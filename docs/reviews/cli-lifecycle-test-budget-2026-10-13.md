@@ -480,7 +480,25 @@ identity bytes preserved, and parsed the update admission contract. These
 focused checks do not replace pipeline final gates or native hosted checks.
 
 The updated PR title and complete retirement body are stored in task artifacts
-`ci-repair/pr-title.txt` and `ci-repair/pr-body.md`. This executor has no granted
-GitHub metadata-write tool and its direct `gh` surface has no credentials; the
-coordinator must apply those prepared bytes to PR #4749 when publishing the
-repair. The existing branch and PR remain authoritative.
+`ci-repair/pr-title.txt` and `ci-repair/pr-body.md`. The coordinator applied
+those bytes to PR #4749 when publishing `94a41ae7`, after all four final gates
+passed on its validated source tree. The original branch and PR remain
+authoritative; replacement PR #4751 was closed unmerged.
+
+### Follow-up macOS carrier repair
+
+Native macOS Clippy on `94a41ae7` found that
+`run_observation_contracts_6` becomes a single-element loop when its Linux-only
+stopped-descendant row is omitted. The carrier now logs and calls the existing
+surface-reservation assertion body directly, followed on Linux by the existing
+stopped-descendant assertion body. Both row labels, order, assertion bodies and
+the isolated-child guard remain unchanged. No test, platform coverage, retry
+or deadline is removed or added.
+
+The other conditional carriers retain at least two rows on Linux and macOS;
+the four previously repaired unary carriers retain their direct calls.
+This repair claims no additional performance improvement and repeats no timing
+experiment or manual QA. Focused warnings-denied Clippy and the existing
+real-CLI carrier check provide local evidence. The pipeline must rerun all four
+final commands, then the coordinator must verify Linux CI, Windows compilation
+and native macOS checks on the newly published head before landing PR #4749.

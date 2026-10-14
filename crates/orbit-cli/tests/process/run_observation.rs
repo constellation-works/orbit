@@ -2900,18 +2900,17 @@ fn run_observation_contracts_6() {
     if !isolated_run_observation("run_observation::run_observation_contracts_6") {
         return;
     }
-    for (name, check) in [
-        (
-            "a_surface_reservation_reaches_readiness_and_drain_run_show",
-            a_surface_reservation_reaches_readiness_and_drain_run_show as fn(),
-        ),
-        #[cfg(target_os = "linux")]
-        (
-            "run_show_marks_an_agent_blocked_on_a_stopped_descendant",
-            run_show_marks_an_agent_blocked_on_a_stopped_descendant as fn(),
-        ),
-    ] {
-        tracing::info!(case = name, "CLI contract row");
-        check();
+    tracing::info!(
+        case = "a_surface_reservation_reaches_readiness_and_drain_run_show",
+        "CLI contract row"
+    );
+    a_surface_reservation_reaches_readiness_and_drain_run_show();
+    #[cfg(target_os = "linux")]
+    {
+        tracing::info!(
+            case = "run_show_marks_an_agent_blocked_on_a_stopped_descendant",
+            "CLI contract row"
+        );
+        run_show_marks_an_agent_blocked_on_a_stopped_descendant();
     }
 }
