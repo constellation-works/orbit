@@ -2,7 +2,7 @@
 // Pure vanilla JS, split into ES modules with no build step.
 
 import { captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, fmtDuration } from './js/common.js';
-import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './js/tasks.js';
+import { cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './js/tasks.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, renderAuditSummary, renderDenialCount, syncAuditControls, wireAuditSearch, } from './js/audit.js';
 import { applyCodebaseHashQuery, buildCodebaseHash, fetchAndRenderCodebase, wireCodebaseControls } from './js/codebase.js';
 import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/scoreboard.js';
@@ -91,6 +91,7 @@ const frictionAccordionMedia = window.matchMedia(FRICTION_ACCORDION_QUERY);
 const $ = (id) => document.getElementById(id);
 
 let searchQuery = "";
+let cancelTaskLookup = () => {};
 let activeStatuses = new Set(DEFAULT_ACTIVE_STATUSES);
 let lastTasks = [];
 // Paging metadata from task-list envelopes drives the visible range and
@@ -150,6 +151,7 @@ function taskContext() {
         lastTasks[index] = updatedTask;
       }
     },
+    cancelTaskLookup: () => cancelTaskLookup(),
     getSearchQuery: () => searchQuery,
     setSearchQuery: (value) => { searchQuery = value; },
     getActiveStatuses: () => activeStatuses,
@@ -955,9 +957,11 @@ function wireTaskIdResolver() {
     return true;
   }
 
-  async function openLookedUpTask(task, workspaceId, seq) {
+  async function openLookedUpTask(task, workspaceId) {
     const workspaceChanged = adoptWorkspace(workspaceId);
-    sAT("tasks", { refresh: false });
+    sAT(buildTasksHash(taskContext()).slice(1), { refresh: false });
+    // Routing retires the prior lookup state; this result now owns that route.
+    const seq = lookupSeq;
     if (workspaceChanged) {
       await refreshDashboard();
       if (seq !== lookupSeq || getWorkspace() !== workspaceId) return;
@@ -976,6 +980,7 @@ function wireTaskIdResolver() {
     }
     input.value = "";
     clearLookupStatus();
+    refreshDashboard();
   }
 
   function otherActiveWorkspaces(exceptId) {
@@ -988,9 +993,16 @@ function wireTaskIdResolver() {
   }
 
   async function lookupTask(id) {
+    cancelTaskSearchDebounce();
+    // Enter commits the text now, including a pending or unsuccessful lookup.
+    // A successful result removes q when it replaces the search with a detail.
+    if (window.location.hash.split("?")[0] === "#tasks") {
+      window.history.replaceState(null, "", buildTasksHash(taskContext()));
+    }
     const seq = ++lookupSeq;
     const workspaceAtStart = getWorkspace();
-    const stillCurrent = () => seq === lookupSeq && getWorkspace() === workspaceAtStart;
+    const visit = captureWorkspaceVisit();
+    const stillCurrent = () => seq === lookupSeq && visit.isCurrent();
     const discardIfStale = () => {
       if (stillCurrent()) return false;
       if (seq === lookupSeq) clearLookupStatus();
@@ -1009,7 +1021,7 @@ function wireTaskIdResolver() {
       }
       if (discardIfStale()) return;
       if (primary.res.ok && primary.body && primary.body.id) {
-        await openLookedUpTask(primary.body, primary.workspaceId, seq);
+        await openLookedUpTask(primary.body, primary.workspaceId);
         return;
       }
 
@@ -1037,7 +1049,7 @@ function wireTaskIdResolver() {
 
     const hit = probed.find((result) => result && result.res && result.res.ok && result.body && result.body.id);
     if (hit) {
-      await openLookedUpTask(hit.body, hit.workspaceId, seq);
+      await openLookedUpTask(hit.body, hit.workspaceId);
       return;
     }
     if (probed.some((result) => result && result.network)) {
@@ -1055,6 +1067,14 @@ function wireTaskIdResolver() {
   }
 
   resolveTaskById = lookupTask;
+  cancelTaskLookup = () => {
+    lookupSeq += 1;
+    clearLookupStatus();
+  };
+  $("task-search-clear")?.addEventListener("click", () => {
+    clearTaskSearch(taskContext());
+    input.focus();
+  });
 
   // Editing the query abandons any lookup still in flight.
   input.addEventListener("input", () => {

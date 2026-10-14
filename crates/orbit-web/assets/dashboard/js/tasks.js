@@ -20,6 +20,8 @@ let pinnedExternalTask = null;
 // pins it when the operator's filter hides it.
 let openTaskId = null;
 let pendingOpenTaskId = null;
+let openTaskGeneration = 0;
+let searchDebounce = null;
 // ORB-10874: per-task inline-edit feedback for the status/crew selects. Each
 // entry is `{ kind: 'pending'|'success'|'error', text, undo }`, where `undo`
 // (when present) is `{ previousValue, expiresAt }` — a bounded window in which
@@ -79,7 +81,7 @@ onWorkspaceChange(() => {
   expandedTaskIds.clear();
   // The initial workspace selection also lands here; a task the URL named but
   // no render has shown yet must survive it.
-  if (!pendingOpenTaskId) setOpenTask(null);
+  if (!pendingOpenTaskId && openTaskId) setOpenTask(null);
   statusFeedback.clear();
   foldedStatusTasks.clear();
   crewFeedback.clear();
@@ -626,6 +628,7 @@ function writeOpenTaskToUrl(taskId) {
 }
 
 function setOpenTask(taskId) {
+  openTaskGeneration += 1;
   openTaskId = taskId;
   writeOpenTaskToUrl(taskId);
 }
@@ -654,7 +657,8 @@ function resolvePendingOpenTask(tasks, context) {
 
 async function pinOpenTask(taskId, context) {
   const visit = captureWorkspaceVisit();
-  const superseded = () => !visit.isCurrent() || openTaskId !== taskId;
+  const generation = openTaskGeneration;
+  const superseded = () => !visit.isCurrent() || openTaskId !== taskId || generation !== openTaskGeneration;
   try {
     const task = await fetchJson(`/api/tasks/${encodeURIComponent(taskId)}`);
     if (superseded()) return;
@@ -676,14 +680,45 @@ async function pinOpenTask(taskId, context) {
    actually contains the task. */
 export function setPinnedExternalTask(task, context) {
   if (!task || !task.id) return;
+  cancelTaskSearchDebounce();
+  if (openTaskId && openTaskId !== task.id) expandedTaskIds.delete(openTaskId);
   pinnedExternalTask = { task, id: task.id };
+  pendingOpenTaskId = null;
   setOpenTask(task.id);
+  // The resolver has cleared the text query; retire its URL and page too.
+  window.history?.replaceState?.(null, "", buildTasksHash(context));
+  if (context?.resetTaskPagination) context.resetTaskPagination();
 }
 
 export function clearPinnedExternalTask(context) {
   if (pinnedExternalTask && openTaskId === pinnedExternalTask.id) setOpenTask(null);
   pinnedExternalTask = null;
   if (context) renderTasks(taskList(context), context);
+}
+
+// Clearing also retires hash-driven reads, so a delayed response cannot restore
+// a dismissed result, even after another lookup for the same task.
+export function cancelTaskSearchDebounce() {
+  if (searchDebounce) clearTimeout(searchDebounce);
+  searchDebounce = null;
+}
+
+export function clearTaskSearch(context) {
+  cancelTaskSearchDebounce();
+  if (context?.cancelTaskLookup) context.cancelTaskLookup();
+  for (const id of [openTaskId, pendingOpenTaskId, pinnedExternalTask?.id]) {
+    if (id) expandedTaskIds.delete(id);
+  }
+  pendingOpenTaskId = null;
+  pinnedExternalTask = null;
+  taskActionNotice = null;
+  setSearchQuery(context, "");
+  setOpenTask(null);
+  window.history?.replaceState?.(null, "", buildTasksHash(context));
+  if (context?.resetTaskPagination) context.resetTaskPagination();
+  syncTaskControls(context);
+  renderTasks(taskList(context), context);
+  refreshTasks(context).catch((error) => console.error("Failed to clear task search", error));
 }
 
 // Per-status counts for the chips, from the rows this page holds. They are
@@ -744,7 +779,19 @@ export function buildTasksHash(context) {
 }
 
 export function applyTasksHashQuery(query, context) {
+  cancelTaskSearchDebounce();
+  // A router replay of the route we just wrote is still the same lookup.
+  // Retire it only when navigation actually changes the represented state.
+  if (query.toString() !== (buildTasksHash(context).split("?")[1] || "") && context?.cancelTaskLookup) {
+    context.cancelTaskLookup();
+  }
   const open = parseOpenTaskId(query.get("open"));
+  if (openTaskId !== open) {
+    if (openTaskId) expandedTaskIds.delete(openTaskId);
+    pinnedExternalTask = null;
+    taskActionNotice = null;
+  }
+  openTaskGeneration += 1;
   openTaskId = open;
   pendingOpenTaskId = open;
   // A link that only names a task (`#tasks?open=ID`) opens it under whatever
@@ -867,11 +914,13 @@ export function buildChips(context) {
 
 export function wireSearch(context) {
   const input = $("task-search");
-  let debounce = null;
   input.addEventListener("input", (e) => {
     setSearchQuery(context, e.target.value.trim().toLowerCase());
-    if (debounce) clearTimeout(debounce);
-    debounce = setTimeout(() => navigateTasksHash(context), 250);
+    cancelTaskSearchDebounce();
+    searchDebounce = setTimeout(() => {
+      searchDebounce = null;
+      navigateTasksHash(context);
+    }, 250);
   });
   // ORB-14495: `/` jumps to the task search while the Tasks view shows it. A
   // field that takes typing keeps the key as a character.
