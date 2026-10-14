@@ -7,10 +7,11 @@
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 
+use orbit_common::fs::overlap_index::OverlapIndex;
 use orbit_core::application::job::JobCatalogEntry;
 use orbit_core::application::task::{
-    PullRequestLinks, TaskRow, task_record_json, task_status_transition_allowed,
-    task_status_transition_required_field,
+    PullRequestLinks, TaskRow, declared_context_files, task_record_json,
+    task_status_transition_allowed, task_status_transition_required_field,
 };
 use orbit_core::runtime::engine::ConfiguredCrewRegistryProjection;
 use orbit_core::{
@@ -435,27 +436,57 @@ pub(crate) fn task_lock_to_json(task: &TaskEnvelopeV2) -> Value {
 }
 
 pub(crate) fn task_locks_json(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
-    let (tasks, locked_files) = task_locks(runtime)?;
+    let candidates = runtime.task_candidates(
+        &orbit_core::application::task::TaskListFilter {
+            statuses: Some(vec![
+                TaskStatus::Backlog,
+                TaskStatus::InProgress,
+                TaskStatus::Review,
+            ]),
+            ..Default::default()
+        },
+        usize::MAX,
+    )?;
+    // Reuse admission's declaration expansion and indexed overlap rules. The
+    // informational population is deliberately narrower than lock holders:
+    // review tasks still appear in by_task, but never cause these highlights.
+    let mut contenders = OverlapIndex::new();
+    for task in &candidates.items {
+        if task.status == TaskStatus::InProgress {
+            for selector in
+                declared_context_files(&task.context_files, &runtime.paths().repo_root).retained
+            {
+                contenders.insert(&selector, (task.id.clone(), task.status, selector.clone()));
+            }
+        }
+    }
+    let contention: BTreeMap<String, Value> = candidates.items.iter()
+        .filter(|task| matches!(task.status, TaskStatus::Backlog | TaskStatus::InProgress))
+        .map(|task| {
+            let entries: Vec<Value> = task.context_files.iter().map(|selector| {
+                let expanded = declared_context_files(std::slice::from_ref(selector), &runtime.paths().repo_root);
+                let matches: Vec<Value> = expanded.retained.iter()
+                    .flat_map(|requested| contenders.overlapping(requested))
+                    .filter(|(_, (id, _, _))| *id != task.id)
+                    .map(|(_, (id, status, held))| json!({"id": id, "status": status.to_string(), "selector": held}))
+                    .collect();
+                json!({"selector": selector, "known": expanded.invalid.is_empty(), "contenders": matches})
+            }).collect();
+            (task.id.clone(), json!({"status": task.status.to_string(), "entries": entries}))
+        }).collect();
+    let (tasks, locked_files) = task_locks(candidates.items);
     let json_by_task: Vec<Value> = tasks.iter().map(task_lock_to_json).collect();
     Ok(json!({
         "locked_files": locked_files.iter().cloned().collect::<Vec<_>>(),
         "by_task": json_by_task,
         "total_locked": locked_files.len(),
         "total_tasks": tasks.len(),
+        "context_contention": contention,
     }))
 }
 
-fn task_locks(
-    runtime: &OrbitRuntime,
-) -> Result<(Vec<TaskEnvelopeV2>, BTreeSet<String>), OrbitError> {
-    let candidates = runtime.task_candidates(
-        &orbit_core::application::task::TaskListFilter {
-            statuses: Some(vec![TaskStatus::InProgress, TaskStatus::Review]),
-            ..Default::default()
-        },
-        usize::MAX,
-    )?;
-    let mut tasks = candidates.items;
+fn task_locks(mut tasks: Vec<TaskEnvelopeV2>) -> (Vec<TaskEnvelopeV2>, BTreeSet<String>) {
+    tasks.retain(|task| matches!(task.status, TaskStatus::InProgress | TaskStatus::Review));
 
     tasks.sort_by_key(|task| {
         (
@@ -470,7 +501,7 @@ fn task_locks(
         .flat_map(|task| task.context_files.iter().cloned())
         .collect();
 
-    Ok((tasks, locked_files))
+    (tasks, locked_files)
 }
 
 fn task_lock_status_rank(status: TaskStatus) -> u8 {

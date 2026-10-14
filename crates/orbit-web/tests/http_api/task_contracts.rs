@@ -611,6 +611,131 @@ fn task_list_and_detail_carry_readiness_for_proposed_and_backlog_only() {
 fn body_json(response: Response) -> Value {
     response.json().expect("JSON body")
 }
+
+#[test]
+fn task_locks_reports_per_selector_active_contention_and_refreshes() {
+    isolated(
+        "task_contracts::task_locks_reports_per_selector_active_contention_and_refreshes",
+        || {
+            let fixture = Fixture::new();
+            let runtime = &fixture.runtime;
+            std::fs::create_dir_all(runtime.paths().repo_root.join("src"))
+                .expect("source directory");
+            std::fs::write(
+                runtime.paths().repo_root.join("src/shared.rs"),
+                "pub fn one() {}\n",
+            )
+            .expect("source file");
+            std::fs::write(runtime.paths().repo_root.join("other.rs"), "").expect("unrelated file");
+            let seed = |title: &str, status, selectors: &[&str]| {
+                runtime
+                    .add_task(TaskAddParams {
+                        title: title.to_string(),
+                        description: "Context contention API fixture".to_string(),
+                        plan: "Validate the lock projection".to_string(),
+                        status: Some(status),
+                        context_files: selectors
+                            .iter()
+                            .map(|selector| selector.to_string())
+                            .collect(),
+                        ..Default::default()
+                    })
+                    .expect("seed context task")
+            };
+            let backlog = seed(
+                "Waiting",
+                TaskStatus::Backlog,
+                &[
+                    "file:src/shared.rs",
+                    "dir:src",
+                    "symbol:src/shared.rs#two:function",
+                    "file:other.rs",
+                ],
+            );
+            let active = seed(
+                "Active",
+                TaskStatus::InProgress,
+                &["symbol:src/shared.rs#one:function"],
+            );
+            let review = seed("Review", TaskStatus::Review, &["dir:."]);
+            let server = fixture.server(true);
+            let locks = body_json(request(&server, "/tasks/locks"));
+            let entries = locks["context_contention"][&backlog.id]["entries"]
+                .as_array()
+                .expect("selector entries");
+            for entry in &entries[..3] {
+                assert_eq!(entry["known"], true);
+                assert_eq!(
+                    entry["contenders"],
+                    json!([{"id": active.id, "status": "in-progress", "selector": "symbol:src/shared.rs#one:function"}])
+                );
+            }
+            assert_eq!(
+                entries[3]["contenders"],
+                json!([]),
+                "review holders and unrelated selectors do not cause highlights"
+            );
+            assert_eq!(
+                locks["context_contention"][&active.id]["entries"][0]["contenders"],
+                json!([]),
+                "self-overlap is excluded"
+            );
+            assert!(
+                locks["context_contention"].get(&review.id).is_none(),
+                "review details are not highlighted"
+            );
+            assert_eq!(
+                locks["total_tasks"], 2,
+                "existing lock population still includes review, excludes backlog"
+            );
+            assert_eq!(
+                server
+                    .get("/api/tasks/locks?workspace=unknown-workspace")
+                    .status(),
+                StatusCode::NOT_FOUND
+            );
+            let second = seed(
+                "Also active",
+                TaskStatus::InProgress,
+                &["file:src/shared.rs"],
+            );
+            let locks = body_json(request(&server, "/tasks/locks"));
+            assert_eq!(
+                locks["context_contention"][&active.id]["entries"][0]["contenders"][0]["id"],
+                second.id,
+                "active-active overlap names the other task"
+            );
+            let changed = patch_task(
+                &server,
+                &second.id,
+                json!({"context_files": ["file:other.rs"]}),
+            );
+            let changed_status = changed.status();
+            assert_eq!(
+                changed_status,
+                StatusCode::OK,
+                "{}",
+                changed.text().expect("mutation response")
+            );
+            let locks = body_json(request(&server, "/tasks/locks"));
+            assert_eq!(
+                locks["context_contention"][&active.id]["entries"][0]["contenders"],
+                json!([]),
+                "context refresh removes stale matches"
+            );
+            assert_eq!(
+                patch_task(&server, &active.id, json!({"status": "review"})).status(),
+                StatusCode::OK
+            );
+            let locks = body_json(request(&server, "/tasks/locks"));
+            assert_eq!(
+                locks["context_contention"][&backlog.id]["entries"][0]["contenders"],
+                json!([]),
+                "status refresh removes the former active contender"
+            );
+        },
+    );
+}
 fn request(server: &Server, uri: &str) -> Response {
     let sep = if uri.contains('?') { '&' } else { '?' };
     server.get(&format!("/api{uri}{sep}workspace=ws_http_fixture"))

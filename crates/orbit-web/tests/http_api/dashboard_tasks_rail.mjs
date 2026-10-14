@@ -129,7 +129,11 @@ const document = {
   createDocumentFragment: () => new Node('#fragment'),
   createTextNode: text => { const node = new Node('#text'); node.own = String(text); return node; },
   getElementById: id => byId[id] || null,
+  querySelectorAll: selector => document.body.querySelectorAll(selector),
+  querySelector: selector => document.body.querySelector(selector),
 };
+// Document queries must reach rendered details when runtime data or scope changes.
+for (const node of Object.values(byId)) document.body.appendChild(node);
 const window = { location: { search: '', hash: '' }, confirm: () => true };
 class Event { constructor(type) { this.type = type; } }
 // Unanswered stub fetches keep their timeout behavior without keeping Node

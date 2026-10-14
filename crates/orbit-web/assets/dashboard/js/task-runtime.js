@@ -4,11 +4,13 @@
 // the task list and hands them here; the rows read them back per task and
 // repaint only when what a row shows changed.
 
-import { onWorkspaceChange } from './common.js';
+import { getWorkspace, onWorkspaceChange } from './common.js';
 
 let runStarts = new Map();
 let lockFiles = new Map();
 let lockTotal = null;
+let contextContention = null;
+let lockWorkspace = null;
 let signature = "";
 const listeners = new Set();
 
@@ -17,6 +19,8 @@ function publish() {
     [...runStarts].map(([id, started]) => `${id}@${started}`).join(","),
     JSON.stringify([...lockFiles].sort(([left], [right]) => left.localeCompare(right))),
     lockTotal ?? "",
+    JSON.stringify(contextContention),
+    lockWorkspace,
   ].join("|");
   if (next === signature) return;
   signature = next;
@@ -44,9 +48,22 @@ export function setTaskLocks(payload) {
     if (task?.id) next.set(String(task.id), files);
   }
   lockFiles = next;
-  const total = Number(payload?.total_locked);
+  contextContention = payload?.context_contention ?? null;
+  lockWorkspace = getWorkspace();
+  const total = payload?.total_locked == null ? NaN : Number(payload.total_locked);
   lockTotal = Number.isFinite(total) ? total : null;
   publish();
+}
+
+/// Server-computed matches for this exact selector and owning workspace.
+/// null means unknown (unloaded, unavailable, stale status, or another scope).
+export function taskContextContenders(task, selector) {
+  if (!lockWorkspace || lockWorkspace !== getWorkspace() || (task.workspace_id && task.workspace_id !== lockWorkspace)) return null;
+  const record = contextContention?.[task.id];
+  if (record?.status !== task.status || !Array.isArray(record.entries)) return null;
+  const entry = record.entries.find(entry => entry.selector === selector);
+  if (entry?.known !== true || !Array.isArray(entry.contenders)) return null;
+  return entry.contenders.filter(holder => holder.id !== task.id && holder.status === "in-progress");
 }
 
 export function onTaskRuntimeChange(listener) {
@@ -87,5 +104,7 @@ onWorkspaceChange(() => {
   runStarts = new Map();
   lockFiles = new Map();
   lockTotal = null;
+  contextContention = null;
+  lockWorkspace = null;
   publish();
 });
