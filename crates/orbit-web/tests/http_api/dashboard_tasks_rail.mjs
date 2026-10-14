@@ -373,6 +373,72 @@ renderTasks(currentTasks, taskContext);
 assert.equal(rowFor('ORB-36'), refreshedLockRow, 'an identical snapshot preserves the existing row');
 stopLockListening();
 
+// Empty context uses the same refreshable list as populated selectors: when a
+// background task/lock refresh adds a contended selector, the separate open
+// description editor keeps its node, text, and focus.
+const contextDraftTask = task(37, { description: 'Saved description', context_files: [] });
+const contextDraftPage = { total: 1, limit: 50, offset: 0, next_cursor: null };
+const contextDraftContext = { ...taskContext, getTasks: () => [contextDraftTask] };
+currentTasks = [contextDraftTask];
+served = contextDraftPage;
+renderTasks(currentTasks, contextDraftContext);
+const contextDraftTitle = rowFor('ORB-37').querySelector('button.title');
+contextDraftTitle.parentNode.dispatch('click', { target: contextDraftTitle });
+let contextDraftDetail = byId['tasks-body'].querySelector('#detail-ORB-37');
+assert.ok(
+  contextDraftDetail.querySelector('.file-list .field-empty').textContent.includes('no context files'),
+  'the empty context state is visible before refresh',
+);
+const descriptionEdit = contextDraftDetail
+  .querySelectorAll('.field-edit')
+  .find(button => button.getAttribute('aria-label') === 'Edit description for ORB-37');
+descriptionEdit.dispatch('click');
+const descriptionDraft = contextDraftDetail.querySelector('.field-editor-input');
+descriptionDraft.value = 'Unsaved description';
+descriptionDraft.focus();
+contextDraftTask.context_files = ['file:src/shared.rs'];
+taskRuntime.setTaskLocks({
+  by_task: [{ id: 'ORB-38', context_files: ['file:src/shared.rs'] }],
+  total_locked: 1,
+  context_contention: {
+    'ORB-37': {
+      status: 'in-progress',
+      entries: [{ selector: 'file:src/shared.rs', known: true, contenders: [{ id: 'ORB-38', status: 'in-progress', selector: 'file:src/shared.rs' }] }],
+    },
+  },
+});
+renderTasks(currentTasks, contextDraftContext);
+contextDraftDetail = byId['tasks-body'].querySelector('#detail-ORB-37');
+const refreshedSelector = contextDraftDetail.querySelector('.context-selector');
+assert.ok(
+  refreshedSelector && refreshedSelector.textContent.includes('file:src/') && refreshedSelector.textContent.includes('shared.rs'),
+  'empty-to-populated refresh renders the selector',
+);
+const activeContention = contextDraftDetail.querySelector('.context-contended-active');
+assert.ok(activeContention.textContent.includes('ORB-38'), 'the refreshed selector shows its active contender');
+assert.ok(activeContention.textContent.includes('file:src/shared.rs'), 'the contention names the matching selector');
+assert.equal(contextDraftDetail.querySelector('.field-editor-input'), descriptionDraft, 'refresh preserves the separate editor control');
+assert.equal(descriptionDraft.value, 'Unsaved description', 'refresh preserves the editor text');
+assert.equal(document.activeElement, descriptionDraft, 'refresh preserves editor focus');
+
+const cancelDescription = contextDraftDetail.querySelector('.field-editor .cancel');
+cancelDescription.dispatch('click');
+const contextEdit = contextDraftDetail.querySelectorAll('.field-edit').find(button => button.getAttribute('aria-label') === 'Edit context files for ORB-37');
+contextEdit.dispatch('click');
+const selectorDraft = contextDraftDetail.querySelector('.field-editor-input');
+selectorDraft.value = 'file:unsaved.rs';
+selectorDraft.focus();
+contextDraftTask.context_files = ['file:server.rs'];
+renderTasks(currentTasks, contextDraftContext);
+contextDraftDetail = byId['tasks-body'].querySelector('#detail-ORB-37');
+assert.equal(
+  contextDraftDetail.querySelector('.field-editor-input'),
+  selectorDraft,
+  'refresh preserves the context editor control',
+);
+assert.equal(selectorDraft.value, 'file:unsaved.rs', 'refresh preserves the context editor text');
+assert.equal(document.activeElement, selectorDraft, 'refresh preserves context editor focus');
+
 const repaints = [];
 const stopListening = drainWaits.onDrainReadinessChange(() => { repaints.push('changed'); paintBacklog(); });
 
