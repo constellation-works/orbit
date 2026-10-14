@@ -20,10 +20,175 @@ use super::lifecycle::{decode, invalid, row};
 use crate::contracts::*;
 
 const ATTEMPT: &str = "distributed-landing-attempt-v1";
+const HISTORY: &str = "distributed-landing-attempt-history-v1";
+const RETRY: &str = "distributed-landing-retry-v1";
 
 impl TaskCommitBoundary {
-    /// Every recorded attempt, newest state included. Read-only inspection for
-    /// the owner consumer and its operators.
+    /// The immutable operator receipt for this handoff and request key.
+    pub fn landing_retry_receipt(
+        &self,
+        handoff_id: &str,
+        request_key: &str,
+    ) -> Result<Option<LandingRetryReceipt>, OrbitError> {
+        self.enter_ordinary(|| {
+            self.coordination_row(RETRY, &retry_id(handoff_id, request_key))?
+                .map(|r| decode(&r.payload_json))
+                .transpose()
+        })
+    }
+
+    /// A specific attempt, including its retained stopped evidence after retry.
+    pub fn landing_attempt_record(
+        &self,
+        handoff_id: &str,
+        number: u32,
+    ) -> Result<Option<LandingAttempt>, OrbitError> {
+        self.enter_ordinary(|| {
+            if let Some(raw) = self.attempt_row(handoff_id)? {
+                let attempt: LandingAttempt = decode(&raw.payload_json)?;
+                if attempt.attempt == number {
+                    return Ok(Some(attempt));
+                }
+            }
+            self.coordination_row(HISTORY, &format!("{handoff_id}:{number}"))?
+                .map(|r| decode(&r.payload_json))
+                .transpose()
+        })
+    }
+
+    pub(super) fn verify_reserved_landing_retry(
+        &self,
+        auth: &ClaimInvocation,
+        state: &ClaimInspection,
+        request: &LandingRetryRequest,
+    ) -> Result<(), OrbitError> {
+        if state.claim.phase != ExecutionClaimPhase::HandedOff {
+            return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
+        }
+        self.check_handoff_landing(auth, state)?;
+        let receipt: LandingRetryReceipt = decode(
+            &self
+                .coordination_row(RETRY, &retry_id(&request.handoff_id, &request.request_key))?
+                .ok_or_else(|| invalid("retry receipt missing"))?
+                .payload_json,
+        )?;
+        let attempt: LandingAttempt = decode(
+            &self
+                .attempt_row(&request.handoff_id)?
+                .ok_or_else(|| invalid("retry attempt missing"))?
+                .payload_json,
+        )?;
+        if attempt.attempt != receipt.attempt || attempt.state != LandingAttemptState::Dispatched {
+            return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn attach_landing_retry(
+        &self,
+        auth: &ClaimInvocation,
+        state: &ClaimInspection,
+        handoff_id: &str,
+        request_key: &str,
+        run_id: &str,
+        params: &mut TaskCoordinationCommitParams,
+        effects: &mut ClaimCommitEffects,
+    ) -> Result<(), OrbitError> {
+        let receipt: LandingRetryReceipt = decode(
+            &self
+                .coordination_row(RETRY, &retry_id(handoff_id, request_key))?
+                .ok_or_else(|| invalid("retry receipt missing"))?
+                .payload_json,
+        )?;
+        let attempt: LandingAttempt = decode(
+            &self
+                .attempt_row(handoff_id)?
+                .ok_or_else(|| invalid("retry attempt missing"))?
+                .payload_json,
+        )?;
+        if attempt.attempt != receipt.attempt {
+            return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
+        }
+        self.dispatch_landing_attempt(
+            auth,
+            state,
+            handoff_id,
+            Some(&run_id.to_string()),
+            params,
+            effects,
+        )
+    }
+
+    pub(super) fn reserve_landing_retry(
+        &self,
+        auth: &ClaimInvocation,
+        state: &ClaimInspection,
+        request: &LandingRetryRequest,
+        params: &mut TaskCoordinationCommitParams,
+        effects: &mut ClaimCommitEffects,
+    ) -> Result<(), OrbitError> {
+        if !auth.operator || state.claim.phase != ExecutionClaimPhase::HandedOff {
+            return Err(invalid("current operator handed-off context required"));
+        }
+        if request.request_key.trim().is_empty()
+            || request.request_key.len() > 128
+            || request.reason.trim().is_empty()
+            || request.reason.len() > 2000
+        {
+            return Err(invalid("retry requires a bounded request key and reason"));
+        }
+        self.check_handoff_landing(auth, state)?;
+        let accepted = self.accepted_handoff(&auth.claim_id)?;
+        if accepted.handoff_id != request.handoff_id
+            || accepted.handoff.candidate.candidate.commit != request.expected_candidate_commit
+            || accepted.handoff.candidate.base.commit != request.expected_base_commit
+        {
+            return Err(OrbitError::claim_refused(
+                ClaimRefusalKind::HandoffCandidateMismatch,
+            ));
+        }
+        let raw = self
+            .attempt_row(&request.handoff_id)?
+            .ok_or_else(|| invalid("retry requires a prior attempt"))?;
+        let attempt: LandingAttempt = decode(&raw.payload_json)?;
+        if attempt.attempt != request.expected_latest_attempt
+            || attempt.state != request.expected_latest_state
+        {
+            return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
+        }
+        if attempt.state != LandingAttemptState::Stopped
+            && !(attempt.state == LandingAttemptState::Dispatched
+                && state.unresolved_merge_intent.is_some())
+        {
+            return Err(invalid("retry requires a stopped or uncertain landing"));
+        }
+        self.dispatch_landing_attempt(auth, state, &request.handoff_id, None, params, effects)?;
+        let number =
+            if attempt.state == LandingAttemptState::Dispatched && attempt.job_run_id.is_none() {
+                attempt.attempt
+            } else {
+                attempt
+                    .attempt
+                    .checked_add(1)
+                    .ok_or_else(|| invalid("landing attempt exhausted"))?
+            };
+        params.rows.push(row(
+            RETRY,
+            &retry_id(&request.handoff_id, &request.request_key),
+            &LandingRetryReceipt {
+                request: request.clone(),
+                actor: auth.machine_id.clone(),
+                attempt: number,
+                created_at: Utc::now(),
+            },
+        )?);
+        params.status_note = Some(request.reason.clone());
+        params.status_event = Some("landing_retry_reserved".into());
+        Ok(())
+    }
+    /// The latest attempt for each handoff. Historical stops remain available
+    /// through `landing_attempt_record`. Read-only owner inspection.
     pub fn landing_attempts(&self) -> Result<Vec<LandingAttempt>, OrbitError> {
         self.enter_ordinary(|| {
             self.coordination_rows(ATTEMPT)?
@@ -136,10 +301,19 @@ impl TaskCommitBoundary {
                         if attempt.state != LandingAttemptState::Dispatched
                             || attempt.job_run_id.is_some()
                         {
-                            attempt.attempt = attempt.attempt.saturating_add(1);
+                            params.rows.push(row(
+                                HISTORY,
+                                &format!("{handoff_id}:{}", attempt.attempt),
+                                &attempt,
+                            )?);
+                            attempt.attempt = attempt
+                                .attempt
+                                .checked_add(1)
+                                .ok_or_else(|| invalid("landing attempt exhausted"))?;
                             attempt.state = LandingAttemptState::Dispatched;
                             attempt.job_run_id = None;
                             attempt.evidence = None;
+                            attempt.created_at = now;
                         }
                     }
                     Some(run_id) => {
@@ -286,6 +460,10 @@ impl TaskCommitBoundary {
             }
         }
     }
+}
+
+fn retry_id(handoff_id: &str, request_key: &str) -> String {
+    orbit_common::security::release::sha256_hex(format!("{handoff_id}\0{request_key}").as_bytes())
 }
 
 /// What a landing stop did to its claim.

@@ -91,6 +91,12 @@ impl TaskCommitBoundary {
         if receipt.input != input {
             return Err(invalid("mutation_mismatch"));
         }
+        if let ClaimMutation::RetryLanding(request) = mutation {
+            // Replaying a reservation whose submission is unknown is launch
+            // admission, so historical approval cannot resurrect revoked work.
+            let authority = self.claim_authority(auth, false)?;
+            self.verify_reserved_landing_retry(auth, &authority.state, request)?;
+        }
         // A persisted send intent is uncertainty, never permission to send again.
         // The landing consumer must reconcile external state, including after a
         // later revocation or a changed candidate. Do not replay launch authority.
@@ -588,6 +594,32 @@ impl TaskCommitBoundary {
                     params.status_note = Some(reason.clone());
                     release = true;
                     state.last_event = "claim_revoked".into();
+                }
+                ClaimMutation::AttachLandingRetry {
+                    handoff_id,
+                    request_key,
+                    job_run_id,
+                } => {
+                    self.attach_landing_retry(
+                        auth,
+                        &state,
+                        handoff_id,
+                        request_key,
+                        job_run_id,
+                        &mut params,
+                        &mut handoff_effects,
+                    )?;
+                    state.last_event = "landing_dispatched".into();
+                }
+                ClaimMutation::RetryLanding(request) => {
+                    self.reserve_landing_retry(
+                        auth,
+                        &state,
+                        request,
+                        &mut params,
+                        &mut handoff_effects,
+                    )?;
+                    state.last_event = "landing_retry_reserved".into();
                 }
                 ClaimMutation::DispatchLanding {
                     handoff_id,

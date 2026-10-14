@@ -248,6 +248,14 @@ pub enum ClaimMutation {
         handoff_id: String,
         job_run_id: Option<String>,
     },
+    /// Atomically compare the stopped/uncertain attempt and reserve its retry.
+    RetryLanding(orbit_types::workflow::handoff::LandingRetryRequest),
+    /// Attach only the run carrying this receipt's exact reserved attempt.
+    AttachLandingRetry {
+        handoff_id: String,
+        request_key: String,
+        job_run_id: String,
+    },
     /// Complete an authorized landing against verified external merge evidence.
     /// Refused while a merge intent is unresolved or the authority is stale.
     CompleteLanding {

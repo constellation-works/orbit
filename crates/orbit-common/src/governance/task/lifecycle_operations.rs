@@ -1,5 +1,5 @@
 //! The task review and lifecycle verbs: `reconcile_review`, `review_reset`,
-//! `reject` and `delete`.
+//! `retry_handoff`, `reject` and `delete`.
 //!
 //! The two review verbs are operator commands on MCP and on the CLI, and
 //! refuse an undeclared field, as their hand-written tools did. A managed
@@ -298,4 +298,81 @@ pub(super) const DELETE: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+};
+
+/// Retry an existing authorized handoff, preserving its immutable foreign binding.
+pub(super) const RETRY_HANDOFF: TaskOperation = TaskOperation {
+    verb: TaskVerb::RetryHandoff,
+    cli_path: &["retry-handoff"],
+    tool_name: "orbit.task.retry_handoff",
+    tool_description: "Retry a stopped or uncertain authorized handoff on its explicit owner workspace. Requires trusted operator authority; unavailable to managed runs. Compare the exact accepted candidate/base and latest attempt/state, supply a reason and a durable request_key. Replaying identical input returns the original landing run. The normal landing job reconciles external intent and rechecks all merge gates.",
+    cli_about: "Retry a stopped authorized handoff through normal owner landing",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[&[
+        required(cli_only(
+            "owner_workspace",
+            ParamType::String,
+            flag_named("owner-workspace", "WORKSPACE"),
+            "Explicit owner logical workspace ID or absolute checkout path",
+        )),
+        required(mcp_only(
+            "workspace",
+            ParamType::String,
+            "Explicit owner logical workspace ID or absolute checkout path",
+        )),
+        required(both(
+            "handoff_id",
+            ParamType::String,
+            "Immutable accepted handoff identity",
+            CliArgKind::Positional,
+            "Accepted handoff identity",
+        )),
+        required(both(
+            "expected_candidate_commit",
+            ParamType::String,
+            "Accepted candidate commit the operator observed",
+            flag_named("candidate", "COMMIT"),
+            "Expected accepted candidate commit",
+        )),
+        required(both(
+            "expected_base_commit",
+            ParamType::String,
+            "Accepted base commit the operator observed",
+            flag_named("base", "COMMIT"),
+            "Expected accepted base commit",
+        )),
+        required(both(
+            "expected_latest_attempt",
+            ParamType::Integer,
+            "Latest landing attempt number the operator observed",
+            flag_named("attempt", "NUMBER"),
+            "Expected latest landing attempt number",
+        )),
+        required(both(
+            "expected_latest_state",
+            ParamType::Enum(&[EnumValue::plain("stopped"), EnumValue::plain("dispatched")]),
+            "Latest state; dispatched is eligible only with unresolved intent and no live owner job",
+            flag_named("state", "STATE"),
+            "Expected latest state: stopped or dispatched with uncertain intent",
+        )),
+        required(free_text(both(
+            "reason",
+            ParamType::String,
+            "Required operator reason retained durably",
+            flag_named("reason", "REASON"),
+            "Operator reason recorded with the retry",
+        ))),
+        required(both(
+            "request_key",
+            ParamType::String,
+            "Durable request key; reuse exactly after a lost reply",
+            flag_named("request", "KEY"),
+            "Durable replay key; reuse after a lost reply",
+        )),
+    ]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Refuse,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
 };

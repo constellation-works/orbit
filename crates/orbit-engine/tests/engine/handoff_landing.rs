@@ -565,6 +565,9 @@ struct ForgeState {
     after_update: Option<FakeJob>,
     /// The head a branch update on a published remote produces.
     update: UpdateShape,
+    /// Provider observations for the bounded owner wait, independent of jobs.
+    merge_states: std::collections::VecDeque<&'static str>,
+    review_decision: Option<&'static str>,
 }
 
 /// A forge whose pull request #42 carries the claimed candidate, with one
@@ -688,17 +691,21 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
         let candidate = &self.context.candidate;
         match operation {
             "pr.status" => {
+                let scripted_state = state.merge_states.front().copied();
+                if state.merge_states.len() > 1 {
+                    state.merge_states.pop_front();
+                }
                 let job = state.jobs.get(&state.head);
                 let (status, conclusion) = match job.map(|job| job.conclusion) {
                     None => ("IN_PROGRESS", ""),
                     Some("success") => ("COMPLETED", "SUCCESS"),
                     Some(_) => ("COMPLETED", "FAILURE"),
                 };
-                let merge_state = match conclusion {
+                let merge_state = scripted_state.unwrap_or(match conclusion {
                     "SUCCESS" => "CLEAN",
                     "" => "PENDING",
                     _ => "BLOCKED",
-                };
+                });
                 Ok(json!({"pull_request": {
                     "number": 42,
                     "state": if state.merged { "MERGED" } else { "OPEN" },
@@ -706,7 +713,7 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                     "baseRefName": candidate.base_branch,
                     "headRefOid": state.head,
                     "mergeStateStatus": merge_state,
-                    "reviewDecision": "",
+                    "reviewDecision": state.review_decision.unwrap_or(""),
                     "mergeCommit": state.merged.then(|| json!({"oid": "provider-merge"})),
                     "statusCheckRollup": [{
                         "__typename": "CheckRun", "name": "clippy", "workflowName": "CI",
@@ -1350,4 +1357,61 @@ fn handoff_landing_contracts_2() {
             ),
         ]);
     });
+}
+
+/// The public landing action keeps UNKNOWN/PENDING bounded and never extends
+/// that wait to a real review or administrative refusal.
+#[test]
+fn owner_landing_waits_for_unknown_then_clean_and_retains_expired_or_blocked_evidence() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "owner_landing_waits_for_unknown_then_clean_and_retains_expired_or_blocked_evidence",
+        || {
+            for (case, states, review) in [
+                ("settles", vec!["UNKNOWN", "PENDING", "CLEAN"], ""),
+                ("expires", vec!["UNKNOWN"], ""),
+                ("review", vec!["BLOCKED"], "REVIEW_REQUIRED"),
+                ("administrative", vec!["BLOCKED"], ""),
+            ] {
+                let sandbox = tempdir().unwrap();
+                let forge = FakeForge::new(sandbox.path(), false);
+                forge.job(&forge.context.candidate.candidate.commit, passed(1, 11));
+                {
+                    let mut state = forge.state.lock().unwrap();
+                    state.merge_states = states.into();
+                    state.review_decision = Some(review);
+                }
+                let result = land_with(
+                    &forge,
+                    json!({"max_wait_seconds": if case == "settles" {10} else {0}, "poll_interval_seconds":5}),
+                );
+                if case == "settles" {
+                    assert_eq!(result.unwrap()["phase"], "landed");
+                    assert_eq!(forge.sent("pr.merge").len(), 1);
+                    assert_eq!(
+                        forge.sent("pr.status").len(),
+                        4,
+                        "bounded observations settle and verify the one merge"
+                    );
+                } else {
+                    assert!(result.is_err(), "{case}");
+                    assert_eq!(
+                        forge.sent("pr.status").len(),
+                        1,
+                        "no administrative wait expansion: {case}"
+                    );
+                    assert!(forge.sent("pr.merge").is_empty(), "{case}");
+                    assert_eq!(
+                        forge.steps(),
+                        [HandoffLandingStep::Stop { repairable: false }],
+                        "durable refusal without repair: {case}"
+                    );
+                    assert!(
+                        !forge.last_evidence().is_empty(),
+                        "expired/refused observations retain evidence"
+                    );
+                }
+            }
+        },
+    );
 }

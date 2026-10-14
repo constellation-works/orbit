@@ -243,6 +243,10 @@ fn a_replica_checkout_reads_empty_and_refuses_every_owner_action() {
             assert_eq!(json["claims"].as_array().unwrap().len(), 0);
             for (uri, body) in [
                 (
+                    "/distributed/handoffs/abc123/retry",
+                    serde_json::json!({"expected_candidate_commit":"aaaa","expected_base_commit":"bbbb","expected_latest_attempt":1,"expected_latest_state":"stopped","reason":"retry safely","request_key":"r1"}),
+                ),
+                (
                     "/distributed/handoffs/abc123/approve",
                     serde_json::json!({"expected_candidate_commit":"aaaa","expected_base_commit":"bbbb","request_id":"r1"}),
                 ),

@@ -158,6 +158,14 @@ pub const DASHBOARD_HANDOFF_APPROVE: GovernedOperation = GovernedOperation {
     rationale: "approving a handoff authorizes the owner to merge that exact candidate; a follower's agent access never decides that",
 };
 
+/// Retry an existing authorized stopped landing through the owner machinery.
+pub const DASHBOARD_HANDOFF_RETRY: GovernedOperation = GovernedOperation {
+    id: "handoff.retry",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "retrying a stopped authorized handoff is a deliberate owner operator decision",
+};
+
 /// Withdraw completion authority for a distributed delivery handoff from the
 /// dashboard [ORB-12516].
 pub const DASHBOARD_HANDOFF_REVOKE: GovernedOperation = GovernedOperation {
@@ -314,6 +322,12 @@ pub fn governed_plugin_tool(mutating: bool) -> &'static GovernedOperation {
 ///    — only the chokepoint can see the process envelope a CLI caller's
 ///    authority actually lives in.
 pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
+    GovernedOperation {
+        id: "orbit.task.retry_handoff",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "retrying an authorized stopped landing is a deliberate owner operator decision",
+    },
     GovernedOperation {
         id: "orbit.task.reconcile_review",
         surface: OperationSurface::Tool,
@@ -540,6 +554,7 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_AUTO_DRAIN_STOP,
     DASHBOARD_HANDOFF_APPROVE,
     DASHBOARD_HANDOFF_REVOKE,
+    DASHBOARD_HANDOFF_RETRY,
     DASHBOARD_CLAIM_RECOVER,
     DASHBOARD_CONFIG_SET,
     DASHBOARD_HOST_EDIT,

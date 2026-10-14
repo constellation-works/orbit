@@ -527,3 +527,6 @@ crate::scenario_table!(
     a_landing_stopped_on_its_base_is_repaired_and_lands_under_the_same_task,
     a_second_base_stop_blocks_the_task_with_both_attempts_evidence
 );
+
+#[path = "landing_retry.rs"]
+mod retry;

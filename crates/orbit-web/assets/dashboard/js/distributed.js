@@ -545,6 +545,12 @@ function buildClaimActions(claim, capabilities, handlers) {
       handlers.onApprove && handlers.onApprove(claim, requestId),
     );
   }
+  if (handoff && claim.phase === "handed_off" && authority.state === "authorized" &&
+      !claim.landing_invalidated && (handoff.landing?.state === "stopped" || claim.unresolved_merge_intent)) {
+    add("retry-handoff", "Retry landing", "handoff_retry",
+      (reason, _status, requestId) => handlers.onRetryHandoff && handlers.onRetryHandoff(claim, reason, requestId),
+      { reasonRequired: true, reasonPlaceholder: "why this landing should retry" });
+  }
   if (handoff && authority.state === "authorized") {
     add(
       "revoke",
@@ -650,6 +656,28 @@ export async function claimedReviewApproval(taskId) {
   };
 }
 
+export function retryHandoff(claim, reason, requestId) {
+  // Keep the exact replay identity across panel rebuilds and browser restarts.
+  // If durable browser storage is unavailable, no request has been sent yet.
+  const identity = JSON.stringify([getWorkspace(), claim.handoff.handoff_id,
+    expectedCandidate(claim), claim.handoff.landing.attempt, claim.handoff.landing.state, reason]);
+  const storageKey = `orbit-handoff-retry:${identity}`;
+  let durableKey;
+  try {
+    durableKey = localStorage.getItem(storageKey) || requestId || newRequestId();
+    localStorage.setItem(storageKey, durableKey);
+  } catch (_) {
+    return Promise.reject(new Error("Landing retry needs browser storage to retain its request key; use the owner CLI with a saved request key."));
+  }
+  return postJson(`/api/distributed/handoffs/${encodeURIComponent(claim.handoff.handoff_id)}/retry`, {
+    ...expectedCandidate(claim),
+    expected_latest_attempt: claim.handoff.landing.attempt,
+    expected_latest_state: claim.handoff.landing.state,
+    reason: reason || "",
+    request_key: durableKey,
+  });
+}
+
 export function revokeHandoff(claim, reason, requestId) {
   return postJson(`/api/distributed/handoffs/${encodeURIComponent(claim.handoff.handoff_id)}/revoke`, {
     ...expectedCandidate(claim),
@@ -713,6 +741,7 @@ export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onConten
         buildClaimPanel(claim, capabilities, {
           formatTime,
           onApprove: (target, requestId) => act(() => approveHandoff(target, requestId)),
+          onRetryHandoff: (target, reason, requestId) => act(() => retryHandoff(target, reason, requestId)),
           onRevoke: (target, reason, requestId) => act(() => revokeHandoff(target, reason, requestId)),
           onRecover: (target, reason, status, requestId) => act(() => recoverClaim(target, reason, status, requestId)),
         }),
@@ -847,6 +876,7 @@ function actionSummary(body) {
   const result = (body && body.result) || {};
   const phase = enumLabel(PHASE_LABELS, result.phase);
   const status = result.task_status ? humanize(result.task_status) : "?";
+  if (result.run_id) return `landing retry recorded: attempt ${result.attempt}, run ${result.run_id}`;
   if (result.handoff_id) return `decision recorded: claim ${phase}, task ${status}`;
   return `decision recorded: claim ${shortId(result.claim_id)} ${phase}, task ${status}`;
 }

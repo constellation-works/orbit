@@ -31,6 +31,7 @@
 mod attempts;
 mod context;
 mod dispatch;
+mod retry;
 
 /// The owner-local job that lands one authorized handoff.
 pub const LANDING_JOB: &str = "task_landing_pipeline";

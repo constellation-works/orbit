@@ -405,6 +405,36 @@ For blocks caused by a missing provider launcher, `orbit task recheck-blocked`
 reports whether the launcher now resolves. Its `--confirm` option requeues only
 the cleared launcher blocks; it leaves implementation failures blocked.
 
+## Retry a stopped owner landing
+
+A healthy accepted handoff can keep its native leaf binding while its owner landing
+stops on a provider gate. Inspect the owner's distributed claim panel, original stop,
+latest landing attempt and provider state. Do not resume or rebind the foreign leaf
+just to retry landing. Only a trusted operator may request a same-handoff retry:
+
+```bash
+orbit task retry-handoff <handoff-id> --owner-workspace <owner-workspace-id> \
+  --candidate <accepted-commit> --base <accepted-base> \
+  --attempt <latest-attempt> --state stopped \
+  --reason '<why the same candidate can land now>' --request <saved-request-key>
+```
+
+The MCP equivalent is `orbit.task.retry_handoff` with `workspace`, `handoff_id`,
+`expected_candidate_commit`, `expected_base_commit`, `expected_latest_attempt`,
+`expected_latest_state`, `reason`, and `request_key`. The workspace must be the owner's
+logical workspace ID or absolute checkout path. This is operator-only and unavailable
+inside a managed run. The dashboard offers **Retry landing** with the same expectations
+and retains its replay key in browser storage.
+
+Reuse the key and exact inputs after a lost reply. The durable receipt reserves one
+attempt atomically and resolves the same run on replay. Only a stopped landing or an
+uncertain intent with no live owner job qualifies. The normal landing job reconciles
+external intent before any merge: an already-merged exact candidate is observed and
+completed without a repeated merge. Every native certificate, review, required check,
+remote identity/head/base, lease and merge-certainty gate remains in force. Original
+stopped evidence stays in history. Changed or invalidated work needs its own repair
+and fresh handoff; the retry accepts no `auto_fix`, raw pipeline input or head override.
+
 ## Multi-operator workspaces
 
 When two operators act on the same authoritative workspace store, one can hold

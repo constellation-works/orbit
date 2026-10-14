@@ -35,7 +35,7 @@
 //! # What it deliberately does not do
 //!
 //! No host registration, demotion, or fleet listing; no automatic reclamation;
-//! no landing trigger. Recovery is here because there is no heartbeat, so the
+//! no arbitrary pipeline inputs. Recovery is here because there is no heartbeat, so the
 //! decision that an attempt is over belongs to a human.
 
 use std::time::Instant;
@@ -44,7 +44,8 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{
-    DASHBOARD_CLAIM_RECOVER, DASHBOARD_HANDOFF_APPROVE, DASHBOARD_HANDOFF_REVOKE,
+    DASHBOARD_CLAIM_RECOVER, DASHBOARD_HANDOFF_APPROVE, DASHBOARD_HANDOFF_RETRY,
+    DASHBOARD_HANDOFF_REVOKE,
 };
 use orbit_core::application::review::{
     DistributedClaimState, ExpectedCandidate, HandoffConsoleRefusal,
@@ -208,6 +209,71 @@ pub(super) async fn approve_handoff_action(
     .await
 }
 
+/// Retry a stopped or uncertain handoff, with a durable compare-and-reserve key.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RetryHandoffRequest {
+    expected_candidate_commit: String,
+    expected_base_commit: String,
+    expected_latest_attempt: u32,
+    expected_latest_state: orbit_types::workflow::handoff::LandingAttemptState,
+    reason: String,
+    request_key: String,
+}
+
+/// `POST /api/distributed/handoffs/:id/retry` — normal owner landing only.
+pub(super) async fn retry_handoff_action(
+    State(state): State<DashboardState>,
+    Query(query): Query<OperationsQuery>,
+    Ws(runtime): Ws,
+    Path(handoff_id): Path<String>,
+    Json(body): Json<RetryHandoffRequest>,
+) -> Response {
+    let handoff_id = match validate_id(&handoff_id) {
+        Ok(id) => id.to_string(),
+        Err(message) => return bad_request(message),
+    };
+    let request_key = match validate_request_id(&body.request_key) {
+        Ok(key) => key,
+        Err(message) => return bad_request(message),
+    };
+    let reason = match validate_reason(&body.reason, "retrying a handoff") {
+        Ok(reason) => reason,
+        Err(message) => return bad_request(message),
+    };
+    let request = orbit_types::workflow::handoff::LandingRetryRequest {
+        handoff_id: handoff_id.clone(),
+        expected_candidate_commit: body.expected_candidate_commit,
+        expected_base_commit: body.expected_base_commit,
+        expected_latest_attempt: body.expected_latest_attempt,
+        expected_latest_state: body.expected_latest_state,
+        reason,
+        request_key,
+    };
+    let arguments = json!(request);
+    run_owner_action(
+        state,
+        query,
+        runtime,
+        &DASHBOARD_HANDOFF_RETRY,
+        "handoff.retry",
+        handoff_id,
+        arguments,
+        move |runtime| retry_handoff_response(runtime, &request),
+    )
+    .await
+}
+
+// Called by run_owner_action on its blocking worker, including workspace lookup.
+fn retry_handoff_response(
+    runtime: &OrbitRuntime,
+    request: &orbit_types::workflow::handoff::LandingRetryRequest,
+) -> Result<Value, OrbitError> {
+    let dispatch =
+        runtime.retry_handoff_as_operator(&runtime.workspace_id()?, request, OPERATOR_ACTOR)?;
+    serde_json::to_value(dispatch).map_err(|error| OrbitError::Execution(error.to_string()))
+}
+
 /// `POST /api/distributed/handoffs/:id/revoke` — withdraw completion authority.
 ///
 /// The task stays in `review`: revocation cancels the pending landing request
@@ -330,7 +396,7 @@ pub(super) async fn recover_claim_action(
     .await
 }
 
-/// The shared body of all three mutations: authorize, require an explicit
+/// The shared body of owner mutations: authorize, require an explicit
 /// workspace, run the domain transaction off the async pool, audit the outcome,
 /// and translate a refusal into the code the client acts on.
 #[allow(clippy::too_many_arguments)]
@@ -473,6 +539,7 @@ fn refusal_response(runtime: &OrbitRuntime, error: &OrbitError) -> Response {
 fn capabilities(operator_session: bool) -> Value {
     json!({
         "handoff_approve": action_capability(&DASHBOARD_HANDOFF_APPROVE, operator_session),
+        "handoff_retry": action_capability(&DASHBOARD_HANDOFF_RETRY, operator_session),
         "handoff_revoke": action_capability(&DASHBOARD_HANDOFF_REVOKE, operator_session),
         "claim_recover": action_capability(&DASHBOARD_CLAIM_RECOVER, operator_session),
     })

@@ -273,6 +273,43 @@ A receipt is historical evidence, not current execution authority. Replay includ
 phase separately. A revoked or settled claim is never reactivated; local launch requires an
 idempotent owner-side binding check and execution mutations require the current claim.
 
+## Owner retry of an authorized handoff
+
+A stopped owner landing does not invalidate a healthy native leaf binding. A trusted
+operator can retry that exact accepted handoff with `orbit.task.retry_handoff`,
+`orbit task retry-handoff`, or the dashboard's **Retry landing** action. The operation
+requires an explicit owner workspace (logical ID or absolute checkout path), handoff
+identity, expected accepted candidate/base commits, expected latest attempt number and
+state, a reason, and a durable `request_key`. It accepts no saved job inputs, repair
+switches, replacement head, or authority. Managed agents and replica checkouts refuse it.
+
+The owner reconciles the prior owner job before admission and rechecks the current
+handed-off claim, accepted candidate, native validation/review evidence and unrevoked
+completion authorization. Only a stopped attempt, or an uncertain merge intent whose
+owner job is no longer live, is eligible. A stale expectation refuses without reserving
+another attempt. The foreign leaf binding and the immutable handoff remain unchanged.
+
+The existing claim journal atomically records the operator request receipt and reserves
+its attempt before pipeline submission. The job uses the normal handoff/attempt action
+key. Concurrent independent requests cannot reserve a second attempt from the same
+observed state; identical replays and a lost reply resolve the same receipt and run,
+including after that run settles. A crash before submission leaves the pending landing
+outbox to recover; a crash after submission resolves its recorded action key before
+attachment. Previous attempts and their stopped evidence remain inspectable through
+`landing_attempt_record` and task history.
+
+The normal owner landing job first reconciles any unresolved external merge intent.
+An already-merged exact head completes from provider readback without sending another
+merge. Otherwise all repository, remote head/base, review, required-check, native
+certificate, lease and merge-certainty checks still apply. UNKNOWN/PENDING uses the
+existing bounded wait; administrative or review refusal is not widened into a wait.
+A candidate that needs repair must produce a fresh validated handoff instead.
+
+Save the request key and reuse the exact input after an uncertain reply. The dashboard
+retains its key in browser storage before sending; if storage is unavailable it refuses
+and points to the owner CLI. This operation does not resume the foreign workflow,
+rebind or release its claim, force a merge, or change branch protection.
+
 ## Read-only receipt reconciliation
 
 Add an owner-served lookup keyed by workspace, original caller machine, and request ID

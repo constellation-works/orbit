@@ -65,10 +65,15 @@ fn public_drain_calls_and_spoofed_initialize_are_refused_and_audited() {
             .collect::<BTreeSet<_>>();
         assert_eq!(
             names.len(),
-            28,
+            29,
             "the reviewed 37-tool surface loses five protocol tools and seven tools \
              folded into their siblings, then gains `orbit_task_eligible`, \
-             `orbit_task_review_reset` and `orbit_task_reconcile_review`"
+             `orbit_task_review_reset`, `orbit_task_reconcile_review` and \
+             `orbit_task_retry_handoff`"
+        );
+        assert!(
+            names.contains("orbit_task_retry_handoff"),
+            "the public owner retry operation remains advertised"
         );
         for name in OPERATIONS {
             let advertised = orbit_types::tool::mcp_advertised_tool_name(name);

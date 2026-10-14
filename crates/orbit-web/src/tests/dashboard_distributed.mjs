@@ -120,6 +120,7 @@ const console_ = (claims, capabilities) => ({
   claims,
   capabilities: capabilities || {
     handoff_approve: { authorized: true, reason: null },
+    handoff_retry: { authorized: true, reason: null },
     handoff_revoke: { authorized: true, reason: null },
     claim_recover: { authorized: true, reason: null },
   },
@@ -1001,6 +1002,38 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   press(block.querySelector("button.claim-retry"));
   await settle();
   assert.ok(button(block, "Approve handoff"), "retry recovers the panel");
+}
+
+// The stopped same-handoff retry carries exact expectations and keeps its key
+// across a lost reply and a rebuilt panel. Live work has no retry control.
+{
+  sent.length = 0;
+  const stopped = claim();
+  stopped.handoff.authority.state = "authorized";
+  stopped.handoff.landing = { state: "stopped", attempt: 3, evidence: "required review" };
+  consoleBody = console_([stopped]);
+  let block = await mount();
+  press(button(block, "Retry landing")); await settle();
+  assert.equal(sent.length, 0, "retry requires an operator reason");
+  block.querySelector('[data-reason-for="retry-handoff"]').value = "provider now permits this candidate";
+  nextAction = { status: 503, body: { error: "reply lost" } };
+  press(button(block, "Retry landing")); await settle();
+  assert.equal(sent.length, 1);
+  const first = sent[0];
+  assert.ok(first.path.endsWith("/retry"));
+  assert.equal(first.body.expected_candidate_commit, CANDIDATE);
+  assert.equal(first.body.expected_base_commit, BASE);
+  assert.equal(first.body.expected_latest_attempt, 3);
+  assert.equal(first.body.expected_latest_state, "stopped");
+  assert.ok(first.body.request_key);
+  block = await mount();
+  block.querySelector('[data-reason-for="retry-handoff"]').value = "provider now permits this candidate";
+  press(button(block, "Retry landing")); await settle();
+  assert.equal(sent[1].body.request_key, first.body.request_key, "a rebuilt panel reuses durable replay identity");
+  stopped.handoff.landing.state = "dispatched";
+  consoleBody = console_([stopped]);
+  block = await mount();
+  assert.ok(!button(block, "Retry landing"), "ordinary live work cannot be retried");
 }
 
 // --- a settled claim is history, not a warning ---------------------------------

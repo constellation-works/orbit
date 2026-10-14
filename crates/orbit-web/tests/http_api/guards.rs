@@ -136,6 +136,9 @@ fn registered_paths() -> impl Iterator<Item = &'static str> {
 
 fn body(path: &str) -> Value {
     match path {
+        "/distributed/handoffs/:id/retry" => {
+            json!({"expected_candidate_commit":"a","expected_base_commit":"b","expected_latest_attempt":1,"expected_latest_state":"stopped","reason":"HTTP guard check","request_key":"guard-fixture"})
+        }
         "/runs/:id/replay" => json!({}),
         "/config/keys/:key" => json!({"value":"agent-main","init":"fresh"}),
         "/config/crews/:name" => json!({"fields":{}}),

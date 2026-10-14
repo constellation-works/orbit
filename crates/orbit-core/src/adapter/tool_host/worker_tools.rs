@@ -62,6 +62,7 @@ pub(crate) fn execute(
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
             | TaskVerb::ReconcileReview
+            | TaskVerb::RetryHandoff
             | TaskVerb::Reject
             | TaskVerb::Delete => true,
         },
@@ -273,6 +274,7 @@ pub(crate) fn execute(
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
             | TaskVerb::ReconcileReview
+            | TaskVerb::RetryHandoff
             | TaskVerb::Reject
             | TaskVerb::Delete => {
                 return Err(OrbitError::PolicyDenied(

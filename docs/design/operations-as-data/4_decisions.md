@@ -1,7 +1,7 @@
 ---
 title: Operations as Data — Decisions
 owner: claude
-last_updated: 2026-10-13
+last_updated: 2026-10-14
 last_validated: 2026-10-12
 status: Accepted
 feature: operations-as-data
@@ -229,6 +229,13 @@ The gap the earlier entry named has therefore closed by deletion, not by a fix: 
 3. **The agent-reachable friction reads stay ungoverned, and that is now a test.** Because the chokepoint is surface-independent, governing the friction `list` / `show` operations would refuse an agent the CLI read as well as an MCP one. A pin asserts they stay off the registry.
 
 4. **An advertised governed tool must not list `agent` among its allowed capabilities.** Governing an operation the ordinary MCP caller already holds the capability for buys nothing and dilutes the entries that do refuse. A second assertion enforces it.
+
+Current surface addition (2026-10-14): `orbit.task.retry_handoff` is advertised for
+operator discovery and governed by the operator capability. The dashboard's
+`handoff.retry` action uses the same operator floor. Managed agents are refused;
+advertisement grants no execution authority. The retry reserves a durable receipt
+for the existing handoff and uses normal owner landing, as specified in
+[owner handoff retry](../distributed-drain/specs/task-pull.md#owner-retry-of-an-authorized-handoff).
 
 ### Rejected alternatives
 

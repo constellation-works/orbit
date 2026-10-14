@@ -1,0 +1,53 @@
+Retry a stopped authorized handoff through normal owner landing
+
+Usage: orbit task retry-handoff [OPTIONS] --owner-workspace <WORKSPACE> --candidate <COMMIT> --base <COMMIT> --attempt <NUMBER> --state <STATE> --reason <REASON> --request <KEY> <HANDOFF_ID>
+
+Arguments:
+  <HANDOFF_ID>
+          Accepted handoff identity
+
+Options:
+      --owner-workspace <WORKSPACE>
+          Explicit owner logical workspace ID or absolute checkout path
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --candidate <COMMIT>
+          Expected accepted candidate commit
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --base <COMMIT>
+          Expected accepted base commit
+
+      --attempt <NUMBER>
+          Expected latest landing attempt number
+
+      --state <STATE>
+          Expected latest state: stopped or dispatched with uncertain intent
+          
+          [possible values: stopped, dispatched]
+
+      --reason <REASON>
+          Operator reason recorded with the retry
+
+      --request <KEY>
+          Durable replay key; reuse after a lost reply
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+  -h, --help
+          Print help (see a summary with '-h')
