@@ -1005,12 +1005,17 @@ fn follower_cli(runtime: &OrbitRuntime, provider: &str, command: &str) {
         .expect("executor");
 }
 
-/// A stand-in worker, reaped the moment it exits so a stop can see it gone.
+/// A stand-in worker whose single reaper owns the child until completion.
 /// On Unix it leads its own group unless a test supplies a shared group.
 struct Worker {
     pid: u32,
+    completion: Arc<std::sync::OnceLock<std::io::Result<std::process::ExitStatus>>>,
     exited: std::sync::mpsc::Receiver<()>,
+    shutdown: std::sync::mpsc::Sender<()>,
+    reaper: Option<std::thread::JoinHandle<()>>,
 }
+
+const WORKER_WAIT_BUDGET: Duration = Duration::from_secs(5);
 
 impl Worker {
     fn spawn() -> Self {
@@ -1033,7 +1038,16 @@ impl Worker {
         Self::spawn_command(command)
     }
 
-    fn spawn_command(mut command: std::process::Command) -> Self {
+    fn spawn_command(command: std::process::Command) -> Self {
+        Self::spawn_command_with_reap_hook(command, || {})
+    }
+
+    /// The cancellation matrix can hold the actual owned-child wait without
+    /// sleeps, synthetic load, or changing production cancellation budgets.
+    fn spawn_command_with_reap_hook(
+        mut command: std::process::Command,
+        before_reap: impl FnOnce() + Send + 'static,
+    ) -> Self {
         let mut child = command
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -1041,32 +1055,101 @@ impl Worker {
             .spawn()
             .expect("worker process");
         let pid = child.id();
+        // Bind before the reaper can consume ownership. Shared-group workers
+        // must be signalled individually, never through OwnedChild's group API.
+        #[cfg(unix)]
+        let bound =
+            orbit_common::process::signal::BoundProcess::bind(pid, None).unwrap_or_else(|error| {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("bind owned worker: {error}");
+            });
+        let completion = Arc::new(std::sync::OnceLock::new());
+        let completed = Arc::clone(&completion);
         let (exited, on_exit) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = child.wait();
+        let (shutdown, on_shutdown) = std::sync::mpsc::channel();
+        let reaper = std::thread::spawn(move || {
+            let result = loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => break Ok(status),
+                    Err(error) => break Err(error),
+                    Ok(None) => {}
+                }
+                if matches!(
+                    on_shutdown.recv_timeout(Duration::from_millis(20)),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                ) {
+                    continue;
+                }
+                #[cfg(unix)]
+                let signal = bound
+                    .as_ref()
+                    .map_or(Ok(false), |process| process.signal(9));
+                #[cfg(not(unix))]
+                let signal = child.kill().map(|()| true);
+                before_reap();
+                // Only this thread ever waits on or kills the owned Child.
+                // A bound signal cannot target a recycled numeric PID.
+                break child.wait().and_then(|status| signal.map(|_| status));
+            };
+            completed.set(result).expect("one owned-child completion");
+            drop(child);
             let _ = exited.send(());
         });
         Self {
             pid,
+            completion,
             exited: on_exit,
+            shutdown,
+            reaper: Some(reaper),
         }
     }
 
-    /// Whether the process has exited and been reaped.
+    /// Whether the process has successfully exited and been reaped. Reading
+    /// the notification never consumes the retained terminal result.
     fn stopped(&self) -> bool {
-        self.exited.recv_timeout(Duration::from_secs(5)).is_ok()
+        if self.completion.get().is_none() {
+            let _ = self.exited.recv_timeout(WORKER_WAIT_BUDGET);
+        }
+        self.completion.get().is_some_and(Result::is_ok)
     }
 
     fn running(&self) -> bool {
-        self.exited.try_recv().is_err()
+        self.completion.get().is_none()
     }
 }
 
 impl Drop for Worker {
     fn drop(&mut self) {
-        let _ = std::process::Command::new("kill")
-            .args(["-9", &self.pid.to_string()])
-            .status();
+        let deadline = std::time::Instant::now() + WORKER_WAIT_BUDGET;
+        let _ = self.shutdown.send(());
+        let completed = self.stopped();
+        // Completion precedes the thread's return. Bound joining as well as
+        // reaping so fixture resources cannot outlive an unobserved reaper.
+        while self
+            .reaper
+            .as_ref()
+            .is_some_and(|reaper| !reaper.is_finished())
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            completed,
+            "owned worker reap failed: {:?}",
+            self.completion.get()
+        );
+        assert!(
+            self.reaper
+                .as_ref()
+                .is_some_and(|reaper| reaper.is_finished()),
+            "worker reaper exceeded its join budget"
+        );
+        self.reaper
+            .take()
+            .expect("owned reaper")
+            .join()
+            .expect("worker reaper");
     }
 }
 

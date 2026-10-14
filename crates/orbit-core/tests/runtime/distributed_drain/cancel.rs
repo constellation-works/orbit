@@ -305,6 +305,132 @@ fn term_ignoring_owner(pgid: libc::pid_t) -> Worker {
     Worker::spawn_command(command)
 }
 
+/// Held actual waits prove that normal, error and unwind cleanup cannot
+/// release fixture resources before the child has been reaped and joined.
+fn worker_cleanup_retains_completion_and_joins_the_reaper() {
+    use std::sync::mpsc;
+
+    struct Resources {
+        pid: u32,
+        completion: Arc<std::sync::OnceLock<std::io::Result<std::process::ExitStatus>>>,
+    }
+    impl Drop for Resources {
+        fn drop(&mut self) {
+            assert!(
+                self.completion.get().is_some_and(Result::is_ok),
+                "fixture resources require successful owned-child reaping"
+            );
+            assert_worker_absent(self.pid);
+        }
+    }
+    // Rust drops fields in declaration order: the worker must complete before
+    // its fixture resources go away, including while unwinding an assertion.
+    struct Fixture {
+        _worker: Worker,
+        _resources: Resources,
+    }
+
+    for path in ["normal", "error", "unwind"] {
+        let (entered, on_entered) = mpsc::channel();
+        let (release, on_release) = mpsc::channel();
+        let mut command = std::process::Command::new("sleep");
+        command.arg("600");
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        let worker = Worker::spawn_command_with_reap_hook(command, move || {
+            let _ = entered.send(());
+            // Disconnect also releases the hold if the control itself unwinds.
+            let _ = on_release.recv_timeout(WORKER_WAIT_BUDGET);
+        });
+        assert!(worker.running());
+        let pid = worker.pid;
+        let completion = Arc::clone(&worker.completion);
+        let fixture = Fixture {
+            _resources: Resources {
+                pid,
+                completion: Arc::clone(&completion),
+            },
+            _worker: worker,
+        };
+        let (returned, on_returned) = mpsc::channel();
+        let cleanup = std::thread::spawn(move || {
+            // The fixture is moved into the closure and fully dropped there;
+            // no state protected by the JoinHandle is reused after an unwind.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                || -> Result<(), &'static str> {
+                    let _fixture = fixture;
+                    match path {
+                        "error" => Err("controlled fixture error"),
+                        "unwind" => panic!("controlled fixture unwind"),
+                        _ => Ok(()),
+                    }
+                },
+            ));
+            returned.send(result).unwrap();
+        });
+        on_entered.recv_timeout(WORKER_WAIT_BUDGET).unwrap();
+        assert!(completion.get().is_none(), "actual child wait is held");
+        assert!(matches!(
+            on_returned.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        release.send(()).unwrap();
+        let result = on_returned.recv_timeout(WORKER_WAIT_BUDGET).unwrap();
+        match path {
+            "error" => assert_eq!(result.unwrap(), Err("controlled fixture error")),
+            "unwind" => assert!(result.is_err()),
+            _ => assert_eq!(result.unwrap(), Ok(())),
+        }
+        cleanup.join().unwrap();
+        assert_worker_absent(pid);
+    }
+
+    let cleanup_signals = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = Arc::clone(&cleanup_signals);
+    let worker =
+        Worker::spawn_command_with_reap_hook(std::process::Command::new("true"), move || {
+            observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+    for _ in 0..3 {
+        assert!(
+            worker.stopped(),
+            "successful terminal result remains available"
+        );
+        assert!(
+            !worker.running(),
+            "terminal completion cannot become running"
+        );
+    }
+    let pid = worker.pid;
+    assert_worker_absent(pid);
+    drop(worker);
+    assert_eq!(
+        cleanup_signals.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "already-reaped cleanup must not enter the signalling path"
+    );
+    assert_worker_absent(pid);
+}
+
+fn assert_worker_absent(pid: u32) {
+    #[cfg(unix)]
+    assert_eq!(
+        orbit_common::process::identity::probe_process_liveness(pid, None),
+        orbit_common::process::identity::ProcessLiveness::Exited,
+        "owned child must be absent, not merely awaiting reap"
+    );
+    #[cfg(not(unix))]
+    let _ = pid;
+    #[cfg(target_os = "linux")]
+    assert!(
+        !Path::new("/proc").join(pid.to_string()).exists(),
+        "reaped child has no proc entry"
+    );
+}
+
 /// [ORB-13892] Cancelling a running pull drain is graceful. The request
 /// returns at once naming the leaf it waits for; the drain's next pass stops
 /// requesting and returns the claim it never launched to the owner's backlog
@@ -746,6 +872,7 @@ fn a_forced_local_drain_cancel_reports_mixed_child_outcomes() {
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_graceful_drain_cancel_releases_unlaunched_claims_and_waits_for_running_leaves_scenarios,
+    worker_cleanup_retains_completion_and_joins_the_reaper,
     a_graceful_drain_cancel_releases_unlaunched_claims_and_waits_for_running_leaves,
     a_forced_drain_cancel_refuses_an_unconfirmed_drain_owner,
     a_forced_drain_cancel_accepts_an_already_exited_drain_owner,
