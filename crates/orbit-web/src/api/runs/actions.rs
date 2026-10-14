@@ -307,7 +307,7 @@ pub(in crate::api) async fn auto_drain_stop_action(
     State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
     Ws(runtime): Ws,
-    OptionalJson(body): OptionalJson<AutoDrainStopBody>,
+    body: Result<OptionalJson<AutoDrainStopBody>, Response>,
 ) -> Response {
     if let Err(rejection) = explicit_workspace(&query) {
         return rejection.into_response();
@@ -315,6 +315,12 @@ pub(in crate::api) async fn auto_drain_stop_action(
     if let Err(denial) = authorized_caller(&DASHBOARD_AUTO_DRAIN_STOP, state.operator_session()) {
         return authorization_denied(denial);
     }
+    // Stop is always operator-only, including requests with malformed bodies.
+    // Defer the extractor's rejection until after authority is established.
+    let body = match body {
+        Ok(OptionalJson(body)) => body,
+        Err(rejection) => return rejection,
+    };
     match blocking("auto-drain stop", move || {
         runtime.stop_workspace_auto_admissions(DrainAdmissionsStopRequest {
             actor: "dashboard",

@@ -111,6 +111,17 @@ fn auto_stop_is_idempotent_and_preserves_in_flight_children() {
                 .write_run_state(&coordinator.run_id, &state)
                 .unwrap();
             let server = fixture.server(true);
+            let refused = server.send(
+                "POST",
+                "/api/workflows/auto/stop?workspace=ws_http_fixture",
+                json!({"auto_concurrency":"enforce"}),
+            );
+            assert_eq!(refused.status().as_u16(), 400);
+            assert_eq!(
+                fixture.runtime.read_run_state(&coordinator.run_id).unwrap(),
+                Some(state.clone()),
+                "an incompatible mode on stop must be refused before changing admissions"
+            );
             let first = json_ok(server.send(
                 "POST",
                 "/api/workflows/auto/stop?workspace=ws_http_fixture",

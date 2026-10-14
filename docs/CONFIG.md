@@ -108,6 +108,12 @@ resize are refused before effects. CLI `--stop` and `--pull` conflict with
 `--auto-concurrency`: pull overrides are unsupported, and pull drains
 continue using their executor host configuration.
 
+CLI submissions report the captured mode in a separate text line and the
+`auto_concurrency` JSON field; submission warnings and notes keep their
+existing meanings. HTTP stop requests require operator authority even when
+their bodies are malformed; authorized incompatible requests are refused
+without stopping admissions.
+
 For a pull drain (`orbit run auto --pull`), under `enforce` each
 `orbit.task.pull` request names the work this host's load forecast has room
 for, the owner grants only a task inside it, and the drain requests nothing

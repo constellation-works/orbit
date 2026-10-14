@@ -295,17 +295,11 @@ impl Execute for AutoCommand {
         };
         let mode = runtime.run_auto_concurrency(&run.run_id)?;
         let notices = runtime.submission_notices(SubmissionKind::Drain);
-        let mut notes = notices.notes();
-        notes.push(format!(
-            "Auto-concurrency: {} ({}).",
-            mode["mode"].as_str().unwrap_or("off"),
-            mode["source"].as_str().unwrap_or("configured")
-        ));
         super::support::workflow_dispatch_payload_with_auto_concurrency(
             AUTO_WORKFLOW,
             &[run],
             notices.warnings(),
-            notes,
+            notices.notes(),
             mode,
         )
     }

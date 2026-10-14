@@ -207,6 +207,11 @@ pub(crate) fn workflow_dispatch_payload_with_auto_concurrency(
         doc["note"] = json!(notes.join("\n"));
     }
     if !auto_concurrency.is_null() {
+        lines.push(format!(
+            "Auto-concurrency: {} ({}).",
+            auto_concurrency["mode"].as_str().unwrap_or("off"),
+            auto_concurrency["source"].as_str().unwrap_or("configured")
+        ));
         doc["auto_concurrency"] = auto_concurrency;
     }
     let payload = Payload::detail(doc, lines.join("\n"));
