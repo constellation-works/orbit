@@ -729,3 +729,67 @@ The current-base mapping covers all 291 retired nextest identities; original
 names and the final surviving family selectors are retained in the prepared PR
 body and `oncall-15958-native/delivery-retired-map.json`. No named CI selector
 or required QA behavior is intentionally dropped.
+
+## Absorbed-candidate preparation reuse
+
+`v2_worktree_lifecycle::absorbed_candidate::absorption_contracts_1` retains its
+four scenario bodies and all nine validation-route rows. Only the repeated
+unrecovered preparation is shared: real `worktree_setup`, commits and `pr_prepare`
+build absorbed and retained seeds once. Each row copies every file and Git object,
+relocates both linked-worktree pointers, and starts with independent host stores,
+provider executable, checkpoints, audit sink and artifacts. The seeds stay alive
+and unchanged until all rows finish. The same fixture run identity can recur
+because each row has a separate repository and host namespace.
+
+| Surviving row or scenario | Observable guarantee |
+|---|---|
+| `retained-owner`, `retained-claim` | Real conflict continuation retains candidate commits, runs all four captured commands at final HEAD, preserves command/log identity, then delivers once without final recovery. |
+| `absorbed-owner`, `absorbed-claim` | Local and owner-contract gates run at the continued HEAD before verified no-diff settlement; delivery stays absent. |
+| `failing-absorbed` | The failed fourth command retains its nonzero log and prevents settlement. |
+| `no-diff-expected`, `standalone` | Tagged and non-owned routes do not run captured host handoff commands; real recovery and no-diff settlement still run. |
+| `uncaptured-claim`, `empty-capture` | Replica configuration and empty captures cannot impersonate captured owner gates. |
+| Identical landed patch scenario | Empty rebase settles before candidate validation and re-observes its certificate on retry. |
+| Absorbed and discarded scenarios | Typed absorbed settlement and discarded-candidate refusal stay distinct; no recovery or delivery bypass. |
+| `absorption_contracts_2` | Advanced-base certificate identity, dropped-candidate refusal, eleven typed re-observation refusals and quoted-marker refusal remain unchanged. |
+
+Every validation row still runs public `execute_job_with_resume`, real Git
+rebasing, the substitute provider process and recovery continuation. No row or
+assertion was retired, no test carrier was split, and no deadline, retry, wait or
+production visibility changed. Row/phase timing goes to inherited stderr for
+this module, so nextest retains the current row even if it terminates the parent;
+the existing isolated-child wait and reap behavior remains in place.
+
+The current-source native Mac pair on 2026-10-14 uses base
+`07751922dcbb9d9235e60928e72c52a7741984c9`, the same default nextest configuration,
+zero retries and the host's unchanged 2 build slots × 5 Cargo jobs × 5 test threads
+on 14 cores. Both arms select and execute the same 152 identities of the complete
+`orbit-engine --test engine` target. Baseline adds only the same row timing and
+stderr diagnostics; the candidate adds preparation reuse and seed-isolation
+assertions. Exact source hashes, patches, commands, identities, JUnit, raw output
+and load observations are retained in the task's `absorbed-cost` evidence.
+
+| Measurement | Baseline | Candidate |
+|---|---:|---:|
+| Named existing table | 15.810 s | 12.477 s |
+| Nine row setups, including candidate seed construction | 2.118 s | 0.542 s |
+| Nine row executor sections (Git, provider, recovery and gates) | 10.396 s | 8.938 s |
+| Full target test wall | 74.227 s | 64.597 s |
+| Summed full target case time | 361.544 s | 316.032 s |
+| Command wall, including compilation and admission | 148.178 s | 68.173 s |
+| Reported test results | 152 passed | 152 passed |
+| Start/end one-minute host load | 3.129 / 7.872 | 6.516 / 6.918 |
+
+The measured removed work is repeated preparation: candidate row copies total
+0.128 s plus 0.414 s to create both seeds. Executor sections still exercise all
+process and gate boundaries. Compilation was cold for the baseline, and live
+load changed, so neither overall wall improvement nor executor improvement is
+attributed causally to this fixture change. The baseline's 15 s budget miss is
+retained; the historical 32.256 s pass and 15.008 s timeout concern another source
+and remain separate parent evidence.
+
+Both full-target runs also report two Seatbelt-unavailable notices and two
+`ps`-denied notices from unrelated CLI sandbox fixtures. Those paths did not run
+and require the pipeline's outside-sandbox final validation. The absorbed tables
+reported no coverage refusal. This pair does not establish a complete affected
+workspace pass or the complete CI job's 900 s budget. All four normal final gates
+remain pipeline-owned; full CI is separately run on the PR.
