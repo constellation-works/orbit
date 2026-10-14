@@ -6,7 +6,7 @@ last_validated: 2026-10-14
 
 # Spec: Table Rendering
 
-A list rendered by `orbit` is a header row followed by one line per record. Borders are not drawn, cells are truncated rather than wrapped, and every truncated value is retrievable in full from a named alternative. A consumer may assume that line count minus one equals record count, and that `cut -f` on the plain form yields whole field values.
+In standard table-mode list output, the header is one line and each record is one line. Borders are not drawn, and cells are truncated rather than wrapped. A named detail command is available for many truncated values, but not all yet; current gaps are listed in [detail-commands.md](../references/detail-commands.md). Plain output uses escaped tab-separated fields, so `cut -f` yields whole field values.
 
 ## Why This Exists
 

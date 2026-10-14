@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Color and Styling"
-last_updated: 2026-10-09
+last_updated: 2026-10-14
 last_validated: 2026-10-14
 ---
 
@@ -11,7 +11,7 @@ Color in `orbit` output is a semantic role attached to a value's meaning, mapped
 
 ## Why This Exists
 
-`crates/orbit-cli/src/output/color.rs` defines the same status vocabulary twice — once returning `comfy_table::Cell`, once returning `colored`-styled `String` — because the styling backend is chosen by the call site's rendering shape rather than by what the value means. Every status change costs two edits, the copies have already drifted, and the two backends disagree about whether `NO_COLOR` applies. Rationale in [One Semantic Color Vocabulary, Gated at the Sink](../4_decisions.md#one-semantic-color-vocabulary-gated-at-the-sink).
+Before this migration, separate helpers encoded the status vocabulary for `comfy_table::Cell` and `colored`-styled `String`. The copies had drifted, and the backends disagreed about whether `NO_COLOR` applied. The current `crates/orbit-cli/src/output/color.rs` maps values once through `role_for` and provides `cell` and `text` renderers; the sink decides whether ANSI is emitted. Rationale in [One Semantic Color Vocabulary, Gated at the Sink](../4_decisions.md#one-semantic-color-vocabulary-gated-at-the-sink).
 
 ## 1. The Role Vocabulary
 
@@ -26,7 +26,7 @@ Six roles, closed set. Adding a seventh is a design change, not a call-site deci
 | `muted` | de-emphasized, archived, secondary | dim |
 | `neutral` | no signal | default |
 
-Mapping from domain values to roles is defined once, in one table, covering task status, run state, job state, priority, task type, doctor status, and audit status together. The current eight per-domain functions (`status_color`/`_cell`, `priority_color`/`_cell`, `job_state_color`/`_cell`, `doctor_status_color_cell`, `task_type_color_cell`) collapse into it.
+Mapping from domain values to roles is defined once in `role_for`, covering task status, priority, task type, the shared job/run/tool/plugin state vocabulary, doctor status, and audit status. The former per-domain color helpers have been replaced by role-tagged `cell` and `text` calls; tool and plugin states use the `JobState` domain. `TaskType` values currently resolve to `neutral`.
 
 **Unmapped values are `neutral`, never an error.** A new status introduced elsewhere in the codebase must render plainly, not panic and not fall through to an arbitrary color.
 
