@@ -1090,7 +1090,7 @@ fn unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf() {
         assert_eq!(grant.requested_tools, vec![tool.to_string()]);
         assert!(grant.effective_tools.iter().any(|name| name == tool));
     }
-    for peers in held.chunks_exact(2) {
+    for peers in held.as_chunks::<2>().0 {
         let reason = |task: &str| {
             exclusions
                 .iter()
