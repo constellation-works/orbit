@@ -3566,5 +3566,24 @@
       4096,
       8192
     ]
+  },
+  {
+    "name": "checkout_unicode_crosses_transport_and_collector_batch_boundaries",
+    "parts": [
+      "setup\tCheckout\tHEAD is now at 2d773a649844b168c5cfce4c80feadb8b025bb69 ",
+      {
+        "text": "x",
+        "repeat": 4024
+      },
+      "λ checkout subject\n"
+    ],
+    "max_bytes": 8192,
+    "max_evidence_lines": 8,
+    "chunks": [
+      1,
+      7,
+      4096,
+      8192
+    ]
   }
 ]

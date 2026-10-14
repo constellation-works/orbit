@@ -75,7 +75,7 @@ impl DiagnosticCollector {
                 self.line.push(*byte);
             }
             if *byte == b'\n' {
-                let bytes = std::mem::take(&mut self.line);
+                let mut bytes = std::mem::take(&mut self.line);
                 let total_bytes = std::mem::take(&mut self.line_bytes);
                 // A retained prefix may end inside a UTF-8 character. Only
                 // assertion payloads are allowed to exceed the line buffer.
@@ -90,11 +90,18 @@ impl DiagnosticCollector {
                     }
                 };
                 self.observe(line, total_bytes);
+                bytes.clear();
+                self.line = bytes;
             }
         }
     }
 
     fn observe(&mut self, line: &str, total_bytes: usize) {
+        // A short, intact line cannot open a runner command or carry a source
+        // truncation notice. Inside a command every byte still counts.
+        if self.candidate.is_none() && total_bytes == line.len() && line.len() < 7 {
+            return;
+        }
         let (columns, payload) = runner_payload(line);
         let plain = strip_ansi_sequences(payload);
         let payload = plain.trim();
@@ -441,6 +448,10 @@ fn timestamp_payload(text: &str) -> Option<(&str, &str)> {
 /// Walks characters rather than bytes: a truncated or malformed escape in a
 /// runner log must not split a multi-byte character.
 pub fn strip_ansi_sequences(input: &str) -> String {
+    // Unstyled runner lines need no character-by-character reconstruction.
+    if !input.contains('\u{1b}') {
+        return input.to_owned();
+    }
     let mut out = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
     while let Some(ch) = chars.next() {

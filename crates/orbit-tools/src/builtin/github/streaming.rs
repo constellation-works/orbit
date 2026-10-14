@@ -15,6 +15,8 @@ const MAX_SHA_LEN: usize = 40;
 /// rest is still drained so `gh` can exit, but identity is marked incomplete.
 pub const MAX_CHECKOUT_LOG_SCAN_BYTES: usize = 8 * 1024 * 1024;
 const MAX_CHECKOUT_EVIDENCE_LINE_BYTES: usize = 16 * 1024;
+/// Bound and amortize work across small transport reads.
+const STREAM_BATCH_BYTES: usize = 4096;
 
 /// The commit a runner actually checked out, read out of the runner's own log.
 ///
@@ -67,13 +69,15 @@ pub struct StreamedLog {
 /// A truncated excerpt drops a whitespace-delimited token split by either
 /// retained boundary before redaction. A raw cut would otherwise keep a
 /// credential prefix or suffix that `redact_all` cannot match. Only the two
-/// windows, plus one byte beside each cut, are retained.
+/// windows, plus one byte beside each cut and a bounded 4 KiB input batch,
+/// are retained. `finish` processes the last partial batch before rendering.
 pub struct StreamedLogCollector {
     max_bytes: usize,
     /// How much of the budget the head window may keep; the rest is the tail.
     head_bytes: usize,
     head: Vec<u8>,
-    tail: Vec<u8>,
+    tail: std::collections::VecDeque<u8>,
+    pending: Vec<u8>,
     total_bytes: usize,
     /// First byte after `head` once that window is full. Absent when the
     /// head was never cut.
@@ -109,7 +113,8 @@ impl StreamedLogCollector {
             max_bytes,
             head_bytes,
             head: Vec::with_capacity(head_bytes),
-            tail: Vec::with_capacity(max_bytes.saturating_sub(head_bytes)),
+            tail: std::collections::VecDeque::with_capacity(max_bytes.saturating_sub(head_bytes)),
+            pending: Vec::with_capacity(STREAM_BATCH_BYTES),
             total_bytes: 0,
             head_following: None,
             tail_preceding: None,
@@ -124,6 +129,35 @@ impl StreamedLogCollector {
 
     pub fn push(&mut self, chunk: &[u8]) {
         self.total_bytes = self.total_bytes.saturating_add(chunk.len());
+        let mut remaining = chunk;
+        while !remaining.is_empty() {
+            let take = (STREAM_BATCH_BYTES - self.pending.len()).min(remaining.len());
+            self.pending.extend_from_slice(&remaining[..take]);
+            remaining = &remaining[take..];
+            if self.pending.len() == STREAM_BATCH_BYTES {
+                self.flush_pending(false);
+            }
+        }
+    }
+
+    fn flush_pending(&mut self, final_batch: bool) {
+        let mut pending = std::mem::take(&mut self.pending);
+        let take = if final_batch {
+            pending.len()
+        } else {
+            // Checkout evidence decodes each batch. Leave an unfinished UTF-8
+            // character for the next read instead of replacing its pieces.
+            match std::str::from_utf8(&pending) {
+                Err(error) if error.error_len().is_none() => error.valid_up_to(),
+                _ => pending.len(),
+            }
+        };
+        self.collect_batch(&pending[..take]);
+        pending.drain(..take);
+        self.pending = pending;
+    }
+
+    fn collect_batch(&mut self, chunk: &[u8]) {
         self.evidence.push(chunk);
         self.diagnostic.push(chunk);
         self.nextest.push(chunk);
@@ -139,17 +173,35 @@ impl StreamedLogCollector {
             self.head_following = Some(chunk[head_take]);
         }
         let tail_limit = self.max_bytes.saturating_sub(head_limit);
-        self.tail.extend_from_slice(&chunk[head_take..]);
-        if self.tail.len() > tail_limit {
-            let drain_end = self.tail.len() - tail_limit;
-            if tail_limit > 0 {
+        let tail_chunk = &chunk[head_take..];
+        if tail_limit == 0 {
+            return;
+        }
+        if tail_chunk.len() >= tail_limit {
+            self.tail_preceding = if tail_chunk.len() > tail_limit {
+                Some(tail_chunk[tail_chunk.len() - tail_limit - 1])
+            } else {
+                self.tail.back().copied().or(self.tail_preceding)
+            };
+            self.tail.clear();
+            self.tail
+                .extend(&tail_chunk[tail_chunk.len() - tail_limit..]);
+        } else {
+            let drain_end = (self.tail.len() + tail_chunk.len()).saturating_sub(tail_limit);
+            if drain_end > 0 {
                 self.tail_preceding = Some(self.tail[drain_end - 1]);
+                // A front drain advances the ring; it does not move the
+                // retained tail on every single-byte transport read.
+                self.tail.drain(..drain_end);
             }
-            self.tail.drain(..drain_end);
+            self.tail.extend(tail_chunk);
         }
     }
 
     pub fn finish(mut self) -> StreamedLog {
+        // Include the short stream or final partial batch in every collector
+        // and both retained windows before rendering or checking completeness.
+        self.flush_pending(true);
         let evidence = self.evidence.finish();
         let truncated = self.total_bytes > self.max_bytes;
         let mut text = if truncated {
@@ -160,7 +212,8 @@ impl StreamedLogCollector {
             // would keep the omitted middle, which this collector must not
             // buffer; one adjacent byte is enough to see the split.
             let head = excerpt_without_partial_suffix(&self.head, self.head_following);
-            let tail = excerpt_without_partial_prefix(&self.tail, self.tail_preceding);
+            let tail =
+                excerpt_without_partial_prefix(self.tail.make_contiguous(), self.tail_preceding);
             format!(
                 "{}\n[... {omitted} bytes omitted; raise the byte budget for more ...]\n{}",
                 redact_all(&head),
@@ -169,7 +222,7 @@ impl StreamedLogCollector {
         } else {
             // When the source is short, all bytes are in `tail` except the
             // initial head window, so join the two retained halves.
-            self.head.extend_from_slice(&self.tail);
+            self.head.extend(self.tail);
             redact_all(&String::from_utf8_lossy(&self.head))
         };
         let nextest_complete = self.nextest.source_complete();
@@ -333,8 +386,21 @@ impl CheckoutEvidenceCollector {
     }
 
     fn observe_pending_line(&mut self) {
-        let line = std::mem::take(&mut self.pending_line);
-        let (step, payload) = split_log_line(&line);
+        let mut line = std::mem::take(&mut self.pending_line);
+        self.observe_line(&line);
+        line.clear();
+        self.pending_line = line;
+    }
+
+    fn observe_line(&mut self, line: &str) {
+        // Neither a checkout marker nor a recognized command nor a bare SHA
+        // fits below this length. Even an unrelated short line consumes the
+        // immediately preceding checkout command's output context.
+        if line.len() < MIN_SHA_LEN {
+            self.pending_checkout_command = None;
+            return;
+        }
+        let (step, payload) = split_log_line(line);
         let lowered = payload.to_ascii_lowercase();
         let marked = CHECKOUT_MARKERS
             .iter()
