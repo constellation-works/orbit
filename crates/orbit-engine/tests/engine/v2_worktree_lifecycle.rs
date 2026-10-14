@@ -5083,6 +5083,10 @@ fn isolated_in(module: &str, test: &str, body: impl FnOnce()) {
         .stdin(Stdio::null())
         .stdout(log.try_clone().unwrap())
         .stderr(log);
+    // Stream row progress into nextest, including when it terminates the parent.
+    if module.ends_with("::absorbed_candidate") {
+        command.stderr(Stdio::inherit());
+    }
     for (name, _) in std::env::vars_os() {
         let name = name.to_string_lossy();
         if name.starts_with("ORBIT_") || name.starts_with("GIT_") {

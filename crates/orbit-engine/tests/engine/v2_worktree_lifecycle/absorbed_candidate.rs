@@ -124,6 +124,7 @@ fn an_identical_landed_patch_settles_before_candidate_validation() {
     );
 }
 
+#[allow(clippy::print_stderr)]
 fn a_rebase_retaining_candidate_commits_still_runs_validation() {
     isolated_in(
         module_path!(),
@@ -132,6 +133,21 @@ fn a_rebase_retaining_candidate_commits_still_runs_validation() {
             use orbit_types::workflow::ValidationGateSource::{
                 LocalConfig, OwnerContract, ReplicaConfig,
             };
+            // Prepare each immutable history through the real setup/prepare
+            // actions once. Rows copy it before any recovery, preserving fresh
+            // Git files, host stores, provider process and gate artifacts.
+            let seeds_started = Instant::now();
+            let absorbed_seed = absorbed_rebase("jrun-validation-absorbed");
+            let retained_seed = PreparedRebase::with_commits(
+                "jrun-validation-retained",
+                &[
+                    ("README.md", "draft\n"),
+                    ("README.md", "target\n"),
+                    ("candidate-only.md", "new change\n"),
+                ],
+                &[("README.md", "target\n")],
+            );
+            eprintln!("validation seeds: prepared {:?}", seeds_started.elapsed());
             // Four distinct cheap commands stand in for the captured full
             // gates. They record their exact head after the real conflict
             // continuation, without generating load or measuring production.
@@ -146,15 +162,14 @@ fn a_rebase_retaining_candidate_commits_still_runs_validation() {
                 ("uncaptured-claim", false, true, ReplicaConfig, true, false),
                 ("empty-capture", false, true, LocalConfig, false, true),
             ] {
-                let mut commits = vec![("README.md", "draft\n"), ("README.md", "target\n")];
-                if retained {
-                    commits.push(("candidate-only.md", "new change\n"));
+                eprintln!("validation row: {case}: setup");
+                let row_started = Instant::now();
+                let prepared = if retained {
+                    &retained_seed
+                } else {
+                    &absorbed_seed
                 }
-                let prepared = PreparedRebase::with_commits(
-                    &format!("jrun-{case}"),
-                    &commits,
-                    &[("README.md", "target\n")],
-                );
+                .fresh_copy();
                 let mut host = resolving_host(&prepared, "printf 'target\\n' > README.md");
                 host.gate_source = Some(source);
                 if claimed {
@@ -196,7 +211,16 @@ fn a_rebase_retaining_candidate_commits_still_runs_validation() {
                 if owned {
                     sync["default_input"]["final_validation"] = json!(true);
                 }
+                eprintln!(
+                    "validation row: {case}: setup {:?}; executor",
+                    row_started.elapsed()
+                );
+                let execution_started = Instant::now();
                 let run = execute(&host, &prepared, &pipeline(sync));
+                eprintln!(
+                    "validation row: {case}: executor {:?}; assertions",
+                    execution_started.elapsed()
+                );
                 let final_head = prepared.head();
                 let should_validate = retained
                     || (owned && source != ReplicaConfig && !empty && case != "no-diff-expected");
@@ -273,6 +297,16 @@ fn a_rebase_retaining_candidate_commits_still_runs_validation() {
                     "",
                     "{case}"
                 );
+                eprintln!(
+                    "validation row: {case}: complete {:?}",
+                    row_started.elapsed()
+                );
+            }
+            for seed in [&absorbed_seed, &retained_seed] {
+                assert_eq!(seed.head(), seed.candidate, "rows cannot mutate their seed");
+                assert_eq!(git(&seed.checkout.path, &["status", "--porcelain"]), "");
+                assert!(seed.host.checkpoints().is_empty());
+                assert!(seed.host.get_task_artifacts("T-REBASE").unwrap().is_empty());
             }
         },
     );
@@ -759,6 +793,59 @@ fn absorbed_rebase(run_id: &str) -> PreparedRebase {
         &[("README.md", "draft\n"), ("README.md", "target\n")],
         &[("README.md", "target\n")],
     )
+}
+
+impl PreparedRebase {
+    /// Copy only an unrecovered preparation. Each row owns all mutable Git
+    /// metadata and host stores; no refs, indexes, objects or certificates are
+    /// shared with the immutable seed. The public executor still performs the
+    /// real conflict, provider invocation, continuation and validation per row.
+    fn fresh_copy(&self) -> Self {
+        let root = TempDir::new().unwrap();
+        crate::git_fixture::copy_template(self.fixture.root.path(), root.path());
+        let old_root = canonical(self.fixture.root.path());
+        let new_root = canonical(root.path());
+        let relocate = |path: &Path| new_root.join(path.strip_prefix(&old_root).unwrap());
+        let repo = relocate(&self.fixture.repo);
+        let checkout = Checkout {
+            path: relocate(&self.checkout.path),
+            branch: self.checkout.branch.clone(),
+        };
+        // copy_template relocates origin's config. A linked worktree also
+        // has two absolute links; relocate both without consulting/mutating
+        // the seed. commondir and index entries are already relative.
+        let link = fs::read_to_string(checkout.path.join(".git")).unwrap();
+        let git_dir = relocate(Path::new(link.trim().strip_prefix("gitdir: ").unwrap()));
+        assert!(git_dir.starts_with(repo.join(".git/worktrees")));
+        fs::write(
+            checkout.path.join(".git"),
+            format!("gitdir: {}\n", git_dir.display()),
+        )
+        .unwrap();
+        fs::write(
+            git_dir.join("gitdir"),
+            format!("{}\n", checkout.path.join(".git").display()),
+        )
+        .unwrap();
+        let host = LifecycleHost {
+            tasks: Mutex::new(self.host.tasks.lock().unwrap().clone()),
+            runs: Mutex::new(self.host.runs.lock().unwrap().clone()),
+            ..LifecycleHost::new(&repo)
+        };
+        let mut common = self.common.clone();
+        common["workspace_path"] = json!(checkout.path);
+        Self {
+            fixture: Fixture { root, repo },
+            host,
+            run_id: self.run_id.clone(),
+            checkout,
+            base_sha: self.base_sha.clone(),
+            candidate: self.candidate.clone(),
+            target: self.target.clone(),
+            common,
+            prepared: self.prepared.clone(),
+        }
+    }
 }
 
 /// `prepared`'s host, with a conflict-recovery provider that runs `body`.
