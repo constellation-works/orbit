@@ -18,21 +18,31 @@
 //! A target name neither record derives is never inferred to be scratch
 //! output.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
+#[cfg(target_os = "linux")]
 use std::time::Duration;
 
 use orbit_common::OrbitError;
-use orbit_common::fs::file_lock::{FileLockGuard, FileLockOptions, acquire_exclusive_file_lock};
+use orbit_common::fs::file_lock::FileLockGuard;
+#[cfg(target_os = "linux")]
+use orbit_common::fs::file_lock::{FileLockOptions, acquire_exclusive_file_lock};
+#[cfg(target_os = "linux")]
 use orbit_common::fs::io::atomic_write_bytes;
 use serde::{Deserialize, Serialize};
 
+#[cfg(target_os = "linux")]
 use super::required_command::{host_validation_source, host_validation_target_key};
 
 /// Where leases live, relative to the primary checkout: beside the targets,
 /// never inside them, so listing the targets lists only targets.
+#[cfg(target_os = "linux")]
 const LEASES_DIR: [&str; 3] = [".orbit", "state", "host-validation-leases"];
+#[cfg(target_os = "linux")]
 const LEASE_SCHEMA_VERSION: u32 = 1;
 /// Long enough to outlast GC removing a large target under the lock.
+#[cfg(target_os = "linux")]
 const LEASE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 #[cfg(target_os = "linux")]
 pub(super) const LEASE_LABEL: &str = "host validation target lease";
@@ -59,6 +69,7 @@ impl ScratchHostTarget {
 }
 
 /// What built one leased target.
+#[cfg(target_os = "linux")]
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct LeaseRecord {
     schema_version: u32,
@@ -89,34 +100,40 @@ pub fn lease_scratch_host_target(
     checkout: &Path,
     kind: ScratchHostTarget,
 ) -> Result<ScratchHostTargetLease, OrbitError> {
-    if !cfg!(target_os = "linux") {
-        return Ok(ScratchHostTargetLease { _lock: None });
+    #[cfg(target_os = "linux")]
+    {
+        let (primary, source) = host_validation_source(checkout)?;
+        let (record_path, lock) = lease_paths(&primary, &host_validation_target_key(&source));
+        let guard = acquire_exclusive_file_lock(
+            &lock,
+            LEASE_LABEL,
+            FileLockOptions {
+                timeout: LEASE_TIMEOUT,
+                warn_after: Duration::from_secs(30),
+                ..FileLockOptions::default()
+            },
+        )
+        .map_err(|error| OrbitError::Execution(format!("lease {}: {error}", lock.display())))?;
+        let record = LeaseRecord {
+            schema_version: LEASE_SCHEMA_VERSION,
+            kind,
+            source,
+        };
+        if read_record(&record_path).as_ref() != Some(&record) {
+            let bytes = serde_json::to_vec(&record)
+                .map_err(|error| OrbitError::Execution(format!("encode lease record: {error}")))?;
+            atomic_write_bytes(&record_path, &bytes).map_err(|error| {
+                OrbitError::Execution(format!("record {}: {error}", record_path.display()))
+            })?;
+        }
+        Ok(ScratchHostTargetLease { _lock: Some(guard) })
     }
-    let (primary, source) = host_validation_source(checkout)?;
-    let (record_path, lock) = lease_paths(&primary, &host_validation_target_key(&source));
-    let guard = acquire_exclusive_file_lock(
-        &lock,
-        LEASE_LABEL,
-        FileLockOptions {
-            timeout: LEASE_TIMEOUT,
-            warn_after: Duration::from_secs(30),
-            ..FileLockOptions::default()
-        },
-    )
-    .map_err(|error| OrbitError::Execution(format!("lease {}: {error}", lock.display())))?;
-    let record = LeaseRecord {
-        schema_version: LEASE_SCHEMA_VERSION,
-        kind,
-        source,
-    };
-    if read_record(&record_path).as_ref() != Some(&record) {
-        let bytes = serde_json::to_vec(&record)
-            .map_err(|error| OrbitError::Execution(format!("encode lease record: {error}")))?;
-        atomic_write_bytes(&record_path, &bytes).map_err(|error| {
-            OrbitError::Execution(format!("record {}: {error}", record_path.display()))
-        })?;
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (checkout, kind);
+        Ok(ScratchHostTargetLease { _lock: None })
     }
-    Ok(ScratchHostTargetLease { _lock: Some(guard) })
 }
 
 /// The lease that names target `key` under `primary`, when its record is a
@@ -138,6 +155,7 @@ pub(super) fn leased_target(primary: &Path, key: &str) -> Option<LeasedTarget> {
     })
 }
 
+#[cfg(target_os = "linux")]
 fn lease_paths(primary: &Path, key: &str) -> (PathBuf, PathBuf) {
     let directory = LEASES_DIR
         .iter()
@@ -150,6 +168,7 @@ fn lease_paths(primary: &Path, key: &str) -> (PathBuf, PathBuf) {
     )
 }
 
+#[cfg(target_os = "linux")]
 fn read_record(path: &Path) -> Option<LeaseRecord> {
     let bytes = std::fs::read(path).ok()?;
     serde_json::from_slice::<LeaseRecord>(&bytes)
