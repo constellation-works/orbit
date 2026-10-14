@@ -61,9 +61,17 @@ that worker ceiling. Global `machine.auto_concurrency.mode` defaults to `off`;
 and resource throttle. Inspect read-only `orbit run profiles` for delivery
 profiles and sparse fallback, `orbit run profiles --accuracy` for forecast
 error and shadow decisions, and `orbit run show <drain-run-id> --json` for the
-recorded pass. No profiles means forecasting adds no restriction. Preserve
-operator policy when explaining waits; diagnostics do not authorize resizing
-or changing thresholds. Settings and limits:
+recorded pass. For one local drain, `orbit run auto --auto-concurrency <MODE>`
+selects its captured mode (`off`, `shadow` or `enforce`); omitting the flag
+captures `machine.auto_concurrency.mode` at submission. MCP
+`orbit_workflow_auto` `action: "start"` accepts the same `auto_concurrency`
+values. The selected mode and its source (`explicit` or `configured`) survive
+restart/resume without writing configuration. Run show and readiness expose
+`mode`, `source`, and the current `configured_mode`. Pull drains refuse this
+override; set the executor host's mode instead. No profiles means forecasting
+adds no restriction. Preserve operator policy when explaining waits: this
+per-drain choice does not authorize starting work or changing machine settings,
+host thresholds, or the worker ceiling. Settings and limits:
 [configuration.md](../../orbit-setup/references/configuration.md#common-settings).
 
 That ceiling is adjustable while the drain runs. `orbit run concurrency <run-id>
@@ -278,8 +286,11 @@ diff. It also excludes a task already named by the durable prepare checkpoint
 of an active pilot run and reports the owning run ID, so a later discovery run
 can inspect new work without repeating the expensive assessment. Explicit
 `task_ids` audits exactly the named tasks, including ones that already have
-selectors, but refuses an ID already prepared by an active run; inspect or
-resume the named run instead.
+selectors, while excluding tasks held by another active run as
+`already_preparing` with `prepared_by_run_ids`. Preparation continues for the
+free named tasks. Apply settles each held task as `superseded` with reason
+`piloted_elsewhere`; if every named task is held, the run succeeds without
+agent work. Inspect or resume the owning run for that task's assessment.
 
 At the prepare activity boundary, an omitted optional `base_branch` is bound as
 an empty string. Prepare treats an omitted or empty value as the registered
@@ -304,9 +315,14 @@ path that did not exist at prepare.
 The pilot agent inspection is read-only; its deterministic apply step mutates
 validated task selectors. It runs five
 partitions concurrently, and returns selector proposals plus duplicate,
-already-landed, dependency, and conflicting-decision warnings. An enabled
-workspace routine may already run the zero-input job every few hours — an extra
-run before a large dispatch is still appropriate.
+already-landed, dependency, and conflicting-decision warnings. The shipped
+workspace routine is disabled by default and uses a `preparation_eligible`
+state trigger, not a periodic cron: each tick fingerprints eligible tasks and
+queues those without a fresh assessment after the 2-minute debounce or the
+10-minute maximum wait. A material change can make a task due again; an
+unchanged backlog stays quiet. Inspect the workspace's actual `task_pilot.yaml`
+before relying on that cadence, because a customized routine or preserved
+legacy cron definition can differ from the shipped seed.
 The task-pilot pipeline never promotes tasks or dispatches them; promotion and
 shipping remain separate operator-authorized steps.
 
