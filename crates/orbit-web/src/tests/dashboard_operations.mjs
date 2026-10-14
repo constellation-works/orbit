@@ -97,7 +97,7 @@ globalThis.fetch = async (path, options = {}) => {
       if (body?.name === 'delivery-code-review') legacyConsumerOn = body.enabled;
       else enabled[workspace] = body.enabled;
     }
-    if (url.pathname === '/api/workflows/auto') return response({ workflow: 'auto', run_id: 'jrun-20260923-0400-a1', state: 'submitted', completion: body.complete ? 'done' : 'review', approve_proposed: body.approve_proposed === true, submitted_at: new Date().toISOString(), warning: 'Admissions throttled: memory 95%. Running work is not touched.\nFIXTURE_TOKEN is listed in execution.env.pass but not set', note: 'no `workflow.required_validation_commands` configured' });
+    if (url.pathname === '/api/workflows/auto') return response({ workflow: 'auto', run_id: 'jrun-20260923-0400-a1', state: 'submitted', completion: body.complete ? 'done' : 'review', auto_concurrency: { mode: body.auto_concurrency || 'shadow', source: body.auto_concurrency ? 'explicit' : 'configured', configured_mode: 'shadow' }, approve_proposed: body.approve_proposed === true, submitted_at: new Date().toISOString(), warning: 'Admissions throttled: memory 95%. Running work is not touched.\nFIXTURE_TOKEN is listed in execution.env.pass but not set', note: 'no `workflow.required_validation_commands` configured' });
     if (url.pathname === '/api/workflows/auto/stop') return response({ workflow: 'auto', outcome: stopOutcome, coordinators: drainRunId ? [{ run_id: drainRunId, outcome: 'stopped', remaining_children: ['jrun-child'] }] : pullDrainRunId ? [{ run_id: pullDrainRunId, outcome: 'stopped', remaining_children: [] }] : [], pull_settlements: stopSettlements });
     if (url.pathname === '/api/jobs/fixture/run') {
       submittedJob = { run_id: 'jrun-dashboard-fixture', job_id: 'fixture', state: 'pending', created_at: new Date().toISOString() };
@@ -158,6 +158,7 @@ globalThis.fetch = async (path, options = {}) => {
   }
   if (url.pathname === '/api/workflows/auto/readiness' && failReadiness) return response({ error: 'readiness unavailable' }, 500);
   if (url.pathname === '/api/workflows/auto/readiness') return response({
+    auto_concurrency: { mode: 'enforce', source: 'explicit', configured_mode: 'shadow' },
     controls_authorized: controlsAuthorized,
     replica: replicaWorkspace,
     approvals: approvalsFixture,
@@ -231,6 +232,13 @@ await fetchAndRenderOperations();
 assert(drainReadinessFor('ORB-40')?.pool === 'other' && drainReadinessFor('ORB-40').title.includes('waits for a macos host (os:macos)'), `an OS wait is named for its row: ${JSON.stringify(drainReadinessFor('ORB-40'))}`);
 readinessTasks.splice(-1);
 
+const modeInput = () => startNode('auto-drain-mode');
+assert(modeInput().value === '' && !modeInput().disabled, 'mode defaults to inherited host policy');
+assert(modeInput().options[0].textContent.includes('shadow'), 'inherited label uses the current readiness host mode');
+assert([...modeInput().options].map(o => o.value).join(',') === ',off,shadow,enforce', 'all supported modes are selectable');
+modeInput().value = 'enforce'; modeInput().dispatchEvent(new Event('change'));
+assert(modeInput().value === 'enforce', 'explicit choice survives rerender');
+
 // Duration, stepper and completion drive the Start label and the submitted body.
 drainButton('2h').click();
 assert(drainButton('Start 2h window'), 'the Start label carries the chosen duration');
@@ -247,15 +255,17 @@ markDone.checked = true; markDone.dispatchEvent(new Event('change'));
 assert(completionOption('done').checked && !completionOption('review').checked, 'choosing Mark done selects it and releases review');
 drainButton('Start 2h window').click(); await tick(); await tick(); await tick();
 const started = requests.find(r => r.path === '/api/workflows/auto');
-assert(started && started.workspace === 'one' && started.body.for_duration === '2h' && started.body.concurrency === 2 && started.body.complete === true && started.body.approve_proposed === false, `start posts the chosen window: ${JSON.stringify(started)}`);
+assert(started && started.workspace === 'one' && started.body.for_duration === '2h' && started.body.concurrency === 2 && started.body.complete === true && started.body.approve_proposed === false && started.body.auto_concurrency === 'enforce', `start posts the chosen window: ${JSON.stringify(started)}`);
 assert(confirmations.at(-1).includes('Duration: 2h · Concurrency: 2') && confirmations.at(-1).includes('WARNING'), 'start confirms the window and warns about completion');
 assert(get('auto-drain-operation-feedback').textContent.includes('Run jrun-20260923-0400-a1 submitted (completion: done).'), 'start result lands in the card status line');
 // The receipt's notices are shown one per line, as `orbit run auto` prints them.
-assert(get('auto-drain-operation-feedback').textContent.split('\n').slice(1).join('|') === 'Warning: Admissions throttled: memory 95%. Running work is not touched.|Warning: FIXTURE_TOKEN is listed in execution.env.pass but not set|Note: no `workflow.required_validation_commands` configured', `start warnings and note follow the result: ${get('auto-drain-operation-feedback').textContent}`);
+assert(get('auto-drain-operation-feedback').textContent.split('\n').slice(1).join('|') === 'Auto-concurrency: enforce (explicit).|Warning: Admissions throttled: memory 95%. Running work is not touched.|Warning: FIXTURE_TOKEN is listed in execution.env.pass but not set|Note: no `workflow.required_validation_commands` configured', `start warnings and note follow the result: ${get('auto-drain-operation-feedback').textContent}`);
 const backToReview = completionOption('review');
 backToReview.checked = true; backToReview.dispatchEvent(new Event('change'));
 assert(completionOption('review').checked, 'completion returns to review');
 
+assert(get('auto-drain-operation-feedback').textContent.includes('Auto-concurrency: enforce (explicit).'), 'receipt shows the submitted effective mode, separately from inherited config');
+modeInput().value = ''; modeInput().dispatchEvent(new Event('change'));
 // Approving proposed tasks is its own explicit opt-in, off by default, with the
 // qualification rule in the tooltip and a line in the confirm dialog.
 const approveOption = value => descendants(get('auto-drain-start-body')).find(node => node.type === 'radio' && node.name === 'auto-drain-approve' && node.value === value);
@@ -266,7 +276,7 @@ assert(String(approveLabel('approve').title).includes('context files') && String
 const requestsBeforeApprove = requests.filter(r => r.path === '/api/workflows/auto').length;
 drainButton('Start 2h window').click(); await tick(); await tick(); await tick();
 const defaultStart = requests.filter(r => r.path === '/api/workflows/auto').at(-1);
-assert(requests.filter(r => r.path === '/api/workflows/auto').length === requestsBeforeApprove + 1 && defaultStart.body.approve_proposed === false, `an ordinary start posts approve_proposed false: ${JSON.stringify(defaultStart)}`);
+assert(requests.filter(r => r.path === '/api/workflows/auto').length === requestsBeforeApprove + 1 && defaultStart.body.approve_proposed === false && !Object.hasOwn(defaultStart.body, 'auto_concurrency'), `an ordinary start posts approve_proposed false: ${JSON.stringify(defaultStart)}`);
 assert(!confirmations.at(-1).includes('approve qualifying proposed tasks'), 'the confirm dialog stays quiet when approving is off');
 approveOption('approve').checked = true; approveOption('approve').dispatchEvent(new Event('change'));
 assert(approveOption('approve').checked && !approveOption('leave').checked, 'choosing Approve qualifying selects it');
@@ -282,12 +292,14 @@ assert(approveOption('leave').checked, 'approving returns to off');
 // reason as visible text; Start itself still works without the opt-in.
 controlsAuthorized = false;
 await fetchAndRenderOperations();
+assert(modeInput().disabled && modeInput().value === '', 'unauthorized launch cannot submit an explicit mode');
 assert(approveOption('approve').disabled && !approveOption('leave').disabled, 'an unauthorized session cannot choose to approve');
 assert(drainText().includes('Approving proposed tasks requires an authorized operator session'), 'the unauthorized reason is visible text');
 assert(!drainButton('Start 2h window').disabled, 'an unauthorized session can still start a default window');
 controlsAuthorized = true;
 replicaWorkspace = true;
 await fetchAndRenderOperations();
+assert(modeInput().disabled, 'replica launch cannot choose an unsupported override');
 assert(approveOption('approve').disabled && drainText().includes('A pull replica cannot approve proposed tasks'), 'a pull replica is not offered approving');
 replicaWorkspace = false;
 await fetchAndRenderOperations();

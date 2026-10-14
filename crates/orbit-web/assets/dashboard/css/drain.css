@@ -107,6 +107,12 @@
 .drain-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .drain-field-label { color: var(--fg-soft); font: 500 12px var(--font-sans); }
 .drain-field-hint { margin: 0; color: var(--fg-mute); font-size: 12px; line-height: 1.45; }
+.drain-mode-select {
+  width: 100%; min-width: 0; min-height: 32px; padding: 4px 8px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-well); color: var(--fg); font: 12.5px var(--font-sans);
+}
+.drain-mode-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .drain-field-hint.warn { color: var(--warn-fg); }
 .drain-durations, .drain-completion {
   display: grid; gap: 2px; padding: 3px;

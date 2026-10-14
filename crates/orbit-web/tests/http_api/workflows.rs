@@ -111,6 +111,17 @@ fn auto_stop_is_idempotent_and_preserves_in_flight_children() {
                 .write_run_state(&coordinator.run_id, &state)
                 .unwrap();
             let server = fixture.server(true);
+            let refused = server.send(
+                "POST",
+                "/api/workflows/auto/stop?workspace=ws_http_fixture",
+                json!({"auto_concurrency":"enforce"}),
+            );
+            assert_eq!(refused.status().as_u16(), 400);
+            assert_eq!(
+                fixture.runtime.read_run_state(&coordinator.run_id).unwrap(),
+                Some(state.clone()),
+                "an incompatible mode on stop must be refused before changing admissions"
+            );
             let first = json_ok(server.send(
                 "POST",
                 "/api/workflows/auto/stop?workspace=ws_http_fixture",
@@ -185,7 +196,9 @@ fn resume_requires_current_completion_authority_and_preserves_review_only_admiss
             fixture.job("resume_fixture");
             let mut source =
                 fixture.seed_run("jrun-resume-done", "resume_fixture", JobRunState::Failed);
-            source.input = Some(json!({"completion":"done","marker":"preserved"}));
+            source.input = Some(
+                json!({"completion":"done","marker":"preserved","auto_concurrency":"enforce","auto_concurrency_source":"explicit"}),
+            );
             fixture.save_run(&source);
             let uri = format!("/api/job-runs/{}/resume?workspace={WS}", source.run_id);
             let agent = fixture.server(false);
@@ -245,6 +258,25 @@ fn resume_requires_current_completion_authority_and_preserves_review_only_admiss
                 assert!(expected.insert(resumed.run_id));
                 assert_eq!(run_ids(&fixture), expected);
             }
+            // An inherited snapshot is retained even when the current host
+            // default differs, through the same public resume endpoint.
+            fixture.job("workspace_auto_pipeline");
+            let mut local = fixture.seed_run(
+                "jrun-resume-captured-mode",
+                "workspace_auto_pipeline",
+                JobRunState::Failed,
+            );
+            local.input =
+                Some(json!({"auto_concurrency":"shadow","auto_concurrency_source":"configured"}));
+            fixture.save_run(&local);
+            let receipt = json_ok(operator.send(
+                "POST",
+                &format!("/api/job-runs/{}/resume?workspace={WS}", local.run_id),
+                json!({}),
+            ));
+            let input = run_input(&fixture, &receipt);
+            assert_eq!(input["auto_concurrency"], "shadow");
+            assert_eq!(input["auto_concurrency_source"], "configured");
         },
     );
 }
@@ -833,6 +865,11 @@ fn auto_start_approve_proposed_is_opt_in_boolean_and_operator_gated() {
         || {
             let fixture = Fixture::new();
             fixture.job("workspace_auto_pipeline");
+            std::fs::write(
+                fixture.global.join("config.toml"),
+                "[machine.auto_concurrency]\nmode = \"shadow\"\n",
+            )
+            .unwrap();
             let uri = format!("/api/workflows/auto?workspace={WS}");
             let agent = fixture.server(false);
             let operator = fixture.server(true);
@@ -865,6 +902,86 @@ fn auto_start_approve_proposed_is_opt_in_boolean_and_operator_gated() {
             }
             assert_eq!(run_ids(&fixture), before, "a rejected body persists no run");
 
+            for wrong in [
+                json!(false),
+                json!(true),
+                json!(1),
+                json!(null),
+                json!("bogus"),
+            ] {
+                let response = operator.send(
+                    "POST",
+                    &uri,
+                    json!({"for_duration":"1m","auto_concurrency":wrong}),
+                );
+                assert!(
+                    !response.status().is_success(),
+                    "malformed mode must be refused"
+                );
+            }
+            assert!(
+                !operator
+                    .send(
+                        "POST",
+                        &format!("/api/workflows/auto/stop?workspace={WS}"),
+                        json!({"auto_concurrency":"off"})
+                    )
+                    .status()
+                    .is_success()
+            );
+            assert!(
+                !operator
+                    .send(
+                        "POST",
+                        &uri,
+                        json!({"for_duration":"1m","autoConcurrency":"enforce"})
+                    )
+                    .status()
+                    .is_success()
+            );
+            let denied = error_code(
+                agent.send(
+                    "POST",
+                    &uri,
+                    json!({"for_duration":"1m","auto_concurrency":"off"}),
+                ),
+                403,
+                "authorization_denied",
+            );
+            assert_eq!(denied["operation"], "auto_drain.auto_concurrency");
+            assert_eq!(
+                run_ids(&fixture),
+                before,
+                "refused modes leave no durable effects"
+            );
+            let config = std::fs::read(fixture.global.join("config.toml")).ok();
+            for mode in ["off", "shadow", "enforce"] {
+                let started = json_ok(operator.send(
+                    "POST",
+                    &uri,
+                    json!({"for_duration":"1m","auto_concurrency":mode}),
+                ));
+                assert_eq!(started["auto_concurrency"]["mode"], mode);
+                assert_eq!(started["auto_concurrency"]["source"], "explicit");
+                let shown = json_ok(operator.send(
+                    "GET",
+                    &format!(
+                        "/api/runs/{}?workspace={WS}",
+                        started["run_id"].as_str().unwrap()
+                    ),
+                    json!({}),
+                ));
+                assert_eq!(shown["run"]["auto_concurrency"]["mode"], mode);
+
+                let input = run_input(&fixture, &started);
+                assert_eq!(input["auto_concurrency"], mode);
+                assert_eq!(input["auto_concurrency_source"], "explicit");
+            }
+            assert_eq!(
+                std::fs::read(fixture.global.join("config.toml")).ok(),
+                config
+            );
+
             // Omitted and explicit false start the same window as before, from
             // an unauthorized session too.
             for body in [
@@ -873,6 +990,8 @@ fn auto_start_approve_proposed_is_opt_in_boolean_and_operator_gated() {
             ] {
                 let started = json_ok(agent.send("POST", &uri, body));
                 assert_eq!(started["approve_proposed"], false, "{started}");
+                assert_eq!(started["auto_concurrency"]["mode"], "shadow");
+                assert_eq!(started["auto_concurrency"]["source"], "configured");
                 assert_eq!(started["completion"], "review", "{started}");
                 let run = run_input(&fixture, &started);
                 assert_ne!(run["approve_proposed"], true, "{run}");
@@ -890,6 +1009,34 @@ fn auto_start_approve_proposed_is_opt_in_boolean_and_operator_gated() {
             );
             let run = run_input(&fixture, &started);
             assert_eq!(run["approve_proposed"], true, "{run}");
+
+            // A long-lived dashboard must capture the host default at submission,
+            // rather than keep inheriting the runtime's startup snapshot.
+            let changed = json_ok(operator.send(
+                "PUT",
+                &format!("/api/config/keys/machine.auto_concurrency.mode?workspace={WS}"),
+                json!({"scope":"global","value":"enforce"}),
+            ));
+            assert_eq!(changed["new_value"], "enforce");
+            let readiness =
+                json_ok(operator.get(&format!("/api/workflows/auto/readiness?workspace={WS}")));
+            assert_eq!(
+                readiness["auto_concurrency"]["configured_mode"], "enforce",
+                "the inherited choice must show the current admitted host setting"
+            );
+            let inherited = json_ok(operator.send("POST", &uri, json!({"for_duration":"1m"})));
+            assert_eq!(inherited["auto_concurrency"]["mode"], "enforce");
+            assert_eq!(inherited["auto_concurrency"]["source"], "configured");
+            assert_eq!(
+                run_input(&fixture, &inherited)["auto_concurrency"],
+                "enforce"
+            );
+            let earlier = json_ok(operator.get(&format!(
+                "/api/runs/{}?workspace={WS}",
+                started["run_id"].as_str().unwrap()
+            )));
+            assert_eq!(earlier["run"]["auto_concurrency"]["mode"], "shadow");
+            assert_eq!(earlier["run"]["auto_concurrency"]["source"], "configured");
         },
     );
 }

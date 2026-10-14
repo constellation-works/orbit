@@ -250,6 +250,20 @@ fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
         json!({"workspace":selector,"action":"start","for_seconds":86_401}),
     );
     assert_eq!(refused["code"], "invalid_input", "{refused}");
+    for (action, mode) in [
+        ("start", json!(false)),
+        ("start", json!(null)),
+        ("start", json!("invalid")),
+        ("stop", json!("off")),
+        ("resize", json!("enforce")),
+        ("status", json!("shadow")),
+    ] {
+        let mut input = json!({"workspace":selector,"action":action,"auto_concurrency":mode});
+        if action == "start" {
+            input["for_seconds"] = json!(60);
+        }
+        client.call_tool_err("orbit_workflow_auto", input);
+    }
     let runs = client.call_tool_ok("orbit_workflow_run_list", json!({"workspace":selector}));
     assert_eq!(
         runs["items"].as_array().unwrap().len(),
@@ -267,6 +281,52 @@ fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
     assert_eq!(changed["concurrency"], 24);
     let state = runtime.read_run_state(id).unwrap().unwrap();
     assert_eq!(state.effective_max_active_leaf_runs(5), 24);
+    let root = workspace.home.join(".orbit");
+    let jobs = root.join("resources/jobs");
+    std::fs::write(jobs.join("workspace_auto_pipeline.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: workspace_auto_pipeline\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: done\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n      default_input:\n        seconds: 0\n").unwrap();
+    let config = std::fs::read(root.join("config.toml")).unwrap();
+    for mode in [None, Some("off"), Some("shadow"), Some("enforce")] {
+        let mut input = json!({"workspace":selector,"action":"start","for_seconds":1});
+        if let Some(mode) = mode {
+            input["auto_concurrency"] = json!(mode);
+        }
+        let receipt = client.call_tool_ok("orbit_workflow_auto", input);
+        assert_eq!(receipt["auto_concurrency"]["mode"], mode.unwrap_or("off"));
+        assert_eq!(
+            receipt["auto_concurrency"]["source"],
+            if mode.is_some() {
+                "explicit"
+            } else {
+                "configured"
+            }
+        );
+        let id = receipt["run_id"].as_str().unwrap();
+        let shown = client.call_tool_ok(
+            "orbit_workflow_run_show",
+            json!({"workspace":selector,"id":id}),
+        );
+        assert_eq!(shown["auto_concurrency"]["mode"], mode.unwrap_or("off"));
+        let recorded = runtime.show_job_run(id).unwrap();
+        assert_eq!(
+            recorded.input.as_ref().unwrap()["auto_concurrency"],
+            mode.unwrap_or("off")
+        );
+        let waited = runtime
+            .wait_pipeline_runs(&[id.to_string()], 10, 1, None)
+            .unwrap();
+        assert!(
+            waited.results[0].status == "success",
+            "fixture worker must finish before handoff"
+        );
+    }
+    assert_eq!(std::fs::read(root.join("config.toml")).unwrap(), config);
+    let before = runtime.list_job_runs(Default::default()).unwrap();
+    drop(client);
+    let mut unprivileged = workspace.serve();
+    assert_eq!(unprivileged.call_tool_err("orbit_workflow_auto",
+        json!({"workspace":selector,"action":"start","for_seconds":60,"auto_concurrency":"enforce"}))["code"], "capability_denied");
+    assert_eq!(runtime.list_job_runs(Default::default()).unwrap(), before);
 }
 
 #[test]

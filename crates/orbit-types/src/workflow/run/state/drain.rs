@@ -549,7 +549,7 @@ pub struct DrainAdmissionPass {
     #[serde(default)]
     pub degraded: bool,
     /// The gap-fit decisions of a local pass under
-    /// `machine.auto_concurrency.mode` `shadow` or `enforce`. Absent with the
+    /// its effective auto-concurrency mode `shadow` or `enforce`. Absent with the
     /// mode `off`, and in pull passes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admission_forecast: Option<DrainAdmissionForecast>,

@@ -97,12 +97,17 @@ impl OrbitRuntime {
         if !reconciliation && run_input_declares_review_reconciliation(&input) {
             return Err(reserved_reconciliation_key_error(job_name));
         }
+        let mut input = input;
+        self.capture_auto_concurrency(
+            job_name,
+            &mut input,
+            resume.is_some() || replay_source_run_id.is_some(),
+        )?;
         self.reclaim_worktrees_on_admission();
         // [ORB-11333] The review admission follows the same discipline: a
         // child inherits its parent's snapshot, an ordinary delivery
         // submission captures the effective policy once, and ordinary input
         // naming the key is refused.
-        let mut input = input;
         crate::application::review::install_review_admission(
             self,
             job_name,

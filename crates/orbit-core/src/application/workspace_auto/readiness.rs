@@ -681,6 +681,10 @@ pub fn explain_workspace_auto_readiness(
     }
 
     let mut payload = json!({
+        "auto_concurrency": runtime.auto_concurrency_view(
+            active_drain.as_ref().map(|drain| &drain.input)
+                .or_else(|| recent_drain.as_ref().and_then(|run| run.input.as_ref()))
+        )?,
         "snapshot": {
             "read_only": true,
             "limitations": "Snapshot only: eligibility can change immediately and does not guarantee a task will start. No stale-run reconciliation, reservation, task mutation, or run submission was performed.",
