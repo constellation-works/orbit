@@ -24,7 +24,7 @@ Optimistic merging removes that wait from the critical path: merge as soon as th
 
 - **Merge without required CI gates.** Agents merge to the integration branch (`agent-main` in this repository) without required status checks. Its repository ruleset blocks branch deletion and merge commits, but does not gate merges on CI.
 - **CI is a signal, not a gate.** Failures do not stall delivery. The `ci-failure-sweep` routine files deduplicated proposed CI findings, pilots them, and admits only current warning-free repairs. The `qa-sweep` auto-task exercises recent changes through user-facing paths and files tasks for non-duplicate issues it finds.
-- **Review is independent and can run after landing.** When enabled, the `delivery-code-review` auto-task reviews landed changes in batches; the shipped after-landing auto-task is disabled by default. The reviewer is never the implementer's crew. It records confirmed findings as follow-up bug tasks and does not change an already-landed delivery. After-landing review does not grant or withhold permission to merge.
+- **Review is independent and can run after landing.** When enabled, the `delivery-code-review` auto-task reviews landed changes in batches; the shipped after-landing auto-task is disabled by default. Crew selection prefers a crew that did not implement the reviewed work, falling back when the available pool has no alternative. It records confirmed findings as follow-up bug tasks and does not change an already-landed delivery. After-landing review does not grant or withhold permission to merge.
 - **No re-review of an identical tree.** A change that lands with exactly the code tree that was already reviewed is covered and is not reviewed again ([review gate, delivery coverage](design/review-gate/2_design.md#7-delivery-coverage)).
 
 ## Where the operator stays in control
@@ -39,7 +39,7 @@ Optimistic merging moves control earlier, to admission, rather than removing it.
 From [Orbit Positioning](POSITIONING.md):
 
 - Every change starts as a task, and its `task_id` is in the commit message, so intent stays traceable.
-- Every tool call and agent decision is recorded in an inspectable audit log. When auditability conflicts with speed, ergonomics or features, auditability wins.
+- Inspectable audit records cover commands, workflow runs, and captured provider/tool activity; the [auditability design](design/auditability/1_overview.md) describes coverage limits. When auditability conflicts with speed, ergonomics or features, auditability wins.
 - Execution is sandboxed by default, uses the operator's own credentials, and reports token and wall-clock cost.
 
 ## Other review modes
@@ -48,7 +48,7 @@ Optimistic merging is the preferred default, not the only option. Operators who 
 
 | Mode | Config | Behaviour |
 | --- | --- | --- |
-| After landing (preferred) | `delivery-code-review` auto-task enabled | Batches review of landed changes; findings become fixes or tasks. |
+| After landing (preferred) | `delivery-code-review` auto-task enabled | Batches review of landed changes; confirmed findings become follow-up bug tasks. |
 | Before PR | `review.before_pr = true` | A fresh reviewer fixes findings before the PR is opened. |
 | Before landing | `review.before_landing = true` | The PR opens first; only the head the review settled is merged. |
 
