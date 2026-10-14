@@ -55,7 +55,9 @@ impl LocalInstall {
         }
         crate::git_repo::SeededRepo::new(&repo)
             .host_default_branch()
-            .readme("# update root test\n")
+            // Discovery needs a real Git boundary, but candidate provenance
+            // is operator-attested, not inferred from a fixture seed commit.
+            .no_commit()
             .build();
         super::orbit(&repo, &home, &mirror)
             .args([
@@ -133,14 +135,16 @@ impl LocalInstall {
         command.output().expect("run reported recovery command")
     }
 
-    /// A candidate built at another commit: same version, distinct bytes.
-    fn candidate(&self, name: &str) -> PathBuf {
+    /// A candidate built at another commit, warmed by its required manifest
+    /// producer before any timed staged-image probe: same version, distinct bytes.
+    fn candidate(&self, name: &str) -> (PathBuf, PathBuf) {
         let candidate = self.builds.join(name);
-        crate::generation_fixture::distinct_copy(
+        let manifest = crate::generation_fixture::distinct_copy_with_probe(
             Path::new(env!("CARGO_BIN_EXE_orbit")),
             &candidate,
+            |producer| self.manifest(producer, COMMIT_B, &format!("{name}.json")),
         );
-        candidate
+        (candidate, manifest)
     }
 
     /// Describe `candidate` with the public producer, run by the candidate.
@@ -296,8 +300,7 @@ fn an_older_installation_is_bootstrapped_to_an_equal_version_candidate_and_repla
     )
     .expect("install the older binary");
     let older = fs::read(&install.installed).expect("older bytes");
-    let candidate = install.candidate("orbit-b");
-    let manifest = install.manifest(&candidate, COMMIT_B, "orbit-b.json");
+    let (candidate, manifest) = install.candidate("orbit-b");
 
     // The installed updater cannot do this itself.
     let refused = install.run(
@@ -391,8 +394,7 @@ fn wrong_provenance_digest_target_or_ownership_refuses_before_replacement() {
     let install = LocalInstall::new();
     let before = fs::read(&install.installed).expect("installed bytes");
     let record = install.generation_record();
-    let candidate = install.candidate("orbit-b");
-    let manifest = install.manifest(&candidate, COMMIT_B, "orbit-b.json");
+    let (candidate, manifest) = install.candidate("orbit-b");
     let run = |program: &Path, args: Vec<OsString>| install.run(program, &args);
 
     // Provenance: the operator expects another commit, or abbreviates it.
@@ -575,8 +577,7 @@ fn wrong_provenance_digest_target_or_ownership_refuses_before_replacement() {
 fn a_live_discovered_workspace_client_blocks_a_local_candidate_update() {
     let install = LocalInstall::new();
     let before = fs::read(&install.installed).expect("installed bytes");
-    let candidate = install.candidate("orbit-b");
-    let manifest = install.manifest(&candidate, COMMIT_B, "orbit-b.json");
+    let (candidate, manifest) = install.candidate("orbit-b");
     let workspace_root = install.repo.join(".orbit");
     let workspace_record = workspace_root.join(".generation.lock");
     let workspace_client = GenerationGuard::acquire(&workspace_root, &sha256(&install.installed))
@@ -611,8 +612,12 @@ fn a_candidate_without_the_admission_contract_is_refused_before_replacement() {
     let record = install.generation_record();
     let unprotected = install.builds.join("orbit-unprotected");
     fs::copy("/bin/true", &unprotected).expect("copy a native executable");
-    let candidate = install.candidate("orbit-b");
-    let manifest = install.manifest_by(&candidate, &unprotected, COMMIT_B, "unprotected.json");
+    let candidate = install.builds.join("orbit-b");
+    let manifest = crate::generation_fixture::distinct_copy_with_probe(
+        Path::new(env!("CARGO_BIN_EXE_orbit")),
+        &candidate,
+        |producer| install.manifest_by(producer, &unprotected, COMMIT_B, "unprotected.json"),
+    );
     let output = install.run(
         &candidate,
         &install.install_args(&unprotected, &manifest, COMMIT_B),
@@ -633,9 +638,8 @@ fn a_candidate_without_the_admission_contract_is_refused_before_replacement() {
 fn clients_run_but_no_update_enters_mid_validation_and_the_accepted_bytes_are_installed() {
     let install = LocalInstall::new();
     let before = fs::read(&install.installed).expect("installed bytes");
-    let candidate = install.candidate("orbit-b");
+    let (candidate, manifest) = install.candidate("orbit-b");
     let accepted = fs::read(&candidate).expect("candidate bytes");
-    let manifest = install.manifest(&candidate, COMMIT_B, "orbit-b.json");
     let fifo = install.builds.join("manifest.fifo");
     mkfifo(&fifo);
 
@@ -728,8 +732,7 @@ fn clients_run_but_no_update_enters_mid_validation_and_the_accepted_bytes_are_in
 /// exact command that retries this candidate; retrying it converges.
 fn a_post_swap_failure_recovers_from_a_quoted_install_dir() {
     let install = LocalInstall::with_bin_name("managed tools' dir");
-    let candidate = install.candidate("orbit-b");
-    let manifest = install.manifest(&candidate, COMMIT_B, "orbit-b.json");
+    let (candidate, manifest) = install.candidate("orbit-b");
     let layout = install.repo.join(".orbit/state/layout.version");
     let current_layout = fs::read(&layout).ok();
     fs::create_dir_all(layout.parent().expect("state directory")).expect("state directory");
