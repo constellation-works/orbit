@@ -61,10 +61,20 @@ fn exercise_handover(after_handover: impl FnOnce(BoundServer, u32, u16)) {
     let pid = server.id();
     assert!(http_get(port, "/healthz").contains("ok"));
 
-    let candidate = temp.path().join("candidate");
+    // Build and assess the replacement on the inode that will be installed.
+    // Copying an already assessed candidate again would pay for another full
+    // image copy and, on macOS, another first-exec assessment. Renaming this
+    // staged file still leaves the running executable's inode untouched.
+    let candidate = installed.with_extension("staged");
     generation_fixture::distinct_copy(Path::new(env!("CARGO_BIN_EXE_orbit")), &candidate);
     let new_digest = executable_generation(&candidate).expect("candidate digest");
-    generation_fixture::install_over(&candidate, &installed);
+    let old_digest = generation_fixture::running_digest(&home.join(".orbit"), pid)
+        .expect("the serving dashboard registered its old generation");
+    assert_ne!(
+        old_digest, new_digest,
+        "preparing a candidate must leave the dashboard on its old generation"
+    );
+    std::fs::rename(&candidate, &installed).expect("replace installation");
 
     test_env::wait_until("handover", || {
         generation_fixture::running_digest(&home.join(".orbit"), pid).as_deref()

@@ -60,6 +60,8 @@ pub(crate) fn distinct_copy(source: &Path, destination: &Path) {
 /// beside it, then rename over it, so the running inode is left untouched.
 /// The staged copy is [`assess`]ed before the rename, as `orbit update`
 /// probes its staged release.
+// MCP fixtures reuse a candidate; the process fixture builds directly in staging.
+#[allow(dead_code)]
 pub(crate) fn install_over(source: &Path, installed: &Path) {
     let staged = installed.with_extension("staged");
     std::fs::copy(source, &staged).expect("stage replacement");
