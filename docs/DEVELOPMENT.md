@@ -161,9 +161,11 @@ the current invocation (null when absent). The comparison includes cache-lock
 waiting, checkout preparation and the baseline command; the cached command's
 historical elapsed time must not be added to it.
 
-Canonical owner log paths still name the latest validation result. Immutable
-copies under `validation/<run>/attempts/<sha256>.json` preserve earlier candidate,
-baseline and failing-test replay evidence across recovery. These diagnostic
+Canonical owner log paths still name the latest validation result. Before a
+canonical log is replaced, its previous bytes are saved as an immutable copy
+under `validation/<run>/attempts/<sha256>.json`, preserving earlier candidate,
+baseline and failing-test replay evidence across recovery. First-time logs
+need only their canonical record. These diagnostic
 copies do not replace the canonical artifacts used to admit delivery. Use
 durable activity start/finish events to separate provider recovery and each
 validation invocation from an end-to-end step span; subtracting reported test

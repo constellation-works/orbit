@@ -477,18 +477,28 @@ fn attach_logs<H: RuntimeHost + ?Sized>(
     }
     let mut references = Vec::new();
     for (path, content) in logs {
-        // Canonical paths are replaced by recovery. Retain immutable bytes of
-        // every observed attempt too, so a later success cannot erase its cost
-        // or original failure. Only canonical paths participate in admission.
+        // Preserve the previous canonical bytes before replacing them. A first
+        // observation needs only its canonical record; recovery must not erase
+        // an earlier attempt's cost or failure. Archives are diagnostic only.
         let digest = sha256_hex(content);
-        let archive = format!("validation/{run_id}/attempts/{digest}.json");
-        if claimed {
-            host.attach_claim_validation_log(path, content.clone())?;
-            host.attach_claim_validation_log(&archive, content.clone())?;
-        } else {
-            for task_id in task_ids {
+        for task_id in task_ids {
+            if let Some(previous) = host.get_task_artifact(task_id, path)?
+                && previous.content != *content
+            {
+                let archive = format!(
+                    "validation/{run_id}/attempts/{}.json",
+                    sha256_hex(&previous.content)
+                );
+                if claimed {
+                    host.attach_claim_validation_log(&archive, previous.content)?;
+                } else {
+                    host.attach_task_validation_log(task_id, run_id, &archive, previous.content)?;
+                }
+            }
+            if claimed {
+                host.attach_claim_validation_log(path, content.clone())?;
+            } else {
                 host.attach_task_validation_log(task_id, run_id, path, content.clone())?;
-                host.attach_task_validation_log(task_id, run_id, &archive, content.clone())?;
             }
         }
         references.push(HandoffArtifactRef {
