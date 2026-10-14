@@ -73,12 +73,22 @@ assuming a value.
 | `pr.close_on_terminal` | Close a task's open Orbit-authored delivery and `[BLOCKED]` PRs when it lands, is rejected or is archived (default `true`). Branches are kept; a forge error is only a warning. |
 | `pr.delivery_authors` | Forge logins whose PRs count as Orbit-authored for that closure. Empty uses the `gh` login on this machine. |
 
-`[machine]` settings are global-only. Inspect `orbit config keys --json` and
-`orbit config show` for the installed schema and effective policy. Forecasting
-does not raise the drain's `--concurrency` worker ceiling or bypass resource
-throttles. Use read-only `orbit run profiles`, `orbit run profiles --accuracy`,
-and `orbit run readiness --json` to explain waiting work; preserve operator
-settings and shutdown holds unless an authorized change is requested. See
+`[machine]` settings are global-only. An authorized local drain can select its
+own forecast mode with `orbit run auto --auto-concurrency <MODE>` (`off`,
+`shadow` or `enforce`); MCP `orbit_workflow_auto` `action: "start"` accepts the
+same `auto_concurrency` input. When omitted, submission captures the configured
+`machine.auto_concurrency.mode`; the captured value and source survive
+restart/resume without a configuration write. `orbit run show <id> --json` and
+`orbit run readiness --json` expose `mode`, `source` (`explicit` or
+`configured`), and the current `configured_mode`. Pull drains refuse the
+override and use the executor host's configured mode.
+Inspect `orbit config keys --json` and `orbit config show` for the installed
+schema and effective policy. Forecasting does not raise the drain's
+`--concurrency` worker ceiling or bypass resource throttles. A per-drain mode
+choice does not authorize dispatch or changes to global policy, host thresholds,
+or shutdown holds. Use read-only `orbit run profiles`, `orbit run profiles
+--accuracy`, and `orbit run readiness --json` to explain waiting work; preserve
+operator settings unless an authorized change is requested. See
 [operational-logs.md](operational-logs.md#delivery-profiles-and-admission-diagnostics).
 
 `operation.review_policy` and `operation.review_minutes` are deprecated: they
