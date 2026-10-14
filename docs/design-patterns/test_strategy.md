@@ -31,6 +31,15 @@ For each consolidation or retirement, record the invariant and important failure
 
 Table-driven cases may amortize setup, but each row must remain isolated where needed and print its identity before running. Sharing fixtures must preserve authority scrubbing, state isolation, process ownership and cleanup. A smaller number of carriers with the same expensive work is not a runtime improvement, and a carrier that hangs or hides the failing row is a quality regression.
 
+The distributed no-diff read fixtures prepare unrelated media through a public
+owner update before claim admission. This avoids encoding and persisting a
+large worker replay receipt solely for read-fixture setup. Each case retains
+its own task, store, claim, Git state and complete media bytes. Both report
+verification and tagged-skip routes still prove the old bulk read exceeds the
+unchanged MCP ceiling, verification reads only named evidence, and settlement
+preserves every unrelated artifact. Worker evidence submission and its replay
+authority remain covered by the claim-mutation and claimed-review fixtures.
+
 The signed-release update fixtures share throwaway signing material while keeping each installation, trust file, manifest and signature isolated. Release verification does not require fresh random RSA primes for every row. Their hanging-probe case synchronizes with the real child before the supervisor's initial clock sample and checks that timeout reaps it without acquiring admission or replacing the installation. A fixture clock must keep advancing after readiness: a single fixed jump can become the initial sample when the child starts early, leaving the timeout unable to expire.
 
 Use timings and failure evidence to find the actual bottleneck: runner setup, compilation, linting, test execution, fixture startup, serial groups or teardown. Compare the same source selection, runner/build settings and cache conditions; retain failed and slow runs as evidence. Measure the full hosted job after changes as well as focused before/after costs. Fix flakes and hangs at their cause. Retries, artificial sleeps, hidden skips, weaker assertions, zero-test selections and omitted required checks cannot satisfy the budget.
