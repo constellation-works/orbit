@@ -384,6 +384,7 @@ fn task_call(command: &TaskSubcommand, holder: &HostEntry) -> Result<RoutedCall,
                         Value::Object(input),
                         Some(&cwd),
                         Some(&cwd),
+                        None,
                     )?,
                     render: Render::TaskWrite {
                         verb: "Stored an artifact on",

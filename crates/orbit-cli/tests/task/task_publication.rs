@@ -546,9 +546,15 @@ fn operator_workflow_is_network_free_labelled_and_fail_closed() {
     );
     // Exact source selection must not normalize filesystem whitespace. Cover
     // both silent selection of a trimmed sibling and a source with no sibling.
+    // Call from scratch so leading filename whitespace also leads the source string.
     for (source, sibling, artifact_path) in [
         ("note.txt ", Some("note.txt"), "notes/selected.txt"),
         ("lone-note.txt ", None, "notes/lone-selected.txt"),
+        (
+            " leading-note.txt",
+            Some("leading-note.txt"),
+            "notes/leading-selected.txt",
+        ),
     ] {
         fs::write(scratch.join(source), b"requested\n").expect("exact source");
         if let Some(sibling) = sibling {
@@ -557,7 +563,7 @@ fn operator_workflow_is_network_free_labelled_and_fail_closed() {
             assert!(!scratch.join(source.trim()).exists());
         }
         orbit(
-            &source_repo,
+            &scratch,
             &owner_home,
             &publication_bare,
             &[
@@ -565,7 +571,7 @@ fn operator_workflow_is_network_free_labelled_and_fail_closed() {
                 "artifact",
                 "put",
                 &first,
-                &format!(".orbit/tmp/{source}"),
+                source,
                 "--path",
                 &format!(" {artifact_path} "),
                 "--model",

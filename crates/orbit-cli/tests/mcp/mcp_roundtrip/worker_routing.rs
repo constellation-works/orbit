@@ -73,6 +73,7 @@ fn mcp_worker_remote_owner_route_treats_null_and_blank_workspace_as_absent() {
     }
 
     let owner = McpWorkspace::init();
+    std::fs::write(owner.work.join("work.rs"), "fn work() {}\n").expect("task context");
     let (owner_machine_id, _) = machine_identity(&owner.home);
     let mut owner_operator = owner.serve_with_args(&["--operator"]);
     let task = owner_operator.call_tool_ok(
@@ -82,9 +83,18 @@ fn mcp_worker_remote_owner_route_treats_null_and_blank_workspace_as_absent() {
             "description": "Probe",
             "complexity": "low",
             "model": "codex",
+            "context_files": ["file:work.rs"],
         }),
     );
     let task_id = task["id"].as_str().expect("task id");
+    owner_operator.call_tool_ok(
+        "orbit_task_update",
+        json!({"id": task_id, "plan": "Validate remote worker artifact routing"}),
+    );
+    owner_operator.call_tool_ok(
+        "orbit_task_update",
+        json!({"id": task_id, "status": "backlog"}),
+    );
     let owner_discovery = owner_operator.call_tool_ok("orbit_workspace_list", json!({}));
     let owner_workspace_id = owner_discovery["workspaces"][0]["id"]
         .as_str()
@@ -108,12 +118,93 @@ fn mcp_worker_remote_owner_route_treats_null_and_blank_workspace_as_absent() {
         &owner.work,
     );
 
+    // Exercise prefix-routed CLI preparation before registering the worker.
+    let scratch = worker.work.join(".orbit/tmp");
+    std::fs::create_dir_all(&scratch).expect("worker scratch");
+    for (source, sibling, artifact_path) in [
+        (
+            "cli-source.txt ",
+            Some("cli-source.txt"),
+            "evidence/cli-exact.txt",
+        ),
+        ("cli-lone.txt ", None, "evidence/cli-lone.txt"),
+    ] {
+        std::fs::write(scratch.join(source), b"exact CLI bytes\n").expect("exact source");
+        if let Some(sibling) = sibling {
+            std::fs::write(scratch.join(sibling), b"wrong sibling bytes\n")
+                .expect("trimmed sibling");
+        }
+        orbit_ok(
+            McpWorkspace::orbit_command(&worker.work, &worker.home).args([
+                "task",
+                "artifact",
+                "put",
+                task_id,
+                &format!(".orbit/tmp/{source}"),
+                "--path",
+                &format!(" {artifact_path} "),
+                "--model",
+                "codex",
+            ]),
+        );
+        let mut owner_client = owner.serve();
+        let read = owner_client.call_tool_ok(
+            "orbit_task_artifact_get",
+            json!({"id": task_id, "path": artifact_path}),
+        );
+        assert_eq!(read["content"], "exact CLI bytes\n", "{source:?}");
+    }
+
+    // Artifact reads and writes require a live owner claim, unlike task.show.
+    use orbit_mcp::federated::{Destination, FederatedMcpHost, SshDestinationProbe};
+    let path = stub_first_path(&McpWorkspace::stub_bin_dir(&worker.home));
+    let _path = test_env::scoped([("PATH", Some(path.to_str().expect("fixture PATH")))]);
+    let follower = FederatedMcpHost::new(
+        vec![Destination::ssh("owner-ssh", &owner_machine_id)],
+        std::sync::Arc::new(SshDestinationProbe::new(
+            worker_machine_id.clone(),
+            RESPONSE_TIMEOUT,
+            RESPONSE_TIMEOUT,
+            None,
+            orbit_mcp::McpSessionAuthority::Agent,
+        )),
+    );
+    let call = |name: &str, mut input: Value| {
+        input["workspace"] = json!(owner_destination);
+        follower
+            .call_internal_drain(name, input, Default::default())
+            .expect("owner claim protocol")
+    };
+    let probe = call("orbit.drain.probe", json!({}));
+    let admitted = call(
+        "orbit.task.pull",
+        json!({
+            "request_id": "worker-artifact-admission", "caller_version": probe["binary_version"],
+            "caller_schema": probe["protocol_schema"], "caller_before_pr": false,
+            "run_context": {"run_id": "worker-drain", "job_name": "workspace_pull_pipeline"},
+            "ship": probe["ship"],
+        }),
+    );
+    assert_eq!(
+        admitted["receipt"]["claim"]["task_id"], task_id,
+        "{admitted}"
+    );
+    let claim_id = admitted["receipt"]["claim"]["claim_id"]
+        .as_str()
+        .expect("claim id");
+    call(
+        "orbit.drain.claim.bind",
+        json!({
+            "claim_id": claim_id, "run_id": "run-test-1", "ship": probe["ship"],
+        }),
+    );
+
     let binding = orbit_types::tool::WorkerInvocation {
         owner_machine_id: owner_machine_id.clone(),
         owner_workspace_id: owner_workspace_id.to_string(),
         owner_destination: owner_destination.clone(),
         task_id: task_id.to_string(),
-        claim_id: "claim-test-1".into(),
+        claim_id: claim_id.into(),
         execution: orbit_types::task::ExecutionLocation {
             machine_id: worker_machine_id.clone(),
             machine_name: None,
@@ -133,6 +224,66 @@ fn mcp_worker_remote_owner_route_treats_null_and_blank_workspace_as_absent() {
         .expect("register worker process");
 
     let mut client = worker.serve();
+
+    // The worker reads the source before forwarding bytes to its remote owner.
+    // MCP must trim even when an exact trailing-space sibling also exists.
+    for (source, sibling, artifact_path) in [
+        ("source.txt", false, "evidence/trimmed-only.txt"),
+        ("siblings.txt", true, "evidence/trimmed-sibling.txt"),
+    ] {
+        std::fs::write(scratch.join(source), b"trimmed MCP bytes\n").expect("trimmed source");
+        if sibling {
+            std::fs::write(scratch.join(format!("{source} ")), b"exact CLI bytes\n")
+                .expect("trailing-space sibling");
+        }
+        client.call_tool_ok(
+            "orbit_task_artifact_put",
+            json!({
+                "id": task_id, "source_path": format!(".orbit/tmp/{source} "),
+                "path": format!(" {artifact_path} "), "model": "codex",
+            }),
+        );
+        let read = client.call_tool_ok(
+            "orbit_task_artifact_get",
+            json!({"id": task_id, "path": artifact_path}),
+        );
+        assert_eq!(read["content"], "trimmed MCP bytes\n", "{source}");
+    }
+
+    // Preparation still refuses workspace escapes and over-limit reads before
+    // forwarding an attachment, even with a live owner claim.
+    let outside = worker.home.join("outside.txt");
+    std::fs::write(&outside, b"outside bytes").expect("outside source");
+    std::os::unix::fs::symlink(&outside, scratch.join("escape.txt")).expect("escape symlink");
+    std::fs::File::create(scratch.join("oversized.txt"))
+        .expect("oversized source")
+        .set_len(orbit_types::task::MAX_TASK_ARTIFACT_CONTENT_BYTES + 1)
+        .expect("oversized length");
+    let mut owner_client = owner.serve();
+    let before = owner_client.call_tool_ok(
+        "orbit_task_show",
+        json!({"id": task_id, "fields": ["artifacts"]}),
+    );
+    for source in [
+        outside.to_str().expect("outside path"),
+        ".orbit/tmp/escape.txt ",
+        ".orbit/tmp/oversized.txt ",
+    ] {
+        let refused = client.call_tool_err(
+            "orbit_task_artifact_put",
+            json!({"id": task_id, "source_path": source, "path": "evidence/refused.txt"}),
+        );
+        assert_eq!(refused["code"], "invalid_input", "{source}: {refused}");
+    }
+    assert_eq!(
+        owner_client.call_tool_ok(
+            "orbit_task_show",
+            json!({"id": task_id, "fields": ["artifacts"]})
+        ),
+        before,
+        "refused source preparation must not change owner artifacts"
+    );
+    drop(owner_client);
 
     // Absent, null, and blank selectors route to the remote owner destination.
     for absent in [Value::Null, json!(""), json!("   ")] {
