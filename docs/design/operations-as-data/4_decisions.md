@@ -672,6 +672,25 @@ optional string on a registry-derived CLI, and `review-reset` sends
 the value the old command sent. Delete still accepts `force` as a `"true"`
 or `"false"` string.
 
+Phase 5 migrated the search query path. Its Step 0 captured 62 calls on
+isolated fixtures, including representative plain/JSON queries, partial-match
+notes, tag/status/limit filters, query refusals, reindex and tool friction
+listings, with and without `ORBIT_OPERATOR=1`. The candidate matches search
+output, exit status and stderr in that capture, and all 48 CLI audit rows have
+the same command, subcommand, target, role and status. Search remains
+ungoverned and read-only; it writes no task/friction attribution. Root search
+and reindex help are frozen from the pre-migration binary.
+
+The generic adapter trims optional strings and list entries and drops blank
+list entries before dispatch, as for the earlier migrated CLIs. The tool keeps
+its legacy string booleans and scalar-tag semantics. Supplying a canonical
+field together with its alias is now refused by the shared parser instead of
+silently choosing one, and unknown fields at the generic entry warn and audit.
+The ordinary tool transport's existing schema admission still runs first.
+The tool's u32 limit bound now also applies to the query CLI. These parser
+rules are shared kernel behavior; the representative capture does not claim
+exhaustive equivalence for malformed inputs.
+
 ## Migrate the remaining nouns on a plan, not on contact
 
 **Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; migration tasks tagged `operations-as-data`, starting with [ORB-15932]
@@ -707,8 +726,8 @@ only; the migration is still incremental, one noun at a time.
 
 ### Consequences
 
-- The transition has an end: two idioms coexist until the last phase, not
-  indefinitely.
+- The scoped transition ends at phase 5. Explicit exceptions remain hand-wired
+  where there is no equivalent second surface; §9 records each verdict.
 - Cost: migration tasks compete with feature work for drain capacity, and a
   phase runs even when no feature currently needs that noun.
 
@@ -788,8 +807,9 @@ handling cover every action. Which fields an action accepts, and which host
 action serves it, belongs to the noun's surface table. An action served by
 another host action is a `guarded_mode` that checks its own allowlist. An
 action served by the verb's handler leaves its field rules to that handler.
-This applies to each multiplexed tool that migrates, starting with
-`orbit.routine.control` in phase 5.
+This applies to each multiplexed tool that migrates. Phase 5 kept
+`orbit.routine.control` hand-wired because its routine CLI operations have
+different contracts; a future equivalent surface can use this shape.
 
 ### Rejected alternatives
 

@@ -112,7 +112,7 @@ pub(super) fn execute(
         OrbitBuiltinAction::PipelineWait => {
             super::pipeline_tools::wait(runtime, input, agent, model)
         }
-        OrbitBuiltinAction::Search => super::search_tools::search(runtime, input),
+        OrbitBuiltinAction::Search(verb) => super::search_tools::dispatch(runtime, verb, input),
         OrbitBuiltinAction::Task(verb) => {
             let (response, written) = super::task_operation_tools::dispatch(
                 runtime,

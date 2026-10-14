@@ -385,21 +385,16 @@ impl Commands {
                     subcommand,
                 )
             }
-            Commands::Search(command) => CommandOperation::new(
+            Commands::Search(command) => {
+                let mut operation = registry_operation(&command.query, runtime_dispatch!(Search));
                 if command.command.is_some() {
-                    RuntimeNeed::Required
-                } else {
-                    RuntimeNeed::ReadOnly
-                },
-                Some(admin_meta(
-                    "search",
-                    Some(&command.audit_subcommand()),
-                    Some("search"),
-                    None,
-                )),
-                None,
-                runtime_dispatch!(Search),
-            ),
+                    operation.runtime_need = RuntimeNeed::Required;
+                }
+                if let Some(meta) = &mut operation.audit_meta {
+                    meta.subcommand = Some(command.audit_subcommand());
+                }
+                operation
+            }
             // ADR-0209 bearing 1 [ORB-10358]: friction is registry-driven, so
             // runtime need and audit metadata derive from its spec. A new
             // friction verb needs no edit here.

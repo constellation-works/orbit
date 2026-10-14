@@ -19,11 +19,11 @@ related_artifacts: [ORB-10358, ORB-15937]
 Forward-looking only. Everything below is a question or an option, not a plan.
 The friction pilot and the structural half of kernel v2 (effect, noun spec,
 redaction class, generic adapters) are built; input validation and the
-migration order are accepted and planned in [2_design.md](./2_design.md), which
+migration order are accepted and implemented in [2_design.md](./2_design.md), which
 records what this doc used to leave open:
 
 - *Which nouns migrate next, and when?* Answered by
-  [2_design.md §9](./2_design.md#9-migration-plan): a planned order, starting
+  [2_design.md §9](./2_design.md#9-migration-plan): the completed scoped migration, starting
   with auto-task, instead of the touch-it-move-it ratchet.
 - *Do nouns with side-effecting verbs fit `OperationSpec` unchanged?* Answered
   for the verb-level case by `effect` ([2_design.md §5](./2_design.md#5-effect-derived-runtime-wiring));

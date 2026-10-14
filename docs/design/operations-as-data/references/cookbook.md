@@ -9,9 +9,9 @@ doc_role: reference
 type: design
 summary: Step-by-step procedure for migrating a noun to the operation registry under kernel v2, and for adding a verb to an already-migrated noun.
 tags: [operations-as-data, architecture, adr-0209, cookbook]
-paths: ["crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-cli/src/command/task/operation.rs"]
+paths: ["crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/search.rs"]
 related_features: [operations-as-data]
-related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15940, ORB-15941]
+related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15940, ORB-15941, ORB-15942]
 ---
 
 # Operations as Data — Migration Cookbook
@@ -37,7 +37,8 @@ relationships. Phase 3d (task review and lifecycle, [ORB-15940]) built
 `CliArgKind::Actions`, which spells a multiplexed tool's actions as CLI
 subcommands with their own arguments. Phase 4 (workflow run, [ORB-15941]) migrated a tool-only
 noun whose overlapping CLI stays hand-wired, and the multiplexed
-`orbit.workflow.auto`. A noun needing another kind the kernel lacks extends the kernel
+`orbit.workflow.auto`. Phase 5 migrated search at the CLI command root and
+recorded explicit exceptions for the remaining tools. A noun needing another kind the kernel lacks extends the kernel
 first. Two recipes: migrating a noun that is still hand-wired, and
 adding a verb to a noun that is already migrated.
 
@@ -257,6 +258,12 @@ matches that variant first and returns the generic helper (task wraps it as
 `task_operation`); the hand-wired arms stay below it. Facts the old arm held
 that are not in the spec, such as owner-workspace binding, come from the
 shared tables that already hold them, not from a new per-verb override.
+
+**An operation at the command root.** Search has no `query` subcommand.
+Use the generic `augment_operation_args` and `input_from_matches` adapters
+with the query spec in the root command's clap implementation, keeping unrelated
+maintenance subcommands separate. Root-only inheritance and audit suffixes stay
+in the CLI surface table.
 
 Now cash in Step 0: commit the captured help files as
 `crates/orbit-cli/tests/help_goldens/<noun>/*.txt` and add each argv to `CASES`

@@ -3,6 +3,7 @@ use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::OperationVerb;
+use orbit_common::governance::search::SearchVerb;
 use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb};
 use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
@@ -36,6 +37,9 @@ pub(crate) fn execute(
             WorkspaceClaimVerb::Acquire
             | WorkspaceClaimVerb::Release
             | WorkspaceClaimVerb::Show => false,
+        },
+        OrbitBuiltinAction::Search(verb) => match verb {
+            SearchVerb::Query => false,
         },
         OrbitBuiltinAction::Workflow(verb) => match verb {
             WorkflowVerb::Auto
@@ -281,6 +285,9 @@ pub(crate) fn execute(
             WorkspaceClaimVerb::Acquire
             | WorkspaceClaimVerb::Release
             | WorkspaceClaimVerb::Show => return Ok(None),
+        },
+        OrbitBuiltinAction::Search(verb) => match verb {
+            SearchVerb::Query => return Ok(None),
         },
         OrbitBuiltinAction::Workflow(verb) => match verb {
             WorkflowVerb::Auto

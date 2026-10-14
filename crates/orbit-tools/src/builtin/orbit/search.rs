@@ -1,92 +1,41 @@
-use orbit_common::OrbitError;
-use orbit_types::tool::{ToolParam, ToolSchema};
+//! Search has no guarded modes; its shared spec owns input validation.
+use super::operation::GuardedModes;
+use crate::ToolContext;
+use orbit_common::{
+    OrbitError,
+    governance::{operation::OperationInput, search::SearchVerb},
+};
 use serde_json::Value;
 
-use crate::{OrbitBuiltinAction, Tool, ToolContext, ToolExecutionKind};
-
-pub struct OrbitSearchTool;
-
-impl Tool for OrbitSearchTool {
-    fn execution_kind(&self) -> ToolExecutionKind {
-        ToolExecutionKind::ReadOnly
-    }
-
-    fn schema(&self) -> ToolSchema {
-        let mut parameters = vec![
-            ToolParam {
-                name: "query".to_string(),
-                description: "Tasks match non-adjacent terms: full matches first, then partial matches by term count and BM25. Frictions match a case-insensitive substring. Optional with `kind: friction`, where omitting it lists frictions."
-                    .to_string(),
-                param_type: "string".to_string(),
-                required: false,
-            },
-            ToolParam {
-                name: "kind".to_string(),
-                description: "Corpus kind: task, friction, or all. Default: all."
-                    .to_string(),
-                param_type: "string".to_string(),
-                required: false,
-            },
-            ToolParam {
-                name: "limit".to_string(),
-                description: "Maximum number of results, at most 1000. Default: 10, or 1000 for a friction listing.".to_string(),
-                param_type: "integer".to_string(),
-                required: false,
-            },
-            ToolParam {
-                name: "tag".to_string(),
-                description:
-                    "AND-filter by tag. Repeat or pass an array. Applies to task and friction."
-                        .to_string(),
-                param_type: "string_list".to_string(),
-                required: false,
-            },
-            ToolParam {
-                name: "all".to_string(),
-                description:
-                    "Include every status for the queried kind. Task defaults to proposed/backlog/in-progress/review/blocked; all adds done/rejected/archived/someday. Friction query defaults to open; all adds triaged/resolved."
-                        .to_string(),
-                param_type: "boolean".to_string(),
-                required: false,
-            },
-            ToolParam {
-                name: "status".to_string(),
-                description:
-                    "Explicit per-kind status override using kind:value tokens, such as task:open or friction:open. task:open covers proposed/backlog/in-progress/review/blocked. Overrides `all` for the named kind."
-                        .to_string(),
-                param_type: "string_list".to_string(),
-                required: false,
-            },
-            ToolParam {
-                // ORB-11027: the federated scope, deliberately not named
-                // `workspace` — that is the reserved routing selector that
-                // binds a call to one registered checkout.
-                name: "workspaces".to_string(),
-                description:
-                    "Federated scope: registered workspace names, `ws_*` IDs, or absolute checkout paths to search together. Hits carry workspace attribution. Omit to search only the bound workspace."
-                        .to_string(),
-                param_type: "string_list".to_string(),
-                required: false,
-            },
-            ToolParam {
-                name: "all_workspaces".to_string(),
-                description:
-                    "Search every active workspace registered on the answering machine. Overrides `workspaces`. Not available inside an Orbit-managed run."
-                        .to_string(),
-                param_type: "boolean".to_string(),
-                required: false,
-            },
-        ];
-        parameters.extend(super::model_identity_params());
-        ToolSchema {
-            name: "orbit.search".to_string(),
-            description: "Search tasks and frictions using lexical matching. With `kind: friction` and no `query`, list friction records instead: every status unless a `friction:` status narrows it, filtered by `tag`, ordered by creation time then ID, each hit carrying the full `record`; a note reports a listing cut at `limit`.".to_string(),
-            parameters,
-            builtin: true,
+impl GuardedModes for SearchVerb {
+    fn normalize_input(self, input: &mut Value) {
+        match self {
+            Self::Query => orbit_common::governance::search::normalize_legacy_input(input),
         }
     }
 
-    fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
-        super::execute_host_action(ctx, input, OrbitBuiltinAction::Search)
+    fn preempt(self, _ctx: &ToolContext, _input: &Value) -> Option<Result<Value, OrbitError>> {
+        match self {
+            Self::Query => None,
+        }
+    }
+    fn guarded_mode(
+        self,
+        _ctx: &ToolContext,
+        _input: &OperationInput,
+    ) -> Option<Result<Value, OrbitError>> {
+        match self {
+            Self::Query => None,
+        }
+    }
+    fn shape_input(self, _ctx: &ToolContext, _input: &mut Value) -> Result<(), OrbitError> {
+        match self {
+            Self::Query => Ok(()),
+        }
+    }
+    fn schema_extension(self) -> Option<fn(&mut Value)> {
+        match self {
+            Self::Query => None,
+        }
     }
 }

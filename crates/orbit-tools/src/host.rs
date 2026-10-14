@@ -6,6 +6,7 @@ use orbit_common::OrbitError;
 use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
+use orbit_common::governance::search::SearchVerb;
 use orbit_common::governance::task::TaskVerb;
 use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
@@ -102,7 +103,8 @@ pub enum OrbitBuiltinAction {
     Friction(FrictionVerb),
     PipelineInvoke,
     PipelineWait,
-    Search,
+    /// Shared lexical search operation.
+    Search(SearchVerb),
     /// Task verbs, one per task tool.
     Task(TaskVerb),
     /// Workflow-run verbs: ship, run reads and resume, and the auto-drain
@@ -203,4 +205,10 @@ pub trait OrbitToolHost: Send + Sync {
     }
 
     fn task_scope(&self) -> OrbitTaskScope;
+}
+
+impl From<SearchVerb> for OrbitBuiltinAction {
+    fn from(verb: SearchVerb) -> Self {
+        Self::Search(verb)
+    }
 }
