@@ -67,17 +67,6 @@ pub(crate) fn distinct_copy_with_probe<T>(
     probe(destination)
 }
 
-/// Install `source`'s bytes at `installed` the way an installer does: write
-/// beside it, then rename over it, so the running inode is left untouched.
-/// The staged copy is [`assess`]ed before the rename, as `orbit update`
-/// probes its staged release.
-pub(crate) fn install_over(source: &Path, installed: &Path) {
-    let staged = installed.with_extension("staged");
-    std::fs::copy(source, &staged).expect("stage replacement");
-    assess(&staged);
-    std::fs::rename(&staged, installed).expect("replace installation");
-}
-
 /// Run a freshly written executable's handover contract before installing it,
 /// so a later timed probe exercises an already completed command path.
 ///

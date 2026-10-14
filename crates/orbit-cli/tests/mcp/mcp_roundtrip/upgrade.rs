@@ -439,11 +439,15 @@ fn running_digest(workspace: &McpWorkspace, pid: u32) -> Option<String> {
 struct DrainCleanup<'a> {
     workspace: &'a McpWorkspace,
     run_id: String,
+    armed: bool,
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl Drop for DrainCleanup<'_> {
     fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
         let mut command = McpWorkspace::orbit_command(&self.workspace.work, &self.workspace.home);
         command.args(["run", "cancel", &self.run_id, "--confirm"]);
         // Production cancellation waits for the verified owner to exit. Keep
@@ -491,9 +495,10 @@ fn a_replaced_drain_hands_its_run_to_the_installed_executable() {
         ],
     );
     let submitted: Value = serde_json::from_slice(&submitted.stdout).expect("submission");
-    let drain = DrainCleanup {
+    let mut drain = DrainCleanup {
         workspace: &workspace,
         run_id: submitted["run_id"].as_str().expect("run ID").to_owned(),
+        armed: true,
     };
     let show = || {
         let output = candidate_ok(
@@ -515,7 +520,7 @@ fn a_replaced_drain_hands_its_run_to_the_installed_executable() {
     let candidate = distinct_candidate(&workspace);
     let new_digest = executable_generation(&candidate).expect("candidate digest");
     assert_ne!(new_digest, old_digest, "the fixture must replace the image");
-    crate::generation_fixture::install_over(&candidate, &installed);
+    install_prepared_candidate(&candidate, &installed);
     test_env::wait_until("the drain to re-exec the changed installation", || {
         assert!(
             orbit_common::process::identity::process_is_alive(pid),
@@ -548,6 +553,18 @@ fn a_replaced_drain_hands_its_run_to_the_installed_executable() {
         !orbit_common::process::identity::process_is_alive(pid)
     });
     assert_eq!(show()["run"]["state"], "cancelled");
+    // Keep unwind cleanup until both cancellation and owner exit are proven,
+    // then avoid launching a second cancellation for the already-finished run.
+    drain.armed = false;
+}
+
+/// `distinct_candidate` already staged and assessed this disposable image.
+/// Rename that same inode over the installation, leaving the running old inode
+/// intact. Copying and assessing it a second time adds no handover coverage.
+/// The local-candidate update row still exercises the production installer.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn install_prepared_candidate(candidate: &Path, installed: &Path) {
+    std::fs::rename(candidate, installed).expect("install prepared candidate");
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -601,7 +618,7 @@ fn a_replaced_mcp_server_defers_handover_until_a_large_partial_request_completes
 
     let candidate = distinct_candidate(&workspace);
     let new_digest = executable_generation(&candidate).expect("candidate digest");
-    crate::generation_fixture::install_over(&candidate, &installed);
+    install_prepared_candidate(&candidate, &installed);
 
     // Observe actual deferred lifecycle checks rather than assuming five
     // seconds of wall time gave a busy host multiple chances to hand over.
@@ -732,7 +749,7 @@ fn a_replaced_mcp_server_hands_its_session_over_after_invalid_requests() {
 
     let candidate = distinct_candidate(&workspace);
     let new_digest = executable_generation(&candidate).expect("candidate digest");
-    crate::generation_fixture::install_over(&candidate, &installed);
+    install_prepared_candidate(&candidate, &installed);
 
     // The idle server notices within a lifecycle interval and execs itself.
     let started = Instant::now();
@@ -771,6 +788,12 @@ fn a_replaced_mcp_server_hands_its_session_over_after_invalid_requests() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn upgrade_admission_and_session_handover() {
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .without_time()
+        .finish();
+    let _trace = tracing::subscriber::set_default(subscriber);
     for (name, check) in [
         (
             "new_review_record_contract_refuses_a_live_old_client_before_mutation",
@@ -786,6 +809,8 @@ fn upgrade_admission_and_session_handover() {
         ),
     ] {
         tracing::info!(case = name, "MCP contract row");
+        let started = Instant::now();
         check();
+        tracing::info!(case = name, elapsed = ?started.elapsed(), "MCP contract row completed");
     }
 }
