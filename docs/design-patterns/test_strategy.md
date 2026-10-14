@@ -7,7 +7,33 @@ last_validated: 2026-10-13
 
 Test behaviour where callers meet it. A new test is written when a bug or defect is fixed: one regression test that fails before the fix, preferably as a row in an existing table-driven test. Features, refactors and chores add no new tests unless an acceptance criterion asks for one; the existing suite gates them, and a change updates the tests it breaks. When a regression test is written, it goes at a stable boundary by default: a crate-root integration test, a golden, or an e2e flow. A unit test is the exception, and it must earn its place by meeting one of the admission criteria below.
 
-Gate time is the main throughput bottleneck for Orbit's drains (on 2026-10-13 one affected-crates run was 2,688 tests and 652 s on dk-server-2), so the suite should shrink over time, not grow.
+Gate time is a finite budget. Optimize the suite for the critical failures it can detect and the time it costs, rather than its test count.
+
+## Quality and the 15-minute budget
+
+The complete **Check / Clippy / Test** CI job must finish in **under 15 minutes (900 seconds) of elapsed wall time**. Measure from the job's start to completion, including setup, compilation, checks, linting, tests and required capability checks. Report queue wait separately. A fast filtered run, a smaller test count or a sum of parallel testcase durations does not establish that the full job meets this budget. This is an acceptance requirement; documenting it does not claim the current suite already meets it.
+
+Every test must protect a named observable guarantee. Prioritize severity and likelihood of failure, the uniqueness of the test's coverage, and its diagnostic value relative to runtime. Prove behavior through the public boundary callers use, retain meaningful negative cases, and use deterministic fault injection where a failure or race cannot be reached reliably otherwise. The current agent guide governs admission of new tests; the historical unit-test admission records below do not authorize new tests of private implementation functions.
+
+Critical coverage takes priority:
+
+| Critical behavior | Guarantees to preserve |
+|---|---|
+| Authority and security | Correct host/workspace identity and operator grants; denial before unauthorized effects; sandbox and path/symlink confinement; child-environment isolation; secret redaction; HTTP origin and host checks. |
+| Durable state and task lifecycle | Valid transitions, atomic persistence, compatibility and migration safety, artifact-bound validation/review/completion, and refusal of missing or empty evidence. |
+| Distributed execution and recovery | Exclusive claims, idempotent settlement, lost-reply reconciliation, restart/orphan recovery, graceful and forced cancellation, and child-process cleanup. |
+| Delivery and PR repair | Required checks and exact candidate heads, bounded auto-fix attempts, merge-conflict recovery, lease-protected publication, and separate repair and merge authority. |
+| Upgrades and cleanup | Existing-client compatibility or safe refusal, recoverable replacement, ownership-proven GC, retention of active/unknown output, and preservation of failed candidates. |
+| Resource admission | Capacity ceilings, enforcement decisions, unavailable or stale measurements, and safe behavior when profiles or forecasts are uncertain. |
+| Public contracts | Real CLI, MCP, API and UI behavior where relevant: inputs, scopes, identifiers, persisted effects, errors, machine output and critical user workflows. |
+
+For each consolidation or retirement, record the invariant and important failure cases, the existing or replacement test that still detects them, and measured cost before and after. Keep the only guard of a security invariant, recovery path or known incident until equivalent behavioral coverage is demonstrated in the same change (STD-04 §R25). Strengthen assertions or add explicitly required boundary coverage when an audit demonstrates a critical gap; do not add speculative private-function tests or duplicate an existing invariant.
+
+Table-driven cases may amortize setup, but each row must remain isolated where needed and print its identity before running. Sharing fixtures must preserve authority scrubbing, state isolation, process ownership and cleanup. A smaller number of carriers with the same expensive work is not a runtime improvement, and a carrier that hangs or hides the failing row is a quality regression.
+
+Use timings and failure evidence to find the actual bottleneck: runner setup, compilation, linting, test execution, fixture startup, serial groups or teardown. Compare the same source selection, runner/build settings and cache conditions; retain failed and slow runs as evidence. Measure the full hosted job after changes as well as focused before/after costs. Fix flakes and hangs at their cause. Retries, artificial sleeps, hidden skips, weaker assertions, zero-test selections and omitted required checks cannot satisfy the budget.
+
+The recurring `test-quality-audit` creates evidence-backed proposed tasks for critical coverage gaps, weak assertions, duplication, flaky or slow fixtures and regressions against this budget. It searches existing tasks before filing, links each finding to the audit, and records concrete acceptance criteria. The audit leaves a durable report even when no new finding is confirmed; it does not treat a quota of findings or deletions as success.
 
 ## Why
 
