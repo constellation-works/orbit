@@ -357,7 +357,7 @@ required_validation_commands = ['sh scripts/validate.sh']
 build_output_env = ["DIST_DIR"]
 ```
 
-For example, `scripts/validate.sh` can invoke `cmake -S . -B "$DIST_DIR"` and
+Create the example validation script in that workspace to invoke `cmake -S . -B "$DIST_DIR"` and
 `cmake --build "$DIST_DIR"`. Orbit supplies no Cargo variable to that workspace.
 Multiple listed variables refer to the same directory; commands can use subdirectories
 below it to separate outputs. Arbitrary placement outside managed host state is not
