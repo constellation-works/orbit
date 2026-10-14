@@ -553,13 +553,22 @@ pub(super) fn pr_required_checks(input: &Value) -> Result<Value, OrbitError> {
         "-f".to_string(),
         format!("query={query}"),
     ];
-    let result = execute_with_transient_retry(
-        "gh",
-        &args,
-        Some(Path::new(workspace_path)),
-        DEFAULT_TIMEOUT_MS,
-        "PR required checks",
-    )?;
+    let result = if input.get("deadline_ms").is_some() {
+        super::super::completion_deadline::Deadline::from_input(input)?.execute(
+            "gh",
+            args,
+            Path::new(workspace_path),
+            "PR required checks",
+        )?
+    } else {
+        execute_with_transient_retry(
+            "gh",
+            &args,
+            Some(Path::new(workspace_path)),
+            DEFAULT_TIMEOUT_MS,
+            "PR required checks",
+        )?
+    };
     let answer: Value = serde_json::from_str(&result.stdout).map_err(|error| {
         OrbitError::Execution(format!(
             "private automation VCS PR required checks returned invalid JSON: {error}"

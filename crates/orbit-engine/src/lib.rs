@@ -40,7 +40,9 @@ pub mod test_support {
     pub use crate::context::NullRuntimeHost;
     #[cfg(target_os = "linux")]
     pub use crate::executor::automation::vcs::with_host_target_removal_hook;
-    pub use crate::executor::automation::vcs::{with_remote_probe_backoff, with_vcs_retry_wait};
+    pub use crate::executor::automation::vcs::{
+        with_prerequisite_clock, with_remote_probe_backoff, with_vcs_retry_wait,
+    };
 }
 mod condition;
 mod context;

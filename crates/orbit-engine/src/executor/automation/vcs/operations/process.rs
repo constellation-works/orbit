@@ -63,7 +63,7 @@ pub(in crate::executor::automation::vcs) fn is_transient_github_failure(message:
         || (text.contains("graphql") && text.contains("timeout"))
 }
 
-pub(super) fn execute(
+pub(in crate::executor::automation::vcs) fn execute(
     program: &str,
     args: Vec<String>,
     current_dir: Option<&Path>,

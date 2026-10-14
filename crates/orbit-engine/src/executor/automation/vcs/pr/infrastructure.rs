@@ -1,7 +1,7 @@
 //! Completion's generic prerequisite recovery; the adapter owns forge evidence.
-use super::super::{freshness::remote_branch_sha, operations};
+use super::super::{completion_deadline::Deadline, operations};
 use super::{
-    answers::{PullRequestStatus, read_required_checks},
+    answers::{PullRequestStatus, RequiredChecks},
     auto_fix::{AutoFix, stopped},
 };
 use crate::context::RuntimeHost;
@@ -47,6 +47,7 @@ fn exact_remote(
     workspace: &str,
     status: &PullRequestStatus,
     evidence: &PrInfrastructureEvidence,
+    deadline: Deadline,
 ) -> Result<(), OrbitError> {
     if status.head_sha.as_deref() != Some(&evidence.head_sha)
         || status.head_branch.as_deref() != Some(&evidence.head_branch)
@@ -63,9 +64,18 @@ fn exact_remote(
             "infrastructure PR identity changed",
         ));
     }
-    if remote_branch_sha(Path::new(workspace), &evidence.head_branch)?.as_deref()
-        != Some(&evidence.head_sha)
-    {
+    let remote = deadline.execute(
+        "git",
+        vec![
+            "ls-remote".into(),
+            "--heads".into(),
+            "origin".into(),
+            format!("refs/heads/{}", evidence.head_branch),
+        ],
+        Path::new(workspace),
+        "infrastructure remote head",
+    )?;
+    if remote.stdout.split_whitespace().next() != Some(evidence.head_sha.as_str()) {
         return Err(stopped(
             &evidence.pr_number,
             "infrastructure remote head changed or was deleted",
@@ -84,11 +94,9 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
     pr: &str,
     status: &PullRequestStatus,
     diagnose: bool,
-    remaining_seconds: u64,
+    deadline_ms: u64,
 ) -> Result<InfrastructureStep, OrbitError> {
-    let deadline = std::time::SystemTime::now()
-        .checked_add(std::time::Duration::from_secs(remaining_seconds))
-        .ok_or_else(|| stopped(pr, "completion deadline overflow"))?;
+    let deadline = Deadline(deadline_ms);
     let history = host.get_task_history(auto_fix.primary_task()?)?;
     let reservations =
         pr_infrastructure_reservations(&history).map_err(|reason| stopped(pr, &reason))?;
@@ -97,21 +105,21 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
         .find(|reservation| reservation.evidence.pr_number == pr)
     {
         let evidence = &reservation.evidence;
-        if remaining_seconds == 0 {
+        if deadline.remaining().is_err() {
             return Err(stopped(
                 pr,
                 "completion deadline expired with a reserved infrastructure rerun",
             ));
         }
-        exact_remote(workspace, status, evidence)?;
+        exact_remote(workspace, status, evidence, deadline)?;
         let observed = host
             .run_private_vcs_operation(
                 operations::CI_PREREQUISITE_OBSERVE,
-                json!({"workspace_path":workspace,"evidence":evidence}),
+                json!({"workspace_path":workspace,"evidence":evidence,"deadline_ms":deadline_ms}),
             )
             .map_err(|error| stopped(pr, &error.to_string()))?;
         record(host, auto_fix, evidence, "observation", &observed)?;
-        if std::time::SystemTime::now() >= deadline {
+        if deadline.remaining().is_err() {
             return Err(stopped(
                 pr,
                 "completion deadline expired while observing infrastructure recovery",
@@ -129,12 +137,19 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
         .head_sha
         .as_deref()
         .ok_or_else(|| stopped(pr, "missing prerequisite head"))?;
-    let policy = read_required_checks(host, Path::new(workspace), pr).map_err(|error| {
-        stopped(
-            pr,
-            &format!("its required checks could not be read: {error}"),
+    deadline.remaining()?;
+    let policy = host
+        .run_private_vcs_operation(
+            operations::PR_REQUIRED_CHECKS,
+            json!({"workspace_path":workspace,"pr":pr,"deadline_ms":deadline_ms}),
         )
-    })?;
+        .and_then(|response| RequiredChecks::from_response(&response))
+        .map_err(|error| {
+            stopped(
+                pr,
+                &format!("its required checks could not be read: {error}"),
+            )
+        })?;
     if policy.head_sha != head {
         return Err(stopped(pr, "required checks name another head"));
     }
@@ -148,42 +163,35 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
     }) {
         return Ok(InfrastructureStep::None);
     }
-    if remaining_seconds == 0 {
+    if deadline.remaining().is_err() {
         return Err(stopped(
             pr,
             "no completion deadline remains for infrastructure recovery",
         ));
     }
-    let response = host.run_private_vcs_operation(operations::CI_PREREQUISITE_EVIDENCE, json!({"workspace_path":workspace,"pr":pr,"head_sha":head,"head_branch":status.head_branch,"base_branch":status.base_branch})).map_err(|error| stopped(pr, &error.to_string()))?;
+    let response = host.run_private_vcs_operation(operations::CI_PREREQUISITE_EVIDENCE, json!({"workspace_path":workspace,"pr":pr,"head_sha":head,"head_branch":status.head_branch,"base_branch":status.base_branch,"deadline_ms":deadline_ms})).map_err(|error| stopped(pr, &error.to_string()))?;
     if response.get("evidence") == Some(&Value::Null) {
         return Ok(InfrastructureStep::None);
     }
     let evidence: PrInfrastructureEvidence =
         serde_json::from_value(response["evidence"].clone())
             .map_err(|error| stopped(pr, &format!("unreadable prerequisite evidence: {error}")))?;
-    exact_remote(workspace, status, &evidence)?;
-    if std::time::SystemTime::now() >= deadline {
+    exact_remote(workspace, status, &evidence, deadline)?;
+    if deadline.remaining().is_err() {
         return Err(stopped(
             pr,
             "completion deadline expired while reading infrastructure evidence",
         ));
     }
-    let deadline_ms = u64::try_from(
-        deadline
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|error| stopped(pr, &error.to_string()))?
-            .as_millis(),
-    )
-    .map_err(|_| stopped(pr, "completion deadline overflow"))?;
     let admission =
         host.admit_pr_infrastructure(&auto_fix.run_id, &auto_fix.task_ids, &evidence)?;
     match admission {
         PrInfrastructureAdmission::Refused(reason) => Err(stopped(pr, &reason)),
         PrInfrastructureAdmission::Observe(reservation) => {
-            exact_remote(workspace, status, &reservation.evidence)?;
+            exact_remote(workspace, status, &reservation.evidence, deadline)?;
             host.run_private_vcs_operation(
                 operations::CI_PREREQUISITE_OBSERVE,
-                json!({"workspace_path":workspace,"evidence":reservation.evidence}),
+                json!({"workspace_path":workspace,"evidence":reservation.evidence,"deadline_ms":deadline_ms}),
             )
             .map_err(|error| stopped(pr, &error.to_string()))?;
             Ok(InfrastructureStep::Wait)
@@ -196,7 +204,7 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
                 "original",
                 &json!(reservation),
             )?;
-            exact_remote(workspace, status, &evidence)?;
+            exact_remote(workspace, status, &evidence, deadline)?;
             // The adapter rechecks policy, latest attempt and source evidence
             // immediately before this single-shot mutation. Never retry it.
             let reply = host.run_private_vcs_operation(operations::CI_RERUN_FAILED, json!({"workspace_path":workspace,"run_id":evidence.run_id.to_string(),"prerequisite":evidence,"deadline_ms":deadline_ms}));
@@ -228,7 +236,7 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
             let observed = host
                 .run_private_vcs_operation(
                     operations::CI_PREREQUISITE_OBSERVE,
-                    json!({"workspace_path":workspace,"evidence":evidence}),
+                    json!({"workspace_path":workspace,"evidence":evidence,"deadline_ms":deadline_ms}),
                 )
                 .map_err(|error| stopped(pr, &error.to_string()))?;
             record(host, auto_fix, &evidence, "observation", &observed)?;

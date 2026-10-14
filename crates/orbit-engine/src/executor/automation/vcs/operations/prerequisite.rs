@@ -1,9 +1,7 @@
 //! GitHub owns effective policy, workflow identities and source dependency reads.
 //! The engine receives verified generic evidence; no workflow is special-cased.
-use super::{
-    DEFAULT_TIMEOUT_MS, ci::ci_job_log, input::required_string, process::execute,
-    workflow_dependency::dependency,
-};
+use super::super::completion_deadline::Deadline;
+use super::{ci::ci_job_log, input::required_string, workflow_dependency::dependency};
 use orbit_common::OrbitError;
 use orbit_types::workflow::{PrInfrastructureEvidence, RequiredGate};
 use serde_json::{Value, json};
@@ -32,13 +30,12 @@ fn same(actual: &Value, expected: Value, label: &str) -> Result<(), OrbitError> 
     }
     Ok(())
 }
-fn api(workspace: &Path, endpoint: &str) -> Result<Value, OrbitError> {
-    let response = execute(
+fn api(deadline: Deadline, workspace: &Path, endpoint: &str) -> Result<Value, OrbitError> {
+    let response = deadline.execute(
         "gh",
         vec!["api".into(), endpoint.into()],
-        Some(workspace),
-        DEFAULT_TIMEOUT_MS,
-        "workflow prerequisite read",
+        workspace,
+        &format!("workflow prerequisite read {endpoint}"),
     )?;
     serde_json::from_str(&response.stdout).map_err(|_| unreadable("invalid API JSON"))
 }
@@ -72,6 +69,7 @@ struct Snapshot {
     runs: Value,
 }
 fn snapshot(
+    deadline: Deadline,
     workspace: &Path,
     pr: &str,
     head: &str,
@@ -84,10 +82,14 @@ fn snapshot(
     {
         return Err(unreadable("PR/head selector"));
     }
-    let repo = api(workspace, "repos/{owner}/{repo}")?;
+    let repo = api(deadline, workspace, "repos/{owner}/{repo}")?;
     let repository = text(&repo, "full_name")?.to_string();
     let repository_id = number(&repo, "id")?;
-    let pull = api(workspace, &format!("repos/{{owner}}/{{repo}}/pulls/{pr}"))?;
+    let pull = api(
+        deadline,
+        workspace,
+        &format!("repos/{{owner}}/{{repo}}/pulls/{pr}"),
+    )?;
     same(
         &pull["number"],
         json!(pr.parse::<u64>().map_err(|_| unreadable("PR number"))?),
@@ -113,7 +115,7 @@ fn snapshot(
     // GraphQL supplies the effective classic rule for this exact base. The
     // active branch-rules endpoint adds organization/repository rulesets.
     let query = "query($pr:Int!,$owner:String!,$repo:String!){repository(owner:$owner,name:$repo){pullRequest(number:$pr){headRefOid baseRefName reviewDecision baseRef{branchProtectionRule{requiredStatusChecks{context app{databaseId slug}}}}}}}";
-    let response = execute(
+    let response = deadline.execute(
         "gh",
         vec![
             "api".into(),
@@ -127,8 +129,7 @@ fn snapshot(
             "-f".into(),
             format!("query={query}"),
         ],
-        Some(workspace),
-        DEFAULT_TIMEOUT_MS,
+        workspace,
         "effective classic policy",
     )?;
     let classic: Value =
@@ -170,6 +171,7 @@ fn snapshot(
         }
     }
     let rules = api(
+        deadline,
         workspace,
         &format!(
             "repos/{{owner}}/{{repo}}/rules/branches/{}?per_page=100",
@@ -229,6 +231,7 @@ fn snapshot(
         return Err(unreadable("no effective protected context"));
     }
     let checks = api(
+        deadline,
         workspace,
         &format!("repos/{{owner}}/{{repo}}/commits/{head}/check-runs?per_page=100&filter=latest"),
     )?;
@@ -239,6 +242,7 @@ fn snapshot(
         number(&check["app"], "id")?;
     }
     let runs = api(
+        deadline,
         workspace,
         &format!("repos/{{owner}}/{{repo}}/actions/runs?head_sha={head}&per_page=100"),
     )?;
@@ -255,16 +259,18 @@ fn snapshot(
 }
 
 fn checked_run(
+    deadline: Deadline,
     workspace: &Path,
     snapshot: &Snapshot,
     run: &Value,
-    head: &str,
-    branch: &str,
-    base: &str,
-    pr: &str,
 ) -> Result<Value, OrbitError> {
+    // Snapshot has already pinned these fields to the requested completion.
+    let head = text(&snapshot.pr["head"], "sha")?;
+    let branch = text(&snapshot.pr["head"], "ref")?;
+    let base = text(&snapshot.pr["base"], "ref")?;
     let run_id = number(run, "id")?;
     let current = api(
+        deadline,
         workspace,
         &format!("repos/{{owner}}/{{repo}}/actions/runs/{run_id}"),
     )?;
@@ -296,11 +302,7 @@ fn checked_run(
         .as_array()
         .filter(|pulls| pulls.len() == 1)
         .ok_or_else(|| unreadable("run PR linkage"))?;
-    same(
-        &pulls[0]["number"],
-        json!(pr.parse::<u64>().map_err(|_| unreadable("PR number"))?),
-        "run PR",
-    )?;
+    same(&pulls[0]["number"], snapshot.pr["number"].clone(), "run PR")?;
     same(&pulls[0]["head"]["sha"], json!(head), "run PR head")?;
     same(&pulls[0]["base"]["ref"], json!(base), "run PR base")?;
     same(
@@ -310,11 +312,18 @@ fn checked_run(
     )?;
     number(&current, "run_attempt")?;
     number(&current, "check_suite_id")?;
+    number(&current["actor"], "id")?;
+    same(&current["actor"], run["actor"].clone(), "original actor")?;
     Ok(current)
 }
-fn workflow(workspace: &Path, run: &Value) -> Result<(String, String, String), OrbitError> {
+fn workflow(
+    deadline: Deadline,
+    workspace: &Path,
+    run: &Value,
+) -> Result<(String, String, String), OrbitError> {
     let id = number(run, "workflow_id")?;
     let workflow = api(
+        deadline,
         workspace,
         &format!("repos/{{owner}}/{{repo}}/actions/workflows/{id}"),
     )?;
@@ -333,6 +342,7 @@ fn workflow(workspace: &Path, run: &Value) -> Result<(String, String, String), O
     same(&run["path"], json!(path), "run workflow source")?;
     let head = text(run, "head_sha")?;
     let contents = api(
+        deadline,
         workspace,
         &format!("repos/{{owner}}/{{repo}}/contents/{path}?ref={head}"),
     )?;
@@ -347,6 +357,7 @@ fn workflow(workspace: &Path, run: &Value) -> Result<(String, String, String), O
         return Err(unreadable("workflow event base commit"));
     }
     let base_contents = api(
+        deadline,
         workspace,
         &format!("repos/{{owner}}/{{repo}}/contents/{path}?ref={source_base}"),
     )?;
@@ -366,24 +377,23 @@ fn workflow(workspace: &Path, run: &Value) -> Result<(String, String, String), O
         "workflow event-base path",
     )?;
     let revision = format!("{head}:{path}");
-    let local_blob = execute(
+    let local_blob = deadline.execute(
         "git",
         vec!["rev-parse".into(), revision.clone()],
-        Some(workspace),
-        DEFAULT_TIMEOUT_MS,
+        workspace,
         "workflow blob",
     )?;
     if local_blob.stdout.trim() != blob {
         return Err(unreadable("source blob differs from the run head"));
     }
-    let source = execute(
-        "git",
-        vec!["show".into(), revision],
-        Some(workspace),
-        DEFAULT_TIMEOUT_MS,
-        "workflow source",
-    )?
-    .stdout;
+    let source = deadline
+        .execute(
+            "git",
+            vec!["show".into(), revision],
+            workspace,
+            "workflow source",
+        )?
+        .stdout;
     if source.len() > 64 * 1024 || contents["size"].as_u64() != Some(source.len() as u64) {
         return Err(unreadable("truncated workflow source"));
     }
@@ -407,7 +417,8 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
     let head = required_string(input, "head_sha")?;
     let branch = required_string(input, "head_branch")?;
     let base = required_string(input, "base_branch")?;
-    let snapshot = snapshot(workspace, pr, head, branch, base)?;
+    let deadline = Deadline::from_input(input)?;
+    let snapshot = snapshot(deadline, workspace, pr, head, branch, base)?;
     let checks = complete_list(&snapshot.checks, "check_runs")?;
     let missing = snapshot
         .required
@@ -436,23 +447,34 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
         if listed["status"] == "completed" && listed["conclusion"] == "success" {
             continue;
         }
-        let run = checked_run(workspace, &snapshot, listed, head, branch, base, pr)?;
+        let run = checked_run(deadline, workspace, &snapshot, listed)?;
         if run["status"] != "completed" || run["conclusion"] != "failure" {
             return Err(unreadable("running, superseded or non-failed attempt"));
         }
         let run_id = number(&run, "id")?;
         let attempt = number(&run, "run_attempt")?;
         let jobs = api(
+            deadline,
             workspace,
             &format!(
                 "repos/{{owner}}/{{repo}}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100"
             ),
         )?;
         let job_list = complete_list(&jobs, "jobs")?;
+        let mut job_ids = std::collections::BTreeSet::new();
         for job in job_list {
+            if !job_ids.insert(number(job, "id")?) {
+                return Err(unreadable("duplicate provider job identity"));
+            }
             same(&job["run_id"], json!(run_id), "job run")?;
             same(&job["head_sha"], json!(head), "job head")?;
             same(&job["run_attempt"], json!(attempt), "job attempt")?;
+            if !matches!(
+                job["conclusion"].as_str(),
+                Some("success" | "skipped" | "failure")
+            ) {
+                return Err(unreadable("ambiguous rerun job selection"));
+            }
             if job["status"] != "completed" {
                 return Err(unreadable("running prerequisite jobs"));
             }
@@ -464,7 +486,7 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
         let [failed] = failed.as_slice() else {
             continue;
         };
-        let (path, blob, source) = workflow(workspace, &run)?;
+        let (path, blob, source) = workflow(deadline, workspace, &run)?;
         for gate in &missing {
             let Ok(dependency) = dependency(&source, &gate.context, text(failed, "name")?) else {
                 continue;
@@ -478,12 +500,13 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
             let [failed_step] = failed_steps.as_slice() else {
                 return Err(unreadable("ambiguous failed prerequisite step"));
             };
-            super::workflow_dependency::api_step(
-                &source,
+            super::workflow_read::api_step(
+                &dependency.workflow,
                 &dependency.prerequisite,
                 text(failed_step, "name")?,
             )?;
             let suite = api(
+                deadline,
                 workspace,
                 &format!(
                     "repos/{{owner}}/{{repo}}/check-suites/{}",
@@ -506,6 +529,12 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
             if gate.app_id.is_some_and(|app| app != app_id) {
                 return Err(unreadable("protected integration differs"));
             }
+            super::workflow_dependency::certify_rerun(
+                &dependency,
+                job_list,
+                &snapshot.required,
+                app_id,
+            )?;
             let job_id = number(failed, "id")?;
             let check_url = text(failed, "check_run_url")?;
             let check_prefix = format!(
@@ -525,7 +554,7 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
                 return Err(unreadable("prerequisite check integration"));
             }
             let log = ci_job_log(
-                &json!({"workspace_path":workspace,"run_id":run_id.to_string(),"job_id":job_id.to_string()}),
+                &json!({"workspace_path":workspace,"run_id":run_id.to_string(),"job_id":job_id.to_string(),"deadline_ms":deadline.0}),
             )?;
             if log["truncated"] != false || !log["fallback_error"].is_null() {
                 return Err(unreadable("truncated/unreadable prerequisite log"));
@@ -580,11 +609,15 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
                 jobs: jobs.clone(),
                 log: log.into(),
             });
+            // Several missing matrix/check contexts may share this unique root.
+            // The complete required set and rerun closure were certified above.
+            break;
         }
     }
     if candidates.len() != 1 {
         return Err(unreadable("no unique source-bound prerequisite recovery"));
     }
+    deadline.remaining()?;
     Ok(json!({"evidence":candidates.pop()}))
 }
 
@@ -594,7 +627,9 @@ pub(super) fn observe(input: &Value) -> Result<Value, OrbitError> {
     let workspace = Path::new(required_string(input, "workspace_path")?);
     let evidence: PrInfrastructureEvidence = serde_json::from_value(input["evidence"].clone())
         .map_err(|_| unreadable("reserved evidence"))?;
+    let deadline = Deadline::from_input(input)?;
     let snapshot = snapshot(
+        deadline,
         workspace,
         &evidence.pr_number,
         &evidence.head_sha,
@@ -621,18 +656,11 @@ pub(super) fn observe(input: &Value) -> Result<Value, OrbitError> {
         .iter()
         .find(|run| run["id"].as_u64() == Some(evidence.run_id))
         .ok_or_else(|| unreadable("reserved run disappeared"))?;
-    let run = checked_run(
-        workspace,
-        &snapshot,
-        listed,
-        &evidence.head_sha,
-        &evidence.head_branch,
-        &evidence.base_branch,
-        &evidence.pr_number,
-    )?;
+    let run = checked_run(deadline, workspace, &snapshot, listed)?;
     if number(&run, "workflow_id")? != evidence.workflow_id
         || text(&run, "path")? != evidence.workflow_path
         || text(&run, "event")? != evidence.event
+        || run["actor"] != evidence.run["actor"]
     {
         return Err(unreadable("reserved workflow/event changed"));
     }
@@ -672,6 +700,7 @@ pub(super) fn observe(input: &Value) -> Result<Value, OrbitError> {
             "second failure or protected check still missing",
         ));
     }
+    deadline.remaining()?;
     Ok(
         json!({"attempt":attempt,"status":state,"conclusion":run["conclusion"],"gates_passed": passed && attempt > u64::from(evidence.run_attempt) && state == "completed", "run":run,"checks":snapshot.checks}),
     )

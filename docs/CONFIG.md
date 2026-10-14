@@ -964,11 +964,51 @@ existing recovery activities, final validation and push do the repair:
   identity), an exact PR/head/base and latest workflow attempt, and source that
   directly links the missing job to a failed API-read prerequisite. The failed
   step must show an explicit GitHub HTTP 502, 503 or 504; credential or permission
-  diagnostics veto recovery. The adapter accepts literal job names and a bounded
-  single-axis literal matrix. The workflow blob must match both the event base
-  and exact PR head, proving the merge-ref workflow uses that DAG. It holds on
-  changed definitions, dynamic or ambiguous dependencies,
-  incomplete pages, source, jobs or logs, and additional administrative rules.
+  diagnostics veto recovery. The complete latest provider job/step table is bound
+  to the immutable workflow and its bounded dependency graph. `--failed` repeats
+  failed jobs and every transitive dependent, even a previously successful
+  `if: always()` job. Recovery requires one uniquely diagnosed failed read job;
+  additional failed jobs or unknown conclusions hold. Every source step of a
+  previously executed selected job, including earlier/later steps and action
+  pre/post effects, must be certified safe to repeat. Unknown provider steps,
+  incomplete source/matrix coverage and unsupported repeated actions hold.
+  Previously skipped selected jobs with zero steps may perform their first
+  execution of the unchanged protected CI job, including analysis, local setup,
+  immutable actions and check-result publication. This requires an effective
+  protected context bound to that source job (or its literal matrix family) and
+  the captured GitHub Actions app. Its explicit token permissions may grant
+  reads and check/status/security-result publication, never unrelated writes;
+  deployment environments, foreign credentials/secrets and unsupported actions
+  hold. Unrelated fresh release, issue or deployment jobs have no such authority.
+  Fresh unprotected jobs qualify only when their commands are supported reads.
+  Source equality at the event base/head, original actor, PR/ref/head, provider
+  run/attempt/suite and app bind this authority; job names or action pins alone
+  grant nothing. The complete effect scope is revalidated before mutation.
+  A literal `gh api repos/…` REST read may use the default GET or one explicit
+  `--method GET`, `--method=GET`, `-X GET` or `-XGET`. Live PR-state workflows use
+  `gh api --method GET 'repos/…' --jq '…' >> "$GITHUB_OUTPUT"`, with a fixed
+  merged/open/closed projection producing one bounded `state` output. Its endpoint
+  may interpolate only the provider's numeric PR expression. The historical
+  `set -euo pipefail` / `state="$(gh api … | jq -er …)"` / local output and log
+  template also qualifies unchanged: repository and numeric PR bindings are
+  trusted, jq selects one of the same three scalars, and the only writes are
+  isolated runner output and stdout. These are finite command templates, not a
+  general shell parser or a workflow-specific exception.
+  Repeated reads require GitHub-hosted Ubuntu using the default shell, `bash` or
+  `sh` (the historical template requires `bash`). Containers, services, actions,
+  working-directory and shell-startup/executable/host/config/output overrides
+  hold. Token bindings must use the repository GitHub token, `GH_REPO` must use
+  `${{ github.repository }}`, and `PR_NUMBER` must use the provider's numeric PR.
+  Other options (including fields and input bodies), GraphQL, API writes,
+  comments/echoed commands, arbitrary jq, pipelines outside the historical
+  template and ambiguous shell composition hold without reservation or rerun.
+  The adapter accepts literal job names and a bounded single-axis literal matrix,
+  at most 100 jobs and 64 KiB of workflow source. A global cycle check visits each
+  node once and each edge twice, including unrelated dependencies, so converging
+  paths cannot multiply work. Cyclic, unresolved, dynamic or ambiguous
+  dependencies hold. The workflow blob must match both the event base and exact
+  PR head, proving the merge-ref workflow uses that DAG. Changed definitions,
+  incomplete pages, source, jobs or logs, and additional administrative rules hold.
 - Before rerunning failed jobs, the owner reserves one infrastructure rerun per
   repository/PR across all heads, resumes and sibling executions under the primary
   task's write lock. Its original policy, workflow source, identities and log are
@@ -978,7 +1018,11 @@ existing recovery activities, final validation and push do the repair:
   subsequent polls and resumed executions observe the current attempt and status
   without repeating the mutation. A second failure, superseded attempt, changed
   policy or identity, or absent protected result holds the PR in review. Reads,
-  the mutation and waiting share the existing completion deadline.
+  the mutation and waiting share one absolute completion deadline. Before each
+  prerequisite policy, API, source, remote or log read (including log fallbacks),
+  the adapter refuses an expired budget and clamps the subprocess timeout to the
+  remaining milliseconds. Expiry during a read prevents the next request and
+  any new rerun or merge; pre-mutation revalidation uses that same deadline.
 - Approvals, permissions, admin rules, unknown status, unreadable evidence,
   infrastructure failures outside that narrow prerequisite case and optional
   checks failing alone launch no agent; the watcher stops with the reason.

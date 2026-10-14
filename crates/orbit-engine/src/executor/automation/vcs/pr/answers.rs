@@ -367,7 +367,9 @@ impl RequiredChecks {
     /// Parse a `pr.required_checks` response. A truncated listing, or an
     /// entry without a name or a boolean `isRequired`, is a failed read: it
     /// cannot prove a failed check optional.
-    fn from_response(response: &Value) -> Result<Self, OrbitError> {
+    pub(in crate::executor::automation::vcs) fn from_response(
+        response: &Value,
+    ) -> Result<Self, OrbitError> {
         let unreadable =
             |what: &str| OrbitError::Execution(format!("the required-checks answer {what}"));
         let pull_request = response

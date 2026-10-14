@@ -2,7 +2,7 @@
 use super::*;
 use orbit_types::workflow::{PR_INFRASTRUCTURE_RESERVED_EVENT, pr_infrastructure_reservations};
 
-const SOURCE: &str = "name: Guarded CI\non: [pull_request]\njobs:\n  state:\n    name: Read state\n    runs-on: ubuntu-latest\n    steps:\n      - name: Read PR\n        run: gh api repos/example/pulls/42\n  protected:\n    needs: state\n    name: Protected (${{ matrix.language }})\n    strategy:\n      matrix:\n        language: [rust]\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo protected\n";
+const SOURCE: &str = "name: Guarded CI\non: [pull_request]\npermissions: {}\njobs:\n  state:\n    name: Read state\n    runs-on: ubuntu-latest\n    steps:\n      - name: Read PR\n        run: gh api repos/example/pulls/42\n  protected:\n    needs: state\n    name: Protected (${{ matrix.language }})\n    strategy:\n      matrix:\n        language: [rust]\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo protected\n";
 
 fn fixture_with_workflow(row: &Path) -> Fixture {
     fixture_with_source(row, SOURCE)
@@ -54,7 +54,7 @@ fn setup(fx: &Fixture, mode: &str) {
         "rollup-policy",
         json!({"data":{"repository":{"pullRequest":{"headRefOid":head,"commits":{"nodes":[{"commit":{"oid":head,"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[{"name":"Read state","isRequired":false}]}}}}]}}}}}),
     );
-    let run = json!({"id":700,"run_attempt":1,"workflow_id":600,"check_suite_id":800,"path":".github/workflows/guard.yml","head_sha":head,"head_branch":BRANCH,"repository":repo,"head_repository":repo,"event":"pull_request","status":"completed","conclusion":"failure","pull_requests":[{"number":42,"head":{"sha":head},"base":{"sha":fx.base_sha,"ref":BASE,"repo":repo}}]});
+    let run = json!({"id":700,"run_attempt":1,"workflow_id":600,"check_suite_id":800,"path":".github/workflows/guard.yml","head_sha":head,"head_branch":BRANCH,"repository":repo,"head_repository":repo,"event":"pull_request","actor":{"id":123,"login":"owner"},"status":"completed","conclusion":"failure","pull_requests":[{"number":42,"head":{"sha":head},"base":{"sha":fx.base_sha,"ref":BASE,"repo":repo}}]});
     put(fx, "run-before", run.clone());
     put(
         fx,
@@ -97,8 +97,39 @@ fn setup(fx: &Fixture, mode: &str) {
     put(
         fx,
         "jobs",
-        json!({"total_count":1,"jobs":[{"id":1000,"run_id":700,"run_attempt":1,"head_sha":head,"name":"Read state","status":"completed","conclusion":"failure","check_run_url":"https://api.github.com/repos/orbit/test/check-runs/1100","steps":[{"name":"Read PR","conclusion":"failure"}]}]}),
+        json!({"total_count":1,"jobs":[{"id":1000,"run_id":700,"run_attempt":1,"head_sha":head,"name":"Read state","status":"completed","conclusion":"failure","check_run_url":"https://api.github.com/repos/orbit/test/check-runs/1100","steps":[{"name":"Read PR","number":1,"status":"completed","conclusion":"failure"}]}]}),
     );
+    // Provider coverage is complete, including zero-step skipped matrices.
+    let source: Value = serde_yaml::from_str(&git(
+        &fx.repo,
+        &["show", &format!("{head}:.github/workflows/guard.yml")],
+    ))
+    .unwrap_or_else(|_| serde_yaml::from_str(SOURCE).unwrap());
+    let jobs = source["jobs"].as_object().unwrap();
+    let root = if jobs.contains_key("pr-state") {
+        "pr-state"
+    } else {
+        "state"
+    };
+    update(fx, "jobs", |value| {
+        let failed = &mut value["jobs"][0];
+        failed["name"] = source["jobs"][root]["name"].clone();
+        if let Some(steps) = source["jobs"][root]["steps"].as_array() {
+            failed["steps"] = json!(steps.iter().enumerate().map(|(i, step)| json!({"name":step["name"], "number":i+1,"status":"completed","conclusion":if step["name"] == "Read PR" || step["name"] == "Read live PR state" {"failure"} else {"success"}})).collect::<Vec<_>>());
+        }
+        let mut rows = vec![failed.clone()];
+        for (index, (id, job)) in jobs
+            .iter()
+            .filter(|(id, _)| id.as_str() != root)
+            .enumerate()
+        {
+            rows.push(json!({"id":1001+index,"run_id":700,"run_attempt":1,"head_sha":head,"name":job.get("name").unwrap_or(&json!(id)),"status":"completed","conclusion":"skipped","steps":[]}));
+        }
+        *value = json!({"total_count":rows.len(),"jobs":rows});
+    });
+    update(fx, "checks-before", |value| {
+        value["check_runs"][0]["name"] = source["jobs"][root]["name"].clone()
+    });
     put(
         fx,
         "workflow",
@@ -107,7 +138,7 @@ fn setup(fx: &Fixture, mode: &str) {
     put(
         fx,
         "contents",
-        json!({"type":"file","path":".github/workflows/guard.yml","size":SOURCE.len(),"sha":git(&fx.repo,&["rev-parse",&format!("{head}:.github/workflows/guard.yml")])}),
+        json!({"type":"file","path":".github/workflows/guard.yml","size":git(&fx.repo,&["cat-file","-s",&format!("{head}:.github/workflows/guard.yml")]).parse::<usize>().unwrap(),"sha":git(&fx.repo,&["rev-parse",&format!("{head}:.github/workflows/guard.yml")])}),
     );
     fs::write(
         fx.forge.join("infra-log"),
@@ -122,6 +153,132 @@ fn update(fx: &Fixture, file: &str, change: impl FnOnce(&mut Value)) {
     let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     change(&mut value);
     fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+}
+
+#[test]
+fn missing_required_prerequisite_requires_a_literal_api_read() {
+    isolated(
+        "infrastructure::missing_required_prerequisite_requires_a_literal_api_read",
+        |sandbox| {
+            for (command, shell, allowed) in [
+                "gh api --method POST repos/example/issues --raw-field title=example",
+                "gh api -X PATCH repos/example/issues/42",
+                "gh api --method=DELETE repos/example/issues/42",
+                "gh api -XPOST repos/example/issues",
+                "gh api --method GET --method POST repos/example/issues",
+                "gh api repos/example/issues --field title=example",
+                "gh api repos/example/issues -Ftitle=example",
+                "gh api repos/example/issues --raw-field=title=example",
+                "gh api repos/example/issues -f title=example",
+                "gh api repos/example/issues -ftitle=example",
+                "gh api repos/example/issues --field=title=example",
+                "gh api repos/example/issues --input payload.json",
+                "gh api repos/example/issues --input=payload.json",
+                "gh api graphql",
+                "gh api repos/{1..1000000}/pulls/42",
+                "gh api --method GET 'repos/example/pulls/42' --jq 'env.GH_TOKEN' >> \"$GITHUB_OUTPUT\"",
+                "# gh api repos/example/pulls/42",
+                "echo gh api repos/example/pulls/42",
+                "gh api repos/example/pulls/42 # a comment",
+                "gh api repos/example/pulls/42; echo done",
+                "gh api repos/example/pulls/42 && echo done",
+                "gh api repos/example/pulls/42 | cat",
+                "gh api repos/example/pulls/42\ngh api -X POST repos/example/issues",
+                "gh api repos/example/$(echo pulls)/42",
+                "gh api repos/example/`echo pulls`/42",
+                "gh api repos/example/pulls/42 > response.json",
+                "gh api\nrepos/example/pulls/42",
+                "gh api --method POST 'repos/example/issues' --jq '.state' >> \"$GITHUB_OUTPUT\"",
+                "gh api --method GET 'repos/example/pulls/42' --field title=x --jq '.state' >> \"$GITHUB_OUTPUT\"",
+                "gh api --method GET 'repos/${{ github.event.pull_request.title }}' --jq '.state' >> \"$GITHUB_OUTPUT\"",
+                "gh api --method GET 'repos/example/pulls/42' --jq '.state' >> \"$GITHUB_ENV\"",
+                "gh api --method GET 'repos/example/pulls/42' --jq '.state'; gh api -X POST repos/example/issues --jq '.state' >> \"$GITHUB_OUTPUT\"",
+            ]
+            .into_iter()
+            .map(|command| (command, None, false))
+            .chain([
+                ("gh api repos/example/pulls/42", None, true),
+                (
+                    "gh api --method GET repos/example/pulls/42",
+                    Some("bash"),
+                    true,
+                ),
+                (
+                    "gh api repos/{owner}/{repo}/pulls/42 -X GET",
+                    Some("sh"),
+                    true,
+                ),
+                ("gh api --method=GET repos/example/pulls/42", None, true),
+                ("gh api -XGET repos/example/pulls/42", None, true),
+                ("gh api repos/example/pulls/42", Some("python"), false),
+                ("gh api repos/example/pulls/42", Some("job:python"), false),
+                (
+                    "gh api repos/example/pulls/42",
+                    Some("workflow:python"),
+                    false,
+                ),
+            ]) {
+                in_fresh_row(sandbox, |row| {
+                    tracing::info!(command, ?shell, "API read source counterfactual");
+                    let mut source: Value = serde_yaml::from_str(SOURCE).unwrap();
+                    source["jobs"]["state"]["steps"][0]["run"] = json!(command);
+                    if let Some(shell) = shell {
+                        if let Some(shell) = shell.strip_prefix("job:") {
+                            source["jobs"]["state"]["defaults"] = json!({"run":{"shell":shell}});
+                        } else if let Some(shell) = shell.strip_prefix("workflow:") {
+                            source["defaults"] = json!({"run":{"shell":shell}});
+                        } else {
+                            source["jobs"]["state"]["steps"][0]["shell"] = json!(shell);
+                        }
+                    }
+                    let source = serde_yaml::to_string(&source).unwrap();
+                    let fx = fixture_with_source(row, &source);
+                    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+                    action(
+                        &host,
+                        "pr_open",
+                        &fx.open_input(&fx.candidate, &fx.base_sha),
+                    )
+                    .unwrap();
+                    setup(&fx, "positive");
+                    let mut input = fx.complete_ungated_input();
+                    input["auto_fix"] = json!(true);
+                    input["completion"] = json!("review");
+                    let result = action(&host, "pr_complete", &input);
+                    assert_eq!(
+                        result.is_ok(),
+                        allowed,
+                        "source admission: {command}: {result:?}"
+                    );
+                    if let Err(error) = result {
+                        assert!(
+                            error.to_string().contains("source-bound API read"),
+                            "{error}"
+                        );
+                    }
+                    assert_eq!(
+                        pr_infrastructure_reservations(&host.history(TASK_ID))
+                            .unwrap()
+                            .len(),
+                        usize::from(allowed),
+                        "only supported reads spend infrastructure budget: {command}"
+                    );
+                    assert_eq!(
+                        fs::read_to_string(fx.forge.join("calls"))
+                            .unwrap()
+                            .lines()
+                            .filter(|line| *line == "run rerun")
+                            .count(),
+                        usize::from(allowed),
+                        "only supported reads authorize one rerun: {command}"
+                    );
+                    assert!(fx.merge_requests().is_empty());
+                    assert!(pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).is_empty());
+                    assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+                });
+            }
+        },
+    );
 }
 
 #[test]
@@ -435,7 +592,7 @@ fn missing_required_prerequisite_refuses_incomplete_or_foreign_evidence() {
                             value["status"] = json!("in_progress");
                         }),
                         "jobs" => update(&fx, "jobs", |value| {
-                            value["total_count"] = json!(2);
+                            value["total_count"] = json!(99);
                         }),
                         "source" => update(&fx, "contents", |value| {
                             value["size"] = json!(1);
@@ -478,7 +635,7 @@ fn missing_required_prerequisite_refuses_incomplete_or_foreign_evidence() {
                             value["workflow_runs"].as_array_mut().unwrap().push(second);
                         }),
                         "spent" => {
-                            let response = orbit_engine::run_private_vcs_operation("ci.prerequisite_evidence",&json!({"workspace_path":fx.repo,"pr":PR_NUMBER,"head_sha":fx.candidate,"head_branch":BRANCH,"base_branch":BASE})).unwrap();
+                            let response = orbit_engine::run_private_vcs_operation("ci.prerequisite_evidence",&json!({"workspace_path":fx.repo,"pr":PR_NUMBER,"head_sha":fx.candidate,"head_branch":BRANCH,"base_branch":BASE,"deadline_ms":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64 + 60000})).unwrap();
                             let evidence: orbit_types::workflow::PrInfrastructureEvidence =
                                 serde_json::from_value(response["evidence"].clone()).unwrap();
                             let mut reservation =
@@ -571,3 +728,5 @@ fn missing_required_prerequisite_refuses_incomplete_or_foreign_evidence() {
         },
     );
 }
+
+mod bounds;

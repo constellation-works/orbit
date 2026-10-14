@@ -9,6 +9,7 @@ mod candidate_resume;
 mod candidate_validate;
 pub mod claim;
 mod commit;
+mod completion_deadline;
 mod deferral_probe;
 mod deferred_sandbox;
 mod delivery_marker;
@@ -76,3 +77,6 @@ pub fn run_private_operation(
 ) -> Result<serde_json::Value, orbit_common::OrbitError> {
     operations::run(operation, input)
 }
+
+#[cfg(feature = "test-support")]
+pub use completion_deadline::with_prerequisite_clock;
