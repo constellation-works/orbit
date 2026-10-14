@@ -217,6 +217,23 @@ impl OwnerCoordinator for EvidenceOwner {
     }
 }
 
+/// Evidence prepared on the owner before admission; every case still owns its
+/// task, store and artifact bytes. A clean-tree report is optional independently
+/// of whether there is unrelated media already in the task bundle.
+struct EvidenceSeed<'a> {
+    report: bool,
+    artifacts: &'a [TaskArtifact],
+}
+
+impl From<bool> for EvidenceSeed<'_> {
+    fn from(report: bool) -> Self {
+        Self {
+            report,
+            artifacts: &[],
+        }
+    }
+}
+
 struct CleanLeaf {
     pair: Pair,
     gate: Option<Gate>,
@@ -233,6 +250,23 @@ struct CleanLeaf {
 impl CleanLeaf {
     fn new(already_landed: bool, completion: &str) -> Self {
         Self::build(already_landed, completion, &[], true)
+    }
+
+    /// A clean leaf whose owner already holds unrelated evidence. This avoids
+    /// creating a large worker mutation receipt just to prepare read fixtures.
+    fn with_evidence(already_landed: bool, completion: &str, artifacts: &[TaskArtifact]) -> Self {
+        Self::build_requiring(
+            already_landed,
+            completion,
+            &[],
+            EvidenceSeed {
+                report: true,
+                artifacts,
+            },
+            None,
+            CHECK,
+            "",
+        )
     }
 
     /// A clean leaf whose task carries the `no-diff-expected` tag, claimed by
@@ -298,24 +332,35 @@ impl CleanLeaf {
         report: bool,
         gated: Option<GateOn>,
     ) -> Self {
-        Self::build_requiring(already_landed, completion, tags, report, gated, CHECK, "")
+        Self::build_requiring(
+            already_landed,
+            completion,
+            tags,
+            report.into(),
+            gated,
+            CHECK,
+            "",
+        )
     }
 
     /// A verified clean leaf whose owner and follower require `red`'s command
     /// instead of [`CHECK`] [ORB-15427].
     fn red(red: &RedCheck) -> Self {
-        Self::build_requiring(false, "done", &[], true, None, &red.command(), "")
+        Self::build_requiring(false, "done", &[], true.into(), None, &red.command(), "")
     }
 
     /// A tagged review whose owner and follower require `check`'s command and
     /// name the [`Gate`] as a baseline command: the skip must run neither
     /// [ORB-15764].
-    fn tagged_requiring(completion: &str, check: &RedCheck) -> Self {
+    fn tagged_requiring(completion: &str, check: &RedCheck, artifacts: &[TaskArtifact]) -> Self {
         Self::build_requiring(
             false,
             completion,
             &[orbit_types::task::NO_DIFF_EXPECTED_TAG],
-            false,
+            EvidenceSeed {
+                report: false,
+                artifacts,
+            },
             Some(GateOn::Both),
             &check.command(),
             "",
@@ -327,8 +372,15 @@ impl CleanLeaf {
     /// validation PATH resolves `cargo` to `replay` [ORB-15747].
     #[cfg(unix)]
     fn resolved(replay: &Replay, selectors: &[&str]) -> Self {
-        let mut fixture =
-            Self::build_requiring(false, "done", &[], true, None, CHECK, &replay.config());
+        let mut fixture = Self::build_requiring(
+            false,
+            "done",
+            &[],
+            true.into(),
+            None,
+            CHECK,
+            &replay.config(),
+        );
         fixture.input["implementation"]["already_resolved"] = json!({"selectors": selectors});
         fixture
     }
@@ -337,7 +389,7 @@ impl CleanLeaf {
         already_landed: bool,
         completion: &str,
         tags: &[&str],
-        report: bool,
+        evidence: EvidenceSeed<'_>,
         gated: Option<GateOn>,
         required: &str,
         follower_config: &str,
@@ -383,6 +435,19 @@ impl CleanLeaf {
                     &task,
                     orbit_core::application::task::TaskUpdateParams {
                         tags: Some(tags.iter().map(|tag| (*tag).to_string()).collect()),
+                        ..Default::default()
+                    },
+                    "fixture operator".into(),
+                )
+                .unwrap();
+        }
+        if !evidence.artifacts.is_empty() {
+            pair.wire
+                .owner
+                .update_task_as_human(
+                    &task,
+                    orbit_core::application::task::TaskUpdateParams {
+                        upsert_artifacts: evidence.artifacts.to_vec(),
                         ..Default::default()
                     },
                     "fixture operator".into(),
@@ -469,7 +534,7 @@ impl CleanLeaf {
             evidence_reads,
             lose_evidence_read,
         };
-        if !report {
+        if !evidence.report {
             return fixture;
         }
         fixture.write_evidence(
@@ -522,43 +587,25 @@ impl CleanLeaf {
     }
 
     /// Real stored media sufficient to exceed the old numeric-byte response.
-    /// Attaching once avoids repeated manifest rewrites in the regression.
-    fn retain_large_unrelated_evidence(&self) -> Vec<TaskArtifact> {
-        let artifacts = (0..17)
+    /// Every case stores its own copy before admission, in one public owner
+    /// update, without preparing an unrelated worker replay receipt.
+    fn large_unrelated_evidence() -> Vec<TaskArtifact> {
+        (0..17)
             .map(|index| TaskArtifact {
                 path: format!("qa/media-{index}.bin"),
                 media_type: "application/octet-stream".into(),
                 content: vec![255; 1_048_576],
                 created_by: None,
             })
-            .collect::<Vec<_>>();
-        let binding = self.bound.worker_invocation().unwrap();
-        self.pair
-            .wire
-            .owner
-            .mutate_execution_claim(
-                Some(&ClaimInvocation::trusted_worker(
-                    self.task.clone(),
-                    binding.claim_id.clone(),
-                    FOLLOWER.into(),
-                    Some(ClaimRun {
-                        machine_id: FOLLOWER.into(),
-                        run_id: self.leaf.clone(),
-                    }),
-                )),
-                "qa-evidence",
-                &ClaimMutation::Evidence(ClaimEvidence {
-                    artifacts: artifacts.clone(),
-                    ..Default::default()
-                }),
-            )
-            .unwrap();
+            .collect()
+    }
+
+    fn assert_bulk_evidence_exceeds_ceiling(&self) {
         let error = RuntimeHost::get_task_artifacts(&self.bound, &self.task).expect_err(
             "ORB-16120: former bulk evidence read must overflow the unchanged MCP ceiling",
         );
         assert!(error.to_string().contains("67108864"), "{error}");
         self.evidence_reads.lock().unwrap().clear();
-        artifacts
     }
 
     fn assert_named_reads_and_retained_evidence(&self, artifacts: &[TaskArtifact]) {
@@ -779,12 +826,15 @@ fn verified_no_diff_and_already_satisfied_base_complete_without_a_pr() {
         (true, "task_claimed_pr_pipeline"),
         (false, "task_claimed_local_pipeline"),
     ] {
-        let fixture = CleanLeaf::new(already_landed, "done");
         let unrelated = if job == "task_claimed_pr_pipeline" {
-            fixture.retain_large_unrelated_evidence()
+            CleanLeaf::large_unrelated_evidence()
         } else {
             Vec::new()
         };
+        let fixture = CleanLeaf::with_evidence(already_landed, "done", &unrelated);
+        if !unrelated.is_empty() {
+            fixture.assert_bulk_evidence_exceeds_ceiling();
+        }
         let handoff = fixture.run_clean_pipeline(job);
         fixture.assert_named_reads_and_retained_evidence(&unrelated);
         let settled = fixture
@@ -1172,12 +1222,15 @@ fn a_claimed_no_diff_expected_skip_runs_no_validation_and_the_owner_lands_it() {
         ("task_claimed_pr_pipeline", "validate_no_diff", "review"),
     ] {
         let check = RedCheck::new();
-        let mut fixture = CleanLeaf::tagged_requiring(completion, &check);
         let unrelated = if completion == "done" && job == "task_claimed_pr_pipeline" {
-            fixture.retain_large_unrelated_evidence()
+            CleanLeaf::large_unrelated_evidence()
         } else {
             Vec::new()
         };
+        let mut fixture = CleanLeaf::tagged_requiring(completion, &check, &unrelated);
+        if !unrelated.is_empty() {
+            fixture.assert_bulk_evidence_exceeds_ceiling();
+        }
         fixture.hand_off_deferral();
         fixture.attach("automation-coverage.json", json!({"findings": []}));
         let outcome = fixture.execute_clean_pipeline(job).unwrap();
@@ -1284,7 +1337,7 @@ fn a_claimed_no_diff_expected_skip_runs_no_validation_and_the_owner_lands_it() {
 fn an_owner_accepts_a_tagged_skip_that_still_carries_logs_and_checks_them() {
     for forged in [false, true] {
         let check = RedCheck::new();
-        let fixture = CleanLeaf::tagged_requiring("done", &check);
+        let fixture = CleanLeaf::tagged_requiring("done", &check, &[]);
         let mut handoff = fixture.prepare_handoff();
         assert!(handoff.validation.is_empty(), "{handoff:?}");
         let log = HandoffValidationLog {
