@@ -73,6 +73,21 @@ when assessing provider cost and host load. Do not start a second drain merely
 to raise capacity. Discover whether the installed version supports a live
 update, and follow its advertised command and authority requirements.
 
+Read-only `orbit run profiles` and `orbit run profiles --accuracy` explain
+delivery resource use and forecast quality. `machine.auto_concurrency.mode`
+`shadow` records forecast decisions; `enforce` applies them within the existing
+worker ceiling. Neither grants authority to resize a drain or change machine
+policy. Inspect effective settings before attributing a wait to capacity; do
+not raise concurrency or forecast thresholds, disable forecasting, or start
+another drain to bypass a wait without operator authorization.
+
+`orbit run readiness --json` names `host_shutdown_scheduled` when a shutdown or
+reboot is within `machine.host_shutdown_hold_minutes` (default 180), holding
+new unattended admissions while leaving running work alone. Later schedules
+are reported while admissions continue. Preserve the configured window and
+schedule; diagnostics do not authorize cancelling shutdown or overriding the
+hold. See [operational-logs.md](../../orbit-setup/references/operational-logs.md#delivery-profiles-and-admission-diagnostics).
+
 Sustained host pressure throttles admissions on its own: readiness tasks read
 `resource_throttled`, and `orbit run readiness`, `orbit run show <drain>` and
 start/ship responses name the resource, value, threshold and since-when.

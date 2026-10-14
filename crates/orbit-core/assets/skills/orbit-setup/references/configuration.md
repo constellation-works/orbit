@@ -23,11 +23,13 @@ omissions, built-in defaults fill the rest. Tables layer down to individual
 settings; scalars and arrays replace wholesale.
 
 **Three security-sensitive settings deliberately do not inherit** once a
-workspace file exists — `execution.codex.sandbox`,
+workspace policy file exists — `execution.codex.sandbox`,
 `execution.codex.approval_policy`, and `execution.env.pass`. If the workspace
 file omits one, its built-in default applies rather than the user's global
 value. This keeps repository sandboxing deterministic instead of dependent on
-whoever's machine is running.
+whoever's machine is running. A file containing only `[plugin_enablement]`
+is stripped before layering and does not count as a workspace policy layer:
+those three settings still inherit global values.
 
 ```bash
 orbit config show                  # effective merged view, with source provenance
@@ -58,12 +60,26 @@ assuming a value.
 | `execution.env.pass` | Environment variable names allow-listed into agent subprocesses. |
 | `execution.codex.sandbox` | `read-only`, `workspace-write`, or `danger-full-access`. |
 | `execution.codex.approval_policy` | `untrusted`, `on-request`, or `never`. |
+| `machine.auto_concurrency.mode` | Forecast admission: `off` (default) builds no forecast, `shadow` records what forecasting would admit while retaining ordinary admission, `enforce` uses forecast fit to decide admissions within the worker ceiling. |
+| `machine.auto_concurrency.admit_cpu_percent`, `machine.auto_concurrency.admit_memory_percent` | Forecast limits as percentages of host cores and non-reclaimable memory (defaults 90 and 75; 1..=100). Memory must be below global `workflow.resource_throttle.memory_high_percent`. |
+| `machine.auto_concurrency.profile_window`, `machine.auto_concurrency.min_profile_deliveries` | Recent completed deliveries per profile key (default 50) and minimum before using it without fallback (default 10); the window must be at least the minimum. |
+| `machine.auto_concurrency.horizon_cap_minutes` | Maximum candidate forecast horizon (default 120 minutes). |
+| `machine.auto_concurrency.head_max_wait_minutes`, `machine.auto_concurrency.head_stuck_passes` | Queue-head starvation guard: protect the head after its maximum wait (default 30 minutes), then report it stuck after consecutive protected passes without improvement (default 20; at least 1). A stuck report does not change admission. |
+| `machine.host_shutdown_hold_minutes` | Hold new unattended admissions when a scheduled shutdown or reboot is this many minutes away or sooner (default 180; at least 1). Later schedules are reported while admission continues. |
 | `runtime.log_retention_days` | Delete JSONL archives older than N days. |
 | `runtime.log_max_total_mb` | Total archive budget; oldest pruned first. |
 | `runtime.log_max_file_mb` | Roll the active log past N MiB. Must not exceed the total budget. |
 | `pr.task_url_template` | URL template linking a task ID in PR descriptions. |
 | `pr.close_on_terminal` | Close a task's open Orbit-authored delivery and `[BLOCKED]` PRs when it lands, is rejected or is archived (default `true`). Branches are kept; a forge error is only a warning. |
 | `pr.delivery_authors` | Forge logins whose PRs count as Orbit-authored for that closure. Empty uses the `gh` login on this machine. |
+
+`[machine]` settings are global-only. Inspect `orbit config keys --json` and
+`orbit config show` for the installed schema and effective policy. Forecasting
+does not raise the drain's `--concurrency` worker ceiling or bypass resource
+throttles. Use read-only `orbit run profiles`, `orbit run profiles --accuracy`,
+and `orbit run readiness --json` to explain waiting work; preserve operator
+settings and shutdown holds unless an authorized change is requested. See
+[operational-logs.md](operational-logs.md#delivery-profiles-and-admission-diagnostics).
 
 `operation.review_policy` and `operation.review_minutes` are deprecated: they
 still load, translated with a warning (`before-pr` → `review.before_pr = true`;

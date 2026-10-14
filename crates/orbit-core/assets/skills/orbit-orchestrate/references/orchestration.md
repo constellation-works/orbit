@@ -54,6 +54,18 @@ explicit `run ship` deliveries, and unsettled pull admissions all consume slots.
 A wrapper and its delivery consume one slot together. The delivery jobs impose
 no active-run limit of their own, so size the ceiling to what the host can carry.
 
+Resource forecasting is an additional admission check, not a replacement for
+that worker ceiling. Global `machine.auto_concurrency.mode` defaults to `off`;
+`shadow` records what forecast fit would do while admitting as `off`, and
+`enforce` uses forecast CPU/memory fit within the free slots left by the ceiling
+and resource throttle. Inspect read-only `orbit run profiles` for delivery
+profiles and sparse fallback, `orbit run profiles --accuracy` for forecast
+error and shadow decisions, and `orbit run show <drain-run-id> --json` for the
+recorded pass. No profiles means forecasting adds no restriction. Preserve
+operator policy when explaining waits; diagnostics do not authorize resizing
+or changing thresholds. Settings and limits:
+[configuration.md](../../orbit-setup/references/configuration.md#common-settings).
+
 That ceiling is adjustable while the drain runs. `orbit run concurrency <run-id>
 --set N` (MCP: `orbit_workflow_auto` with `action: "resize"` and `concurrency`;
 omit `id` to target the workspace's one live drain) records a live ceiling on the run
@@ -168,6 +180,15 @@ holders, live child-run claims, capacity saturation, and — with `--allow-crew`
 files, or mutates a task.
 Its answer can change immediately after the snapshot, so `eligible` means
 "would be admitted by this snapshot", never a guarantee that work will start.
+
+It also names a scheduled host shutdown or reboot and its mode. Within
+`machine.host_shutdown_hold_minutes` (default 180), tasks report
+`host_shutdown_scheduled` and new unattended admissions hold; running workers
+are left alone. A later schedule is reported while admissions continue. Pull
+drains report the same hold as `Pull drain requests held:`. Report the time and
+configured window, and wait or follow an explicit operator instruction; do not
+cancel the schedule or override the hold automatically. See
+[authorization.md](authorization.md#keep-authorized-work-moving).
 
 Two of its answers separate contention from capacity:
 

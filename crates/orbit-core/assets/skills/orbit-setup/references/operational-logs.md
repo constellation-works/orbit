@@ -128,6 +128,42 @@ For a failed, cancelled, or stuck run, continue with
 [run-debugging.md](../../orbit-orchestrate/references/run-debugging.md). It covers the run bundle, v2
 audit trail, blobs, and live-process checks in the right order.
 
+## Delivery Profiles and Admission Diagnostics
+
+Inspect these read-only surfaces when work waits despite a free worker slot:
+
+```bash
+orbit run profiles --json
+orbit run profiles --accuracy --json
+orbit run readiness --json
+orbit config keys --json
+orbit config show
+```
+
+Profiles summarize per-delivery CPU and memory by workspace, work class and
+complexity on this host; `auto-task:<template>` profiles omit complexity.
+They use recent completed deliveries from the last 30 days, excluding resumed
+or retried deliveries. Sparse keys fall back to broader profiles; inspect
+sample counts and spread before drawing conclusions. `BUILD_FLAG` identifies
+no-diff work using more than one core for two consecutive minutes, with its
+deliveries listed; templates that build by design, such as QA sweeps, are exempt.
+It is diagnostic evidence, not proof of a defect.
+
+`--accuracy` compares forecasts recorded in `shadow` or `enforce` with measured
+host load 5, 10, 20 and 30 minutes ahead, and reports shadow admission differences.
+Error is forecast minus measured; negative errors are underestimates. Unmeasured
+points are reported separately and cannot establish accuracy. Forecast modes
+and settings are in [configuration.md](configuration.md#common-settings).
+Forecast fit, the fixed worker-slot ceiling, and sustained resource throttling
+are separate admission checks; diagnostics authorize no policy change.
+
+Readiness names `host_shutdown_scheduled` with the scheduled time and mode.
+New unattended admissions hold within `machine.host_shutdown_hold_minutes`
+(default 180); later schedules are still visible while admissions continue.
+Running work is left alone by the hold. Report the schedule and configured
+window; preserve the hold and operator capacity policy rather than raising
+concurrency, changing forecast thresholds, or cancelling a shutdown automatically.
+
 ## Worker Resource Containment
 
 On Linux with a reachable systemd user manager, every detached pipeline worker
@@ -257,9 +293,11 @@ in-flight uncontained runs.
 
 Restarts: a contained worker lives outside the `orbit-web.service` and
 `orbit-sweep.service` cgroups, so restarting either never signals it. An
-uncontained worker keeps the existing guarantee: it runs in its own `setsid`
-session and the sweep unit uses `KillMode=process`. Stopping a worker scope
-(`systemctl --user stop orbit-worker-….scope`) kills that run; use
+uncontained worker runs in its own `setsid` session but remains in the launching
+service's cgroup. The sweep unit uses `KillMode=mixed` and
+`TimeoutStartSec=10min`, so service stops or that timeout can kill uncontained
+workers; a separate session does not protect them from cgroup cleanup. Stopping
+a worker scope (`systemctl --user stop orbit-worker-….scope`) kills that run; use
 `orbit run cancel <run-id> --confirm` instead.
 
 ## Archive-Pruning Warning

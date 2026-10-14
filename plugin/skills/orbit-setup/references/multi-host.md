@@ -101,11 +101,16 @@ legacy migration are in [remote-access.md](remote-access.md).
 
 ## Scheduling and claims
 
-Routine definitions carry no host field: every host with a registered owner
-checkout and an enabled clock evaluates them against its own store. Inspect
+Cron routine definitions have no machine pin: every host with a registered owner
+checkout and an enabled clock evaluates them against its own store. The two
+state routines, `task-pilot` and `finding-verification`, declare
+`trigger.state.owner_machine` and `trigger.state.branch`, rendered from the
+seeding host's stable machine id and the registered base branch. Only that
+machine evaluates their state triggers; copy those definitions with their pins
+in mind. See [automation.md](automation.md#the-seven-seeded-routines). Inspect
 their seeded names with `orbit routine list`. Definitions and enablement are
 per-user, gitignored checkout state; copy changes deliberately. Last-fire timestamps and pauses stay host-local. Two hosts running the same
-routine each evaluate it independently, and `overlap: forbid` is local — pause
+cron routine each evaluate it independently, and `overlap: forbid` is local — pause
 it on the hosts that should not run it.
 
 ```bash
@@ -113,8 +118,8 @@ orbit config set --global machine.name <new-name>
 ```
 
 Renaming changes only the display name; `machine.id` and `machine.task_prefix`
-are read-only and `orbit config set` refuses both. Routine definitions name no
-machine, so nothing versioned has to be rewritten.
+are read-only and `orbit config set` refuses both. State routines pin the stable
+id, not the display name, so renaming requires no routine rewrite.
 
 Workspace claims coordinate operators acting on **the same authoritative
 store**. `--claim-token` or `ORBIT_WORKSPACE_CLAIM_TOKEN` presents an existing
