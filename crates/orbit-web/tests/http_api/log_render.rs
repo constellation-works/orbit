@@ -1,4 +1,4 @@
-use super::support::{Fixture, Server, isolated, json_ok};
+use super::support::{Fixture, Server, isolated, json_ok, spawn_server};
 use serde_json::{Value, json};
 fn visible_text(html: &str) -> String {
     let mut in_tag = false;
@@ -118,14 +118,19 @@ fn rendered_context_shortens_paths_without_losing_full_values_or_html_safety() {
         "log_render::rendered_context_shortens_paths_without_losing_full_values_or_html_safety",
         || {
             let fixture = Fixture::new();
-            let server = fixture.server(false);
-
-            let home = fixture
-                .path("")
-                .display()
-                .to_string()
-                .trim_end_matches('/')
-                .to_string();
+            // Keep HOME independent from TMPDIR: managed checkouts place test
+            // scratch below .orbit/state/worktrees/orbit-..., which would make
+            // the home-lookalike also a valid worktree path.
+            let home = "/orbit-http-fixture-home".to_string();
+            let server = spawn_server(
+                &fixture.path(""),
+                false,
+                false,
+                false,
+                &fixture.path("process.log"),
+                None,
+                &[("HOME", std::ffi::OsStr::new(&home))],
+            );
             let worktree =
                 "/srv/project/.orbit/state/worktrees/orbit-jrun-20261007-0722-c12/src/lib.rs";
             for (value, short) in [
