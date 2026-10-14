@@ -351,6 +351,41 @@ impl OrbitRuntime {
         approve_proposed: bool,
         auto_fix: bool,
     ) -> Result<PipelineInvokeResult, OrbitError> {
+        self.submit_workspace_auto_run_with_mode(
+            for_seconds,
+            max_active_leaf_runs,
+            completion,
+            allowed_crews,
+            complexity_crews,
+            actor,
+            claim_token,
+            trigger,
+            strict_containment,
+            approve_proposed,
+            auto_fix,
+            None,
+        )
+    }
+
+    /// Submit a local drain with a run-scoped forecast mode. Omission captures
+    /// the host setting; explicit modes never edit configuration. All surfaces
+    /// use this submission and the existing admission controller.
+    #[allow(clippy::too_many_arguments)]
+    pub fn submit_workspace_auto_run_with_mode(
+        &self,
+        for_seconds: Option<u64>,
+        max_active_leaf_runs: Option<u32>,
+        completion: crate::application::workflow::CompletionPolicy,
+        allowed_crews: &[String],
+        complexity_crews: &orbit_config::ComplexityCrewPools,
+        actor: Option<&str>,
+        claim_token: Option<&str>,
+        trigger: JobRunTrigger,
+        strict_containment: bool,
+        approve_proposed: bool,
+        auto_fix: bool,
+        auto_concurrency: Option<orbit_types::workflow::AutoConcurrencyMode>,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
         self.validate_strict_worker_containment(strict_containment)?;
         self.require_workspace_claim("orbit.workflow.auto", claim_token)?;
         // [ORB-12500] An explicit owner drain is owner coordination work; a
@@ -374,6 +409,9 @@ impl OrbitRuntime {
             approve_proposed,
             auto_fix,
         )?;
+        if let Some(mode) = auto_concurrency {
+            input["auto_concurrency"] = json!(mode);
+        }
         Self::set_auto_crew_overrides(&mut input, complexity_crews);
         if strict_containment {
             input["__worker_containment_strict"] = json!(true);

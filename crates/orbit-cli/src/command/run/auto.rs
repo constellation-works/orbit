@@ -101,6 +101,12 @@ pub struct AutoCommand {
     /// not a batch size. Defaults to 5.
     #[arg(long, value_name = "N")]
     pub concurrency: Option<u32>,
+    /// Forecast admission mode for this local drain: off, shadow or enforce.
+    /// Omitted, captures machine.auto_concurrency.mode when submitted. Survives
+    /// restart/resume and changes no configuration. Pull drains do not support
+    /// this override; configure their executor host mode instead.
+    #[arg(long, value_name = "MODE", value_parser = ["off", "shadow", "enforce"])]
+    pub auto_concurrency: Option<String>,
     /// Authorize this drain to finish delivery and move the tasks it ships to
     /// `done`, instead of leaving them in `review` for a separate approval.
     /// This is blanket authorization for every task the drain admits during its
@@ -171,7 +177,7 @@ pub struct AutoCommand {
     #[arg(
         long,
         value_name = "SELECTOR",
-        conflicts_with_all = ["complete", "approve_proposed", "auto_fix", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews", "claim_token"]
+        conflicts_with_all = ["auto_concurrency", "complete", "approve_proposed", "auto_fix", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews", "claim_token"]
     )]
     pub pull: Option<String>,
     /// Owner host for `--pull <workspace>`, by registered host name or
@@ -189,7 +195,7 @@ pub struct AutoCommand {
     /// start a drain.
     #[arg(
         long,
-        conflicts_with_all = ["for_duration", "concurrency", "complete", "approve_proposed", "auto_fix", "allow_crew", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews", "pull"]
+        conflicts_with_all = ["for_duration", "concurrency", "auto_concurrency", "complete", "approve_proposed", "auto_fix", "allow_crew", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews", "pull"]
     )]
     pub stop: bool,
 }
@@ -255,7 +261,7 @@ impl Execute for AutoCommand {
         } else {
             CompletionPolicy::Review
         };
-        let invoke = runtime.submit_workspace_auto_run_with_containment(
+        let invoke = runtime.submit_workspace_auto_run_with_mode(
             for_seconds,
             self.concurrency,
             completion,
@@ -267,6 +273,11 @@ impl Execute for AutoCommand {
             self.strict_worker_containment,
             self.approve_proposed,
             self.auto_fix,
+            self.auto_concurrency
+                .as_deref()
+                .map(str::parse)
+                .transpose()
+                .map_err(|message: &str| orbit_core::OrbitError::InvalidInput(message.into()))?,
         )?;
         let run = WorkflowDispatchResult {
             workflow_alias: AUTO_WORKFLOW,
@@ -282,12 +293,20 @@ impl Execute for AutoCommand {
             error_code: None,
             error_message: None,
         };
+        let mode = runtime.run_auto_concurrency(&run.run_id)?;
         let notices = runtime.submission_notices(SubmissionKind::Drain);
-        workflow_dispatch_payload_with_notices(
+        let mut notes = notices.notes();
+        notes.push(format!(
+            "Auto-concurrency: {} ({}).",
+            mode["mode"].as_str().unwrap_or("off"),
+            mode["source"].as_str().unwrap_or("configured")
+        ));
+        super::support::workflow_dispatch_payload_with_auto_concurrency(
             AUTO_WORKFLOW,
             &[run],
             notices.warnings(),
-            notices.notes(),
+            notes,
+            mode,
         )
     }
 }

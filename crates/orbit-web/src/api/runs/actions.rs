@@ -4,7 +4,8 @@ use crate::state::{DashboardState, Ws};
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{
-    DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED, DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_AUTO_DRAIN_STOP,
+    DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED, DASHBOARD_AUTO_DRAIN_COMPLETE,
+    DASHBOARD_AUTO_DRAIN_MODE, DASHBOARD_AUTO_DRAIN_STOP,
 };
 use orbit_common::protocol::tool_input::parse_duration_seconds;
 use orbit_core::OrbitRuntime;
@@ -116,6 +117,7 @@ fn workspace_default_ship_mode(runtime: &OrbitRuntime) -> orbit_core::ShipMode {
 }
 
 #[derive(serde::Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub(in crate::api) struct AutoDrainBody {
     /// Bounded drain window, e.g. "30m", "2h". Required: unlike the CLI's
     /// `--for`, this endpoint always starts a bounded window, never an
@@ -125,6 +127,9 @@ pub(in crate::api) struct AutoDrainBody {
     /// Leaf-run concurrency ceiling; omitted keeps the runtime's own default.
     #[serde(default)]
     concurrency: Option<u32>,
+    /// Per-drain forecast mode; omitted captures the configured host mode.
+    #[serde(default, deserialize_with = "explicit_auto_concurrency")]
+    auto_concurrency: Option<orbit_types::workflow::AutoConcurrencyMode>,
     /// Opt-in to `CompletionPolicy::Done` for this run's whole window,
     /// mirroring CLI `--complete`. Default keeps every shipped task at
     /// `review`, same as an omitted `--complete`.
@@ -139,6 +144,13 @@ pub(in crate::api) struct AutoDrainBody {
     /// operator holds one.
     #[serde(default)]
     claim_token: Option<String>,
+}
+
+fn explicit_auto_concurrency<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<orbit_types::workflow::AutoConcurrencyMode>, D::Error> {
+    <orbit_types::workflow::AutoConcurrencyMode as serde::Deserialize>::deserialize(deserializer)
+        .map(Some)
 }
 
 /// Minimum bounded window this endpoint accepts, in seconds. `for_seconds:
@@ -216,8 +228,13 @@ pub(in crate::api) async fn auto_drain_workflow_action(
     {
         return authorization_denied(denial);
     }
+    if body.auto_concurrency.is_some()
+        && let Err(denial) = authorized_caller(&DASHBOARD_AUTO_DRAIN_MODE, state.operator_session())
+    {
+        return authorization_denied(denial);
+    }
     match blocking("auto-drain workflow", move || {
-        let invoke = runtime.submit_workspace_auto_run_with_containment(
+        let invoke = runtime.submit_workspace_auto_run_with_mode(
             Some(for_seconds),
             body.concurrency,
             completion,
@@ -233,6 +250,7 @@ pub(in crate::api) async fn auto_drain_workflow_action(
             approve_proposed,
             // `--auto-fix` is a CLI-only flag.
             false,
+            body.auto_concurrency,
         )?;
         let mut started = json!({
             "workflow": "auto",
@@ -243,6 +261,7 @@ pub(in crate::api) async fn auto_drain_workflow_action(
             "completion": completion.as_input_value(),
             "approve_proposed": approve_proposed,
         });
+        started["auto_concurrency"] = runtime.run_auto_concurrency(&invoke.run_id)?;
         runtime
             .submission_notices(SubmissionKind::Drain)
             .insert_into(&mut started);
@@ -256,6 +275,7 @@ pub(in crate::api) async fn auto_drain_workflow_action(
 }
 
 #[derive(serde::Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub(in crate::api) struct AutoDrainStopBody {
     /// Free-text reason recorded on the coordinator's stop marker and audit.
     #[serde(default)]
@@ -372,9 +392,9 @@ pub(in crate::api) async fn auto_drain_readiness(
     {
         Ok(mut payload) => {
             // So the form can hide/disable the `complete` and
-            // `approve_proposed` opt-ins and the stop control before the
+            // `approve_proposed` and forecast-mode opt-ins and the stop control before the
             // operator ever hits the separately-governed 403 at submission.
-            // All three operations admit the same operator capability, so one
+            // All four operations admit the same operator capability, so one
             // flag describes them.
             if let Some(object) = payload.as_object_mut() {
                 let operator_session = state.operator_session();
@@ -388,6 +408,8 @@ pub(in crate::api) async fn auto_drain_readiness(
                             )
                             .is_ok()
                             && authorized_caller(&DASHBOARD_AUTO_DRAIN_STOP, operator_session)
+                                .is_ok()
+                            && authorized_caller(&DASHBOARD_AUTO_DRAIN_MODE, operator_session)
                                 .is_ok(),
                     ),
                 );

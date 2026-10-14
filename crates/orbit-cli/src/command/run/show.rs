@@ -154,7 +154,7 @@ pub(crate) fn run_show_payload(
             tracing::warn!(target: "orbit.cli.run", run_id = %run.run_id, %error, "pull drain crew window unreadable; drain shown without it");
             None
         });
-    let doc = json!({
+    let mut doc = json!({
         "run": run_projection,
         "recovery_attempts": recovery.to_json(),
         "pull_claim": pull_claim,
@@ -186,6 +186,17 @@ pub(crate) fn run_show_payload(
     });
 
     let mut header = run_header_text_with_lock_holders(&run, state.as_ref(), &lock_holders);
+    if run.job_id == "workspace_auto_pipeline" {
+        let mode = runtime.run_auto_concurrency(&run.run_id)?;
+        header.push_str(&format!(
+            "\nAuto-concurrency: {} ({}; host currently {}).",
+            mode["mode"].as_str().unwrap_or("off"),
+            mode["source"].as_str().unwrap_or("configured"),
+            mode["configured_mode"].as_str().unwrap_or("off")
+        ));
+        doc["run"]["auto_concurrency"] = mode;
+    }
+
     for attempt in &recovery.attempts {
         header.push_str(&format!(
             "\nRecovery: {} at {}: {}{}",

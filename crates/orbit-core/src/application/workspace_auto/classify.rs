@@ -72,6 +72,8 @@ pub(crate) fn classify_workspace_auto_tasks(
     action: &str,
     input: &Value,
 ) -> Result<Value, DispatchError> {
+    let mode = super::mode::effective_mode(runtime, input)
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     runtime
         .record_backlog_pilot_operator_handoffs()
         .map_err(|error| {
@@ -251,12 +253,11 @@ pub(crate) fn classify_workspace_auto_tasks(
             gap_fit,
         )
     };
-    // Gap fit (`machine.auto_concurrency.mode`) judges the wave against the
+    // Gap fit (the captured per-drain mode) judges the wave against the
     // host load forecast after every check above, so it only removes
     // candidates; the ceiling and the throttle have already set
     // `free_slots`. `off` never builds a forecast.
-    let gap_fit_mode =
-        GapFitMode::from_setting(&runtime.context.settings().auto_concurrency().mode);
+    let gap_fit_mode = GapFitMode::from_setting(mode.as_str());
     let GapFitPass {
         mut selection,
         record: admission_forecast,

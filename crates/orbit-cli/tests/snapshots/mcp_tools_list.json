@@ -1929,6 +1929,10 @@
           "type": "integer",
           "description": "Required for start: window length in seconds, 1 through 86400 (24 hours)"
         },
+        "auto_concurrency": {
+          "type": "string",
+          "description": "Start only: off, shadow or enforce for this local drain. Omitted captures machine.auto_concurrency.mode. Retained on resume/restart; changes no configuration. Unsupported for pull drains"
+        },
         "concurrency": {
           "type": "integer",
           "description": "Worker limit, positive u32. Optional for start (omitted uses runtime default); required for resize. The drain's only ceiling: delivery jobs impose none of their own"

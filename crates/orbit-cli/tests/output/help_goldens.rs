@@ -20,6 +20,7 @@ const UPDATE_HELP_GOLDENS_ENV: &str = "ORBIT_UPDATE_HELP_GOLDENS";
 const CASES: &[(&[&str], &str)] = &[
     (&[], "root.txt"),
     (&["run"], "run/root.txt"),
+    (&["run", "auto"], "run/auto.txt"),
     (&["init"], "init.txt"),
     (&["host", "add"], "host/add.txt"),
     (&["host", "remove"], "host/remove.txt"),

@@ -167,6 +167,22 @@ pub(crate) fn workflow_dispatch_payload_with_notices(
     warnings: Vec<String>,
     notes: Vec<String>,
 ) -> CommandOut {
+    workflow_dispatch_payload_with_auto_concurrency(
+        workflow_alias,
+        runs,
+        warnings,
+        notes,
+        Value::Null,
+    )
+}
+
+pub(crate) fn workflow_dispatch_payload_with_auto_concurrency(
+    workflow_alias: &'static str,
+    runs: &[WorkflowDispatchResult],
+    warnings: Vec<String>,
+    notes: Vec<String>,
+    auto_concurrency: Value,
+) -> CommandOut {
     let mut doc = if runs.len() == 1 {
         workflow_dispatch_result_to_json(&runs[0])
     } else {
@@ -189,6 +205,9 @@ pub(crate) fn workflow_dispatch_payload_with_notices(
     if !notes.is_empty() {
         lines.extend(notes.iter().map(|note| format!("Note: {note}")));
         doc["note"] = json!(notes.join("\n"));
+    }
+    if !auto_concurrency.is_null() {
+        doc["auto_concurrency"] = auto_concurrency;
     }
     let payload = Payload::detail(doc, lines.join("\n"));
     if runs

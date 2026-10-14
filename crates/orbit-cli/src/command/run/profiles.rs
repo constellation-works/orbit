@@ -37,7 +37,7 @@ design, such as qa-sweep, are never flagged.\n\n\
 `--json` emits every profile with its full per-minute series (alive, cpu_cores, cpu_stddev, \
 memory_bytes, memory_stddev_bytes), its deliveries and its flagged deliveries.\n\n\
 `--accuracy` reports instead how well the host load forecast held up, from what drains in \
-`machine.auto_concurrency.mode` `shadow` or `enforce` recorded each admission pass over the last \
+effective auto-concurrency mode `shadow` or `enforce` recorded each admission pass over the last \
 30 days: the forecast 5, 10, 20 and 30 minutes ahead, counting what the pass admitted, against \
 the host's measured CPU and memory for that minute. Error is forecast minus measured: MEAN_ERR \
 is its mean, UNDER how often the forecast was below the measured load, and WORST the largest \

@@ -150,6 +150,15 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
         "steps": run.steps.iter().map(|step| RunDisplayStep::from_job_step(step).to_json()).collect::<Vec<_>>(),
         "created_at": run.created_at.to_rfc3339(),
     });
+    if run.job_id == "workspace_auto_pipeline"
+        && let Some(input) = run.input.as_ref()
+        && let Some(mode) = input.get("auto_concurrency").and_then(Value::as_str)
+    {
+        value["auto_concurrency"] = json!({
+            "mode": mode,
+            "source": input.get("auto_concurrency_source").and_then(Value::as_str).unwrap_or("explicit"),
+        });
+    }
     value["task_ids"] = json!((!task_ids.is_empty()).then_some(task_ids));
     value["drain_window_extension"] = drain_window_extension;
     // [ORB-14777] Pass-listed variables the submitting process did not hold.

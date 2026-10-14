@@ -233,6 +233,12 @@ impl OrbitRuntime {
                 &job_name,
             ));
         }
+        let mut input = input;
+        self.capture_auto_concurrency(
+            &job_name,
+            &mut input,
+            resume.is_some() || retry_source_run_id.is_some(),
+        )?;
         let scheduled_at = chrono::Utc::now();
         let run = self.stores().jobs().insert_job_run(
             &job_name,

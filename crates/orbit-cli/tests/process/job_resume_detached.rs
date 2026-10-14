@@ -247,7 +247,7 @@ mod unix {
 
         for args in [
             &["run", "ship", "--mode", "local", "--json"][..],
-            &["run", "auto", "--json"][..],
+            &["run", "auto", "--auto-concurrency", "enforce", "--json"][..],
         ] {
             let submitted = fixture.installed_json(&installed, args);
             let run_id = submitted["run_id"].as_str().expect("submitted run id");
@@ -257,6 +257,11 @@ mod unix {
                     "a drain with no required validation commands is noted, not refused: \
                      {submitted}"
                 );
+            }
+            if args[1] == "auto" {
+                assert_eq!(submitted["auto_concurrency"]["mode"], "enforce");
+                let detail = fixture.json(&["run", "show", run_id, "--no-reconcile", "--json"]);
+                assert_eq!(detail["run"]["auto_concurrency"]["mode"], "enforce");
             }
             fixture.assert_worker_started(run_id);
             fixture.poll_run(run_id, "success", Duration::from_secs(10));
@@ -286,6 +291,20 @@ mod unix {
             stderr.contains("--approve-proposed") && stderr.contains("--pull"),
             "the refusal names both flags: {stderr}"
         );
+        for args in [
+            vec![
+                "run",
+                "auto",
+                "--auto-concurrency",
+                "enforce",
+                "--pull",
+                "hm_owner/ws_orbit",
+            ],
+            vec!["run", "auto", "--auto-concurrency", "off", "--stop"],
+            vec!["run", "auto", "--auto-concurrency", "false"],
+        ] {
+            fixture.command().args(args).assert().code(2);
+        }
         let history = fixture.json(&["run", "history", "--json"]);
         assert_eq!(
             history["runs"].as_array().map(Vec::len),
