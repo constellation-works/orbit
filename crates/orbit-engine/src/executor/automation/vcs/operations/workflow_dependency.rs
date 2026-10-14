@@ -151,7 +151,8 @@ fn job_names(id: &str, job: &Value) -> Result<Vec<String>, OrbitError> {
 }
 
 /// Bind the failed API step to the prerequisite's source, not arbitrary log
-/// text from an unrelated job/step. Unsupported dynamic step names hold.
+/// text from an unrelated job/step. Only a single literal REST read in a
+/// supported shell qualifies; this deliberately does not interpret scripts.
 pub(super) fn api_step(
     source: &str,
     prerequisite: &str,
@@ -172,8 +173,62 @@ pub(super) fn api_step(
     let command = step["run"]
         .as_str()
         .ok_or_else(|| unreadable("failed step has no source command"))?;
-    if !command.contains("gh api ") {
+    let shell = [
+        step.get("shell"),
+        workflow["jobs"][prerequisite].pointer("/defaults/run/shell"),
+        workflow.pointer("/defaults/run/shell"),
+    ]
+    .into_iter()
+    .flatten()
+    .next();
+    if step.get("uses").is_some()
+        || shell.is_some_and(|shell| !matches!(shell.as_str(), Some("bash" | "sh")))
+        || !literal_api_read(command)
+    {
         return Err(unreadable("failed step is not a source-bound API read"));
     }
     Ok(())
+}
+
+/// A bounded allowlist rather than shell tokenization: quoting, expansion,
+/// comments, redirection and composition all hold. Unknown gh options also
+/// hold, including field/input flags that silently change GET to POST.
+fn literal_api_read(command: &str) -> bool {
+    let command = command.trim_matches([' ', '\t', '\r', '\n']);
+    if !command
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || b" \t/._-{}=".contains(&byte))
+    {
+        return false;
+    }
+    let mut words = command.split_ascii_whitespace();
+    if words.next() != Some("gh") || words.next() != Some("api") {
+        return false;
+    }
+    let mut endpoint = false;
+    let mut method = false;
+    while let Some(word) = words.next() {
+        match word {
+            "--method" | "-X" if !method => {
+                if words.next() != Some("GET") {
+                    return false;
+                }
+                method = true;
+            }
+            "--method=GET" | "-XGET" if !method => method = true,
+            _ => {
+                // Repository REST paths are supported. In particular, `graphql`
+                // defaults to POST even without fields or an explicit method.
+                if endpoint
+                    || !word.starts_with("repos/")
+                    || word.len() <= "repos/".len()
+                    || word.contains('=')
+                {
+                    return false;
+                }
+                endpoint = true;
+            }
+        }
+    }
+    endpoint
 }

@@ -107,7 +107,7 @@ fn setup(fx: &Fixture, mode: &str) {
     put(
         fx,
         "contents",
-        json!({"type":"file","path":".github/workflows/guard.yml","size":SOURCE.len(),"sha":git(&fx.repo,&["rev-parse",&format!("{head}:.github/workflows/guard.yml")])}),
+        json!({"type":"file","path":".github/workflows/guard.yml","size":git(&fx.repo,&["cat-file","-s",&format!("{head}:.github/workflows/guard.yml")]).parse::<usize>().unwrap(),"sha":git(&fx.repo,&["rev-parse",&format!("{head}:.github/workflows/guard.yml")])}),
     );
     fs::write(
         fx.forge.join("infra-log"),
@@ -122,6 +122,124 @@ fn update(fx: &Fixture, file: &str, change: impl FnOnce(&mut Value)) {
     let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     change(&mut value);
     fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+}
+
+#[test]
+fn missing_required_prerequisite_requires_a_literal_api_read() {
+    isolated(
+        "infrastructure::missing_required_prerequisite_requires_a_literal_api_read",
+        |sandbox| {
+            for (command, shell, allowed) in [
+                "gh api --method POST repos/example/issues --raw-field title=example",
+                "gh api -X PATCH repos/example/issues/42",
+                "gh api --method=DELETE repos/example/issues/42",
+                "gh api -XPOST repos/example/issues",
+                "gh api --method GET --method POST repos/example/issues",
+                "gh api repos/example/issues --field title=example",
+                "gh api repos/example/issues -Ftitle=example",
+                "gh api repos/example/issues --raw-field=title=example",
+                "gh api repos/example/issues -f title=example",
+                "gh api repos/example/issues -ftitle=example",
+                "gh api repos/example/issues --field=title=example",
+                "gh api repos/example/issues --input payload.json",
+                "gh api repos/example/issues --input=payload.json",
+                "gh api graphql",
+                "# gh api repos/example/pulls/42",
+                "echo gh api repos/example/pulls/42",
+                "gh api repos/example/pulls/42 # a comment",
+                "gh api repos/example/pulls/42; echo done",
+                "gh api repos/example/pulls/42 && echo done",
+                "gh api repos/example/pulls/42 | cat",
+                "gh api repos/example/pulls/42\ngh api -X POST repos/example/issues",
+                "gh api repos/example/$(echo pulls)/42",
+                "gh api repos/example/`echo pulls`/42",
+                "gh api repos/example/pulls/42 > response.json",
+            ]
+            .into_iter()
+            .map(|command| (command, None, false))
+            .chain([
+                ("gh api repos/example/pulls/42", None, true),
+                (
+                    "gh api --method GET repos/example/pulls/42",
+                    Some("bash"),
+                    true,
+                ),
+                (
+                    "gh api repos/{owner}/{repo}/pulls/42 -X GET",
+                    Some("sh"),
+                    true,
+                ),
+                ("gh api --method=GET repos/example/pulls/42", None, true),
+                ("gh api -XGET repos/example/pulls/42", None, true),
+                ("gh api repos/example/pulls/42", Some("python"), false),
+                ("gh api repos/example/pulls/42", Some("job:python"), false),
+                (
+                    "gh api repos/example/pulls/42",
+                    Some("workflow:python"),
+                    false,
+                ),
+            ]) {
+                in_fresh_row(sandbox, |row| {
+                    tracing::info!(command, ?shell, "API read source counterfactual");
+                    let mut source: Value = serde_yaml::from_str(SOURCE).unwrap();
+                    source["jobs"]["state"]["steps"][0]["run"] = json!(command);
+                    if let Some(shell) = shell {
+                        if let Some(shell) = shell.strip_prefix("job:") {
+                            source["jobs"]["state"]["defaults"] = json!({"run":{"shell":shell}});
+                        } else if let Some(shell) = shell.strip_prefix("workflow:") {
+                            source["defaults"] = json!({"run":{"shell":shell}});
+                        } else {
+                            source["jobs"]["state"]["steps"][0]["shell"] = json!(shell);
+                        }
+                    }
+                    let source = serde_yaml::to_string(&source).unwrap();
+                    let fx = fixture_with_source(row, &source);
+                    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+                    action(
+                        &host,
+                        "pr_open",
+                        &fx.open_input(&fx.candidate, &fx.base_sha),
+                    )
+                    .unwrap();
+                    setup(&fx, "positive");
+                    let mut input = fx.complete_ungated_input();
+                    input["auto_fix"] = json!(true);
+                    input["completion"] = json!("review");
+                    let result = action(&host, "pr_complete", &input);
+                    assert_eq!(
+                        result.is_ok(),
+                        allowed,
+                        "source admission: {command}: {result:?}"
+                    );
+                    if let Err(error) = result {
+                        assert!(
+                            error.to_string().contains("source-bound API read"),
+                            "{error}"
+                        );
+                    }
+                    assert_eq!(
+                        pr_infrastructure_reservations(&host.history(TASK_ID))
+                            .unwrap()
+                            .len(),
+                        usize::from(allowed),
+                        "only supported reads spend infrastructure budget: {command}"
+                    );
+                    assert_eq!(
+                        fs::read_to_string(fx.forge.join("calls"))
+                            .unwrap()
+                            .lines()
+                            .filter(|line| *line == "run rerun")
+                            .count(),
+                        usize::from(allowed),
+                        "only supported reads authorize one rerun: {command}"
+                    );
+                    assert!(fx.merge_requests().is_empty());
+                    assert!(pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).is_empty());
+                    assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+                });
+            }
+        },
+    );
 }
 
 #[test]

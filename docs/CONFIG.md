@@ -964,9 +964,15 @@ existing recovery activities, final validation and push do the repair:
   identity), an exact PR/head/base and latest workflow attempt, and source that
   directly links the missing job to a failed API-read prerequisite. The failed
   step must show an explicit GitHub HTTP 502, 503 or 504; credential or permission
-  diagnostics veto recovery. The adapter accepts literal job names and a bounded
-  single-axis literal matrix. The workflow blob must match both the event base
-  and exact PR head, proving the merge-ref workflow uses that DAG. It holds on
+  diagnostics veto recovery. Its source must be a single literal `gh api` command
+  with a `repos/` REST path, using the default GET or one explicit `--method GET`,
+  `--method=GET`, `-X GET` or `-XGET`. Only the default shell, `bash` and `sh` are
+  supported. Other options (including fields and input bodies), GraphQL, writes,
+  quotes, expansions, comments, shell composition and ambiguous scripts hold
+  without reserving or rerunning infrastructure recovery. The adapter accepts
+  literal job names and a bounded single-axis literal matrix. The workflow blob
+  must match both the event base and exact PR head, proving the merge-ref workflow
+  uses that DAG. It holds on
   changed definitions, dynamic or ambiguous dependencies,
   incomplete pages, source, jobs or logs, and additional administrative rules.
 - Before rerunning failed jobs, the owner reserves one infrastructure rerun per
