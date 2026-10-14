@@ -188,9 +188,19 @@ impl OrbitRuntime {
         &self,
         request: Value,
     ) -> Result<T, OrbitError> {
+        self.read_owner_tool_request("orbit.task.show", request)
+    }
+
+    /// Named artifact reads share the existing lock-busy retry and response
+    /// decoding; unknown outcomes are propagated, never treated as absent evidence.
+    pub(crate) fn read_owner_tool_request<T: serde::de::DeserializeOwned>(
+        &self,
+        tool: &str,
+        request: Value,
+    ) -> Result<T, OrbitError> {
         let mut delays = OWNER_READ_LOCK_BUSY_RETRY_DELAYS.iter();
         let value = loop {
-            match self.route_worker_host_tool("orbit.task.show", request.clone()) {
+            match self.route_worker_host_tool(tool, request.clone()) {
                 Err(error) if error.is_lock_busy() => {
                     let Some(delay) = delays.next() else {
                         return Err(error);

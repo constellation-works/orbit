@@ -6953,6 +6953,33 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
         Ok(selectors)
     }
 
+    fn get_task_artifact(
+        &self,
+        task_id: &str,
+        path: &str,
+    ) -> Result<Option<TaskArtifact>, OrbitError> {
+        let artifact = self
+            .artifacts
+            .lock()
+            .unwrap()
+            .get(&(task_id.to_string(), path.to_string()))
+            .map(|content| TaskArtifact {
+                path: path.into(),
+                content: content.clone(),
+                media_type: "application/json".into(),
+                created_by: self
+                    .artifact_creators
+                    .lock()
+                    .unwrap()
+                    .get(&(task_id.to_string(), path.to_string()))
+                    .cloned(),
+            });
+        if let Some(artifact) = &artifact {
+            artifact.validate_inline_size(task_id)?;
+        }
+        Ok(artifact)
+    }
+
     fn get_task_artifacts(&self, task_id: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
         Ok(self
             .artifacts

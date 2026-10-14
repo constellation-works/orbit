@@ -140,6 +140,13 @@ pub trait NullRuntimeHost: Send + Sync {
     fn get_task(&self, _task_id: &str) -> Result<Task, OrbitError> {
         Err(unsupported_runtime_capability("get_task"))
     }
+    fn get_task_artifact(
+        &self,
+        _task_id: &str,
+        _path: &str,
+    ) -> Result<Option<TaskArtifact>, OrbitError> {
+        Ok(None)
+    }
     fn get_task_artifacts(&self, _task_id: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
         Ok(Vec::new())
     }
@@ -792,6 +799,13 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     }
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
         NullRuntimeHost::get_task(self, task_id)
+    }
+    fn get_task_artifact(
+        &self,
+        task_id: &str,
+        path: &str,
+    ) -> Result<Option<TaskArtifact>, OrbitError> {
+        NullRuntimeHost::get_task_artifact(self, task_id, path)
     }
     fn get_task_artifacts(&self, task_id: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
         NullRuntimeHost::get_task_artifacts(self, task_id)

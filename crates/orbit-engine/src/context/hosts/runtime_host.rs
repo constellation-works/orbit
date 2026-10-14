@@ -104,6 +104,13 @@ pub trait RuntimeHost: Send + Sync {
     fn write_run_state(&self, run_id: &str, state: &PipelineState) -> Result<(), OrbitError>;
 
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError>;
+    /// Retrieve only one named, complete inline evidence payload. Implementations
+    /// enforce the existing artifact read bound and owning task/path authority.
+    fn get_task_artifact(
+        &self,
+        task_id: &str,
+        path: &str,
+    ) -> Result<Option<TaskArtifact>, OrbitError>;
     fn get_task_artifacts(&self, task_id: &str) -> Result<Vec<TaskArtifact>, OrbitError>;
     fn get_task_comments(&self, task_id: &str) -> Result<Vec<TaskComment>, OrbitError>;
     fn get_task_history(&self, task_id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError>;

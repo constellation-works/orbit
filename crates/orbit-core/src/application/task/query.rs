@@ -89,13 +89,29 @@ impl OrbitRuntime {
         path: &str,
     ) -> Result<Option<TaskArtifact>, OrbitError> {
         if self.worker_invocation().is_some() {
-            return Ok(self
-                .get_task_artifacts(id)?
-                .into_iter()
-                .find(|artifact| artifact.path == path));
+            return self.read_owner_tool_request(
+                "orbit.task.artifact.get",
+                serde_json::json!({"id": id, "path": path, "_worker_read": "artifact"}),
+            );
         }
 
         self.stores().task_artifacts().get_task_artifact(id, path)
+    }
+
+    /// Read one exact artifact through the same task/path authority and inline
+    /// bound as the public artifact tool. Missing evidence remains distinguishable.
+    pub(crate) fn get_task_artifact_inline(
+        &self,
+        id: &str,
+        path: &str,
+    ) -> Result<Option<TaskArtifact>, OrbitError> {
+        orbit_types::task::validate_relative_artifact_path(path)?;
+        let task = self.get_task(id)?;
+        let artifact = self.get_task_artifact(&task.id, path)?;
+        if let Some(artifact) = &artifact {
+            artifact.validate_inline_size(&task.id)?;
+        }
+        Ok(artifact)
     }
 
     pub fn get_task_comments(&self, id: &str) -> Result<Vec<TaskComment>, OrbitError> {

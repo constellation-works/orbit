@@ -147,10 +147,8 @@ fn checkpoint<H: RuntimeHost + ?Sized>(
     reference: &HandoffArtifactRef,
 ) -> Result<Value, OrbitError> {
     orbit_types::task::validate_relative_artifact_path(&reference.path)?;
-    let artifacts = host.get_task_artifacts(task_id)?;
-    let artifact = artifacts
-        .iter()
-        .find(|artifact| artifact.path == reference.path)
+    let artifact = host
+        .get_task_artifact(task_id, &reference.path)?
         .ok_or_else(|| refused("NoDiff verifier report is missing"))?;
     if sha256_hex(&artifact.content) != reference.sha256 {
         return Err(refused("NoDiff verifier report changed"));

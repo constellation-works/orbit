@@ -174,6 +174,14 @@ impl RuntimeHost for OrbitRuntime {
         OrbitRuntime::get_task(self, task_id)
     }
 
+    fn get_task_artifact(
+        &self,
+        task_id: &str,
+        path: &str,
+    ) -> Result<Option<orbit_types::task::TaskArtifact>, OrbitError> {
+        self.get_task_artifact_inline(task_id, path)
+    }
+
     fn get_task_artifacts(
         &self,
         task_id: &str,

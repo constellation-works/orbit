@@ -23,16 +23,20 @@ pub(super) fn verify_clean_tree<H: RuntimeHost + ?Sized>(
     run_id: &str,
     base_sha: &str,
 ) -> Result<Value, OrbitError> {
-    let artifacts = host.get_task_artifacts(&task.id)?;
-    let has = |path: &str| artifacts.iter().any(|artifact| artifact.path == path);
-    if !has(no_diff::ARTIFACT) {
+    if host
+        .get_task_artifact(&task.id, no_diff::ARTIFACT)?
+        .is_none()
+    {
         return already_landed::verify(host, task, workspace_path, run_id, base_sha);
     }
     let no_diff_error = match no_diff::verify(host, task, workspace_path, run_id, base_sha) {
         Ok(checkpoint) => return Ok(checkpoint),
         Err(error) => error,
     };
-    if !has(already_landed::ARTIFACT) {
+    if host
+        .get_task_artifact(&task.id, already_landed::ARTIFACT)?
+        .is_none()
+    {
         return Err(no_diff_error);
     }
     already_landed::verify(host, task, workspace_path, run_id, base_sha)
