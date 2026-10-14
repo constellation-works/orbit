@@ -114,7 +114,8 @@ pub(super) fn capture(anchor: &File, invocation: &str, workspace: &Path) -> Valu
             }
             Err(error) => return Err(error.to_string()),
         };
-        let report: Manifest = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+        let report: Manifest =
+            serde_json::from_slice(&bytes).map_err(|_| "command evidence manifest is invalid")?;
         if report.schema_version != 1 || report.invocation != invocation {
             return Err("command evidence schema or invocation does not match".into());
         }
@@ -141,8 +142,19 @@ pub(super) fn capture(anchor: &File, invocation: &str, workspace: &Path) -> Valu
                 return Err("command evidence bytes/digest do not match the report".into());
             }
             remaining -= bytes.len();
-            let text = std::str::from_utf8(&bytes).map_err(|_| "command evidence is not UTF-8")?;
-            let retained = redact_all(text);
+            // A reported prefix can end before a credential pattern's minimum
+            // length or closing delimiter, including in a multiline value or
+            // UTF-8 scalar. No suffix/window proves the earlier bytes safe.
+            // Withhold the entire partial payload before memory/cache retention;
+            // keep its verified source identity and honest incompleteness.
+            let retained = if report.complete {
+                let text =
+                    std::str::from_utf8(&bytes).map_err(|_| "command evidence is not UTF-8")?;
+                redact_all(text)
+            } else {
+                String::new()
+            };
+            let redacted = retained.as_bytes() != bytes;
             if retained.len() > MAX_BYTES {
                 return Err("redacted command evidence exceeds its fixed byte ceiling".into());
             }
@@ -151,8 +163,9 @@ pub(super) fn capture(anchor: &File, invocation: &str, workspace: &Path) -> Valu
                 "source_authority": "command_reported",
                 "source_bytes": bytes.len(), "source_sha256": report.sha256,
                 "complete": report.complete,
-                "raw_complete": report.complete && retained == text,
-                "redacted": retained != text,
+                "raw_complete": report.complete && !redacted,
+                "redacted": redacted,
+                "partial_source_withheld": !report.complete,
                 "retained_bytes": retained.len(), "retained_sha256": sha256_hex(retained.as_bytes()),
                 // Private in-memory/cache payload, removed before artifact attachment.
                 "payload": retained,

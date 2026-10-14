@@ -27,7 +27,9 @@ const CACHE_DIR: &str = "orbit-baseline";
 /// Version 8 runs in host-owned source-path target namespaces: earlier results
 /// could have executed sandbox-built binaries [F2026-10-342].
 /// Version 9 keys workspace output bindings as part of the execution contract.
-pub(super) const CACHE_SCHEMA_VERSION: u32 = 9;
+/// Version 10 withholds partial command-evidence payloads before caching;
+/// earlier results can contain unrecognized credential boundary fragments.
+pub(super) const CACHE_SCHEMA_VERSION: u32 = 10;
 
 /// Where version 1 checked bases out, under [`CACHE_DIR`]. Any checkout left
 /// there trips the Linux Git protection scan until it is removed.

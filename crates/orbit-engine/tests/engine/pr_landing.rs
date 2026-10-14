@@ -2072,7 +2072,7 @@ fn required_validation_retains_reported_evidence_after_scratch_lifetime() {
             fs::write(&script, r#"import hashlib, json, os, sys
 from pathlib import Path
 mode, source, observed = sys.argv[1:]
-if not Path('src/feature.txt').exists() and mode != 'both':
+if not Path('src/feature.txt').exists() and mode not in ('both', 'partial-both'):
     sys.exit(0)
 if 'ORBIT_COMMAND_EVIDENCE_DIR' not in os.environ:
     Path(observed).write_text('unavailable-evidence-directory')
@@ -2093,7 +2093,7 @@ if mode == 'symlink':
 if mode == 'fifo':
     path.unlink()
     os.mkfifo(path)
-entry = dict(name=name, source='logs/runner.log', bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest(), complete=mode != 'partial')
+entry = dict(name=name, source='logs/runner.log', bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest(), complete=not mode.startswith('partial'))
 manifest = dict(schema_version=1, invocation=os.environ['ORBIT_COMMAND_EVIDENCE_INVOCATION'], files=[entry])
 if mode == 'foreign': manifest['invocation'] = 'another-command'
 if mode == 'outside': entry['name'] = source
@@ -2101,6 +2101,8 @@ if mode == 'outside-source': entry['source'] = '../runner.log'
 if mode == 'digest': entry['sha256'] = '0' * 64
 if mode == 'size': entry['bytes'] += 1
 if mode == 'malformed': manifest['unexpected'] = True
+if mode == 'malformed-secret': manifest['ghp_' + 'Q' * 34] = True
+if mode == 'missing-complete': del entry['complete']
 if mode == 'total-oversized':
     raw = b'x' * 600000
     path.write_bytes(raw)
@@ -2116,7 +2118,7 @@ if mode == 'parent-swap':
 if mode == 'manifest-symlink':
     (directory / 'manifest.json').unlink()
     (directory / 'manifest.json').symlink_to(source)
-if mode == 'both':
+if mode == 'both' or mode.startswith(('partial-', 'secret-')):
     print('test broken ... FAILED')
 else:
     sys.stdout.write(Path(source).read_text())
@@ -2127,9 +2129,19 @@ sys.exit(3)
                 for mode in [
                     "complete",
                     "both",
+                    "partial-ghp",
                     "partial",
                     "redacted",
+                    "partial-token",
+                    "partial-key",
+                    "partial-assignment",
+                    "partial-bearer",
+                    "partial-utf8",
+                    "partial-both",
+                    "secret-complete",
                     "malformed",
+                    "malformed-secret",
+                    "missing-complete",
                     "foreign",
                     "outside",
                     "outside-source",
@@ -2146,6 +2158,44 @@ sys.exit(3)
                     "unknown-write",
                     "foreign-owner",
                 ] {
+                    // Synthetic bytes only: incomplete source payloads are withheld
+                    // regardless of credential shape or where UTF-8 was cut.
+                    let reported: Vec<u8> = match mode {
+                        "partial-ghp" | "partial-both" => {
+                            format!("{}ghp_{}", " ".repeat(1048576 - 38), "Q".repeat(34))
+                                .into_bytes()
+                        }
+                        "partial-token" => b"github_pat_QQQQQQQ".to_vec(),
+                        "partial-key" => {
+                            b"sk-QQQQQQQ\nglpat-QQQQQQQ\nAIzaQQQQQQQ\nAKIAQQQQQQQ\nnpm_QQQQQQQ\nxoxb-QQQQ".to_vec()
+                        }
+                        "partial-assignment" => {
+                            b"aws_secret_access_key=QQQQ\n{\"api_key\":\"QQQQ\nQQQQ".to_vec()
+                        }
+                        "partial-bearer" => {
+                            b"Authorization: Bearer QQQQ\nBearer [REDACTED_AUTH]".to_vec()
+                        }
+                        "partial-utf8" => b"{\"api_key\":\"QQQQ\nQQQQ\xf0\x9f".to_vec(),
+                        "secret-complete" => {
+                            format!(
+                                "{}ghp_{}\nsk-{}\nglpat-{}\ngithub_pat_{}\nAIza{}\nAKIA{}\nnpm_{}\nxoxb-{}\naws_secret_access_key=QQQQ\n{{\"api_key\":\"QQQQ\"}}\nBearer QQQQ\nBearer [REDACTED_AUTH]\n",
+                                " ".repeat(16384 - 38), "Q".repeat(36),
+                                "Q".repeat(20), "Q".repeat(20), "Q".repeat(22),
+                                "Q".repeat(35), "Q".repeat(16), "Q".repeat(36), "Q".repeat(10),
+                            ).into_bytes()
+                        }
+                        "redacted" => b"Authorization: Bearer fixture-secret-token\n".to_vec(),
+                        _ => raw.as_bytes().to_vec(),
+                    };
+                    let boundary_case = mode.starts_with("partial-")
+                        || matches!(mode, "secret-complete" | "malformed-secret");
+                    let boundary_source = sandbox.join("boundary-source.log");
+                    fs::write(&boundary_source, &reported).unwrap();
+                    let command_source = if boundary_case {
+                        &boundary_source
+                    } else {
+                        &source
+                    };
                     let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
                     *host.fail_evidence_writes.lock().unwrap() = mode == "unknown-write";
                     if mode == "foreign-owner" {
@@ -2159,7 +2209,7 @@ sys.exit(3)
                     let command = format!(
                         "python3 '{}' {mode} '{}' '{}'",
                         script.display(),
-                        source.display(),
+                        command_source.display(),
                         observed.display()
                     );
                     host.require_commands(&[&command]);
@@ -2177,7 +2227,7 @@ sys.exit(3)
                         );
                         continue;
                     }
-                    if mode == "both" {
+                    if matches!(mode, "both" | "partial-both") {
                         assert_eq!(
                             outcome.unwrap()["decision"],
                             "passed_with_known_red",
@@ -2189,6 +2239,10 @@ sys.exit(3)
                             failure.contains("exit 3"),
                             "{route}/{mode}: original failure remains: {failure}"
                         );
+                    }
+                    if mode == "partial-both" {
+                        let replay = action(&host, route, &input).unwrap();
+                        assert_eq!(replay["decision"], "passed_with_known_red");
                     }
                     let ephemeral = fs::read_to_string(&observed).unwrap();
                     assert!(
@@ -2210,16 +2264,24 @@ sys.exit(3)
                     };
                     let log = read(&log_path);
                     assert_eq!(log["exit_code"], 3);
+                    if mode == "partial-both" {
+                        assert_eq!(
+                            log["baseline"]["cached"], true,
+                            "safe partial evidence survives cached-base replay"
+                        );
+                    }
                     let evidence = &log["timing"]["attempts"][0]["command_evidence"];
                     assert!(log["timing"]["attempts"][0]["evidence_capture_ms"].is_u64());
                     measurements.push(json!({"route": route, "mode": mode,
-                        "raw_bytes": raw.len(), "bounded_bytes": log["output"].as_str().unwrap().len(),
+                        "raw_bytes": reported.len(), "bounded_bytes": log["output"].as_str().unwrap().len(),
                         "capture_ms": log["timing"]["attempts"][0]["evidence_capture_ms"],
                         "retention_ms": log["timing"]["evidence_retention_ms"],
                         "status": evidence["status"]}));
                     match mode {
                         "complete" | "both" | "partial" | "redacted" | "foreign-owner"
-                        | "parent-swap" => {
+                        | "parent-swap" | "partial-ghp" | "partial-token" | "partial-key"
+                        | "partial-assignment" | "partial-bearer" | "partial-utf8"
+                        | "partial-both" | "secret-complete" => {
                             assert_eq!(
                                 evidence["status"], "captured",
                                 "{route}/{mode}: {evidence}"
@@ -2263,12 +2325,26 @@ sys.exit(3)
                                 orbit_common::security::release::sha256_hex(retained.as_bytes())
                             );
                             assert_eq!(file["retained_bytes"], retained.len());
-                            assert_eq!(file["complete"], mode != "partial");
+                            assert_eq!(file["source_bytes"], reported.len());
+                            assert_eq!(
+                                file["source_sha256"],
+                                orbit_common::security::release::sha256_hex(&reported)
+                            );
+                            let partial = mode.starts_with("partial");
+                            assert_eq!(file["complete"], !partial);
+                            assert_eq!(evidence["complete"], !partial);
                             assert_eq!(
                                 file["raw_complete"],
-                                mode != "partial" && mode != "redacted"
+                                !partial && !matches!(mode, "redacted" | "secret-complete")
                             );
-                            if mode == "redacted" {
+                            if partial {
+                                assert!(
+                                    retained.is_empty(),
+                                    "{route}/{mode}: incomplete credentials cannot enter chunks"
+                                );
+                                assert_eq!(file["partial_source_withheld"], true);
+                                assert_eq!(file["redacted"], true);
+                            } else if matches!(mode, "redacted" | "secret-complete") {
                                 assert!(
                                     !retained.contains("fixture-secret-token"),
                                     "secrets cannot bypass validation redaction"
@@ -2280,7 +2356,7 @@ sys.exit(3)
                                     "all raw middle failure bytes survive scratch cleanup"
                                 );
                             }
-                            if mode == "both" {
+                            if matches!(mode, "both" | "partial-both") {
                                 let base_path = if route == "candidate_validate" {
                                     format!("validation/{RUN_ID}/0.baseline.json")
                                 } else {
@@ -2292,7 +2368,21 @@ sys.exit(3)
                                 let base_manifest = read(base_ref["path"].as_str().unwrap());
                                 assert_eq!(base_manifest["provenance"]["tested_head"], fx.base_sha);
                                 assert_eq!(base_manifest["provenance"]["role"], "baseline");
-                            } else {
+                                if partial {
+                                    assert_eq!(base_manifest["file"]["retained_bytes"], 0);
+                                    let cache_dir = fx.repo.join(".git/orbit-baseline");
+                                    for entry in fs::read_dir(cache_dir).unwrap().flatten() {
+                                        if entry.path().extension().is_some_and(|ext| ext == "json")
+                                        {
+                                            let cached = fs::read_to_string(entry.path()).unwrap();
+                                            assert!(
+                                                !cached.contains("ghp_Q"),
+                                                "incomplete credentials cannot enter base caches"
+                                            );
+                                        }
+                                    }
+                                }
+                            } else if !boundary_case {
                                 assert!(log["output"].as_str().unwrap().contains("durable-detail"));
                             }
                         }
@@ -2331,6 +2421,38 @@ sys.exit(3)
                                 evidence.get("files").is_none(),
                                 "refused bytes cannot be passed off as complete"
                             );
+                        }
+                    }
+                    if boundary_case {
+                        let contents: Vec<Vec<u8>> = if route == "candidate_validate" {
+                            host.artifacts.lock().unwrap().values().cloned().collect()
+                        } else {
+                            host.claim_log_contents
+                                .lock()
+                                .unwrap()
+                                .values()
+                                .cloned()
+                                .collect()
+                        };
+                        for bytes in contents {
+                            let persisted = String::from_utf8(bytes).unwrap();
+                            for fragment in [
+                                "ghp_Q",
+                                "github_pat_Q",
+                                "sk-QQ",
+                                "glpat-QQ",
+                                "AIzaQQ",
+                                "AKIAQQ",
+                                "npm_QQ",
+                                "xoxb-QQ",
+                                "fixture-secret-token",
+                                "QQQQ",
+                            ] {
+                                assert!(
+                                    !persisted.contains(fragment),
+                                    "{route}/{mode}: credentials cannot enter durable evidence"
+                                );
+                            }
                         }
                     }
                 }
