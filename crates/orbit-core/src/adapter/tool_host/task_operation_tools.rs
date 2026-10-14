@@ -90,6 +90,48 @@ pub(super) fn dispatch(
                 input.as_value(),
             ),
         ),
+        TaskVerb::RetryHandoff => {
+            if orbit_common::governance::authorization::agent_context_declared() {
+                return Err(OrbitError::CapabilityDenied(
+                    "managed agents cannot retry owner handoffs".into(),
+                ));
+            }
+            let authority = runtime
+                .admit_operator_operation("orbit.task.retry_handoff", caller.session_context)?;
+            let actor = authority
+                .remote_caller_machine_id
+                .map_or_else(|| runtime.actor().resolve_write_label(None, None), Ok)?;
+            let workspace = input.required_string("workspace")?;
+            let owner = runtime.workspace_id()?;
+            // The host adapter has selected the runtime. Direct runtime tool
+            // callers must also explicitly name this partition or checkout.
+            if workspace != owner
+                && std::path::Path::new(&workspace)
+                    .canonicalize()
+                    .ok()
+                    .as_deref()
+                    != Some(runtime.paths().repo_root.as_path())
+            {
+                return Err(OrbitError::CapabilityDenied(
+                    "retry must name this owner workspace explicitly".into(),
+                ));
+            }
+            let mut request = input.into_value();
+            if let Some(object) = request.as_object_mut() {
+                object.remove("workspace");
+            }
+            let request = serde_json::from_value(request).map_err(|error| {
+                OrbitError::InvalidInput(format!("invalid retry request: {error}"))
+            })?;
+            read(
+                runtime
+                    .retry_handoff_as_operator(&owner, &request, &actor)
+                    .and_then(|value| {
+                        serde_json::to_value(value)
+                            .map_err(serialize_error("serialize landing retry"))
+                    }),
+            )
+        }
         TaskVerb::Reject => written(reject(runtime, &input, caller.agent, caller.model)),
         TaskVerb::Delete => read(delete(runtime, &input)),
     }

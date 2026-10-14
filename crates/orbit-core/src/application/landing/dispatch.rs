@@ -126,7 +126,7 @@ impl OrbitRuntime {
     /// Whether this attempt's owner job is still pending or running. A run that
     /// died is reconciled by the lookup, so a crashed landing does not look live
     /// forever.
-    fn landing_job_is_live(&self, attempt: &LandingAttempt) -> Result<bool, OrbitError> {
+    pub(super) fn landing_job_is_live(&self, attempt: &LandingAttempt) -> Result<bool, OrbitError> {
         let Some(run_id) = attempt.job_run_id.as_deref() else {
             return Ok(false);
         };

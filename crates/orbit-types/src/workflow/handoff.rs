@@ -267,7 +267,8 @@ pub enum LandingAttemptState {
     Dispatched,
     /// Merged and completed against verified external evidence.
     Merged,
-    /// Stopped with durable evidence; a repair needs fresh validation and a new handoff.
+    /// Stopped with durable evidence; an operator may retry a healthy authorized
+    /// handoff. A candidate repair needs fresh validation and a new handoff.
     Stopped,
 }
 
@@ -290,6 +291,29 @@ pub struct LandingAttempt {
     pub evidence: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+/// An operator's compare-and-reserve request for the same immutable handoff.
+/// No pipeline input or replacement authority is accepted by this operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LandingRetryRequest {
+    pub handoff_id: String,
+    pub expected_candidate_commit: String,
+    pub expected_base_commit: String,
+    pub expected_latest_attempt: u32,
+    pub expected_latest_state: LandingAttemptState,
+    pub reason: String,
+    pub request_key: String,
+}
+
+/// Durable outbox receipt, committed with the reserved attempt before submission.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LandingRetryReceipt {
+    pub request: LandingRetryRequest,
+    pub actor: String,
+    pub attempt: u32,
+    pub created_at: DateTime<Utc>,
 }
 
 /// Existing no-diff delivery contract shared with the local verifier.

@@ -41,6 +41,8 @@ Health:
   review-reset Reset one review lineage budget with an audited reason
   reconcile-review
                Validate and review a recovered delivery's changed merged head
+  retry-handoff
+               Retry a stopped authorized handoff through normal owner landing
   recheck-blocked
                Requeue tasks blocked by a provider launcher that now resolves
 

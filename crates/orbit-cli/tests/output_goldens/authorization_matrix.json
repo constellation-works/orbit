@@ -251,6 +251,19 @@
   },
   {
     "surface": "dashboard",
+    "operation": "handoff.retry",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "dashboard",
     "operation": "handoff.revoke",
     "required_any": [
       "operator"
@@ -889,6 +902,19 @@
   {
     "surface": "tool",
     "operation": "orbit.task.reject",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.task.retry_handoff",
     "required_any": [
       "operator"
     ],

@@ -105,6 +105,10 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
         // public navigation entry of its own.
         .route("/distributed/claims", get(distributed::list_claims))
         .route(
+            "/distributed/handoffs/:id/retry",
+            post(distributed::retry_handoff_action),
+        )
+        .route(
             "/distributed/handoffs/:id/approve",
             post(distributed::approve_handoff_action),
         )

@@ -34,6 +34,7 @@ pub(crate) fn render(verb: TaskVerb, value: Value) -> CommandOut {
         | TaskVerb::ArtifactGet
         | TaskVerb::ReviewReset
         | TaskVerb::ReconcileReview
+        | TaskVerb::RetryHandoff
         | TaskVerb::Reject
         | TaskVerb::Delete => Err(OrbitError::Execution(
             "task lock renderer received another operation".into(),

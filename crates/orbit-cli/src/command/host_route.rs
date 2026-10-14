@@ -412,7 +412,8 @@ fn task_call(command: &TaskSubcommand, holder: &HostEntry) -> Result<RoutedCall,
                 input: without_host(&invocation.input),
                 render: Render::Reconcile,
             },
-            TaskVerb::LocksList
+            TaskVerb::RetryHandoff
+            | TaskVerb::LocksList
             | TaskVerb::LocksReserve
             | TaskVerb::LocksRelease
             | TaskVerb::Add

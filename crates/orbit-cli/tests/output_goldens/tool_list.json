@@ -1338,6 +1338,64 @@
     ]
   },
   {
+    "name": "orbit.task.retry_handoff",
+    "description": "Retry a stopped or uncertain authorized handoff on its explicit owner workspace. Requires trusted operator authority; unavailable to managed runs. Compare the exact accepted candidate/base and latest attempt/state, supply a reason and a durable request_key. Replaying identical input returns the original landing run. The normal landing job reconciles external intent and rechecks all merge gates.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "workspace",
+        "description": "Explicit owner logical workspace ID or absolute checkout path",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "handoff_id",
+        "description": "Immutable accepted handoff identity",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "expected_candidate_commit",
+        "description": "Accepted candidate commit the operator observed",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "expected_base_commit",
+        "description": "Accepted base commit the operator observed",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "expected_latest_attempt",
+        "description": "Latest landing attempt number the operator observed",
+        "param_type": "integer",
+        "required": true
+      },
+      {
+        "name": "expected_latest_state",
+        "description": "Latest state; dispatched is eligible only with unresolved intent and no live owner job",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "reason",
+        "description": "Required operator reason retained durably",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "request_key",
+        "description": "Durable request key; reuse exactly after a lost reply",
+        "param_type": "string",
+        "required": true
+      }
+    ]
+  },
+  {
     "name": "orbit.task.review_reset",
     "description": "Record an operator decision closing the open review attempt and renewing one explicitly selected lineage budget while preserving every attempt. Requires trusted operator authority; unavailable to managed runs. Inspect the returned ledger after a lost reply before retrying.",
     "enabled": true,

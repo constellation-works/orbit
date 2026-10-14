@@ -632,6 +632,7 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.task.pull", Placement::Unadvertised),
     ("orbit.task.reconcile_review", Placement::Advertised),
     ("orbit.task.reject", Placement::Unadvertised),
+    ("orbit.task.retry_handoff", Placement::Advertised),
     ("orbit.task.review_reset", Placement::Advertised),
     ("orbit.workflow.auto", Placement::Advertised),
     ("orbit.workflow.run.list", Placement::Advertised),
@@ -1262,4 +1263,71 @@ fn doctor_terminal_findings_golden() {
         actual,
         std::fs::read_to_string(path).expect("doctor golden")
     );
+}
+
+#[test]
+fn retry_handoff_cli_selects_its_explicit_owner_and_refuses_missing_operator() {
+    let fixture = Fixture::new();
+    let args = [
+        "task",
+        "retry-handoff",
+        "handoff-absent",
+        "--owner-workspace",
+        fixture.work.to_str().unwrap(),
+        "--candidate",
+        "a",
+        "--base",
+        "b",
+        "--attempt",
+        "1",
+        "--state",
+        "stopped",
+        "--reason",
+        "inspect retained handoff",
+        "--request",
+        "cli-retry-1",
+        "--json",
+    ];
+    for operator in [false, true] {
+        let mut command = cargo_bin_cmd!("orbit");
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(&fixture.home)
+            .env("HOME", &fixture.home)
+            .env("USERPROFILE", &fixture.home)
+            .env("RUST_LOG", "off");
+        if operator {
+            command.env("ORBIT_OPERATOR", "1");
+        } else {
+            command
+                .env("ORBIT_AGENT_NAME", "codex")
+                .env("ORBIT_AGENT_MODEL", "gpt");
+        }
+        let output = command.args(args).output().unwrap();
+        assert!(!output.status.success());
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap_or_else(|error| {
+            panic!(
+                "{error}: stdout={} stderr={}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+        });
+        assert_eq!(
+            error["code"],
+            if operator {
+                "invalid_input"
+            } else {
+                "capability_denied"
+            },
+            "{error}"
+        );
+        if operator {
+            assert!(
+                error["error"].as_str().unwrap().contains(args[2]),
+                "the selected owner looked up the exact handoff identity: {error}"
+            );
+        }
+    }
 }

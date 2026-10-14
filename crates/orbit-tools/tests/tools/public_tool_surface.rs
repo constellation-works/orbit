@@ -278,6 +278,7 @@ fn workflow_critical_tools_remain_registered() {
         // Destructive administrative operations are inactive on the agent
         // surface; its inactive-classification is covered by
         // `inactive_ops_tools_*` and `INACTIVE_TOOL_NAMES` above.
+        "orbit.task.retry_handoff",
         "orbit.task.artifact.get",
         "orbit.task.artifact.put",
         "proc.spawn",

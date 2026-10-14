@@ -586,7 +586,13 @@ fn run() {
     let inspection =
         matches!(&cli.command, command::Commands::Migrate(command) if !command.confirm);
     let root_override = cli.root.clone();
-    let workspace_selector = cli.workspace.clone();
+    let workspace_selector = cli.workspace.clone().or_else(|| {
+        if let command::Commands::Task(task) = &cli.command {
+            command::task::operation::retry_owner_workspace(&task.command).map(ToOwned::to_owned)
+        } else {
+            None
+        }
+    });
     let CommandOperation {
         runtime_need,
         task_owner_id,

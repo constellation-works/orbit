@@ -761,7 +761,7 @@ fn handoff_json(
         ),
         Some(LandingAttemptState::Stopped) => (
             "stopped",
-            "stopped with durable evidence; a repair needs fresh validation and a new handoff",
+            "stopped with durable evidence; an operator may retry this authorized handoff; candidate repairs require a new validated handoff",
         ),
     };
     serde_json::json!({

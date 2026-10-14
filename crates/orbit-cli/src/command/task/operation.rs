@@ -17,6 +17,23 @@ use serde_json::{Map, Value, json};
 use super::super::operation_args::Invocation;
 use crate::command::{CommandOut, Payload};
 
+/// Explicit owner selection is resolved before opening the CLI runtime.
+pub(crate) fn retry_owner_workspace(command: &super::command::TaskSubcommand) -> Option<&str> {
+    let super::command::TaskSubcommand::Operation(super::command::TaskInvocation::Registry(
+        invocation,
+    )) = command
+    else {
+        return None;
+    };
+    if invocation.spec.verb != TaskVerb::RetryHandoff {
+        return None;
+    }
+    invocation
+        .input
+        .get("owner_workspace")
+        .and_then(Value::as_str)
+}
+
 /// CLI-only response options: list presentation and the artifact destination.
 #[derive(Clone, Default)]
 pub(super) struct ListView {
@@ -154,6 +171,12 @@ fn prepare(
         }
         // The review verbs act on this checkout's workspace unless `--host`
         // routed them, which the preflight did before dispatch.
+        TaskVerb::RetryHandoff => {
+            if let Some(workspace) = input.shift_remove("owner_workspace") {
+                input.insert("workspace".into(), workspace);
+            }
+            Ok(ListView::default())
+        }
         TaskVerb::ReviewReset | TaskVerb::ReconcileReview => {
             input.shift_remove("host");
             input.insert("workspace".to_string(), json!(runtime.paths().repo_root));
@@ -384,6 +407,8 @@ fn render(
             let text = super::reconcile_review::reconciliation_text(&value);
             Ok(Payload::detail(value, text).into())
         }
-        TaskVerb::Reject | TaskVerb::Delete => Ok(Payload::document(value).into()),
+        TaskVerb::RetryHandoff | TaskVerb::Reject | TaskVerb::Delete => {
+            Ok(Payload::document(value).into())
+        }
     }
 }

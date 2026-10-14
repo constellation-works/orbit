@@ -48,6 +48,24 @@ impl TaskStoreBackend for TaskV2Store {
         self.claim_boundary()?.landing_attempts()
     }
 
+    fn landing_retry_receipt(
+        &self,
+        handoff_id: &str,
+        request_key: &str,
+    ) -> Result<Option<orbit_types::workflow::handoff::LandingRetryReceipt>, OrbitError> {
+        self.claim_boundary()?
+            .landing_retry_receipt(handoff_id, request_key)
+    }
+
+    fn landing_attempt_record(
+        &self,
+        handoff_id: &str,
+        attempt: u32,
+    ) -> Result<Option<orbit_types::workflow::handoff::LandingAttempt>, OrbitError> {
+        self.claim_boundary()?
+            .landing_attempt_record(handoff_id, attempt)
+    }
+
     fn kept_claim_candidate(
         &self,
         task_id: &str,
