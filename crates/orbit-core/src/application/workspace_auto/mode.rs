@@ -26,10 +26,9 @@ impl OrbitRuntime {
                 "pipeline run input must be a JSON object".into(),
             ));
         }
-        let configured = &self.context.settings().auto_concurrency().mode;
         let (mode, source) = match input.get("auto_concurrency") {
             Some(value) => (parse_mode(value)?, "explicit"),
-            None => (configured.parse().map_err(invalid_mode)?, "configured"),
+            None => (configured_mode(self)?, "configured"),
         };
         // Resumes/restarts keep both the captured policy and its provenance.
         if !retain_snapshot || input.get("auto_concurrency_source").is_none() {
@@ -47,8 +46,11 @@ impl OrbitRuntime {
     }
 
     pub(crate) fn auto_concurrency_view(&self, input: Option<&Value>) -> Result<Value, OrbitError> {
-        let configured = &self.context.settings().auto_concurrency().mode;
-        let mode = effective_mode(self, input.unwrap_or(&Value::Null))?;
+        let configured = configured_mode(self)?;
+        let mode = match input.and_then(|input| input.get("auto_concurrency")) {
+            None | Some(Value::Null) => configured,
+            Some(value) => parse_mode(value)?,
+        };
         Ok(json!({
             "mode": mode,
             "source": input.and_then(|input| input.get("auto_concurrency_source"))
@@ -56,6 +58,20 @@ impl OrbitRuntime {
             "configured_mode": configured,
         }))
     }
+}
+
+// Dashboard and MCP runtimes can outlive a configuration write. Resolve the
+// global-only default at submission/readback, while existing runs continue
+// using their captured input and admission keeps its existing host thresholds.
+fn configured_mode(runtime: &OrbitRuntime) -> Result<AutoConcurrencyMode, OrbitError> {
+    orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(
+        runtime.global_root(),
+        runtime.shared_root(),
+    ))?
+    .auto_concurrency
+    .mode
+    .parse()
+    .map_err(invalid_mode)
 }
 
 pub(super) fn effective_mode(

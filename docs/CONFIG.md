@@ -94,6 +94,11 @@ configuration is edited implicitly; concurrency ceilings, throttle, fit
 thresholds, profiles, accuracy recording, idle-host fallback and starvation
 protection keep their existing behavior.
 
+Long-lived dashboard and MCP sessions resolve the host mode from the current
+global configuration at each inherited submission and readiness read. A
+supported configuration change updates the next inherited choice without
+restarting the session; previously submitted drains retain their captured mode.
+
 The dashboard's **Auto-concurrency mode** control offers **Inherit host**,
 **Off**, **Shadow** and **Enforce** in an operator session. MCP
 `orbit.workflow.auto` accepts `auto_concurrency` on `action: start`; HTTP

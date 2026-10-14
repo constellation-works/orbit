@@ -1009,6 +1009,34 @@ fn auto_start_approve_proposed_is_opt_in_boolean_and_operator_gated() {
             );
             let run = run_input(&fixture, &started);
             assert_eq!(run["approve_proposed"], true, "{run}");
+
+            // A long-lived dashboard must capture the host default at submission,
+            // rather than keep inheriting the runtime's startup snapshot.
+            let changed = json_ok(operator.send(
+                "PUT",
+                &format!("/api/config/keys/machine.auto_concurrency.mode?workspace={WS}"),
+                json!({"scope":"global","value":"enforce"}),
+            ));
+            assert_eq!(changed["new_value"], "enforce");
+            let readiness =
+                json_ok(operator.get(&format!("/api/workflows/auto/readiness?workspace={WS}")));
+            assert_eq!(
+                readiness["auto_concurrency"]["configured_mode"], "enforce",
+                "the inherited choice must show the current admitted host setting"
+            );
+            let inherited = json_ok(operator.send("POST", &uri, json!({"for_duration":"1m"})));
+            assert_eq!(inherited["auto_concurrency"]["mode"], "enforce");
+            assert_eq!(inherited["auto_concurrency"]["source"], "configured");
+            assert_eq!(
+                run_input(&fixture, &inherited)["auto_concurrency"],
+                "enforce"
+            );
+            let earlier = json_ok(operator.get(&format!(
+                "/api/runs/{}?workspace={WS}",
+                started["run_id"].as_str().unwrap()
+            )));
+            assert_eq!(earlier["run"]["auto_concurrency"]["mode"], "shadow");
+            assert_eq!(earlier["run"]["auto_concurrency"]["source"], "configured");
         },
     );
 }
