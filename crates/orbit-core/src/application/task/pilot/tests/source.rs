@@ -12,7 +12,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use orbit_common::fs::git::{run_git, with_git_fetch_lock};
+use crate::git_test_support::run as run_git;
+use orbit_common::fs::git::with_git_fetch_lock;
 use orbit_common::process::shell::quote_posix_arg;
 use orbit_common::test_env::{assert_child_test_passed, run_child_test};
 use tempfile::TempDir;

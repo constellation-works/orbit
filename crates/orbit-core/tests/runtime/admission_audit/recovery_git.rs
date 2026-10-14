@@ -133,7 +133,7 @@ fn recovery_tool_context(workspace_root: &Path, programs: Vec<String>) -> ToolCo
 }
 
 fn run_git(repo: &Path, args: &[&str]) -> Result<String, OrbitError> {
-    let output = std::process::Command::new("git")
+    let output = crate::git_test_support::command()
         .current_dir(repo)
         .args(args)
         .output()

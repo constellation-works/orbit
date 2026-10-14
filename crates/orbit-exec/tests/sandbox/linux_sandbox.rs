@@ -375,7 +375,6 @@ fn trusted_resolution_never_consults_path() {
 #[test]
 fn tmp_linked_worktree_retains_git_without_exposing_host_scratch() {
     use std::fs;
-    use std::process::Command;
 
     for managed in [false, true] {
         let temp = tempfile::tempdir_in("/tmp").expect("fixture under /tmp");
@@ -384,7 +383,7 @@ fn tmp_linked_worktree_retains_git_without_exposing_host_scratch() {
         let workspace = root.join("workspace");
         fs::create_dir(&primary).expect("primary");
         let git = |cwd: &std::path::Path, args: &[&str]| {
-            let output = Command::new("git")
+            let output = crate::git_test_support::command()
                 .env_clear()
                 .env("PATH", "/usr/bin:/bin")
                 .current_dir(cwd)
@@ -1662,7 +1661,6 @@ fn kernel_enforces_versioned_orbit_exceptions_and_protected_stores_when_availabl
 #[ignore = "requires a Linux host with working Bubblewrap user/mount namespaces"]
 fn kernel_git_metadata_integrity_through_original_and_build_aliases() {
     use std::fs;
-    use std::process::Command;
 
     let probe = probe_bwrap();
     assert!(
@@ -1676,7 +1674,7 @@ fn kernel_git_metadata_integrity_through_original_and_build_aliases() {
     let workspace = root.join("workspace");
     fs::create_dir(&primary).unwrap();
     let git = |cwd: &std::path::Path, args: &[&str]| {
-        let output = Command::new("git")
+        let output = crate::git_test_support::command()
             .current_dir(cwd)
             .args(args)
             .output()

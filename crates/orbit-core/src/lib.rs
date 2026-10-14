@@ -39,6 +39,10 @@
 //! orbit-common, orbit-store, orbit-policy, orbit-tools, orbit-search, orbit-engine
 //! → `orbit-core` → orbit-cmd / orbit-web / orbit-cli
 
+#[cfg(test)]
+#[path = "../tests/support/git.rs"]
+mod git_test_support;
+
 // A bare `cargo test` from a managed-run shell must match one from a clean shell.
 #[cfg(test)]
 orbit_common::isolate_test_process!();

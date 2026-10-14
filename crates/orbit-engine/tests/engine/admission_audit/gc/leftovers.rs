@@ -31,7 +31,7 @@ fn gc_reclaims_the_leftover_of_a_removal_that_failed_partway() {
     let _unlock = Unlock(locked.clone());
     // Reproduce the failure directly: Git unregisters the worktree, then
     // cannot delete the read-only directory.
-    let failed = Command::new("git")
+    let failed = crate::git_test_support::command()
         .args(["worktree", "remove", "--force"])
         .arg(&worktree)
         .current_dir(&repo)

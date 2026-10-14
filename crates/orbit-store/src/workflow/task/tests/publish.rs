@@ -317,7 +317,7 @@ fn isolated(function: &str) -> bool {
 }
 
 fn git(cwd: &Path, args: &[&str]) {
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .current_dir(cwd)
         .args(args)
         .output()
@@ -332,7 +332,7 @@ fn git(cwd: &Path, args: &[&str]) {
 }
 
 fn git_output(cwd: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .current_dir(cwd)
         .args(args)
         .output()

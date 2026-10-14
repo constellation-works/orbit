@@ -324,10 +324,7 @@ fn timeout_retains_partial_report_and_budget_and_resumes_the_same_review() {
 }
 
 fn git(repo: &std::path::Path, args: &[&str]) -> String {
-    let mut command = std::process::Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|key| {
-        command.env_remove(key);
-    });
+    let mut command = crate::git_test_support::command();
     let output = command.args(args).current_dir(repo).output().unwrap();
     assert!(output.status.success(), "git {args:?}: {output:?}");
     String::from_utf8(output.stdout).unwrap().trim().to_string()
@@ -838,10 +835,7 @@ fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
         // itself neither approves it nor rewrites the incomplete certificate.
         // ORB-14328: a fresh reviewer saw a new commit on the evidenced tree,
         // then requested the same unavailable check under its new attempt.
-        let mut command = std::process::Command::new("git");
-        orbit_common::test_env::clear_inherited_authority(|key| {
-            command.env_remove(key);
-        });
+        let mut command = crate::git_test_support::command();
         let committed = command
             .args(["commit", "--allow-empty", "-m", "same tree, fresh commit"])
             .current_dir(&fixture.repo)

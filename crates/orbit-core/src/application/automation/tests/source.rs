@@ -6,7 +6,6 @@
 
 use std::cell::Cell;
 use std::path::Path;
-use std::process::Command;
 
 use orbit_automation::AutomationError;
 use orbit_automation::delivery::digest;
@@ -42,7 +41,7 @@ struct Diverged {
 }
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .args(args)
         .current_dir(repo)
         .env("GIT_AUTHOR_NAME", "replay")
@@ -338,7 +337,7 @@ fn diverged_with_inserted_canonical_commit() -> Diverged {
 
     let remote = root.path().join("remote.git");
     std::fs::create_dir(&remote).expect("remote dir");
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .args(["init", "--bare"])
         .current_dir(&remote)
         .output()

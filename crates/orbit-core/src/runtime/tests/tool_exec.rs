@@ -1,7 +1,6 @@
 //! Sibling tests for `tool_exec.rs` (migrated per ORB-00246 / docs/design-patterns/test_layout.md).
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::OrbitRuntime;
 use crate::runtime::tool_exec::populate_filesystem_policy_context;
@@ -190,7 +189,7 @@ fn canonical(path: &Path) -> PathBuf {
 }
 
 fn git(current_dir: &Path, args: &[&str]) {
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .args(args)
         .current_dir(current_dir)
         .output()
@@ -206,7 +205,7 @@ fn git(current_dir: &Path, args: &[&str]) {
 }
 
 fn git_stdout(current_dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .args(args)
         .current_dir(current_dir)
         .output()

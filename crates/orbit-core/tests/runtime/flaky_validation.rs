@@ -21,10 +21,7 @@ fn flaky_signatures_are_filed_once_across_runs_and_tasks() {
     let global = root.path().join("global");
     std::fs::create_dir_all(&workspace).unwrap();
     std::fs::create_dir_all(&global).unwrap();
-    let mut git = std::process::Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|key| {
-        git.env_remove(key);
-    });
+    let mut git = crate::git_test_support::command();
     let boundary = git
         .args(["init", "--bare", "--initial-branch=main", "-q"])
         .arg(repo.join(".git"))

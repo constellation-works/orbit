@@ -88,7 +88,7 @@ pub(super) fn bare(pair: &Pair) -> PathBuf {
 }
 
 pub(super) fn has_commit(repo: &Path, sha: &str) -> bool {
-    std::process::Command::new("git")
+    crate::git_test_support::command()
         .arg("-C")
         .arg(repo)
         .args(["cat-file", "-e", &format!("{sha}^{{commit}}")])
@@ -746,7 +746,7 @@ fn a_red_base_hold_whose_push_is_refused_stays_host_local() {
     assert!(!failure.is_empty(), "the push diagnostic: {handoff}");
     let reference = format!("refs/orbit/candidates/{task}/{run}");
     assert!(
-        std::process::Command::new("git")
+        crate::git_test_support::command()
             .arg("-C")
             .arg(bare(&pair))
             .args(["rev-parse", "--verify", "--quiet", &reference])

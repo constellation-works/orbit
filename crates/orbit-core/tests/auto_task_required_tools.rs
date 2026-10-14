@@ -1,6 +1,9 @@
 //! Contract checks for tool requirements in bundled auto-task definitions.
 #![allow(clippy::unwrap_used)]
 
+#[path = "support/git.rs"]
+mod git_test_support;
+
 orbit_common::isolate_test_process!();
 
 use std::path::Path;
@@ -386,10 +389,7 @@ fn isolated(test: &str) -> bool {
 }
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let mut command = std::process::Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|key| {
-        command.env_remove(key);
-    });
+    let mut command = crate::git_test_support::command();
     let output = command.current_dir(repo).args(args).output().unwrap();
     assert!(output.status.success(), "git {args:?}: {output:?}");
     String::from_utf8(output.stdout).unwrap().trim().to_string()

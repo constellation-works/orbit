@@ -78,18 +78,53 @@ fn commit_child_environment_excludes_parent_secrets() {
     paths.extend(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
     ));
-    let output = Command::new(std::env::current_exe().expect("test executable"))
-        .args(["--exact", exact_test, "--nocapture"])
-        .env("ORBIT_TEST_SECRET", exact_test)
-        .env("PATH", std::env::join_paths(paths).expect("observer PATH"))
-        .output()
-        .expect("isolated environment test");
-    orbit_common::test_env::assert_child_test_passed(
-        exact_test,
-        output.status,
-        &output.stdout,
-        &output.stderr,
-    );
+    let decoy = initialized_git_repo();
+    let snapshot = || {
+        let mut bytes = [".git/config", ".git/HEAD", ".git/index", "README.md"]
+            .map(|path| fs::read(decoy.path().join(path)).unwrap())
+            .to_vec();
+        for args in [
+            vec!["for-each-ref"],
+            vec!["worktree", "list", "--porcelain"],
+        ] {
+            bytes.push(git_output(decoy.path(), &args).unwrap().into_bytes());
+        }
+        bytes
+    };
+    let before = snapshot();
+    for common_only in [false, true] {
+        let mut child = Command::new(std::env::current_exe().expect("test executable"));
+        orbit_common::test_env::clear_inherited_authority(|name| {
+            child.env_remove(name);
+        });
+        let git_dir = decoy.path().join(".git");
+        child.env("GIT_COMMON_DIR", &git_dir);
+        if !common_only {
+            child
+                .env("GIT_DIR", &git_dir)
+                .env("GIT_WORK_TREE", decoy.path())
+                .env("GIT_INDEX_FILE", git_dir.join("index"))
+                .env("GIT_OBJECT_DIRECTORY", git_dir.join("objects"))
+                .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", git_dir.join("objects"));
+        }
+        let output = child
+            .args(["--exact", exact_test, "--nocapture"])
+            .env("ORBIT_TEST_SECRET", exact_test)
+            .env("PATH", std::env::join_paths(&paths).expect("observer PATH"))
+            .output()
+            .expect("isolated environment test");
+        assert_eq!(
+            snapshot(),
+            before,
+            "fixture Git commands changed the decoy's config, HEAD, index, refs, worktrees or README (common_only={common_only})"
+        );
+        orbit_common::test_env::assert_child_test_passed(
+            exact_test,
+            output.status,
+            &output.stdout,
+            &output.stderr,
+        );
+    }
 
     let observed = fs::read(observed_path).expect("production commit ran the observer");
     let observed = String::from_utf8(observed).expect("environment UTF-8");

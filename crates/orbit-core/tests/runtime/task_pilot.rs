@@ -495,10 +495,7 @@ fn namespace(pin: &str) -> &str {
 
 fn git_in(repo: &Path, args: &[&str], input: Option<&str>) -> String {
     use std::io::Write;
-    let mut command = std::process::Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|key| {
-        command.env_remove(key);
-    });
+    let mut command = crate::git_test_support::command();
     let mut child = command
         .args(args)
         .current_dir(repo)

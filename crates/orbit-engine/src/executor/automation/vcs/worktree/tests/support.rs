@@ -1,6 +1,5 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// Puts a read-only directory holding a file inside the worktree, the way an
 /// aborted fixture leaves one, and keeps it out of the dirty-tree check.
@@ -58,7 +57,7 @@ pub(super) fn add_worktree(repo: &Path, path: &Path, branch: &str) {
 }
 
 fn git(current_dir: &Path, args: &[&str]) -> String {
-    let mut command = Command::new("git");
+    let mut command = crate::git_test_support::command();
     command.args(args).current_dir(current_dir);
     let output = command
         .output()

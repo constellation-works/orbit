@@ -4,7 +4,6 @@
 //! `delivery:task_local_pipeline` tag delivers that one task locally instead.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use orbit_core::application::job::JobRunListParams;
 use orbit_core::application::task::TaskAddParams;
@@ -69,10 +68,7 @@ fn open() -> Forgeless {
 }
 
 fn git(cwd: &Path, args: &[&str]) -> String {
-    let mut command = Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|key| {
-        command.env_remove(key);
-    });
+    let mut command = crate::git_test_support::command();
     let output = command.args(args).current_dir(cwd).output().unwrap();
     assert!(
         output.status.success(),

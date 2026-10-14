@@ -6,7 +6,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use chrono::{TimeZone, Utc};
 use orbit_common::OrbitError;
@@ -370,7 +369,7 @@ fn push_descendant(bare: &Path, parent: &str) -> String {
 }
 
 fn git(cwd: &Path, args: &[&str]) {
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .current_dir(cwd)
         .args(args)
         .output()
@@ -385,7 +384,7 @@ fn git(cwd: &Path, args: &[&str]) {
 }
 
 fn git_output(cwd: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .current_dir(cwd)
         .args(args)
         .output()

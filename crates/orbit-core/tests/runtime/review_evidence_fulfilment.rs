@@ -106,10 +106,7 @@ echo "codeql-rust-local: run directory: $run_dir" >&2
 }
 
 fn git(fixture: &Fixture, args: &[&str]) -> String {
-    let mut command = std::process::Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|key| {
-        command.env_remove(key);
-    });
+    let mut command = crate::git_test_support::command();
     let output = command
         .args(args)
         .current_dir(&fixture.repo)

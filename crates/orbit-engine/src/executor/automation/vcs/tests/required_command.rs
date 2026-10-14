@@ -104,7 +104,7 @@ impl crate::test_support::NullRuntimeHost for CaptureHost {}
 fn oversized_stdout_keeps_the_stderr_tail_and_names_the_missing_tool() {
     let dir = tempfile::tempdir().expect("temp dir");
     // Use a repository fixture, as required validation normally does.
-    let init = std::process::Command::new("git")
+    let init = crate::git_test_support::command()
         .args(["init", "--quiet"])
         .current_dir(dir.path())
         .output()

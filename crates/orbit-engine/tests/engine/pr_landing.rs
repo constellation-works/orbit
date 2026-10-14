@@ -1027,7 +1027,7 @@ fn commit_tree(fx: &Fixture, tree: &str, parents: &[&str], message: &str) -> Str
 }
 
 fn remote_ref(fx: &Fixture, reference: &str) -> Option<String> {
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .args([
             "--git-dir",
             "remote.git",
@@ -5345,7 +5345,7 @@ fn rebase_state(checkout: &Path, name: &str) -> String {
 }
 
 fn is_ancestor(repo: &Path, ancestor: &str, descendant: &str) -> bool {
-    Command::new("git")
+    crate::git_test_support::command()
         .args(["merge-base", "--is-ancestor", ancestor, descendant])
         .current_dir(repo)
         .status()
@@ -5892,7 +5892,7 @@ fn fixture_push_refuses_non_file_transports_without_network() {
             );
 
             for clear_policy_variable in [false, true] {
-                let mut command = Command::new("git");
+                let mut command = crate::git_test_support::command();
                 command
                     .args(["push", "origin", BRANCH])
                     .current_dir(&fx.repo);

@@ -32,6 +32,10 @@
 //! # Dependency direction
 //! `orbit-common` / `orbit-types` ← `orbit-store` ← consumers such as orbit-core and orbit-engine
 
+#[cfg(test)]
+#[path = "../tests/support/git.rs"]
+mod git_test_support;
+
 pub mod compose;
 pub mod contracts;
 mod driver;

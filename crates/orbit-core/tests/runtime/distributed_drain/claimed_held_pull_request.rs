@@ -463,7 +463,7 @@ fn a_before_landing_evidence_hold_preserves_reviewer_fixes_for_next_claim() {
             git(next_repo, &["fetch", "-q", "origin", "main"]);
             git(next_repo, &["reset", "-q", "--hard", "origin/main"]);
             assert!(
-                !std::process::Command::new("git")
+                !crate::git_test_support::command()
                     .current_dir(next_repo)
                     .args(["cat-file", "-e", &fixed])
                     .output()

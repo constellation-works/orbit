@@ -26,10 +26,7 @@ impl Fixture {
         let jobs = global.join("resources/jobs");
         std::fs::create_dir_all(&jobs).unwrap();
         std::fs::create_dir_all(repo.join(".orbit")).unwrap();
-        let mut git = std::process::Command::new("git");
-        orbit_common::test_env::clear_inherited_authority(|key| {
-            git.env_remove(key);
-        });
+        let mut git = crate::git_test_support::command();
         assert!(
             git.args(["init", "-q"])
                 .current_dir(&repo)

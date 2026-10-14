@@ -10,7 +10,6 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::process::Command;
 use std::time::Duration;
 
 use chrono::Utc;
@@ -180,7 +179,7 @@ impl PipelineWaitClock for FakeClock<'_> {
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .args([
             "-c",
             "user.name=Orbit Test",

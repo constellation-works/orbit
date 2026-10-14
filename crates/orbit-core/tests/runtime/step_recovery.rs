@@ -69,19 +69,13 @@ struct Fixture {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let mut command = std::process::Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|key| {
-        command.env_remove(key);
-    });
+    let mut command = crate::git_test_support::command();
     let output = command.args(args).current_dir(dir).output().unwrap();
     assert!(output.status.success(), "git {args:?}: {output:?}");
 }
 
 fn git_stdout(dir: &Path, args: &[&str]) -> String {
-    let mut command = std::process::Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|key| {
-        command.env_remove(key);
-    });
+    let mut command = crate::git_test_support::command();
     let output = command.args(args).current_dir(dir).output().unwrap();
     assert!(output.status.success(), "git {args:?}: {output:?}");
     String::from_utf8(output.stdout).unwrap().trim().to_string()

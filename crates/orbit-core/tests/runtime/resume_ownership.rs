@@ -194,10 +194,7 @@ impl Fixture {
 }
 
 fn git(repo: &std::path::Path, args: &[&str]) -> String {
-    let mut command = Command::new("git");
-    orbit_common::test_env::clear_inherited_authority(|name| {
-        command.env_remove(name);
-    });
+    let mut command = crate::git_test_support::command();
     let output = command
         .current_dir(repo)
         .env("GIT_ALLOW_PROTOCOL", "file")

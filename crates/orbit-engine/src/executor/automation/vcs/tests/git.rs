@@ -40,7 +40,7 @@ fn quiet_git_failures_keep_exit_status_and_signal_diagnostics() {
         ),
     ] {
         let args = ["-c", alias, "quiet-failure"];
-        let raw = Command::new("git")
+        let raw = crate::git_test_support::command()
             .args(args)
             .current_dir(repo.path())
             .output()
@@ -73,7 +73,7 @@ fn quiet_git_failures_keep_exit_status_and_signal_diagnostics() {
 }
 
 fn git_ok(repo: &Path, args: &[&str]) {
-    let mut command = Command::new("git");
+    let mut command = crate::git_test_support::command();
     command.args(args).current_dir(repo);
     let output = command
         .output()

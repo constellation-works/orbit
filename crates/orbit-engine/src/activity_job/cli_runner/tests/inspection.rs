@@ -254,7 +254,7 @@ fn init_repo(path: &Path) -> String {
 }
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = crate::git_test_support::command()
         .args([
             "-c",
             "core.hooksPath=/dev/null",

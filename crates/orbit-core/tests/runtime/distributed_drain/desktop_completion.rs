@@ -1410,7 +1410,7 @@ fn a_squash_landing_disposes_on_a_remediation_containing_the_squash_commit() {
     let original = settled["record"]["validation"].clone();
 
     let remediation = delivery.land("NOTICE", "notice\n", "Add NOTICE");
-    let head_in_remediation = std::process::Command::new("git")
+    let head_in_remediation = crate::git_test_support::command()
         .arg("-C")
         .arg(&delivery.repo)
         .args(["merge-base", "--is-ancestor", &delivery.head, &remediation])
