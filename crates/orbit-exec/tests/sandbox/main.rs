@@ -9,6 +9,7 @@
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[cfg(target_os = "linux")]
 #[path = "../support/git.rs"]
 mod git_test_support;
 
