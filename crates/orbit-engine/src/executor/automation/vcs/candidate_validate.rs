@@ -40,6 +40,7 @@
 //! failure, and one that reports no executed tests is refused.
 
 use std::collections::BTreeSet;
+use std::time::Instant;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
@@ -160,12 +161,16 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
         validation_env = run.environment_record();
         // [ORB-14258] A conclusive failure that is not a missing tool is rerun on the
         // synchronized base, so a red base is told apart from the candidate.
+        let baseline_started = Instant::now();
         let baseline: Option<BaselineCheck> = base_sha
             .as_deref()
             .filter(|_| {
                 !run.passed && run.missing_tool.is_none() && run.infrastructure_failure.is_none()
             })
             .map(|base| compare_candidate_with_base(host, &workspace_path, base, &run));
+        let baseline_comparison_ms = baseline
+            .as_ref()
+            .map(|_| baseline_started.elapsed().as_millis());
         let log_path = format!("validation/{run_id}/{index}.json");
         let baseline_path = baseline
             .as_ref()
@@ -199,6 +204,7 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
                     failures: BaselineRedFailures::new(failures.iter().cloned(), ""),
                 })
             });
+        let rerun_started = Instant::now();
         let rerun = if coverage_failure.is_none() {
             rerun_failed_tests(
                 host,
@@ -211,6 +217,7 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
         } else {
             None
         };
+        let candidate_rerun_ms = rerun.as_ref().map(|_| rerun_started.elapsed().as_millis());
         let recovered = rerun.as_ref().and_then(|rerun| rerun.flaky.as_ref());
         let rerun_path = format!("validation/{run_id}/{index}.rerun.json");
         let evidence = if rerun.is_some() {
@@ -226,6 +233,7 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
                     "tested_head": candidate, "command": rerun.run.command,
                     "exit_code": rerun.run.exit_code, "timed_out": rerun.run.timed_out,
                     "output": rerun.run.output, "summary": rerun.run.summary,
+                    "timing": rerun.run.timing,
                     "validation_env": rerun.run.environment_record(), "flaky": rerun.flaky,
                 }))
                 .map_err(|error| {
@@ -269,6 +277,9 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
             "deferred_sandbox_replay": replays.contains(&run.command),
             "missing_tool": run.missing_tool_name(),
             "network_retries": run.network_retries,
+            "timing": run.timing,
+            "baseline_comparison_ms": baseline_comparison_ms,
+            "candidate_rerun_ms": candidate_rerun_ms,
             "summary": run.summary,
             "baseline": baseline
                 .as_ref()
@@ -466,16 +477,23 @@ fn attach_logs<H: RuntimeHost + ?Sized>(
     }
     let mut references = Vec::new();
     for (path, content) in logs {
+        // Canonical paths are replaced by recovery. Retain immutable bytes of
+        // every observed attempt too, so a later success cannot erase its cost
+        // or original failure. Only canonical paths participate in admission.
+        let digest = sha256_hex(content);
+        let archive = format!("validation/{run_id}/attempts/{digest}.json");
         if claimed {
             host.attach_claim_validation_log(path, content.clone())?;
+            host.attach_claim_validation_log(&archive, content.clone())?;
         } else {
             for task_id in task_ids {
                 host.attach_task_validation_log(task_id, run_id, path, content.clone())?;
+                host.attach_task_validation_log(task_id, run_id, &archive, content.clone())?;
             }
         }
         references.push(HandoffArtifactRef {
             path: path.clone(),
-            sha256: sha256_hex(content),
+            sha256: digest,
         });
     }
     Ok(references)

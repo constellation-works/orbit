@@ -40,6 +40,9 @@ pub struct BaseCommandResult {
     pub timed_out: bool,
     pub output: String,
     pub network_retries: u32,
+    /// Advisory timing from the original execution, absent in older caches.
+    #[serde(default)]
+    pub timing: Value,
     /// Whether complete base output refused any host coverage.
     #[serde(default)]
     pub host_coverage_refused: bool,
@@ -279,6 +282,7 @@ impl BaselineCheck {
                 "timed_out": base.timed_out,
                 "passed": base.passed,
                 "network_retries": base.network_retries,
+                "timing": base.timing,
                 "host_coverage_refused": base.host_coverage_refused,
                 "output": base.output,
                 "failures": base.failures,
@@ -536,6 +540,7 @@ fn compare_base<H: RuntimeHost + ?Sized>(
                 validation_env: run.environment_record(),
                 output: run.output,
                 network_retries: run.network_retries,
+                timing: run.timing,
                 host_coverage_refused: run.host_output_refusal.is_some()
                     || run.deferred_notice.is_some(),
                 summary: run.summary,

@@ -273,6 +273,23 @@ jobs:
         result = self.run_guard("ci-guardrails.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_self_tests(True)
+        phases = re.findall(r"ci-guardrails-phase: (\S+) wall_seconds=\d+ exit=(\d+)", result.stderr)
+        self.assertIn(("clippy-production", "0"), phases)
+        self.assertIn(("workspace-tests", "0"), phases)
+        self.assertIn(("repository-guards", "0"), phases)
+        # A real command failure must keep its status and timing in the final
+        # diagnostic tail, and must not be followed by tests.
+        original = (self.bin / "cargo").read_text()
+        (self.bin / "cargo").write_text(original.replace(
+            'if sys.argv[1] == "metadata":',
+            'if sys.argv[1] == "clippy":\n    raise SystemExit(23)\n'
+            'if sys.argv[1] == "metadata":'))
+        self.log.write_text("")
+        result = self.run_guard("ci-guardrails.sh")
+        self.assertEqual(result.returncode, 23, result.stderr)
+        self.assertRegex(result.stderr, r"ci-guardrails-phase: clippy-production wall_seconds=\d+ exit=23")
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertFalse(any(call[:2] == ["nextest", "run"] for call in calls))
 
     def test_parallel_guards_rendezvous_and_all_failures_are_named(self):
         self.prepare_ci()

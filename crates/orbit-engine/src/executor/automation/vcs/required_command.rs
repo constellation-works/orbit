@@ -60,6 +60,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::OnceLock;
+use std::time::Instant;
 
 use orbit_common::OrbitError;
 use orbit_common::text::floor_char_boundary;
@@ -147,6 +148,8 @@ pub(super) struct RequiredCommandRun {
     pub(super) failures: BTreeSet<String>,
     /// The timeout allowance in milliseconds the command ran under [ORB-15350].
     pub(super) timeout_ms: u64,
+    /// Advisory elapsed and admission evidence; never used to judge a pass.
+    pub(super) timing: Value,
 }
 
 /// What a command reported about its own run in [`VALIDATION_SUMMARY_ENV`]:
@@ -406,6 +409,8 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
     selection: Option<&Value>,
     timeout_ms: u64,
 ) -> Result<RequiredCommandRun, OrbitError> {
+    let started_at = chrono::Utc::now();
+    let started = Instant::now();
     let command = command.trim();
     if command.is_empty() {
         return Err(OrbitError::PolicyDenied(
@@ -426,19 +431,32 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
             OrbitError::Execution(format!("create the validation summary directory: {error}"))
         })?;
     let summary_path = summary_dir.path().join("summary.json");
+    let waits_path = summary_dir.path().join("waits");
+    orbit_common::fs::io::create_private_dir(&waits_path).map_err(|error| {
+        OrbitError::Execution(format!("create validation wait directory: {error}"))
+    })?;
     let mut env = environment
         .env
         .iter()
-        .filter(|(key, _)| key != VALIDATION_SUMMARY_ENV && key != VALIDATION_SELECTION_ENV)
+        .filter(|(key, _)| {
+            key != VALIDATION_SUMMARY_ENV
+                && key != VALIDATION_SELECTION_ENV
+                && key != orbit_common::process::build_budget::WAIT_DIRECTORY_ENV
+        })
         .cloned()
         .collect::<Vec<_>>();
     env.push((
         VALIDATION_SUMMARY_ENV.to_string(),
         summary_path.to_string_lossy().into_owned(),
     ));
+    env.push((
+        orbit_common::process::build_budget::WAIT_DIRECTORY_ENV.to_string(),
+        waits_path.to_string_lossy().into_owned(),
+    ));
     if let Some(selection) = selection {
         env.push((VALIDATION_SELECTION_ENV.to_string(), selection.to_string()));
     }
+    let setup_ms = started.elapsed().as_millis();
     let supervised = run_process_supervised(
         &ExecRequest {
             program: "/bin/sh".to_string(),
@@ -453,6 +471,34 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
     )?;
     let infrastructure_failure = supervised.stop_cause.map(|cause| cause.to_string());
     let outcome = supervised.result;
+    // Reuse the wrapper's bounded monotonic snapshots. This grants no timeout
+    // credit and introduces no build-tool default or output binding.
+    let admission = orbit_common::process::build_budget::read_waits(&waits_path, 0);
+    let phase_timings = std::fs::read(&summary_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .filter(|value| value["schema_version"] == 1)
+        .map(|value| {
+            json!({
+                "compile_ms": value["compile_ms"],
+                "test_ms": value["test_ms"],
+                "package_timings": value["package_timings"],
+            })
+        });
+    let timing = json!({
+        "elapsed_ms": started.elapsed().as_millis(),
+        "network_retry_backoff_ms": 0,
+        "attempts": [{
+            "started_at": started_at,
+            "finished_at": chrono::Utc::now(),
+            "setup_ms": setup_ms,
+            "process_ms": outcome.duration_ms,
+            "exit_code": outcome.exit_code,
+            "timed_out": outcome.timed_out,
+            "admission_waits": admission,
+            "phase_timings": phase_timings,
+        }],
+    });
     let summary = ValidationSummary::read(&summary_path);
     // Judge the complete streams before `capture` bounds the log. A skip or
     // deferral in the middle of a large output must still refuse a host pass
@@ -516,6 +562,7 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
         summary,
         failures,
         timeout_ms,
+        timing,
     })
 }
 

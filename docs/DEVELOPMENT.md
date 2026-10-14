@@ -145,6 +145,30 @@ Roll a list change out from the operator's shell, never from an agent: deploy th
 
 ### Validation failure diagnostics
 
+Owner validation logs record advisory `timing` separately from the pass/fail
+evidence. Each attempt retains UTC start/end, environment/setup and supervised
+process milliseconds, its exit/timeout result, and the build wrapper's bounded
+monotonic admission snapshots. `queued_wall_ms` is the union of wait intervals;
+summed waits can overlap. No timeout credit is granted by this telemetry.
+Network reruns retain every attempt and measured backoff rather than replacing
+their cost with the last attempt. Gate-reported compile/test/package durations
+are retained in `phase_timings`: compilation-unit and testcase sums can overlap
+and must not be presented as wall time. Missing measurements remain null.
+Baseline logs retain original execution timing even when reused from cache;
+`cached: true` means that execution cost was not incurred again.
+Candidate logs also record `baseline_comparison_ms` and `candidate_rerun_ms` for
+the current invocation (null when absent). The comparison includes cache-lock
+waiting, checkout preparation and the baseline command; the cached command's
+historical elapsed time must not be added to it.
+
+Canonical owner log paths still name the latest validation result. Immutable
+copies under `validation/<run>/attempts/<sha256>.json` preserve earlier candidate,
+baseline and failing-test replay evidence across recovery. These diagnostic
+copies do not replace the canonical artifacts used to admit delivery. Use
+durable activity start/finish events to separate provider recovery and each
+validation invocation from an end-to-end step span; subtracting reported test
+time alone cannot establish engine overhead.
+
 Required-command failure messages are limited to 16 KiB and name the command,
 exit code, failing tests, base verdict and candidate/base log artifact paths.
 Captured output stays in the task's `validation/<run>/<index>.json` and
@@ -182,6 +206,21 @@ When a comparable base passes but the candidate names at most three failed tests
 ### Hosted CI
 
 Hosted CI runs the full `make ci` on open PRs. Each PR-triggered workflow starts with a checkout-free `Live PR state` job (`pull-requests: read` only); if the PR merged or closed while queued, the build and analysis jobs are skipped under unchanged check names, which GitHub treats as passing. An API error fails the gate rather than admitting an unknown state; a PR that closes after the gate read `open` can still finish. Push, scheduled and manual runs skip the gate, so agent-main/main CI and CodeQL still cover merged changes. `make ci-fast` selects `scripts/test-pr-state-workflows.py` when self-test inputs change; full `make ci` always runs it. The script replays each gate against recorded API responses.
+
+The ephemeral Linux runner installs sandbox packages with needrestart's
+per-invocation `NEEDRESTART_MODE=l` (list-only) setting through `sudo env`.
+This avoids restarting unrelated image services while retaining signed apt
+installation, the new Bubblewrap binary's actual namespace probe, and the
+guarded packaged AppArmor profile checks. See the
+[Ubuntu needrestart manual](https://manpages.ubuntu.com/manpages/noble/man1/needrestart.1.html)
+for the environment override; this does not change a persistent host setting.
+
+`ci-guardrails.sh` repeats its phase breakdown in the final log tail, including
+on failure: format, workflow test listing/build, both Clippy passes, workspace
+tests, doctests, documentation, supply-chain checks and repository guards.
+These are wall seconds at Bash's one-second resolution with the original
+command exit status. They let bounded hosted excerpts retain build/check costs
+separately from nextest testcase sums and the full GitHub job elapsed time.
 
 ## Filesystem writes
 
