@@ -2015,6 +2015,39 @@ fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_pass
             let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/1.json"));
             assert_eq!(log["exit_code"], 0, "the retry replaces the failing log");
             assert_eq!(log["tested_head"], repaired.as_str());
+            let attempt = &log["timing"]["attempts"][0];
+            assert!(
+                attempt["process_ms"].is_u64(),
+                "command elapsed evidence survives capture"
+            );
+            assert_eq!(attempt["admission_waits"]["deadline_extension_ms"], 0);
+            assert!(
+                attempt["phase_timings"].is_null(),
+                "unmeasured phases are not fabricated"
+            );
+
+            let measured = r#"printf '%s' '{"schema_version":1,"selection":{"packages":["fixture"]},"tests_run":1,"compile_ms":11,"test_ms":22,"package_timings":[{"package":"fixture","compile_ms":11,"test_ms":22}]}' > "$ORBIT_VALIDATION_SUMMARY""#;
+            host.require_commands(&[measured]);
+            action(&host, "candidate_validate", &fx.validate_input()).unwrap();
+            let measured_log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+            assert_eq!(
+                measured_log["timing"]["attempts"][0]["phase_timings"]["compile_ms"], 11,
+                "gate-reported compile units must survive the required-command boundary"
+            );
+            assert_eq!(
+                measured_log["timing"]["attempts"][0]["phase_timings"]["test_ms"],
+                22
+            );
+            let original_bytes = serde_json::to_vec(&failed).unwrap();
+            let archive = format!(
+                "validation/{RUN_ID}/attempts/{}.json",
+                orbit_common::security::release::sha256_hex(&original_bytes)
+            );
+            assert_eq!(
+                host.validation_log(TASK_ID, &archive),
+                failed,
+                "recovery must retain the original failure after the canonical log passes"
+            );
         },
     );
 }

@@ -55,6 +55,8 @@ pub(in super::super) fn run_validation_command_until<H: RuntimeHost + ?Sized>(
     selection: Option<&Value>,
     deadline: Option<Instant>,
 ) -> Result<RequiredCommandRun, OrbitError> {
+    let started = Instant::now();
+    let mut backoff_ms = 0_u64;
     let mut run = run_required_command(
         host,
         workspace_path,
@@ -82,8 +84,15 @@ pub(in super::super) fn run_validation_command_until<H: RuntimeHost + ?Sized>(
             retry = run.network_retries + 1,
             "required validation was network-inconclusive; retrying"
         );
+        let wait_started = Instant::now();
         super::super::remote_probe::fixed_wait(backoff);
+        backoff_ms = backoff_ms
+            .saturating_add(u64::try_from(wait_started.elapsed().as_millis()).unwrap_or(u64::MAX));
         let retries = run.network_retries + 1;
+        let mut attempts = run.timing["attempts"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
         run = run_required_command(
             host,
             workspace_path,
@@ -91,6 +100,10 @@ pub(in super::super) fn run_validation_command_until<H: RuntimeHost + ?Sized>(
             selection,
             attempt_timeout_ms(deadline),
         )?;
+        if let Some(new) = run.timing["attempts"].as_array() {
+            attempts.extend(new.iter().cloned());
+        }
+        run.timing["attempts"] = serde_json::json!(attempts);
         run.network_retries = retries;
     }
     if !run.passed
@@ -100,6 +113,8 @@ pub(in super::super) fn run_validation_command_until<H: RuntimeHost + ?Sized>(
     {
         run.network_evidence = network_inconclusive(&run.output);
     }
+    run.timing["elapsed_ms"] = serde_json::json!(started.elapsed().as_millis());
+    run.timing["network_retry_backoff_ms"] = serde_json::json!(backoff_ms);
     Ok(run)
 }
 

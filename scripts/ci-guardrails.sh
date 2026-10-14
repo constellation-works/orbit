@@ -26,35 +26,62 @@ fi
 # runs rather than die in a traceback partway through.
 "$repo_root/scripts/require-python.sh"
 
+# Retain a compact phase breakdown at the end of both passing and failing
+# logs. Individual Cargo output can be omitted from bounded delivery excerpts.
+# SECONDS is Bash's portable wall clock (one-second resolution), not a sum of
+# overlapping compilation units or testcases.
+phase_records=()
+mkdir -p "$repo_root/.orbit/tmp"
+guard_logs="$(mktemp -d "$repo_root/.orbit/tmp/ci-guardrails.XXXXXX")"
+report_phases() {
+  local status=$? record
+  if ((${#phase_records[@]})); then
+    for record in "${phase_records[@]}"; do
+      echo "ci-guardrails-phase: $record" >&2
+    done
+  fi
+  python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$guard_logs"
+  exit "$status"
+}
+trap report_phases EXIT
+
+run_phase() {
+  local name="$1" started=$SECONDS status=0
+  shift
+  "$@" || status=$?
+  phase_records+=("$name wall_seconds=$((SECONDS - started)) exit=$status")
+  return "$status"
+}
+
 # --fast runs formatting and script guardrails, never the Rust test suite.
 # `make ci-test-affected` supplies the separate pre-handoff test gate.
-cargo fmt --all -- --check
+run_phase fmt cargo fmt --all -- --check
 if [[ "$fast" == false ]]; then
   # Enumerating workflow tests compiles their targets; keep it out of ci-fast.
   # --workspace-build lists them from the same `--workspace --lib --bins
   # --tests` artifacts the nextest pass below runs, instead of a per-crate
   # `cargo test -p` build that resolves features differently and recompiles
   # the workspace chain a second time. [DANI-10428]
-  "$repo_root/scripts/check-ci-macos.sh" --workspace-build
+  run_phase workflow-test-list-build "$repo_root/scripts/check-ci-macos.sh" --workspace-build
   # Production must reject unbounded channels. Existing test-only channels
   # remain exempt in the all-targets pass.
-  cargo clippy --workspace --lib --bins -- -D warnings -D clippy::disallowed_methods
-  cargo clippy --workspace --all-targets -- -D warnings -A clippy::disallowed_methods
+  run_phase clippy-production cargo clippy --workspace --lib --bins -- -D warnings -D clippy::disallowed_methods
+  run_phase clippy-all-targets cargo clippy --workspace --all-targets -- -D warnings -A clippy::disallowed_methods
   if cargo nextest --version >/dev/null 2>&1; then
-    cargo nextest run --no-fail-fast \
+    run_phase workspace-tests cargo nextest run --no-fail-fast \
       --success-output immediate \
       --workspace --lib --bins --tests
   else
     echo "cargo-nextest not found; falling back to cargo test" >&2
-    cargo test --no-fail-fast --workspace --lib --bins --tests
+    run_phase workspace-tests cargo test --no-fail-fast --workspace --lib --bins --tests
   fi
-  cargo test --no-fail-fast --workspace --doc
-  RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace
+  run_phase doctests cargo test --no-fail-fast --workspace --doc
+  RUSTDOCFLAGS="-D warnings" run_phase documentation cargo doc --no-deps --workspace
   # Supply-chain gate: dependency advisories + license allow-list (deny.toml).
   # [ORB-00416] [ORB-11983] Soft-presence like nextest above — CI installs a pinned version;
   # local runs without the tool warn instead of hard-failing.
   if command -v cargo-deny >/dev/null 2>&1; then
-    "$repo_root/scripts/cargo-deny.sh" check
+    run_phase supply-chain "$repo_root/scripts/cargo-deny.sh" check
   else
     echo "cargo-deny not found; skipping supply-chain gate (install: cargo install cargo-deny --locked)" >&2
   fi
@@ -62,9 +89,7 @@ fi
 
 # Keep all runtime output within the checkout, including on macOS. Separate
 # streams prevent interleaved diagnostics while guards execute concurrently.
-mkdir -p "$repo_root/.orbit/tmp"
-guard_logs="$(mktemp -d "$repo_root/.orbit/tmp/ci-guardrails.XXXXXX")"
-trap 'python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$guard_logs"' EXIT
+guards_started=$SECONDS
 export GIT_OPTIONAL_LOCKS=0
 
 run_self_tests=true
@@ -223,4 +248,5 @@ run_guard "$repo_root/scripts/test-compiler-cache.sh"
 run_guard "$repo_root/scripts/test-compiler-cache-namespaces.sh"
 run_guard "$repo_root/scripts/test-cross-revision-check.sh"
 finish_guards
+phase_records+=("repository-guards wall_seconds=$((SECONDS - guards_started)) exit=$failed")
 exit "$failed"
