@@ -774,12 +774,17 @@ fn a_candidate_failure_still_blocks_the_task() {
 
 /// Cancelling one launched claimed leaf, as `orbit run cancel <leaf>` and the
 /// dashboard's cancel do, gives its claim back with the operator's reason
-/// rather than failing the task, and excludes its crew for the drain window.
+/// and candidate. Only that task is suppressed for the drain window; the
+/// crew stays usable for unrelated work and mandatory before-landing review.
 fn cancelling_a_launched_claimed_leaf_returns_its_task_to_backlog_with_the_reason() {
-    let pair = Pair::with_crews(&[Some("sol")]);
+    let pair = Pair::with_owner_config(
+        "[review]\nbefore_landing = true\n\n[operation]\nreview_crew = \"sol\"\n",
+        &[Some("sol"), Some("sol")],
+    );
     let drain = pair.run_drain();
     let (leaf, worker) = pair.running_leaf_with_worker(&drain, 1);
     let task = pair.claimed_task(&leaf);
+    leaf_completed(&pair, &leaf, prepared());
 
     let cancel = pair
         .follower
@@ -804,16 +809,50 @@ fn cancelling_a_launched_claimed_leaf_returns_its_task_to_backlog_with_the_reaso
     );
     let release = &settlement_of(&pair, &leaf)["Release"];
     assert_eq!(release["failure"]["class"], "operator_cancel", "{release}");
+    assert_eq!(release["failure"]["candidate"]["branch"], BRANCH);
+    assert_eq!(release["failure"]["candidate"]["head_sha"], HEAD);
     assert_eq!(
         pair.owner_claim_for_leaf(&leaf)["claim"]["phase"],
         "revoked"
     );
-    let exclusion = sol_exclusion(&pair, &drain).expect("a cancel excludes its crew");
-    assert_eq!(exclusion.source, CrewExclusionSource::LeafReleased);
+    assert_eq!(sol_exclusion(&pair, &drain), None);
+    assert_eq!(window(&pair, &drain).host_suppressed, None);
+
+    let next = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&next), pair.tasks[1]);
+    let ship = pair.admission(&next).request.ship;
+    assert!(ship.before_landing, "the owner's mandatory review survives");
+    assert_eq!(ship.review.unwrap().crew.as_deref(), Some("sol"));
+
+    // Replay a request built before the cancel, bypassing the follower's
+    // window projection: the owner itself must suppress the original task.
+    let mut request = pair.wire.calls("orbit.task.pull")[0].clone();
+    request["request_id"] = json!("built-before-the-operator-cancel");
+    let same = pair
+        .wire
+        .call("", "orbit.task.pull", request.clone())
+        .unwrap();
+    assert!(same["receipt"]["claim"].is_null(), "{same:#}");
     assert!(
-        exclusion.reason.contains("operator_cancel"),
-        "{exclusion:?}"
+        same["receipt"]["crew_unavailable"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|held| held["task_id"] == task.as_str()
+                && held["reason"].as_str().unwrap().contains("operator_cancel")),
+        "the original task stays withheld from this window: {same:#}"
     );
+    assert_eq!(pair.owner_claims().len(), 2, "no immediate repull");
+
+    // A later window can resume the candidate, with the release still in
+    // owner history; the budget scenario below verifies the cancel counts.
+    request["request_id"] = json!("after-the-operator-cancel-window");
+    request["run_context"]["run_id"] = json!("jrun-after-the-operator-cancel");
+    let later = pair.wire.call("", "orbit.task.pull", request).unwrap();
+    assert_eq!(later["receipt"]["claim"]["task_id"], task.as_str());
+    let resumed = &later["receipt"]["task"]["resume_candidate"];
+    assert_eq!(resumed["branch"], BRANCH, "{later:#}");
+    assert_eq!(resumed["head_sha"], HEAD, "{later:#}");
 }
 
 /// An operator who cancels a launched claimed leaf with `--block` asks for the
@@ -879,7 +918,7 @@ fn a_third_budgeted_release_within_a_day_blocks_the_task_with_every_reason() {
     assert_eq!(pair.owner_status(&task), "backlog");
 
     for (n, reason) in reasons.iter().enumerate() {
-        // A cancel excludes its crew only for the drain that admitted it;
+        // A cancel suppresses its task only for the drain that admitted it;
         // later drains can retry the task while the task-wide budget persists.
         let drain = pair.run_drain();
         let leaf = pair.running_leaf(&drain, 1);
