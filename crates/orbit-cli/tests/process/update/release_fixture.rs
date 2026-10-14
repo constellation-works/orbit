@@ -65,6 +65,30 @@ R7dTEa7m1rPGwS7jBMC+avb7EOPmVyZuIRqHwzDITTeCpT+R1YWu0DyFJdZyvPvB
 6QIDAQAB
 -----END PUBLIC KEY-----";
 
+/// Materialize the throwaway signing pair in one isolated installation. These
+/// cases exercise release verification, not key generation; retain real RSA
+/// signatures without paying for fresh random primes for each contract row.
+pub(super) fn write_signing_keypair(directory: &Path) -> (PathBuf, PathBuf) {
+    let private = directory.join("release-test.pem");
+    let public = directory.join("release-test.pub");
+    std::fs::write(&private, TEST_PRIVATE_KEY_PEM).expect("test private key");
+    std::fs::write(&public, TEST_PUBLIC_KEY_PEM).expect("test public key");
+    (private, public)
+}
+
+/// Make each contract row observable in libtest and isolated-child output.
+/// A thread-scoped subscriber avoids changing other fixtures' tracing state.
+pub(super) fn trace_contract_rows() -> tracing::subscriber::DefaultGuard {
+    tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .without_time()
+            .with_ansi(false)
+            .with_writer(std::io::stderr)
+            .finish(),
+    )
+}
+
 /// Test trust set carrying the throwaway key above.
 pub(super) fn test_trusted_keys() -> &'static [TrustedReleaseKey] {
     &[TrustedReleaseKey {

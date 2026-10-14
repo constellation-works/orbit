@@ -190,6 +190,7 @@ fn update_flow_contracts_0() {
     if crate::isolated_test::run_in_child("update::flow::update_flow_contracts_0") {
         return;
     }
+    let _trace = super::release_fixture::trace_contract_rows();
     for (name, check) in [
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         (
@@ -219,6 +220,7 @@ fn update_flow_contracts_1() {
     if crate::isolated_test::run_in_child("update::flow::update_flow_contracts_1") {
         return;
     }
+    let _trace = super::release_fixture::trace_contract_rows();
     for (name, check) in [
         (
             "an_update_refreshes_an_installed_bundled_bubblewrap_with_the_new_release",
@@ -253,7 +255,7 @@ fn a_hanging_candidate_probe_times_out_without_holding_an_authority() {
     let authority = &environment.admission_roots[0];
     let probing = authority.with_file_name("probe-started");
     let candidate = format!(
-        "#!/bin/sh\nif [ \"$1\" = --version ]; then : > '{}'; exec sleep 600; fi\nexit 0\n",
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo $$ > '{}'; exec sleep 600; fi\nexit 0\n",
         probing.display()
     );
     fixture.publish_script("0.19.0", candidate.as_bytes());
@@ -269,10 +271,42 @@ fn a_hanging_candidate_probe_times_out_without_holding_an_authority() {
     let admission_probe = std::rc::Rc::new(RefCell::new(None));
     let clock_admission_probe = admission_probe.clone();
     let clock_roots = environment.admission_roots.clone();
+    let install_dir = fixture
+        .executable
+        .parent()
+        .expect("install directory")
+        .to_path_buf();
+    let clock_ticks = Cell::new(0u32);
     let origin = Instant::now();
     let error = with_supervision_clock(
         move || {
-            if probing.exists() {
+            let probe_started = || {
+                std::fs::read_to_string(&probing)
+                    .ok()
+                    .and_then(|pid| pid.trim().parse::<libc::pid_t>().ok())
+                    .is_some()
+            };
+            // Force the child to start before the staged probe's initial clock
+            // sample. The installed-version probe runs before staging, so it
+            // must retain the unadvanced clock. This ordering exposed the
+            // remaining hang after the admission callback repair.
+            if !clock_observed.get()
+                && std::fs::read_dir(&install_dir)
+                    .expect("install directory")
+                    .any(|entry| {
+                        entry
+                            .expect("install entry")
+                            .file_name()
+                            .to_string_lossy()
+                            .starts_with(".orbit-update-staged")
+                    })
+            {
+                orbit_common::test_env::wait_until(
+                    "the staged version probe to start",
+                    probe_started,
+                );
+            }
+            if probe_started() {
                 if !clock_observed.replace(true) {
                     // Admission can wait for a live participant. Keep that
                     // check off the supervisor's clock callback so a blocked
@@ -297,7 +331,11 @@ fn a_hanging_candidate_probe_times_out_without_holding_an_authority() {
                             .unwrap_or(false),
                     );
                 }
-                origin + Duration::from_secs(3_601)
+                // Keep advancing after readiness: if readiness precedes the
+                // first sample, a single fixed jump becomes the deadline's
+                // origin and never expires. Each later read must advance too.
+                clock_ticks.set(clock_ticks.get() + 1);
+                origin + Duration::from_secs(3_601) * clock_ticks.get()
             } else {
                 origin
             }
@@ -325,6 +363,22 @@ fn a_hanging_candidate_probe_times_out_without_holding_an_authority() {
     assert!(message.contains("did not finish within"), "{message}");
     assert!(message.contains("--version"), "{message}");
     assert!(message.contains("nothing was replaced"), "{message}");
+    let pid: libc::pid_t = std::fs::read_to_string(authority.with_file_name("probe-started"))
+        .expect("probe pid")
+        .trim()
+        .parse()
+        .expect("numeric probe pid");
+    // SAFETY: signal zero only observes the fixture's recorded child. The
+    // updater must have reaped it before returning the timeout error.
+    assert_eq!(
+        unsafe { libc::kill(pid, 0) },
+        -1,
+        "timed-out candidate is still alive"
+    );
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
     assert_eq!(std::fs::read(&fixture.executable).unwrap(), before);
     assert_eq!(std::fs::read(&generation).unwrap(), before_generation);
     assert!(
