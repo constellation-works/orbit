@@ -156,7 +156,7 @@ pub(super) fn bridge_through(
             ))
         });
     };
-    let request = match bridged_input(binding, name, input, cwd, workspace_root) {
+    let request = match bridged_input(binding, name, input, cwd, workspace_root, entry_point) {
         Ok(request) => request,
         Err(error) => return Some(ClaimedOwnerRoute::Refused(error)),
     };
@@ -245,6 +245,7 @@ fn bridged_input(
     input: &Value,
     cwd: &Path,
     workspace_root: &Path,
+    entry_point: ToolEntryPoint,
 ) -> Result<Value, OrbitError> {
     let mut input = input.clone();
     if let Some(object) = input.as_object_mut() {
@@ -269,8 +270,18 @@ fn bridged_input(
     if name != PUT {
         return Ok(input);
     }
-    let prepared =
-        orbit_tools::prepare_remote_task_artifact_put(input, Some(cwd), Some(workspace_root))?;
+    // The nested process's trusted entry point selects source-string semantics;
+    // the broker payload cannot choose CLI versus local MCP preparation.
+    let transport = match entry_point {
+        ToolEntryPoint::Cli => None,
+        ToolEntryPoint::Mcp => Some(orbit_types::tool::McpTransport::Local),
+    };
+    let prepared = orbit_tools::prepare_remote_task_artifact_put(
+        input,
+        Some(cwd),
+        Some(workspace_root),
+        transport,
+    )?;
     let artifact = prepared["artifacts"]
         .get(0)
         .cloned()

@@ -73,14 +73,22 @@ pub trait DrainOwnerTransport: Send + Sync {
 ///
 /// `source_path` is resolved against `cwd` and must land inside
 /// `workspace_root` after symlink resolution. The hub never sees the path.
+/// `transport` comes from the trusted caller context, never the payload:
+/// MCP trims the source string; CLI and deterministic attachments (`None`)
+/// select the exact filesystem name.
 pub fn prepare_remote_task_artifact_put(
     input: Value,
     cwd: Option<&std::path::Path>,
     workspace_root: Option<&std::path::Path>,
+    transport: Option<orbit_types::tool::McpTransport>,
 ) -> Result<Value, OrbitError> {
     let ctx = ToolContext {
         cwd: cwd.map(|path| path.to_string_lossy().into_owned()),
         workspace_root: workspace_root.map(PathBuf::from),
+        session_context: orbit_types::tool::ToolSessionContext {
+            transport,
+            ..Default::default()
+        },
         ..ToolContext::default()
     };
     crate::builtin::orbit::task::artifact_put::prepare_remote_payload(input, &ctx)

@@ -58,6 +58,7 @@ impl OrbitRuntime {
                     input,
                     tool_context.cwd.as_deref().map(Path::new),
                     tool_context.workspace_root.as_deref(),
+                    tool_context.session_context.transport,
                 )?
             } else {
                 input

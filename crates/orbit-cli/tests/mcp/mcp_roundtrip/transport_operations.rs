@@ -12,7 +12,21 @@ fn stdio_artifact_put_reopens_intact_bytes_and_refuses_workspace_escape() {
     std::fs::write(&source, "Exact evidence\nπ\n").unwrap();
     // MCP keeps its shipped source-string trimming while the local CLI
     // preserves exact filesystem names.
-    client.call_tool_ok("orbit_task_artifact_put",json!({"workspace":selector,"id":id,"source_path":format!(" {} ", source.display()),"path":"evidence/report.txt","model":"codex"}));
+    for sibling in [false, true] {
+        if sibling {
+            std::fs::write(
+                source.with_file_name("source.txt "),
+                "wrong sibling bytes\n",
+            )
+            .unwrap();
+        }
+        client.call_tool_ok("orbit_task_artifact_put",json!({"workspace":selector,"id":id,"source_path":format!(" {} ", source.display()),"path":" evidence/report.txt ","model":"codex"}));
+        let read = client.call_tool_ok(
+            "orbit_task_artifact_get",
+            json!({"workspace":selector,"id":id,"path":"evidence/report.txt"}),
+        );
+        assert_eq!(read["content"], "Exact evidence\nπ\n");
+    }
     drop(client);
     let mut client = workspace.serve();
     let read = client.call_tool_ok(

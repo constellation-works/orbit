@@ -192,11 +192,14 @@ To avoid spending the payload twice, the JSON text mirror is replaced with a one
 
 `source_path` on `orbit.task.artifact.put` is resolved **on the machine that makes the call**, relative to that caller's cwd, then confined to that machine's workspace checkout after symlink resolution. Absolute paths and in-workspace symlinks that escape the checkout are rejected as `invalid_input`. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR` in a managed worker; gitignored, run-scoped in a job worktree). Sources under `/tmp` are outside the workspace and are refused. The path is consumed locally and never crosses the coordination boundary: the spoke broker reads the bytes first and sends a path-free payload, which the hub accepts only over the authenticated `ssh-mcp` connector.
 
-Local CLI attachment preserves the supplied source filename, including leading
+CLI attachment preserves the supplied source filename, including leading
 or trailing whitespace, before filesystem resolution and bounded reads. MCP
-attachment retains its existing trimming of the source string. Artifact names
+attachment retains its existing trimming of the source string. Remote
+preparation carries the trusted caller transport (or the nested broker
+bridge's entry point), so owner location does not change source selection.
+Deterministic claim attachments select exact filenames. Artifact names
 are normalized independently on both surfaces; whitespace in a source filename
-does not select a sibling file with a trimmed name on the local CLI.
+does not select a sibling file with a trimmed name on the CLI.
 
 Attachment accepts only task `id`, `source_path`, optional artifact `path`, `model` attribution, and the transport `workspace` / `_meta` wrappers. The local path and artifact path have compatibility aliases. The authenticated spoke payload replaces the source and path fields with `artifacts`; it accepts the same identity and transport fields. Other task update fields, including `title`, `status`, and `plan`, are rejected before the task host is called. Task metadata changes belong on `orbit.task.update`.
 

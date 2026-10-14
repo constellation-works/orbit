@@ -96,6 +96,7 @@ pub(in crate::executor::automation::vcs) fn import_implementation_evidence<
             }),
             Some(workspace),
             Some(&scratch),
+            None,
         )?;
         let bytes: Vec<u8> = serde_json::from_value(payload["artifacts"][0]["content"].clone())
             .map_err(|error| refused(format!("invalid prepared artifact: {error}")))?;

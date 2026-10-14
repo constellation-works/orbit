@@ -377,7 +377,12 @@ impl ServerMcpHost {
         {
             let routed_name = if name == "orbit.task.artifact.put" {
                 let cwd = std::env::current_dir()?;
-                input = orbit_cmd::prepare_remote_task_artifact_put(input, Some(&cwd), Some(&cwd))?;
+                input = orbit_cmd::prepare_remote_task_artifact_put(
+                    input,
+                    Some(&cwd),
+                    Some(&cwd),
+                    context.transport,
+                )?;
                 name
             } else {
                 name
