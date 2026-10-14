@@ -5,6 +5,9 @@
 //! canonical pass turns that failure into an ambiguous mapping.
 
 use std::cell::Cell;
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
+use std::io::{Seek, Write as _};
 use std::path::Path;
 
 use orbit_automation::AutomationError;
@@ -64,50 +67,92 @@ fn git(repo: &Path, args: &[&str]) -> String {
 /// Two first-parent chains from one base. Step `i` on each chain uses the
 /// same tree, so the parent-relative `.orbit` patch matches and the commits
 /// themselves differ.
+///
+/// Import real Git objects in one process rather than spawning `add`,
+/// `write-tree`, and `commit-tree` thousands of times for the limit rows.
+/// Marks recover each chain in construction order without a per-commit query.
 fn diverged(orphans: usize, canonical: usize) -> Diverged {
     let root = tempfile::tempdir().expect("tempdir");
     let repo = root.path();
     git(repo, &["init"]);
-    std::fs::create_dir(repo.join(".orbit")).expect("orbit dir");
-    std::fs::write(repo.join(".orbit/n"), "0\n").expect("base file");
-    git(repo, &["add", ".orbit"]);
-    let base_tree = git(repo, &["write-tree"]);
-    let base = git(repo, &["commit-tree", &base_tree, "-m", "base"]);
-
-    let steps = orphans.max(canonical);
-    let mut trees = Vec::with_capacity(steps);
-    for step in 1..=steps {
-        std::fs::write(repo.join(".orbit/n"), format!("{step}\n")).expect("step file");
-        git(repo, &["add", ".orbit"]);
-        trees.push(git(repo, &["write-tree"]));
-    }
-
-    let commit_chain = |count: usize, message: &str| {
-        let mut parent = base.clone();
-        let mut commits = Vec::with_capacity(count);
-        for (step, tree) in trees.iter().take(count).enumerate() {
-            let commit = git(
-                repo,
-                &[
-                    "commit-tree",
-                    tree,
-                    "-p",
-                    &parent,
-                    "-m",
-                    &format!("{message} {step}"),
-                ],
-            );
-            parent = commit.clone();
-            commits.push(commit);
+    let mut stream = String::from(
+        "commit refs/heads/base\nmark :1\n\
+         committer replay <replay@example.com> 0 +0000\n\
+         data 4\nbase\nM 100644 inline .orbit/n\ndata 2\n0\n\n",
+    );
+    let mut next_mark = 2;
+    let mut commit_chain = |count: usize, name: &str| {
+        let mut parent = 1;
+        let mut marks = Vec::with_capacity(count);
+        for step in 0..count {
+            let mark = next_mark;
+            next_mark += 1;
+            let message = format!("{name} {step}");
+            let contents = format!("{}\n", step + 1);
+            write!(
+                stream,
+                "commit refs/heads/{name}\nmark :{mark}\n\
+                 committer replay <replay@example.com> 0 +0000\n\
+                 data {}\n{message}\nfrom :{parent}\n\
+                 M 100644 inline .orbit/n\ndata {}\n{contents}\n",
+                message.len(),
+                contents.len(),
+            )
+            .expect("import commit");
+            parent = mark;
+            marks.push(mark);
         }
-        commits
+        marks
     };
+    let old_marks = commit_chain(orphans, "old");
+    let new_marks = commit_chain(canonical, "new");
+    stream.push_str("done\n");
 
-    let old = commit_chain(orphans, "old");
-    let new = commit_chain(canonical, "new");
+    // File-backed input avoids a pipe-writing child that could outlive a
+    // failed fixture; output() waits for the single importer before returning.
+    let mut input = tempfile::tempfile().expect("import input");
+    input.write_all(stream.as_bytes()).expect("write import");
+    input.rewind().expect("rewind import");
+    let marks_file = tempfile::NamedTempFile::new().expect("marks file");
+    let output = crate::git_test_support::command()
+        .args(["fast-import", "--quiet", "--done"])
+        .arg(format!("--export-marks={}", marks_file.path().display()))
+        .current_dir(repo)
+        .stdin(input)
+        .output()
+        .expect("git fast-import");
+    assert!(
+        output.status.success(),
+        "git fast-import failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let marks: BTreeMap<usize, String> = std::fs::read_to_string(marks_file.path())
+        .expect("exported marks")
+        .lines()
+        .map(|line| {
+            let (mark, commit) = line.split_once(' ').expect("mark and commit");
+            (
+                mark.strip_prefix(':')
+                    .expect("mark prefix")
+                    .parse()
+                    .expect("mark number"),
+                commit.to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        marks.len(),
+        1 + orphans + canonical,
+        "every commit imported"
+    );
+    let base = &marks[&1];
+    let commits = |chain: Vec<usize>| chain.into_iter().map(|mark| marks[&mark].clone()).collect();
+    let old = commits(old_marks);
+    let new: Vec<String> = commits(new_marks);
+
     git(
         repo,
-        &["update-ref", "refs/heads/main", new.last().unwrap_or(&base)],
+        &["update-ref", "refs/heads/main", new.last().unwrap_or(base)],
     );
     git(repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
 
