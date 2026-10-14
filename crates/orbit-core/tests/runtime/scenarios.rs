@@ -18,6 +18,7 @@ pub(super) fn run(module: &str, table: &str, rows: &[Scenario]) {
                 use std::io::Write;
                 writeln!(std::io::stderr(), "scenario: {module}::{name}").expect("row identity");
                 scenario();
+                orbit_common::test_env::record_scenario_pass(name);
             }
             return;
         }
@@ -26,6 +27,7 @@ pub(super) fn run(module: &str, table: &str, rows: &[Scenario]) {
             .find(|(name, _)| *name == selected)
             .expect("the selected row belongs to this table");
         scenario();
+        orbit_common::test_env::record_scenario_pass(&selected);
         return;
     }
 

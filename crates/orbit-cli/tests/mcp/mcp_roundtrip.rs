@@ -5515,6 +5515,7 @@ fn governed_session_admission() {
     ] {
         tracing::info!(case = name, "MCP contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
 
@@ -5536,6 +5537,7 @@ fn forwarded_caller_authorization() {
     ] {
         tracing::info!(case = name, "MCP contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
 
@@ -5557,6 +5559,7 @@ fn agent_invocation_envelopes() {
     ] {
         tracing::info!(case = name, "MCP contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
 
@@ -5578,6 +5581,7 @@ fn session_authority_and_unbound_discovery() {
     ] {
         tracing::info!(case = name, "MCP contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
 
@@ -5601,6 +5605,7 @@ fn global_artifacts_and_workspace_selectors() {
     ] {
         tracing::info!(case = name, "MCP contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
 
@@ -5622,6 +5627,7 @@ fn transport_peer_identity() {
     ] {
         tracing::info!(case = name, "MCP contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
 
@@ -5643,6 +5649,7 @@ fn record_mutation_and_error_protocol() {
     ] {
         tracing::info!(case = name, "MCP contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
 
@@ -5664,6 +5671,7 @@ fn task_projection_search_and_audit() {
     ] {
         tracing::info!(case = name, "MCP contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
 
@@ -5686,6 +5694,7 @@ fn worktree_and_federated_routing() {
     ] {
         tracing::info!(case = name, "MCP contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
 
@@ -5707,6 +5716,7 @@ fn federated_local_destinations() {
     ] {
         tracing::info!(case = name, "MCP contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
 
@@ -5728,6 +5738,7 @@ fn federated_host_configuration() {
     ] {
         tracing::info!(case = name, "MCP contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
 
@@ -5749,6 +5760,7 @@ fn managed_environment_binding() {
     ] {
         tracing::info!(case = name, "MCP contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
 
@@ -5770,6 +5782,7 @@ fn global_task_reads_and_source_inspection() {
     ] {
         tracing::info!(case = name, "MCP contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
 
@@ -5792,6 +5805,7 @@ fn live_runtime_and_app_presentation() {
     ] {
         tracing::info!(case = name, "MCP contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
 
@@ -5814,5 +5828,6 @@ fn observational_read_only_stores() {
     ] {
         tracing::info!(case = name, "MCP contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }

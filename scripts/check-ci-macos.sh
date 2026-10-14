@@ -424,6 +424,17 @@ if evidence_output is not None:
         Path("scripts/test-qa-full-sweep.py"),
         Path(".github/workflows/ci-macos.yml"),
     ]
+    # The workflow wrapper retains completed libtest output, including notices
+    # from successful children. Listing alone cannot emit execution credit.
+    import runpy
+    harness = runpy.run_path(str(repo_root / "scripts/test-qa-full-sweep.py"))
+    execution = [json.loads(path.read_text()) for path in
+                 sorted((repo_root / ".orbit/tmp/macos-native-execution").glob("*.json"))]
+    try:
+        harness["validate_native_execution"](execution, repo_root, checked_out_commit)
+    except (ValueError, KeyError, TypeError) as error:
+        print(f"check-ci-macos: incomplete native execution: {error}", file=sys.stderr)
+        raise SystemExit(1) from error
     report = {
         "schema_version": 1,
         "evidence_type": "orbit-macos-platform",
@@ -436,6 +447,7 @@ if evidence_output is not None:
             "macos-required-workflow-is-current",
             "macos-check-ran-on-matching-revision",
         ],
+        "execution": execution,
         "producer": {
             "system": "github-actions",
             "repository": os.environ["GITHUB_REPOSITORY"],

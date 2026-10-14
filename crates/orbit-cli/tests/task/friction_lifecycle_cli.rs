@@ -903,6 +903,7 @@ fn friction_tool_input_is_checked_against_the_spec() {
     ] {
         tracing::info!(case = name, "CLI contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
 
@@ -928,6 +929,7 @@ fn friction_clear_semantics_and_replica_admission() {
     ] {
         tracing::info!(case = name, "CLI contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
 
@@ -949,5 +951,6 @@ fn friction_ownership_and_redaction() {
     ] {
         tracing::info!(case = name, "CLI contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }

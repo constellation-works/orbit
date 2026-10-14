@@ -7655,13 +7655,7 @@ fn isolated(test: &str, body: impl FnOnce(&Path)) {
         .env("GIT_TERMINAL_PROMPT", "0");
     let output = run_bounded_capped(&mut command, CHILD_DEADLINE, 256 * 1024)
         .unwrap_or_else(|error| panic!("{test} did not finish in its isolated child: {error}"));
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        output.status.success() && stdout.contains("1 passed; 0 failed"),
-        "{test} failed in its isolated child ({}):\n{stdout}\n{}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
-    );
+    test_env::assert_child_test_passed(&qualified, output.status, &output.stdout, &output.stderr);
 }
 
 /// The bounded child runs exactly one libtest thread. Change its environment
@@ -8018,8 +8012,17 @@ fn claimed_publication_and_merge_pins() {
 fn validation_repairs_and_logs() {
     isolated("validation_repairs_and_logs", |_| {
         required_validation_refuses_a_failing_candidate_until_a_committed_repair_passes();
+        test_env::record_scenario_pass(
+            "required_validation_refuses_a_failing_candidate_until_a_committed_repair_passes",
+        );
         required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs();
+        test_env::record_scenario_pass(
+            "required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs",
+        );
         printed_supervisor_notes_remain_candidate_failures_on_both_streams();
+        test_env::record_scenario_pass(
+            "printed_supervisor_notes_remain_candidate_failures_on_both_streams",
+        );
     });
 }
 

@@ -543,5 +543,6 @@ fn store_retention_contracts() {
     ] {
         tracing::info!(case = name, "CLI contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
