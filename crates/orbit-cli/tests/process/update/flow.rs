@@ -245,7 +245,7 @@ fn update_flow_contracts_1() {
 fn a_hanging_candidate_probe_times_out_without_holding_an_authority() {
     use orbit_common::fs::generation::{GenerationGuard, executable_generation};
     use orbit_common::test_env::with_supervision_clock;
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::time::{Duration, Instant};
 
     let fixture = Fixture::new("0.18.0");
@@ -264,15 +264,37 @@ fn a_hanging_candidate_probe_times_out_without_holding_an_authority() {
     let before = std::fs::read(&fixture.executable).expect("installed bytes");
     let observed = std::rc::Rc::new(Cell::new(false));
     let clock_observed = observed.clone();
+    let admission_free_during_probe = std::rc::Rc::new(Cell::new(false));
+    let clock_admission_free_during_probe = admission_free_during_probe.clone();
+    let admission_probe = std::rc::Rc::new(RefCell::new(None));
+    let clock_admission_probe = admission_probe.clone();
     let clock_roots = environment.admission_roots.clone();
     let origin = Instant::now();
     let error = with_supervision_clock(
         move || {
             if probing.exists() {
                 if !clock_observed.replace(true) {
-                    drop(
-                        orbit_cmd::update::acquire_admissions(&clock_roots)
-                            .expect("a live candidate probe must not hold generation admission"),
+                    // Admission can wait for a live participant. Keep that
+                    // check off the supervisor's clock callback so a blocked
+                    // check cannot prevent the probe deadline from advancing.
+                    let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+                    let roots = clock_roots.clone();
+                    let probe = std::thread::spawn(move || {
+                        let available = match orbit_cmd::update::acquire_admissions(&roots) {
+                            Ok(admissions) => {
+                                drop(admissions);
+                                true
+                            }
+                            Err(_) => false,
+                        };
+                        let _ = result_tx.send(available);
+                        available
+                    });
+                    *clock_admission_probe.borrow_mut() = Some(probe);
+                    clock_admission_free_during_probe.set(
+                        result_rx
+                            .recv_timeout(Duration::from_secs(5))
+                            .unwrap_or(false),
                     );
                 }
                 origin + Duration::from_secs(3_601)
@@ -281,6 +303,19 @@ fn a_hanging_candidate_probe_times_out_without_holding_an_authority() {
             }
         },
         || run_update(&environment, &request()).expect_err("candidate probe must time out"),
+    );
+    assert!(
+        admission_free_during_probe.get(),
+        "a live candidate probe must not hold generation admission"
+    );
+    assert!(
+        admission_probe
+            .borrow_mut()
+            .take()
+            .expect("admission probe started")
+            .join()
+            .expect("admission probe thread"),
+        "generation admission must remain available during the candidate probe"
     );
     assert!(
         observed.get(),
