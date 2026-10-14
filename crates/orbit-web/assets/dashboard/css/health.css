@@ -327,14 +327,14 @@ td .rel-rate { font-size: 12px; }
 }
 .incident-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
-/* The panel is the container (`runs-card`): beside the rail it narrows well
-   before the viewport does. The detail panel stacks under the list, then the
-   row puts its title on its own line above the bar, count and last seen. */
-@container runs-card (max-width: 1000px) {
+/* Health › Diagnostics owns the incidents layout. Its width, not the separate
+   Runs panel's width or the viewport, decides when the detail stacks. */
+#diagnostics-panel { container: diagnostics-card / inline-size; }
+@container diagnostics-card (max-width: 1000px) {
   .incident-layout { grid-template-columns: minmax(0, 1fr); }
   .incident-detail-panel { position: static; }
 }
-@container runs-card (max-width: 640px) {
+@container diagnostics-card (max-width: 640px) {
   .incident-head-bar, .incident-classes, .incident-insights { padding-left: 12px; padding-right: 12px; }
   .incident-layout { padding: 12px; gap: 12px; }
   .incident-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
