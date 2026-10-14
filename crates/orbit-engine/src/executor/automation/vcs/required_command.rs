@@ -93,6 +93,16 @@ pub(crate) const VALIDATION_SUMMARY_ENV: &str = "ORBIT_VALIDATION_SUMMARY";
 /// A selection, as a candidate run's summary reported it, that the command
 /// must test instead of choosing its own.
 pub(crate) const VALIDATION_SELECTION_ENV: &str = "ORBIT_VALIDATION_SELECTION";
+/// Where host validation targets live, relative to the primary checkout.
+pub(super) const HOST_VALIDATION_TARGETS_DIR: [&str; 3] =
+    [".orbit", "state", "host-validation-targets"];
+
+/// The directory name of the host validation target for a canonical source
+/// checkout. Worktree GC re-derives it from run records with this same rule.
+pub(super) fn host_validation_target_key(source: &Path) -> String {
+    sha256_hex(source.as_os_str().as_encoded_bytes())
+}
+
 /// Host-owned Cargo output, separate from every sandbox-writable target.
 /// Key by the canonical *source* path: Cargo freshness alone cannot detect
 /// compiler-wrapper rewrites of embedded paths, or a different source checkout.
@@ -106,11 +116,15 @@ pub(super) fn host_validation_target(checkout: &Path) -> Result<PathBuf, OrbitEr
         .ok_or_else(|| {
             OrbitError::Execution("host validation needs a primary Git checkout".into())
         })?;
-    let key = sha256_hex(source.as_os_str().as_encoded_bytes());
+    let key = host_validation_target_key(&source);
     let mut target = primary.to_path_buf();
     // These are host state, never global compiler/download caches. Refuse
     // redirects rather than creating output through a sandbox-writable symlink.
-    for component in [".orbit", "state", "host-validation-targets", &key] {
+    for component in HOST_VALIDATION_TARGETS_DIR
+        .iter()
+        .copied()
+        .chain([key.as_str()])
+    {
         target.push(component);
         match std::fs::symlink_metadata(&target) {
             Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}

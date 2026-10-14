@@ -205,6 +205,201 @@ fn reclaim_fails_closed_for_symlinks_tracked_content_workers_and_shared_active_p
     );
 }
 
+/// Host validation output lives outside the checkout, keyed by its path, so
+/// removing the checkout used to strand it. It goes only for attributed,
+/// terminal and inactive runs; everything else is retained and reported.
+fn host_validation_output_is_reclaimed_only_for_terminal_inactive_attributed_checkouts() {
+    isolated_in(
+        module_path!(),
+        "host_validation_output_is_reclaimed_only_for_terminal_inactive_attributed_checkouts",
+        || {
+            // Only Linux required validation builds into a host-owned target.
+            if !cfg!(target_os = "linux") {
+                return;
+            }
+            let fixture = Fixture::new();
+            let host = LifecycleHost::new(&fixture.repo);
+            let build = |checkout: &Path| -> PathBuf {
+                let run = orbit_engine::review_gate::run_required_validation(
+                    &host,
+                    checkout,
+                    "mkdir -p \"$CARGO_TARGET_DIR/debug\" && printf 'host build' > \"$CARGO_TARGET_DIR/debug/output\"",
+                )
+                .unwrap();
+                assert!(run.passed, "{}", run.output);
+                PathBuf::from(run.environment["cargo_target_dir"].as_str().unwrap())
+            };
+            let outside = fixture.root.path().join("outside");
+            fs::create_dir_all(&outside).unwrap();
+            fs::write(outside.join("output"), "outside").unwrap();
+            let unrelated = fixture.repo.join(".orbit/state/compiler-cache/output");
+            fs::create_dir_all(unrelated.parent().unwrap()).unwrap();
+            fs::write(&unrelated, "cache").unwrap();
+            // (case, report action of a dry run, of the scheduled sweep)
+            let cases = [
+                ("orphan", "would_reclaim", "reclaimed"),
+                ("kept", "skipped:source_retained", "reclaimed"),
+                (
+                    "active",
+                    "skipped:run_not_terminal",
+                    "skipped:run_not_terminal",
+                ),
+                ("alive", "skipped:worker_alive", "skipped:worker_alive"),
+                (
+                    "shared-active",
+                    "skipped:run_not_terminal",
+                    "skipped:run_not_terminal",
+                ),
+                (
+                    "symlink",
+                    "skipped:not_a_real_directory",
+                    "skipped:not_a_real_directory",
+                ),
+            ];
+            let mut targets = BTreeMap::new();
+            let mut kept = None;
+            for (case, _, _) in cases {
+                let task = format!("T-HOST-{case}");
+                let run_id = format!("jrun-host-{case}");
+                host.add_task(&task, TaskStatus::Backlog);
+                let input = setup_input(&[&task], &run_id);
+                let checkout =
+                    Checkout::from_setup(&action(&host, "worktree_setup", &input).unwrap());
+                host.set_status(&task, TaskStatus::Blocked);
+                let target = build(&checkout.path);
+                assert!(target.join("debug/output").is_file());
+                if case != "kept" {
+                    git(
+                        &fixture.repo,
+                        &["worktree", "remove", "--force", path_str(&checkout.path)],
+                    );
+                }
+                let mut run = job_run(&run_id, JobRunState::Failed, input);
+                match case {
+                    "kept" => {
+                        let head = commit_file(&checkout.path, "candidate.txt", "candidate\n");
+                        kept = Some((checkout, head));
+                    }
+                    "active" => run.state = JobRunState::Running,
+                    "alive" => run.pid = Some(std::process::id()),
+                    "shared-active" => {
+                        let mut live = run.clone();
+                        live.run_id = format!("{run_id}-live");
+                        live.state = JobRunState::Running;
+                        host.add_run(live);
+                    }
+                    "symlink" => {
+                        fs::remove_dir_all(&target).unwrap();
+                        symlink(&outside, &target).unwrap();
+                    }
+                    _ => {}
+                }
+                host.add_run(run);
+                targets.insert(case, target);
+            }
+            // A detached scratch checkout no run record names.
+            let scratch = fixture
+                .repo
+                .join(".orbit/state/worktrees/orbit-baseline-fixture");
+            git(
+                &fixture.repo,
+                &["worktree", "add", "--detach", path_str(&scratch), BASE],
+            );
+            let unattributed = build(&scratch);
+            git(
+                &fixture.repo,
+                &["worktree", "remove", "--force", path_str(&scratch)],
+            );
+            let host_reports = |result: &Value| -> BTreeMap<PathBuf, Value> {
+                result["reports"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|report| {
+                        report["path"]
+                            .as_str()
+                            .is_some_and(|path| path.contains("host-validation-targets"))
+                    })
+                    .map(|report| {
+                        (
+                            PathBuf::from(report["path"].as_str().unwrap()),
+                            report.clone(),
+                        )
+                    })
+                    .collect()
+            };
+
+            let dry_run = orbit_engine::collect_worktrees(
+                &fixture.repo,
+                &host.list_job_runs_for_gc().unwrap(),
+                &host,
+                &orbit_engine::WorktreeGcOptions {
+                    estimate_bytes: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let dry_run = host_reports(&serde_json::to_value(&dry_run).unwrap());
+            assert_eq!(dry_run.len(), cases.len() + 1, "{dry_run:#?}");
+            let estimated = dry_run[&targets["orphan"]]["bytes_reclaimed"]
+                .as_u64()
+                .unwrap();
+            assert!(estimated >= 10, "{dry_run:#?}");
+            for (case, expected, _) in cases {
+                let report = &dry_run[&targets[case]];
+                assert_eq!(report["action"], expected, "{case}: {report:#}");
+                assert!(targets[case].exists(), "{case}: a dry run deletes nothing");
+            }
+            assert_eq!(
+                dry_run[&unattributed]["action"], "skipped:unattributed_host_target",
+                "{dry_run:#?}"
+            );
+
+            let swept = action(&host, "worktree_gc", &json!({})).unwrap();
+            let reports = host_reports(&swept);
+            for (case, _, expected) in cases {
+                let report = &reports[&targets[case]];
+                assert_eq!(report["action"], expected, "{case}: {report:#}");
+                assert_eq!(
+                    targets[case].exists(),
+                    expected != "reclaimed",
+                    "{case}: {report:#}"
+                );
+            }
+            assert_eq!(reports[&targets["orphan"]]["bytes_reclaimed"], estimated);
+            assert!(unattributed.join("debug/output").is_file());
+            assert!(
+                fs::symlink_metadata(&targets["symlink"])
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            assert_eq!(
+                fs::read_to_string(outside.join("output")).unwrap(),
+                "outside"
+            );
+            assert_eq!(fs::read_to_string(&unrelated).unwrap(), "cache");
+            // Reclaiming the output keeps the kept run's checkout, branch and candidate.
+            let (checkout, head) = kept.unwrap();
+            assert_eq!(git(&checkout.path, &["rev-parse", "HEAD"]), head);
+            assert_eq!(git(&fixture.repo, &["rev-parse", &checkout.branch]), head);
+            assert_eq!(
+                fs::read_to_string(checkout.path.join("candidate.txt")).unwrap(),
+                "candidate\n"
+            );
+            assert!(registered_worktrees(&fixture.repo).contains(&checkout.path));
+            // No duplicate accounting on the next sweep.
+            let again = action(&host, "worktree_gc", &json!({})).unwrap();
+            assert!(
+                host_reports(&again)
+                    .values()
+                    .all(|report| report["bytes_reclaimed"] == 0),
+                "{again:#}"
+            );
+        },
+    );
+}
+
 fn a_reclaimed_candidate_resumes_rebuilds_with_a_fake_agent_and_completes() {
     isolated_in(
         module_path!(),
@@ -280,6 +475,10 @@ fn reclaim_contracts_1() {
             (
                 "reclaim_fails_closed_for_symlinks_tracked_content_workers_and_shared_active_paths",
                 reclaim_fails_closed_for_symlinks_tracked_content_workers_and_shared_active_paths,
+            ),
+            (
+                "host_validation_output_is_reclaimed_only_for_terminal_inactive_attributed_checkouts",
+                host_validation_output_is_reclaimed_only_for_terminal_inactive_attributed_checkouts,
             ),
             (
                 "a_reclaimed_candidate_resumes_rebuilds_with_a_fake_agent_and_completes",

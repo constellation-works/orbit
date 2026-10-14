@@ -1,9 +1,9 @@
 ---
 type: runbook
-summary: Reclaim declared rebuildable outputs from kept terminal run worktrees.
+summary: Reclaim declared rebuildable outputs from kept terminal run worktrees and their host validation output.
 tags: [disk, worktree, gc]
 paths: ["crates/orbit-engine/src/executor/automation/vcs/worktree/", "crates/orbit-core/src/application/gc/"]
-last_validated: 2026-10-12
+last_validated: 2026-10-14
 ---
 
 # Reclaim kept worktree output
@@ -43,7 +43,8 @@ The default and `--dry-run` report paths, matching patterns and file-size bytes
 without deletion. Overlapping matches count each removed path once, against the
 first matching pattern. `--run` and `--older-than-hours` can narrow the manual
 pass. `--target-only` remains an alias for `--reclaim`. Doctor warns when kept
-worktrees hold more than 10 GiB of reclaimable output and names this command.
+worktrees and [host validation output](#host-validation-output) hold more than
+10 GiB of reclaimable output and names this command.
 
 The scheduled `worktree_gc_pipeline` reclaims every retained terminal worktree
 on each sweep, including failed, blocked and review candidates. Its age floor
@@ -66,6 +67,44 @@ are unlinked during recursive removal rather than followed. Run branches,
 candidate commits, tracked files and unmatched evidence under `.orbit/tmp` stay.
 Resume applies the preserved candidate and rebuilds the removed output. Only
 declare caches and build output: evidence matching a declaration is reclaimable.
+
+## Host validation output
+
+On Linux, required validation and host evidence build into
+`<primary-repository>/.orbit/state/host-validation-targets/<sha256(canonical-checkout)>`,
+outside the checkout ([host build isolation](compiler-cache.md#host-validation-builds-apart)).
+Removing a run's worktree does not remove that directory. Each sweep
+re-derives every recorded run's worktree path with the runner's own rule
+(the managed worktree root resolved, the worktree name appended) and hashes
+it. A target is attributed only to the runs whose path produces its name, even
+when the worktree is already gone. The name alone never attributes it.
+
+An attributed target is reclaimed (`would_reclaim`, then `reclaimed` with
+`--confirm`) when every run mapping its checkout is terminal with no live or
+undecidable recorded worker, and either:
+
+- its checkout is gone, or this sweep removes or would remove it; or
+- its checkout is kept, and the sweep reclaims kept output (`--reclaim`,
+  the scheduled pipeline, or admission) with a non-empty `worktree.reclaim`.
+
+A plain sweep keeps a kept checkout's output as `skipped:source_retained`.
+Any mapped active run reports `skipped:run_not_terminal` and a live worker
+reports `skipped:worker_alive`; neither is measured. `--older-than-hours`
+applies as for worktrees, except when the sweep reclaims kept output. A
+target that is not a real directory (a symlink, a file) is
+`skipped:not_a_real_directory` and is never followed. Before deletion, GC
+checks again that each component of the targets directory is a real directory
+and that the target is the same directory it measured. Recursive removal
+unlinks symlinks inside it rather than following them.
+
+Base reruns, host-evidence and recovery checkouts are detached scratch
+checkouts that no run record names. Their targets, and any other entry, are
+retained as `skipped:unattributed_host_target`; `--estimate-bytes` reports
+their `retained_bytes`. Only a primary checkout's own targets directory is
+inventoried. Admission's prefilter also selects terminal runs with an
+attributed host target, so admission reclaims them oldest first. Sources,
+branches, refs, task artifacts, logs and other caches are never touched.
+`detail` names the checkout each attributed target was built for.
 
 ## Dirty worktrees of settled tasks
 
