@@ -150,6 +150,9 @@ pub struct ValidationEnvPolicy {
     pub path: Vec<String>,
     /// How [`Self::path`] combines with the resolved PATH.
     pub path_mode: ValidationPathMode,
+    /// Output variables bound to managed host output by validation runners.
+    /// Empty means no output allocation or environment override.
+    pub build_output_env: Vec<String>,
 }
 
 impl Default for ValidationEnvPolicy {
@@ -159,6 +162,7 @@ impl Default for ValidationEnvPolicy {
             interactive: true,
             path: Vec::new(),
             path_mode: ValidationPathMode::Prepend,
+            build_output_env: Vec::new(),
         }
     }
 }
@@ -424,6 +428,12 @@ pub struct ValidationEnvironment {
     pub config_path: Vec<String>,
     /// How [`Self::config_path`] was applied.
     pub path_mode: ValidationPathMode,
+    /// Workspace-selected variables for managed host output.
+    pub build_output_env: Vec<String>,
+    /// Managed output directory after the host runner binds it.
+    pub build_output_dir: Option<PathBuf>,
+    /// Canonical source namespace of the managed output.
+    pub build_output_source: Option<PathBuf>,
 }
 
 impl ValidationEnvironment {
@@ -440,6 +450,9 @@ impl ValidationEnvironment {
             login_shell_enabled: false,
             config_path: Vec::new(),
             path_mode: ValidationPathMode::Prepend,
+            build_output_env: Vec::new(),
+            build_output_dir: None,
+            build_output_source: None,
         }
     }
 
@@ -513,6 +526,9 @@ impl ValidationEnvironment {
             login_shell_enabled: policy.login_shell,
             config_path,
             path_mode: policy.path_mode,
+            build_output_env: policy.build_output_env.clone(),
+            build_output_dir: None,
+            build_output_source: None,
         }
     }
 

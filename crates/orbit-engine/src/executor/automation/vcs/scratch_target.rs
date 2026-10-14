@@ -2,7 +2,7 @@
 //! checkouts build into.
 //!
 //! A host validation target is keyed by its checkout's canonical path
-//! ([`super::required_command::host_validation_target`]). Worktree GC
+//! ([`super::build_output::host_validation_target`]). Worktree GC
 //! attributes a run checkout's target by re-deriving the path from the run
 //! record. A scratch checkout is named by no run record and is removed after
 //! use, so its target outlives it. GC reclaims such a target only through a
@@ -33,7 +33,7 @@ use orbit_common::fs::io::atomic_write_bytes;
 use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "linux")]
-use super::required_command::{host_validation_source, host_validation_target_key};
+use super::build_output::{host_validation_source, host_validation_target_key};
 
 /// Where leases live, relative to the primary checkout: beside the targets,
 /// never inside them, so listing the targets lists only targets.
@@ -94,8 +94,8 @@ pub struct ScratchHostTargetLease {
 }
 
 /// Lease the host validation target of scratch `checkout`, recording what
-/// built it before the target exists. Only Linux validation builds into a
-/// host validation target; elsewhere the lease holds nothing.
+/// built it before the target exists. The descriptor-bound collector runs
+/// only on Linux; elsewhere output is retained and the lease holds nothing.
 pub fn lease_scratch_host_target(
     checkout: &Path,
     kind: ScratchHostTarget,

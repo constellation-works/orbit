@@ -112,7 +112,15 @@ The owner workspace lists the four [gates](../AGENTS.md#gates) in [`workflow.req
 ```toml
 [workflow]
 required_validation_commands = ["make ci-fast", "make ci-lint", "make goldens", "make ci-test-affected"]
+
+[workflow.validation_env]
+build_output_env = ["CARGO_TARGET_DIR"]
 ```
+
+The reviewable [workspace configuration example](../config/orbit-workspace.toml) includes
+both settings. Merge it into the owner configuration during operator rollout. Cargo
+output selection is this repository's policy; the generic runtime has no build-tool
+default ([build output contract](CONFIG.md#workspace-build-output)).
 
 For tasks that deliver a diff, candidate validation runs them once, in that order, on the final candidate after base synchronization, and before-PR review requires a passing record of each. Tasks tagged `no-diff-expected` do not run this list. A managed implementer finds the list in its envelope's `task.final_validation_commands` and leaves those commands to that validation ([required validation](CONFIG.md#required-validation)); it still runs focused checks and any gate the list omits, so a shorter list moves no gate out of the delivery.
 

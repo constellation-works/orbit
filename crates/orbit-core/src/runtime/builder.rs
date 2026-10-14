@@ -277,6 +277,10 @@ pub(crate) fn build_context_from_roots(
         login_shell: runtime_config.snapshot.workflow_validation_env_login_shell,
         interactive: runtime_config.snapshot.workflow_validation_env_interactive,
         path: runtime_config.snapshot.workflow_validation_env_path.clone(),
+        build_output_env: runtime_config
+            .snapshot
+            .workflow_validation_env_build_output_env
+            .clone(),
         path_mode: orbit_exec::ValidationPathMode::parse(
             &runtime_config.snapshot.workflow_validation_env_path_mode,
         )

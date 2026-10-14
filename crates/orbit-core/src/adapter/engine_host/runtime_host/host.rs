@@ -603,6 +603,10 @@ impl RuntimeHost for OrbitRuntime {
         self.validation_environment()
     }
 
+    fn validation_build_output_env(&self) -> Vec<String> {
+        self.validation_env_policy().build_output_env.clone()
+    }
+
     fn orbit_registry_root(&self) -> Option<String> {
         Some(
             self.context

@@ -15,7 +15,7 @@ use super::super::{
 use super::resolve::{
     DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES, DEFAULT_WORKER_MEMORY_HIGH, DEFAULT_WORKER_MEMORY_MAX,
     default_log_rotation, default_pass_list, normalize_logins, normalize_pass_list, read_optional,
-    resolve_bounded_minutes, resolve_choice, resolve_cpu_light_leaves,
+    resolve_bounded_minutes, resolve_build_output_env, resolve_choice, resolve_cpu_light_leaves,
     resolve_distributed_completion, resolve_host_shutdown_hold_minutes, resolve_machine_id,
     resolve_machine_name, resolve_material_fields, resolve_memory_limit, resolve_non_empty,
     resolve_optional_choice, resolve_optional_non_empty, resolve_percent, resolve_reclaim,
@@ -647,6 +647,12 @@ define_config_settings! {
         description: "PATH entries for required validation and local_shell steps, combined with the resolved PATH per `workflow.validation_env.path_mode`; a leading `~/` expands to HOME. Empty adds nothing.",
         section: ConfigSection::Delivery, order: 63,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
+    },
+    workflow_validation_env_build_output_env: Vec<String> => Vec<String> {
+        key: "workflow.validation_env.build_output_env", value_type: "array<string>",
+        description: "Workspace output variables bound to a host-owned source-keyed directory for required validation and host evidence on every platform. Empty (default) allocates nothing. Configured bindings replace inherited values; commands must honor them. Execution identity and ORBIT_ variables are reserved.",
+        section: ConfigSection::Delivery, order: 65,
+        resolve: |raw: Option<Vec<String>>| resolve_build_output_env(raw),
     },
     workflow_validation_env_path_mode: String => String {
         key: "workflow.validation_env.path_mode", value_type: "string",

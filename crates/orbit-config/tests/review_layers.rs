@@ -537,3 +537,51 @@ mod operation;
 
 #[path = "review_layers/machine.rs"]
 mod machine;
+
+#[test]
+fn build_output_bindings_default_empty_and_workspace_replaces_global() {
+    let global = tempfile::tempdir().expect("global");
+    let workspace = tempfile::tempdir().expect("workspace");
+    let roots = ConfigRoots::new(global.path(), workspace.path());
+    let load = || {
+        ResolvedConfig::load(&roots)
+            .expect("config loads")
+            .snapshot
+            .workflow_validation_env_build_output_env
+    };
+    assert!(load().is_empty());
+    write_config(
+        global.path(),
+        "[workflow.validation_env]\nbuild_output_env = ['GLOBAL_OUTPUT']\n",
+    );
+    assert_eq!(load(), ["GLOBAL_OUTPUT"]);
+    write_config(
+        workspace.path(),
+        "[workflow.validation_env]\nbuild_output_env = [' DIST_DIR ', 'DIST_DIR']\n",
+    );
+    assert_eq!(load(), ["DIST_DIR"]);
+    write_config(
+        workspace.path(),
+        "[workflow.validation_env]\nbuild_output_env = []\n",
+    );
+    assert!(load().is_empty(), "explicit empty overrides global");
+    admit_settable_config_key("workflow.validation_env.build_output_env").expect("live key");
+    for name in [
+        "BAD-NAME",
+        "PATH",
+        "Path",
+        "HOME",
+        "ORBIT_VALIDATION_SUMMARY",
+        "orbit_summary",
+        "",
+    ] {
+        write_config(
+            workspace.path(),
+            &format!("[workflow.validation_env]\nbuild_output_env = ['{name}']\n"),
+        );
+        assert!(
+            ResolvedConfig::load(&roots).is_err(),
+            "invalid locator {name}"
+        );
+    }
+}

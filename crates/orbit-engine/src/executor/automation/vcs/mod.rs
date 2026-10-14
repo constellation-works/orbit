@@ -4,6 +4,7 @@ mod base_chase;
 mod base_claim;
 mod base_obsolescence;
 mod baseline;
+mod build_output;
 mod candidate_resume;
 mod candidate_validate;
 pub mod claim;

@@ -4380,6 +4380,14 @@ impl LifecycleHost {
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
+    fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment {
+        let mut environment = orbit_exec::ValidationEnvironment::launcher(
+            RuntimeHost::agent_subprocess_environment(self, &[]),
+        );
+        environment.build_output_env = vec!["BUILD_OUTPUT_DIR".into()];
+        environment
+    }
+
     fn record_direct_landing_intent(
         &self,
         _request: &orbit_types::workflow::automation::DirectLandingRequest,

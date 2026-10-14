@@ -115,8 +115,12 @@ tracks is kept (`skipped:tracked_content`). The scheduled pipeline does the
 same for every kept terminal worktree. `bytes_reclaimed` reports the size of
 the removed paths.
 
-On Linux, required validation builds into a host-owned target under
-`.orbit/state/host-validation-targets/`, outside the checkout. GC attributes
+With `workflow.validation_env.build_output_env` configured, required validation
+binds the workspace's output variables to host-owned output under
+`.orbit/state/host-validation-targets/`, outside the checkout. The Linux collector
+keeps the same layout and lineage for historical output; an empty mapping allocates
+nothing and never deletes old output. Other platforms retain configured output for
+operator maintenance. GC attributes
 each target to the runs whose recorded worktree path it was built for, and
 reclaims it once they are terminal with no live worker and the checkout is gone
 (or its kept output is being reclaimed). A scratch checkout's target (base

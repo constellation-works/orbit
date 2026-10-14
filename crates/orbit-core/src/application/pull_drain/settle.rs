@@ -117,7 +117,7 @@ impl OrbitRuntime {
         let repo = &self.paths().repo_root;
         let settlement =
             leaf_failure_settlement(&record, &run, diagnostic, state.as_ref(), &|hold| {
-                recorded_base_no_longer_red(repo, hold)
+                recorded_base_no_longer_red(self, repo, hold)
             });
         match jobs.mutate_local_pull(
             &record.destination,

@@ -1,8 +1,8 @@
 //! Host validation output of run checkouts.
 //!
-//! On Linux required validation builds into a host-owned target outside the
+//! Configured required validation builds into host-owned output outside the
 //! checkout, keyed by the checkout's canonical path
-//! (`required_command::host_validation_target`).
+//! (`build_output::host_validation_target`).
 //! Removing the checkout leaves that target behind. GC attributes a target to
 //! runs only by re-deriving each recorded run's worktree path with the same
 //! key rule; a directory name no run record derives is never inferred to
@@ -16,9 +16,7 @@
 //! `skipped:unattributed_host_target`.
 
 use super::super::super::baseline::recorded_base_runs;
-use super::super::super::required_command::{
-    HOST_VALIDATION_TARGETS_DIR, host_validation_target_key,
-};
+use super::super::super::build_output::{HOST_VALIDATION_TARGETS_DIR, host_validation_target_key};
 use super::super::super::scratch_target::{LEASE_LABEL, leased_target};
 use super::held::{HeldDirectory, Identity, entry_name};
 use super::leftovers::worker_may_be_alive;

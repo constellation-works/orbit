@@ -213,7 +213,7 @@ fn host_validation_output_is_reclaimed_only_for_terminal_inactive_attributed_che
         module_path!(),
         "host_validation_output_is_reclaimed_only_for_terminal_inactive_attributed_checkouts",
         || {
-            // Only Linux required validation builds into a host-owned target.
+            // The descriptor-bound host output collector runs only on Linux.
             if !cfg!(target_os = "linux") {
                 return;
             }
@@ -223,11 +223,15 @@ fn host_validation_output_is_reclaimed_only_for_terminal_inactive_attributed_che
                 let run = orbit_engine::review_gate::run_required_validation(
                     &host,
                     checkout,
-                    "mkdir -p \"$CARGO_TARGET_DIR/debug\" && printf 'host build' > \"$CARGO_TARGET_DIR/debug/output\"",
+                    "mkdir -p \"$BUILD_OUTPUT_DIR/debug\" && printf 'host build' > \"$BUILD_OUTPUT_DIR/debug/output\"",
                 )
                 .unwrap();
                 assert!(run.passed, "{}", run.output);
-                PathBuf::from(run.environment["cargo_target_dir"].as_str().unwrap())
+                PathBuf::from(
+                    run.environment["build_output"]["directory"]
+                        .as_str()
+                        .unwrap(),
+                )
             };
             let outside = fixture.root.path().join("outside");
             fs::create_dir_all(&outside).unwrap();
@@ -390,7 +394,7 @@ fn host_validation_output_is_reclaimed_only_for_terminal_inactive_attributed_che
                     "host-evidence" => {
                         let author = fixture.root.path().join("host-evidence-author");
                         attach(&author, BASE);
-                        let script = "mkdir -p \"$CARGO_TARGET_DIR/debug\" && printf 'host build' > \"$CARGO_TARGET_DIR/debug/output\"\n";
+                        let script = "mkdir -p \"$BUILD_OUTPUT_DIR/debug\" && printf 'host build' > \"$BUILD_OUTPUT_DIR/debug/output\"\n";
                         let commit = commit_file(&author, "host-build.sh", script);
                         detach(&author);
                         let candidate =
@@ -406,12 +410,14 @@ fn host_validation_output_is_reclaimed_only_for_terminal_inactive_attributed_che
                             &candidate,
                             &command,
                             "jrun-host-evidence",
-                            &fixture.root.path().join("unused-target"),
                         )
                         .unwrap();
                         assert_eq!(run.exit_code, Some(0), "{}", run.output);
-                        let target =
-                            PathBuf::from(run.environment["cargo_target_dir"].as_str().unwrap());
+                        let target = PathBuf::from(
+                            run.environment["build_output"]["directory"]
+                                .as_str()
+                                .unwrap(),
+                        );
                         let leases = target
                             .parent()
                             .unwrap()

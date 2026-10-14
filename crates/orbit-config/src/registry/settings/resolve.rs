@@ -394,3 +394,40 @@ pub(crate) fn resolve_percent(raw: Option<u8>, default: u8, key: &str) -> Result
         )))
     }
 }
+
+/// Admit output locators without allowing them to replace execution identity.
+pub(super) fn resolve_build_output_env(
+    raw: Option<Vec<String>>,
+) -> Result<Vec<String>, OrbitError> {
+    let mut names = BTreeSet::new();
+    for raw in raw.unwrap_or_default() {
+        let name = raw.trim();
+        let mut chars = name.chars();
+        let valid = chars
+            .next()
+            .is_some_and(|ch| ch == '_' || ch.is_ascii_alphabetic())
+            && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric());
+        let identity = name.to_ascii_uppercase();
+        let reserved = identity.starts_with("ORBIT_")
+            || matches!(
+                identity.as_str(),
+                "PATH"
+                    | "HOME"
+                    | "USER"
+                    | "LOGNAME"
+                    | "SHELL"
+                    | "TMPDIR"
+                    | "TMP"
+                    | "TEMP"
+                    | "PWD"
+                    | "OLDPWD"
+            );
+        if !valid || reserved {
+            return Err(OrbitError::InvalidInput(format!(
+                "workflow.validation_env.build_output_env contains invalid or reserved output variable '{name}'"
+            )));
+        }
+        names.insert(name.to_string());
+    }
+    Ok(names.into_iter().collect())
+}

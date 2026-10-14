@@ -46,7 +46,7 @@ a host that can create Linux mount namespaces.
 | rustc wrapper | Repository | `scripts/rustc-compiler-cache.sh` |
 | Cargo hook | Repository | `.cargo/config.toml` (`build.rustc-wrapper`); native Windows [overrides it off](#windows) |
 | Per-worktree build output | Each managed worktree | `$CARGO_TARGET_DIR` or `<worktree>/target/` |
-| Linux host validation output | Primary repository, keyed by canonical source checkout | `.orbit/state/host-validation-targets/<source-path-sha256>/` |
+| Configured host validation output | Primary repository, keyed by canonical source checkout | `.orbit/state/host-validation-targets/<source-path-sha256>/` |
 
 Linux implementer sandboxes grant `$HOME/.orbit/cache` as a narrow extra write
 root. Managed worktrees whose activity cwd lies within a writable policy root
@@ -292,8 +292,9 @@ That target is still under its writable checkout, and the wrapper normalizes
 then treats the output as fresh but the compiled manifest path points into the
 expired sandbox source mount. A directory name alone did not isolate it.
 
-Required validation and host-evidence execution on Linux now replace inherited
-`CARGO_TARGET_DIR` with
+With this repository's explicit `workflow.validation_env.build_output_env = ["CARGO_TARGET_DIR"]`
+binding ([configuration example](../../config/orbit-workspace.toml)), required validation
+and host-evidence execution on every platform replace inherited `CARGO_TARGET_DIR` with
 `<primary-repository>/.orbit/state/host-validation-targets/<sha256(canonical-source-checkout)>`.
 The primary repository comes from the Git common directory. The directory is
 host-owned state, outside the managed worktree and the sandbox's writable
@@ -307,12 +308,15 @@ reuse each other's embedded fixture paths. Repeated required validation in the
 same checkout reuses its host target. A detached evidence checkout is recreated
 for each run, so Cargo may rebuild its timestamp-changed workspace sources.
 
-The effective target appears in `validation_env.cargo_target_dir`. Commands,
+The effective target appears in `validation_env.build_output.directory`, with the
+configured variables, canonical source and host execution context beside it. Commands,
 build-budget admission, toolchain environment and candidate/base/tree evidence
-bindings are unchanged. Baseline result schema 8 uses a new versioned cache
-key so earlier results cannot certify the new execution contract; old records
+bindings are unchanged. Baseline result schema 9 includes the workspace output
+bindings in a new versioned cache key so earlier results cannot certify the new execution contract; old records
 are retained at their earlier keys. These targets are rebuildable host state;
-this repair does not add eviction or delete shared caches. The first validation
+configuration does not delete old output or shared caches. The Linux collector
+retains its run attribution and scratch lease controls; other platforms retain
+output for operator maintenance. The first validation
 in each source namespace pays for a fresh build; dependencies still use the
 compiler cache. Sandboxed builds continue using their own warm targets.
 

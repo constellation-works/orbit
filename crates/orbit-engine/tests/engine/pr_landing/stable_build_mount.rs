@@ -43,7 +43,9 @@ fn host_validation_rebuilds_test_binaries_built_through_the_stable_build_mount()
 
                 let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
                 host.require_commands(&[COMMAND]);
-                host.resolve_validation_env(ValidationEnvironment::launcher(env));
+                let mut environment = ValidationEnvironment::launcher(env);
+                environment.build_output_env = vec!["CARGO_TARGET_DIR".into()];
+                host.resolve_validation_env(environment);
                 let run = || {
                     if route == "host_evidence" {
                         let candidate = orbit_types::workflow::automation::SourceRevision {
@@ -56,7 +58,7 @@ fn host_validation_rebuilds_test_binaries_built_through_the_stable_build_mount()
                         )
                         .unwrap();
                         let evidence = review_gate::run_host_sandbox_test(
-                            &host, &fx.repo, &candidate, &admitted, RUN_ID, &target,
+                            &host, &fx.repo, &candidate, &admitted, RUN_ID,
                         )
                         .unwrap();
                         assert!(evidence.judgement.is_ok(), "{evidence:?}");
@@ -74,7 +76,8 @@ fn host_validation_rebuilds_test_binaries_built_through_the_stable_build_mount()
                         .clone()
                 };
                 let first = run();
-                let host_target = PathBuf::from(first["cargo_target_dir"].as_str().unwrap());
+                let host_target =
+                    PathBuf::from(first["build_output"]["directory"].as_str().unwrap());
                 assert!(
                     !host_target.starts_with(fx.repo.join("target")),
                     "F2026-10-342: recovery can write every target below the checkout"
@@ -101,7 +104,7 @@ fn host_validation_rebuilds_test_binaries_built_through_the_stable_build_mount()
                 );
                 let second = run();
                 assert_eq!(
-                    first["cargo_target_dir"], second["cargo_target_dir"],
+                    first["build_output"]["directory"], second["build_output"]["directory"],
                     "ordinary retry reuses its source namespace"
                 );
                 if route == "host_evidence" {
@@ -110,7 +113,8 @@ fn host_validation_rebuilds_test_binaries_built_through_the_stable_build_mount()
                     let ordinary =
                         action(&host, "candidate_validate", &fx.validate_input()).unwrap();
                     assert_ne!(
-                        ordinary["validation_env"]["cargo_target_dir"], first["cargo_target_dir"],
+                        ordinary["validation_env"]["build_output"]["directory"],
+                        first["build_output"]["directory"],
                         "different compiled source paths must have different host targets"
                     );
                 } else {
@@ -292,4 +296,80 @@ fn output_text(output: &orbit_common::process::CapturedOutput) -> String {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     )
+}
+
+#[test]
+fn workspace_build_output_is_opt_in_and_toolchain_neutral() {
+    isolated(
+        "stable_build_mount::workspace_build_output_is_opt_in_and_toolchain_neutral",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            fx.commit(".gitignore", "/.orbit/\n");
+            let candidate = fx.commit("validate.sh", "test -z \"${CARGO_TARGET_DIR+x}\" && mkdir -p \"$DIST_DIR\" && printf built > \"$DIST_DIR/output\"\n");
+            let fx = Fixture { candidate, ..fx };
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let env = vec![
+                ("PATH".into(), "/usr/bin:/bin".into()),
+                ("DIST_DIR".into(), "/not-an-output".into()),
+            ];
+            host.resolve_validation_env(ValidationEnvironment::launcher(env.clone()));
+            let unconfigured = review_gate::run_required_validation(
+                &host,
+                &fx.repo,
+                "test -z \"${CARGO_TARGET_DIR+x}\" && test \"$DIST_DIR\" = /not-an-output",
+            )
+            .unwrap();
+            assert!(unconfigured.passed, "{}", unconfigured.output);
+            assert!(unconfigured.environment["build_output"]["directory"].is_null());
+            assert!(
+                !fx.repo
+                    .join(".orbit/state/host-validation-targets")
+                    .exists()
+            );
+            let mut environment = ValidationEnvironment::launcher(env);
+            environment.build_output_env = vec!["DIST_DIR".into()];
+            host.resolve_validation_env(environment);
+            let command = "sh validate.sh";
+            host.require_commands(&[command]);
+            let candidate = review_gate::revision(&fx.repo, &fx.candidate).unwrap();
+            let mut sources = Vec::new();
+            for route in ["candidate_validate", "claim_validate", "host_evidence"] {
+                let record = if route == "host_evidence" {
+                    let admitted = orbit_types::workflow::HostSandboxCommand::admit(
+                        command,
+                        &[command.into()],
+                    )
+                    .unwrap();
+                    let run = review_gate::run_host_sandbox_test(
+                        &host, &fx.repo, &candidate, &admitted, RUN_ID,
+                    )
+                    .unwrap();
+                    assert_eq!(run.exit_code, Some(0), "{}", run.output);
+                    run.environment
+                } else {
+                    let input = if route == "candidate_validate" {
+                        fx.validate_input()
+                    } else {
+                        *host.ship_mode.lock().unwrap() = "pr".into();
+                        json!({"workspace_path": fx.repo, "base_sync": "local", "base_sha": fx.base_sha})
+                    };
+                    action(&host, route, &input).unwrap()["validation_env"].clone()
+                };
+                let output = PathBuf::from(record["build_output"]["directory"].as_str().unwrap());
+                assert!(!output.starts_with(fx.repo.join("target")));
+                assert_eq!(fs::read_to_string(output.join("output")).unwrap(), "built");
+                assert_eq!(record["build_output"]["env"], json!(["DIST_DIR"]));
+                assert_eq!(record["build_output"]["context"], "host");
+                sources.push(output);
+            }
+            assert_eq!(
+                sources[0], sources[1],
+                "delivery routes share their host source namespace"
+            );
+            assert_ne!(
+                sources[0], sources[2],
+                "detached sources cannot reuse checkout output"
+            );
+        },
+    );
 }

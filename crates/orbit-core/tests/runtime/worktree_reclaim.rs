@@ -36,7 +36,7 @@ fn admission_reclaims_oldest_kept_worktrees_first_and_leaves_active_runs() {
     std::fs::create_dir_all(&global).unwrap();
     std::fs::write(
         repo.join(".orbit/config.toml"),
-        "[worktree]\nreclaim = ['cache']\nreclaim_below_free_mib = 1099511627776\n",
+        "[worktree]\nreclaim = ['cache']\nreclaim_below_free_mib = 1099511627776\n[workflow.validation_env]\nbuild_output_env = ['BUILD_OUTPUT_DIR']\n",
     )
     .unwrap();
     git(&repo, &["init", "-q", "-b", "main"]);
@@ -91,12 +91,14 @@ fn admission_reclaims_oldest_kept_worktrees_first_and_leaves_active_runs() {
             let built = orbit_engine::review_gate::run_required_validation(
                 &runtime,
                 &worktree,
-                "mkdir -p \"$CARGO_TARGET_DIR/debug\" && printf output > \"$CARGO_TARGET_DIR/debug/output\"",
+                "mkdir -p \"$BUILD_OUTPUT_DIR/debug\" && printf output > \"$BUILD_OUTPUT_DIR/debug/output\"",
             )
             .unwrap();
             assert!(built.passed, "{}", built.output);
             host_targets.push(std::path::PathBuf::from(
-                built.environment["cargo_target_dir"].as_str().unwrap(),
+                built.environment["build_output"]["directory"]
+                    .as_str()
+                    .unwrap(),
             ));
         }
         if age == 4 {

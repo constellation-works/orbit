@@ -327,7 +327,7 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
     // Only a comparable, conclusive record stands in for a run.
     let cached = cut
         .is_none()
-        .then(|| cached_base_check(workspace_path, base_sha, command, full.as_ref()))
+        .then(|| cached_base_check(host, workspace_path, base_sha, command, full.as_ref()))
         .flatten()
         .filter(super::baseline::BaselineCheck::conclusive);
     // A timed-out run is compared whole for evidence, never confirmed.
@@ -554,7 +554,7 @@ pub fn verify_claimed_known_red<H: RuntimeHost + ?Sized>(
         ));
     }
     on_owner_base(workspace_path, base_branch, base_sync, base_sha).map_err(Inconclusive)?;
-    let cached = cached_base_check(workspace_path, base_sha, command, selection)
+    let cached = cached_base_check(host, workspace_path, base_sha, command, selection)
         .filter(super::baseline::BaselineCheck::conclusive);
     let (check, whole) = match (cached, failing_tests_selection(selection, failures, &[])) {
         (Some(check), _) => (check, true),
