@@ -28,17 +28,24 @@ fn refused_apply_prints_a_named_skip_and_required_coverage_fails() {
             );
             assert!(!stderr.contains("SKIP:"), "required coverage must not skip");
         } else {
+            let simulated_notice = orbit_exec::seatbelt_deferral_notice(CHILD, FAILURE);
+            assert!(
+                stderr.lines().any(|line| line == simulated_notice),
+                "the skipped fixture must expose its name and probe failure: {stderr}"
+            );
+            // This child injects data, rather than probing the host. Assert its
+            // exact simulated notice above, then keep only that notice out of
+            // the generic forwarder. Any genuine child deferral still escapes.
+            let host_stderr = stderr
+                .lines()
+                .filter(|line| *line != simulated_notice)
+                .collect::<Vec<_>>()
+                .join("\n");
             orbit_common::test_env::assert_child_test_passed(
                 CHILD,
                 output.status,
                 &output.stdout,
-                &output.stderr,
-            );
-            assert!(
-                stderr.lines().any(|line| line.starts_with("SKIP:")
-                    && line.contains(CHILD)
-                    && line.contains(FAILURE)),
-                "the skipped fixture must expose its name and probe failure: {stderr}"
+                host_stderr.as_bytes(),
             );
         }
     }

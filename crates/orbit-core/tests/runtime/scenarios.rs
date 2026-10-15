@@ -18,6 +18,7 @@ pub(super) fn run(module: &str, table: &str, rows: &[Scenario]) {
                 use std::io::Write;
                 writeln!(std::io::stderr(), "scenario: {module}::{name}").expect("row identity");
                 scenario();
+                orbit_common::test_env::record_scenario_pass(name);
             }
             return;
         }
@@ -26,6 +27,7 @@ pub(super) fn run(module: &str, table: &str, rows: &[Scenario]) {
             .find(|(name, _)| *name == selected)
             .expect("the selected row belongs to this table");
         scenario();
+        orbit_common::test_env::record_scenario_pass(&selected);
         return;
     }
 
@@ -81,11 +83,17 @@ pub(super) fn run(module: &str, table: &str, rows: &[Scenario]) {
             &output.stdout,
             &output.stderr,
         );
-        // Preserve host-sandbox deferrals for the affected gate's parser.
+        // This bypasses libtest capture. Keep child reports owned by their
+        // outer case, rather than interleaving them with outer suite results.
+        // One stdout lock keeps another case from splitting the frame.
         use std::io::Write;
-        std::io::stdout()
-            .write_all(&output.stdout)
-            .expect("row stdout");
+        {
+            let mut stdout = std::io::stdout().lock();
+            writeln!(stdout, "qa-child-output-begin: {qualified}").expect("row owner");
+            stdout.write_all(&output.stdout).expect("row stdout");
+            writeln!(stdout, "\nqa-child-output-end: {qualified}").expect("row end");
+        }
+        // Preserve host-sandbox deferrals for the affected gate's parser.
         std::io::stderr()
             .write_all(&output.stderr)
             .expect("row stderr");

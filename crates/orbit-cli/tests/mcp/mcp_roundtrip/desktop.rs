@@ -649,6 +649,7 @@ fn desktop_destination_and_routine_contracts() {
     ] {
         tracing::info!(case = name, "MCP contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
 
@@ -666,5 +667,6 @@ fn desktop_governance_and_bounded_reads() {
     ] {
         tracing::info!(case = name, "MCP contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }

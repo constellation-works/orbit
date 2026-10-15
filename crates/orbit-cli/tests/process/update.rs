@@ -588,6 +588,9 @@ fn check_reports_the_available_release_and_exits_three() {
         home.path(),
         mirror.path(),
     );
+    orbit_common::test_env::record_scenario_pass(
+        "applying_an_update_to_a_checkout_build_is_refused_with_the_command_that_works",
+    );
 }
 
 fn check_renders_a_prefix_free_remediation_sentence(executable: &Path, home: &Path, mirror: &Path) {
@@ -769,6 +772,7 @@ fn update_command_contracts_0() {
     ] {
         tracing::info!(case = name, "CLI contract row");
         check(&executable);
+        orbit_common::test_env::record_scenario_pass(name);
         assert_eq!(
             fs::read(&executable).expect("read-only updater image after row"),
             before,
@@ -795,6 +799,7 @@ fn update_command_contracts_1() {
     ] {
         tracing::info!(case = name, "CLI contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
 
@@ -817,5 +822,6 @@ fn update_command_contracts_2() {
     ] {
         tracing::info!(case = name, "CLI contract row");
         check();
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }
