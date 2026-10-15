@@ -112,12 +112,94 @@ pub(super) fn continue_source<H: RuntimeHost + ?Sized>(
     Ok(result)
 }
 
+/// A host-authenticated completed owner candidate skips implementation after a
+/// clean apply. All later validation, review and completion gates run afresh.
+pub(super) fn continue_published_owner<H: RuntimeHost + ?Sized>(
+    host: &H,
+    run_id: &str,
+    task: &Task,
+    binding: &orbit_types::workflow::SourceRepairBinding,
+    workspace: &Path,
+    base: &str,
+) -> Result<Value, OrbitError> {
+    let refused =
+        |reason: &str| OrbitError::Execution(format!("published candidate refused: {reason}"));
+    let run = host
+        .get_job_run(run_id)?
+        .ok_or_else(|| refused("admitting run missing"))?;
+    if task.job_run_id.as_deref() != Some(run_id)
+        || binding.task_id != task.id
+        || host.local_machine_id().as_deref() != Some(binding.machine_id.as_str())
+        || run
+            .executed_on
+            .as_ref()
+            .is_none_or(|o| o.machine_id != binding.machine_id)
+        || run.job_id != "task_pr_pipeline"
+        || run
+            .input
+            .as_ref()
+            .is_none_or(|input| input["claimed"] == true || input["task_ids"] != json!([task.id]))
+        || !matches!(task.status, orbit_types::task::TaskStatus::InProgress)
+        || !matches!(run.state, orbit_types::workflow::JobRunState::Running)
+    {
+        return Err(refused("admitting execution binding changed"));
+    }
+    if git_output(workspace, &["config", "--get", "remote.origin.url"])? != binding.remote_url {
+        return Err(refused("repository changed"));
+    }
+    let pr = read_pr_status(host, workspace, &binding.pull_request)?;
+    if !exact_open_pr(binding, &pr, &binding.head_sha) {
+        return Err(refused(
+            "provider PR or merge outcome changed; reconcile explicitly",
+        ));
+    }
+    let candidate = Candidate {
+        run_id: binding.source_run_id.clone(),
+        branch: binding.branch.clone(),
+        head_sha: binding.head_sha.clone(),
+        durable_ref: None,
+        failed_step_id: "complete_pr".into(),
+        needs_review_repair: false,
+        held: false,
+        claim: None,
+        published: true,
+        pull_request: Some(binding.pull_request.clone()),
+        pull_request_head: Some(binding.branch.clone()),
+        interrupted_review: None,
+    };
+    let outcome = match apply(&candidate, &candidate.head_sha, workspace, base)? {
+        Applied::Clean => Outcome::Carried,
+        Applied::Conflict { paths, output } => {
+            Outcome::Repair(json!({"trigger":"conflict","conflicting_paths":paths,"output":output}))
+        }
+        Applied::AlreadyPresent => {
+            return Err(refused(
+                "published changes are already on the base; reconcile the existing PR",
+            ));
+        }
+        Applied::Refused(reason) => return Err(refused(&reason)),
+    };
+    match adopt_published_branch(workspace, &task.id, &candidate)? {
+        Adoption::Adopted => {}
+        Adoption::Refused(reason) => return Err(refused(&reason)),
+    }
+    record(host, task, run_id, &candidate, &outcome)?;
+    let mut result = output(&outcome, Some(&candidate), base);
+    result["published_binding"] =
+        serde_json::to_value(binding).map_err(|e| refused(&e.to_string()))?;
+    result["reused_branch"] = json!(binding.branch);
+    result["reused_head_sha"] = json!(binding.head_sha);
+    result["prior_pull_request"] = json!(binding.pull_request);
+    result["prior_pull_request_head"] = json!(binding.branch);
+    Ok(result)
+}
+
 /// Publication reads the immutable run input, not a caller-shaped candidate
 /// checkpoint. The owner pipeline and claimed pipeline pass different fields.
 pub(in crate::executor::automation::vcs) fn publication_admission<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
-) -> Result<Option<SourceRepairAdmission>, OrbitError> {
+) -> Result<Option<orbit_types::workflow::SourceRepairBinding>, OrbitError> {
     let Some(id) = input
         .get("run_id")
         .or_else(|| input.get("job_run_id"))
@@ -126,7 +208,7 @@ pub(in crate::executor::automation::vcs) fn publication_admission<H: RuntimeHost
         return Ok(None);
     };
     let Some(admission) = host.source_repair_admission(id)? else {
-        return Ok(None);
+        return host.owner_publication_binding(id);
     };
     let run = host
         .get_job_run(id)?
@@ -154,7 +236,7 @@ pub(in crate::executor::automation::vcs) fn publication_admission<H: RuntimeHost
             "source repair publication authority changed".into(),
         ));
     }
-    Ok(Some(admission))
+    Ok(Some(admission.binding))
 }
 
 /// A before-landing reviewer fix follows this run's own successful initial

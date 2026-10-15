@@ -208,6 +208,17 @@ pub trait RuntimeHost: Send + Sync {
         &self,
         run_id: &str,
     ) -> Result<Option<orbit_types::workflow::SourceRepairAdmission>, OrbitError>;
+    /// Authenticate an owner-local publication preserved by final recovery.
+    fn owner_published_candidate(
+        &self,
+        task_id: &str,
+        source_run_id: Option<&str>,
+    ) -> Result<Option<orbit_types::workflow::SourceRepairBinding>, OrbitError>;
+    /// Read publication authority from this run's successful host adoption.
+    fn owner_publication_binding(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<orbit_types::workflow::SourceRepairBinding>, OrbitError>;
     /// Recheck the durable operator admission and exact source/scope before
     /// applying a cancelled owner's published candidate. Other hosts refuse.
     fn validate_source_repair(&self, run_id: &str) -> Result<(), OrbitError>;

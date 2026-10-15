@@ -98,11 +98,13 @@ impl OrbitRuntime {
             return Err(reserved_reconciliation_key_error(job_name));
         }
         let source_repair = resume.is_some_and(|plan| {
-            plan.source.state == JobRunState::Cancelled
-                && plan
-                    .input
-                    .get(orbit_types::workflow::SOURCE_REPAIR_KEY)
-                    .is_some()
+            matches!(
+                plan.source.state,
+                JobRunState::Cancelled | JobRunState::Failed
+            ) && plan
+                .input
+                .get(orbit_types::workflow::SOURCE_REPAIR_KEY)
+                .is_some()
         });
         if input
             .get(orbit_types::workflow::SOURCE_REPAIR_KEY)

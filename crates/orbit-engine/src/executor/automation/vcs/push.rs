@@ -142,17 +142,15 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
     let repair_lease = repair_admission
         .as_ref()
         .map(|admission| {
-            super::candidate_resume::source_repair::publication_lease(
-                host,
-                input,
-                &admission.binding,
-            )
+            super::candidate_resume::source_repair::publication_lease(host, input, admission)
         })
         .transpose()?;
     if let Some(admission) = &repair_admission {
-        let binding = &admission.binding;
+        let binding = admission;
         let pr = read_pr_status(host, workspace_path, &binding.pull_request)?;
         if branch != binding.branch
+            || git_output(workspace_path, &["config", "--get", "remote.origin.url"])?
+                != binding.remote_url
             || !matches!(remote_sha.as_deref(), Some(sha) if Some(sha) == repair_lease.as_deref() || sha == local_sha)
             || !super::candidate_resume::source_repair::exact_open_pr(
                 binding,

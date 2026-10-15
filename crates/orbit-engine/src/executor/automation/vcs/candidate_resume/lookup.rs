@@ -77,6 +77,21 @@ pub(in crate::executor::automation) fn candidate_resume<H: RuntimeHost + ?Sized>
             &base_sha,
         );
     }
+    if input.get("prior_foreign_run").is_none_or(Value::is_null)
+        && let Some(binding) = host.owner_published_candidate(
+            &task.id,
+            input.get("prior_job_run_id").and_then(Value::as_str),
+        )?
+    {
+        return super::source_repair::continue_published_owner(
+            host,
+            &run_id,
+            &task,
+            &binding,
+            &workspace_path,
+            &base_sha,
+        );
+    }
     let foreign = input.get("prior_foreign_run").and_then(|run| {
         Some(ForeignRun {
             run_id: input_string_field(run, "run_id")?,

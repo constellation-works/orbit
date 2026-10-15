@@ -933,6 +933,19 @@ impl RuntimeHost for OrbitRuntime {
             })
     }
 
+    fn owner_published_candidate(
+        &self,
+        task_id: &str,
+        source_run_id: Option<&str>,
+    ) -> Result<Option<orbit_types::workflow::SourceRepairBinding>, OrbitError> {
+        OrbitRuntime::owner_published_candidate(self, task_id, source_run_id)
+    }
+    fn owner_publication_binding(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<orbit_types::workflow::SourceRepairBinding>, OrbitError> {
+        OrbitRuntime::owner_publication_binding(self, run_id)
+    }
     fn validate_source_repair(&self, run_id: &str) -> Result<(), OrbitError> {
         self.validate_operator_source_repair(run_id)
     }

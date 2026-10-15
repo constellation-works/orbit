@@ -466,7 +466,7 @@ impl Fixture {
                 &HashMap::new(),
                 None,
             )
-            .unwrap()
+            .unwrap_or_else(|error| panic!("{name}: {error}"))
         }
     }
     pub(super) fn assert_original(&self) {

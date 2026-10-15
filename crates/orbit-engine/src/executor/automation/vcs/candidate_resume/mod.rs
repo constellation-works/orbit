@@ -38,6 +38,13 @@
 //! is unchanged. A conflict hands the implementer the conflict, after which
 //! the gate requests the evidence again.
 //!
+//! A published owner-local candidate preserved by final-recovery requeue is
+//! authenticated by the host from its successful publication checkpoints and
+//! durable task-meaning binding. It adopts the existing PR branch under its
+//! exact lease; a clean apply skips implementation. Missing or changed evidence
+//! refuses admission instead of returning `fresh`. Publication rereads the
+//! successful adoption, preserving the original PR identity under current gates.
+//!
 //! Whenever a candidate was found, the outcome, source run and SHA are also
 //! written to the task's history.
 //!

@@ -251,6 +251,19 @@ pub trait NullRuntimeHost: Send + Sync {
     ) -> Result<Option<orbit_types::workflow::SourceRepairAdmission>, OrbitError> {
         Ok(None)
     }
+    fn owner_published_candidate(
+        &self,
+        _task_id: &str,
+        _source_run_id: Option<&str>,
+    ) -> Result<Option<orbit_types::workflow::SourceRepairBinding>, OrbitError> {
+        Ok(None)
+    }
+    fn owner_publication_binding(
+        &self,
+        _run_id: &str,
+    ) -> Result<Option<orbit_types::workflow::SourceRepairBinding>, OrbitError> {
+        Ok(None)
+    }
     fn validate_source_repair(&self, _run_id: &str) -> Result<(), OrbitError> {
         Err(OrbitError::CapabilityDenied(
             "operator source repair is unavailable on this host".into(),
@@ -918,6 +931,19 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
         run_id: &str,
     ) -> Result<Option<orbit_types::workflow::SourceRepairAdmission>, OrbitError> {
         NullRuntimeHost::source_repair_admission(self, run_id)
+    }
+    fn owner_published_candidate(
+        &self,
+        task_id: &str,
+        source_run_id: Option<&str>,
+    ) -> Result<Option<orbit_types::workflow::SourceRepairBinding>, OrbitError> {
+        NullRuntimeHost::owner_published_candidate(self, task_id, source_run_id)
+    }
+    fn owner_publication_binding(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<orbit_types::workflow::SourceRepairBinding>, OrbitError> {
+        NullRuntimeHost::owner_publication_binding(self, run_id)
     }
     fn validate_source_repair(&self, run_id: &str) -> Result<(), OrbitError> {
         NullRuntimeHost::validate_source_repair(self, run_id)

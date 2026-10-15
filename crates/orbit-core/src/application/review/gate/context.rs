@@ -223,9 +223,14 @@ const MAX_RESUME_CHAIN: usize = 64;
 fn lineage_root(runtime: &OrbitRuntime, run_id: &str) -> Result<String, OrbitError> {
     let mut root = run_id.to_string();
     for _ in 0..MAX_RESUME_CHAIN {
-        let source = runtime
-            .get_job_run_backend(&root)?
-            .and_then(|run| run.retry_source_run_id)
+        // A fresh admission carrying a published owner candidate spends the
+        // original lineage's review budget; adoption conveys no green verdict.
+        let adopted = runtime.read_owner_publication_binding(&root, false)?;
+        let source = adopted
+            .map(|binding| binding.source_run_id)
+            .or(runtime
+                .get_job_run_backend(&root)?
+                .and_then(|run| run.retry_source_run_id))
             .filter(|source| !source.trim().is_empty() && *source != root);
         match source {
             Some(source) => root = source,

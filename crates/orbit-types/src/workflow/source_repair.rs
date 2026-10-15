@@ -1,4 +1,4 @@
-//! Per-attempt operator authority for a cancelled owner's published candidate.
+//! Owner-local authority for preserved published candidates.
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -30,6 +30,18 @@ pub struct SourceRepairBinding {
     pub head_sha: String,
     pub base_sha: String,
     pub base_branch: String,
+    /// A stopped replacement attempt explicitly retained by this recovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded: Option<SourceRepairSuccessor>,
+}
+
+/// Exact newer binding acknowledged when recovering an older publication.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceRepairSuccessor {
+    pub run_id: String,
+    /// Digest of the entire stopped execution and its checkpoints.
+    pub digest: String,
 }
 
 /// One request key consumes one bounded repair reservation, even if cancelled.
