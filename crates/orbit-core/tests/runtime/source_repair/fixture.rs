@@ -90,6 +90,7 @@ impl Fixture {
         std::fs::create_dir_all(&activities).unwrap();
         for name in [
             "worktree_setup",
+            "candidate_resume",
             "git_commit",
             "git_rebase",
             "pr_prepare",
@@ -104,7 +105,7 @@ impl Fixture {
             )
             .unwrap();
         }
-        let yaml = "schemaVersion: 2\nkind: Job\nmetadata:\n  name: task_pr_pipeline\nspec:\n  state: enabled\n  task_delivery: {}\n  steps:\n    - {id: worktree, target: 'activity:worktree_setup'}\n    - {id: commit, target: 'activity:git_commit'}\n    - {id: prepare_branch, target: 'activity:pr_prepare'}\n    - {id: sync_base, target: 'activity:git_rebase'}\n    - {id: push, target: 'activity:git_push'}\n    - {id: pr_open, target: 'activity:pr_open'}\n    - {id: complete_pr, target: 'activity:pr_complete'}\n";
+        let yaml = "schemaVersion: 2\nkind: Job\nmetadata:\n  name: task_pr_pipeline\nspec:\n  state: enabled\n  task_delivery: {}\n  steps:\n    - {id: worktree, target: 'activity:worktree_setup'}\n    - {id: commit, target: 'activity:git_commit'}\n    - {id: prepare_branch, target: 'activity:pr_prepare'}\n    - {id: sync_base, target: 'activity:git_rebase'}\n    - {id: push, target: 'activity:git_push'}\n    - {id: pr_open, target: 'activity:pr_open'}\n    - {id: resume_candidate, target: 'activity:candidate_resume'}\n    - {id: complete_pr, target: 'activity:pr_complete'}\n";
         std::fs::write(jobs.join("task_pr_pipeline.yaml"), yaml).unwrap();
         let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
             .unwrap()

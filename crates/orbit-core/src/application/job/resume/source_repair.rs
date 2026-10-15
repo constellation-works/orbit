@@ -1,4 +1,6 @@
 //! Explicit owner-local recovery. Generic resume remains deliberately unchanged.
+mod adoption;
+
 use chrono::Utc;
 use orbit_common::fs::git::run_git;
 use orbit_common::protocol::tool_input::required_string;
@@ -555,12 +557,39 @@ impl OrbitRuntime {
         let pr = checkpoint("pr_open", "pr_open")?;
         let sync = checkpoint("sync_base", "git_rebase")?;
         let prepared = checkpoint("prepare_branch", "pr_prepare")?;
-        let branch = field(worktree, "head_ref")?;
+        let adopted = if source
+            .input
+            .as_ref()
+            .is_some_and(|input| input.get(SOURCE_REPAIR_KEY).is_some())
+        {
+            Some(self.source_repair_adopted_binding(
+                &source,
+                &task,
+                worktree,
+                checkpoint("resume_candidate", "candidate_resume")?,
+            )?)
+        } else {
+            None
+        };
+        // Setup precedes adoption and keeps its per-run branch. Only the
+        // authenticated operator continuation may replace that branch identity.
+        let branch = match &adopted {
+            Some(binding) => binding.branch.as_str(),
+            None => field(worktree, "head_ref")?,
+        };
         let head = field(push, "local_sha")?;
         let base_sha = field(sync, "base_sha")?;
         let base_branch = field(sync, "base")?;
         let number = field(pr, "pr_number")?;
         if task.github_pr_number() != Some(number)
+            || adopted.as_ref().is_some_and(|binding| {
+                binding.pull_request != number
+                    || binding.base_branch != base_branch
+                    || prepared.get("remote_sha").and_then(Value::as_str)
+                        != Some(binding.head_sha.as_str())
+                    || pr.get("pr_url").and_then(Value::as_str)
+                        != Some(binding.pull_request_url.as_str())
+            })
             || field(worktree, "job_run_id")? != source_id
             || field(prepared, "phase")? != "prepare"
             || field(sync, "phase")? != "rebase"
@@ -668,6 +697,11 @@ impl OrbitRuntime {
             .strip_prefix("github.com/")
             .ok_or_else(|| refuse("source repair requires an exact GitHub origin identity"))?
             .to_string();
+        if adopted.as_ref().is_some_and(|binding| {
+            binding.repository != repository || binding.remote_url != remote_url
+        }) {
+            return Err(refuse("adopted source repository identity changed"));
+        }
         let status = self.read_pull_request_status(number)?;
         let url = format!("https://github.com/{repository}/pull/{number}");
         if status.url.as_deref() != Some(&url)
