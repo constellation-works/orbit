@@ -41,7 +41,9 @@ use orbit_types::task::{
     CANDIDATE_DISCARDED_EVENT, ContextWideningStep, ExternalRef, Task, TaskArtifact,
     TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,
 };
-use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, OnDenial, Provider};
+use orbit_types::workflow::activity_job::{
+    ActivityV2, ActivityV2Spec, AgentLoopSpec, OnDenial, Provider,
+};
 use orbit_types::workflow::{
     FailureActivityCheckpoint, FinalRecoveryDecision, JobRun, JobRunState, PipelineState,
 };
@@ -4278,6 +4280,23 @@ type Widening = (String, ContextWideningStep, String, Vec<String>);
 type PreparationHook = Box<dyn FnMut(&Value) + Send>;
 
 impl LifecycleHost {
+    pub(super) fn stub(&self, action: &str, reply: Result<Value, String>) {
+        self.stubs.lock().unwrap().insert(
+            action.to_string(),
+            reply.map_err(|message| DispatchError::action_failed(action, message)),
+        );
+    }
+
+    pub(super) fn stub_calls_of(&self, action: &str) -> Vec<Value> {
+        self.stub_calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(name, _)| name == action)
+            .map(|(_, input)| input.clone())
+            .collect()
+    }
+
     fn new(repo: &Path) -> Self {
         Self {
             repo: repo.to_path_buf(),
@@ -4438,6 +4457,39 @@ impl LifecycleHost {
             .cloned()
             .unwrap_or_default()
     }
+}
+
+fn conflict_recovery_activity() -> ActivityV2 {
+    let asset = json!({
+        "schemaVersion": 2,
+        "kind": "Activity",
+        "metadata": { "name": "pr_conflict_recovery" },
+        "spec": {
+            "type": "agent_loop",
+            "description": "Resolve the stopped rebase.",
+            "instruction": "Resolve the stopped rebase.",
+            "provider": "codex",
+            "max_iterations": 1,
+            "wall_clock_timeout_seconds": 30,
+            "require_completion_envelope": true,
+            "on_denial": "terminate",
+        },
+    });
+    orbit_engine::activity_job::load_activity_asset(&asset.to_string())
+        .expect("conflict recovery fixture loads")
+        .spec
+}
+
+fn deterministic_activity(name: &str) -> ActivityV2 {
+    let asset = json!({
+        "schemaVersion": 2,
+        "kind": "Activity",
+        "metadata": { "name": name },
+        "spec": { "type": "deterministic", "description": name, "action": name, "config": {} },
+    });
+    orbit_engine::activity_job::load_activity_asset(&asset.to_string())
+        .expect("fixture activity loads")
+        .spec
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {

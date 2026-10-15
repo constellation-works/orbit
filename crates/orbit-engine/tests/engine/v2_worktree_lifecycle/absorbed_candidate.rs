@@ -13,7 +13,7 @@
 //! with its typed refusal instead of settling.
 
 use orbit_engine::{JobOutcome, V2SqliteSink, execute_job_with_resume};
-use orbit_types::workflow::activity_job::{ActivityV2, JobV2, V2AuditEventKind};
+use orbit_types::workflow::activity_job::{JobV2, V2AuditEventKind};
 
 use super::*;
 
@@ -943,39 +943,6 @@ fn absorbed_step() -> Value {
     })
 }
 
-pub(super) fn conflict_recovery_activity() -> ActivityV2 {
-    let asset = json!({
-        "schemaVersion": 2,
-        "kind": "Activity",
-        "metadata": { "name": "pr_conflict_recovery" },
-        "spec": {
-            "type": "agent_loop",
-            "description": "Resolve the stopped rebase.",
-            "instruction": "Resolve the stopped rebase.",
-            "provider": "codex",
-            "max_iterations": 1,
-            "wall_clock_timeout_seconds": 30,
-            "require_completion_envelope": true,
-            "on_denial": "terminate",
-        },
-    });
-    orbit_engine::activity_job::load_activity_asset(&asset.to_string())
-        .expect("conflict recovery fixture loads")
-        .spec
-}
-
-pub(super) fn deterministic_activity(name: &str) -> ActivityV2 {
-    let asset = json!({
-        "schemaVersion": 2,
-        "kind": "Activity",
-        "metadata": { "name": name },
-        "spec": { "type": "deterministic", "description": name, "action": name, "config": {} },
-    });
-    orbit_engine::activity_job::load_activity_asset(&asset.to_string())
-        .expect("fixture activity loads")
-        .spec
-}
-
 /// Run `job` as `prepared`'s run, keeping its audit events.
 fn execute(host: &LifecycleHost, prepared: &PreparedRebase, job: &JobV2) -> AbsorbedRun {
     let audit_root = TempDir::new().unwrap();
@@ -1012,25 +979,6 @@ fn execute(host: &LifecycleHost, prepared: &PreparedRebase, job: &JobV2) -> Abso
             .into_iter()
             .map(|event| event.kind)
             .collect(),
-    }
-}
-
-impl LifecycleHost {
-    pub(super) fn stub(&self, action: &str, reply: Result<Value, String>) {
-        self.stubs.lock().unwrap().insert(
-            action.to_string(),
-            reply.map_err(|message| DispatchError::action_failed(action, message)),
-        );
-    }
-
-    pub(super) fn stub_calls_of(&self, action: &str) -> Vec<Value> {
-        self.stub_calls
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(name, _)| name == action)
-            .map(|(_, input)| input.clone())
-            .collect()
     }
 }
 

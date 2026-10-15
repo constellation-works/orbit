@@ -129,7 +129,7 @@ fn shipped_sync_job(name: &str, conflict_recovery: bool) -> JobV2 {
     .unwrap()
     .spec;
     if conflict_recovery {
-        let recovery = super::absorbed_candidate::conflict_recovery_activity();
+        let recovery = super::conflict_recovery_activity();
         let step = job
             .steps
             .iter_mut()
@@ -676,8 +676,7 @@ fn exhausted_preparation_never_dispatches_source_recovery() {
     advances(&prepared, true, true);
     let mut job = shipped_sync_job("task_pr_pipeline", true);
     job.final_recovery_activity = Some("decide".into());
-    job.resolved_final_recovery_activity =
-        Some(super::absorbed_candidate::deterministic_activity("decide"));
+    job.resolved_final_recovery_activity = Some(super::deterministic_activity("decide"));
     prepared.host.stub("decide", Ok(json!({"unexpected":true})));
     let (result, events) = run_job(&prepared, &job);
     assert!(result.is_err(), "churn must exhaust: {result:?}");
