@@ -36,6 +36,12 @@ pub(super) fn job_log<H: RuntimeHost + ?Sized>(
             "the job log source is incomplete".to_string(),
         ));
     }
+    let source = response["source"].as_str();
+    if source.is_some_and(|source| source != SOURCE_RUN_LOG && source != SOURCE_JOB_API_LOG) {
+        return Err(OrbitError::Execution(
+            "the job log source is unknown".to_string(),
+        ));
+    }
     let selected = response["diagnostic"].as_str();
     if selected.is_none() && response["failure_regions"].is_object() {
         return bound_failure_regions(&response, job)
@@ -60,6 +66,13 @@ pub(super) fn job_log<H: RuntimeHost + ?Sized>(
     // preferred there so successful setup cannot supply the cause.
     let mut selected_lines = Vec::new();
     for line in text.lines() {
+        // A raw job API log can contain arbitrary tabs in printed commands or
+        // output. Its ISO timestamp precedes the payload, so recognize that
+        // shape before interpreting any tabs as gh's job/step columns.
+        if timestamp_prefixed(line) || source == Some(SOURCE_JOB_API_LOG) {
+            selected_lines.push(line);
+            continue;
+        }
         let mut columns = line.splitn(3, '\t');
         if let (Some(_), Some(line_step), Some(_)) =
             (columns.next(), columns.next(), columns.next())
@@ -76,6 +89,12 @@ pub(super) fn job_log<H: RuntimeHost + ?Sized>(
         selected_lines.push(line);
     }
     Ok(selected_lines.join("\n"))
+}
+
+fn timestamp_prefixed(line: &str) -> bool {
+    line.split_once(' ').is_some_and(|(timestamp, _)| {
+        timestamp.ends_with('Z') && timestamp.contains('T') && !timestamp.contains('\t')
+    })
 }
 
 /// Regions omit source bytes, so attribution must come from the collector's
