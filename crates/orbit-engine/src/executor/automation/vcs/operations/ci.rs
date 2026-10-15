@@ -64,12 +64,14 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
             "run jobs",
         )?;
         for job in listing["jobs"].as_array().into_iter().flatten() {
-            let failed_step = job["steps"]
+            let failed_steps: Vec<Value> = job["steps"]
                 .as_array()
                 .into_iter()
                 .flatten()
-                .find(|step| step["conclusion"].as_str() == Some("failure"))
-                .and_then(|step| step["name"].as_str());
+                .filter(|step| step["conclusion"].as_str() == Some("failure"))
+                .map(|step| step["name"].clone())
+                .collect();
+            let failed_step = failed_steps.first().and_then(Value::as_str);
             jobs.push(json!({
                 "run_id": run_id,
                 "job_id": job["id"],
@@ -78,6 +80,7 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
                 "status": job["status"],
                 "conclusion": job["conclusion"],
                 "failed_step": failed_step,
+                "failed_steps": failed_steps,
             }));
         }
     }
@@ -86,7 +89,9 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
 
 /// One failed job's bounded, redacted failed-step log. `fallback_error` is
 /// the redacted reason the read recovered no text, so the caller can tell an
-/// unreadable log from a readable one.
+/// unreadable log from a readable one. Complete command evidence or bounded
+/// failure regions accompany the display with their source; callers must bind
+/// them to the provider's failed job and step before recovery.
 pub(super) fn ci_job_log(input: &Value) -> Result<Value, OrbitError> {
     let run_id = required_string(input, "run_id")?;
     let job_id = required_string(input, "job_id")?;
@@ -120,6 +125,8 @@ pub(super) fn ci_job_log(input: &Value) -> Result<Value, OrbitError> {
         "truncated": read.log.truncated,
         "source_complete": read.log.source_complete,
         "diagnostic": read.log.diagnostic,
+        "failure_regions": read.log.failure_regions,
+        "source": read.source,
         "fallback_error": read.fallback_error,
     }))
 }

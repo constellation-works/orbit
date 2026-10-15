@@ -960,6 +960,12 @@ existing recovery activities, final validation and push do the repair:
   whose job log shows a code failure is repaired, with that head's failed step,
   error signature and log excerpt as evidence. A conflict is rebased onto the
   current base by PR conflict recovery.
+- A job log that exceeds the display or full-command retention limit can still
+  supply bounded failure regions. Recovery requires a fully scanned source,
+  complete command and region selection, and exactly one provider-reported
+  failed step. Retained job/step columns must agree throughout; raw job logs
+  require a unique completed failed command. Missing provenance, conflicting
+  labels and partial selections stop recovery without spending an attempt.
 - An admitted required-check repair may change the source files needed to fix
   its evidenced failure outside the original task description or selectors,
   including a defect already on the shared base. Ordinary step recovery keeps

@@ -1,6 +1,7 @@
 //! Resumed auto-fix authority through the public job and PR boundaries.
 
 use super::*;
+use std::io::Write as _;
 
 // A successful publication checkpoint deliberately keeps H0 when completion
 // fails after repairing it. Resume executes completion as R2, retaining R0's
@@ -1141,6 +1142,212 @@ fn auto_fix_anchors_emitted_failure_after_printed_commands_and_before_cleanup() 
                     assert!(fx.merge_requests().is_empty());
                     assert_eq!(host.status(TASK_ID), TaskStatus::Review);
                 });
+            }
+        },
+    );
+}
+
+/// Oversized evidence must reach public repair admission without granting
+/// authority to partial, ambiguous or differently attributed regions.
+#[test]
+fn auto_fix_preserves_complete_oversized_failure_regions() {
+    isolated(
+        "auto_fix::auto_fix_preserves_complete_oversized_failure_regions",
+        |sandbox| {
+            for case in [
+                "columns",
+                "unattributed",
+                "raw",
+                "runner_regions",
+                "source_incomplete",
+                "source_missing",
+                "command_incomplete",
+                "selection_incomplete",
+                "selection_missing",
+                "source_unknown",
+                "provenance_missing",
+                "step_missing",
+                "multiple_steps",
+                "job_conflict",
+                "step_conflict",
+                "mixed_labels",
+                "omitted_conflict",
+                "ambiguous_raw",
+                "tail_only",
+            ] {
+                writeln!(std::io::stderr(), "oversized-failure-region-case: {case}").unwrap();
+                in_fresh_row(sandbox, |row| {
+                    let fx = Fixture::new(row);
+                    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+                    open_for_completion(&fx, &host);
+                    let label = if case == "unattributed" {
+                        "UNKNOWN STEP"
+                    } else {
+                        "Tests"
+                    };
+                    let columns = format!("test\t{label}\t");
+                    let prefix = if matches!(case, "raw" | "ambiguous_raw") {
+                        ""
+                    } else {
+                        &columns
+                    };
+                    let padding =
+                        format!("{prefix}PASS [ 0.001s] suite passing_test\n").repeat(6000);
+                    let failure = if case == "runner_regions" {
+                        "error[E0433]: cannot find module `real_failure`"
+                    } else {
+                        "FAIL [ 0.123s] suite real_failure"
+                    };
+                    let mut raw = format!(
+                        "{prefix}##[group]Run cargo nextest run\n{prefix}##[endgroup]\n{padding}{prefix}{failure}\n{prefix}thread 'real_failure' panicked at tests/sample.rs:12:3:\n{prefix}assertion failed: operation completed\n{padding}{prefix}##[error]Process completed with exit code 100.\n"
+                    );
+                    if case == "omitted_conflict" {
+                        raw = raw.replacen("test\tTests\tPASS", "test\tOther\tPASS", 1);
+                    } else if case == "ambiguous_raw" {
+                        raw.insert_str(0, "##[group]Run earlier\n##[endgroup]\n##[error]Process completed with exit code 1.\n");
+                    }
+                    assert!(
+                        raw.len() > 262_144,
+                        "exercise the full-command retention cap"
+                    );
+                    let mut collector =
+                        orbit_tools::github_cli::StreamedLogCollector::new(65_536, 40);
+                    collector.push(raw.as_bytes());
+                    let log = collector.finish();
+                    assert!(log.source_complete && log.truncated && log.diagnostic.is_none());
+                    let regions = log.failure_regions.unwrap();
+                    assert!(regions["text"].as_str().unwrap().len() <= 65_536);
+                    assert_eq!(
+                        regions["command_complete"],
+                        !matches!(case, "omitted_conflict" | "ambiguous_raw")
+                    );
+                    let source = if prefix.is_empty() {
+                        "job_api_log"
+                    } else {
+                        "run_log"
+                    };
+                    let mut response = json!({"log":log.text, "truncated":true,
+                        "source_complete":true, "source":source, "failure_regions":regions});
+                    let mut job = json!({"name":"test", "workflow":"CI", "conclusion":"failure",
+                        "run_id":10, "job_id":11, "failed_step":"Tests", "failed_steps":["Tests"]});
+                    match case {
+                        "source_incomplete" => response["source_complete"] = json!(false),
+                        "source_missing" => {
+                            response.as_object_mut().unwrap().remove("source_complete");
+                        }
+                        "command_incomplete" => {
+                            response["failure_regions"]["command_complete"] = json!(false)
+                        }
+                        "selection_incomplete" => {
+                            response["failure_regions"]["selection_complete"] = json!(false)
+                        }
+                        "selection_missing" => {
+                            response["failure_regions"]
+                                .as_object_mut()
+                                .unwrap()
+                                .remove("selection_complete");
+                        }
+                        "source_unknown" => response["source"] = json!("unknown"),
+                        "provenance_missing" => {
+                            response.as_object_mut().unwrap().remove("source");
+                        }
+                        "step_missing" => {
+                            job.as_object_mut().unwrap().remove("failed_steps");
+                        }
+                        "multiple_steps" => job["failed_steps"] = json!(["Tests", "Other"]),
+                        "job_conflict" => {
+                            let text = response["failure_regions"]["text"].as_str().unwrap();
+                            response["failure_regions"]["text"] =
+                                json!(text.replace("test\t", "other\t"));
+                        }
+                        "step_conflict" | "mixed_labels" => {
+                            let text = response["failure_regions"]["text"].as_str().unwrap();
+                            response["failure_regions"]["text"] = json!(text.replacen(
+                                "test\tTests\t",
+                                if case == "step_conflict" {
+                                    "test\tOther\t"
+                                } else {
+                                    "test\tUNKNOWN STEP\t"
+                                },
+                                1
+                            ));
+                        }
+                        "tail_only" => {
+                            response.as_object_mut().unwrap().remove("failure_regions");
+                        }
+                        _ => {}
+                    }
+                    // Exercise the real private adapter and streaming read as
+                    // part of public completion, not just a scripted projection.
+                    if matches!(
+                        case,
+                        "columns" | "unattributed" | "runner_regions" | "multiple_steps"
+                    ) {
+                        fs::write(fx.forge.join("failed-command-log"), raw).unwrap();
+                        let mut steps = vec![json!({"name":"Tests", "conclusion":"failure"})];
+                        if case == "multiple_steps" {
+                            steps.push(json!({"name":"Other", "conclusion":"failure"}));
+                        }
+                        fs::write(
+                            fx.forge.join("failed-command-jobs"),
+                            serde_json::to_vec(&json!({"jobs":[{
+                                "id":11, "name":"test", "conclusion":"failure", "steps":steps
+                            }]}))
+                            .unwrap(),
+                        )
+                        .unwrap();
+                    } else {
+                        host.script("ci.job_log", response);
+                        host.script("ci.commit_jobs", json!({"jobs":[job]}));
+                    }
+                    fx.script_checks(&["failure"]);
+                    let mut input = fx.complete_ungated_input();
+                    input["auto_fix"] = json!(true);
+                    input["completion"] = json!("review");
+                    let error = action(&host, "pr_complete", &input)
+                        .unwrap_err()
+                        .to_string();
+                    let actionable =
+                        matches!(case, "columns" | "unattributed" | "raw" | "runner_regions");
+                    assert_eq!(
+                        orbit_types::workflow::is_pr_auto_fix_check_repair(&error),
+                        actionable,
+                        "{case}: {error}"
+                    );
+                    assert_eq!(
+                        pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).len(),
+                        usize::from(actionable),
+                        "{case}: invalid evidence spends no repair authority"
+                    );
+                    if actionable {
+                        let signature = if case == "runner_regions" {
+                            "error[e0433]: cannot find module `real_failure`"
+                        } else {
+                            "fail [ <n>.<n>s] suite real_failure"
+                        };
+                        assert!(
+                            error.contains(&format!("with signature `{signature}`")),
+                            "{case}: stable failure identity: {error}"
+                        );
+                        assert!(
+                            error.contains(failure),
+                            "{case}: preserve the middle failure: {error}"
+                        );
+                        assert!(
+                            error.contains("assertion failed: operation completed"),
+                            "{case}: preserve captured output: {error}"
+                        );
+                    } else {
+                        assert!(error.contains("could not be read"), "{case}: {error}");
+                    }
+                    assert!(error.len() < 12000, "repair evidence stays bounded");
+                    assert!(fx.merge_requests().is_empty());
+                    assert!(!fx.forge_calls().iter().any(|call| call == "run rerun"));
+                    assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+                    assert_eq!(fx.head(), fx.candidate);
+                    assert_eq!(fx.remote_tip(BASE), fx.base_sha);
+                });
+                test_env::record_scenario_pass(&format!("oversized_failure_regions/{case}"));
             }
         },
     );

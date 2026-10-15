@@ -8151,6 +8151,17 @@ merge() {
     printf '{"sha":"%s","merged":true,"message":"Pull Request successfully merged"}\n' "$(cat "$forge/merged")"
 }
 
+if [ -f "$forge/failed-command-log" ]; then
+    case "$1 ${2:-}" in
+        "run view") cat "$forge/failed-command-log"; exit ;;
+        "api --method")
+            case "${4:-}" in
+                'repos/{owner}/{repo}/actions/runs') echo '{"workflow_runs":[{"id":10,"name":"CI"}]}'; exit ;;
+                'repos/{owner}/{repo}/actions/runs/10/jobs') cat "$forge/failed-command-jobs"; exit ;;
+            esac ;;
+    esac
+fi
+
 if [ -f "$forge/infrastructure" ]; then
     phase=before
     [ ! -f "$forge/rerun-applied" ] || phase=after

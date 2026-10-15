@@ -55,6 +55,9 @@ use super::git::{git_command_success, git_output};
 use super::operations;
 use super::pr::{CheckState, PullRequestStatus};
 
+mod log;
+use log::job_log;
+
 /// Largest log excerpt a stop's evidence carries per failed job.
 const MAX_EXCERPT_BYTES: usize = 2 * 1024;
 
@@ -215,7 +218,7 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
             ));
         };
         let label = job_label(job);
-        let log = match job_log(host, workspace, run_id, job_id, failed_step(job)) {
+        let log = match job_log(host, workspace, run_id, job_id, job) {
             Ok(log) => log,
             Err(error) => {
                 return Ok(unclassified(format!(
@@ -417,7 +420,7 @@ pub(super) fn head_check_evidence<H: RuntimeHost + ?Sized>(
                 "the failed job behind check '{label}' reported no identity"
             ));
         };
-        let log = match job_log(host, workspace, run_id, job_id, failed_step(job)) {
+        let log = match job_log(host, workspace, run_id, job_id, job) {
             Ok(log) => log,
             Err(error) => {
                 return HeadCheckEvidence::Stop(format!(
@@ -486,10 +489,9 @@ fn inherited<H: RuntimeHost + ?Sized>(
         else {
             return Err(format!("a failed job on base {base} reported no identity"));
         };
-        let log =
-            job_log(host, workspace, run_id, job_id, failed_step(candidate)).map_err(|error| {
-                format!("the log of the failed job on base {base} could not be read: {error}")
-            })?;
+        let log = job_log(host, workspace, run_id, job_id, candidate).map_err(|error| {
+            format!("the log of the failed job on base {base} could not be read: {error}")
+        })?;
         let found = error_signature(&log, failed_step(candidate));
         if found.step_fallback {
             return Err(format!(
@@ -544,7 +546,7 @@ pub(super) fn landed_check_repair<H: RuntimeHost + ?Sized>(
             workspace,
             job["run_id"].as_u64()?,
             job["job_id"].as_u64()?,
-            failed_step(job),
+            job,
         )
         .ok()?;
         if transient_evidence(&log).is_some() {
@@ -564,7 +566,7 @@ pub(super) fn landed_check_repair<H: RuntimeHost + ?Sized>(
                 workspace,
                 base_job["run_id"].as_u64()?,
                 base_job["job_id"].as_u64()?,
-                failed_step(base_job),
+                base_job,
             )
             .ok()?;
             let base_signature = error_signature(&base_log, failed_step(base_job));
@@ -606,65 +608,6 @@ fn commit_jobs<H: RuntimeHost + ?Sized>(
     response["jobs"].as_array().cloned().ok_or_else(|| {
         OrbitError::Execution(format!("the jobs answer for {commit} carried no job list"))
     })
-}
-
-/// One failed job's log. A read that recovered no text, which the log
-/// reader reports beside an empty log, is a failed read.
-fn job_log<H: RuntimeHost + ?Sized>(
-    host: &H,
-    workspace: &Path,
-    run_id: u64,
-    job_id: u64,
-    step: &str,
-) -> Result<String, OrbitError> {
-    let response = host.run_private_vcs_operation(
-        operations::CI_JOB_LOG,
-        json!({
-            "run_id": run_id.to_string(),
-            "job_id": job_id.to_string(),
-            "workspace_path": workspace.to_string_lossy(),
-        }),
-    )?;
-    if let Some(reason) = response["fallback_error"].as_str() {
-        return Err(OrbitError::Execution(format!(
-            "the log read recovered no text: {reason}"
-        )));
-    }
-    if response["source_complete"] == false {
-        return Err(OrbitError::Execution(
-            "the job log source is incomplete".to_string(),
-        ));
-    }
-    let selected = response["diagnostic"].as_str();
-    if response["truncated"] == true && selected.is_none() {
-        return Err(OrbitError::Execution(
-            "the job log is truncated and has no complete failing command".to_string(),
-        ));
-    }
-    let text = selected
-        .or_else(|| response["log"].as_str())
-        .ok_or_else(|| OrbitError::Execution("the log answer carried no log".to_string()))?;
-    // gh's columns bind command evidence to the provider's failed step.
-    // Raw job API logs have no columns; a unique complete failed command is
-    // preferred there so successful setup cannot supply the cause.
-    let mut selected_lines = Vec::new();
-    for line in text.lines() {
-        let mut columns = line.splitn(3, '\t');
-        if let (Some(_), Some(line_step), Some(_)) =
-            (columns.next(), columns.next(), columns.next())
-            && line_step != step
-            && line_step != "UNKNOWN STEP"
-        {
-            if selected.is_some() {
-                return Err(OrbitError::Execution(
-                    "the failing command does not match the failed step".to_string(),
-                ));
-            }
-            continue;
-        }
-        selected_lines.push(line);
-    }
-    Ok(selected_lines.join("\n"))
 }
 
 /// A job that finished without passing.
