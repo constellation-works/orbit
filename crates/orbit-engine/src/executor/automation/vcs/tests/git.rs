@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use orbit_common::fs::file_lock::FileLockOptions;
+use orbit_common::fs::file_lock::{FileLockOptions, try_acquire_exclusive_file_lock};
 use orbit_common::fs::git::{git_common_dir, git_fetch_lock_target, is_git_ref_update_contention};
 use orbit_common::fs::io::with_exclusive_file_lock_options;
 use orbit_common::test_env::{assert_child_test_passed, canonical_temp_dir, run_child_test};
@@ -134,15 +134,45 @@ fn stalled_delivery_fetch_releases_the_lock_before_a_waiter_times_out() {
             ..GitTimeoutBudget::DEFAULT
         });
         let result = fetch_remote_base_within(&holder_repo, "main", hold_limit);
-        done.send(holder_started.elapsed()).unwrap();
+        done.send((holder_started.elapsed(), format!("{result:?}")))
+            .unwrap();
         result
     });
 
     let give_up = Instant::now() + Duration::from_secs(20);
     while !started.exists() {
         assert!(Instant::now() < give_up, "the stalled fetch never started");
-        thread::sleep(Duration::from_millis(20));
+        match holder_done.recv_timeout(Duration::from_millis(20)) {
+            Ok((elapsed, outcome)) => {
+                let joined = holder.join();
+                panic!(
+                    "holder exited before the lock waiter after {elapsed:?}; \
+                     phase=fetch_remote_base_within, ssh_started={}, outcome={outcome}, \
+                     joined={joined:?}, repo={}, ssh={}",
+                    started.exists(),
+                    repo.display(),
+                    ssh.display()
+                );
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!(
+                    "holder panicked before the lock waiter: {:?}",
+                    holder.join()
+                );
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
     }
+
+    // Probe the same dot-prefixed sibling acquired by the real waiter below.
+    // A marker alone cannot prove that the holder still owns this lock.
+    let lock_path = lock_target.with_file_name(".orbit-git-fetch.lock");
+    assert!(
+        try_acquire_exclusive_file_lock(&lock_path, "fixture contention probe")
+            .unwrap()
+            .is_none(),
+        "the SSH shim must start while the holder owns the fetch lock"
+    );
 
     // A pilot- or final-recovery-style waiter, mid-hold, outwaits the holder.
     let waited = Instant::now();
@@ -159,12 +189,29 @@ fn stalled_delivery_fetch_releases_the_lock_before_a_waiter_times_out() {
     .expect("a waiter must acquire the lock once the holder's deadline passes, not time out");
     assert!(acquired < waiter_wait, "waited {acquired:?}");
 
-    let held = holder_done.recv().unwrap();
+    let (held, outcome) = holder_done.recv().unwrap();
     assert!(
         held < hold_limit + Duration::from_secs(2),
         "the holder kept the lock {held:?} against a {hold_limit:?} limit"
     );
     let error = holder.join().unwrap().expect_err("a stalled fetch fails");
+    assert!(
+        matches!(error, orbit_common::OrbitError::ExecutionTimeout { .. }),
+        "the SSH stall must end through the holder's deadline: {error}"
+    );
+    tracing::subscriber::with_default(
+        tracing_subscriber::fmt()
+            .with_test_writer()
+            .without_time()
+            .with_ansi(false)
+            .finish(),
+        || {
+            tracing::info!(
+                ?held, ?acquired, %outcome,
+                "SSH shim started; fetch lock contention confirmed; holder released; waiter acquired"
+            );
+        },
+    );
     let error = error.to_string();
     assert!(
         error.contains(TRANSIENT_FAILURE_MARKER),
