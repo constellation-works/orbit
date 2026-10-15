@@ -16,6 +16,8 @@ use tempfile::{TempDir, tempdir};
 #[path = "../support/child_guard.rs"]
 mod child_guard;
 
+mod native_reads;
+
 struct Fixture {
     _temp: TempDir,
     home: PathBuf,

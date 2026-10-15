@@ -638,7 +638,7 @@ impl OrbitRuntime {
             execution_kind,
             plugin,
             audit,
-            |params, invocation| self.record_tool_dispatch_audit(params, invocation),
+            |params, invocation| self.record_audit_event_with_invocation(params, invocation),
             |input| {
                 enforce_plugin_callback_allowlist(
                     &self.global_root(),

@@ -886,7 +886,10 @@ MCP `tools/call` is **not** an unaudited read: even `orbit.workspace.list` must 
 its durable audit event. An old process with a read-only newer store is therefore not a
 usable MCP authority, even when `orbit task show` works at the CLI. Audit events are
 writes, so a read-only command records no audit row and prints a `failed to write audit
-event` warning.
+event` warning. This differs from a compatible foreign executable generation
+whose store schema exactly matches the reader: native CLI and tool-dispatch
+audit events can append to that existing database through a separate,
+migration-free connection while operational state handles remain read-only.
 
 The workspace layout has no single write choke point, so it cannot be held read-only:
 a read-compatible layout migration the binary lacks refuses the workspace like a breaking
