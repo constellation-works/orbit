@@ -31,9 +31,12 @@ README frames tasks, jobs, and activities as substrate. Should Orbit keep this l
 
 The schema names more providers than Orbit can execute — `openai_compat` has no CLI runtime. Do we keep the closed enum and wire each runtime deliberately, or move toward a more explicit "provider capability" registry?
 
-### 1.4 Should Orbit enforce tool allowlists itself?
+### 1.4 Should tool policy extend to provider-native tools?
 
-Agent dispatch advises rather than enforces: the declared `tools:` list is delegated to the provider harness. Does the CLI agent path need a wrapper so `tools:` means the same thing everywhere?
+Orbit enforces activity tool policy at its managed MCP and `orbit tool run`
+boundaries when the provider forwards the managed envelope; provider-native
+tools remain delegated to the harness. Should the CLI agent path add a wrapper
+so activity tool policy also covers those native tools?
 
 ### 1.5 Which limits should stay structural literals?
 

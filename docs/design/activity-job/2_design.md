@@ -1481,9 +1481,14 @@ This feature spans a migration, so the retained surfaces are explicit.
 
 Seeded assets are part of the design. Today they include:
 
-- small reference activities such as `agent_loop_reference` and `agent_loop_cli_reference`
+- operational activities such as `agent_implement` and `worktree_setup`
 - control-plane jobs such as `task_gate_pipeline`
 - higher-level dispatch workflows such as `task_auto_pipeline`
+
+The seeded catalog is defined by `DEFAULT_ACTIVITY_FILES` and
+`DEFAULT_JOB_FILES` in `crates/orbit-core/src/runtime/assets.rs`. Reference
+activities such as `agent_loop_reference` and `agent_loop_cli_reference` live
+under `crates/orbit-core/assets/activities/examples/` and are not seeded.
 
 The gate/auto assets from [T20260419-0622-3] and [T20260419-0623] exercise real v2 constructs:
 
