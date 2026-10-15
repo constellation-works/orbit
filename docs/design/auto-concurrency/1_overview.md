@@ -32,10 +32,18 @@ forecast and measured host point;
 that confirms the reporting path, not a useful accuracy cohort or a safe
 threshold. Historical Mac worker minutes without corrected CPU-unit
 provenance remain stored but are excluded from profiles, so the eligible Mac
-cohort is newer still. Keep the fleet's shadow rollout separate from the
-delivered capability. See [ORB-15980] and [ORB-15994] for the native
-measurement repairs and [ORB-15775] for forecast recording and accuracy
-reporting.
+cohort is newer still. Keep that historical fleet snapshot separate from the
+delivered capability; it is not a current fleet-mode claim. See [ORB-15980]
+and [ORB-15994] for the native measurement repairs and [ORB-15775] for
+forecast recording and accuracy reporting.
+
+The accuracy report now supports operator-selected forecast-time, drain and
+recorded-mode cohorts, and separates unfinished target minutes from mature
+sampling gaps. This is delivered reporting capability, with no admission or
+configuration retune. A selected cohort does not attest source/build-budget
+homogeneity, and does not turn sparse per-task profiles or wide spread into
+calibrated confidence. See [§8.1](2_design.md#81-the-accuracy-report) and the
+[forecast accuracy runbook](../../runbooks/forecast-accuracy.md).
 
 A drain's concurrency today is a number the operator picks.
 **Auto-concurrency** admits tasks by predicted host load instead, up to that
