@@ -75,7 +75,7 @@ impl OrbitRuntime {
                 "a landing job is still live; retry refused".into(),
             ));
         }
-        let observation = self.observe_claim_handoff(&accepted.handoff, false)?;
+        let observation = self.observe_accepted_claim_handoff(&accepted)?;
         let context = ClaimInvocation::trusted_operator(
             claim.claim.task_id.clone(),
             claim.claim.claim_id.clone(),

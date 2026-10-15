@@ -89,7 +89,7 @@ impl OrbitRuntime {
     /// Resolve a handoff to the claim that owns it. Claims are few and the
     /// handoff identity is a digest of the accepted record, so this is an exact
     /// match rather than a search over task state.
-    pub(super) fn landing_claim(
+    pub(crate) fn landing_claim(
         &self,
         handoff_id: &str,
     ) -> Result<(ClaimInspection, AcceptedHandoff), OrbitError> {

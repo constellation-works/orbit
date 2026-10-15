@@ -250,6 +250,8 @@ pub enum ClaimMutation {
     },
     /// Atomically compare the stopped/uncertain attempt and reserve its retry.
     RetryLanding(orbit_types::workflow::handoff::LandingRetryRequest),
+    /// Owner-only durable base-update reservation; acceptance remains immutable.
+    ReserveBaseUpdate(orbit_types::workflow::PrBaseUpdateReservation),
     /// Attach only the run carrying this receipt's exact reserved attempt.
     AttachLandingRetry {
         handoff_id: String,

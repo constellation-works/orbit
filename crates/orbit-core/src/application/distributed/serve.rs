@@ -402,6 +402,28 @@ impl crate::OrbitRuntime {
         handoff: &TaskHandoff,
         remote: bool,
     ) -> Result<HandoffObservation, OrbitError> {
+        self.observe_handoff_candidate(handoff, remote, None)
+    }
+
+    /// Only a stored acceptance may use provider base-only adoption. Initial
+    /// settlement continues through the strict published candidate observer.
+    pub(crate) fn observe_accepted_claim_handoff(
+        &self,
+        accepted: &orbit_types::workflow::handoff::AcceptedHandoff,
+    ) -> Result<HandoffObservation, OrbitError> {
+        let current = self.accepted_task_handoff(&accepted.handoff.claim_id)?;
+        if current != *accepted {
+            return Err(refused("accepted handoff changed before observation"));
+        }
+        self.observe_handoff_candidate(&accepted.handoff, false, Some(accepted))
+    }
+
+    fn observe_handoff_candidate(
+        &self,
+        handoff: &TaskHandoff,
+        remote: bool,
+        accepted: Option<&orbit_types::workflow::handoff::AcceptedHandoff>,
+    ) -> Result<HandoffObservation, OrbitError> {
         let receipt = self.claim_receipt(&handoff.claim_id)?;
         let candidate = match handoff.candidate.delivery {
             HandoffDelivery::NoDiff { .. } => orbit_engine::observe_no_diff_candidate(
@@ -435,6 +457,13 @@ impl crate::OrbitRuntime {
             // [ORB-12500] The owner reads the published pull request itself:
             // the provider names the delivery, and the candidate and base
             // objects are resolved in this checkout.
+            HandoffDelivery::PullRequest { .. } if accepted.is_some() => {
+                orbit_engine::observe_accepted_published_handoff(
+                    self,
+                    &self.paths().repo_root,
+                    accepted.ok_or_else(|| refused("accepted handoff required"))?,
+                )?
+            }
             HandoffDelivery::PullRequest { .. } => orbit_engine::observe_published_candidate(
                 self,
                 &self.paths().repo_root,

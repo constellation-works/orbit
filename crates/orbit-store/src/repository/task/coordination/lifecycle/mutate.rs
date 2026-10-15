@@ -20,6 +20,69 @@ const DECISION_STEP: &str = "claim decision";
 const COMMIT_STEP: &str = "claim commit";
 
 impl TaskCommitBoundary {
+    /// Check native/landing authority and reserve a base update through the
+    /// claim journal, never the generic task writer fenced by this live claim.
+    pub fn reserve_handoff_base_update(
+        &self,
+        auth: &ClaimInvocation,
+        request: &orbit_types::workflow::PrBaseUpdateReservation,
+    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
+        use orbit_types::workflow::{PrBaseUpdateAdmission, decide_pr_base_update};
+        self.with_admission(|| {
+            let authority = self.claim_authority(auth, false)?;
+            self.check_base_update_scope(auth, &authority.state, request)?;
+            let history =
+                crate::repository::task::v2::task_history_from_events(authority.bundle.events);
+            let decision = decide_pr_base_update(&history, request);
+            if matches!(decision, PrBaseUpdateAdmission::Reserved) {
+                let mutation = ClaimMutation::ReserveBaseUpdate(request.clone());
+                let mutation_id =
+                    format!("base-update:{}:{}", request.repository, request.pr_number);
+                let receipt_id = sha256_hex(encode(&(&auth.claim_id, &mutation_id))?.as_bytes());
+                let input = encode(&(
+                    &auth.task_id,
+                    &auth.claim_id,
+                    &auth.machine_id,
+                    &auth.run,
+                    auth.operator,
+                    &mutation,
+                ))?;
+                self.mutate_claim_locked(auth, &mutation, &receipt_id, input)?;
+            }
+            Ok(decision)
+        })
+    }
+
+    fn check_base_update_scope(
+        &self,
+        auth: &ClaimInvocation,
+        state: &ClaimInspection,
+        request: &orbit_types::workflow::PrBaseUpdateReservation,
+    ) -> Result<(), OrbitError> {
+        if state.claim.phase != ExecutionClaimPhase::HandedOff {
+            return Err(invalid("current handed-off landing claim required"));
+        }
+        self.check_handoff_landing(auth, state)?;
+        let accepted = self.accepted_handoff(&auth.claim_id)?;
+        let candidate = &accepted.handoff.candidate;
+        if request.execution != accepted.handoff_id
+            || request.repository != candidate.repository
+            || request.head_sha != candidate.candidate.commit
+            || request.head_branch != candidate.source_branch
+            || request.base_branch != candidate.base_branch
+            || candidate.delivery
+                != (orbit_types::workflow::handoff::HandoffDelivery::PullRequest {
+                    number: request
+                        .pr_number
+                        .parse()
+                        .map_err(|_| invalid("base update PR identity required"))?,
+                })
+        {
+            return Err(invalid("base update differs from accepted handoff"));
+        }
+        Ok(())
+    }
+
     /// Trusted-context seam for application callers and the later generic tool adapter.
     /// Missing invocation context is always refused, even for an unclaimed task.
     pub fn mutate_execution_claim(
@@ -96,6 +159,11 @@ impl TaskCommitBoundary {
             // admission, so historical approval cannot resurrect revoked work.
             let authority = self.claim_authority(auth, false)?;
             self.verify_reserved_landing_retry(auth, &authority.state, request)?;
+        }
+        if matches!(mutation, ClaimMutation::ReserveBaseUpdate(_)) {
+            return Err(invalid(
+                "base update reservation already recorded; observe its outcome instead of repeating a provider write",
+            ));
         }
         // A persisted send intent is uncertainty, never permission to send again.
         // The landing consumer must reconcile external state, including after a
@@ -610,6 +678,34 @@ impl TaskCommitBoundary {
                         &mut handoff_effects,
                     )?;
                     state.last_event = "landing_dispatched".into();
+                }
+                ClaimMutation::ReserveBaseUpdate(request) => {
+                    use orbit_types::workflow::{
+                        PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission, decide_pr_base_update,
+                    };
+                    self.check_base_update_scope(auth, &state, request)?;
+                    let history = crate::repository::task::v2::task_history_from_events(
+                        bundle.events.clone(),
+                    );
+                    if !matches!(
+                        decide_pr_base_update(&history, request),
+                        PrBaseUpdateAdmission::Reserved
+                    ) {
+                        return Err(invalid("the cumulative base update is already reserved"));
+                    }
+                    params
+                        .append_history
+                        .push(orbit_types::task::TaskHistoryEntry {
+                            at: Utc::now(),
+                            by: auth.machine_id.clone(),
+                            event: PR_BASE_UPDATE_RESERVED_EVENT.into(),
+                            note: Some(encode(request)?),
+                            from_status: None,
+                            to_status: None,
+                            operation_id: None,
+                            decision: None,
+                        });
+                    state.last_event = "handoff_base_update_admitted".into();
                 }
                 ClaimMutation::RetryLanding(request) => {
                     self.reserve_landing_retry(

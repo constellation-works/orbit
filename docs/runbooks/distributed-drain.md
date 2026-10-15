@@ -1206,6 +1206,33 @@ one. From then on:
   failure past that budget, or one the landing cannot classify (its jobs or
   log are unreadable), stops the landing with the task in `review` and the
   classification in the stop evidence (`orbit task show <task-id>`).
+- An older published head can also lack a currently required context while
+  every reported check succeeded. With captured landing authority (or the
+  owner's `auto_fix` completion authority), recovery can update the branch
+  once when authenticated PR-run, integration, effective-rule revision and
+  complete workflow source evidence proves the old event cannot emit those
+  exact contexts and the freshly fetched descendant base does emit them.
+  The adapter supports literal PR synchronize triggers, literal branch lists,
+  unconditional jobs on supported literal hosted runners and its bounded
+  single-axis literal matrix names. It also
+  recognizes the adapter's finite live-PR-state REST projection and its exact
+  open-state dependent condition. Other needs/conditions, path filters,
+  reusable jobs and dynamic evidence refuse this recovery. A check name or an unrelated successful push is insufficient.
+  Every currently required and owner-owed check must actually succeed on the
+  new head before the normal conditional merge.
+
+  This uses the same cumulative base-update reservation as inherited failures:
+  one update per repository/PR on the owning task, recorded before mutation.
+  The owner rechecks current handoff authorization and pinned native/review
+  evidence in the owner claim/task transaction and again before the provider update; revoked
+  or unreadable authority cannot reserve an update.
+  Polls, sibling executions and restarts cannot reset it or extend its original
+  absolute deadline. An ambiguous provider reply is observed against the
+  remote head and exact clean merge tree; it never authorizes a repeated write.
+  Expiry stops further provider actions and waiting; an exact existing merge
+  can still settle through verified readback and the normal native gates.
+  Pending checks retain their ordinary bounded wait, and missing emission
+  never dispatches a source-repair agent.
 - Claims admitted before the change keep their `review` contract and still
   need **Approve handoff**.
 - Setting the key back to `review` (or removing it) stops every handoff that
@@ -1215,17 +1242,24 @@ one. From then on:
 Do not merge follower pull requests on the provider by hand. That skips the
 owner's validation gate, and the owner still has to settle the claim.
 
-If a follower's pull request was merged by hand anyway ([ORB-14175]), revoke the
-handoff and use **Recover claim → blocked** on the owner. Then move the task
-through `in-progress` back to `review` and complete it with an operator's
-evidence-bound desktop review. The task keeps the follower's `job_run_id` and
-`job_run_machine`. Completion reads the recovered claim and the accepted
-handoff for that exact host and run, takes the pull request from the handoff,
-reads it by number, and requires it to be merged into the landing branch.
+An authorized, stopped accepted handoff whose exact head is already merged
+can use **Retry landing** on the owner. The public retry also accepts a
+provider base-only update when fresh Git/provider evidence proves a two-parent
+clean merge of the immutable accepted candidate with a descendant landing base.
+It preserves the accepted candidate/base, native and review certificates,
+foreign leaf binding and original stopped attempt. An already-merged update
+requires its reported merge on the freshly fetched landing branch and the
+exact clean delivery tree; readback settles it without a second merge. Initial
+handoff acceptance remains strict, and the retry accepts no replacement-head
+or provider-evidence JSON from the caller.
 
-If the merged head is not the handed-off candidate (for example, after a base
-merge or a fix pushed by hand), the candidate's validation and review do not
-carry over, and the review gate cannot run on an already-merged head.
+A source edit, foreign merge, failed fetch or unavailable proof cannot use
+that exception. If deliberate operator recovery is needed, revoke the handoff
+and use **Recover claim → blocked** on the owner before moving the task through
+`in-progress` to `review`. The task keeps its original `job_run_id` and
+`job_run_machine`. Changed source needs fresh review and validation; the old
+certificate is never copied to a new head.
+
 Reconcile that head instead, as an operator on the owner (the owner checkout
 must hold the merged head and merge commit; `git fetch origin` there first):
 

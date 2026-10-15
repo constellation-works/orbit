@@ -76,7 +76,8 @@ pub use executor::automation::ci::log_signature as ci_log_signature;
 pub use executor::automation::ci::run_event as ci_run_event;
 pub use executor::automation::execute_action as execute_deterministic_action;
 pub use executor::automation::vcs::claim::{
-    observe_candidate, observe_no_diff_candidate, observe_published_candidate,
+    observe_accepted_published_handoff, observe_candidate, observe_no_diff_candidate,
+    observe_published_candidate,
 };
 pub use executor::automation::vcs::git::BaseSyncMode;
 pub use executor::automation::vcs::review_gate;

@@ -338,6 +338,8 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     // repair rewrites and lease-pushes the same branch.
     let mut pin = DeliveryPin::from_input(input);
     let mut head_lag = HeadLag::new(max_wait_seconds, poll_interval_seconds);
+    let mut base_candidate = None;
+    let mut base_adopted = false;
     let watch_only = auto_fix.is_some_and(AutoFix::watch_only);
     // Polls of a BLOCKED head that showed no failed and no running check.
     let mut unsettled_polls = 0_u32;
@@ -378,6 +380,42 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
             )?
         };
         let mut state = classify_pr_state(&status);
+        let mut base_refresh_wait = false;
+        if let Some(auto_fix) = auto_fix {
+            pin.ensure_candidate_identity(&status, pr_number)?;
+            if base_candidate.is_none() {
+                base_candidate = super::super::base_refresh::owner_candidate(
+                    Path::new(workspace_path),
+                    input,
+                    &pin,
+                    &status,
+                )?;
+            }
+            if let Some(candidate) = &base_candidate {
+                match super::super::base_refresh::recover(
+                    host,
+                    Path::new(workspace_path),
+                    &auto_fix.task_ids,
+                    &auto_fix.run_id,
+                    candidate,
+                    &status,
+                    completion_deadline_ms,
+                    false,
+                    None,
+                )? {
+                    super::super::base_refresh::RefreshStep::Changed => continue,
+                    super::super::base_refresh::RefreshStep::Wait => base_refresh_wait = true,
+                    super::super::base_refresh::RefreshStep::Adopted { waiting } => {
+                        if !base_adopted {
+                            pin.adopt_refreshed_candidate(status.head_sha.as_deref());
+                        }
+                        base_adopted = true;
+                        base_refresh_wait = waiting;
+                    }
+                    super::super::base_refresh::RefreshStep::None => {}
+                }
+            }
+        }
         if matches!(
             state,
             PrMergeState::Mergeable
@@ -399,7 +437,9 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 continue;
             }
             pin.ensure_pinned_candidate(&status, pr_number)?;
-            ensure_pr_head_is_reviewed(&status, pr_number, reviewed_head_sha.as_deref())?;
+            if !base_adopted {
+                ensure_pr_head_is_reviewed(&status, pr_number, reviewed_head_sha.as_deref())?;
+            }
         }
         state = checked_pr_state(
             host,
@@ -414,9 +454,34 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
             completion_deadline_ms,
         )
         .map_err(|reason| stopped(pr_number, &reason))?;
+        if !base_refresh_wait
+            && !base_adopted
+            && matches!(state, PrMergeState::Blocked(_))
+            && let (Some(auto_fix), Some(candidate)) = (auto_fix, base_candidate.as_ref())
+        {
+            match super::super::base_refresh::recover(
+                host,
+                Path::new(workspace_path),
+                &auto_fix.task_ids,
+                &auto_fix.run_id,
+                candidate,
+                &status,
+                completion_deadline_ms,
+                true,
+                None,
+            )? {
+                super::super::base_refresh::RefreshStep::Changed => continue,
+                super::super::base_refresh::RefreshStep::Wait
+                | super::super::base_refresh::RefreshStep::Adopted { waiting: true } => {
+                    base_refresh_wait = true
+                }
+                _ => {}
+            }
+        }
         let pending_required = matches!(state, PrMergeState::Pending);
-        let mut infrastructure_wait = false;
+        let mut infrastructure_wait = base_refresh_wait;
         if let Some(auto_fix) = auto_fix
+            && !base_refresh_wait
             && matches!(
                 state,
                 PrMergeState::Mergeable | PrMergeState::Pending | PrMergeState::Blocked(_)
@@ -434,7 +499,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
             {
                 return Err(stopped(pr_number, reason));
             }
-            infrastructure_wait = matches!(
+            infrastructure_wait |= matches!(
                 super::infrastructure::recover(
                     host,
                     auto_fix,
@@ -693,7 +758,14 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                         pr_number,
                         &mut merge_capabilities,
                     )?;
-                    let condition = merge_condition_sha(reviewed_head_sha.as_deref(), &pin);
+                    let condition = merge_condition_sha(
+                        if base_adopted {
+                            None
+                        } else {
+                            reviewed_head_sha.as_deref()
+                        },
+                        &pin,
+                    );
                     match request_merge(
                         host,
                         workspace_path,

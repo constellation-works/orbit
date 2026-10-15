@@ -241,6 +241,7 @@ fn a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts() {
         let sandbox = tempdir().unwrap();
         let mut context = owner_checkout(sandbox.path()).context;
         context.candidate.delivery = HandoffDelivery::PullRequest { number: 42 };
+        context.candidate.repository = "owner/repository".into();
         let intent_id = "handoff-1:42".to_string();
         // A lost merge reply leaves this intent for the next attempt to read.
         context.unresolved_merge_intent = Some(intent_id.clone());
@@ -394,6 +395,7 @@ fn only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair() {
         let sandbox = tempdir().unwrap();
         let mut context = owner_checkout(sandbox.path()).context;
         context.candidate.delivery = HandoffDelivery::PullRequest { number: 42 };
+        context.candidate.repository = "owner/repository".into();
         let host = OpenPullRequestHost::new(context, merge_state, json!([]));
 
         land_with(&host, json!({"max_wait_seconds": 0}))
@@ -473,6 +475,7 @@ fn an_owed_hosted_check_must_pass_before_the_owner_merges() {
         let sandbox = tempdir().unwrap();
         let mut context = owner_checkout(sandbox.path()).context;
         context.candidate.delivery = HandoffDelivery::PullRequest { number: 42 };
+        context.candidate.repository = "owner/repository".into();
         context.owed_hosted_checks = vec![OWED.into()];
         let host = OpenPullRequestHost::new(context, "CLEAN", rollup);
 
@@ -583,6 +586,7 @@ struct FakeForge {
     state: Mutex<ForgeState>,
     ops: Mutex<Vec<(String, Value)>>,
     updates: Mutex<Vec<HandoffLandingUpdate>>,
+    history: Mutex<Vec<orbit_types::task::TaskHistoryEntry>>,
 }
 
 impl FakeForge {
@@ -590,6 +594,7 @@ impl FakeForge {
         let host = owner_checkout(sandbox);
         let mut context = host.context;
         context.candidate.delivery = HandoffDelivery::PullRequest { number: 42 };
+        context.candidate.repository = "owner/repository".into();
         if owed {
             context.owed_hosted_checks = vec!["CI / clippy".into()];
         }
@@ -603,6 +608,7 @@ impl FakeForge {
             context,
             ops: Mutex::default(),
             updates: Mutex::default(),
+            history: Mutex::default(),
         }
     }
 
@@ -666,6 +672,44 @@ impl FakeForge {
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
+    fn admit_handoff_base_update(
+        &self,
+        _: &str,
+        request: &orbit_types::workflow::PrBaseUpdateReservation,
+    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
+        RuntimeHost::admit_pr_base_update(self, &[TASK_ID.into()], request)
+    }
+
+    fn get_task_history(
+        &self,
+        _: &str,
+    ) -> Result<Vec<orbit_types::task::TaskHistoryEntry>, OrbitError> {
+        Ok(self.history.lock().unwrap().clone())
+    }
+    fn admit_pr_base_update(
+        &self,
+        _: &[String],
+        request: &orbit_types::workflow::PrBaseUpdateReservation,
+    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
+        use orbit_types::workflow::{
+            PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission, decide_pr_base_update,
+        };
+        let mut history = self.history.lock().unwrap();
+        let decision = decide_pr_base_update(&history, request);
+        if matches!(decision, PrBaseUpdateAdmission::Reserved) {
+            history.push(orbit_types::task::TaskHistoryEntry {
+                at: chrono::Utc::now(),
+                by: "owner".into(),
+                event: PR_BASE_UPDATE_RESERVED_EVENT.into(),
+                note: Some(serde_json::to_string(request).unwrap()),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            });
+        }
+        Ok(decision)
+    }
     fn handoff_landing_context(
         &self,
         _handoff_id: &str,
@@ -690,6 +734,8 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
         let mut state = self.state.lock().unwrap();
         let candidate = &self.context.candidate;
         match operation {
+            "ci.current_gates" => Ok(json!({"gates_passed":true})),
+            "ci.emission_evidence" => Ok(json!({"evidence":null})),
             "pr.status" => {
                 let scripted_state = state.merge_states.front().copied();
                 if state.merge_states.len() > 1 {
@@ -708,6 +754,7 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                 });
                 Ok(json!({"pull_request": {
                     "number": 42,
+                    "url": "https://github.com/owner/repository/pull/42",
                     "state": if state.merged { "MERGED" } else { "OPEN" },
                     "headRefName": candidate.source_branch,
                     "baseRefName": candidate.base_branch,

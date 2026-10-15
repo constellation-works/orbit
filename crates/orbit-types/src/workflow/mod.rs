@@ -174,3 +174,9 @@ pub use source_repair::{
     SOURCE_REPAIR_KEY, SOURCE_REPAIR_LINKED, SOURCE_REPAIR_RESERVED, SourceRepairAdmission,
     SourceRepairBinding, source_repair_reservations,
 };
+
+mod pr_base_update;
+pub use pr_base_update::{
+    PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission, PrBaseUpdateReservation,
+    decide_pr_base_update, pr_base_update_reservations,
+};

@@ -944,6 +944,21 @@ impl RuntimeHost for OrbitRuntime {
         OrbitRuntime::admit_pr_auto_fix(self, request)
     }
 
+    fn admit_handoff_base_update(
+        &self,
+        handoff_id: &str,
+        request: &orbit_types::workflow::PrBaseUpdateReservation,
+    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
+        OrbitRuntime::admit_handoff_base_update(self, handoff_id, request)
+    }
+    fn admit_pr_base_update(
+        &self,
+        task_ids: &[String],
+        request: &orbit_types::workflow::PrBaseUpdateReservation,
+    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
+        OrbitRuntime::admit_pr_base_update(self, task_ids, request)
+    }
+
     fn admit_pr_infrastructure(
         &self,
         execution: &str,

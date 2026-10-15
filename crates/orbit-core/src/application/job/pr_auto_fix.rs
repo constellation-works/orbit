@@ -199,3 +199,107 @@ impl OrbitRuntime {
         })
     }
 }
+
+impl OrbitRuntime {
+    /// Persist before any base-update mutation, using the same owner task lock
+    /// for inherited failures and missing workflow emission.
+    pub(crate) fn admit_pr_base_update(
+        &self,
+        task_ids: &[String],
+        request: &orbit_types::workflow::PrBaseUpdateReservation,
+    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
+        self.reserve_pr_base_update(task_ids, request)
+    }
+
+    pub(crate) fn admit_handoff_base_update(
+        &self,
+        handoff_id: &str,
+        request: &orbit_types::workflow::PrBaseUpdateReservation,
+    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
+        let (claim, accepted) = self.landing_claim(handoff_id)?;
+        if request.execution != handoff_id
+            || accepted.handoff.candidate.repository != request.repository
+            || accepted.handoff.candidate.source_branch != request.head_branch
+            || accepted.handoff.candidate.base_branch != request.base_branch
+            || accepted.handoff.candidate.candidate.commit != request.head_sha
+            || accepted.handoff.candidate.delivery
+                != (orbit_types::workflow::handoff::HandoffDelivery::PullRequest {
+                    number: request
+                        .pr_number
+                        .parse()
+                        .map_err(|_| OrbitError::InvalidInput("invalid base update PR".into()))?,
+                })
+        {
+            return Err(OrbitError::InvalidInput(
+                "base update differs from accepted handoff".into(),
+            ));
+        }
+        let observation = orbit_store::contracts::HandoffObservation {
+            candidate: accepted.handoff.candidate.clone(),
+            footprint_widening: accepted.handoff.footprint_widening.clone(),
+            required_commands: self.workflow_required_validation_commands().to_vec(),
+            owner_completion_authority: self.owner_completion_authority(),
+            review: None,
+            known_red: vec![],
+        };
+        let auth = orbit_store::contracts::ClaimInvocation::trusted_operator(
+            claim.claim.task_id.clone(),
+            claim.claim.claim_id,
+            "owner-base-update".into(),
+        )
+        .with_handoff_observation(observation);
+        self.admission_boundary()?
+            .reserve_handoff_base_update(&auth, request)
+    }
+
+    fn reserve_pr_base_update(
+        &self,
+        task_ids: &[String],
+        request: &orbit_types::workflow::PrBaseUpdateReservation,
+    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
+        use orbit_types::workflow::{
+            PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission, decide_pr_base_update,
+        };
+        if self.worker_invocation().is_some() {
+            return Ok(PrBaseUpdateAdmission::Refused(
+                "base updates require the owning host".into(),
+            ));
+        }
+        let primary = task_ids
+            .iter()
+            .min()
+            .ok_or_else(|| OrbitError::InvalidInput("no owning task for base update".into()))?;
+        let mut decision = None;
+        self.stores()
+            .tasks()
+            .with_task_write_lock(primary, &mut || {
+                let admitted = decide_pr_base_update(&self.get_task_history(primary)?, request);
+                if matches!(admitted, PrBaseUpdateAdmission::Reserved) {
+                    self.apply_task_automation_update(
+                        primary,
+                        TaskAutomationUpdate {
+                            append_history: vec![TaskHistoryEntry {
+                                at: Utc::now(),
+                                by: "system".into(),
+                                event: PR_BASE_UPDATE_RESERVED_EVENT.into(),
+                                note: Some(
+                                    serde_json::to_string(request)
+                                        .map_err(|e| OrbitError::Execution(e.to_string()))?,
+                                ),
+                                from_status: None,
+                                to_status: None,
+                                operation_id: None,
+                                decision: None,
+                            }],
+                            ..Default::default()
+                        },
+                    )?;
+                }
+                decision = Some(admitted);
+                Ok(())
+            })?;
+        decision.ok_or_else(|| {
+            OrbitError::Execution("base update admission did not run under the task lock".into())
+        })
+    }
+}

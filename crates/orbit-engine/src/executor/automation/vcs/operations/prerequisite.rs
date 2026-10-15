@@ -12,25 +12,29 @@ pub(super) fn unreadable(reason: &str) -> OrbitError {
         "workflow prerequisite evidence is unavailable ({reason})"
     ))
 }
-fn text<'a>(value: &'a Value, key: &str) -> Result<&'a str, OrbitError> {
+pub(super) fn text<'a>(value: &'a Value, key: &str) -> Result<&'a str, OrbitError> {
     value[key]
         .as_str()
         .filter(|s| !s.is_empty())
         .ok_or_else(|| unreadable(key))
 }
-fn number(value: &Value, key: &str) -> Result<u64, OrbitError> {
+pub(super) fn number(value: &Value, key: &str) -> Result<u64, OrbitError> {
     value[key]
         .as_u64()
         .filter(|n| *n > 0)
         .ok_or_else(|| unreadable(key))
 }
-fn same(actual: &Value, expected: Value, label: &str) -> Result<(), OrbitError> {
+pub(super) fn same(actual: &Value, expected: Value, label: &str) -> Result<(), OrbitError> {
     if *actual != expected {
         return Err(unreadable(&format!("foreign or changed {label}")));
     }
     Ok(())
 }
-fn api(deadline: Deadline, workspace: &Path, endpoint: &str) -> Result<Value, OrbitError> {
+pub(super) fn api(
+    deadline: Deadline,
+    workspace: &Path,
+    endpoint: &str,
+) -> Result<Value, OrbitError> {
     let response = deadline.execute(
         "gh",
         vec!["api".into(), endpoint.into()],
@@ -39,14 +43,14 @@ fn api(deadline: Deadline, workspace: &Path, endpoint: &str) -> Result<Value, Or
     )?;
     serde_json::from_str(&response.stdout).map_err(|_| unreadable("invalid API JSON"))
 }
-fn complete_list<'a>(value: &'a Value, key: &str) -> Result<&'a Vec<Value>, OrbitError> {
+pub(super) fn complete_list<'a>(value: &'a Value, key: &str) -> Result<&'a Vec<Value>, OrbitError> {
     let list = value[key].as_array().ok_or_else(|| unreadable(key))?;
     if value["total_count"].as_u64() != Some(list.len() as u64) || list.len() > 100 {
         return Err(unreadable(&format!("truncated {key}")));
     }
     Ok(list)
 }
-fn encoded(value: &str) -> String {
+pub(super) fn encoded(value: &str) -> String {
     value
         .bytes()
         .map(|byte| {
@@ -59,16 +63,16 @@ fn encoded(value: &str) -> String {
         .collect()
 }
 
-struct Snapshot {
-    repository: String,
-    repository_id: u64,
-    pr: Value,
-    required: Vec<RequiredGate>,
-    policy: Value,
-    checks: Value,
-    runs: Value,
+pub(super) struct Snapshot {
+    pub(super) repository: String,
+    pub(super) repository_id: u64,
+    pub(super) pr: Value,
+    pub(super) required: Vec<RequiredGate>,
+    pub(super) policy: Value,
+    pub(super) checks: Value,
+    pub(super) runs: Value,
 }
-fn snapshot(
+pub(super) fn snapshot(
     deadline: Deadline,
     workspace: &Path,
     pr: &str,
@@ -114,7 +118,7 @@ fn snapshot(
     same(&pull["base"]["ref"], json!(base), "base")?;
     // GraphQL supplies the effective classic rule for this exact base. The
     // active branch-rules endpoint adds organization/repository rulesets.
-    let query = "query($pr:Int!,$owner:String!,$repo:String!){repository(owner:$owner,name:$repo){pullRequest(number:$pr){headRefOid baseRefName reviewDecision baseRef{branchProtectionRule{requiredStatusChecks{context app{databaseId slug}}}}}}}";
+    let query = "query($pr:Int!,$owner:String!,$repo:String!){repository(owner:$owner,name:$repo){pullRequest(number:$pr){headRefOid baseRefName reviewDecision baseRef{branchProtectionRule{id requiredStatusChecks{context app{databaseId slug}}}}}}}";
     let response = deadline.execute(
         "gh",
         vec![
@@ -258,7 +262,7 @@ fn snapshot(
     })
 }
 
-fn checked_run(
+pub(super) fn checked_run(
     deadline: Deadline,
     workspace: &Path,
     snapshot: &Snapshot,
@@ -316,7 +320,7 @@ fn checked_run(
     same(&current["actor"], run["actor"].clone(), "original actor")?;
     Ok(current)
 }
-fn workflow(
+pub(super) fn workflow(
     deadline: Deadline,
     workspace: &Path,
     run: &Value,
@@ -399,7 +403,7 @@ fn workflow(
     }
     Ok((path, blob, source))
 }
-fn gate_passed(gate: &RequiredGate, checks: &[Value]) -> bool {
+pub(super) fn gate_passed(gate: &RequiredGate, checks: &[Value]) -> bool {
     checks.iter().any(|check| {
         check["name"].as_str() == Some(&gate.context)
             && check["status"] == "completed"

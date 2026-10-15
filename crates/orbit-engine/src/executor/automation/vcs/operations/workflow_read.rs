@@ -209,3 +209,59 @@ fn legacy_api_read(command: &str, workflow: &Value, job: &str, step: &Value) -> 
             Some("${{ github.token }}" | "${{ secrets.GITHUB_TOKEN }}")
         )
 }
+
+/// Finite PR-emission condition forms, sharing the existing source-bound REST
+/// projection verifier. This recognizes no general expression or shell syntax.
+pub(super) fn pr_emission_job(workflow: &Value, id: &str) -> Result<(), OrbitError> {
+    let job = &workflow["jobs"][id];
+    if job.get("uses").is_some() {
+        return Err(unreadable("reusable emission job"));
+    }
+    match (job.get("needs"), job.get("if")) {
+        (None, None) => Ok(()),
+        (None, Some(condition)) if condition == "${{ github.event_name == 'pull_request' }}" => {
+            Ok(())
+        }
+        (Some(Value::String(root)), Some(condition)) => {
+            let expected = format!(
+                "${{{{ !cancelled() && (github.event_name != 'pull_request' || needs.{root}.outputs.state == 'open') }}}}"
+            );
+            if condition.as_str() != Some(expected.as_str()) {
+                return Err(unreadable("unsupported emission condition"));
+            }
+            let state = &workflow["jobs"][root];
+            if state.get("needs").is_some()
+                || state["if"] != "${{ github.event_name == 'pull_request' }}"
+                || state.get("continue-on-error").is_some()
+            {
+                return Err(unreadable("unsupported live-state dependency"));
+            }
+            let steps = state["steps"]
+                .as_array()
+                .filter(|steps| steps.len() == 1)
+                .ok_or_else(|| unreadable("live-state projection steps"))?;
+            let step = &steps[0];
+            let step_id = step["id"]
+                .as_str()
+                .ok_or_else(|| unreadable("live-state output identity"))?;
+            if state["outputs"]
+                != serde_json::json!({"state":format!("${{{{ steps.{step_id}.outputs.state }}}}")})
+                || step.get("if").is_some()
+                || step.get("continue-on-error").is_some()
+            {
+                return Err(unreadable("live-state output binding"));
+            }
+            let command = step["run"]
+                .as_str()
+                .ok_or_else(|| unreadable("live-state source read"))?;
+            if !projected_api_read(command) || !command.trim().starts_with("gh api --method GET 'repos/{owner}/{repo}/pulls/${{ github.event.pull_request.number }}' --jq '") {
+                return Err(unreadable("live-state read does not name this PR"));
+            }
+            let name = step["name"]
+                .as_str()
+                .ok_or_else(|| unreadable("live-state step name"))?;
+            api_step(workflow, root, name)
+        }
+        _ => Err(unreadable("conditional emission is unsupported")),
+    }
+}

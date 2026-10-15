@@ -1,5 +1,6 @@
 mod ci;
 mod dispatch;
+mod emission;
 mod input;
 mod pr;
 mod prerequisite;
@@ -48,3 +49,10 @@ pub(crate) const BASE_MODIFIED_REFUSAL: &str = "base_modified";
 
 pub(crate) const CI_PREREQUISITE_EVIDENCE: &str = "ci.prerequisite_evidence";
 pub(crate) const CI_PREREQUISITE_OBSERVE: &str = "ci.prerequisite_observe";
+
+/// Trusted old-head/current-base workflow emission proof and observation.
+pub(crate) const CI_EMISSION_EVIDENCE: &str = "ci.emission_evidence";
+pub(crate) const CI_EMISSION_OBSERVE: &str = "ci.emission_observe";
+
+/// Current exact policy gates on an adopted provider head.
+pub(crate) const CI_CURRENT_GATES: &str = "ci.current_gates";
