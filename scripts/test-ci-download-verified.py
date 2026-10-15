@@ -10,10 +10,10 @@ import os
 from pathlib import Path
 import subprocess
 import ssl
+import sys
 import tarfile
 import tempfile
 import threading
-import time
 import unittest
 
 import yaml
@@ -24,9 +24,9 @@ HELPER = ROOT / "scripts/ci-download-verified.sh"
 URL = "https://downloads.example.invalid/pinned.tar.gz"
 BODY = b"verified fixture bytes\n"
 
-# Only the transport is replaced: real Bash/Python run the public helper,
-# and real sha256/tar/version commands run the actual workflow installers.
-CURL = r'''#!/usr/bin/env python3
+# Real Bash/Python run the public helper; real sha256/tar/version commands run
+# the workflow installers. Short-deadline tests additionally gate startup below.
+CURL = f"#!{sys.executable}\n" + r'''
 import base64, json, os, sys, time
 from pathlib import Path
 args = sys.argv[1:]
@@ -34,18 +34,125 @@ root = Path(os.environ["DOWNLOAD_FIXTURE"])
 calls = root / "calls.json"
 history = json.loads(calls.read_text()) if calls.exists() else []
 history.append(args)
-calls.write_text(json.dumps(history))
 rows = json.loads((root / "responses.json").read_text())
 row = rows[min(len(history) - 1, len(rows) - 1)]
+
+def signal(stage):
+    if "DOWNLOAD_READY_FD" in os.environ:
+        os.write(int(os.environ["DOWNLOAD_READY_FD"]), stage)
+
+if row.get("pause_start"):
+    signal(b"S")
+    time.sleep(60)
+# Cancellation must leave either the old complete receipt or the new one.
+# The barrier exposes the old truncate-before-write failure without host load.
+pending = root / "calls.pending"
+pending.write_text("")
+if row.get("pause_receipt"):
+    signal(b"W")
+    time.sleep(60)
+pending.write_text(json.dumps(history))
+pending.replace(calls)
 output = args[args.index("--output") + 1] if "--output" in args else args[args.index("-o") + 1]
 if "body" in row:
     Path(output).write_bytes(base64.b64decode(row["body"]))
+signal(b"R")
 if row.get("stall"):
     time.sleep(60)
 print("fixture curl diagnostic", file=sys.stderr)
 if "--write-out" in args:
     sys.stdout.write(row.get("http", "000"))
 sys.exit(row.get("exit", 0))
+'''
+
+
+# This test-only python3 launcher executes the public helper's stdin unchanged.
+# Popen waits for an explicit fixture stage before the real watchdog starts.
+# Only fixture startup is excluded from the helper's clock; backoff, transport
+# execution and watchdogs use real elapsed time. Ordinary regressions also
+# include startup. This avoids betting on cold Python starting within 0.3s.
+DEADLINE_PYTHON = r'''
+import builtins, json, os, select, subprocess, sys, time
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+source = sys.stdin.read()
+root = Path(os.environ["DOWNLOAD_FIXTURE"])
+events = []
+excluded_startup = 0.0
+started = time.monotonic()
+real_run, real_popen = subprocess.run, subprocess.Popen
+real_import = builtins.__import__
+
+class ReadyPopen(real_popen):
+    def __init__(self, *args, **kwargs):
+        global excluded_startup
+        startup = time.monotonic()
+        read_fd, write_fd = os.pipe()
+        try:
+            kwargs["env"] = dict(os.environ, DOWNLOAD_READY_FD=str(write_fd))
+            kwargs["pass_fds"] = (write_fd,)
+            super().__init__(*args, **kwargs)
+        finally:
+            os.close(write_fd)
+        try:
+            if not select.select([read_fd], [], [], 5)[0]:
+                raise RuntimeError("fixture readiness timed out")
+            stage = os.read(read_fd, 1).decode()
+            expected = os.environ.get("DOWNLOAD_EXPECT_READY", "R")
+            attempt = sum("pid" in event for event in events)
+            if stage != expected[min(attempt, len(expected) - 1)]:
+                raise RuntimeError(f"unexpected fixture readiness: {stage!r}")
+            elapsed = time.monotonic() - startup
+            excluded_startup += elapsed
+            events.append({"stage": stage, "pid": self.pid, "startup_seconds": elapsed})
+        except BaseException:
+            self.kill()
+            self.wait()
+            raise
+        finally:
+            os.close(read_fd)
+
+def run(*args, **kwargs):
+    timeout = kwargs["timeout"]
+    try:
+        return real_run(*args, **kwargs)
+    except subprocess.TimeoutExpired:
+        events[-1]["timed_out"] = True
+        raise
+    finally:
+        event = events[-1]
+        event["timeout"] = timeout
+        # subprocess.run must have waited for every owned transport, including
+        # on TimeoutExpired. A live child or a zombie is a failure, not a skip.
+        try:
+            os.waitpid(event["pid"], os.WNOHANG)
+        except ChildProcessError:
+            event["reaped"] = True
+        else:
+            raise RuntimeError("transport was not reaped by subprocess.run")
+        (root / "deadline-events.json").write_text(json.dumps(events))
+
+def sleep(delay):
+    events.append({"backoff": delay})
+    time.sleep(delay)
+
+def import_module(name, globals=None, *args, **kwargs):
+    if name == "time" and globals and globals.get("__name__") == "__main__":
+        return SimpleNamespace(monotonic=lambda: time.monotonic() - excluded_startup, sleep=sleep)
+    return real_import(name, globals, *args, **kwargs)
+
+sys.argv = ["-", *sys.argv[2:]]
+try:
+    with patch.object(builtins, "__import__", import_module), \
+            patch.object(subprocess, "Popen", ReadyPopen), patch.object(subprocess, "run", run):
+        exec(compile(source, "ci-download-verified.sh:stdin", "exec"), {"__name__": "__main__"})
+finally:
+    (root / "deadline-summary.json").write_text(json.dumps({
+        "active_seconds": time.monotonic() - started - excluded_startup,
+        "excluded_startup_seconds": excluded_startup,
+    }))
 '''
 
 
@@ -79,10 +186,25 @@ class VerifiedDownloadTests(unittest.TestCase):
     def calls(self):
         return json.loads((self.root / "calls.json").read_text())
 
-    def invoke(self, *, budget=60, digest=None, url=URL):
+    def invoke(self, *, budget=60, digest=None, url=URL, deadline=False, stage="R"):
+        env = self.env
+        if deadline:
+            launcher = self.bin / "python3"
+            launcher.write_text(f"#!{sys.executable}\n" + DEADLINE_PYTHON)
+            launcher.chmod(0o755)
+            env = dict(env, DOWNLOAD_EXPECT_READY=stage)
         return subprocess.run([str(HELPER), url, digest or hashlib.sha256(BODY).hexdigest(),
                                str(self.destination), "--budget-seconds", str(budget)],
-                              env=self.env, text=True, capture_output=True, timeout=8)
+                              env=env, text=True, capture_output=True, timeout=8)
+
+    def deadline_events(self):
+        events = json.loads((self.root / "deadline-events.json").read_text())
+        summary = json.loads((self.root / "deadline-summary.json").read_text())
+        self.assertLess(summary["active_seconds"], 2, summary)
+        for event in events:
+            if "pid" in event:
+                self.assertTrue(event["reaped"], event)
+        return events
 
     def assert_clean(self):
         self.assertEqual(list(self.root.glob(".ci-download-*")), [], "attempt bytes must be cleaned")
@@ -155,30 +277,70 @@ class VerifiedDownloadTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(len(self.calls()), 3)
         self.assertIn("attempt limit exhausted", result.stderr)
+        self.assertFalse(self.destination.exists())
         self.assert_clean()
         for row in (response(6, "000"), response(stall=True)):
             with self.subTest(row=row):
                 self.configure([row])
-                started = time.monotonic()
-                result = self.invoke(budget=0.3)
-                self.assertLess(time.monotonic() - started, 2, result.stderr)
+                result = self.invoke(budget=0.3, deadline=True)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(len(self.calls()), 1)
+                events = self.deadline_events()
+                self.assertEqual(len(events), 1)
+                self.assertEqual(events[0]["stage"], "R")
+                if row.get("stall"):
+                    self.assertTrue(events[0]["timed_out"])
+                    self.assertIn("outcome=process_timeout", result.stderr)
+                else:
+                    self.assertIn("total budget cannot accommodate backoff", result.stderr)
                 self.assertFalse(self.destination.exists())
                 self.assert_clean()
 
         # Backoff and a second transport must share the original deadline,
         # rather than each receiving a fresh per-attempt budget.
         self.configure([response(6, "000"), response(stall=True)])
-        started = time.monotonic()
-        result = self.invoke(budget=1.4)
-        self.assertLess(time.monotonic() - started, 2, result.stderr)
+        result = self.invoke(budget=1.4, deadline=True)
         self.assertNotEqual(result.returncode, 0)
         calls = self.calls()
         self.assertEqual(len(calls), 2)
         self.assertLess(float(calls[1][calls[1].index("--max-time") + 1]), 0.4)
+        events = self.deadline_events()
+        self.assertEqual([event.get("stage", event.get("backoff")) for event in events],
+                         ["R", 1, "R"])
+        self.assertLess(events[2]["timeout"], 0.4)
+        self.assertTrue(events[2]["timed_out"])
+        self.assertIn("outcome=process_timeout", result.stderr)
         self.assertFalse(self.destination.exists())
         self.assert_clean()
+
+    def test_cancellation_barriers_expose_incomplete_receipt_and_late_start(self):
+        for mode in ("legacy", "atomic", "startup"):
+            with self.subTest(mode=mode):
+                rows = ([response(6, "000"), response(pause_start=True)] if mode == "startup"
+                        else [response(pause_receipt=True)])
+                self.configure(rows)
+                # Counterfactual: the same barrier with the old in-place write
+                # deterministically leaves invalid JSON when the helper kills it.
+                curl = self.bin / "curl"
+                curl.write_text(CURL.replace('pending = root / "calls.pending"', 'pending = calls')
+                                if mode == "legacy" else CURL)
+                result = self.invoke(budget=1.4 if mode == "startup" else 0.3, deadline=True,
+                                     stage="RS" if mode == "startup" else "W")
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertIn("outcome=process_timeout", result.stderr)
+                if mode == "legacy":
+                    with self.assertRaises(json.JSONDecodeError):
+                        self.calls()
+                elif mode == "startup":
+                    self.assertEqual(len(self.calls()), 1, "second startup has not completed a receipt")
+                else:
+                    self.assertEqual(self.calls(), [], "no completed receipt before readiness")
+                events = self.deadline_events()
+                self.assertEqual([event.get("stage", event.get("backoff")) for event in events],
+                                 ["R", 1, "S"] if mode == "startup" else ["W"])
+                self.assertTrue(events[-1]["timed_out"])
+                self.assertFalse(self.destination.exists())
+                self.assert_clean()
 
     def test_curl_invocation_keeps_https_tls_and_disables_hidden_retries(self):
         self.configure([response()])
