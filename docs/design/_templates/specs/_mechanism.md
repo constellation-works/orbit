@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: <Mechanism>"
-last_validated: 2026-10-10
+last_validated: 2026-10-14
 ---
 
 # Spec: <Mechanism>
