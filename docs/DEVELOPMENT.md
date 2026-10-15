@@ -170,10 +170,22 @@ are retained in `phase_timings`: compilation-unit and testcase sums can overlap
 and must not be presented as wall time. Missing measurements remain null.
 Baseline logs retain original execution timing even when reused from cache;
 `cached: true` means that execution cost was not incurred again.
+
 Candidate logs also record `baseline_comparison_ms` and `candidate_rerun_ms` for
 the current invocation (null when absent). The comparison includes cache-lock
 waiting, checkout preparation and the baseline command; the cached command's
 historical elapsed time must not be added to it.
+
+A passing pinned-base execution means the candidate failure was not reproduced
+in that recorded execution; it does not establish that source changes caused
+the failure. Diagnostics distinguish an exact replay of the candidate's failing
+tests from a command run with its recorded selection. Exact replay covers only
+those failing tests, without establishing full-suite or load equivalence.
+When neither run declares a selection, matching command text does not establish
+that the same guards ran. Noncomparable or inconclusive base results leave
+source causation unconfirmed. These limits do not change the candidate's
+validation failure, comparison rules, known-red admission or replay policy;
+the candidate and base logs retain the original evidence.
 
 Canonical owner log paths still name the latest validation result. Before a
 canonical log is replaced, its previous bytes are saved as an immutable copy

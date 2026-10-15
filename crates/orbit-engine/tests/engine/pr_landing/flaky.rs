@@ -164,6 +164,23 @@ fn candidate_replay_rows(test: &str, route: &str, selected: &[&str]) {
                         .expect_err("failed rerun or an over-bound set remains a failure")
                         .to_string();
                     assert!(!is_baseline_red_failure(None, Some(&error)), "{error}");
+                    assert!(!error.contains("candidate introduced"), "{error}");
+                    if mode == "over_bound" {
+                        assert!(
+                            error.contains("failure was not reproduced")
+                                && error.contains("replayed only the candidate's failing tests")
+                                && error.contains("full-suite or load equivalence")
+                                && !error.contains("not comparable"),
+                            "[F2026-10-377] supported exact replay proves nonreproduction within its narrower scope: {error}"
+                        );
+                    }
+                    if mode.starts_with("base_") && !matches!(mode, "base_skip" | "base_compile") {
+                        assert!(
+                            error.contains("not comparable")
+                                && error.contains("source causation is unconfirmed"),
+                            "incomplete exact replay evidence remains uncertain: {error}"
+                        );
+                    }
                     assert!(
                         host.history(TASK_ID)
                             .iter()
