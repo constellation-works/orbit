@@ -4,7 +4,12 @@
 # `prepare_task_pilot`: automatic mode (task_ids empty) discovers only
 # proposed/backlog tasks in the active workspace with empty context_files or
 # unassessed complexity, excluding no-diff tasks. Explicit mode audits named
-# tasks, including non-empty selectors.
+# proposed/backlog tasks, including non-empty selectors. Any unsupported
+# explicit status refuses the whole selection before agent work or task
+# reservation; the refusal names every unsupported task and its current status.
+# The CLI preflights before submission; prepare checks again for direct callers
+# and intervening status moves. Status races after valid preparation retain
+# the apply/supersession behavior below.
 # Preparation never promotes or dispatches a task. In a Git workspace it
 # fetches the landing branch and pins one source revision without changing
 # primary HEAD, index, or working files. An unfetchable remote fails before

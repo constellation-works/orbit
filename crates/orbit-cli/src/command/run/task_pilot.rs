@@ -1,7 +1,7 @@
 //! `orbit run task-pilot` CLI entrypoint.
 
 use clap::Args;
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::{OrbitError, OrbitRuntime, TaskStatus};
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Execute};
@@ -45,6 +45,22 @@ impl Execute for TaskPilotCommand {
             self.max_tasks,
             self.max_partition_size,
         )?;
+        // Refuse the whole explicit selection before submitting a run. Prepare
+        // repeats this check against current state for every other caller and
+        // for status changes after this read.
+        let mut unsupported = Vec::new();
+        for task_id in &self.task_ids {
+            let task = runtime.get_task(task_id)?;
+            if !matches!(task.status, TaskStatus::Proposed | TaskStatus::Backlog) {
+                unsupported.push(format!("{} (status {})", task.id, task.status));
+            }
+        }
+        if !unsupported.is_empty() {
+            return Err(OrbitError::InvalidInput(format!(
+                "explicit task-pilot selection refuses {}; only proposed and backlog tasks may be assessed",
+                unsupported.join(", ")
+            )));
+        }
         let runs = dispatch_workflow(
             runtime,
             TASK_PILOT_WORKFLOW,
@@ -75,6 +91,12 @@ fn build_task_pilot_input(
                 "duplicate task id '{task_id}' in explicit task-pilot selection"
             )));
         }
+    }
+
+    if task_ids.len() > 500 {
+        return Err(OrbitError::InvalidInput(
+            "explicit task-pilot selection exceeds the limit of 500 tasks".to_string(),
+        ));
     }
 
     let mut map = serde_json::Map::new();

@@ -67,6 +67,12 @@ pub(crate) fn prepare(
         HARD_MAX_TASKS,
     )?;
     let explicit_task_ids = string_array(input, "task_ids", action)?;
+    if explicit_task_ids.len() > HARD_MAX_TASKS {
+        return Err(DispatchError::action_failed(
+            action,
+            format!("explicit task-pilot selection exceeds the limit of {HARD_MAX_TASKS} tasks"),
+        ));
+    }
     let explicit_mode = !explicit_task_ids.is_empty();
     let run_id = pilot_run_id(input);
     let mut active_preparations =
@@ -152,6 +158,24 @@ pub(crate) fn prepare(
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        // Check every named task before exclusions or reservations. An invalid
+        // sibling must not spend agent budget, even when another pilot holds
+        // it or a routine's frozen source would supersede it. Apply still owns
+        // status changes after valid preparation and their audited outcomes.
+        let unsupported = selected
+            .iter()
+            .filter(|task| !matches!(task.status, TaskStatus::Proposed | TaskStatus::Backlog))
+            .map(|task| format!("{} (status {})", task.id, task.status))
+            .collect::<Vec<_>>();
+        if !unsupported.is_empty() {
+            return Err(DispatchError::action_failed(
+                action,
+                format!(
+                    "explicit task-pilot selection refuses {}; only proposed and backlog tasks may be assessed",
+                    unsupported.join(", ")
+                ),
+            ));
+        }
         let selected = selected
             .into_iter()
             .filter(|task| !superseded.contains_key(&task.id))
