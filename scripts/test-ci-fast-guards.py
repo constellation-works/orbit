@@ -1358,6 +1358,72 @@ class OrphanModuleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("orphan test module: crates/fixture/src/tests/lost.rs", result.stdout)
 
+    def test_inline_path_directories_match_compiler_and_reject_collisions(self):
+        self.write_source("lib.rs", 'mod external;\nmod directory;\n'
+                          'mod inner {\n'
+                          '    #[path = "chosen.rs"] pub(crate) mod renamed;\n'
+                          '    mod r#type { #[path = "chosen.rs"] mod renamed; }\n'
+                          '}\n'
+                          'mod sibling { #[path = "chosen.rs"] mod renamed; }\n')
+        # Both mod.rs and ordinary file modules contain nested inline modules.
+        # An explicit inline path overrides the ordinary file's stem directory.
+        owner = ('const TEXT: &str = r#"mod misleading { }"#;\n'
+                 '/* mod misleading { */\n'
+                 'mod inner {\n'
+                 '    fn braces() { let _ = "}"; }\n'
+                 '    #[path = "chosen.rs"] mod renamed;\n'
+                 '    mod deep { #[path = "./chosen.rs"] mod renamed; }\n'
+                 '}\n'
+                 '#[path = "relocated"] mod overridden {\n'
+                 '    #[path = "chosen.rs"] mod renamed;\n'
+                 '    mod deep { #[path = "chosen.rs"] mod renamed; }\n'
+                 '}\n'
+                 '#[path = "after.rs"] mod after;\n')
+        self.write_source("external.rs", owner)
+        self.write_source("directory/mod.rs", owner)
+        destinations = {
+            "inner/chosen.rs": "inner::renamed",
+            "inner/type/chosen.rs": "inner::r#type::renamed",
+            "sibling/chosen.rs": "sibling::renamed",
+            "external/inner/chosen.rs": "external::inner::renamed",
+            "external/inner/deep/chosen.rs": "external::inner::deep::renamed",
+            "relocated/chosen.rs": "external::overridden::renamed",
+            "relocated/deep/chosen.rs": "external::overridden::deep::renamed",
+            "after.rs": "external::after",
+            "directory/inner/chosen.rs": "directory::inner::renamed",
+            "directory/inner/deep/chosen.rs": "directory::inner::deep::renamed",
+            "directory/relocated/chosen.rs": "directory::overridden::renamed",
+            "directory/relocated/deep/chosen.rs": "directory::overridden::deep::renamed",
+            "directory/after.rs": "directory::after",
+        }
+        for path in destinations:
+            self.write_source(path, "#[test] fn registered_inline_path() {}\n")
+
+        binary = self.root / "fixture-test"
+        compiled = subprocess.run(["rustc", "--test", str(self.source / "lib.rs"),
+                                   "-o", str(binary)], text=True, capture_output=True)
+        self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+        listing = subprocess.run([str(binary), "--list"], text=True, capture_output=True)
+        self.assertEqual(listing.returncode, 0, listing.stdout + listing.stderr)
+        self.assertEqual(set(re.findall(r"^(.*): test$", listing.stdout, re.MULTILINE)),
+                         {f"{module}::registered_inline_path" for module in destinations.values()})
+
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        # Neither a root-relative guess nor another same-basename file may be
+        # mistaken for one of the compiler-verified inline destinations.
+        for path in ("chosen.rs", "unregistered/chosen.rs", "tests/chosen.rs"):
+            self.write_source(path, '#[test] fn lost_coverage() { panic!("must run"); }\n')
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(set(re.findall(r"^(orphan(?: test)? module): (\S+)",
+                                        result.stdout, re.MULTILINE)), {
+            ("orphan module", "crates/fixture/src/chosen.rs"),
+            ("orphan module", "crates/fixture/src/unregistered/chosen.rs"),
+            ("orphan test module", "crates/fixture/src/tests/chosen.rs"),
+        })
+
 
 class PythonPreflightTests(unittest.TestCase):
     """Drive scripts/require-python.sh and the make gates with a stub python3."""

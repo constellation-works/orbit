@@ -6,7 +6,7 @@ set -euo pipefail
 # in its directory's owning file (mod.rs, lib.rs, or main.rs), in the sibling
 # file that owns the directory as a module (`foo.rs` next to `foo/`), or
 # referenced by a direct `#[path = "..."]` attribute in the crate's src tree,
-# resolved relative to the declaring source file to the actual candidate file.
+# resolved through its enclosing module directories to the actual candidate file.
 # Otherwise the file is never compiled, linted, or tested — see
 # docs/design/orbit-cleanup/orbitenginecleanup.md §1/§11.
 #
@@ -182,6 +182,61 @@ sub source_text {
   return $sources{$path};
 }
 
+sub source_code {
+  my ($path) = @_;
+  $masked{$path} = strip_rust_non_code(source_text($path)) unless exists $masked{$path};
+  return $masked{$path};
+}
+
+# Track only lexical attributes, module openings and braces, not cfg or macro
+# expansion. Outside inline modules a path is relative to the source directory;
+# entering an ordinary file's first inline module also adds the file's stem.
+sub index_path_targets {
+  my ($path, $targets) = @_;
+  my $source = source_text($path);
+  my $code = source_code($path);
+  my $directory = dirname($path);
+  my $inline_directory = basename($path) =~ /^(?:mod|lib|main)\.rs$/
+    ? $directory : File::Spec->catdir($directory, basename($path, '.rs'));
+  my @scopes = ([$directory, $inline_directory]);
+  my $module_path;
+
+  # Identifier bytes include UTF-8; keep offsets aligned with the source literals.
+  while ($code =~ /#\[|(?:\bpub(?:[[:space:]]*\([^)]*\))?[[:space:]]+)?\bmod[[:space:]]+(?:r#)?([[:word:]\x80-\xff]+)[[:space:]]*([;{])|[{}]|\S/g) {
+    my ($token, $module, $ending, $start) = ($&, $1, $2, $-[0]);
+    if ($token eq '#[') {
+      my $depth = 1;
+      while ($depth && $code =~ /[\[\]]/g) {
+        $depth += $& eq '[' ? 1 : -1;
+      }
+      last if $depth;
+      my $attribute = substr($source, $start, pos($code) - $start);
+      if ($attribute =~ /\A#\[path[[:space:]]*=[[:space:]]*"([^"\n]*)"/) {
+        $module_path = $1;
+        my $target = File::Spec->rel2abs($module_path, $scopes[-1][0]);
+        if (-f $target) {
+          my $resolved = abs_path($target);
+          $targets->{$resolved} = 1 if defined $resolved;
+        }
+      }
+      next;
+    }
+    if (defined($module) && $ending eq '{') {
+      # An inline module's explicit path replaces its default directory, also
+      # suppressing the file-stem component for a non-mod.rs source file.
+      my $child = defined($module_path)
+        ? File::Spec->rel2abs($module_path, $scopes[-1][0])
+        : File::Spec->catdir($scopes[-1][1], $module);
+      push @scopes, [$child, $child];
+    } elsif ($token eq '{') {
+      push @scopes, $scopes[-1];
+    } elsif ($token eq '}') {
+      pop @scopes if @scopes > 1;
+    }
+    undef $module_path;
+  }
+}
+
 sub is_declared {
   my ($file) = @_;
   my $dir = dirname($file);
@@ -189,11 +244,9 @@ sub is_declared {
   for my $owner ("$dir/mod.rs", "$dir/lib.rs", "$dir/main.rs",
                  dirname($dir) . '/' . basename($dir) . '.rs') {
     next unless -f $owner;
-    unless (exists $masked{$owner}) {
-      $masked{$owner} = [split /\n/, decode('UTF-8', strip_rust_non_code(source_text($owner)))];
-    }
     # ripgrep's original declaration search matched within each line.
-    return 1 if grep { /\bmod[[:space:]]+(r#)?${stem}\b[[:space:]]*[;{]/ } @{$masked{$owner}};
+    return 1 if grep { /\bmod[[:space:]]+(r#)?${stem}\b[[:space:]]*[;{]/ }
+      split /\n/, decode('UTF-8', source_code($owner));
   }
 
   my ($crate_src) = $file =~ m{^(.*?)/src/};
@@ -207,15 +260,9 @@ sub is_declared {
     close $paths or die "Cannot list $crate_src: ripgrep failed\n";
     my %targets;
     for my $path (@paths) {
-      # Keep the existing literal/cfg scan, but index actual destinations once
-      # per invocation. A basename elsewhere in the crate is not registration.
-      my $source = source_text($path);
-      while ($source =~ /#\[path[[:space:]]*=[[:space:]]*"([^"\n]*)"/g) {
-        my $target = File::Spec->rel2abs($1, dirname($path));
-        next unless -f $target;
-        my $resolved = abs_path($target);
-        $targets{$resolved} = 1 if defined $resolved;
-      }
+      # Index actual destinations once per invocation, regardless of cfg. A
+      # basename elsewhere in the crate is not registration.
+      index_path_targets($path, \%targets);
     }
     $crate_targets{$crate_src} = \%targets;
   }
