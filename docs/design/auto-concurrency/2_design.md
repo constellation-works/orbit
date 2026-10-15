@@ -695,7 +695,7 @@ Limitations:
 | `orbit run show` | Implemented: an `Admission:` line from the recorded pass, e.g. `forecast — skipped heavy candidate (cpu 94% at +6m)`, with candidate titles, shadow decisions labelled hypothetical, and a protected head named by the starvation guard; a `Stuck head:` line while that head is stuck (§5.3). After an idle pass, it names the last built forecast's timestamp, decisions and peaks, and says the current pass built none. JSON preserves `pipeline_state.drain_last_pass.admission_forecast` and retains built history in `pipeline_state.drain_last_forecast`. |
 | `orbit run readiness` | Implemented: the last pass's host forecast peaks, headroom below the current admission thresholds, each judged candidate's profile source and wait, and a stuck head (§5.3). JSON adds `capacity.admission_forecast` and `tasks[].admission_forecast` for the current pass, plus `capacity.last_admission_forecast` for retained built history. Idle passes show that history without changing eligibility; without either recorded block, output is unchanged. See [observing admission](../../CONFIG.md#machineauto_concurrency--host-forecast-admission). |
 | `orbit run profiles` | Implemented: the profiles per workspace, work class and complexity: deliveries (sparse below `min_profile_deliveries`), horizon, peak CPU and memory and when they occur, and the CPU and memory spread. Flags no-diff profiles with build-like load and names the deliveries behind each flag (§3.2). `--json` for the full series |
-| `orbit run profiles --accuracy` | Implemented (§8.1): recorded forecasts against the measured host per offset, and shadow decisions against actual admissions per drain. `--json` for the raw pairs |
+| `orbit run profiles --accuracy` | Implemented (§8.1): composable forecast-time `--since`, exact `--drain` and recorded `--mode` cohorts; mature measured pairs, pending and missing counts per offset; shadow decisions per drain. `--json` includes the effective selection and raw pairs |
 | Per-drain mode | Implemented for local drains: CLI `--auto-concurrency off|shadow|enforce`, registered MCP `orbit.workflow.auto` start `auto_concurrency`, and dashboard HTTP start `auto_concurrency` all use Core submission. At durable admission, explicit or configured mode is captured in `input.auto_concurrency` with `input.auto_concurrency_source`, retained on resume/restart. The loop forwards it to the existing classifier; thresholds, profiles, throttle, ceilings and accuracy lineage remain host policy. Stop/resize and explicit pull overrides are refused before effects. |
 | Dashboard | Implemented: an operator launch choice of inherited host mode, off, shadow or enforce. The form reads current inherited host mode from readiness, sends the actual option, and shows the receipt's durable effective mode; the live window shows its captured mode. Forecast curves against measured load with running tasks stacked remain future work. |
 
@@ -774,16 +774,46 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   counts as zero, as it did for admission.
 - **Pairs.** A point forecast at `forecast_at` for `+n` pairs with the
   `host_resource_minutes` row of the minute `forecast_at` truncated to the
-  minute, plus `n`. A point without that row is counted as unmeasured.
+  minute, plus `n`, only once that target minute has fully ended. One
+  `report_at` snapshot bounds the forecasts and determines maturity for
+  every point. Until `minute_at + 1 minute <= report_at`, the point is
+  **pending**, even if a partial measured row already exists. After that
+  boundary it is **missing** if no row exists, otherwise **paired**. Per
+  offset, paired + pending + missing equals the selected recorded point
+  count; the compatible `unmeasured` field is pending + missing. A completed
+  minute with a row is usable regardless of sample count; this report does
+  not certify sampling completeness.
 - **Errors**, per offset and for CPU (cores) and memory (bytes): the mean
   and mean absolute error of forecast minus measured, the share of pairs
   under-forecast, and the worst miss with its minute and drain.
 - **Shadow decisions**, per drain, over its `shadow` passes: the distinct
   tasks it admitted, those gap fit would have held, and those gap fit would
   have admitted in a pass that did not. `enforce` passes are counted only.
-- **Window and retention.** The report reads the last 30 days. Rows are
-  pruned with the resource history by `orbit gc runs --apply` after 30 days,
-  whatever `retention.runs_days` says.
+- **Selection and retention.** Without filters the report reads all drains
+  and recorded modes over the last 30 days. Optional `--since` selects
+  forecasts at or after an RFC3339 timestamp; `--drain` matches an exact
+  drain run id and `--mode shadow|enforce` matches the stored mode. Supplied
+  filters intersect, applying equally to forecasts, pairs, errors and local
+  or pull decisions. Forecasts after `report_at` are excluded. Text echoes
+  both time bounds, drain and mode (`all` when unrestricted). JSON retains
+  `since`, `forecasts`, `offsets`, `drains` and `pairs`, adding `report_at`,
+  effective `selection` (`since`, `drain`, `mode`; null means unrestricted),
+  and per-offset `pending` and `missing`. Empty cohorts have zero counts,
+  empty pairs and drains, and null error summaries. Invalid timestamps,
+  modes, empty drain ids and a since later than report time are rejected;
+  selectors require `--accuracy`. Rows are pruned with the resource history
+  by `orbit gc runs --apply` after 30 days, whatever `retention.runs_days`
+  says. An earlier explicit since can read older surviving rows, but cannot
+  restore pruned history. The report reads evidence without changing it.
+- **Attribution limits.** Forecast rows record mode and drain, but do not
+  attest source revision, build-budget settings or admission thresholds.
+  A time/drain cohort is an operator selection, not proof of a homogeneous
+  generation; configuration can change within it. No absent historical
+  metadata is inferred or backfilled. Per-task resource profiles have a
+  separate delivery population: sparse samples and wide spread remain
+  limitations even when a selected host-forecast cohort has many pairs.
+  See the [operator runbook](../../runbooks/forecast-accuracy.md) for cohort
+  collection. Live post-deploy evaluation and tuning remain separate work.
 - **Pull drains** record one row per request forecast in shadow or enforce,
   including forecasts whose request was held. Store schema v50 adds a nullable
   pull decision alongside local task decisions: whether the request was sent

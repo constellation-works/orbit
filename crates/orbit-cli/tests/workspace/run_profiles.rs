@@ -126,6 +126,24 @@ impl Fixture {
         Connection::open(self.home.join(".orbit/orbit.db")).unwrap()
     }
 
+    fn measurements(&self) -> Vec<Vec<Vec<rusqlite::types::Value>>> {
+        ["admission_forecasts", "host_resource_minutes"]
+            .into_iter()
+            .map(|table| {
+                let db = self.db();
+                let mut query = db
+                    .prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))
+                    .unwrap();
+                let columns = query.column_count();
+                query
+                    .query_map([], |row| (0..columns).map(|i| row.get(i)).collect())
+                    .unwrap()
+                    .collect::<Result<_, _>>()
+                    .unwrap()
+            })
+            .collect()
+    }
+
     /// Record one admission pass's forecast: `(offset, cores, GiB)` points.
     #[allow(clippy::too_many_arguments)]
     fn forecast(
@@ -186,8 +204,167 @@ impl Fixture {
     }
 }
 
+/// Calibration must select the intersection of time, drain and recorded
+/// mode, including decisions and errors, without rewriting its evidence.
+#[test]
+fn accuracy_selects_a_cohort_and_rejects_invalid_selectors_without_mutation() {
+    if crate::isolated_test::run_in_child(
+        "run_profiles::accuracy_selects_a_cohort_and_rejects_invalid_selectors_without_mutation",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let since = (Utc::now() - chrono::Duration::hours(3))
+        .duration_trunc(chrono::Duration::minutes(1))
+        .unwrap();
+    let selected_at = since + chrono::Duration::seconds(20);
+    for (run, mode, at, cpu) in [
+        (
+            "jrun-cohort",
+            "shadow",
+            since - chrono::Duration::seconds(1),
+            90.0,
+        ),
+        ("jrun-other", "shadow", selected_at, 80.0),
+        ("jrun-cohort", "enforce", selected_at, 70.0),
+        ("jrun-cohort", "shadow", selected_at, 4.0),
+        // Inclusive lower bound, with a different selected error.
+        ("jrun-cohort", "shadow", since, 6.0),
+        (
+            "jrun-expired",
+            "shadow",
+            since - chrono::Duration::days(31),
+            60.0,
+        ),
+    ] {
+        fixture.forecast(run, mode, at, &[(5, cpu, 8)], &["ORB-1"], &[], &["ORB-1"]);
+    }
+    fixture.host_minute(since + chrono::Duration::minutes(5), 5.0, 6);
+    let before = fixture.measurements();
+    let stamp = since.to_rfc3339();
+    let args = [
+        "run",
+        "profiles",
+        "--accuracy",
+        "--since",
+        &stamp,
+        "--drain",
+        "jrun-cohort",
+        "--mode",
+        "shadow",
+    ];
+    let mut json_args = args.to_vec();
+    json_args.push("--json");
+    let report: Value = serde_json::from_str(&fixture.stdout(&json_args)).unwrap();
+    assert_eq!(report["forecasts"], 2, "{report:#}");
+    assert_eq!(report["selection"]["drain"], "jrun-cohort");
+    assert_eq!(report["selection"]["mode"], "shadow");
+    assert_eq!(report["selection"]["since"], report["since"]);
+    assert_eq!(
+        report["since"]
+            .as_str()
+            .unwrap()
+            .parse::<DateTime<Utc>>()
+            .unwrap(),
+        since
+    );
+    let pairs = report["pairs"].as_array().unwrap();
+    assert_eq!(pairs.len(), 2);
+    assert!(
+        pairs
+            .iter()
+            .all(|p| p["run_id"] == "jrun-cohort" && p["mode"] == "shadow")
+    );
+    let five = &report["offsets"][0];
+    assert_eq!(five["cpu"]["mean_error"], 0.0);
+    assert_eq!(five["cpu"]["worst_miss"]["error"], 1.0);
+    assert_eq!(five["memory"]["mean_error"], 2.0 * GIB as f64);
+    let drains = report["drains"].as_array().unwrap();
+    assert_eq!(drains.len(), 1);
+    assert_eq!(drains[0]["shadow_passes"], 2);
+    assert_eq!(drains[0]["enforce_passes"], 0);
+    assert_eq!(drains[0]["admitted"], 1);
+    assert_eq!(drains[0]["would_hold"], serde_json::json!(["ORB-1"]));
+
+    let mut plain_args = args.to_vec();
+    plain_args.extend(["--format", "plain"]);
+    let plain = fixture.stdout(&plain_args);
+    assert!(
+        plain.contains("jrun-cohort") && plain.contains("shadow") && plain.contains(&stamp),
+        "{plain}"
+    );
+    assert!(
+        !plain.contains("jrun-other") && !plain.contains("jrun-expired"),
+        "{plain}"
+    );
+
+    let legacy: Value =
+        serde_json::from_str(&fixture.stdout(&["run", "profiles", "--accuracy", "--json"]))
+            .unwrap();
+    assert_eq!(legacy["forecasts"], 5);
+    assert_eq!(legacy["selection"]["drain"], Value::Null);
+    assert_eq!(legacy["selection"]["mode"], Value::Null);
+    let report_at: DateTime<Utc> = legacy["report_at"].as_str().unwrap().parse().unwrap();
+    let lower: DateTime<Utc> = legacy["since"].as_str().unwrap().parse().unwrap();
+    assert_eq!(report_at - lower, chrono::Duration::days(30));
+    for selectors in [
+        vec!["--drain", "jrun-absent"],
+        vec!["--since", "2999-01-01T00:00:00Z"],
+    ] {
+        // An unmatched drain is empty; a reversed time range is invalid.
+        let mut command = fixture.orbit();
+        command
+            .args(["run", "profiles", "--accuracy", "--json"])
+            .args(&selectors);
+        if selectors[0] == "--drain" {
+            let out = command.assert().success().get_output().stdout.clone();
+            let empty: Value = serde_json::from_slice(&out).unwrap();
+            assert_eq!(empty["forecasts"], 0);
+            assert_eq!(empty["pairs"], serde_json::json!([]));
+            assert_eq!(empty["drains"], serde_json::json!([]));
+        } else {
+            command.assert().failure();
+        }
+    }
+    for selectors in [
+        vec!["--since", "not-a-time"],
+        vec!["--mode", "off"],
+        vec!["--drain", ""],
+        vec!["--mode", "SHADOW"],
+    ] {
+        fixture
+            .orbit()
+            .args(["run", "profiles", "--accuracy"])
+            .args(selectors)
+            .assert()
+            .failure();
+    }
+    for selectors in [
+        ["--since", &stamp],
+        ["--drain", "jrun-cohort"],
+        ["--mode", "shadow"],
+    ] {
+        fixture
+            .orbit()
+            .args(["run", "profiles"])
+            .args(selectors)
+            .assert()
+            .failure();
+    }
+    assert_eq!(
+        fixture.measurements(),
+        before,
+        "accuracy reads preserve recorded evidence"
+    );
+}
+
 #[test]
 fn profiles_report_tabulates_profiles_emits_series_and_flags_building_no_diff_work() {
+    if crate::isolated_test::run_in_child(
+        "run_profiles::profiles_report_tabulates_profiles_emits_series_and_flags_building_no_diff_work",
+    ) {
+        return;
+    }
     let fixture = Fixture::new();
     let empty: Value =
         serde_json::from_str(&fixture.stdout(&["run", "profiles", "--json"])).unwrap();
@@ -281,6 +458,11 @@ fn profiles_report_tabulates_profiles_emits_series_and_flags_building_no_diff_wo
 /// against actual admissions per drain.
 #[test]
 fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() {
+    if crate::isolated_test::run_in_child(
+        "run_profiles::accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions",
+    ) {
+        return;
+    }
     let fixture = Fixture::new();
     let empty: Value =
         serde_json::from_str(&fixture.stdout(&["run", "profiles", "--accuracy", "--json"]))
@@ -381,6 +563,8 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
     let five = offset(5);
     assert_eq!(five["paired"], 5);
     assert_eq!(five["unmeasured"], 0);
+    assert_eq!(five["pending"], 0);
+    assert_eq!(five["missing"], 0);
     assert_eq!(five["cpu"]["mean_error"], -0.2);
     assert_eq!(five["cpu"]["mean_absolute_error"], 0.6);
     assert_eq!(five["cpu"]["under_rate"], 0.2);
@@ -397,6 +581,8 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
     let thirty = offset(30);
     assert_eq!(thirty["paired"], 0);
     assert_eq!(thirty["unmeasured"], 1);
+    assert_eq!(thirty["pending"], 0);
+    assert_eq!(thirty["missing"], 1);
     assert_eq!(thirty["cpu"]["mean_error"], Value::Null);
 
     let drains = doc["drains"].as_array().unwrap();

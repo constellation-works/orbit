@@ -12,14 +12,16 @@ use orbit_store::contracts::{
 use orbit_types::task::NO_DIFF_EXPECTED_TAG;
 
 use super::OrbitRuntime;
-use crate::runtime::host_resource::accuracy::{ForecastAccuracy, forecast_accuracy};
+use crate::runtime::host_resource::accuracy::{
+    AccuracySelection, ForecastAccuracy, forecast_accuracy,
+};
 use crate::runtime::host_resource::delivery::delivery_jobs;
 use crate::runtime::host_resource::forecast::{
     AdmissionReservationRequest, ForecastDecision, HostLoadForecast, HostLoadProbe,
     RESERVATION_TTL_MINUTES, build_forecast,
 };
 use crate::runtime::host_resource::profile::{
-    PROFILE_HISTORY_DAYS, ProfileBounds, ProfileLookup, ProfileMatch, ProfileSet,
+    ProfileBounds, ProfileLookup, ProfileMatch, ProfileSet,
 };
 use crate::runtime::host_resource::{
     HostResourceMonitor, HostResourceProbe, HostResourceStatus, ResourceAdmission,
@@ -150,17 +152,62 @@ impl OrbitRuntime {
     }
 
     /// How the admission forecasts recorded on this host over the last
-    /// [`PROFILE_HISTORY_DAYS`] compare with its measured minutes, and how
+    /// 30 days compare with its measured minutes, and how
     /// each drain's shadow decisions compare with what it admitted.
     pub fn forecast_accuracy(&self) -> Result<ForecastAccuracy, OrbitError> {
+        let report_at = Utc::now();
+        self.forecast_accuracy_selected(AccuracySelection::last_30_days(report_at), report_at)
+    }
+
+    /// Read a selected cohort of recorded forecasts, bounded above by `report_at`.
+    /// That same snapshot determines whether target minutes have fully ended.
+    /// This does not reconcile, prune, sample, or change admission settings.
+    pub fn forecast_accuracy_selected(
+        &self,
+        selection: AccuracySelection,
+        report_at: DateTime<Utc>,
+    ) -> Result<ForecastAccuracy, OrbitError> {
+        if selection.since > report_at {
+            return Err(OrbitError::InvalidInput(
+                "accuracy since must not be after report time".into(),
+            ));
+        }
+        if selection
+            .drain
+            .as_ref()
+            .is_some_and(|id| id.trim().is_empty())
+        {
+            return Err(OrbitError::InvalidInput(
+                "accuracy drain must not be empty".into(),
+            ));
+        }
+        if selection
+            .mode
+            .as_deref()
+            .is_some_and(|mode| !matches!(mode, "shadow" | "enforce"))
+        {
+            return Err(OrbitError::InvalidInput(
+                "accuracy mode must be shadow or enforce".into(),
+            ));
+        }
         let store = self.sqlite_store()?;
-        let since = Utc::now() - Duration::days(PROFILE_HISTORY_DAYS);
-        let records = store.admission_forecasts(since)?;
+        let mut records = store.admission_forecasts(selection.since)?;
+        records.retain(|record| {
+            record.forecast_at <= report_at
+                && selection
+                    .drain
+                    .as_ref()
+                    .is_none_or(|run| run == &record.run_id)
+                && selection
+                    .mode
+                    .as_ref()
+                    .is_none_or(|mode| mode == &record.mode)
+        });
         let minutes = match records.first() {
             Some(first) => store.host_resource_minutes(first.forecast_at - Duration::minutes(1))?,
             None => Vec::new(),
         };
-        Ok(forecast_accuracy(&records, &minutes, since))
+        Ok(forecast_accuracy(&records, &minutes, selection, report_at))
     }
 
     /// Read the host's load from `<proc_root>/{stat,meminfo}` instead of
