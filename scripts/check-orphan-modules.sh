@@ -5,7 +5,8 @@ set -euo pipefail
 # tests/ dir) must be reachable from the module tree: declared as `mod <stem>`
 # in its directory's owning file (mod.rs, lib.rs, or main.rs), in the sibling
 # file that owns the directory as a module (`foo.rs` next to `foo/`), or
-# referenced by a `#[path = "...stem.rs"]` attribute anywhere in the crate.
+# referenced by a direct `#[path = "..."]` attribute in the crate's src tree,
+# resolved relative to the declaring source file to the actual candidate file.
 # Otherwise the file is never compiled, linted, or tested — see
 # docs/design/orbit-cleanup/orbitenginecleanup.md §1/§11.
 #
@@ -33,8 +34,10 @@ fi
 perl - <<'PERL'
 use strict;
 use warnings;
+use Cwd qw(abs_path);
 use File::Basename qw(dirname basename);
 use File::Find qw(find);
+use File::Spec;
 use Encode qw(decode);
 
 sub mask {
@@ -167,7 +170,7 @@ sub strip_rust_non_code {
   return $output;
 }
 
-my (%sources, %masked, %crate_paths);
+my (%sources, %masked, %crate_targets);
 sub source_text {
   my ($path) = @_;
   if (!exists $sources{$path}) {
@@ -195,20 +198,29 @@ sub is_declared {
 
   my ($crate_src) = $file =~ m{^(.*?)/src/};
   $crate_src .= '/src';
-  if (!exists $crate_paths{$crate_src}) {
+  if (!exists $crate_targets{$crate_src}) {
     # Keep ripgrep's original hidden/ignore/glob selection for #[path] search.
     open my $paths, '-|', 'rg', '--files', '--glob', '*.rs', $crate_src
       or die "Cannot list $crate_src: $!\n";
     my @paths;
     while (my $path = <$paths>) { chomp $path; push @paths, $path; }
     close $paths or die "Cannot list $crate_src: ripgrep failed\n";
-    $crate_paths{$crate_src} = \@paths;
+    my %targets;
+    for my $path (@paths) {
+      # Keep the existing literal/cfg scan, but index actual destinations once
+      # per invocation. A basename elsewhere in the crate is not registration.
+      my $source = source_text($path);
+      while ($source =~ /#\[path[[:space:]]*=[[:space:]]*"([^"\n]*)"/g) {
+        my $target = File::Spec->rel2abs($1, dirname($path));
+        next unless -f $target;
+        my $resolved = abs_path($target);
+        $targets{$resolved} = 1 if defined $resolved;
+      }
+    }
+    $crate_targets{$crate_src} = \%targets;
   }
-  my $base = basename($file);
-  for my $path (@{$crate_paths{$crate_src}}) {
-    return 1 if source_text($path) =~ /#\[path[[:space:]]*=[[:space:]]*"[^"\n]*${base}"/;
-  }
-  return 0;
+  my $resolved = abs_path($file);
+  return defined($resolved) && exists $crate_targets{$crate_src}{$resolved};
 }
 
 my (@modules, @tests);
