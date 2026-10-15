@@ -4,7 +4,8 @@ set -euo pipefail
 # Every src/**/*.rs file (excluding mod.rs/lib.rs/main.rs and anything under a
 # tests/ dir) must be reachable from the module tree: declared as `mod <stem>`
 # resolved through its enclosing module directories, or referenced by a direct
-# `#[path = "..."]` attribute (also raw strings) in the crate's src tree.
+# `#[path = "..."]` attribute (Rust escapes, whitespace and raw strings) in
+# the crate's src tree.
 # An explicit path replaces the ordinary destination; only the actual candidate
 # file is registered.
 # Otherwise the file is never compiled, linted, or tested — see
@@ -29,12 +30,13 @@ if ! command -v perl >/dev/null 2>&1; then
   exit 1
 fi
 
-# One process reads each owner once. All snapshots are scoped to this
+# One process reads each physical owner once. All snapshots are scoped to this
 # invocation; a later run observes edits without a cache identity or timestamp.
 perl - <<'PERL'
 use strict;
 use warnings;
 use Cwd qw(abs_path);
+use Encode qw(encode);
 use File::Basename qw(dirname basename);
 use File::Find qw(find);
 use File::Spec;
@@ -187,15 +189,46 @@ sub source_code {
   return $masked{$path};
 }
 
+# Decode Rust string escapes explicitly, keeping paths as UTF-8 bytes like
+# source_text and filesystem names. Perl's string unescaping has different rules.
+sub rust_string_value {
+  my ($literal) = @_;
+  $literal =~ s/\r\n/\n/g;
+  my %escapes = ('n' => "\n", 'r' => "\r", 't' => "\t", '0' => "\0",
+                 '\\' => '\\', '"' => '"', "'" => "'");
+  my $value = '';
+  pos($literal) = 0;
+  while (pos($literal) < length($literal)) {
+    if ($literal =~ /\G([^\\]+)/gc) {
+      $value .= $1;
+    } elsif ($literal =~ /\G\\([nrt0\\"'])/gc) {
+      $value .= $escapes{$1};
+    } elsif ($literal =~ /\G\\x([0-7][0-9a-fA-F])/gc) {
+      $value .= chr(hex($1));
+    } elsif ($literal =~ /\G\\u\{([0-9a-fA-F][0-9a-fA-F_]*)\}/gc) {
+      my $digits = $1;
+      $digits =~ s/_//g;
+      return undef if length($digits) > 6;
+      my $scalar = hex($digits);
+      return undef if $scalar > 0x10ffff || ($scalar >= 0xd800 && $scalar <= 0xdfff);
+      $value .= encode('UTF-8', chr($scalar));
+    } elsif ($literal =~ /\G\\\n[\x09\x0a\x0d\x20]*/gc) {
+      # Rust's string continuation skips the following ASCII whitespace.
+    } else {
+      return undef;
+    }
+  }
+  return $value;
+}
+
 # Track only lexical attributes, module openings and braces, not cfg or macro
 # expansion. Outside inline modules a path is relative to the source directory.
 # The declaring module supplies the directory for ordinary children: an ordinary
 # file module adds its stem, while a redirected file owns its containing directory.
 sub index_module_targets {
-  my ($path, $inline_directory, $targets, $pending) = @_;
+  my ($path, $directory, $inline_directory, $targets, $pending) = @_;
   my $source = source_text($path);
   my $code = source_code($path);
-  my $directory = dirname($path);
   my @scopes = ([$directory, $inline_directory]);
   my $module_path;
 
@@ -209,13 +242,14 @@ sub index_module_targets {
       }
       last if $depth;
       my $attribute = substr($source, $start, pos($code) - $start);
-      if ($attribute =~ /\A#\[path[[:space:]]*=[[:space:]]*"([^"\n]*)"/) {
-        $module_path = $1;
-      } elsif ($attribute =~ /\A#\[path[[:space:]]*=[[:space:]]*r(\#*)"(.*?)"\1/s) {
+      if ($attribute =~ /\A#\[[[:space:]]*path[[:space:]]*=[[:space:]]*"((?:\\[\s\S]|[^"\\])*)"[[:space:]]*\]\z/) {
+        $module_path = rust_string_value($1);
+      } elsif ($attribute =~ /\A#\[[[:space:]]*path[[:space:]]*=[[:space:]]*r(\#*)"(.*?)"\1[[:space:]]*\]\z/s) {
         # Raw path contents are literal; the closing delimiter must repeat
         # the opening hash count. Read only attributes found in masked code,
         # so path-like text inside comments and other literals stays inert.
         $module_path = $2;
+        $module_path =~ s/\r\n/\n/g;
       }
       next;
     }
@@ -231,10 +265,13 @@ sub index_module_targets {
           my $resolved = abs_path($target);
           if (defined $resolved) {
             $targets->{$resolved} = 1;
-            my $child_directory = defined($module_path) || basename($resolved) eq 'mod.rs'
-              ? dirname($resolved)
-              : File::Spec->catdir(dirname($resolved), basename($resolved, '.rs'));
-            push @$pending, [$resolved, $child_directory];
+            # Canonical identity is for caching/registration, not ownership:
+            # rustc resolves children beside the logical symlink name.
+            my $source_directory = abs_path(dirname($target));
+            my $child_directory = defined($module_path) || basename($target) eq 'mod.rs'
+              ? $source_directory
+              : File::Spec->catdir($source_directory, basename($target, '.rs'));
+            push @$pending, [$resolved, $source_directory, $child_directory];
           }
         }
       }
@@ -262,10 +299,13 @@ sub is_declared {
     # Candidate discovery checks the physical source tree, including ignored
     # directories. Its owners must use the same scope: ignore rules (and
     # ripgrep-version differences in negations) cannot hide declarations.
-    open my $paths, '-|', 'rg', '--files', '--hidden', '--no-ignore', '--glob', '*.rs', $crate_src
+    open my $paths, '-|', 'rg', '--files', '--null', '--hidden', '--no-ignore', '--glob', '*.rs', $crate_src
       or die "Cannot list $crate_src: $!\n";
     my @paths;
-    while (my $path = <$paths>) { chomp $path; push @paths, $path; }
+    {
+      local $/ = "\0";
+      while (my $path = <$paths>) { chomp $path; push @paths, $path; }
+    }
     close $paths or die "Cannot list $crate_src: ripgrep failed\n";
     my (%targets, %indexed);
     # Resolve owners before their children so redirected files never acquire a
@@ -277,17 +317,22 @@ sub is_declared {
         || $a cmp $b
     } @paths;
     for my $path (@paths) {
-      $path = abs_path($path);
-      next if exists $indexed{$path};
+      my $resolved = abs_path($path);
+      next if !defined($resolved) || exists $indexed{$resolved};
+      my $source_directory = abs_path(dirname($path));
       my $directory = basename($path) =~ /^(?:mod|lib|main)\.rs$/
-        ? dirname($path) : File::Spec->catdir(dirname($path), basename($path, '.rs'));
-      my @pending = ([$path, $directory]);
+        ? $source_directory : File::Spec->catdir($source_directory, basename($path, '.rs'));
+      my @pending = ([$resolved, $source_directory, $directory]);
       while (my $owner = pop @pending) {
-        my ($owner_path, $owner_directory) = @$owner;
+        my ($owner_path, $owner_source_directory, $owner_directory) = @$owner;
         # A file can be loaded both ordinarily and through #[path]. Index both
         # real contexts, but never revisit cycles or add a default to a redirect.
-        next if $indexed{$owner_path}{$owner_directory}++;
-        index_module_targets($owner_path, $owner_directory, \%targets, \@pending);
+        # Source directories are canonical and child directories add only a
+        # finite source stem. Thus growing directory-symlink spellings converge
+        # on the same context, while nested uses of one physical owner survive.
+        next if $indexed{$owner_path}{$owner_source_directory}{$owner_directory}++;
+        index_module_targets($owner_path, $owner_source_directory, $owner_directory,
+                             \%targets, \@pending);
       }
     }
     $crate_targets{$crate_src} = \%targets;

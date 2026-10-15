@@ -1326,7 +1326,118 @@ class OrphanModuleTests(unittest.TestCase):
 
     def run_guard(self):
         return subprocess.run(["bash", str(self.guard)], cwd=self.root,
-                              text=True, capture_output=True, check=False)
+                              text=True, capture_output=True, check=False, timeout=30)
+
+    def compile_and_execute(self, expected):
+        binary = self.root / "fixture-test"
+        compiled = subprocess.run(["rustc", "--edition=2024", "--test",
+                                   str(self.source / "lib.rs"), "-o", str(binary)],
+                                  text=True, capture_output=True, timeout=60)
+        self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+        listing = subprocess.run([str(binary), "--list"], text=True,
+                                 capture_output=True, timeout=30)
+        self.assertEqual(listing.returncode, 0, listing.stdout + listing.stderr)
+        self.assertEqual(set(re.findall(r"^(.*): test$", listing.stdout, re.MULTILINE)),
+                         expected)
+        executed = subprocess.run([str(binary), "--nocapture"], text=True,
+                                  capture_output=True, timeout=30)
+        self.assertEqual(executed.returncode, 0, executed.stdout + executed.stderr)
+        self.assertEqual(set(re.findall(r"^test (.*) \.\.\. ok$", executed.stdout,
+                                        re.MULTILINE)), expected)
+
+    def test_spaced_and_escaped_paths_register_only_compiler_destinations(self):
+        # Source spellings are Rust escapes, not Python's decoded strings.
+        variants = (
+            ("spaced", '#[ path = "checks/spaced.rs"]', "checks/spaced.rs"),
+            ("hex", r'#[path = "checks/probe\x2ers"]', "checks/probe.rs"),
+            ("unicode", r'#[ path = "checks/\u{e_9}.rs" ]', "checks/é.rs"),
+            ("quoted", r'''#[path = "checks/quo\"te\\apos\'trophe.rs"]''',
+             'checks/quo"te\\apos\'trophe.rs'),
+            ("continued", '#[path = "checks/\\\n \tcontinued.rs"]', "checks/continued.rs"),
+            ("controls", r'#[path = "checks/tab\tline\nreturn\r.rs"]',
+             "checks/tab\tline\nreturn\r.rs"),
+        )
+        expected = set()
+        orphans = set()
+        for directory, prefix in (("", ""), ("tests/", "tests::")):
+            owner = '#[cfg(test)] mod tests;\n' if not directory else ""
+            for name, attribute, destination in variants:
+                owner += f'{attribute} mod {name};\n'
+                self.write_source(directory + destination,
+                                  "#[test] fn registered() { assert_eq!(2 + 2, 4); }\n")
+                expected.add(f"{prefix}{name}::registered")
+                orphans.add(directory + name + ".rs")
+            owner += ('/* #[ path = "comment.rs"] mod comment; */\n'
+                      'const TEXT: &str = r#"#[ path = "string.rs"] mod string;"#;\n')
+            orphans.update({directory + "comment.rs", directory + "string.rs"})
+            self.write_source(directory + ("mod.rs" if directory else "lib.rs"), owner)
+
+        self.compile_and_execute(expected)
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for path in orphans:
+            self.write_source(path, '#[test] fn unregistered() { panic!("orphan"); }\n')
+        self.compile_and_execute(expected)
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(set(re.findall(r"^orphan(?: test)? module: (\S+)",
+                                        result.stdout, re.MULTILINE)),
+                         {f"crates/fixture/src/{path}" for path in orphans})
+
+    def test_symlinked_owners_preserve_each_logical_child_directory(self):
+        # Three logical owners share one physical file outside the src scan.
+        physical = self.root / "shared/owner.rs"
+        physical.parent.mkdir()
+        physical.write_text('mod child;\nmod inner { mod leaf; }\n'
+                            '#[path="relative.rs"] mod relative;\n')
+        self.write_source("lib.rs", 'mod parent;\nmod alternate;\n'
+                          '#[path="redirect/alias.rs"] mod redirected;\nmod repeated;\n')
+        for path in ("parent.rs", "alternate.rs", "redirect/alias.rs"):
+            link = self.source / path
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(os.path.relpath(physical, link.parent))
+        expected = set()
+        for directory, prefix in (("parent/", "parent"), ("alternate/", "alternate"),
+                                  ("redirect/", "redirected")):
+            for child, module in (("child.rs", "child"), ("inner/leaf.rs", "inner::leaf")):
+                self.write_source(directory + child, "#[test] fn registered() {}\n")
+                expected.add(f"{prefix}::{module}::registered")
+        for path in ("relative.rs", "redirect/relative.rs"):
+            self.write_source(path, "#[test] fn registered() {}\n")
+        expected.update(f"{prefix}::relative::registered"
+                        for prefix in ("parent", "alternate", "redirected"))
+        # Rust also permits nested reuse of one physical owner when each
+        # logical directory eventually leads to a different leaf file.
+        repeated = physical.parent / "repeated.rs"
+        repeated.write_text("mod child;\n")
+        for path in ("repeated.rs", "repeated/child.rs"):
+            link = self.source / path
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(os.path.relpath(repeated, link.parent))
+        self.write_source("repeated/child/child.rs", "#[test] fn registered() {}\n")
+        expected.add("repeated::child::child::registered")
+        self.compile_and_execute(expected)
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        self.write_source("parent/lost.rs", '#[test] fn unregistered() { panic!("orphan"); }\n')
+        self.compile_and_execute(expected)
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.splitlines(), [
+            "orphan module: crates/fixture/src/parent/lost.rs — no module declaration resolves to this file",
+        ])
+
+        # A declared directory symlink can grow logical paths indefinitely.
+        # The public guard must terminate without registering unrelated files.
+        self.write_source("cycle.rs", '#[path="loop/cycle.rs"] mod again;\n')
+        (self.source / "loop").symlink_to(".", target_is_directory=True)
+        self.write_source("lib.rs", (self.source / "lib.rs").read_text() + "mod cycle;\n")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.splitlines(), [
+            "orphan module: crates/fixture/src/parent/lost.rs — no module declaration resolves to this file",
+        ])
 
     def test_redirected_parent_children_inherit_the_resolved_module_directory(self):
         self.write_source("lib.rs", '#[path="other.rs"] mod renamed;\n'
