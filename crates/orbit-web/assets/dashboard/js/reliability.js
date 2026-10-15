@@ -15,9 +15,9 @@
 //      counts and an "n too small" marker instead of a percentage.
 //
 // The server also reports which run states it counted. `succeeded + failed`
-// is smaller than the run total whenever runs were cancelled, skipped, or are
-// still in flight, so the summary spells out the excluded bucket rather than
-// letting the two visible numbers imply they add up.
+// is smaller than the run total whenever runs were cancelled, skipped, held,
+// still in flight, or unrecognized, so the summary spells out the excluded
+// bucket rather than letting the two visible numbers imply they add up.
 
 import { el, syncNodes, fetchJson, requestPanel, getWindow, getWorkspaceRevision, onWorkspaceChange, payloadHonorsWindow, reliabilityWindowFor, wireWindowSelector, syncWindowSelectors, formatUtcDateTime, formatUtcRange } from './common.js';
 
@@ -112,7 +112,7 @@ function renderSummary(payload) {
 
   const settled = num(counts.succeeded) + num(counts.failed);
   const excluded =
-    num(counts.cancelled) + num(counts.skipped) + num(counts.in_flight) + num(counts.unknown);
+    num(counts.cancelled) + num(counts.skipped) + num(counts.held) + num(counts.in_flight) + num(counts.unknown);
 
   const tiles = [
     statTile(
@@ -156,10 +156,10 @@ function renderSummary(payload) {
     note.textContent =
       excluded > 0
         ? `Failure rate is over settled runs only (success + failed = ${settled}). ` +
-          `${excluded} further run(s) in this window were cancelled, skipped, still in flight, ` +
+          `${excluded} further run(s) in this window were cancelled, skipped, held, still in flight, ` +
           `or in an unrecognized state and are excluded from the denominator.`
         : `Failure rate is over settled runs only (success + failed = ${settled}). ` +
-          `No cancelled, skipped, in-flight, or unrecognized runs in this window.`;
+          `No cancelled, skipped, held, in-flight, or unrecognized runs in this window.`;
   }
 
   const truncNote = $("reliability-truncation-note");
