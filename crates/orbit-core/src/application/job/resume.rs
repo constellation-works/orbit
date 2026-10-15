@@ -43,6 +43,8 @@
 //! would make validation name a run that does not own the task. The attach
 //! guard in `runtime_host` stays fail-closed for a non-owning run.
 
+mod source_repair;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
@@ -157,6 +159,13 @@ impl OrbitRuntime {
         // `show_job_run` reconciles a stale Running owner first, so a run
         // orphaned by SIGKILL flips to Interrupted before the state guard.
         let source = self.show_job_run(source_run_id)?;
+        if source.input.as_ref().is_some_and(|input| {
+            input
+                .get(orbit_types::workflow::SOURCE_REPAIR_KEY)
+                .is_some()
+        }) {
+            return Err(OrbitError::JobValidation("operator source-repair authority covers one attempt only; inspect and submit a new explicit recovery request".into()));
+        }
         // [ORB-11354] A resume reuses the source run's persisted input, which
         // for a trusted-host invocation would carry its admission forward into
         // a run nobody authorized now. The mode is per-invocation on purpose,

@@ -137,6 +137,34 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
     let local_sha = commit_sha(workspace_path, &branch)?;
     let probe = pre_push_remote_branch(workspace_path, &branch)?;
     let remote_sha = &probe.sha;
+    let repair_admission =
+        super::candidate_resume::source_repair::publication_admission(host, input)?;
+    let repair_lease = repair_admission
+        .as_ref()
+        .map(|admission| {
+            super::candidate_resume::source_repair::publication_lease(
+                host,
+                input,
+                &admission.binding,
+            )
+        })
+        .transpose()?;
+    if let Some(admission) = &repair_admission {
+        let binding = &admission.binding;
+        let pr = read_pr_status(host, workspace_path, &binding.pull_request)?;
+        if branch != binding.branch
+            || !matches!(remote_sha.as_deref(), Some(sha) if Some(sha) == repair_lease.as_deref() || sha == local_sha)
+            || !super::candidate_resume::source_repair::exact_open_pr(
+                binding,
+                &pr,
+                remote_sha.as_deref().unwrap_or_default(),
+            )
+        {
+            return Err(OrbitError::Execution("push_lease_lost: source repair PR or published branch changed; no replacement publication is authorized".into()));
+        }
+        // Pin the actual write as well as the observation: another publisher
+        // racing this probe must lose the ordinary push's exact lease below.
+    }
     // [ORB-14849] A before-landing reviewer's fix goes onto the published
     // head it reviewed and nowhere else: a branch that moved since loses the
     // lease, and the push itself is conditional on that head.
@@ -164,7 +192,8 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
     // and adopted no branch.
     let adopted_head = input
         .get("candidate_resume")
-        .and_then(|resumed| input_string_field(resumed, "reused_head_sha"));
+        .and_then(|resumed| input_string_field(resumed, "reused_head_sha"))
+        .or(repair_lease);
     if let Some(adopted) = &adopted_head
         && remote_sha.as_deref() != Some(adopted.as_str())
         && remote_sha.as_deref() != Some(local_sha.as_str())

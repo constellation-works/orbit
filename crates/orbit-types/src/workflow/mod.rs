@@ -168,3 +168,9 @@ pub use pr_infrastructure::{
     PrInfrastructureReservation, RequiredGate, decide_pr_infrastructure,
     pr_infrastructure_reservations,
 };
+
+mod source_repair;
+pub use source_repair::{
+    SOURCE_REPAIR_KEY, SOURCE_REPAIR_LINKED, SOURCE_REPAIR_RESERVED, SourceRepairAdmission,
+    SourceRepairBinding, source_repair_reservations,
+};

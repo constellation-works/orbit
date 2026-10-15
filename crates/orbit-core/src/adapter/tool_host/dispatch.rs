@@ -131,6 +131,7 @@ pub(super) fn execute(
         }
         OrbitBuiltinAction::Workflow(verb) => super::workflow_tools::dispatch(
             runtime,
+            session_context,
             verb,
             input,
             agent,

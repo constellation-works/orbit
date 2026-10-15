@@ -225,6 +225,14 @@ impl OrbitRuntime {
         // gets the same reserved-key refusal as the detached submission path.
         // Nothing runs a trusted-host activity in the foreground: an admitted
         // invocation is always a detached run so it survives disconnect.
+        if input
+            .get(orbit_types::workflow::SOURCE_REPAIR_KEY)
+            .is_some()
+        {
+            return Err(OrbitError::CapabilityDenied(
+                "source repair input is reserved for explicit operator admission".into(),
+            ));
+        }
         if run_input_declares_trusted_host(&input) {
             return Err(super::pipeline::reserved_trusted_host_key_error(&job_name));
         }
@@ -498,7 +506,11 @@ impl OrbitRuntime {
         self.stores()
             .jobs()
             .write_run_state(&run.run_id, &initial_state)?;
-        if let Some(plan) = resume {
+        if let Some(plan) = resume
+            && input
+                .get(orbit_types::workflow::SOURCE_REPAIR_KEY)
+                .is_none()
+        {
             self.reconcile_resume_task_ownership(plan, &run.run_id)?;
         }
         Ok(())
