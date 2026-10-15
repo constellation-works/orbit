@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Parse GitHub Actions workflows and guard the Homebrew shell boundary.
 
-GitHub creates no jobs for a workflow it cannot parse. A path-filtered leg
+GitHub creates no jobs for a workflow it cannot parse. A platform leg
 such as the macOS sandbox job then disappears from the PR checks instead of
 failing, so a syntax error there stays silent until someone notices red on
 the branch tip (a trailing `generation_root::` once disabled it for every

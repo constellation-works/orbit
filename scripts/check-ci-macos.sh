@@ -71,46 +71,32 @@ def indentation(line: str) -> int:
     return len(line) - len(line.lstrip(" "))
 
 
-def pull_request_paths() -> list[str]:
-    entries: list[str] = []
-
+def has_unfiltered_pull_request() -> bool:
+    # Inspect the workflow's block-form event mapping without an optional YAML
+    # dependency on native runners. Any event options could withhold a required
+    # check, so only an empty pull_request event provides complete coverage.
+    in_events = False
+    event_indent = None
     for index, line in enumerate(lines):
-        if line.strip() != "pull_request:":
+        stripped = re.sub(r"\s+#.*$", "", line).strip()
+        if not stripped or stripped.startswith("#"):
             continue
-
-        event_indent = indentation(line)
-        paths_index = None
-        paths_indent = None
-        cursor = index + 1
-        while cursor < len(lines):
-            candidate = lines[cursor]
-            stripped = candidate.strip()
-            if stripped and indentation(candidate) <= event_indent:
-                break
-            if stripped == "paths:":
-                paths_index = cursor
-                paths_indent = indentation(candidate)
-                break
-            cursor += 1
-
-        if paths_index is None or paths_indent is None:
+        indent = indentation(line)
+        if not in_events:
+            in_events = indent == 0 and stripped == "on:"
             continue
-
-        cursor = paths_index + 1
-        while cursor < len(lines):
-            candidate = lines[cursor]
-            stripped = candidate.strip()
-            if stripped and indentation(candidate) <= paths_indent:
-                break
-            if stripped.startswith("-") and indentation(candidate) > paths_indent:
-                value = stripped[1:].strip()
-                value = re.sub(r"\s+#.*$", "", value).strip()
-                if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-                    value = value[1:-1]
-                entries.append(value)
-            cursor += 1
-
-    return entries
+        if indent == 0:
+            break
+        if event_indent is None:
+            event_indent = indent
+        if indent != event_indent or not re.fullmatch(r"pull_request:\s*(?:\{\s*\}|null|~)?", stripped):
+            continue
+        for child in lines[index + 1:]:
+            if not child.strip() or child.lstrip().startswith("#"):
+                continue
+            return indentation(child) <= event_indent
+        return True
+    return False
 
 
 # A filter whose tests compile only on Darwin carries this marker. The Linux
@@ -239,11 +225,8 @@ def filtered_cargo_tests() -> list[FilteredTest]:
 
 errors: list[str] = []
 
-for path in pull_request_paths():
-    if path.startswith("!") or any(character in path for character in "*?["):
-        continue
-    if not (repo_root / path).exists():
-        errors.append(f"pull_request.paths entry does not exist: {path}")
+if not has_unfiltered_pull_request():
+    errors.append("workflow must define an unfiltered pull_request event so required checks report on every PR")
 
 filtered_tests = filtered_cargo_tests()
 if not filtered_tests:
@@ -386,7 +369,7 @@ if errors:
         print(f"check-ci-macos: {error}", file=sys.stderr)
     raise SystemExit(1)
 
-print("check-ci-macos: workflow paths and filtered tests passed")
+print("check-ci-macos: workflow PR coverage and filtered tests passed")
 
 if evidence_output is not None:
     required_environment = {
