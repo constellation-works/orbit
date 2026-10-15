@@ -1328,6 +1328,73 @@ class OrphanModuleTests(unittest.TestCase):
         return subprocess.run(["bash", str(self.guard)], cwd=self.root,
                               text=True, capture_output=True, check=False)
 
+    def test_ignored_module_owners_still_register_their_children(self):
+        # Candidate files are checked regardless of ignore rules, so owners
+        # must remain visible too, including directories named like outputs.
+        (self.root / ".ignore").write_text("build/\n")
+        self.write_source("lib.rs", "mod build;\n#[cfg(test)] mod tests;\n")
+        self.write_source("tests/mod.rs", "mod build;\n")
+        for directory in ("build/", "tests/build/"):
+            self.write_source(f"{directory}mod.rs", "mod live;\n")
+            self.write_source(f"{directory}live.rs", "#[test] fn registered() {}\n")
+
+        binary = self.root / "fixture-test"
+        compiled = subprocess.run(["rustc", "--edition=2024", "--test",
+                                   str(self.source / "lib.rs"), "-o", str(binary)],
+                                  text=True, capture_output=True)
+        self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+        listing = subprocess.run([str(binary), "--list"], text=True, capture_output=True)
+        self.assertEqual(listing.returncode, 0, listing.stdout + listing.stderr)
+        self.assertEqual(set(re.findall(r"^(.*): test$", listing.stdout, re.MULTILINE)), {
+            "build::live::registered", "tests::build::live::registered",
+        })
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        for directory in ("build/", "tests/build/"):
+            self.write_source(f"{directory}lost.rs", "#[test] fn never_runs() {}\n")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(set(re.findall(r"^(orphan(?: test)? module): (\S+)",
+                                        result.stdout, re.MULTILINE)), {
+            ("orphan module", "crates/fixture/src/build/lost.rs"),
+            ("orphan test module", "crates/fixture/src/tests/build/lost.rs"),
+        })
+
+    def test_path_override_does_not_register_same_name_files(self):
+        self.write_source("lib.rs", '#[path="other.rs"] mod lost;\n'
+                          'mod ordinary;\n#[cfg(test)] mod tests;\n')
+        self.write_source("tests/mod.rs", '#[path="other.rs"] mod lost;\n'
+                          'mod ordinary;\n')
+        for directory in ("", "tests/"):
+            self.write_source(f"{directory}other.rs", "#[test] fn live() {}\n")
+            self.write_source(f"{directory}ordinary.rs", "#[test] fn plain() {}\n")
+
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        for directory in ("", "tests/"):
+            self.write_source(f"{directory}lost.rs",
+                              '#[test] fn never_runs() { panic!("lost test"); }\n')
+        binary = self.root / "fixture-test"
+        compiled = subprocess.run(["rustc", "--edition=2024", "--test",
+                                   str(self.source / "lib.rs"), "-o", str(binary)],
+                                  text=True, capture_output=True)
+        self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+        listing = subprocess.run([str(binary), "--list"], text=True, capture_output=True)
+        self.assertEqual(listing.returncode, 0, listing.stdout + listing.stderr)
+        self.assertEqual(set(re.findall(r"^(.*): test$", listing.stdout, re.MULTILINE)), {
+            "lost::live", "ordinary::plain", "tests::lost::live", "tests::ordinary::plain",
+        })
+
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(set(re.findall(r"^(orphan(?: test)? module): (\S+)",
+                                        result.stdout, re.MULTILINE)), {
+            ("orphan module", "crates/fixture/src/lost.rs"),
+            ("orphan test module", "crates/fixture/src/tests/lost.rs"),
+        })
+
     def test_path_attribute_only_registers_its_resolved_file(self):
         self.write_source("lib.rs", '#[path = "feature.rs"] mod production;\n'
                           '#[cfg(test)] mod tests;\n')

@@ -3,10 +3,9 @@ set -euo pipefail
 
 # Every src/**/*.rs file (excluding mod.rs/lib.rs/main.rs and anything under a
 # tests/ dir) must be reachable from the module tree: declared as `mod <stem>`
-# in its directory's owning file (mod.rs, lib.rs, or main.rs), in the sibling
-# file that owns the directory as a module (`foo.rs` next to `foo/`), or
-# referenced by a direct `#[path = "..."]` attribute in the crate's src tree,
-# resolved through its enclosing module directories to the actual candidate file.
+# resolved through its enclosing module directories, or referenced by a direct
+# `#[path = "..."]` attribute in the crate's src tree. An explicit path replaces
+# the ordinary destination; only the actual candidate file is registered.
 # Otherwise the file is never compiled, linted, or tested — see
 # docs/design/orbit-cleanup/orbitenginecleanup.md §1/§11.
 #
@@ -38,7 +37,6 @@ use Cwd qw(abs_path);
 use File::Basename qw(dirname basename);
 use File::Find qw(find);
 use File::Spec;
-use Encode qw(decode);
 
 sub mask {
   my ($text) = @_;
@@ -190,8 +188,8 @@ sub source_code {
 
 # Track only lexical attributes, module openings and braces, not cfg or macro
 # expansion. Outside inline modules a path is relative to the source directory;
-# entering an ordinary file's first inline module also adds the file's stem.
-sub index_path_targets {
+# ordinary declarations and inline modules also add an ordinary file's stem.
+sub index_module_targets {
   my ($path, $targets) = @_;
   my $source = source_text($path);
   my $code = source_code($path);
@@ -213,15 +211,23 @@ sub index_path_targets {
       my $attribute = substr($source, $start, pos($code) - $start);
       if ($attribute =~ /\A#\[path[[:space:]]*=[[:space:]]*"([^"\n]*)"/) {
         $module_path = $1;
-        my $target = File::Spec->rel2abs($module_path, $scopes[-1][0]);
+      }
+      next;
+    }
+    if (defined($module) && $ending eq ';') {
+      # A path override registers only its destination, never the same-name
+      # default file. Both production and sibling-test checks use this index.
+      my @destinations = defined($module_path)
+        ? (File::Spec->rel2abs($module_path, $scopes[-1][0]))
+        : (File::Spec->catfile($scopes[-1][1], "$module.rs"),
+           File::Spec->catfile($scopes[-1][1], $module, 'mod.rs'));
+      for my $target (@destinations) {
         if (-f $target) {
           my $resolved = abs_path($target);
           $targets->{$resolved} = 1 if defined $resolved;
         }
       }
-      next;
-    }
-    if (defined($module) && $ending eq '{') {
+    } elsif (defined($module) && $ending eq '{') {
       # An inline module's explicit path replaces its default directory, also
       # suppressing the file-stem component for a non-mod.rs source file.
       my $child = defined($module_path)
@@ -239,21 +245,13 @@ sub index_path_targets {
 
 sub is_declared {
   my ($file) = @_;
-  my $dir = dirname($file);
-  my $stem = decode('UTF-8', basename($file, '.rs'));
-  for my $owner ("$dir/mod.rs", "$dir/lib.rs", "$dir/main.rs",
-                 dirname($dir) . '/' . basename($dir) . '.rs') {
-    next unless -f $owner;
-    # ripgrep's original declaration search matched within each line.
-    return 1 if grep { /\bmod[[:space:]]+(r#)?${stem}\b[[:space:]]*[;{]/ }
-      split /\n/, decode('UTF-8', source_code($owner));
-  }
-
   my ($crate_src) = $file =~ m{^(.*?)/src/};
   $crate_src .= '/src';
   if (!exists $crate_targets{$crate_src}) {
-    # Keep ripgrep's original hidden/ignore/glob selection for #[path] search.
-    open my $paths, '-|', 'rg', '--files', '--glob', '*.rs', $crate_src
+    # Candidate discovery checks the physical source tree, including ignored
+    # directories. Its owners must use the same scope: ignore rules (and
+    # ripgrep-version differences in negations) cannot hide declarations.
+    open my $paths, '-|', 'rg', '--files', '--hidden', '--no-ignore', '--glob', '*.rs', $crate_src
       or die "Cannot list $crate_src: $!\n";
     my @paths;
     while (my $path = <$paths>) { chomp $path; push @paths, $path; }
@@ -262,7 +260,7 @@ sub is_declared {
     for my $path (@paths) {
       # Index actual destinations once per invocation, regardless of cfg. A
       # basename elsewhere in the crate is not registration.
-      index_path_targets($path, \%targets);
+      index_module_targets($path, \%targets);
     }
     $crate_targets{$crate_src} = \%targets;
   }
@@ -285,11 +283,10 @@ find({ no_chdir => 1, wanted => sub {
 my $failed = 0;
 for my $file (@modules, @tests) {
   next if is_declared($file);
-  my $stem = basename($file, '.rs');
   if ($file =~ m{/tests/}) {
-    print "orphan test module: $file — no mod $stem; declaration in " . dirname($file) . "/mod.rs and no matching #[path] attribute\n";
+    print "orphan test module: $file — no module declaration resolves to this file\n";
   } else {
-    print "orphan module: $file — no mod $stem; declaration and no matching #[path] attribute\n";
+    print "orphan module: $file — no module declaration resolves to this file\n";
   }
   $failed = 1;
 }
