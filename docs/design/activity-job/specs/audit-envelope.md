@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: V2 Audit Envelope"
 tags: ["activity-job"]
-last_validated: 2026-10-10
+last_validated: 2026-10-14
 ---
 
 # Spec: V2 Audit Envelope
@@ -55,7 +55,7 @@ Loop-engine events use the same table with `source: loop_event`. Content-address
 .orbit/state/audit/blobs/<hh>/<hash>
 ```
 
-Test builds expose an in-memory snapshot for smoke assertions; production CLI inspection reads the persisted SQLite audit rows and blob store. The writer's legacy `envelope_log_path()` hook returns `None` for the SQLite-backed production writer.
+The writer's `events_snapshot()` reads events back from its configured persistence sink; it returns `SnapshotUnavailable` when no inspectable sink is attached. Production CLI inspection reads the persisted SQLite audit rows and blob store. The writer's legacy `envelope_log_path()` hook returns `None` for the SQLite-backed production writer.
 
 ## CLI Inspection
 
@@ -68,7 +68,7 @@ Test builds expose an in-memory snapshot for smoke assertions; production CLI in
 ## Invariants
 
 - Envelope writes are append-only rows whose payload is one JSON object.
-- Disk persistence failure should not crash the run by itself; the in-memory event stream is still load-bearing.
+- Disk persistence failure does not crash the run by itself; the writer records a failure counter and tracing error and continues counting attempted envelope emissions. It retains no in-memory fallback event stream, so failed writes leave gaps in the persisted audit trail.
 - `workspace_path` is attached when the caller has a meaningful repo identity.
 - CLI invocation start events include `cwd` when the runtime selected a subprocess working directory.
 - Parent stacks propagate into worker threads so nested branch/worker events remain traversable.
@@ -76,7 +76,7 @@ Test builds expose an in-memory snapshot for smoke assertions; production CLI in
 ## Failure Modes
 
 - Audit writer mutex poisoning surfaces as a structured audit failure.
-- SQLite persistence can fail independently of in-memory event capture.
+- SQLite persistence can fail even when event emission returns an event ID. Inspect the audit-failure count or degraded-audit flag rather than treating successful emission as proof of persistence.
 - Reviewers may need both the envelope and loop-event rows, plus the blob store, to reconstruct a full run.
 
 ## Migration Notes
