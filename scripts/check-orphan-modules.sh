@@ -4,7 +4,7 @@ set -euo pipefail
 # Every src/**/*.rs file (excluding mod.rs/lib.rs/main.rs and anything under a
 # tests/ dir) must be reachable from the module tree: declared as `mod <stem>`
 # resolved through its enclosing module directories, or referenced by a direct
-# `#[path = "..."]` attribute (Rust escapes, whitespace and raw strings) in
+# `#[path = "..."]` attribute (Rust escapes, whitespace, comments and raw strings) in
 # the crate's src tree.
 # An explicit path replaces the ordinary destination; only the actual candidate
 # file is registered.
@@ -47,9 +47,10 @@ sub mask {
   return $text;
 }
 
-# Preserve the lexical masking rules for comments and literals.
+# Preserve the lexical masking rules for comments and literals. Attribute
+# extraction keeps literals intact while treating comments as token whitespace.
 sub strip_rust_non_code {
-  my ($source) = @_;
+  my ($source, $keep_literals) = @_;
   my $output = '';
   my $index = 0;
   my $length = length $source;
@@ -79,14 +80,14 @@ sub strip_rust_non_code {
       if ($character eq 'r' && substr($source, $index) =~ /\Ar(#+)?"/) {
         my $prefix = $&;
         $raw_hashes = defined($1) ? length($1) : 0;
-        $output .= mask($prefix);
+        $output .= $keep_literals ? $prefix : mask($prefix);
         $index += length($prefix);
         $state = 'raw_string';
         next;
       }
 
       if ($character eq '"') {
-        $output .= ' ';
+        $output .= $keep_literals ? $character : ' ';
         $index++;
         $state = 'string';
         next;
@@ -96,7 +97,7 @@ sub strip_rust_non_code {
       # quote inside one cannot change how the remainder of the owner is read.
       if ($character eq "'" && substr($source, $index) =~ /\A'(?:\\[\s\S]|[^\\\r\n']){1,4}'/) {
         my $literal = $&;
-        $output .= mask($literal);
+        $output .= $keep_literals ? $literal : mask($literal);
         $index += length($literal);
         next;
       }
@@ -138,17 +139,17 @@ sub strip_rust_non_code {
 
     if ($state eq 'string') {
       if ($character eq '\\') {
-        $output .= ' ';
+        $output .= $keep_literals ? $character : ' ';
         $index++;
         if ($index < $length) {
           my $escaped = substr($source, $index, 1);
-          $output .= $escaped eq "\n" ? "\n" : ' ';
+          $output .= $keep_literals || $escaped eq "\n" ? $escaped : ' ';
           $index++;
         }
         next;
       }
 
-      $output .= $character eq "\n" ? "\n" : ' ';
+      $output .= $keep_literals || $character eq "\n" ? $character : ' ';
       $index++;
       if ($character eq '"') {
         $state = 'code';
@@ -158,13 +159,13 @@ sub strip_rust_non_code {
 
     my $terminator = '"' . ('#' x $raw_hashes);
     if (substr($source, $index, length($terminator)) eq $terminator) {
-      $output .= mask($terminator);
+      $output .= $keep_literals ? $terminator : mask($terminator);
       $index += length($terminator);
       $state = 'code';
       next;
     }
 
-    $output .= $character eq "\n" ? "\n" : ' ';
+    $output .= $keep_literals || $character eq "\n" ? $character : ' ';
     $index++;
   }
 
@@ -241,7 +242,7 @@ sub index_module_targets {
         $depth += $& eq '[' ? 1 : -1;
       }
       last if $depth;
-      my $attribute = substr($source, $start, pos($code) - $start);
+      my $attribute = strip_rust_non_code(substr($source, $start, pos($code) - $start), 1);
       if ($attribute =~ /\A#\[[[:space:]]*path[[:space:]]*=[[:space:]]*"((?:\\[\s\S]|[^"\\])*)"[[:space:]]*\]\z/) {
         $module_path = rust_string_value($1);
       } elsif ($attribute =~ /\A#\[[[:space:]]*path[[:space:]]*=[[:space:]]*r(\#*)"(.*?)"\1[[:space:]]*\]\z/s) {
