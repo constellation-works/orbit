@@ -39,13 +39,13 @@ from pathlib import Path
 mode = json.loads(Path("mode.json").read_text())
 if "metadata" in sys.argv:
     print(json.dumps({"packages": [{"name": "fixture", "targets": [{"name": "boundary", "kind": ["test"]}]}]}))
+elif "--list" in sys.argv:
+    print(("unrelated" if mode == "stale" else "boundary::contracts") + ": test")
 elif mode.startswith("native-"):
     record = json.loads(Path("transcript.json").read_text())
     print(record["stdout"], end="")
     print(record["stderr"], end="", file=sys.stderr)
     raise SystemExit(record.get("exit_code", 0))
-elif "--list" in sys.argv:
-    print(("unrelated" if mode == "stale" else "boundary::contracts") + ": test")
 else:
     print("     Running tests/boundary.rs (target/debug/deps/boundary-fixture)", file=sys.stderr)
     print("running 1 test")
@@ -57,6 +57,34 @@ else:
         print("SKIP: sandbox-exec cannot apply a profile: Operation not permitted", file=sys.stderr)
     if mode == "ps":
         print("DEFERRED: ps denied: Operation not permitted", file=sys.stderr)
+'''
+
+LIBTEST_FRAMES = r'''
+mod boundary {
+    #[test]
+    fn contracts() {
+        use std::io::Write;
+        if std::env::var_os("QA_FRAME_CHILD").is_some() {
+            eprintln!("qa-scenario-pass: original_boundary");
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "boundary::contracts", "--nocapture", "--test-threads=1"])
+            .env("QA_FRAME_CHILD", "1")
+            .output().unwrap();
+        assert!(output.status.success());
+        // Use the runtime scenario producer's locked stdout protocol, twice
+        // to cover tables that forward several children before returning.
+        for _ in 0..2 {
+            let mut stdout = std::io::stdout().lock();
+            writeln!(stdout, "qa-child-output-begin: boundary::contracts").unwrap();
+            stdout.write_all(&output.stdout).unwrap();
+            writeln!(stdout, "\nqa-child-output-end: boundary::contracts").unwrap();
+        }
+        std::io::stderr().write_all(&output.stderr).unwrap();
+        assert!(std::env::var_os("QA_FRAME_FAIL").is_none(), "real outer failure");
+    }
+}
 '''
 
 BROWSER = '''
@@ -312,6 +340,79 @@ def self_test():
                 assert retained["test_counts"] == {"passed": 1, "failed": 0, "ignored": 0, "suites": 1}, retained
                 assert retained["stdout"] == forwarded["stdout"], retained
         command = original_command
+        # Compile once, then capture actual libtest bytes with one and two
+        # threads. Replay through both the public recorder/import and sweep.
+        source = repo / "frames.rs"
+        source.write_text(LIBTEST_FRAMES)
+        binary = repo / "frames"
+        compiled = subprocess.run(["rustc", "--test", str(source), "-o", str(binary)],
+                                  capture_output=True, text=True, timeout=60)
+        assert compiled.returncode == 0, compiled.stderr
+        for threads in [1, 2]:
+            captures = {}
+            for failure in [False, True]:
+                env = {key: value for key, value in os.environ.items()
+                       if key not in ["QA_FRAME_CHILD", "QA_FRAME_FAIL"]}
+                env["RUST_TEST_THREADS"] = str(threads)
+                if failure:
+                    env["QA_FRAME_FAIL"] = "1"
+                child = subprocess.run([str(binary), "--show-output"], env=env,
+                                       capture_output=True, text=True, timeout=60)
+                assert child.returncode == (101 if failure else 0), child.stderr
+                serial_prefix = "test boundary::contracts ... qa-child-output-begin:"
+                assert (serial_prefix in child.stdout) == (threads == 1), child.stdout
+                captures[failure] = child
+            for mode in ["complete", "outer-failure", "wrong-owner", "missing-end", "wrong-end",
+                         "missing-outer-row", "missing-row", "notice", "truncated", "unstable"]:
+                child = captures[mode == "outer-failure"]
+                execution = {"stdout": child.stdout,
+                             "stderr": "     Running tests/boundary.rs (target/debug/deps/boundary-fixture)\n" + child.stderr,
+                             # Even a claimed zero exit must not hide a real failed outer test.
+                             "exit_code": 0, "executed_command": command}
+                if mode == "wrong-owner":
+                    execution["stdout"] = execution["stdout"].replace("output-begin: boundary::contracts", "output-begin: unrelated").replace("output-end: boundary::contracts", "output-end: unrelated")
+                elif mode == "missing-end":
+                    execution["stdout"] = execution["stdout"].replace("qa-child-output-end: boundary::contracts", "")
+                elif mode == "wrong-end":
+                    execution["stdout"] = execution["stdout"].replace("output-end: boundary::contracts", "output-end: unrelated")
+                elif mode == "missing-outer-row":
+                    # Remove only the final outer completion, keeping child results intact.
+                    completion = "ok\n" if threads == 1 else "test boundary::contracts ... ok\n"
+                    offset = execution["stdout"].rfind(completion)
+                    assert offset >= 0, execution
+                    execution["stdout"] = execution["stdout"][:offset] + execution["stdout"][offset + len(completion):]
+                elif mode == "missing-row":
+                    execution["stderr"] = execution["stderr"].replace("qa-scenario-pass: original_boundary\n", "")
+                elif mode == "notice":
+                    execution["stdout"] = execution["stdout"].replace("qa-child-output-begin: boundary::contracts", "qa-child-output-begin: boundary::contracts\nSKIP: sandbox-exec cannot apply a profile: real child refusal")
+                elif mode == "truncated":
+                    execution["output_truncated"] = True
+                elif mode == "unstable":
+                    execution["source_stable"] = False
+                (repo / "transcript.json").write_text(json.dumps(execution))
+                (repo / "mode.json").write_text(json.dumps("native-libtest"))
+                records = repo / f".orbit/tmp/libtest-{threads}-{mode}"
+                recorded_child = subprocess.run([sys.executable, str(driver), str(harness), str(repo),
+                                                "--native-execution-dir", str(records), "--record-native-command", *command],
+                                               cwd=repo, env={**os.environ, "PATH": f"{cargo.parent}:{os.environ['PATH']}"},
+                                               capture_output=True, text=True, timeout=60)
+                recorded = json.loads(next(records.glob("*.json")).read_text())
+                assert recorded["stdout"] == execution["stdout"] and recorded["stderr"] == execution["stderr"], recorded
+                for key in ["output_truncated", "source_stable"]:
+                    if key in execution:
+                        recorded[key] = execution[key]
+                (repo / "transcript.json").write_text(json.dumps(recorded))
+                report = sweep([rust, native], "native-libtest")
+                assert (report["decision"] == "PASS") == (mode == "complete"), (threads, mode, report)
+                if mode == "complete":
+                    assert recorded_child.returncode == 0, recorded_child.stderr
+                    retained = row(report, "macos-platform")["native_evidence"]["execution"][0]
+                    assert retained["stdout"] == child.stdout, retained
+                    assert retained["passing_tests"] == ["boundary::contracts"], retained
+                    assert retained["outer_suites"][0]["child_owners"] == ["boundary::contracts"], retained
+                    assert retained["test_counts"] == {"passed": 1, "failed": 0, "ignored": 0, "suites": 1}, retained
+                    assert row(report, "rust")["stdout"] == child.stdout, report
+                    assert row(report, "rust")["passing_rows"] == ["original_boundary"], report
         browser_args = ["--playwright-module", str(module), "--playwright-browsers-path", str(repo / "browsers")]
         report = sweep(browsers, "complete", browser_args)
         assert report["decision"] == "PASS", report
