@@ -283,6 +283,10 @@ identity, expected accepted candidate/base commits, expected latest attempt numb
 state, a reason, and a durable `request_key`. It accepts no saved job inputs, repair
 switches, replacement head, or authority. Managed agents and replica checkouts refuse it.
 
+The shared text sanitizer applies to the reason before persistence. A sanitized
+reason retains the successful dispatch response and records a redaction audit event
+attributed to the affected task; replaying the original input resolves the same receipt.
+
 The owner reconciles the prior owner job before admission and rechecks the current
 handed-off claim, accepted candidate, native validation/review evidence and unrevoked
 completion authorization. Only a stopped attempt, or an uncertain merge intent whose
