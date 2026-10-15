@@ -83,6 +83,7 @@ impl OrbitRuntime {
             action_key,
             retry_key,
             trusted_host,
+            landing_repair_authority,
             reconciliation,
             trigger,
         } = submission;
@@ -283,6 +284,17 @@ impl OrbitRuntime {
             // error is returned. A reused automation run belongs to its original
             // admission and keeps its state.
             let delivered = (|| -> Result<ChildSubmission, OrbitError> {
+                if landing_repair_authority && !existing_automation_run {
+                    if self.worker_invocation().is_some() {
+                        return Err(OrbitError::PolicyDenied(
+                            "claimed workers cannot capture operator landing repair authority"
+                                .into(),
+                        ));
+                    }
+                    self.ensure_distributed_owner_workspace()?;
+                    self.admission_boundary()?
+                        .capture_landing_repair_authority(&run.run_id)?;
+                }
                 if seed_after_insert {
                     self.seed_v2_pipeline_run(&run, &input, resume, trigger.clone())?;
                 }

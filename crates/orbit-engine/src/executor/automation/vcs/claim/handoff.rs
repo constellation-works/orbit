@@ -93,6 +93,23 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
     }
     let review = handoff_review(input, &candidate)?;
 
+    if let Some(repair) = &context.repair {
+        super::super::landing_source::validate_claim_source_repair(
+            &workspace_path,
+            repair,
+            &candidate.base.commit,
+            Some(&candidate.candidate.commit),
+        )?;
+        if repair.source.is_some()
+            && (candidate.source_branch != repair.candidate.source_branch
+                || candidate.delivery != repair.candidate.delivery
+                || candidate.repository != repair.candidate.repository)
+        {
+            return Err(OrbitError::Execution(
+                "source repair must preserve its authenticated repository, PR and branch".into(),
+            ));
+        }
+    }
     let handoff = TaskHandoff {
         schema_version: 1,
         workspace_id: context.workspace_id.clone(),

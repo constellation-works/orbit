@@ -310,6 +310,21 @@ fn host_evidence_rules_orbit_could_never_fulfil_fail_the_load() {
     for body in [
         rule("hosted_ci", "[\"**/*.rs\"]", "ci", "evidence/ci.json"),
         rule(
+            "native_os",
+            "[\"**/*.rs\"]",
+            "scripts/native.sh",
+            "evidence/native.json",
+        ),
+        format!(
+            "{}hosted_check = \"Native\"\n",
+            rule(
+                "native_os",
+                "[\"**/*.rs\"]",
+                "scripts/native.sh",
+                "evidence/native.json"
+            )
+        ),
+        rule(
             "codeql",
             "[]",
             "scripts/codeql-rust-local.sh",

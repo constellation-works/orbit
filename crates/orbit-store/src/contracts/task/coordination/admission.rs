@@ -10,6 +10,8 @@ pub use orbit_types::task::ExecutionLocation;
 /// request: how it orders candidates, and what its receipt captures.
 #[derive(Debug, Default)]
 pub struct AdmissionOrdering {
+    /// An active operator drain's host-captured repair grant.
+    pub repair_authorization: Option<String>,
     /// The owner's OS. Outside the namespace, it runs only unrestricted tasks.
     pub owner_os: Option<orbit_types::task::HostOs>,
     /// Tasks whose admitted frozen delivery batch nears its deadline.

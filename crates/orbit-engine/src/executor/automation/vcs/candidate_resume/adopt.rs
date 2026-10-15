@@ -56,7 +56,7 @@ pub(super) fn adopt_published_branch(
     // namespace, is adopted: the kept reference names nothing else.
     let ours_prefix = ours.rsplit_once('/').map(|(prefix, _)| prefix);
     let task_branch = branch.rsplit_once('/').is_some_and(|(prefix, name)| {
-        Some(prefix) == ours_prefix && name.starts_with(&format!("{task_id}-"))
+        Some(prefix) == ours_prefix && (name == task_id || name.starts_with(&format!("{task_id}-")))
     });
     if !task_branch
         || !git_command_success(workspace_path, &["check-ref-format", "--branch", branch])?

@@ -21,7 +21,11 @@
 #   period, the owner's local drain) admits a repair claim that re-applies the
 #   candidate, revalidates it and hands off again. Only one automatic repair:
 #   a second such stop blocks the task with both attempts' evidence. Any other
-#   stop leaves the task in review.
+#   stop leaves the task in review. A repeated inherited source failure after
+#   one base update uses that same repair budget only under host-captured
+#   operator --auto-fix authority, complete exact-head evidence and explicit
+#   source paths. The fresh leaf must commit, validate, certify and independently
+#   review a new candidate; saved inputs never grant repair authority.
 #
 schemaVersion: 2
 kind: Job

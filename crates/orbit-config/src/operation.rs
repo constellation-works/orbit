@@ -534,7 +534,7 @@ fn host_evidence_rules(rules: Vec<HostEvidenceRule>) -> Result<Vec<HostEvidenceR
             if !HostEvidenceRule::admits_kind(rule.kind) {
                 return Err(invalid(
                     index,
-                    "has kind outside codeql and host_sandbox_test".to_string(),
+                    "has kind outside codeql, native_os and host_sandbox_test".to_string(),
                 ));
             }
             if rule.name.is_empty() || rule.command.is_empty() {
@@ -563,15 +563,30 @@ fn host_evidence_rules(rules: Vec<HostEvidenceRule>) -> Result<Vec<HostEvidenceR
                 ));
             }
             if let Some(check) = &rule.hosted_check {
-                if rule.kind != ReviewEvidenceKind::CodeQl || rule.os != EvidenceHostOs::Linux {
+                if !(rule.kind == ReviewEvidenceKind::CodeQl && rule.os == EvidenceHostOs::Linux)
+                    && rule.kind != ReviewEvidenceKind::NativeOs
+                {
                     return Err(invalid(
                         index,
-                        "names a hosted_check, which only a linux codeql rule may".to_string(),
+                        "names a hosted_check, which only linux codeql or native_os rules may"
+                            .to_string(),
                     ));
                 }
                 if check.is_empty() {
                     return Err(invalid(index, "has an empty hosted_check".to_string()));
                 }
+            }
+            if rule.kind == ReviewEvidenceKind::NativeOs
+                && !rule.hosted_check.as_deref().is_some_and(|check| {
+                    check.split_once(" / ").is_some_and(|(workflow, name)| {
+                        !workflow.trim().is_empty() && !name.trim().is_empty()
+                    })
+                })
+            {
+                return Err(invalid(
+                    index,
+                    "native_os needs an explicit workflow / check hosted binding".into(),
+                ));
             }
             if rule.kind == ReviewEvidenceKind::HostSandboxTest {
                 HostSandboxCommand::admit(&rule.command, &[])

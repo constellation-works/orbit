@@ -135,6 +135,9 @@ spec:
     allowed_crews: []
     # The repair a claim carries when it re-runs a handoff whose landing
     # stopped on its base [ORB-14261]; null for a first attempt.
+    # A source repair also carries typed host diagnosis and permitted files.
+    # candidate_resume authenticates it against the durable receipt; commit
+    # and owner handoff recheck its delta. No auto_fix field is injected.
     claim_repair: null
     title: null
     body: null

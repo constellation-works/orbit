@@ -24,6 +24,8 @@ pub(crate) struct PipelineSubmission<'a> {
     /// [ORB-11354]. Only it may carry [`TRUSTED_HOST_ADMISSION_KEY`] in its
     /// input; every other submission is refused for supplying it.
     pub(crate) trusted_host: bool,
+    /// Explicit operator --auto-fix; never populated from job input or resumes.
+    pub(crate) landing_repair_authority: bool,
     /// Whether this submission is the governed review reconciliation
     /// admission. Only it may carry
     /// [`REVIEW_RECONCILIATION_ADMISSION_KEY`](orbit_types::workflow::REVIEW_RECONCILIATION_ADMISSION_KEY).
@@ -79,6 +81,7 @@ impl<'a> PipelineSubmission<'a> {
             action_key: None,
             retry_key: None,
             trusted_host: false,
+            landing_repair_authority: false,
             reconciliation: false,
             trigger: JobRunTrigger::cli(),
         }
@@ -416,7 +419,10 @@ impl OrbitRuntime {
         if strict_containment {
             input["__worker_containment_strict"] = json!(true);
         }
-        self.submit_pipeline_run_with_trigger(workflow.job_id, input, None, actor, trigger)
+        self.submit_persisted_pipeline_run(PipelineSubmission {
+            landing_repair_authority: auto_fix,
+            ..PipelineSubmission::catalog(workflow.job_id, input, actor).with_trigger(trigger)
+        })
     }
 
     fn validate_strict_worker_containment(&self, strict: bool) -> Result<(), OrbitError> {

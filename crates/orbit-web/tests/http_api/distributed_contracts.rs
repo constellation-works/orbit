@@ -34,6 +34,7 @@ fn owner_state_with_claims(
             reservation_expires_at: now.clone(),
             phase,
             repair: None,
+            repair_authorization: None,
         };
         let inspection = ClaimInspection {
             claim: claim.clone(),

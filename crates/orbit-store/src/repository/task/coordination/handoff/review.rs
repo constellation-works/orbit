@@ -205,9 +205,9 @@ impl TaskCommitBoundary {
         for owed in &certificate.owner_owed_evidence {
             let declared = captured == ReviewTiming::BeforeLanding
                 && contract.host_evidence.iter().any(|rule| {
-                    rule.kind == ReviewEvidenceKind::CodeQl
+                    ((rule.kind == ReviewEvidenceKind::CodeQl && rule.os == EvidenceHostOs::Linux)
+                        || rule.kind == ReviewEvidenceKind::NativeOs)
                         && owed.kind == rule.kind
-                        && rule.os == EvidenceHostOs::Linux
                         && owed.os == Some(rule.os)
                         && rule.command == owed.command
                         && rule.artifact == owed.artifact

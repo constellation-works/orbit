@@ -92,6 +92,9 @@ pub struct ReviewEvidenceCandidateCarry {
 /// the reviewer to name it. A `codeql` rule is owed by a host of another OS
 /// and fulfilled by the owner on `os`; a `host_sandbox_test` rule is owed by
 /// a host of `os`, which runs it outside the agent sandbox at settlement.
+/// A `native_os` rule explicitly binds a hosted workflow/check to its native
+/// command and OS; before-landing review owes that execution to the owner,
+/// while before-PR review holds for actual external evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct HostEvidenceRule {
@@ -103,7 +106,7 @@ pub struct HostEvidenceRule {
     pub os: EvidenceHostOs,
     pub command: String,
     pub artifact: String,
-    /// [ORB-15677] A `codeql` rule only: the name of the pull request's
+    /// A Linux `codeql` or explicit `native_os` rule: the name of the pull request's
     /// hosted check that runs exactly `command` on every candidate, as the
     /// forge reports it (`CodeQL / Analyze (rust)`). Without it no hosted run
     /// stands in for the rule, so a review that cannot run it holds.
@@ -116,7 +119,9 @@ impl HostEvidenceRule {
     pub fn admits_kind(kind: ReviewEvidenceKind) -> bool {
         matches!(
             kind,
-            ReviewEvidenceKind::CodeQl | ReviewEvidenceKind::HostSandboxTest
+            ReviewEvidenceKind::CodeQl
+                | ReviewEvidenceKind::HostSandboxTest
+                | ReviewEvidenceKind::NativeOs
         )
     }
 
@@ -126,7 +131,10 @@ impl HostEvidenceRule {
         match self.kind {
             ReviewEvidenceKind::CodeQl => host != Some(self.os),
             ReviewEvidenceKind::HostSandboxTest => host == Some(self.os),
-            ReviewEvidenceKind::HostedCi | ReviewEvidenceKind::NativeOs => false,
+            // Native execution is owed even on a matching OS: a captured hosted
+            // rule still needs actual execution, never a reviewer's assertion.
+            ReviewEvidenceKind::NativeOs => true,
+            ReviewEvidenceKind::HostedCi => false,
         }
     }
 

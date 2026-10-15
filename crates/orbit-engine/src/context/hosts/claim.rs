@@ -10,6 +10,8 @@
 pub struct ClaimExecutionContext {
     /// Original owner-admitted selectors from the local durable receipt.
     pub footprint: Vec<String>,
+    /// Scope from the authenticated durable claim receipt, never step input.
+    pub repair: Option<orbit_store::contracts::ClaimRepair>,
     pub workspace_id: String,
     pub task_id: String,
     pub claim_id: String,
@@ -49,10 +51,20 @@ pub struct HandoffLandingContext {
     /// owed to the owner instead of running them. The landing merges only
     /// once each has passed on the pinned head.
     pub owed_hosted_checks: Vec<String>,
+    /// Complete requirements from the immutable accepted owner certificate.
+    /// Plain check names and activity inputs never grant source repair.
+    pub owner_review_certificate: Option<orbit_types::workflow::ReviewCertificate>,
     /// [ORB-15956] This claim already is the one automatic repair of an
     /// earlier landing stop. A hosted check its candidate fails then stops
     /// the landing in review instead of asking for another repair.
     pub automatic_repair_spent: bool,
+    /// Captured operator authority and recovery intents from the owner store.
+    pub source_repair_authorized: bool,
+    /// Original immutable admission selectors, a bounded source-scope starting point.
+    pub repair_footprint: Vec<String>,
+    /// This accepted candidate already spent the source continuation.
+    pub source_repair: Option<orbit_types::workflow::handoff::LandingSourceRepair>,
+    pub check_recovery: orbit_types::workflow::handoff::LandingCheckRecovery,
 }
 
 /// One durable step of a landing attempt, recorded by the owner store.
@@ -71,6 +83,14 @@ pub enum HandoffLandingStep {
     /// the candidate caused [ORB-15956]: the owner hands it to one automatic
     /// repair rather than leaving it in review.
     Stop { repairable: bool },
+    /// Complete exact-head evidence, accepted only under captured host authority.
+    SourceRepair {
+        source: orbit_types::workflow::handoff::LandingSourceRepair,
+    },
+    /// Durable action admission, recorded before a provider mutation.
+    CheckRecovery {
+        recovery: orbit_types::workflow::handoff::LandingCheckRecovery,
+    },
 }
 
 /// A landing transition with the owner observation that justifies it.

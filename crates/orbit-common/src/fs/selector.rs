@@ -654,6 +654,24 @@ pub(super) fn root_ancestor(path: &str) -> Option<&'static str> {
     is_path_ancestor(root, path).then_some(root)
 }
 
+/// Source repairs never edit delivery controls, policy, credentials or guard suites.
+/// The exact allowed files still come from authenticated owner diagnosis.
+pub fn ci_repair_path_is_safe(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    claim_new_path_is_safe(path)
+        && !lower.starts_with(".github/")
+        && !lower.starts_with("scripts/check-")
+        && !lower.starts_with("scripts/ci-")
+        && !lower.starts_with("scripts/generate-")
+        && !lower
+            .split('/')
+            .any(|part| matches!(part, "tests" | "test" | "assets"))
+        && !matches!(
+            lower.rsplit('/').next(),
+            Some("makefile" | "cargo.toml" | "cargo.lock" | "agents.md" | "claude.md")
+        )
+}
+
 /// Whether a new path is one an owner can accept from a claimed run: no
 /// traversal, Git or `.orbit` metadata, or environment-secret path (including
 /// `.envrc`). Protected names and environment patterns ignore ASCII case on

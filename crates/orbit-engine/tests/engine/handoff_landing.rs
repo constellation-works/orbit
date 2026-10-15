@@ -100,7 +100,12 @@ fn owner_checkout(repo: &Path) -> LandingHost {
             unresolved_merge_intent: None,
             workspace_path: repo.to_path_buf(),
             owed_hosted_checks: Vec::new(),
+            owner_review_certificate: None,
             automatic_repair_spent: false,
+            source_repair_authorized: false,
+            repair_footprint: Vec::new(),
+            source_repair: None,
+            check_recovery: Default::default(),
         },
         steps: Mutex::default(),
         intents: Mutex::default(),
@@ -535,6 +540,7 @@ enum FakeLog {
     Unrecovered,
     /// The read itself fails.
     Unreadable,
+    Truncated,
 }
 
 /// The head a provider branch update leaves on the published branch.
@@ -568,6 +574,7 @@ struct ForgeState {
     after_update: Option<FakeJob>,
     /// The head a branch update on a published remote produces.
     update: UpdateShape,
+    source_mode: Option<&'static str>,
     /// Provider observations for the bounded owner wait, independent of jobs.
     merge_states: std::collections::VecDeque<&'static str>,
     review_decision: Option<&'static str>,
@@ -648,6 +655,7 @@ impl FakeForge {
             .lock()
             .unwrap()
             .iter()
+            .filter(|update| !matches!(update.step, HandoffLandingStep::CheckRecovery { .. }))
             .map(|update| update.step.clone())
             .collect()
     }
@@ -714,7 +722,21 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
         &self,
         _handoff_id: &str,
     ) -> Result<HandoffLandingContext, OrbitError> {
-        Ok(self.context.clone())
+        let mut context = self.context.clone();
+        if let Some(recovery) = self
+            .updates
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find_map(|update| match &update.step {
+                HandoffLandingStep::CheckRecovery { recovery } => Some(recovery),
+                _ => None,
+            })
+        {
+            context.check_recovery = recovery.clone();
+        }
+        Ok(context)
     }
 
     fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
@@ -733,9 +755,29 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
             .push((operation.to_string(), input.clone()));
         let mut state = self.state.lock().unwrap();
         let candidate = &self.context.candidate;
+        let native = state
+            .source_mode
+            .is_some_and(|mode| mode.starts_with("owed_") || mode == "native_unbound");
+        let (workflow, name, step) = if native {
+            ("Native", "macOS Sandbox", "Emit native execution")
+        } else {
+            ("CI", "clippy", "Run clippy")
+        };
+        let updated = state.head != candidate.candidate.commit;
         match operation {
             "ci.current_gates" => Ok(json!({"gates_passed":true})),
             "ci.emission_evidence" => Ok(json!({"evidence":null})),
+            "pr.required_checks" => {
+                let mut nodes = vec![
+                    json!({"name":name,"status":if state.jobs.contains_key(&state.head) {"COMPLETED"} else {"IN_PROGRESS"},"conclusion":state.jobs.get(&state.head).map(|job| if job.conclusion == "success" { "SUCCESS" } else { "FAILURE" }).unwrap_or(""),"isRequired":!state.source_mode.is_some_and(|mode| mode == "optional" || mode.starts_with("owed_") || mode == "native_unbound"),"checkSuite":{"workflowRun":{"workflow":{"name":workflow}}}}),
+                ];
+                if native {
+                    nodes.push(json!({"name":"guard","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true,"checkSuite":{"workflowRun":{"workflow":{"name":"CI"}}}}));
+                }
+                Ok(
+                    json!({"pull_request":{"headRefOid":state.head,"commits":{"nodes":[{"commit":{"oid":state.head,"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":nodes}}}}]}}}),
+                )
+            }
             "pr.status" => {
                 let scripted_state = state.merge_states.front().copied();
                 if state.merge_states.len() > 1 {
@@ -752,6 +794,12 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                     "" => "PENDING",
                     _ => "BLOCKED",
                 });
+                let mut rollup = vec![
+                    json!({"__typename":"CheckRun", "name":name, "workflowName":workflow, "status":status, "conclusion":conclusion}),
+                ];
+                if native {
+                    rollup.push(json!({"__typename":"CheckRun", "name":"guard", "workflowName":"CI", "status":"COMPLETED", "conclusion":"SUCCESS"}));
+                }
                 Ok(json!({"pull_request": {
                     "number": 42,
                     "url": "https://github.com/owner/repository/pull/42",
@@ -759,24 +807,18 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                     "headRefName": candidate.source_branch,
                     "baseRefName": candidate.base_branch,
                     "headRefOid": state.head,
-                    "mergeStateStatus": merge_state,
-                    "reviewDecision": state.review_decision.unwrap_or(""),
+                    "mergeStateStatus": if updated { match state.source_mode {
+                        Some("unknown" | "owed_unknown") => "UNKNOWN",
+                        Some("owed_clean" | "protected_clean") => "CLEAN",
+                        Some("owed_hooks") => "HAS_HOOKS",
+                        _ => merge_state,
+                    }} else { merge_state },
+                    "reviewDecision": if updated && matches!(state.source_mode, Some("review" | "owed_review")) { "REVIEW_REQUIRED" } else { state.review_decision.unwrap_or("") },
+                    "mergedAt": if updated && state.source_mode == Some("owed_contradiction") { Some("2026-10-14T00:00:00Z") } else { None },
                     "mergeCommit": state.merged.then(|| json!({"oid": "provider-merge"})),
-                    "statusCheckRollup": [{
-                        "__typename": "CheckRun", "name": "clippy", "workflowName": "CI",
-                        "status": status, "conclusion": conclusion,
-                    }],
+                    "statusCheckRollup": rollup,
                 }}))
             }
-            "pr.required_checks" => Ok(pending_policy(
-                &state.head,
-                if state.jobs.contains_key(&state.head) {
-                    "COMPLETED"
-                } else {
-                    "IN_PROGRESS"
-                },
-                true,
-            )),
             "ci.commit_jobs" => {
                 let commit = input["commit"].as_str().unwrap();
                 if state
@@ -791,7 +833,20 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                 let jobs: Vec<Value> = state
                     .jobs
                     .get(commit)
-                    .map(Self::job_json)
+                    .map(|job| {
+                        let mut value = Self::job_json(job);
+                        value["workflow"] = json!(workflow);
+                        value["name"] = json!(name);
+                        if job.conclusion == "failure" { value["failed_step"] = json!(step); }
+                        value["steps"] = json!([{"name":step,"status":"completed","conclusion":if matches!(state.source_mode, Some("source_skipped" | "failed_step_skipped")) { "skipped" } else { job.conclusion }}]);
+                        if state.source_mode == Some("source_incomplete_step") { value["steps"] = json!([]); }
+                        value["head_sha"] = json!(if state.source_mode == Some("foreign_job") {
+                            "foreign"
+                        } else {
+                            commit
+                        });
+                        value
+                    })
                     .into_iter()
                     .collect();
                 Ok(json!({"commit": commit, "jobs": jobs}))
@@ -805,9 +860,12 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                     .map(|job| job.log)
                     .expect("a log for a job the forge reported");
                 match log {
-                    FakeLog::Text(log) => {
-                        Ok(json!({"log": log, "truncated": false, "fallback_error": null}))
-                    }
+                    FakeLog::Text(log) => Ok(
+                        json!({"log": log, "truncated": false, "source_complete": true, "fallback_error": null}),
+                    ),
+                    FakeLog::Truncated => Ok(
+                        json!({"log": "error: src/contract: broken", "truncated": true, "source_complete": false, "fallback_error": null}),
+                    ),
                     FakeLog::Unrecovered => Ok(json!({
                         "log": "", "truncated": false,
                         "fallback_error": format!("job {job_id} (`clippy`) returned no log text"),
@@ -1436,10 +1494,10 @@ fn a_check_failure_inherited_from_the_base_updates_the_branch_and_lands() {
 /// classified, instead of asking for a second repair. A base whose job query
 /// succeeds with no jobs ran nothing to fail, which is not a failed read.
 #[test]
-fn a_candidate_caused_check_failure_gets_one_repair_then_stops_in_review() {
+fn a_candidate_caused_check_failure_gets_one_repair_then_blocks_with_evidence() {
     for (repair_spent, base_ran, repairable) in [
         (false, true, true),
-        (true, true, false),
+        (true, true, true),
         (false, false, true),
     ] {
         let sandbox = tempdir().unwrap();
@@ -1881,4 +1939,287 @@ fn owner_landing_waits_for_unknown_then_clean_and_retains_expired_or_blocked_evi
             )
         },
     );
+}
+
+/// Regression rows invoked by the existing PR auto-fix public table.
+/// Every row drives handoff_land; the fixture supplies trusted host facts.
+pub(crate) fn evidenced_source_continuation_rows() {
+    fresh_source_certification_rows();
+    const SOURCE: &str =
+        "error: src/contract: expected fixed, found broken\nProcess completed with exit code 1";
+    for mode in [
+        "repair",
+        "authority",
+        "optional",
+        "review",
+        "unknown",
+        "foreign_job",
+        "truncated",
+        "missing_path",
+        "admitted_source",
+        "restart",
+        "owed_blocked",
+        "owed_clean",
+        "owed_hooks",
+        "owed_foreign_binding",
+        "owed_stale_head",
+        "owed_stale_base",
+        "owed_foreign_task",
+        "owed_foreign_repository",
+        "owed_unknown",
+        "owed_review",
+        "owed_contradiction",
+        "owed_credentials",
+        "native_unbound",
+        "protected_clean",
+        "failed_step_skipped",
+        "owed_missing_command",
+        "owed_unqualified_binding",
+        "owed_caller_binding",
+    ] {
+        tracing::info!(mode, "claimed source landing recovery");
+        let sandbox = tempdir().unwrap();
+        let mut forge = FakeForge::new(sandbox.path(), true);
+        forge.context.source_repair_authorized = mode != "authority";
+        if mode.starts_with("owed_") && mode != "owed_caller_binding" {
+            forge.context.owed_hosted_checks = vec!["Native / macOS Sandbox".into()];
+            let mut certificate = source_owner_certificate(&forge.context);
+            match mode {
+                "owed_foreign_binding" => {
+                    certificate.owner_owed_evidence[0].hosted_check =
+                        Some("Foreign / macOS Sandbox".into())
+                }
+                "owed_stale_head" => {
+                    certificate.final_candidate = forge.context.candidate.base.clone()
+                }
+                "owed_stale_base" => certificate.base = forge.context.candidate.candidate.clone(),
+                "owed_foreign_task" => certificate.task_ids = vec!["foreign".into()],
+                "owed_foreign_repository" => certificate.repository = "foreign/repository".into(),
+                "owed_missing_command" => certificate.owner_owed_evidence[0].command.clear(),
+                "owed_unqualified_binding" => {
+                    certificate.owner_owed_evidence[0].hosted_check = Some("macOS Sandbox".into())
+                }
+                _ => {}
+            }
+            forge.context.owner_review_certificate = Some(certificate);
+        }
+
+        let candidate = forge.context.candidate.candidate.commit.clone();
+        let base = forge.context.candidate.base.commit.clone();
+        if mode == "admitted_source" {
+            forge.context.repair_footprint = vec!["file:src/parser.py".into()];
+        }
+        std::fs::create_dir_all(forge.repo.join("src")).unwrap();
+        std::fs::write(forge.repo.join("src/contract"), "broken\n").unwrap();
+        if mode == "admitted_source" {
+            std::fs::write(
+                forge.repo.join("src/parser.py"),
+                "raise ValueError('broken parser')\n",
+            )
+            .unwrap();
+            git(&forge.repo, &["add", "src/parser.py"]);
+        }
+        git(&forge.repo, &["add", "src/contract"]);
+        git(
+            &forge.repo,
+            &[
+                "commit",
+                "-q",
+                "-m",
+                "base advances with the same source defect",
+            ],
+        );
+        let tip = git(&forge.repo, &["rev-parse", "main"]);
+        let initial = if mode == "admitted_source" {
+            "error: source contract is broken"
+        } else {
+            SOURCE
+        };
+        forge.job(&candidate, failed(1, 11, initial));
+        forge.job(&base, failed(2, 21, initial));
+        forge.job(&tip, passed(3, 31));
+        forge.state.lock().unwrap().after_update = Some(match mode {
+            "truncated" => failed_reading(4, 41, FakeLog::Truncated),
+            "owed_credentials" => failed(4, 41, "error: src/contract: Permission denied"),
+            "missing_path" | "admitted_source" => failed(4, 41, "error: source contract is broken"),
+            _ => failed(4, 41, SOURCE),
+        });
+        // Administrative refusals are introduced only on the updated head.
+        forge.state.lock().unwrap().source_mode = Some(mode);
+        land_with(
+            &forge,
+            json!({"max_wait_seconds":0, "auto_fix":true,
+            "owner_review_certificate":source_owner_certificate(&forge.context)}),
+        )
+        .expect_err("caller inputs cannot replace host certificate or repair authority");
+        assert_eq!(forge.sent("pr.update_branch").len(), 1, "{mode}");
+        assert!(
+            forge.sent("pr.merge").is_empty(),
+            "repair never merges: {mode}"
+        );
+        assert!(
+            forge.sent("ci.rerun_failed").is_empty(),
+            "source never runs infrastructure repair: {mode}"
+        );
+        if matches!(
+            mode,
+            "repair" | "restart" | "admitted_source" | "owed_blocked" | "owed_clean" | "owed_hooks"
+        ) {
+            let steps = forge.steps();
+            let Some(HandoffLandingStep::SourceRepair { source }) = steps.last() else {
+                panic!(
+                    "source continuation missing: {mode}: {}",
+                    forge.last_evidence()
+                );
+            };
+            assert_eq!(source.failed_head, forge.state.lock().unwrap().head);
+            assert_eq!(
+                source.permitted_paths,
+                [if mode == "admitted_source" {
+                    "src/parser.py"
+                } else {
+                    "src/contract"
+                }]
+            );
+            assert_eq!(source.checks[0].job_id, 41);
+            if mode.starts_with("owed_") {
+                assert_eq!(source.checks[0].workflow, "Native");
+                assert_eq!(source.checks[0].name, "macOS Sandbox");
+                assert_eq!(
+                    source.checks[0].owner_requirement.as_ref().unwrap(),
+                    &forge
+                        .context
+                        .owner_review_certificate
+                        .as_ref()
+                        .unwrap()
+                        .owner_owed_evidence[0]
+                );
+            }
+
+            assert_eq!(
+                source.checks[0].diagnostic,
+                if mode == "admitted_source" {
+                    "error: source contract is broken"
+                } else {
+                    SOURCE
+                }
+            );
+            if mode == "restart" {
+                land_with(&forge, json!({"max_wait_seconds":0}))
+                    .expect_err("restart still requires a fresh handoff");
+                assert_eq!(
+                    forge.sent("pr.update_branch").len(),
+                    1,
+                    "restart cannot reset branch update budget"
+                );
+            }
+        } else if matches!(mode, "review" | "unknown") {
+            // A second attempt reads changed provider state and refuses source authority.
+            forge.state.lock().unwrap().source_mode = Some(mode);
+            land_with(&forge, json!({"max_wait_seconds":0})).expect_err("administrative refusal");
+            assert!(
+                matches!(
+                    forge.steps().last(),
+                    Some(HandoffLandingStep::Stop { repairable: false })
+                ),
+                "{mode}"
+            );
+        } else {
+            assert!(
+                matches!(
+                    forge.steps().last(),
+                    Some(HandoffLandingStep::Stop { repairable: false })
+                ),
+                "{mode}: {}",
+                forge.last_evidence()
+            );
+        }
+    }
+}
+
+/// The public landing boundary requires exact-head native job/step completion,
+/// and cannot adopt a later base/head with a source repair certificate.
+fn fresh_source_certification_rows() {
+    use orbit_types::workflow::handoff::{
+        LandingFailedCheck, LandingSourceCause, LandingSourceRepair,
+    };
+    for mode in [
+        "source_certified",
+        "source_skipped",
+        "source_incomplete_step",
+        "source_base_changed",
+        "source_head_changed",
+    ] {
+        let sandbox = tempdir().unwrap();
+        let mut forge = FakeForge::new(sandbox.path(), true);
+        forge.context.automatic_repair_spent = true;
+        forge.context.source_repair_authorized = true;
+        let head = forge.context.candidate.candidate.commit.clone();
+        let base = forge.context.candidate.base.commit.clone();
+        forge.context.source_repair = Some(LandingSourceRepair {
+            failed_head: base.clone(),
+            pull_request: 42,
+            cause: LandingSourceCause::RepeatedInheritedSourceFailure,
+            permitted_paths: vec!["src/contract".into()],
+            checks: vec![LandingFailedCheck {
+                run_id: 1,
+                job_id: 1,
+                workflow: "CI".into(),
+                name: "clippy".into(),
+                failed_step: "Run clippy".into(),
+                signature: "source failed".into(),
+                diagnostic: "source diagnostic".into(),
+                owner_requirement: None,
+            }],
+        });
+        forge.job(&head, passed(2, 22));
+        forge.state.lock().unwrap().source_mode = Some(mode);
+        if mode == "source_base_changed" {
+            std::fs::write(forge.repo.join("new-base"), "advance\n").unwrap();
+            git(&forge.repo, &["add", "new-base"]);
+            git(
+                &forge.repo,
+                &["commit", "-m", "base advanced after certification"],
+            );
+        } else if mode == "source_head_changed" {
+            forge.state.lock().unwrap().head = base;
+        }
+        let outcome = land_with(&forge, json!({"max_wait_seconds":0}));
+        if mode == "source_certified" {
+            assert!(
+                outcome.is_ok(),
+                "matching-head completion must land: {outcome:?}"
+            );
+            assert_eq!(forge.sent("pr.merge").len(), 1);
+        } else {
+            assert!(outcome.is_err(), "{mode}: {outcome:?}");
+            assert!(
+                forge.sent("pr.merge").is_empty(),
+                "invalid native/head/base evidence never merges: {mode}"
+            );
+            assert!(
+                forge.sent("pr.update_branch").is_empty(),
+                "source certification cannot silently survive a base update"
+            );
+        }
+    }
+}
+
+/// Explicit certificate-bound native fixture at RuntimeHost's public boundary.
+fn source_owner_certificate(
+    context: &HandoffLandingContext,
+) -> orbit_types::workflow::ReviewCertificate {
+    serde_json::from_value(json!({
+        "schema_version": 1, "attempt_id": "accepted-native-review", "lineage_key": "claim-1",
+        "task_ids": [context.task_id], "task_meaning_digest": "captured-meaning",
+        "repository": context.candidate.repository, "base": context.candidate.base,
+        "reviewed_candidate": context.candidate.candidate, "final_candidate": context.candidate.candidate,
+        "implementation_commits": [], "repair_commits": [], "verdict": "accept",
+        "findings": [], "validation": [], "validation_complete": true,
+        "reviewer": {"crew":"independent", "provider":"fixture", "model":"fixture", "same_model_as_implementer":false},
+        "consumed": {"seconds":1}, "budget":{"minutes":1}, "issued_at":"2026-10-14T00:00:00Z",
+        "owner_owed_evidence":[{"kind":"native_os", "name":"Native emitter execution",
+            "command":"scripts/check-ci-macos.sh", "artifact":"native-emitter.json", "os":"macos",
+            "hosted_check":"Native / macOS Sandbox"}]
+    })).unwrap()
 }

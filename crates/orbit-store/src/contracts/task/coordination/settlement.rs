@@ -269,6 +269,16 @@ pub enum ClaimMutation {
     /// against, its base — instead moves an original claim to
     /// `repair_pending`, and blocks the task when the claim is already its
     /// repair [ORB-14261].
+    /// Source authority and diagnosis come exclusively from ClaimInvocation.
+    StopSourceRepair {
+        handoff_id: String,
+        reason: String,
+    },
+    /// Persist action admission before the hosted rerun or branch update.
+    RecordLandingRecovery {
+        handoff_id: String,
+        recovery: orbit_types::workflow::handoff::LandingCheckRecovery,
+    },
     StopLanding {
         handoff_id: String,
         reason: String,

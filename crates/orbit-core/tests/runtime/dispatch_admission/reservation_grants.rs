@@ -38,6 +38,7 @@ fn no_diff_grants_check_frozen_claims_after_reservation_expiry() {
         reservation_expires_at: (Utc::now() - chrono::Duration::minutes(1)).to_rfc3339(),
         phase: ExecutionClaimPhase::Running,
         repair: None,
+        repair_authorization: None,
     };
     let workspace_id = runtime.workspace_id().unwrap();
     let connection = rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();
@@ -231,6 +232,7 @@ fn closing_rescued_blocked_task_through_the_task_tool_succeeds_without_force_whi
         reservation_expires_at: (Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
         phase: ExecutionClaimPhase::Running,
         repair: None,
+        repair_authorization: None,
     };
     let workspace_id = runtime.workspace_id().unwrap();
     let connection = rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();

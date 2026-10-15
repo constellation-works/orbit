@@ -36,10 +36,14 @@
 //! the reviewer names that no such rule covers keep the hold, as does a
 //! before-PR review, since nothing hosted runs before the pull request
 //! opens. A failed CodeQL record still blocks.
+//!
+//! Explicit `native_os` rules follow the same captured before-landing hosted
+//! contract on any known host. They require a qualified workflow/check binding;
+//! without a published PR they hold for native evidence. No task prose derives
+//! such a rule, and failed native records still block.
 
 use orbit_common::OrbitError;
 use orbit_engine::review_gate::{CandidateIdentity, committed_paths};
-use orbit_types::task::HostOs;
 use orbit_types::workflow::{
     CommitIdentity, EvidenceHostOs, REVIEW_GATE_ARTIFACT, ReviewCertificate, ReviewEvidenceHold,
     ReviewEvidenceKind, ReviewEvidenceRequirement, ReviewValidation, ReviewVerdict,
@@ -75,21 +79,21 @@ pub(super) fn owed_evidence<'a>(
     ))
 }
 
-/// Whether this review's host leaves Linux CodeQL to the owner and the pull
-/// request's hosted CI: a claimed before-landing review on a host of a
-/// known OS other than Linux.
-pub(super) fn defers_linux_codeql(runtime: &OrbitRuntime, context: &GateContext) -> bool {
+/// A claimed before-landing review on a known host can owe captured hosted
+/// execution to the owner. Linux CodeQL is owed only on another OS; an explicit
+/// native rule always owes execution, including on its native host.
+pub(super) fn defers_hosted_owner_checks(runtime: &OrbitRuntime, context: &GateContext) -> bool {
     context.claimed
         && context
             .admission
             .as_ref()
             .is_some_and(|admission| admission.gates_landing())
-        && runtime.host_os().is_some_and(|os| os != HostOs::Linux)
+        && runtime.host_os().is_some()
 }
 
 /// Split `owed` into what holds the review and what the owner owes instead:
-/// with `defers`, every Linux CodeQL requirement whose rule names the pull
-/// request's hosted check that runs it is the owner's.
+/// with `defers`, captured Linux CodeQL or native requirements naming the
+/// hosted check that runs the exact command are the owner's.
 pub(super) fn split_owner_owed(
     owed: Vec<ReviewEvidenceRequirement>,
     defers: bool,
@@ -100,8 +104,10 @@ pub(super) fn split_owner_owed(
     if !defers {
         return (owed, Vec::new());
     }
-    owed.into_iter()
-        .partition(|required| !(linux_codeql(required) && required.hosted_check.is_some()))
+    owed.into_iter().partition(|required| {
+        !((linux_codeql(required) || required.kind == ReviewEvidenceKind::NativeOs)
+            && required.hosted_check.is_some())
+    })
 }
 
 /// A CodeQL requirement that runs on Linux, or on no named OS.
@@ -254,7 +260,7 @@ impl Judgement {
             return;
         }
         self.external_evidence.retain(|named| {
-            !(linux_codeql(named)
+            !((linux_codeql(named) || named.kind == ReviewEvidenceKind::NativeOs)
                 && owner_owed
                     .iter()
                     .any(|owed| owed.command.trim() == named.command.trim()))
@@ -262,7 +268,7 @@ impl Judgement {
         for required in owner_owed {
             let note = format!(
                 "owed to the owner and the pull request's hosted check `{}`: `{}` runs on \
-                 Linux, not on this review's host, and does not hold a before-landing review",
+                 its captured OS and does not hold a before-landing review",
                 required.hosted_check.as_deref().unwrap_or_default(),
                 required.name
             );

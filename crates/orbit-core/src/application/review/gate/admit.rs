@@ -30,7 +30,7 @@ use super::context::{GateContext, admitted_run_id, not_applicable};
 use super::host_gates::{HOST_VALIDATION_STEP_INPUT, recorded_host_gates};
 use super::judgement::write_artifact;
 use super::owed::{
-    EVIDENCE_RECEIVED_DECISION, defers_linux_codeql, owed_evidence, owed_hold_received,
+    EVIDENCE_RECEIVED_DECISION, defers_hosted_owner_checks, owed_evidence, owed_hold_received,
     split_owner_owed,
 };
 use super::release::release_abandoned;
@@ -338,7 +338,7 @@ fn admit(
     // review; the host's own runs of the owner's gates decide those checks.
     let (owed_external_evidence, owner_owed_evidence) = split_owner_owed(
         owed_evidence(runtime, context, &candidate.commits)?,
-        defers_linux_codeql(runtime, context),
+        defers_hosted_owner_checks(runtime, context),
     );
     let host_validation = match (host_step, rebase) {
         (Some(step), None) => {

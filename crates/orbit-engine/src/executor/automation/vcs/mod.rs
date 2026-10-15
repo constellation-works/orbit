@@ -23,6 +23,8 @@ mod host_evidence;
 mod interrupted_review;
 mod landing;
 mod landing_checks;
+mod landing_source;
+pub use landing_source::{validate_claim_source_repair, validate_landing_source_identity};
 mod operations;
 mod pr;
 mod push;

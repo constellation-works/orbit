@@ -66,7 +66,7 @@ impl TaskCommitBoundary {
     }
 
     /// The ship contract the claim was admitted under.
-    pub(super) fn claim_ship(
+    pub(in super::super) fn claim_ship(
         &self,
         state: &ClaimInspection,
     ) -> Result<AdmissionShipContract, OrbitError> {

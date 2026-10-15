@@ -189,6 +189,23 @@ impl orbit_engine::test_support::NullRuntimeHost for CommitTestHost {
         self.worker.clone()
     }
 
+    fn claim_execution_context(&self) -> Result<orbit_engine::ClaimExecutionContext, OrbitError> {
+        let worker = self.worker.as_ref().expect("claimed fixture");
+        Ok(orbit_engine::ClaimExecutionContext {
+            footprint: self.task(&worker.task_id).context_files,
+            repair: None,
+            workspace_id: worker.owner_workspace_id.clone(),
+            task_id: worker.task_id.clone(),
+            claim_id: worker.claim_id.clone(),
+            machine_id: worker.execution.machine_id.clone(),
+            run_id: worker.bound_run_id.clone(),
+            ship_mode: "pr".into(),
+            base_branch: "agent-main".into(),
+            landing_branch: "agent-main".into(),
+            required_commands: RuntimeHost::required_validation_commands(self),
+        })
+    }
+
     fn get_task_history(&self, task_id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
         Ok(self
             .history

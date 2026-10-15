@@ -280,6 +280,8 @@ impl TaskCommitBoundary {
                     state: LandingAttemptState::Dispatched,
                     job_run_id: job_run_id.cloned(),
                     evidence: None,
+                    source_repair: None,
+                    check_recovery: Default::default(),
                     created_at: now,
                     updated_at: now,
                 };
@@ -338,6 +340,40 @@ impl TaskCommitBoundary {
             }
         }
         params.status_event = Some("landing_dispatched".into());
+        Ok(())
+    }
+
+    /// Persist hosted action admission before invoking the provider. Budgets are monotone.
+    pub(super) fn record_landing_recovery(
+        &self,
+        auth: &ClaimInvocation,
+        state: &ClaimInspection,
+        handoff_id: &str,
+        recovery: &LandingCheckRecovery,
+        effects: &mut ClaimCommitEffects,
+    ) -> Result<(), OrbitError> {
+        self.check_handoff_landing(auth, state)?;
+        if state.unresolved_merge_intent.is_some()
+            || state.claim.phase != ExecutionClaimPhase::HandedOff
+        {
+            return Err(invalid("live landing without merge intent required"));
+        }
+        let (old, mut attempt) = self.live_attempt(auth, handoff_id)?;
+        let prior = &attempt.check_recovery;
+        if (prior.rerun && !recovery.rerun)
+            || (prior.updated && !recovery.updated)
+            || !prior.handled.is_subset(&recovery.handled)
+            || !recovery.actions.starts_with(&prior.actions)
+            || (!prior.source_signatures.is_empty()
+                && prior.source_signatures != recovery.source_signatures)
+        {
+            return Err(invalid("hosted recovery budgets cannot reset"));
+        }
+        attempt.check_recovery = recovery.clone();
+        attempt.updated_at = Utc::now();
+        effects
+            .replacements
+            .push((old, row(ATTEMPT, handoff_id, &attempt)?));
         Ok(())
     }
 
@@ -413,6 +449,60 @@ impl TaskCommitBoundary {
             ));
         }
         let (old, mut attempt) = self.live_attempt(auth, handoff_id)?;
+        if let Some(source) = &auth.source_repair {
+            self.check_handoff_landing(auth, state)?;
+            let accepted = self.accepted_handoff(&auth.claim_id)?;
+            let ship = self.claim_ship(state)?;
+            if state.claim.repair_authorization.is_none()
+                || !ship.review_contract_consistent()
+                || ship.review.is_none()
+                || (self
+                    .coordination_row(
+                        "owner-landing-repair-authority-v1",
+                        state
+                            .claim
+                            .repair_authorization
+                            .as_deref()
+                            .unwrap_or_default(),
+                    )?
+                    .is_none())
+                || (!attempt.check_recovery.updated
+                    && !state
+                        .claim
+                        .repair
+                        .as_ref()
+                        .is_some_and(|repair| repair.source.is_some()))
+                || !source.complete()
+                || source.checks.iter().any(|check| {
+                    !attempt.check_recovery.source_signatures.contains(&(
+                        check.workflow.clone(),
+                        check.name.clone(),
+                        check.signature.clone(),
+                    ))
+                })
+                || source.checks.is_empty()
+                || source.permitted_paths.is_empty()
+                || !matches!(accepted.handoff.candidate.delivery, HandoffDelivery::PullRequest { number } if number == source.pull_request)
+                || source.checks.iter().any(|check| {
+                    check.run_id == 0
+                        || check.job_id == 0
+                        || check.workflow.is_empty()
+                        || check.name.is_empty()
+                        || check.failed_step.is_empty()
+                        || check.signature.is_empty()
+                        || check.diagnostic.is_empty()
+                })
+                || source
+                    .permitted_paths
+                    .iter()
+                    .any(|path| !orbit_common::fs::selector::ci_repair_path_is_safe(path))
+            {
+                return Err(invalid(
+                    "source repair requires captured authority, independent review, branch update and complete exact-head source evidence",
+                ));
+            }
+            attempt.source_repair = Some(source.clone());
+        }
         attempt.state = LandingAttemptState::Stopped;
         attempt.evidence = Some(reason.into());
         attempt.updated_at = Utc::now();

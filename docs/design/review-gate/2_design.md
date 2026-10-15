@@ -933,7 +933,7 @@ A reviewer may forget to name owed evidence, or report a check as passed
 when its host could not have run it. To close that gap, the workspace
 declares what a claimed leaf owes, and Orbit derives the requirement instead of
 reading it from the report. Each `[[review.host_evidence]]` rule
-([config](../../CONFIG.md#owed-host-evidence)) names a `kind` (`codeql` or
+([config](../../CONFIG.md#owed-host-evidence)) names a `kind` (`codeql`, `native_os` or
 `host_sandbox_test`), a display `name`, workspace-relative `paths` globs, an
 `os`, the exact `command` and the result `artifact`. The owner captures the
 rules in the review contract each claim carries. A rule is owed when a claimed
@@ -942,7 +942,10 @@ leaf's candidate changes a matching path and one of these holds:
 - a `codeql` rule runs on a host of another OS, and the owner fulfils it on
   `os`;
 - a `host_sandbox_test` rule runs on a host of that `os`, which runs it
-  outside the agent sandbox at settlement, as above.
+  outside the agent sandbox at settlement, as above;
+- an explicit `native_os` rule owes actual native execution on its declared
+  OS, including when the claim host runs that OS. It requires a qualified
+  hosted workflow/check binding and defers only at before-landing review.
 
 A local run owes nothing, because its host is the owner.
 
@@ -978,6 +981,14 @@ pending is never excluded. A rule without `hosted_check` and Linux CodeQL the
 reviewer names that no such rule covers hold the review as above, so a custom
 query or a workspace without hosted CodeQL never loses its obligation.
 
+An explicit `native_os` host-evidence rule uses the same before-landing
+contract on any known host, including its native OS. It must name the exact
+command, OS, artifact, matching paths and a qualified `workflow / check`
+hosted binding. Before-PR review holds for actual native evidence; failed
+native records still block. Task criteria and optional check names never
+synthesize native authority. The certificate preserves this captured binding
+for exact-head landing and any authenticated source-repair continuation.
+
 The owner enforces owner-owed evidence. Handoff acceptance refuses a
 certificate whose `owner_owed_evidence` names a check its captured rules did
 not declare hosted for a before-landing review. `handoff_land` merges only once
@@ -996,7 +1007,7 @@ each gate with the host's outcome:
 - a verified known red counts as known red;
 - any other failure rejects (`host_gate_failed`).
 
-A review whose only blockers were those gates and owner-owed CodeQL, with no
+A review whose only blockers were those gates and owner-owed hosted evidence, with no
 open finding and no pending evidence, settles `accept`. The certificate
 records the results in `host_validation`
 ([runbook](../../runbooks/review-gate.md#sandboxed-reviewers-on-a-claimed-leaf)).

@@ -154,6 +154,11 @@ impl TaskCommitBoundary {
         if receipt.input != input {
             return Err(invalid("mutation_mismatch"));
         }
+        if matches!(mutation, ClaimMutation::RecordLandingRecovery { .. }) {
+            return Err(invalid(
+                "hosted recovery action already admitted; reconcile provider state instead of repeating its side effect",
+            ));
+        }
         if let ClaimMutation::RetryLanding(request) = mutation {
             // Replaying a reservation whose submission is unknown is launch
             // admission, so historical approval cannot resurrect revoked work.
@@ -745,6 +750,46 @@ impl TaskCommitBoundary {
                     )?;
                     state.claim.phase = ExecutionClaimPhase::Landed;
                     state.last_event = "landing_completed".into();
+                }
+                ClaimMutation::RecordLandingRecovery {
+                    handoff_id,
+                    recovery,
+                } => {
+                    self.record_landing_recovery(
+                        auth,
+                        &state,
+                        handoff_id,
+                        recovery,
+                        &mut handoff_effects,
+                    )?;
+                    state.last_event = "landing_recovery_admitted".into();
+                }
+                ClaimMutation::StopSourceRepair { handoff_id, reason } => {
+                    if auth.source_repair.is_none() {
+                        return Err(invalid("host-derived source diagnosis required"));
+                    }
+                    match self.stop_landing_attempt(
+                        auth,
+                        &state,
+                        handoff_id,
+                        reason,
+                        true,
+                        &mut params,
+                        &mut handoff_effects,
+                    )? {
+                        LandingStop::Stopped => {}
+                        LandingStop::Repair => {
+                            state.claim.phase = ExecutionClaimPhase::RepairPending;
+                            state.landing_invalidated = true;
+                        }
+                        LandingStop::Blocked(comment) => {
+                            state.claim.phase = ExecutionClaimPhase::Failed;
+                            state.landing_invalidated = true;
+                            evidence.comment = Some(comment);
+                            release = true;
+                        }
+                    }
+                    state.last_event = "landing_source_repair_stopped".into();
                 }
                 ClaimMutation::StopLanding {
                     handoff_id,

@@ -11,7 +11,9 @@
 //!   or the base branch has moved past that base and the same job passes on
 //!   its tip. The landing merges the current base into the pull request's
 //!   branch once, through the provider's branch update, and waits for the
-//!   checks again on the new head. No agent runs.
+//!   checks again on the new head. A repeated evidenced source failure can
+//!   use the same one repair claim under host-captured operator authority;
+//!   missing authority, diagnostics or scope remain refusals.
 //! - **transient**: the log shows the network or the runner failing, by the
 //!   rule the validation gates already rerun on. The landing reruns the
 //!   failed jobs once and waits again.
@@ -26,7 +28,9 @@
 //!   base or the candidate at fault, so the landing stops in review and
 //!   spends nothing.
 //!
-//! The rerun, the branch update and the repair are each spent once; a
+//! Hosted action admission is durable before provider effects. Replays read
+//! current state instead of repeating an uncertain action. The rerun, the
+//! branch update and the repair are each spent once; a
 //! failure past that, or one this module cannot classify, stops the landing
 //! in review as before, with the classification in the stop evidence.
 //!
@@ -52,6 +56,7 @@ use super::super::ci::log_signature::{
 };
 use super::baseline::network_inconclusive;
 use super::git::{git_command_success, git_output};
+use super::landing_source::source_repair_evidence;
 use super::operations;
 use super::pr::{CheckState, PullRequestStatus};
 
@@ -89,29 +94,26 @@ impl CheckFailureClass {
 }
 
 /// What this landing attempt has already done about failed checks.
-#[derive(Default)]
-pub(super) struct CheckRecovery {
-    rerun: bool,
-    updated: bool,
-    deadline_ms: u64,
-    /// Failed jobs already acted on, so a rollup that still shows them
-    /// before the provider registers the rerun or update waits instead.
-    handled: BTreeSet<u64>,
-    /// The classification each action was taken on, for the evidence.
-    actions: Vec<String>,
+pub(super) type CheckRecovery = orbit_types::workflow::handoff::LandingCheckRecovery;
+
+pub(super) fn recovery_evidence(recovery: &CheckRecovery) -> Option<Value> {
+    (!recovery.actions.is_empty()).then(|| json!(recovery.actions))
 }
 
-impl CheckRecovery {
-    pub(super) fn before(deadline_ms: u64) -> Self {
-        Self {
-            deadline_ms,
-            ..Default::default()
-        }
-    }
-    /// The actions this attempt took, for the landing's completion evidence.
-    pub(super) fn evidence(&self) -> Option<Value> {
-        (!self.actions.is_empty()).then(|| json!(self.actions))
-    }
+fn admit_action<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &HandoffLandingContext,
+    recovery: &CheckRecovery,
+) -> Result<(), OrbitError> {
+    host.record_handoff_landing(&crate::context::HandoffLandingUpdate {
+        handoff_id: context.handoff_id.clone(),
+        step: crate::context::HandoffLandingStep::CheckRecovery {
+            recovery: recovery.clone(),
+        },
+        observed: Some(context.candidate.clone()),
+        evidence: serde_json::to_string(recovery)
+            .map_err(|error| OrbitError::Execution(error.to_string()))?,
+    })
 }
 
 /// What the landing does next about its failed checks.
@@ -123,6 +125,7 @@ pub(super) enum CheckRecoveryStep {
     Wait,
     /// Stop for the one automatic repair, with this evidence.
     Repair(String),
+    SourceRepair(String, orbit_types::workflow::handoff::LandingSourceRepair),
     /// Stop in review, with this evidence.
     Stop(String),
 }
@@ -145,6 +148,8 @@ struct FailedJob {
     run_id: u64,
     job_id: u64,
     label: String,
+    workflow: String,
+    name: String,
     class: CheckFailureClass,
     signature: String,
     why: String,
@@ -155,6 +160,7 @@ struct FailedJob {
 ///
 /// `reason` is the failure as the landing words it. `landing_tip` is the
 /// landing branch's current commit in the owner checkout.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &HandoffLandingContext,
@@ -163,6 +169,7 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
     landing_tip: Option<&str>,
     recovery: &mut CheckRecovery,
     reason: &str,
+    deadline_ms: u64,
 ) -> Result<CheckRecoveryStep, OrbitError> {
     let workspace = &context.workspace_path;
     let (Some(head), Some(pr)) = (status.head_sha.as_deref(), status.number) else {
@@ -184,6 +191,14 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
         .iter()
         .filter(|job| unsuccessful(job) && failed.iter().any(|check| answers(job, check)))
         .collect();
+    if failed
+        .iter()
+        .any(|check| !failed_jobs.iter().any(|job| answers(job, check)))
+    {
+        return Ok(unclassified(
+            "a failed check has no exact-head failed job".into(),
+        ));
+    }
     if failed_jobs.is_empty() {
         // A rerun or update the provider has not registered yet still shows
         // the old failure in the rollup while its jobs are queued.
@@ -262,6 +277,8 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
             run_id,
             job_id,
             label,
+            workflow: job["workflow"].as_str().unwrap_or_default().to_string(),
+            name: job["name"].as_str().unwrap_or_default().to_string(),
             class,
             signature: signature.text,
             why,
@@ -279,6 +296,12 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
     match class {
         CheckFailureClass::Transient if !recovery.rerun => {
             let runs: BTreeSet<u64> = jobs.iter().map(|job| job.run_id).collect();
+            recovery.rerun = true;
+            recovery.handled.extend(jobs.iter().map(|job| job.job_id));
+            recovery
+                .actions
+                .push(format!("admitted rerun of the failed jobs: {classified}"));
+            admit_action(host, context, recovery)?;
             for run_id in runs {
                 host.run_private_vcs_operation(
                     operations::CI_RERUN_FAILED,
@@ -288,22 +311,31 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
                     }),
                 )?;
             }
-            recovery.rerun = true;
-            recovery.handled.extend(jobs.iter().map(|job| job.job_id));
-            recovery
-                .actions
-                .push(format!("reran the failed jobs: {classified}"));
             Ok(CheckRecoveryStep::Acted)
         }
         CheckFailureClass::Transient => Ok(CheckRecoveryStep::Stop(evidence(
             "it failed again after its one rerun, so the candidate stays in review",
         ))),
-        CheckFailureClass::Inherited
-            if recovery.updated || head != context.candidate.candidate.commit =>
-        {
-            Ok(CheckRecoveryStep::Stop(evidence(
-                "it failed again after one branch update, so the candidate stays in review",
+        CheckFailureClass::Inherited if context.automatic_repair_spent => {
+            Ok(CheckRecoveryStep::Repair(evidence(
+                "the one automatic repair failed again; both attempts must be retained",
             )))
+        }
+        CheckFailureClass::Inherited if recovery.updated => {
+            if !context.source_repair_authorized {
+                return Ok(CheckRecoveryStep::Stop(evidence(
+                    "it failed again after one branch update without captured source repair authority",
+                )));
+            }
+            match source_repair_evidence(host, context, status, failed, recovery) {
+                Ok(source) => Ok(CheckRecoveryStep::SourceRepair(
+                    evidence("one authenticated source repair requires a fresh validated handoff"),
+                    source,
+                )),
+                Err(error) => Ok(CheckRecoveryStep::Stop(evidence(&format!(
+                    "source repair refused: {error}"
+                )))),
+            }
         }
         CheckFailureClass::Inherited => {
             let Some(tip) = moved_tip.filter(|tip| !contains(workspace, tip, head)) else {
@@ -320,7 +352,7 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
                 head_branch: context.candidate.source_branch.clone(),
                 base_branch: context.candidate.base_branch.clone(),
                 base_sha: tip.into(),
-                deadline_ms: recovery.deadline_ms,
+                deadline_ms,
                 evidence: json!({"cause":"inherited","classification":classified}),
             };
             match host.admit_handoff_base_update(&context.handoff_id, &request)? {
@@ -333,6 +365,22 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
                     return Ok(CheckRecoveryStep::Stop(reason));
                 }
             }
+            recovery.updated = true;
+            recovery.source_signatures = jobs
+                .iter()
+                .map(|job| {
+                    (
+                        job.workflow.clone(),
+                        job.name.clone(),
+                        job.signature.clone(),
+                    )
+                })
+                .collect();
+            recovery.handled.extend(jobs.iter().map(|job| job.job_id));
+            recovery.actions.push(format!(
+                "admitted branch update from base tip {tip}: {classified}"
+            ));
+            admit_action(host, context, recovery)?;
             // The reservation survives an unknown provider reply. Re-observe
             // its actual head; never repeat the expected-head update.
             let _reply = host.run_private_vcs_operation(
@@ -343,16 +391,11 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
                     "workspace_path": workspace.to_string_lossy(),
                 }),
             );
-            recovery.updated = true;
-            recovery.handled.extend(jobs.iter().map(|job| job.job_id));
-            recovery.actions.push(format!(
-                "merged base tip {tip} into the pull request's branch: {classified}"
-            ));
             Ok(CheckRecoveryStep::Acted)
         }
         CheckFailureClass::Candidate if context.automatic_repair_spent => {
-            Ok(CheckRecoveryStep::Stop(evidence(
-                "this candidate already is the one automatic repair, so it stays in review",
+            Ok(CheckRecoveryStep::Repair(evidence(
+                "the one automatic repair failed again; both attempts must be retained",
             )))
         }
         CheckFailureClass::Candidate => Ok(CheckRecoveryStep::Repair(evidence(
@@ -594,7 +637,7 @@ fn failed_step(job: &Value) -> &str {
 
 /// Every job on `commit`. An answer without a job list is a failed read,
 /// never an empty one.
-fn commit_jobs<H: RuntimeHost + ?Sized>(
+pub(super) fn commit_jobs<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
     commit: &str,
@@ -610,7 +653,7 @@ fn commit_jobs<H: RuntimeHost + ?Sized>(
 
 /// One failed job's log. A read that recovered no text, which the log
 /// reader reports beside an empty log, is a failed read.
-fn job_log<H: RuntimeHost + ?Sized>(
+pub(super) fn job_log<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
     run_id: u64,
@@ -673,7 +716,7 @@ fn unsuccessful(job: &Value) -> bool {
 }
 
 /// Whether rollup entry `check` is this job's check run.
-fn answers(job: &Value, (workflow, name): &(Option<String>, String)) -> bool {
+pub(super) fn answers(job: &Value, (workflow, name): &(Option<String>, String)) -> bool {
     job["name"].as_str().map(str::trim) == Some(name.as_str())
         && workflow
             .as_deref()
@@ -693,7 +736,7 @@ fn job_label(job: &Value) -> String {
 }
 
 /// The network or runner failure a log shows, if any.
-fn transient_evidence(log: &str) -> Option<String> {
+pub(super) fn transient_evidence(log: &str) -> Option<String> {
     let emitted = classify_log_lines(log)
         .into_iter()
         .filter(|(kind, _)| {

@@ -54,7 +54,43 @@ pub(in crate::executor::automation) fn candidate_resume<H: RuntimeHost + ?Sized>
             .get("claim_repair")
             .filter(|repair| repair.is_object())
         {
-            return claim_repair_resume(repair, &workspace_path, &base_sha);
+            if repair["source"].is_object() {
+                if !host
+                    .claim_execution_context()?
+                    .repair
+                    .as_ref()
+                    .and_then(|repair| repair.source.as_ref())
+                    .is_some_and(|source| source.complete())
+                {
+                    return Err(OrbitError::InvalidInput(
+                        "candidate_resume: incomplete authenticated source evidence".into(),
+                    ));
+                }
+                let context = host.claim_execution_context()?;
+                if context.task_id != *task_id || context.run_id != run_id {
+                    return Err(OrbitError::InvalidInput(
+                        "candidate_resume: foreign source repair task or run".into(),
+                    ));
+                }
+                let trusted = context.repair.as_ref().ok_or_else(|| {
+                    OrbitError::InvalidInput(
+                        "candidate_resume: no authenticated repair claim".into(),
+                    )
+                })?;
+                if repair["repairs_claim_id"] != trusted.repairs_claim_id
+                    || repair["handoff_id"] != trusted.handoff_id
+                    || repair["head_sha"] != trusted.candidate.candidate.commit
+                    || repair["branch"] != trusted.candidate.source_branch
+                    || repair["source"]
+                        != serde_json::to_value(&trusted.source)
+                            .map_err(|error| OrbitError::Execution(error.to_string()))?
+                {
+                    return Err(OrbitError::InvalidInput(
+                        "candidate_resume: repair input differs from authenticated claim".into(),
+                    ));
+                }
+            }
+            return claim_repair_resume(repair, &workspace_path, &base_sha, task_id);
         }
         return claimed_resume(input, task_id, &workspace_path, &base_sha);
     }
@@ -524,6 +560,7 @@ fn claim_repair_resume(
     repair: &Value,
     workspace_path: &Path,
     base_sha: &str,
+    task_id: &str,
 ) -> Result<Value, OrbitError> {
     let (Some(branch), Some(head_sha)) = (
         input_string_field(repair, "branch"),
@@ -536,7 +573,10 @@ fn claim_repair_resume(
     };
     let stopped = input_string_field(repair, "stop_evidence")
         .unwrap_or_else(|| "the owner's landing stopped on its base".to_string());
-    let candidate = Candidate {
+    let source: Option<orbit_types::workflow::handoff::LandingSourceRepair> =
+        serde_json::from_value(repair["source"].clone())
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+    let mut candidate = Candidate {
         run_id: input_string_field(repair, "repairs_claim_id").unwrap_or_default(),
         branch,
         head_sha,
@@ -590,5 +630,36 @@ fn claim_repair_resume(
     let mut resumed = output(&outcome, None, base_sha);
     resumed["source_branch"] = json!(candidate.branch);
     resumed["source_sha"] = json!(candidate.head_sha);
+    if let Some(source) = source {
+        if super::super::freshness::remote_branch_sha(workspace_path, &candidate.branch)?.as_deref()
+            != Some(source.failed_head.as_str())
+        {
+            return Err(OrbitError::Execution(
+                "candidate_resume: source repair remote lease changed".into(),
+            ));
+        }
+        let local_ref = format!("refs/heads/{}", candidate.branch);
+        if let Ok(local) =
+            super::super::git::git_output(workspace_path, &["rev-parse", "--verify", &local_ref])
+            && local == source.failed_head
+        {
+            candidate.head_sha = source.failed_head.clone();
+        }
+        candidate.published = true;
+        candidate.pull_request = Some(source.pull_request.to_string());
+        match adopt_published_branch(workspace_path, task_id, &candidate)? {
+            Adoption::Adopted => {}
+            Adoption::Refused(reason) => {
+                return Err(OrbitError::Execution(format!(
+                    "candidate_resume: source repair branch reuse refused: {reason}"
+                )));
+            }
+        }
+        resumed["reused_branch"] = json!(candidate.branch);
+        resumed["reused_head_sha"] = json!(source.failed_head);
+        resumed["prior_pull_request"] = json!(source.pull_request.to_string());
+        resumed["prior_pull_request_head"] = json!(candidate.branch);
+        resumed["repair"]["source"] = json!(source);
+    }
     Ok(resumed)
 }

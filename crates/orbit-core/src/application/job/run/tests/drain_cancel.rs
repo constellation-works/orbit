@@ -490,6 +490,7 @@ fn admission(
             reservation_id: format!("reservation-{id}"),
             reservation_expires_at: (Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
             repair: None,
+            repair_authorization: None,
             phase: ExecutionClaimPhase::Claimed,
         }),
         task: Some(AdmissionTaskSummary {

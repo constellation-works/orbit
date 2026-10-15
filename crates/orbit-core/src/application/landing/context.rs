@@ -24,17 +24,34 @@ impl OrbitRuntime {
         let (claim, accepted) = self.landing_claim(handoff_id)?;
         // [ORB-15677] The hosted checks the accepted review owed the owner,
         // read from the certificate the handoff pinned and acceptance judged.
-        let owed_hosted_checks = self
+        let certificate = self
             .admission_boundary()?
-            .accepted_review_certificate(&accepted.handoff.claim_id)?
-            .map(|certificate| {
-                certificate
-                    .owner_owed_evidence
-                    .into_iter()
-                    .filter_map(|owed| owed.hosted_check)
-                    .collect()
-            })
+            .accepted_review_certificate(&accepted.handoff.claim_id)?;
+        let owner_owed_evidence = certificate
+            .as_ref()
+            .map(|certificate| certificate.owner_owed_evidence.clone())
             .unwrap_or_default();
+        let mut owed_hosted_checks: Vec<String> = owner_owed_evidence
+            .iter()
+            .filter_map(|owed| owed.hosted_check.clone())
+            .collect();
+        if let Some(source) = claim
+            .claim
+            .repair
+            .as_ref()
+            .and_then(|repair| repair.source.as_ref())
+        {
+            owed_hosted_checks.extend(
+                source
+                    .checks
+                    .iter()
+                    .map(|check| format!("{} / {}", check.workflow, check.name)),
+            );
+            owed_hosted_checks.sort();
+            owed_hosted_checks.dedup();
+        }
+        let attempt = self.landing_attempt(handoff_id)?;
+        let receipt = self.claim_receipt(&accepted.handoff.claim_id)?;
         Ok(HandoffLandingContext {
             handoff_id: accepted.handoff_id,
             task_id: accepted.handoff.task_id,
@@ -43,8 +60,21 @@ impl OrbitRuntime {
             unresolved_merge_intent: claim.unresolved_merge_intent,
             workspace_path: self.paths().repo_root.clone(),
             owed_hosted_checks,
+            owner_review_certificate: certificate,
             // [ORB-15956] A repair claim has spent the one automatic repair.
             automatic_repair_spent: claim.claim.repair.is_some(),
+            source_repair_authorized: claim.claim.repair_authorization.is_some()
+                && receipt.request.ship.review.is_some()
+                && receipt.request.ship.review_contract_consistent(),
+            repair_footprint: claim.claim.footprint.clone(),
+            source_repair: claim
+                .claim
+                .repair
+                .as_ref()
+                .and_then(|repair| repair.source.clone()),
+            check_recovery: attempt
+                .map(|attempt| attempt.check_recovery)
+                .unwrap_or_default(),
         })
     }
 
@@ -63,10 +93,31 @@ impl OrbitRuntime {
         let mut context = self.landing_invocation(&claim);
         if matches!(
             update.step,
-            HandoffLandingStep::PublishIntent { .. } | HandoffLandingStep::Complete
+            HandoffLandingStep::PublishIntent { .. }
+                | HandoffLandingStep::Complete
+                | HandoffLandingStep::SourceRepair { .. }
+                | HandoffLandingStep::CheckRecovery { .. }
         ) {
-            context =
-                context.with_handoff_observation(self.landing_observation(update, &accepted)?);
+            let mut observation = self.landing_observation(update, &accepted)?;
+            if matches!(update.step, HandoffLandingStep::SourceRepair { .. })
+                || claim
+                    .claim
+                    .repair
+                    .as_ref()
+                    .is_some_and(|repair| repair.source.is_some())
+            {
+                observation.required_commands =
+                    self.workflow_required_validation_commands().to_vec();
+            }
+            context = context.with_handoff_observation(observation);
+        }
+        if let HandoffLandingStep::SourceRepair { source } = &update.step {
+            orbit_engine::validate_landing_source_identity(
+                self,
+                &self.handoff_landing_context(&update.handoff_id)?,
+                source,
+            )?;
+            context = context.with_source_repair(source.clone());
         }
         let attempt = self
             .landing_attempt(&update.handoff_id)?
@@ -134,6 +185,25 @@ impl OrbitRuntime {
                 ClaimMutation::CompleteLanding {
                     handoff_id: update.handoff_id.clone(),
                     evidence,
+                },
+            ),
+            HandoffLandingStep::SourceRepair { .. } => (
+                format!("landing-source-stop:{}:{attempt}", update.handoff_id),
+                ClaimMutation::StopSourceRepair {
+                    handoff_id: update.handoff_id.clone(),
+                    reason: update.evidence.clone(),
+                },
+            ),
+            HandoffLandingStep::CheckRecovery { recovery } => (
+                format!(
+                    "landing-recovery:{}:{}",
+                    update.handoff_id,
+                    serde_json::to_string(recovery)
+                        .map_err(|error| OrbitError::Execution(error.to_string()))?
+                ),
+                ClaimMutation::RecordLandingRecovery {
+                    handoff_id: update.handoff_id.clone(),
+                    recovery: recovery.clone(),
                 },
             ),
             HandoffLandingStep::Stop { repairable } => (

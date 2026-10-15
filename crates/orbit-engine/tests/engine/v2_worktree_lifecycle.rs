@@ -4649,6 +4649,7 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
         let worker = self.worker.as_ref().expect("claimed fixture");
         Ok(orbit_engine::ClaimExecutionContext {
             footprint: vec!["file:README.md".to_string()],
+            repair: None,
             workspace_id: worker.owner_workspace_id.clone(),
             task_id: worker.task_id.clone(),
             claim_id: worker.claim_id.clone(),

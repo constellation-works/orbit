@@ -35,7 +35,7 @@ use super::judgement::{
     write_artifact,
 };
 use super::owed::{
-    EVIDENCE_RECEIVED_DECISION, defers_linux_codeql, owed_evidence, owed_hold_received,
+    EVIDENCE_RECEIVED_DECISION, defers_hosted_owner_checks, owed_evidence, owed_hold_received,
     split_owner_owed,
 };
 use super::release::release_review_attempt;
@@ -423,7 +423,7 @@ fn settle(
     // [ORB-15630] Linux CodeQL a macOS host cannot run is the owner's and
     // the pull request's hosted CI's on a before-landing review, when its
     // rule names the hosted check that runs it [ORB-15677].
-    let defers = defers_linux_codeql(runtime, context);
+    let defers = defers_hosted_owner_checks(runtime, context);
     let (owed, owner_owed) = match &held {
         Some((_, certificate)) => (
             certificate.owed_evidence.clone(),

@@ -77,6 +77,11 @@ pub(in crate::executor::automation) fn handoff_land<H: RuntimeHost + ?Sized>(
         OrbitError::InvalidInput("handoff_land: handoff_id is required".to_string())
     })?;
     let context = host.handoff_landing_context(&handoff_id)?;
+    if input_string_field(input, "task_id").is_some_and(|task| task != context.task_id) {
+        return Err(OrbitError::InvalidInput(
+            "handoff_land: foreign task identity".into(),
+        ));
+    }
     // Every containment judgement below reads the landing ref, so the owner's
     // view of it is refreshed once before any of them run.
     let view = LandingView::refresh(
@@ -313,7 +318,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
         } else {
             max_wait_seconds.saturating_mul(1000)
         });
-    let mut recovery = CheckRecovery::before(deadline_ms);
+    let mut recovery: CheckRecovery = context.check_recovery.clone();
     let mut waited_seconds = 0_u64;
     let mut intent: Option<String> = None;
     loop {
@@ -338,19 +343,38 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
         waited_seconds = waited_seconds.max(started.elapsed().as_secs());
         // [ORB-15956] A branch update this landing (or an earlier attempt)
         // requested moved the head onto a verified merge with the base.
-        let updated_head = adopt_base_update(&mut pin, context, &status);
-        let refresh = super::base_refresh::recover(
-            host,
-            &workspace,
-            std::slice::from_ref(&context.task_id),
-            &context.handoff_id,
-            candidate,
-            &status,
-            deadline_ms,
-            false,
-            Some(&context.handoff_id),
-        )
-        .map_err(|error| stop(host, context, &error.to_string()).unwrap_or(error))?;
+        if context.source_repair.is_some()
+            && !matches!(state, PrMergeState::Merged)
+            && (status.head_sha.as_deref() != Some(candidate.candidate.commit.as_str())
+                || landing_tip(context, view).as_deref() != Some(candidate.base.commit.as_str()))
+        {
+            return Err(stop_for_repair(
+                host,
+                context,
+                "the source repair head or base changed after its certification; fresh native validation and independent review are required",
+            )?);
+        }
+        let updated_head = if context.source_repair.is_some() {
+            None
+        } else {
+            adopt_base_update(&mut pin, context, &status)
+        };
+        let refresh = if context.source_repair.is_some() {
+            super::base_refresh::RefreshStep::None
+        } else {
+            super::base_refresh::recover(
+                host,
+                &workspace,
+                std::slice::from_ref(&context.task_id),
+                &context.handoff_id,
+                candidate,
+                &status,
+                deadline_ms,
+                false,
+                Some(&context.handoff_id),
+            )
+            .map_err(|error| stop(host, context, &error.to_string()).unwrap_or(error))?
+        };
         if matches!(refresh, super::base_refresh::RefreshStep::Changed) {
             continue;
         }
@@ -374,7 +398,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
             if let Some(head) = &updated_head {
                 evidence["updated_head"] = json!(head);
             }
-            if let Some(actions) = recovery.evidence() {
+            if let Some(actions) = super::landing_checks::recovery_evidence(&recovery) {
                 evidence["check_recovery"] = actions;
             }
             let observed = observe_or_stop(host, context, Some(&status), view)?;
@@ -415,7 +439,10 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 )?);
             }
         };
-        if !refresh_wait && matches!(state, PrMergeState::Blocked(_)) {
+        if context.source_repair.is_none()
+            && !refresh_wait
+            && matches!(state, PrMergeState::Blocked(_))
+        {
             match super::base_refresh::recover(
                 host,
                 &workspace,
@@ -443,6 +470,14 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
         // each reports an explicit success on the pinned head. A skipped or
         // neutral result keeps waiting. Branch protection is separate.
         let owed = owed_hosted_checks(&status, &context.owed_hosted_checks);
+        let owed = if matches!(owed, OwedHostedChecks::Passed) && context.source_repair.is_some() {
+            match super::landing_source::source_certification(host, context, &status) {
+                Ok(certification) => certification,
+                Err(error) => return Err(stop(host, context, &error.to_string())?),
+            }
+        } else {
+            owed
+        };
         // [ORB-15956] A failed check, owed or required, is classified and
         // recovered before anything stops on it.
         let failed = failed_checks(&status);
@@ -483,11 +518,22 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 tip.as_deref(),
                 &mut recovery,
                 &reason,
+                deadline_ms,
             )? {
                 CheckRecoveryStep::Acted => continue,
                 CheckRecoveryStep::Wait => waiting_on_recovery = true,
                 CheckRecoveryStep::Repair(evidence) => {
                     return Err(stop_for_repair(host, context, &evidence)?);
+                }
+                CheckRecoveryStep::SourceRepair(evidence, source) => {
+                    record(
+                        host,
+                        context,
+                        HandoffLandingStep::SourceRepair { source },
+                        Some(context.candidate.clone()),
+                        &Value::String(evidence.clone()),
+                    )?;
+                    return Err(OrbitError::Execution(format!("handoff_land: {evidence}")));
                 }
                 CheckRecoveryStep::Stop(evidence) => {
                     return Err(stop(host, context, &evidence)?);

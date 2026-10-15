@@ -506,6 +506,8 @@ fn claim_repair_input(repair: &ClaimRepair) -> serde_json::Value {
         "head_sha": repair.candidate.candidate.commit,
         "base_sha": repair.candidate.base.commit,
         "stop_evidence": repair.stop_evidence,
+        "source": repair.source,
+        "pull_request": match repair.candidate.delivery { orbit_types::workflow::handoff::HandoffDelivery::PullRequest { number } => Some(number), _ => None },
     })
 }
 

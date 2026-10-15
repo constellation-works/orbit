@@ -289,8 +289,115 @@ pub struct LandingAttempt {
     pub job_run_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence: Option<String>,
+    /// Complete owner-read source diagnosis, retained before repair admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_repair: Option<LandingSourceRepair>,
+    /// Recovery budgets survive redispatch; intent is recorded before effects.
+    #[serde(default)]
+    pub check_recovery: LandingCheckRecovery,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+/// Durable hosted-check actions. A lost provider reply never renews a budget.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LandingCheckRecovery {
+    pub rerun: bool,
+    pub updated: bool,
+    pub handled: std::collections::BTreeSet<u64>,
+    pub actions: Vec<String>,
+    /// Original classified workflow/job labels and normalized source diagnostics.
+    #[serde(default)]
+    pub source_signatures: Vec<(String, String, String)>,
+}
+
+/// A repeated inherited source failure, observed by the owner on the PR head.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LandingSourceRepair {
+    pub failed_head: String,
+    pub pull_request: u64,
+    pub cause: LandingSourceCause,
+    pub checks: Vec<LandingFailedCheck>,
+    /// Exact repository-relative files from diagnostics or admitted source selectors.
+    pub permitted_paths: Vec<String>,
+}
+
+impl LandingSourceRepair {
+    /// Complete bounded diagnostic facts; this check grants no authority.
+    #[must_use]
+    pub fn complete(&self) -> bool {
+        self.failed_head.len() == 40
+            && self
+                .failed_head
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+            && self.pull_request > 0
+            && !self.checks.is_empty()
+            && self.checks.len() <= 32
+            && !self.permitted_paths.is_empty()
+            && self
+                .permitted_paths
+                .iter()
+                .all(|path| !path.trim().is_empty())
+            && self
+                .permitted_paths
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                == self.permitted_paths.len()
+            && self
+                .checks
+                .iter()
+                .map(|check| check.diagnostic.len())
+                .sum::<usize>()
+                <= 512 * 1024
+            && self.checks.iter().all(|check| {
+                check.run_id > 0
+                    && check.job_id > 0
+                    && [
+                        &check.workflow,
+                        &check.name,
+                        &check.failed_step,
+                        &check.signature,
+                        &check.diagnostic,
+                    ]
+                    .iter()
+                    .all(|text| !text.trim().is_empty())
+                    && check.diagnostic.len() <= 64 * 1024
+            })
+            && self
+                .checks
+                .iter()
+                .map(|check| (check.run_id, check.job_id))
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                == self.checks.len()
+    }
+}
+
+/// Source recovery deliberately excludes runner and administrative failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LandingSourceCause {
+    RepeatedInheritedSourceFailure,
+}
+
+/// Identity and complete failed-step diagnostic retained for the fresh leaf.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LandingFailedCheck {
+    pub run_id: u64,
+    pub job_id: u64,
+    pub workflow: String,
+    pub name: String,
+    pub failed_step: String,
+    pub signature: String,
+    pub diagnostic: String,
+    /// Captured native/host command binding when branch protection did not own it.
+    /// Retained as evidence; only the accepted certificate grants this authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_requirement: Option<super::ReviewEvidenceRequirement>,
 }
 
 /// An operator's compare-and-reserve request for the same immutable handoff.

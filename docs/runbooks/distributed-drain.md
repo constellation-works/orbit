@@ -1202,7 +1202,47 @@ one. From then on:
     evidence carries the failed step's signature and log excerpt for the
     repair leaf.
 
-  Each of the rerun, the branch update and the repair is spent once. A
+  A repeated inherited source failure after that branch update gets the same
+  one automatic repair only when pull admission captured an active owner's
+  explicit `orbit run auto --auto-fix` grant and an independent review
+  contract. The owner records the grant before starting the drain worker;
+  it covers claims admitted while that drain is active and stays pinned for
+  their delivery. An `auto_fix` field in an ordinary job, saved/replayed
+  input, task comment or artifact grants nothing. Existing claims without
+  the captured grant stay in review. Completion authority is still separate.
+
+  A failed check must be protected or explicitly bound by the accepted
+  certificate's `owner_owed_evidence.hosted_check`. Optional native checks
+  qualify only through that captured workflow/check and command/OS requirement;
+  task prose, caller inputs and arbitrary optional checks grant nothing.
+  CLEAN/HasHooks with protected checks green can still owe that failed native
+  check. A mergeable state with a failed protected check is contradictory.
+  The owner rechecks certificate task/repository/candidate/base identity and
+  complete exact-head GitHub Actions job evidence before revocation.
+  The stop retains that requirement, exact PR/head and failed run/job/check
+  identities, complete diagnostics and explicit source files. Unreadable/truncated evidence,
+  inconclusive source paths, UNKNOWN mergeability, reviews, credentials,
+  optional-only failures and infrastructure prerequisites refuse a source
+  agent. The old handoff is revoked; no Recover operation or backlog rewrite
+  is needed. The original executor's next eligible pull admits one fresh
+  claim, retaining the task and reserving those source files without silently
+  widening its selectors. The executor must first finish its old live worker.
+
+  The leaf restores the candidate and reuses its PR branch under a lease on
+  the failed head. It may change only the authenticated source files, with
+  scope checked before host commit and at handoff. Delivery controls, guard
+  suites, gate scripts, workflows, metadata and credentials remain protected.
+  Missing paths, restoration conflicts and a branch/lease mismatch stop the
+  continuation. A fresh commit, validation and independent review are
+  required. Every failed protected or certificate-bound check remains owed on the new head;
+  native skip/refusal, neutral, truncated or nonzero evidence cannot certify
+  it. A later head/base change invalidates that certification. A second
+  repairable stop blocks the task with both attempts' retained evidence.
+
+  Each of the rerun, the branch update and the claim repair is spent once;
+  their action admission survives owner redispatch and is recorded before
+  provider side effects. The watcher's three PR repair attempts are a
+  separate budget and cannot mint more landing repair claims. A
   failure past that budget, or one the landing cannot classify (its jobs or
   log are unreadable), stops the landing with the task in `review` and the
   classification in the stop evidence (`orbit task show <task-id>`).

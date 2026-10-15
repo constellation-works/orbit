@@ -342,6 +342,17 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
             head_moved,
         ));
     }
+    if claimed && let Some(repair) = host.claim_execution_context()?.repair {
+        let base = base_sha.as_deref().ok_or_else(|| {
+            OrbitError::InvalidInput("source repair commit requires the fresh base".into())
+        })?;
+        super::super::landing_source::validate_claim_source_repair(
+            &workspace_path,
+            &repair,
+            base,
+            None,
+        )?;
+    }
     stage_paths(&workspace_path, &candidate_paths)?;
 
     let changed_files = staged_changed_files(&workspace_path)?;

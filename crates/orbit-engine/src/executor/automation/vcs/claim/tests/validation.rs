@@ -11,6 +11,7 @@ fn claimed_base_ref_preserves_valid_refs_and_propagates_invalid_modes() {
     for ship_mode in ["local", "pr", "unknown"] {
         let context = ClaimExecutionContext {
             footprint: vec![],
+            repair: None,
             workspace_id: String::new(),
             task_id: String::new(),
             claim_id: String::new(),

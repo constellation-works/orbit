@@ -55,6 +55,23 @@ impl orbit_engine::test_support::NullRuntimeHost for VerifierHost {
         self.worker.clone()
     }
 
+    fn claim_execution_context(&self) -> Result<orbit_engine::ClaimExecutionContext, OrbitError> {
+        let worker = self.worker.as_ref().expect("claimed fixture");
+        Ok(orbit_engine::ClaimExecutionContext {
+            footprint: orbit_engine::RuntimeHost::get_task(self, &worker.task_id)?.context_files,
+            repair: None,
+            workspace_id: worker.owner_workspace_id.clone(),
+            task_id: worker.task_id.clone(),
+            claim_id: worker.claim_id.clone(),
+            machine_id: worker.execution.machine_id.clone(),
+            run_id: worker.bound_run_id.clone(),
+            ship_mode: "pr".into(),
+            base_branch: "agent-main".into(),
+            landing_branch: "agent-main".into(),
+            required_commands: orbit_engine::RuntimeHost::required_validation_commands(self),
+        })
+    }
+
     fn attach_claim_validation_log(&self, path: &str, content: Vec<u8>) -> Result<(), OrbitError> {
         let mut artifacts = self.artifacts.lock().unwrap();
         let logs = artifacts.entry(TASK_ID.to_string()).or_default();

@@ -98,6 +98,7 @@ impl PullPeer for Peer {
                     reservation_id: "reservation".into(),
                     reservation_expires_at: "later".into(),
                     repair: None,
+                    repair_authorization: None,
                     phase: ExecutionClaimPhase::Claimed,
                 }),
                 task: (!self.idle.get()).then(|| AdmissionTaskSummary {

@@ -38,7 +38,42 @@ struct RepairCandidate<'a> {
     repair: ClaimRepair,
 }
 
+const REPAIR_AUTHORITY: &str = "owner-landing-repair-authority-v1";
+
 impl TaskCommitBoundary {
+    /// Host-only capture at explicit operator submission, before worker creation.
+    /// No tool surface exposes this writer; absence is refusal.
+    pub fn capture_landing_repair_authority(&self, owner_run: &str) -> Result<(), OrbitError> {
+        if owner_run.trim().is_empty() {
+            return Err(OrbitError::InvalidInput("owner run required".into()));
+        }
+        self.with_admission(|| {
+            if self
+                .coordination_row(REPAIR_AUTHORITY, owner_run)?
+                .is_none()
+            {
+                self.store.insert_task_coordination_row(
+                    &self.workspace_id,
+                    &row(REPAIR_AUTHORITY, owner_run, &owner_run)?,
+                )?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Captured submissions only; the runtime checks which drain is still active.
+    pub fn landing_repair_authorities(&self) -> Result<Vec<String>, OrbitError> {
+        self.enter_ordinary(|| {
+            self.coordination_rows(REPAIR_AUTHORITY)?
+                .iter()
+                .map(|row| {
+                    serde_json::from_str(&row.payload_json)
+                        .map_err(|error| OrbitError::Store(error.to_string()))
+                })
+                .collect()
+        })
+    }
+
     /// Admit the first pending repair this pull may take, as a new claim.
     ///
     /// Returns `true` when a repair claim was committed. Pending repairs this
@@ -109,6 +144,21 @@ impl TaskCommitBoundary {
                 ));
                 continue;
             };
+            let source = self
+                .landing_attempt(&accepted.handoff_id)?
+                .and_then(|attempt| attempt.source_repair);
+            if source.as_ref().is_some_and(|source| !source.complete()) {
+                receipt.invalid_candidates.push(diagnose(
+                    "retained source repair evidence is incomplete".into(),
+                ));
+                continue;
+            }
+            if source.is_some()
+                && (!request.ship.review_contract_consistent() || request.ship.review.is_none())
+            {
+                receipt.invalid_candidates.push(diagnose("source repair requires fresh independent review under the captured owner policy".into()));
+                continue;
+            }
             if let Some(reason) = ship_mismatch(&accepted.handoff.candidate, &request.ship) {
                 receipt.invalid_candidates.push(diagnose(reason));
                 continue;
@@ -140,9 +190,10 @@ impl TaskCommitBoundary {
             candidates.push(RepairCandidate {
                 repair: ClaimRepair {
                     repairs_claim_id: state.claim.claim_id.clone(),
-                    handoff_id: accepted.handoff_id,
+                    handoff_id: accepted.handoff_id.clone(),
                     candidate: accepted.handoff.candidate,
                     stop_evidence,
+                    source,
                 },
                 state,
                 task,
@@ -171,7 +222,17 @@ impl TaskCommitBoundary {
         } = candidate;
         let superseded = &state.claim;
         let claim_id = format!("claim-{}", digest(&(&self.workspace_id, receipt_key))?);
-        let footprint = superseded.footprint.clone();
+        let mut footprint = superseded.footprint.clone();
+        if let Some(source) = &repair.source {
+            footprint.extend(
+                source
+                    .permitted_paths
+                    .iter()
+                    .map(|path| format!("file:{path}")),
+            );
+            footprint.sort();
+            footprint.dedup();
+        }
         let machine_id = receipt.machine_id.clone();
         let old_claim = self
             .coordination_row(CLAIM, &superseded.claim_id)?
@@ -249,6 +310,7 @@ impl TaskCommitBoundary {
                         .clone()
                         .ok_or_else(|| OrbitError::Store("reservation expiry missing".into()))?,
                     repair: Some(repair.clone()),
+                    repair_authorization: superseded.repair_authorization.clone(),
                 };
                 let mut admitted = receipt.clone();
                 admitted.claim = Some(claim.clone());
@@ -257,7 +319,7 @@ impl TaskCommitBoundary {
                     title: task.title.clone(),
                     complexity: task.complexity,
                     crew: task.crew.clone(),
-                    context_files: footprint.clone(),
+                    context_files: task.context_files.clone(),
                     // The repair carries its own candidate in `claim.repair`.
                     resume_candidate: None,
                 });

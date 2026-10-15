@@ -87,5 +87,5 @@ pub use executor::automation::vcs::{
     WorktreeGcRecovery, WorktreeGcResult, WorktreeReclaimReport, baseline_hold_status,
     collect_worktrees, fetch_remote_base, recorded_baseline_hold_status, run_deferral_probe,
     run_worktree_has_reclaim_output, run_worktree_paths, validate_claim_new_paths,
-    verify_claimed_known_red,
+    validate_claim_source_repair, validate_landing_source_identity, verify_claimed_known_red,
 };

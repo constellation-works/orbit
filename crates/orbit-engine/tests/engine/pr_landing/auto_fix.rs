@@ -748,6 +748,8 @@ fn docs_only_auto_fix_repairs_shared_source_and_watches_published_green_head() {
                     assert_eq!(host.status(TASK_ID), TaskStatus::Review);
                 });
             }
+            claimed_source_scope_rows(sandbox);
+            crate::handoff_landing::evidenced_source_continuation_rows();
         },
     );
 }
@@ -1358,4 +1360,175 @@ fn auto_fix_mixed_failure_wait_preserves_recovery_and_refusals() {
             }
         },
     );
+}
+
+/// The same owner-visible scope validator used at handoff acceptance judges
+/// a real committed delta and the pre-commit worktree, including carried additions.
+fn claimed_source_scope_rows(sandbox: &Path) {
+    use orbit_store::contracts::ClaimRepair;
+    use orbit_types::workflow::automation::SourceRevision;
+    use orbit_types::workflow::handoff::{
+        HandoffCandidate, LandingSourceCause, LandingSourceRepair,
+    };
+    for mode in [
+        "source",
+        "carried_addition",
+        "unrelated",
+        "original_work",
+        "guard",
+        "workflow",
+        "symlink",
+        "parent_symlink_outside",
+        "parent_symlink_inside",
+        "parent_symlink_missing",
+        "leaf_symlink_missing",
+        "removal",
+    ] {
+        in_fresh_row(sandbox, |row| {
+            let fx = Fixture::new(row);
+            fx.commit_on_base("src/contract", "broken\n");
+            git(&fx.repo, &["reset", "--hard", BASE]);
+            let base = fx.head();
+            delete_remote_branch(&fx, BRANCH);
+            let original = fx.commit("README.md", "original task work\n");
+            let accepted = HandoffCandidate {
+                repository: "owner/repository".into(),
+                source_branch: BRANCH.into(),
+                base_branch: BASE.into(),
+                landing_branch: BASE.into(),
+                candidate: SourceRevision {
+                    commit: original.clone(),
+                    tree: git(&fx.repo, &["rev-parse", "HEAD^{tree}"]),
+                },
+                base: SourceRevision {
+                    commit: base.clone(),
+                    tree: git(&fx.repo, &["rev-parse", &format!("{base}^{{tree}}")]),
+                },
+                delivery: orbit_types::workflow::handoff::HandoffDelivery::PullRequest {
+                    number: 42,
+                },
+            };
+            let repair = ClaimRepair {
+                repairs_claim_id: "original-claim".into(),
+                handoff_id: "original-handoff".into(),
+                candidate: accepted,
+                stop_evidence: "source failed after base update".into(),
+                source: Some(LandingSourceRepair {
+                    failed_head: original.clone(),
+                    pull_request: 42,
+                    cause: LandingSourceCause::RepeatedInheritedSourceFailure,
+                    checks: vec![orbit_types::workflow::handoff::LandingFailedCheck {
+                        run_id: 1,
+                        job_id: 1,
+                        workflow: "Native".into(),
+                        name: "Native".into(),
+                        failed_step: "Native".into(),
+                        signature: "source failed".into(),
+                        diagnostic: "error: src/contract: broken".into(),
+                        owner_requirement: None,
+                    }],
+                    permitted_paths: vec!["src/contract".into()],
+                }),
+            };
+            fs::write(fx.repo.join("src/contract"), "fixed\n").unwrap();
+            match mode {
+                "unrelated" => {
+                    fs::write(fx.repo.join("unrelated.txt"), "unrelated\n").unwrap();
+                }
+                "original_work" => {
+                    fs::write(fx.repo.join("README.md"), "changed original task work\n").unwrap();
+                }
+                "guard" => {
+                    fs::create_dir_all(fx.repo.join("scripts")).unwrap();
+                    fs::write(fx.repo.join("scripts/check-ci-macos.sh"), "exit 0\n").unwrap();
+                }
+                "workflow" => {
+                    fs::create_dir_all(fx.repo.join(".github/workflows")).unwrap();
+                    fs::write(fx.repo.join(".github/workflows/ci.yml"), "disabled\n").unwrap();
+                }
+                "symlink" => {
+                    fs::rename(
+                        fx.repo.join("src/contract"),
+                        fx.repo.join("src/contract-real"),
+                    )
+                    .unwrap();
+                    std::os::unix::fs::symlink("contract-real", fx.repo.join("src/contract"))
+                        .unwrap();
+                }
+                "parent_symlink_outside" | "parent_symlink_inside" | "parent_symlink_missing" => {
+                    // Ignore the replacement directory link so Git reports only
+                    // its tracked descendant. Matching carried bytes must not
+                    // allow the validator to follow a link before checking scope.
+                    let destination = if mode == "parent_symlink_inside" {
+                        fx.repo.join(".orbit/tmp/carried-source")
+                    } else {
+                        row.join("outside-source")
+                    };
+                    fs::create_dir_all(destination.parent().unwrap()).unwrap();
+                    fs::rename(fx.repo.join("src"), &destination).unwrap();
+                    fs::write(destination.join("contract"), "broken\n").unwrap();
+                    if mode == "parent_symlink_missing" {
+                        fs::rename(destination.join("contract"), destination.join("retained"))
+                            .unwrap();
+                    }
+                    let excludes = row.join("source-excludes");
+                    fs::write(&excludes, "src\n").unwrap();
+                    git(
+                        &fx.repo,
+                        &["config", "core.excludesFile", excludes.to_str().unwrap()],
+                    );
+                    std::os::unix::fs::symlink(&destination, fx.repo.join("src")).unwrap();
+                    let before =
+                        orbit_engine::validate_claim_source_repair(&fx.repo, &repair, &base, None);
+                    assert!(
+                        before.is_err(),
+                        "{mode}: an intermediate symlink must refuse before inspecting carried work: {before:?}"
+                    );
+                    let retained = if mode == "parent_symlink_missing" {
+                        "retained"
+                    } else {
+                        "contract"
+                    };
+                    assert_eq!(
+                        fs::read_to_string(destination.join(retained)).unwrap(),
+                        "broken\n"
+                    );
+                    return;
+                }
+                "leaf_symlink_missing" => {
+                    fs::rename(fx.repo.join("src/contract"), row.join("retained-contract"))
+                        .unwrap();
+                    std::os::unix::fs::symlink("missing-target", fx.repo.join("src/contract"))
+                        .unwrap();
+                    let before =
+                        orbit_engine::validate_claim_source_repair(&fx.repo, &repair, &base, None);
+                    assert!(
+                        before.is_err(),
+                        "{mode}: a dangling symlink is not a file removal: {before:?}"
+                    );
+                    return;
+                }
+                "removal" => {
+                    fs::rename(fx.repo.join("src/contract"), row.join("removed-contract")).unwrap();
+                }
+                "carried_addition" => {
+                    git(&fx.repo, &["reset", "--mixed", &base]);
+                }
+                _ => {}
+            }
+            let allowed = matches!(mode, "source" | "carried_addition" | "removal");
+            let before = orbit_engine::validate_claim_source_repair(&fx.repo, &repair, &base, None);
+            assert_eq!(before.is_ok(), allowed, "precommit {mode}: {before:?}");
+            git(&fx.repo, &["add", "-A"]);
+            git(&fx.repo, &["commit", "-m", "candidate repair"]);
+            let head = fx.head();
+            let committed =
+                orbit_engine::validate_claim_source_repair(&fx.repo, &repair, &base, Some(&head));
+            assert_eq!(
+                committed.is_ok(),
+                allowed,
+                "owner acceptance {mode}: {committed:?}"
+            );
+        });
+    }
 }

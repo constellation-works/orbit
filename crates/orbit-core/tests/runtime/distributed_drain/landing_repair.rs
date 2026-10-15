@@ -521,6 +521,11 @@ impl OwnerCoordinator for ToSelf {
     }
 }
 
+#[cfg(unix)]
+mod source;
+#[cfg(unix)]
+use source::evidenced_source_stop_is_one_authenticated_claim_and_keeps_selectors;
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_landing_stopped_on_its_base_is_repaired_and_lands_under_the_same_task_scenarios,
@@ -530,3 +535,9 @@ crate::scenario_table!(
 
 #[path = "landing_retry.rs"]
 mod retry;
+
+#[cfg(unix)]
+crate::scenario_table!(
+    evidenced_source_stop_is_one_authenticated_claim_and_keeps_selectors_scenarios,
+    evidenced_source_stop_is_one_authenticated_claim_and_keeps_selectors
+);

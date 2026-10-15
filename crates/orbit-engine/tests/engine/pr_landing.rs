@@ -7805,6 +7805,7 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
     fn claim_execution_context(&self) -> Result<ClaimExecutionContext, OrbitError> {
         Ok(ClaimExecutionContext {
             footprint: vec!["file:src/feature.txt".to_string()],
+            repair: None,
             workspace_id: "ws_owner".to_string(),
             task_id: TASK_ID.to_string(),
             claim_id: "claim-landing".to_string(),

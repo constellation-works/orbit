@@ -9,6 +9,8 @@
 mod answers;
 mod attribution;
 mod auto_fix;
+pub(super) use answers::read_required_checks;
+pub(super) use auto_fix::{BlockedVerdict, blocked_verdict};
 mod body;
 mod complete;
 mod delivery;

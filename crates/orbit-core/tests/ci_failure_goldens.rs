@@ -1343,6 +1343,7 @@ fn protecting_branch_claim(
         reservation_expires_at: "2099-01-01T00:00:00Z".into(),
         phase: ExecutionClaimPhase::Claimed,
         repair: None,
+        repair_authorization: None,
     };
     let workspace_id = runtime.workspace_id().unwrap();
     {

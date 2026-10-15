@@ -163,7 +163,7 @@ fn repair_ledger_runs<H: RuntimeHost + ?Sized>(
 }
 
 /// What a `BLOCKED` pull request means to an auto-fix watcher.
-pub(super) enum BlockedVerdict {
+pub(in crate::executor::automation::vcs) enum BlockedVerdict {
     /// Checks are still running, or the head has not settled yet.
     Wait,
     /// Required checks failed: repair them.
@@ -175,7 +175,7 @@ pub(super) enum BlockedVerdict {
 /// Read a `BLOCKED` pull request for auto-fix. A review gate or an
 /// unreadable rollup stops before any check is considered, as completion
 /// already does; only policy-bound pending evidence authorizes a check wait.
-pub(super) fn blocked_verdict(
+pub(in crate::executor::automation::vcs) fn blocked_verdict(
     status: &PullRequestStatus,
     unsettled_polls: u32,
     pending_required: bool,

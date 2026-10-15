@@ -142,6 +142,11 @@ fn accepted_landing(fx: &Fixture, host: DeliveryHost) -> AcceptedLanding {
             unresolved_merge_intent: None,
             owed_hosted_checks: vec!["Protected (rust)".into()],
             automatic_repair_spent: false,
+            source_repair_authorized: false,
+            source_repair: None,
+            owner_review_certificate: None,
+            repair_footprint: Vec::new(),
+            check_recovery: Default::default(),
             candidate: orbit_types::workflow::handoff::HandoffCandidate {
                 repository: "orbit/test".into(),
                 source_branch: BRANCH.into(),

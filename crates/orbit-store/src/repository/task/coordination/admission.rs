@@ -301,6 +301,7 @@ impl TaskCommitBoundary {
                 held,
                 validation_hold,
                 ordering.gates.as_ref(),
+                ordering.repair_authorization.as_deref(),
                 reach,
             )
         };
@@ -323,6 +324,7 @@ impl TaskCommitBoundary {
         held: &BTreeMap<String, String>,
         validation_hold: &ValidationHold<'_>,
         gates: Option<&orbit_types::workflow::ValidationGates>,
+        repair_authorization: Option<&str>,
         reach: DependencyReach,
     ) -> Result<Option<AdmissionLookup>, OrbitError> {
         if let Some(row) = self.receipt_row(&identity.location().machine_id, &request.request_id)? {
@@ -505,6 +507,7 @@ impl TaskCommitBoundary {
                         .clone()
                         .ok_or_else(|| OrbitError::Store("reservation expiry missing".into()))?,
                     repair: None,
+                    repair_authorization: repair_authorization.map(str::to_string),
                 };
                 let mut admitted = receipt.clone();
                 admitted.claim = Some(claim.clone());

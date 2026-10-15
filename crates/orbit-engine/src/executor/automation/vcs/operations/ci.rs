@@ -46,11 +46,26 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
         workspace_path,
         "commit runs",
     )?;
+    let run_list = runs["workflow_runs"]
+        .as_array()
+        .ok_or_else(|| OrbitError::Execution("commit jobs: missing workflow list".into()))?;
+    if runs["total_count"]
+        .as_u64()
+        .is_none_or(|count| count > run_list.len() as u64)
+    {
+        return Err(OrbitError::Execution(
+            "commit jobs: incomplete workflow list".into(),
+        ));
+    }
     let mut jobs = Vec::new();
-    for run in runs["workflow_runs"].as_array().into_iter().flatten() {
-        let Some(run_id) = run["id"].as_u64() else {
-            continue;
-        };
+    for run in run_list {
+        if run["head_sha"].as_str() != Some(commit) {
+            return Err(OrbitError::Execution("commit jobs: foreign head".into()));
+        }
+        let run_id = run["id"]
+            .as_u64()
+            .filter(|id| *id > 0)
+            .ok_or_else(|| OrbitError::Execution("commit jobs: missing run identity".into()))?;
         let listing = gh_json(
             vec![
                 "api".to_string(),
@@ -63,7 +78,23 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
             workspace_path,
             "run jobs",
         )?;
-        for job in listing["jobs"].as_array().into_iter().flatten() {
+        let job_list = listing["jobs"]
+            .as_array()
+            .ok_or_else(|| OrbitError::Execution("commit jobs: missing job list".into()))?;
+        if listing["total_count"]
+            .as_u64()
+            .is_none_or(|count| count > job_list.len() as u64)
+        {
+            return Err(OrbitError::Execution(
+                "commit jobs: incomplete job list".into(),
+            ));
+        }
+        for job in job_list {
+            if job["head_sha"].as_str() != Some(commit) || job["run_id"].as_u64() != Some(run_id) {
+                return Err(OrbitError::Execution(
+                    "commit jobs: foreign job identity".into(),
+                ));
+            }
             let failed_step = job["steps"]
                 .as_array()
                 .into_iter()
@@ -72,12 +103,14 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
                 .and_then(|step| step["name"].as_str());
             jobs.push(json!({
                 "run_id": run_id,
+                "head_sha": commit,
                 "job_id": job["id"],
                 "workflow": run["name"],
                 "name": job["name"],
                 "status": job["status"],
                 "conclusion": job["conclusion"],
                 "failed_step": failed_step,
+                "steps": job["steps"],
             }));
         }
     }

@@ -928,7 +928,56 @@ same job passes on the moved landing tip) updates the pull request branch from t
 once; `transient` (the network or runner rule the validation gates rerun on) reruns the failed jobs
 once; `candidate` is a repairable stop whose evidence carries the signature and log excerpt. Past
 that budget, or when the jobs or log are unreadable, the landing stops in `review` with the
-classification. A branch-updated head is merged only when it is a two-parent merge of the accepted
+classification. A repeated inherited **source** failure after the single base update can instead
+use that same one claim repair budget. Explicit owner `orbit run auto --auto-fix` submission captures
+an immutable `owner-landing-repair-authority-v1` row before its worker starts. While that owner drain
+is active, pull admission pins its grant onto each admitted claim, including follower claims. The
+captured grant lasts for those deliveries; old claims, ordinary job submissions, replay/resume
+inputs, task status, provider messages and raw artifacts grant nothing. Completion authority stays
+separate. Without the captured grant and an independent review contract, source continuation is
+refused.
+
+Source admission requires a settled check failure owned by branch protection or explicitly bound
+in the accepted review certificate's `owner_owed_evidence.hosted_check`. Explicit native bindings
+come from operator-configured `native_os` host-evidence rules captured at claim admission and
+checked again at before-landing handoff acceptance; no task prose synthesizes them. The complete captured
+requirement (command, native OS and artifact identity) is retained; task prose and plain optional
+check names grant nothing. A qualified workflow/check binding must match this task, repository,
+accepted candidate and base. A consistent CLEAN/HasHooks provider state permits certificate-bound
+failures when protected checks are green; a mergeable state alongside a failed protected check
+refuses as contradictory. Exact-head GitHub Actions job reads establish the hosted execution
+identity. Admission requires a complete job listing, a completed failed job for every admitted
+failure, and a complete untruncated failed-step
+log with a real diagnostic. The owner re-reads identities, diagnostics, required checks, repository
+and remote lease before revoking the handoff. UNKNOWN/contradictory mergeability, required reviews,
+credential/permission failures, missing tools, runner/network failures, optional-only blockers and
+missing protected checks grant no source agent. Infrastructure prerequisite recovery remains the
+separate single-rerun route.
+
+`LandingSourceRepair` retains the typed cause, failed head/PR, run/job/workflow/check/step identities,
+full redacted diagnostics, and explicit repository-relative permitted source files. Files must exist as regular files in the failed tree. Scope comes from explicit diagnostic
+locations or, when those are absent, precise source-file selectors from the immutable original
+admission. Directory selectors are never expanded into a broad source grant. Traversal, metadata,
+credentials, workflows, delivery controls, guard suites and gate scripts are refused. A diagnostic
+that cannot establish a source path stays in review. The repair admission reserves the union of the
+old footprint and those explicit files without changing the task's original selectors. The fresh
+leaf authenticates the carried context against its durable claim, restores the candidate, reuses the
+same PR branch, and replaces only its failed head under a remote lease. Scope is checked before
+host commit and again at owner handoff observation: only permitted repair deltas may differ from
+the original candidate cleanly merged with the new base. Before filesystem inspection, every
+worktree path must pass lexical containment validation. Existing paths and the nearest existing
+ancestor of a removal must canonicalize inside the checkout without traversing a symlink; dangling
+links also refuse. Carried additions are compared only after those checks. Source restoration
+conflicts or branch reuse/lease refusals stop rather than silently starting fresh or opening another PR.
+
+The leaf commits, validates and independently reviews its new head. The repaired landing also owes
+every original failed protected or certificate-bound check an explicit success on that exact head, even if review copy
+or branch protection later omits it; skipped/neutral results are not native certification. A new
+head or base invalidates the source repair's certification and stops it. Its next repairable stop
+blocks with both candidates and both failures; it never mints another claim. This one claim budget
+is separate from the watcher's three PR repair attempts. Hosted rerun and branch-update budgets
+are durable per handoff, recorded before provider effects. A lost reply is reconciled by reading
+current state; redispatch never renews or blindly repeats those actions. A branch-updated head is merged only when it is a two-parent merge of the accepted
 candidate and a commit on the landing branch whose tree equals their clean `merge-tree`; the
 accepted candidate and its evidence stay the validated commit. A claimed leaf whose required
 command failed on a red base that the follower has since recorded green releases `baseline_red`

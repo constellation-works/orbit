@@ -480,6 +480,23 @@ impl crate::OrbitRuntime {
             .claim
             .as_ref()
             .ok_or_else(|| refused("original claim footprint unavailable"))?;
+        if let Some(repair) = &original.repair {
+            orbit_engine::validate_claim_source_repair(
+                &self.paths().repo_root,
+                repair,
+                &candidate.base.commit,
+                Some(&candidate.candidate.commit),
+            )?;
+            if repair.source.is_some()
+                && (candidate.source_branch != repair.candidate.source_branch
+                    || candidate.delivery != repair.candidate.delivery
+                    || candidate.repository != repair.candidate.repository)
+            {
+                return Err(refused(
+                    "source repair changed its authenticated repository, PR or branch",
+                ));
+            }
+        }
         let (new_paths, footprint_widening) = orbit_engine::validate_claim_new_paths(
             &self.paths().repo_root,
             &original.footprint,
@@ -512,7 +529,7 @@ impl crate::OrbitRuntime {
     }
 
     /// The receipt this owner recorded when it admitted `claim_id`'s claim.
-    fn claim_receipt(&self, claim_id: &str) -> Result<AdmissionReceipt, OrbitError> {
+    pub(crate) fn claim_receipt(&self, claim_id: &str) -> Result<AdmissionReceipt, OrbitError> {
         let claim = self.current_claim(claim_id)?;
         let AdmissionLookup::Found { receipt, .. } = self.admission_boundary()?.lookup_admission(
             &AdmissionIdentity::trusted_local(claim.executed_on.clone()),
@@ -737,6 +754,21 @@ impl crate::OrbitRuntime {
                 owner_os: self.host_os(),
                 expiring_tasks,
                 gates: Some(self.owner_validation_gates()),
+                repair_authorization: boundary.landing_repair_authorities()?.into_iter().find(
+                    |run_id| {
+                        self.get_job_run_backend(run_id)
+                            .ok()
+                            .flatten()
+                            .is_some_and(|run| {
+                                run.job_id == "workspace_auto_pipeline"
+                                    && matches!(
+                                        run.state,
+                                        orbit_types::workflow::JobRunState::Pending
+                                            | orbit_types::workflow::JobRunState::Running
+                                    )
+                            })
+                    },
+                ),
             },
             owner_binary_version(),
             &self.paths().repo_root,

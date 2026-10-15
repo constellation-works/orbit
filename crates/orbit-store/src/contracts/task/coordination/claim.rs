@@ -54,6 +54,9 @@ pub struct ClaimRepair {
     pub candidate: orbit_types::workflow::handoff::HandoffCandidate,
     /// The landing stop's evidence.
     pub stop_evidence: String,
+    /// Owner-authenticated source scope; absent on base/conflict repairs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<orbit_types::workflow::handoff::LandingSourceRepair>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +75,9 @@ pub struct ExecutionClaim {
     /// implementing the task from scratch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repair: Option<ClaimRepair>,
+    /// Host-captured operator drain grant, never derived from request inputs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repair_authorization: Option<String>,
 }
 
 /// Immutable leaf identity. Host labels are diagnostic; machine and run fence ownership.
@@ -94,6 +100,7 @@ pub struct ClaimInvocation {
     pub(crate) run: Option<ClaimRun>,
     pub(crate) operator: bool,
     pub(crate) handoff_observation: Option<HandoffObservation>,
+    pub(crate) source_repair: Option<orbit_types::workflow::handoff::LandingSourceRepair>,
     pub(crate) provider_hold: Option<orbit_types::workflow::ProviderFailureHold>,
 }
 
@@ -113,6 +120,7 @@ impl ClaimInvocation {
             operator: false,
             handoff_observation: None,
             provider_hold: None,
+            source_repair: None,
         }
     }
 
@@ -126,11 +134,21 @@ impl ClaimInvocation {
             operator: true,
             handoff_observation: None,
             provider_hold: None,
+            source_repair: None,
         }
     }
 }
 
 impl ClaimInvocation {
+    /// Owner-read source diagnosis. Tool payloads never construct this context.
+    pub fn with_source_repair(
+        mut self,
+        source: orbit_types::workflow::handoff::LandingSourceRepair,
+    ) -> Self {
+        self.source_repair = Some(source);
+        self
+    }
+
     /// Trusted owner-domain seam; never fill observations from worker payloads.
     pub fn with_handoff_observation(mut self, observation: HandoffObservation) -> Self {
         self.handoff_observation = Some(observation);

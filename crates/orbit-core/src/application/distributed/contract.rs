@@ -98,7 +98,7 @@ impl crate::OrbitRuntime {
     /// the owner, so the caller has to reach the owner rather than this
     /// checkout. Every owner-side drain tool, read-only ones included, comes
     /// through here, which is why the message does not talk about writes.
-    pub(super) fn ensure_distributed_owner_workspace(&self) -> Result<(), OrbitError> {
+    pub(crate) fn ensure_distributed_owner_workspace(&self) -> Result<(), OrbitError> {
         self.ensure_coordination_task_write_permitted()
             .map_err(|error| match (&error, self.coordination_write_owner()) {
                 (OrbitError::CapabilityRefused(_), Some(owner)) => {

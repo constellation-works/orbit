@@ -148,8 +148,7 @@ pub(super) fn bind(
     for item in &report.paths {
         if item.reason.trim().is_empty()
             || !paths.insert(item.path.clone())
-            || !orbit_common::fs::selector::claim_new_path_is_safe(&item.path)
-            || item.path.to_ascii_lowercase().starts_with(".github/")
+            || !orbit_common::fs::selector::ci_repair_path_is_safe(&item.path)
         {
             return Err(refused("invalid, duplicate, protected or unexplained path"));
         }
