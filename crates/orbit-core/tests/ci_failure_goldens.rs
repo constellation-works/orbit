@@ -2447,7 +2447,16 @@ fn ci_printed_test_names_and_locations_do_not_change_runtime_failure_identity() 
     );
     let later = printed
         .replace("printed_test", "another_printed_test")
-        .replace("crates/printed", "crates/other");
+        .replace("crates/printed", "crates/other")
+        .replace(
+            "  error[E0123]",
+            "  key\tvalue\t##[endgroup]\n  error[E0123]",
+        )
+        .replace("step.sh: line 8:", "step.sh:\tline 8:\t");
+    let later = later
+        .lines()
+        .map(|line| format!("2026-10-15T02:42:56Z {line}\n"))
+        .collect::<String>();
     let second = file(&runtime, vec![failure(&later, 1, &commits[1])]);
     assert_eq!(second["filed_count"], 0, "{second}");
     assert_eq!(
