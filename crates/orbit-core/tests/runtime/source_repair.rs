@@ -9,6 +9,8 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+#[path = "source_repair/association.rs"]
+mod association;
 #[path = "source_repair/fixture.rs"]
 mod fixture;
 use fixture::{Fixture, git};
@@ -130,6 +132,9 @@ fn cancelled_admission_refuses_identity_liveness_lease_and_evidence_drift() {
         "scope",
         "footprint",
         "binding",
+        "binding_task",
+        "binding_pr",
+        "binding_repo",
         "claimed_input",
         "before_head",
         "after_head",
@@ -242,9 +247,15 @@ fn cancelled_admission_refuses_identity_liveness_lease_and_evidence_drift() {
                     "{case}"
                 );
             }
-            "binding" => {
+            "binding" | "binding_task" | "binding_pr" | "binding_repo" => {
                 let mut input = input.clone();
-                input["source_repair"]["binding"]["head_sha"] = json!("a".repeat(40));
+                let (field, value) = match case {
+                    "binding_task" => ("task_id", "foreign-task".into()),
+                    "binding_pr" => ("pull_request", "18".into()),
+                    "binding_repo" => ("repository", "foreign/repository".into()),
+                    _ => ("head_sha", "a".repeat(40)),
+                };
+                input["source_repair"]["binding"][field] = json!(value);
                 assert!(
                     f.runtime
                         .run_tool_as_human("orbit.workflow.run.resume", input)
@@ -671,7 +682,7 @@ fn exhausted_budget_and_unreadable_ledger_refuse_without_run_admission() {
 }
 
 fn scope_and_cancellation_are_rechecked_before_source_effects() {
-    for cancelled in [false, true] {
+    for case in ["scope", "cancelled", "association"] {
         let f = Fixture::new();
         let result = f
             .runtime
@@ -686,7 +697,7 @@ fn scope_and_cancellation_are_rechecked_before_source_effects() {
         );
         let checkout = PathBuf::from(setup["workspace_path"].as_str().unwrap());
         let before = git(&checkout, &["branch", "--show-current"]);
-        if cancelled {
+        if case == "cancelled" {
             let mut run = f.runtime.show_job_run_observed(id).unwrap();
             run.state = JobRunState::Cancelled;
             run.finished_at = Some(Utc::now());
@@ -695,6 +706,8 @@ fn scope_and_cancellation_are_rechecked_before_source_effects() {
                 .unwrap()
                 .upsert_job_run_for_workspace(&f.runtime.workspace_id().unwrap(), &run, None)
                 .unwrap();
+        } else if case == "association" {
+            f.replace_refs(Vec::new());
         } else {
             f.runtime
                 .update_task_with_identity(
@@ -712,10 +725,12 @@ fn scope_and_cancellation_are_rechecked_before_source_effects() {
         &json!({"job_run_id":id,"task_ids":[f.task],"workspace_path":checkout,"base_sha":setup["base_sha"]}),
         false,&HashMap::new(),None).unwrap_err();
         assert!(
-            error
-                .to_string()
-                .contains("changed before source application"),
-            "{error}"
+            error.to_string().contains(if case == "association" {
+                "task PR association"
+            } else {
+                "changed before source application"
+            }),
+            "{case}: {error}"
         );
         assert_eq!(git(&checkout, &["branch", "--show-current"]), before);
         assert_eq!(

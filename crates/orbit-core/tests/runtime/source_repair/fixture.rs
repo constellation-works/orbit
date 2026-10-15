@@ -39,12 +39,31 @@ impl Fixture {
         Self::with_policy("none")
     }
     pub(super) fn with_policy(timing: &str) -> Self {
-        Self::build(timing, false)
+        Self::build(timing, false, "17", Vec::new())
     }
     pub(super) fn as_agent() -> Self {
-        Self::build("none", true)
+        Self::build("none", true, "17", Vec::new())
     }
-    fn build(timing: &str, agent: bool) -> Self {
+    pub(super) fn with_historical_pr() -> Self {
+        let fixture = Self::build(
+            "none",
+            false,
+            "4817",
+            vec![ExternalRef {
+                system: "github-pr".into(),
+                id: "4805".into(),
+                url: Some("https://github.com/owner/repository/pull/4805".into()),
+            }],
+        );
+        // The old PR is closed; recovery must observe the authenticated current
+        // publication rather than choosing a task ref by order or open status.
+        std::fs::write(fixture._root.path().join("bin/gh"), format!(
+            "#!/bin/sh\ncase \"$1 $2 $3\" in\n'pr view 4817') cat '{}' ;;\n'pr view 4805') echo '{{\"number\":4805,\"state\":\"CLOSED\",\"url\":\"https://github.com/owner/repository/pull/4805\"}}' ;;\n*) exit 99 ;;\nesac\n",
+            fixture.answer.display()
+        )).unwrap();
+        fixture
+    }
+    fn build(timing: &str, agent: bool, number: &str, refs: Vec<ExternalRef>) -> Self {
         let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let repo = root.path().join("repo");
         let global = root.path().join("global");
@@ -117,6 +136,7 @@ impl Fixture {
             }));
         let task = runtime
             .add_task(TaskAddParams {
+                external_refs: refs,
                 title: "Published repair".into(),
                 description: "Repair remaining compiler error".into(),
                 acceptance_criteria: vec!["Continue the same PR".into()],
@@ -196,7 +216,7 @@ impl Fixture {
             (
                 5,
                 "pr_open",
-                json!({"phase":"pr_open","pr_number":"17","head":branch,"base":"main","base_ref":"origin/main","base_sha":base,"pr_url":"https://github.com/owner/repository/pull/17"}),
+                json!({"phase":"pr_open","pr_number":number,"head":branch,"base":"main","base_ref":"origin/main","base_sha":base,"pr_url":format!("https://github.com/owner/repository/pull/{number}")}),
             ),
         ] {
             state.record_step(index, JobRunState::Success, Some(output.clone()), None);
@@ -236,22 +256,22 @@ impl Fixture {
                     job_run_id: Some(source.run_id.clone()),
                     external_refs: vec![ExternalRef {
                         system: "github-pr".into(),
-                        id: "17".into(),
-                        url: Some("https://github.com/owner/repository/pull/17".into()),
+                        id: number.into(),
+                        url: Some(format!("https://github.com/owner/repository/pull/{number}")),
                     }],
                     ..Default::default()
                 },
             )
             .unwrap();
         let answer = root.path().join("pr.json");
-        std::fs::write(&answer,json!({"number":17,"state":"OPEN","headRefName":branch,"headRefOid":head,"baseRefName":"main","url":"https://github.com/owner/repository/pull/17","autoMergeRequest":null,"isDraft":true}).to_string()).unwrap();
+        std::fs::write(&answer,json!({"number":number.parse::<u64>().unwrap(),"state":"OPEN","headRefName":branch,"headRefOid":head,"baseRefName":"main","url":format!("https://github.com/owner/repository/pull/{number}"),"autoMergeRequest":null,"isDraft":true}).to_string()).unwrap();
         let bin = root.path().join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let gh = bin.join("gh");
         std::fs::write(
             &gh,
             format!(
-                "#!/bin/sh\n[ \"$1 $2 $3\" = \"pr view 17\" ] || exit 99\ncat '{}'\n",
+                "#!/bin/sh\n[ \"$1 $2 $3\" = \"pr view {number}\" ] || exit 99\ncat '{}'\n",
                 answer.display()
             ),
         )
@@ -281,6 +301,29 @@ impl Fixture {
             answer,
             _env: env,
         }
+    }
+    /// Replace only isolated fixture evidence, including deliberately inconsistent refs.
+    pub(super) fn replace_refs(&self, refs: Vec<ExternalRef>) {
+        use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+        let registry =
+            TaskRegistryStore::open(&task_registry_path(&self.runtime.global_root())).unwrap();
+        orbit_store::compose::workspace_coordinated_backends(
+            registry,
+            self.runtime.workspace_id().unwrap(),
+            self.runtime.sqlite_store().unwrap().clone(),
+        )
+        .unwrap()
+        .task
+        .document
+        .update_task_document(
+            &self.task,
+            orbit_store::contracts::TaskDocumentUpdateParams {
+                actor: "fixture".into(),
+                external_refs: Some(refs),
+                ..Default::default()
+            },
+        )
+        .unwrap();
     }
     /// Model the durable host checkpoints after a reviewer correction was published.
     pub(super) fn publish_review(&mut self, landing: bool) {

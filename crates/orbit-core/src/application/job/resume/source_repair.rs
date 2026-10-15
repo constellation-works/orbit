@@ -65,6 +65,37 @@ fn field<'a>(value: &'a Value, name: &str) -> Result<&'a str, OrbitError> {
         .ok_or_else(|| refuse(format!("missing checkpoint field {name}")))
 }
 
+/// Corroborate an authenticated publication without selecting authority from
+/// reference order. Historical PRs remain intact; contradictory identities do
+/// not become valid merely because another reference matches.
+fn task_pr_association(task: &Task, number: &str, url: &str) -> Result<(), OrbitError> {
+    let mut associated = false;
+    for reference in task
+        .external_refs
+        .iter()
+        .filter(|reference| reference.system == orbit_types::task::GITHUB_PR_EXTERNAL_REF_SYSTEM)
+    {
+        if reference.id == number {
+            // Key-only references are a supported persisted format. Repository
+            // authority comes from the host checkpoints, origin and provider.
+            if reference.url.as_deref().is_some_and(|value| value != url) {
+                return Err(refuse(
+                    "task PR association has a conflicting repository or URL",
+                ));
+            }
+            associated = true;
+        } else if reference.url.as_deref() == Some(url) {
+            return Err(refuse("task PR association has a conflicting number"));
+        }
+    }
+    if !associated {
+        return Err(refuse(
+            "task PR association is missing for the authenticated publication",
+        ));
+    }
+    Ok(())
+}
+
 fn history(runtime: &OrbitRuntime, task: &str) -> Result<Vec<SourceRepairAdmission>, OrbitError> {
     orbit_types::workflow::source_repair_reservations(&runtime.get_task_history(task)?)
         .map_err(|error| refuse(format!("unreadable repair reservation: {error}")))
@@ -132,6 +163,7 @@ impl OrbitRuntime {
                 "source, task, scope or reservation changed before source application",
             ));
         }
+        task_pr_association(&task, &binding.pull_request, &binding.pull_request_url)?;
         Ok(())
     }
 
@@ -592,16 +624,14 @@ impl OrbitRuntime {
         let base_sha = field(sync, "base_sha")?;
         let base_branch = field(sync, "base")?;
         let number = field(pr, "pr_number")?;
-        if task.github_pr_number() != Some(number)
-            || adopted.as_ref().is_some_and(|binding| {
-                binding.pull_request != number
-                    || binding.base_branch != base_branch
-                    || prepared.get("remote_sha").and_then(Value::as_str)
-                        != Some(binding.head_sha.as_str())
-                    || pr.get("pr_url").and_then(Value::as_str)
-                        != Some(binding.pull_request_url.as_str())
-            })
-            || field(worktree, "job_run_id")? != source_id
+        if adopted.as_ref().is_some_and(|binding| {
+            binding.pull_request != number
+                || binding.base_branch != base_branch
+                || prepared.get("remote_sha").and_then(Value::as_str)
+                    != Some(binding.head_sha.as_str())
+                || pr.get("pr_url").and_then(Value::as_str)
+                    != Some(binding.pull_request_url.as_str())
+        }) || field(worktree, "job_run_id")? != source_id
             || field(prepared, "phase")? != "prepare"
             || field(sync, "phase")? != "rebase"
             || field(push, "phase")? != "push"
@@ -714,8 +744,9 @@ impl OrbitRuntime {
         }) {
             return Err(refuse("adopted source repository identity changed"));
         }
-        let status = self.read_pull_request_status(number)?;
         let url = format!("https://github.com/{repository}/pull/{number}");
+        task_pr_association(&task, number, &url)?;
+        let status = self.read_pull_request_status(number)?;
         if status.url.as_deref() != Some(&url)
             || status.number.map(|n| n.to_string()).as_deref() != Some(number)
             || status.state.as_deref() != Some("OPEN")
