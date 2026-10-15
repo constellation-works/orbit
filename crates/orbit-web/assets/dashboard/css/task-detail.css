@@ -145,8 +145,7 @@
   color: var(--fg-dim);
   font-size: 11px;
 }
-/* The drain part leads the card: the pool dot and words, the row dot's badge
-   text, then one labelled line per holder, lock or dependency. */
+/* The pool leads the card, followed by linked blockers or a concise cause. */
 .readiness-drain {
   display: flex;
   flex-direction: column;
@@ -544,13 +543,17 @@ input.field-editor-input {
 .row-detail .file-list .context-contended-active .selector-dim {
   color: #fca5a5;
 }
-.context-contention {
-  display: block;
-  color: var(--fg-dim);
-  font-size: 10px;
+.row-detail .file-list .context-selector {
+  text-decoration: none;
+  color: inherit;
 }
-.context-contention-unknown {
-  color: var(--fg-dim);
+.row-detail .file-list .context-selector:hover { text-decoration: underline; }
+.row-detail .file-list .context-selector:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.row-detail .file-list .context-contention-unknown .context-selector {
+  text-decoration: underline dotted;
 }
 
 .row-detail .history-line {

@@ -18,6 +18,9 @@ const tasks = [
   { id: 'CTX-4', status: 'review', context_files: selectors },
 ].map(task => ({ ...task, title: `Context fixture ${task.id}`, priority: 'medium', complexity: 'low',
   description: 'Disposable browser scenario', plan: 'Inspect contexts', comments: [], history: [], artifacts: [], tags: [], status_transitions: [] }));
+let readiness = { task_id: 'CTX-1', eligible: false, reason: 'context_lock_conflict',
+  conflicts: [{ locking_task_id: 'CTX-2', requested_file: 'file:src/shared.rs' }, { blocking_task_id: 'CTX-3', requested_file: 'dir:src' }],
+  blocking_task_ids: ['CTX-3', 'CTX-2'], detail: 'waits on CTX-2: file:src/shared.rs' };
 let locksUnavailable = false;
 let matches = true;
 const list = items => ({ items, total: items.length, limit: 100, truncated: false });
@@ -37,6 +40,7 @@ function locks(workspace) {
 }
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
+  url.pathname = url.pathname.replace(/^\/api\/on\/[^/]+\//, '/api/');
   if (url.pathname.startsWith('/api/')) {
     res.setHeader('content-type', 'application/json');
     let payload = list([]);
@@ -44,6 +48,11 @@ const server = http.createServer((req, res) => {
       { id: 'ws_fixture', name: 'fixture', status: 'active', is_default: true },
       { id: 'ws_other', name: 'other', status: 'active' },
     ];
+    if (url.pathname === '/api/hosts') payload = { generation: 1, hosts: [
+      { name: 'serving-host', machine_id: 'hm_serving', local: true, reachable: true },
+      { name: 'fixture-host', machine_id: 'hm_fixture', local: false, reachable: true, workspaces: [] },
+    ], forward_writes: { authorized: true, reason: null } };
+    if (url.pathname === '/api/hosts/fixture-host/connection') payload = { reachable: true, forward_writes: { authorized: true, reason: null } };
     if (url.pathname === '/api/crews') payload = { crews: [], default_crew: null };
     if (url.pathname === '/api/tasks') payload = list(tasks);
     if (url.pathname === '/api/tasks/all') payload = list(tasks.map(task => ({ ...task, workspace_id: 'ws_fixture', workspace_name: 'fixture' })));
@@ -53,7 +62,7 @@ const server = http.createServer((req, res) => {
       if (locksUnavailable) { res.writeHead(503); res.end(JSON.stringify({ error: 'lock read unavailable' })); return; }
       payload = locks(url.searchParams.get('workspace'));
     }
-    if (url.pathname === '/api/workflows/auto/readiness') payload = { tasks: [], capacity: {} };
+    if (url.pathname === '/api/workflows/auto/readiness') payload = { tasks: [readiness], capacity: {} };
     res.end(JSON.stringify(payload));
     return;
   }
@@ -70,13 +79,13 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
   const errors = [];
   page.on('pageerror', error => errors.push(String(error)));
-  await page.goto(`http://127.0.0.1:${server.address().port}/?workspace=ws_fixture#tasks`);
+  await page.goto(`http://127.0.0.1:${server.address().port}/?host=fixture-host&workspace=ws_fixture&window=24h#tasks`);
   const open = async id => {
     if (!await page.locator(`#detail-${id}`).count()) await page.locator(`[data-key="task-${id}"] .title`).click();
     await page.locator(`#detail-${id} .file-list`).waitFor();
   };
   const refresh = async () => {
-    const response = page.waitForResponse(response => new URL(response.url()).pathname === '/api/tasks/locks');
+    const response = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/tasks/locks'));
     await page.locator('#refresh-btn').click();
     await response;
     await page.waitForFunction(() => !document.getElementById('refresh-btn').disabled);
@@ -86,13 +95,26 @@ try {
   await page.waitForFunction(() => document.querySelectorAll('#detail-CTX-1 .context-contended-backlog').length === 3);
   assert.equal(await highlights('CTX-1').count(), 3, 'unrelated entry stays normal');
   await page.evaluate(async () => { (await import('/static/js/task-runtime.js')).setTaskLocks(null); });
-  await page.locator('#detail-CTX-1 .context-contention-unknown').waitFor();
+  await page.locator('#detail-CTX-1 .context-contention-unknown').first().waitFor();
+  assert(((await page.locator('#detail-CTX-1 .context-selector').first().getAttribute('aria-label')) || '').includes('Contention unknown'), 'unknown data is accessible without extra context text');
   await refresh();
   await page.waitForFunction(() => document.querySelectorAll('#detail-CTX-1 .context-contended-backlog').length === 3);
   assert.deepEqual(await page.locator('#detail-CTX-1 .context-selector').allTextContents(), selectors, 'selector text remains intact');
-  const labels = await page.locator('#detail-CTX-1 .context-contention').allTextContents();
-  assert(labels.every(label => label.includes('CTX-2') && label.includes('dir:src')), 'visible explanations name contenders and matching selectors');
-  assert(await page.locator('#detail-CTX-1 .context-contention a').first().getAttribute('href'), 'contenders use task links');
+  assert.equal(await page.locator('#detail-CTX-1 .context-contention').count(), 0, 'context contains selectors alone');
+  const assertScoped = async (locator, hash) => {
+    const href = new URL(await locator.getAttribute('href'), page.url());
+    assert.equal(href.hash, hash);
+    assert.equal(href.searchParams.get('host'), 'fixture-host');
+    assert.equal(href.searchParams.get('workspace'), 'ws_fixture');
+    assert.equal(href.searchParams.get('window'), '24h');
+  };
+  for (const link of await page.locator('#detail-CTX-1 .context-selector').all()) await assertScoped(link, '#tasks?open=CTX-1');
+  const drain = page.locator('#detail-CTX-1 .readiness-drain');
+  await drain.locator('a').first().waitFor();
+  assert.deepEqual(await drain.locator('a').allTextContents(), ['CTX-2', 'CTX-3'], 'all unique blockers linked');
+  for (const id of ['CTX-2', 'CTX-3']) await assertScoped(drain.getByRole('link', { name: id, exact: true }), `#tasks?open=${id}`);
+  assert.equal(await drain.textContent(), 'Waiting on locksWaits onCTX-2CTX-3', 'one category and one wait, without paths or raw reason');
+  await drain.screenshot({ path: path.join(evidence, 'multiple-blockers.png') });
   const measureContrast = node => {
     const rgb = color => color.match(/[\d.]+/g).slice(0, 3).map(Number);
     const luminance = color => rgb(color).map(value => { value /= 255; return value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4; }).reduce((sum, value, index) => sum + value * [.2126, .7152, .0722][index], 0);
@@ -106,7 +128,7 @@ try {
   results.push({ scenario: 'backlog, directory/symbol rows, unrelated, links, contrast', passed: true, contrast });
   await open('CTX-2');
   assert.equal(await page.locator('#detail-CTX-2 .context-contended-active').count(), 1);
-  assert(!(await page.locator('#detail-CTX-2 .context-contention').textContent()).includes('CTX-2'), 'self excluded');
+  await assertScoped(page.locator('#detail-CTX-2 .context-selector'), '#tasks?open=CTX-2');
   const red = await page.locator('#detail-CTX-2 .context-selector').evaluate(measureContrast);
   assert.notEqual(red.fg, contrast.fg, 'active contention uses distinct red hue');
   assert(red.ratio >= 4.5, 'red text meets normal-text contrast');
@@ -137,7 +159,7 @@ try {
   await page.waitForFunction(() => document.querySelectorAll('#detail-CTX-1 .context-contended-backlog').length === 3);
   locksUnavailable = true;
   await refresh();
-  await page.locator('#detail-CTX-1 .context-contention-unknown').waitFor();
+  await page.locator('#detail-CTX-1 .context-contention-unknown').first().waitFor();
   assert.equal(await highlights('CTX-1').count(), 0, 'failed read clears stale highlights');
   locksUnavailable = false;
   await refresh();
@@ -152,16 +174,40 @@ try {
   results.push({ scenario: 'viewed/contender context and status refresh, unknown data, failure/recovery, preserved editor', passed: true });
   await page.locator('#detail-CTX-1 .field-editor .cancel').click();
   await page.getByRole('button', { name: 'Edit context files for CTX-1', exact: true }).click();
-  assert.equal(await page.getByRole('textbox', { name: 'Edit context files for CTX-1', exact: true }).inputValue(), selectors.join('\n'), 'editing contains selectors without explanations');
+  assert.equal(await page.getByRole('textbox', { name: 'Edit context files for CTX-1', exact: true }).inputValue(), selectors.join('\n'), 'editing contains selectors alone');
   await refresh();
   assert.equal(await page.getByRole('textbox', { name: 'Edit context files for CTX-1', exact: true }).inputValue(), selectors.join('\n'));
   await page.locator('#detail-CTX-1 .field-editor .cancel').click();
   for (const width of [1440, 375]) {
     await page.setViewportSize({ width, height: 1100 });
+    await drain.screenshot({ path: path.join(evidence, `readiness-${width}.png`) });
     const overflow = await page.locator('#detail-CTX-1 .file-list').evaluate(node => node.scrollWidth > node.clientWidth + 1);
     assert.equal(overflow, false, `selectors wrap at ${width}`);
   }
   await page.locator('#detail-CTX-1 .field-block').filter({ has: page.locator('.file-list') }).screenshot({ path: path.join(evidence, 'narrow.png'), animations: 'disabled' });
+  for (const [name, entry, text, links] of [
+    ['absent-holder', { reason: 'context_lock_conflict', conflicts: [{ requested_file: 'file:CTX-999.rs' }] }, 'Lock holder unavailable', []],
+    ['tasks-and-run', { reason: 'conflict_deferred', conflicts: [{ locking_task_id: 'CTX-2', blocking_task_id: 'CTX-3' }], run_ids: ['jrun-first'] }, 'Waits on', ['CTX-2', 'CTX-3', 'jrun-first']],
+    ['live-runs', { reason: 'claimed_by_live_child', run_ids: ['jrun-first', 'jrun-second'] }, 'Waits on', ['jrun-first', 'jrun-second']],
+    ['dependencies', { reason: 'unmet_dependency', dependencies: [{ task_id: 'CTX-2', status: 'in-progress' }, { task_id: 'CTX-3', status: 'review' }] }, 'Depends on', ['CTX-2', 'CTX-3']],
+    ['capacity', { reason: 'capacity_saturated' }, 'no free slot', []],
+    ['host', { reason: 'host_os_mismatch', detail: 'requires os:macos' }, 'needs macos host', []],
+    ['other', { reason: 'future_server_reason', detail: 'Admission is waiting for operator input' }, 'future server reason', []],
+  ]) {
+    readiness = { task_id: 'CTX-1', eligible: false, ...entry };
+    await refresh();
+    await page.waitForFunction(text => document.querySelector('#detail-CTX-1 .readiness-drain')?.textContent.includes(text), text);
+    assert.deepEqual(await drain.locator('a').allTextContents(), links, name);
+    assert(!(await drain.textContent()).includes('file:'), 'never infer blockers from paths');
+    assert(!(await page.locator('#detail-CTX-1 .readiness-list').textContent()).includes('Ready: nothing'), 'wait never implies eligibility');
+    for (const link of await drain.locator('a').all()) {
+      const id = await link.textContent();
+      await assertScoped(link, id.startsWith('jrun-') ? `#runs?run_id=${id}` : `#tasks?open=${id}`);
+    }
+    assert.equal(await drain.evaluate(node => node.scrollWidth > node.clientWidth + 1), false, `${name} wraps at narrow width`);
+    await drain.screenshot({ path: path.join(evidence, `${name}.png`) });
+  }
+  results.push({ scenario: 'multiple blockers, absent holder, multiple runs, dependencies, capacity, host and unknown reasons, scoped links', passed: true });
   await page.evaluate(async () => { (await import('/static/js/common.js')).setWorkspace('ws_other'); });
   await refresh();
   await open('CTX-1');
@@ -170,7 +216,7 @@ try {
   await page.locator('#refresh-btn').click();
   await page.locator('[data-key="task-CTX-1"] .title').waitFor();
   await open('CTX-1');
-  await page.locator('#detail-CTX-1 .context-contention-unknown').waitFor();
+  await page.locator('#detail-CTX-1 .context-contention-unknown').first().waitFor();
   results.push({ scenario: 'context editing, narrow wrapping, workspace switch, unknown aggregate scope', passed: true });
   assert.deepEqual(errors, [], 'no browser runtime errors');
   fs.writeFileSync(path.join(evidence, 'results.json'), JSON.stringify({ passed: true, results }, null, 2));

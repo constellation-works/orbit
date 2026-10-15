@@ -415,8 +415,9 @@ assert.ok(
   'empty-to-populated refresh renders the selector',
 );
 const activeContention = contextDraftDetail.querySelector('.context-contended-active');
-assert.ok(activeContention.textContent.includes('ORB-38'), 'the refreshed selector shows its active contender');
-assert.ok(activeContention.textContent.includes('file:src/shared.rs'), 'the contention names the matching selector');
+assert.ok(!activeContention.textContent.includes('ORB-38'), 'contention adds no blocker metadata');
+assert.ok(activeContention.querySelector('a.context-selector').href.includes('open=ORB-37'), 'the context links to its owning task');
+assert.ok(activeContention.textContent.includes('file:src/') && activeContention.textContent.includes('shared.rs'), 'the selector text remains intact');
 assert.equal(contextDraftDetail.querySelector('.field-editor-input'), descriptionDraft, 'refresh preserves the separate editor control');
 assert.equal(descriptionDraft.value, 'Unsaved description', 'refresh preserves the editor text');
 assert.equal(document.activeElement, descriptionDraft, 'refresh preserves editor focus');
@@ -461,8 +462,8 @@ assert.equal(dotOf('ORB-31').dataset.pool, 'eligible');
 assert.equal(dotOf('ORB-31').getAttribute('aria-label'), 'Eligible now', 'an eligible task says so');
 assert.ok(rowFor('ORB-31').querySelector('.task-quick').classList.contains('ready'), 'Ship reads ready when nothing holds the task');
 assert.equal(dotOf('ORB-32').dataset.pool, 'locks');
-assert.equal(dotOf('ORB-32').getAttribute('aria-label'), 'Waiting on locks: waits on ORB-77 · lock', 'a lock wait names the holder');
-assert.ok(dotOf('ORB-32').title.includes('Lock: file:docs/CONFIG.md') && dotOf('ORB-32').title.includes('context_lock_conflict'), `the lock detail is in the tooltip: ${dotOf('ORB-32').title}`);
+assert.equal(dotOf('ORB-32').getAttribute('aria-label'), 'Waiting on locks: waits on ORB-77', 'a lock wait names the holder');
+assert.equal(dotOf('ORB-32').title, 'Waits on ORB-77', 'the tooltip names the holder without raw lock metadata');
 assert.ok(!rowFor('ORB-32').querySelector('.task-quick').classList.contains('ready'), 'Ship stays quiet while the task waits');
 assert.equal(dotOf('ORB-33').dataset.pool, 'other');
 assert.equal(dotOf('ORB-33').getAttribute('aria-label'), 'Waiting, other: needs macos host', 'a host wait names the OS');
@@ -565,47 +566,48 @@ assert.deepEqual(
 );
 assert.ok(readinessReads.every(read => read.workspace === 'ws_orbit'), 'in the selected workspace');
 
-// Waiting on a lock: the holder links to its task, with the contested selector.
-assert.deepEqual(cardHead('ORB-41'), ['', 'Waiting on locks', 'waits on ORB-77 · lock']);
+// Waiting on a lock links its holder without exposing raw lock metadata.
+assert.deepEqual(cardHead('ORB-41'), ['', 'Waiting on locks']);
 const holderLink = readinessCard('ORB-41').querySelector('a.relation-target');
 assert.equal(holderLink.textContent, 'ORB-77');
 assert.ok(holderLink.href.includes('open=ORB-77'), `the holder is a link to its task: ${holderLink.href}`);
-assert.ok(readinessCard('ORB-41').textContent.includes('file:docs/CONFIG.md'), 'the contested selector is named');
-assert.ok(readinessCard('ORB-41').textContent.includes('Reason: context_lock_conflict'), 'the raw reason is kept');
+assert.ok(!readinessCard('ORB-41').textContent.includes('file:docs/CONFIG.md'), 'raw lock paths do not crowd readiness');
+assert.ok(!readinessCard('ORB-41').textContent.includes('Reason:'), 'readiness does not repeat raw reason codes');
 assert.ok(!readinessCard('ORB-41').textContent.includes('Ready: nothing is missing.'), 'a waiting task is never Ready');
 assert.ok(readinessCard('ORB-41').textContent.includes('No preparation gaps.'));
 
 // Waiting on capacity.
-assert.deepEqual(cardHead('ORB-42'), ['', 'Waiting on capacity', 'no free slot']);
-assert.ok(readinessCard('ORB-42').textContent.includes('Reason: capacity_saturated'));
+assert.deepEqual(cardHead('ORB-42'), ['', 'Waiting on capacity']);
+assert.ok(readinessCard('ORB-42').textContent.includes('no free slot'));
 
 // A red base: "base red", with the command and base sha from the hold.
-assert.deepEqual(cardHead('ORB-43'), ['', 'Waiting, other', 'base red']);
+assert.deepEqual(cardHead('ORB-43'), ['', 'Waiting, other']);
 assert.ok(readinessCard('ORB-43').textContent.includes('make ci-test-affected') && readinessCard('ORB-43').textContent.includes('1a2b3c4d'), 'the hold names its command and red base');
-assert.ok(readinessCard('ORB-43').textContent.includes('Reason: baseline_red_hold'));
+assert.ok(readinessCard('ORB-43').textContent.includes('base red'));
 
 // Eligible with nothing missing is the only Ready.
-assert.deepEqual(cardHead('ORB-44'), ['', 'Eligible now', 'nothing holds it']);
+assert.deepEqual(cardHead('ORB-44'), ['', 'Eligible now']);
 assert.ok(readinessCard('ORB-44').textContent.includes('Ready: nothing is missing.'), 'an eligible task with no gaps is Ready');
 
 // Unmet dependencies: each linked, with its status.
-assert.deepEqual(cardHead('ORB-45'), ['', 'Waiting, other', 'waits on deps']);
+assert.deepEqual(cardHead('ORB-45'), ['', 'Waiting, other']);
 const dependencies = readinessCard('ORB-45').querySelectorAll('.readiness-dependency').map(node => node.textContent);
 assert.deepEqual(dependencies, ['ORB-50in-progress', 'ORB-51proposed'], 'each dependency is listed with its status');
 assert.deepEqual(readinessCard('ORB-45').querySelectorAll('.readiness-dependency a.relation-target').map(link => link.textContent), ['ORB-50', 'ORB-51']);
 
 // Eligible, but a preparation gap stays listed in the same card and Ready is not claimed.
-assert.deepEqual(cardHead('ORB-46'), ['', 'Eligible now', 'nothing holds it']);
+assert.deepEqual(cardHead('ORB-46'), ['', 'Eligible now']);
 assert.ok(readinessCard('ORB-46').querySelector('.readiness-gap').textContent.includes('No plan yet'), 'the gap stays in the card');
 assert.ok(!readinessCard('ORB-46').textContent.includes('Ready: nothing is missing.'));
 
-// An unknown reason keeps its raw code and detail.
-assert.deepEqual(cardHead('ORB-47'), ['', 'Waiting, other', 'brand new wait']);
+// An unknown reason keeps its readable cause and detail.
+assert.deepEqual(cardHead('ORB-47'), ['', 'Waiting, other']);
 assert.ok(readinessCard('ORB-47').textContent.includes('something the dashboard has never heard of'));
-assert.ok(readinessCard('ORB-47').textContent.includes('Reason: brand_new_wait'));
+assert.ok(readinessCard('ORB-47').textContent.includes('brand new wait'));
 
 // A proposed task waits for approval.
-assert.deepEqual(cardHead('ORB-48'), ['', 'Waiting, other', 'awaits approval']);
+assert.deepEqual(cardHead('ORB-48'), ['', 'Waiting, other']);
+assert.ok(readinessCard('ORB-48').textContent.includes('awaits approval'), 'a proposed task still names approval as its cause');
 
 // No answer and no snapshot: the card says readiness is unknown, never Ready.
 assert.ok(readinessCard('ORB-49').textContent.includes('Drain readiness unknown: readiness unavailable.'), readinessCard('ORB-49').textContent);
@@ -619,11 +621,11 @@ drainWaits.setDrainReadiness({ tasks: [
 ] });
 paintCards();
 for (const id of ['ORB-41', 'ORB-42', 'ORB-43', 'ORB-44', 'ORB-45']) {
-  const [, pool, text] = cardHead(id);
+  const [, pool] = cardHead(id);
   const dotLabel = dotOf(id).getAttribute('aria-label');
-  assert.ok(dotLabel === pool || dotLabel === `${pool}: ${text}`, `${id}: dot "${dotLabel}" matches card "${pool}: ${text}"`);
+  assert.ok(dotLabel === pool || dotLabel.startsWith(`${pool}: `), `${id}: dot "${dotLabel}" matches card pool "${pool}"`);
 }
-assert.deepEqual(cardHead('ORB-49'), ['', 'Waiting on capacity', 'no free slot'], 'the snapshot entry stands in');
+assert.deepEqual(cardHead('ORB-49'), ['', 'Waiting on capacity'], 'the snapshot entry stands in');
 for (const item of cardTasks) {
   const title = rowFor(item.id).querySelector('button.title');
   title.parentNode.dispatch('click', { target: title });
@@ -712,7 +714,7 @@ heldReads.get('ORB-150').resolve(readinessResponse({ tasks: [pinnedSuccessEntry]
 heldReads.delete('ORB-150');
 await settleReads();
 assert.notEqual(pinnedWrap(), pendingSuccessWrap, 'a settled pinned answer invalidates its wrapper');
-assert.deepEqual(pinnedCardHead(), ['', 'Eligible now', 'nothing holds it'], 'a pinned proposed or backlog task shows its completed answer');
+assert.deepEqual(pinnedCardHead(), ['', 'Eligible now'], 'a pinned proposed or backlog task shows its completed answer');
 assert.ok(pinnedReadiness().textContent.includes('Ready: nothing is missing.'));
 assert.equal(JSON.stringify(pinnedSuccessTask), pinnedSuccessBefore, 'the readiness repaint needs no task field change');
 assert.deepEqual(pinnedReads, ['ORB-150'], 'settling readiness does not issue another per-task read');
@@ -746,14 +748,14 @@ assert.equal(readinessRepaints.length, 1, 'a fallback snapshot repaints a pinned
 assert.equal(pinnedWrap(), draftWrap, 'fallback repaint preserves the pinned wrapper holding a draft');
 assert.equal(pinnedWrap().querySelector('.comment-form textarea'), draftTextarea, 'fallback repaint preserves the live draft control');
 assert.equal(draftTextarea.value, 'keep this unsent draft', 'fallback repaint preserves the unsent text');
-assert.deepEqual(pinnedCardHead(), ['', 'Waiting on locks', 'waits on ORB-88 · lock'], 'the failed read now shows the known snapshot state');
+assert.deepEqual(pinnedCardHead(), ['', 'Waiting on locks'], 'the failed read now shows the known snapshot state');
 const pinnedCapacity = { task_id: 'ORB-151', status: 'backlog', eligible: false, reason: 'capacity_saturated', active_run_ids: ['jrun-7'] };
 drainWaits.setDrainReadiness({ tasks: [pinnedCapacity] });
 assert.equal(readinessRepaints.length, 2, 'a changed fallback answer repaints again');
 assert.equal(pinnedWrap(), draftWrap, 'a second fallback repaint still preserves the draft wrapper');
 assert.equal(pinnedWrap().querySelector('.comment-form textarea'), draftTextarea, 'a second fallback repaint keeps the same control');
 assert.equal(draftTextarea.value, 'keep this unsent draft');
-assert.deepEqual(pinnedCardHead(), ['', 'Waiting on capacity', 'no free slot'], 'the card shows the current fallback snapshot');
+assert.deepEqual(pinnedCardHead(), ['', 'Waiting on capacity'], 'the card shows the current fallback snapshot');
 stopPinnedReadiness();
 drainWaits.setDrainReadiness({ tasks: [] });
 clearPinnedExternalTask(pinnedContext);
@@ -820,11 +822,18 @@ assert.equal(byId['tasks-body'].querySelector('#detail-ORB-155'), ordinaryFailur
 assert.equal(ordinaryFailureDraft.detail.querySelector('.comment-form textarea'), ordinaryFailureDraft.textarea, 'fallback repaint preserves the draft textarea');
 assert.equal(ordinaryFailureDraft.textarea.value, 'keep this ordinary draft', 'fallback repaint preserves unsent text');
 assert.equal(document.activeElement, ordinaryFailureDraft.textarea, 'fallback repaint preserves textarea focus');
-assert.deepEqual(cardHead('ORB-155'), ['', 'Waiting on locks', 'waits on ORB-88 · lock'], 'an ordinary draft shows the fallback lock snapshot');
+assert.deepEqual(cardHead('ORB-155'), ['', 'Waiting on locks'], 'an ordinary draft shows the fallback lock snapshot');
+// A run blocker can change while the task holders stay identical. Both the
+// snapshot notification and the draft's fallback card must follow that change.
+for (const runId of ['jrun-blocker-first', 'jrun-blocker-second']) {
+  drainWaits.setDrainReadiness({ tasks: [{ ...ordinaryLock, run_ids: [runId] }] });
+  assert.deepEqual(readinessCard('ORB-155').querySelectorAll('.readiness-drain a').map(link => link.textContent), ['ORB-88', runId], 'refresh links every task and the current run blocker');
+  assert.equal(ordinaryFailureDraft.textarea.value, 'keep this ordinary draft');
+}
 const ordinaryCapacity = { task_id: 'ORB-155', status: 'backlog', eligible: false, reason: 'capacity_saturated', active_run_ids: ['jrun-8'] };
 drainWaits.setDrainReadiness({ tasks: [ordinaryCapacity] });
-assert.equal(ordinaryReadinessRepaints, 2, 'a changed fallback answer repaints again');
-assert.deepEqual(cardHead('ORB-155'), ['', 'Waiting on capacity', 'no free slot'], 'the ordinary draft shows the current fallback snapshot');
+assert.equal(ordinaryReadinessRepaints, 4, 'changed run blockers and capacity each repaint the fallback');
+assert.deepEqual(cardHead('ORB-155'), ['', 'Waiting on capacity'], 'the ordinary draft shows the current fallback snapshot');
 assert.equal(ordinaryFailureDraft.detail.querySelector('.comment-form textarea'), ordinaryFailureDraft.textarea, 'a second fallback repaint retains the same textarea');
 assert.equal(ordinaryFailureDraft.textarea.value, 'keep this ordinary draft');
 assert.equal(document.activeElement, ordinaryFailureDraft.textarea);
