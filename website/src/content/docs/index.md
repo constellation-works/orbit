@@ -1,6 +1,6 @@
 ---
 title: What Orbit Is
-description: "Orbit is a local-first runtime for coding agents. Your agent files a task over MCP, Orbit ships it in an isolated worktree and lands it, with review after landing."
+description: "Orbit is a local-first runtime for coding agents. Your agent files a task over MCP, Orbit ships it in an isolated worktree and lands it, with optional review after landing."
 template: splash
 prev: false
 next: false
@@ -12,7 +12,7 @@ next: false
   <div class="orbit-hero-copy">
     <a class="orbit-hero-release" href="/changelog/"><span class="orbit-hero-release-tag">Early access</span><span>What shipped in the latest release</span><span aria-hidden="true">→</span></a>
     <h1 id="_top" class="orbit-hero-headline">Agents write. Orbit delivers.</h1>
-    <p class="orbit-hero-lede">Orbit is a local-first runtime for coding agents. Ask the agent you already use for a change: it files a scoped task, Orbit runs it in an isolated worktree and lands it, and review runs after landing so the queue keeps moving. Every step is on the record.</p>
+    <p class="orbit-hero-lede">Orbit is a local-first runtime for coding agents. Ask the agent you already use for a change: it files a scoped task, Orbit runs it in an isolated worktree and lands it. Enable review after landing to check the results while the queue keeps moving. Every step is on the record.</p>
     <div class="orbit-hero-actions">
       <a class="orbit-button primary" href="/getting-started/">Get started →</a>
       <a class="orbit-button" href="/how-to/mcp-integration/">Connect your agent</a>
@@ -99,7 +99,7 @@ next: false
   </div>
   <div class="orbit-guarantee">
     <div class="orbit-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M6 8.5v7"/><path d="M8.5 6H12a3.5 3.5 0 0 1 3.5 3.5"/></svg></div>
-    <div><h2>Code lands fast, and review follows</h2><p>Changes land on <code>agent-main</code> without a review gate. CI is a signal, not a blocker, and independent review runs after landing, with findings coming back as tasks. Review before landing is optional: turn on <code>review.before_pr</code> or <code>review.before_landing</code> if you want a gate.</p></div>
+    <div><h2>Code lands fast, with optional review</h2><p>Changes land on <code>agent-main</code> without a review gate. CI is a signal, not a blocker. Enable <code>delivery-code-review</code> to review batches after landing and file findings as tasks; it is off by default. Review before landing is optional: turn on <code>review.before_pr</code> or <code>review.before_landing</code> if you want a gate. Protected branches still enforce their required checks and approvals.</p></div>
   </div>
   <div class="orbit-guarantee">
     <div class="orbit-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h11"/><path d="M4 12h11"/><path d="M4 19h7"/><path d="m16 18 2 2 4-4"/></svg></div>
