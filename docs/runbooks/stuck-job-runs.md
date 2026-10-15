@@ -426,6 +426,26 @@ definition snapshot needs its job in the catalog (`orbit job list --all`). Refer
 activities still resolve through the current activity catalog.
 A run with no successful checkpoints degrades to a full replay.
 
+## A cancelled published source repair
+
+An operator source-repair admission authorizes one attempt. Generic resume
+cannot restart that attempt. If a repair publishes a new head on the original
+PR and is then cancelled with its task still in review, inspect the cancelled
+repair run through `orbit.workflow.run.resume` with
+`source_repair: {action: "inspect", task_id: "<task>"}` and the run's `id`.
+Submit that fresh binding with a new `request_key` and a diagnosis of the
+remaining work to authorize another attempt.
+
+Inspection authenticates the repair's successful `resume_candidate` branch
+adoption against its immutable operator admission, durable reservation and run
+link. Its temporary setup branch may differ from the original PR branch. The
+task must still belong to that exact stopped owner-local run, and the retained
+branch, published lease, repository and open PR must agree. Missing or changed
+adoption or admission evidence refuses recovery. An old request only returns
+its existing run; it never restarts a cancelled worker. Requests for an already
+reserved published head are refused, and cancelled attempts keep their charge
+against the shared per-PR repair budget.
+
 ## A task held for a red base
 
 Sometimes a run stops at `validate` with `[baseline_red]` and ends `held`, not

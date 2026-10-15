@@ -12,8 +12,11 @@ use std::path::PathBuf;
 #[path = "source_repair/fixture.rs"]
 mod fixture;
 use fixture::{Fixture, git};
+#[path = "source_repair/generations.rs"]
+mod generations;
 #[path = "source_repair/replay.rs"]
 mod replay;
+use generations::cancelled_published_repair_accepts_fresh_generation;
 use replay::lost_spawn_reply_reconciles_the_reserved_run_after_older_retries;
 
 fn cancelled_candidate_requires_explicit_intent_and_continues_same_branch() {
@@ -765,6 +768,7 @@ fn model_context_and_forged_run_inputs_cannot_grant_repair_authority() {
 
 crate::scenario_table!(
     cancelled_source_repair_scenarios,
+    cancelled_published_repair_accepts_fresh_generation,
     cancelled_candidate_requires_explicit_intent_and_continues_same_branch,
     cancelled_admission_refuses_identity_liveness_lease_and_evidence_drift,
     current_policy_is_captured_and_review_runs_at_its_scheduled_boundary,
