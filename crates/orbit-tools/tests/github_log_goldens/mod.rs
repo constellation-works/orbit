@@ -181,10 +181,10 @@ fn mid_log_nextest_blocks_survive_independent_command_and_display_limits() {
     let block = "FAIL [ 0.123s] (2021/2810) suite failing_test\n──────── STDOUT ────────\noutput from the failing test\n──────── STDERR ────────\nthread 'failing_test' panicked at tests/sample.rs:12:3:\nexpected a completed operation\n";
     let padding = "PASS [ 0.001s] suite passing_test\n".repeat(32_768);
     for (prefix, suffix) in [
-        ("##[group]Run cargo nextest run\n".to_string(), "##[error]Process completed with exit code 100.\n"),
+        ("##[group]Run cargo nextest run\n##[endgroup]\n".to_string(), "##[error]Process completed with exit code 100.\n"),
         (String::new(), ""),
-        (format!("{}\n##[group]Run cargo nextest run\n", "unrelated".repeat(4096)), "##[error]Process completed with exit code 100.\n"),
-        ("##[group]Run earlier\n##[error]Process completed with exit code 1.\n##[group]Run cargo nextest run\n".to_string(), "##[error]Process completed with exit code 100.\n"),
+        (format!("{}\n##[group]Run cargo nextest run\n##[endgroup]\n", "unrelated".repeat(4096)), "##[error]Process completed with exit code 100.\n"),
+        ("##[group]Run earlier\n##[endgroup]\n##[error]Process completed with exit code 1.\n##[group]Run cargo nextest run\n##[endgroup]\n".to_string(), "##[error]Process completed with exit code 100.\n"),
     ] {
         let raw = format!("{prefix}{padding}{block}{padding}Summary [ 1.0s] 2810 tests run: 1 failed\n{suffix}");
         assert!(raw.len() > 2_000_000);

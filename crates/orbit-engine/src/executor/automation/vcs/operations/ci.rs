@@ -118,6 +118,8 @@ pub(super) fn ci_job_log(input: &Value) -> Result<Value, OrbitError> {
     Ok(json!({
         "log": read.log.text,
         "truncated": read.log.truncated,
+        "source_complete": read.log.source_complete,
+        "diagnostic": read.log.diagnostic,
         "fallback_error": read.fallback_error,
     }))
 }

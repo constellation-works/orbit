@@ -398,6 +398,10 @@ fn job_signature<Q: CiQueries + ?Sized>(
         .and_then(Value::as_str)
         .unwrap_or_default();
     let diagnostic = bound_diagnostic(&log, &json!({"failed_jobs": [job]}), job_id);
+    if !log.source_complete || (log.truncated && diagnostic.is_none()) {
+        notes.push(format!("the log of run {run_id}, job {job_id} is incomplete; it cannot prove a reproduced cause"));
+        return Some(None);
+    }
     let text = diagnostic
         .as_ref()
         .and_then(|unit| unit.get("text"))

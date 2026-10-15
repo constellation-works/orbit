@@ -994,3 +994,154 @@ fn published_ci_repair_conflict_refresh_keeps_authenticated_head_and_guards() {
         },
     );
 }
+
+#[test]
+fn auto_fix_anchors_emitted_failure_after_printed_commands_and_before_cleanup() {
+    isolated(
+        "auto_fix::auto_fix_anchors_emitted_failure_after_printed_commands_and_before_cleanup",
+        |sandbox| {
+            let actual =
+                "step.sh: line 8: scripts/ci-download-verified.sh: No such file or directory";
+            let signature =
+                "step.sh: line <n>: scripts/ci-download-verified.sh: no such file or directory";
+            let display = "##[group]Run preflight\n  emit \"::error title=insufficient runner disk::need more space\"\n  error[E0123]: printed compiler text\n  lost communication with the server\n##[endgroup]\n";
+            for case in [
+                "raw",
+                "columns",
+                "successful_step",
+                "annotation",
+                "compiler",
+                "panic",
+                "test",
+                "nextest",
+                "unclosed",
+                "orphan",
+                "truncated",
+                "incomplete",
+                "selected",
+                "wrong_step",
+            ] {
+                in_fresh_row(sandbox, |row| {
+                    let fx = Fixture::new(row);
+                    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+                    action(
+                        &host,
+                        "pr_open",
+                        &fx.open_input(&fx.candidate, &fx.base_sha),
+                    )
+                    .unwrap();
+                    host.script(
+                        "ci.commit_jobs",
+                        json!({"jobs":[{
+                            "name":"test", "workflow":"CI", "conclusion":"failure",
+                            "run_id":10, "job_id":11, "failed_step":"Install cargo-nextest"
+                        }]}),
+                    );
+                    let (diagnostic, expected) = match case {
+                        "annotation" => (
+                            "##[error]insufficient runner disk",
+                            "##[error]insufficient runner disk",
+                        ),
+                        "compiler" => (
+                            "error[E0433]: cannot find module `real`",
+                            "error[e0433]: cannot find module `real`",
+                        ),
+                        "panic" => (
+                            "thread 'real_test' panicked at src/lib.rs:8:1:",
+                            "thread 'real_test' panicked at src/lib.rs:<n>:<n>:",
+                        ),
+                        "test" => ("test real_case ... FAILED", "test real_case ... failed"),
+                        "nextest" => (
+                            "FAIL [ 0.3s] suite real_case",
+                            "fail [ <n>.<n>s] suite real_case",
+                        ),
+                        _ => (actual, signature),
+                    };
+                    let mut log = format!(
+                        "{display}preflight passed\n{display}{diagnostic}\n##[error]Process completed with exit code 127.\n{}",
+                        "post-job cleanup completed\n".repeat(1000)
+                    );
+                    if matches!(case, "columns" | "successful_step" | "wrong_step") {
+                        let step = if case == "wrong_step" {
+                            "successful setup"
+                        } else {
+                            "Install cargo-nextest"
+                        };
+                        log = log
+                            .lines()
+                            .enumerate()
+                            .map(|(index, line)| {
+                                let step = if case == "successful_step"
+                                    && index < display.lines().count() + 1
+                                {
+                                    "successful setup"
+                                } else {
+                                    step
+                                };
+                                format!(
+                                    "test\t{step}\t2026-10-15T02:42:56Z \x1b[31m{line}\x1b[0m\n"
+                                )
+                            })
+                            .collect();
+                    } else if case == "unclosed" {
+                        log = "##[group]Run verify\n  ##[error]printed failure\n".into();
+                    } else if case == "orphan" {
+                        log = "  ##[error]printed failure\n##[endgroup]\n##[error]Process completed with exit code 127.\n".into();
+                    }
+                    let mut response =
+                        json!({"log":log, "truncated":false, "source_complete":true});
+                    if matches!(case, "truncated" | "selected" | "wrong_step") {
+                        response["truncated"] = json!(true);
+                    }
+                    if case == "selected" {
+                        response["log"] = json!("cleanup only");
+                        response["diagnostic"] = json!(format!(
+                            "{display}{actual}\n##[error]Process completed with exit code 127."
+                        ));
+                    } else if case == "wrong_step" {
+                        response["diagnostic"] = response["log"].clone();
+                    } else if case == "incomplete" {
+                        response["source_complete"] = json!(false);
+                    }
+                    host.script("ci.job_log", response);
+                    fx.script_checks(&["failure"]);
+                    let mut input = fx.complete_ungated_input();
+                    input["auto_fix"] = json!(true);
+                    input["completion"] = json!("review");
+                    let error = action(&host, "pr_complete", &input)
+                        .unwrap_err()
+                        .to_string();
+                    let actionable = !matches!(
+                        case,
+                        "unclosed" | "orphan" | "truncated" | "incomplete" | "wrong_step"
+                    );
+                    assert_eq!(
+                        orbit_types::workflow::is_pr_auto_fix_check_repair(&error),
+                        actionable,
+                        "{case}: {error}"
+                    );
+                    if actionable {
+                        assert!(
+                            error.contains(&format!("with signature `{expected}`")),
+                            "{case}: {error}"
+                        );
+                        assert!(
+                            error.contains(diagnostic),
+                            "{case}: repair evidence must retain the emitted failure: {error}"
+                        );
+                    } else {
+                        assert!(
+                            error.contains("no emitted diagnostic")
+                                || error.contains("could not be read"),
+                            "{case}: {error}"
+                        );
+                        assert!(pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).is_empty());
+                    }
+                    assert!(error.len() < 12000, "repair evidence remains bounded");
+                    assert!(fx.merge_requests().is_empty());
+                    assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+                });
+            }
+        },
+    );
+}

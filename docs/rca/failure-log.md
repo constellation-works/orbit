@@ -34,6 +34,92 @@ before you close it out, or extend the entry that already names the cause.
 Delete an entry once its fix has landed. Git history keeps the resolved
 entries.
 
+## 2026-10-15: Printed runner commands become deterministic failure causes
+
+- **Where:** owner `complete_pr` / `pr_complete`, and the shared CI signature
+  classifier used by reproduction, landing recovery and CI failure filing.
+- **Symptom:** PR [#4823](https://github.com/constellation-works/orbit/pull/4823)
+  at `1af607609feb79be1b7dd266d64731c5e09133fb` reported a disk-guard signature
+  while naming `Install cargo-nextest`. The first Luna repair declared
+  `external_blocker` and filed F2026-10-379 as insufficient disk. Provider
+  [job 116218350235](https://github.com/constellation-works/orbit/actions/runs/38672403770/job/116218350235)
+  instead records disk admission **passed**, then the missing
+  `scripts/ci-download-verified.sh` diagnostic and install exit **127**.
+- **Cause:** `classify_log_lines` recognized the `Run` header but lost provenance
+  for its multi-line printed source. An error-bearing source line became a
+  diagnostic marker and outranked the later unannotated runtime failure.
+  `head_check_evidence` put that signature into the repair mandate before agent
+  interpretation. Its tail-only excerpt could then hide the real diagnostic
+  behind cleanup. The same wrong signature is retained in PR #4824's auto-fix
+  attestation, although that repair independently found the actual missing file.
+- **Fix:** ORB-16208 preserves command-display provenance, retains display
+  boundaries in bounded selections, and anchors signatures and repair excerpts
+  to emitted diagnostics. Public PR completion and CI-filing regressions cover
+  printed bodies in successful and failed steps, genuine annotations, compiler
+  and test identities, cleanup tails and incomplete provenance. This is a
+  candidate prevention change, **not deployed prevention**; parent ORB-16190
+  owns rollout and installed-source / after-landing verification. It does not
+  prevent workflow/checkout generation skew (the separate cause below).
+- **Tasks:** ORB-16192, ORB-16195; repair ORB-16208. F2026-10-379's original
+  incorrect body remains preserved with a resolved, superseded disposition
+  pointing to F2026-10-380 and ORB-16208; no disk repair occurred. Durable evidence:
+  `evidence/pr-4823-diagnostic-provenance.json` on ORB-16208 and ORB-16190;
+  ORB-16195 artifact
+  `auto-fix/jrun-20261015-0225-c3/b8761e59323dcf17be5965e31b110b9a82c01cf5.json`.
+- **Final recovery:** on the **same** `jrun-20261015-0211-c3`, verified `resume`
+  was applied at 03:00:00Z from `prepare_branch` to refresh base evidence and
+  synchronize the candidate. It did not change disk policy or runner capacity.
+  The exact-head recovery outcomes are recorded under the generation cause.
+
+## 2026-10-15: New workflow generation calls a helper absent from the PR checkout
+
+- **Where:** hosted `Install cargo-nextest` in PR #4823 / ORB-16192 and
+  [PR #4824](https://github.com/constellation-works/orbit/pull/4824) / ORB-16195.
+- **Symptom:** candidate heads `1af607609feb79be1b7dd266d64731c5e09133fb` and
+  `ea8b8483cc44d11e33f1352daa2acb99999436ee` failed install with
+  `scripts/ci-download-verified.sh: No such file or directory`, exit 127, after
+  successful disk admission. Original hosted jobs were
+  [116218350235](https://github.com/constellation-works/orbit/actions/runs/38672403770/job/116218350235)
+  and [116219627401](https://github.com/constellation-works/orbit/actions/runs/38672806630/job/116219627401).
+- **Cause:** both candidates branched from
+  `637f95e05bb8dc1c15d5e9b6d350cf61d569bd0a`. The live workflow generation
+  invoked the verified-download helper introduced by
+  `14156e650c21a53bf191d9d6774f2bd3327a219e`, while explicit checkout used the
+  older candidate without that file. Local green gates on those old heads did
+  not prove compatibility with the newer hosted workflow.
+- **Fix:** bounded recovery restored a compatible candidate on each **same
+  run, branch and PR**. ORB-16192's normal base-sync resume produced
+  `b0a5e0dd8a4b9f69bf121659fd2a0b04b8256eca`; its four final local gates and
+  hosted checks **passed**, and PR #4823 merged normally at 03:23:46Z as
+  `10627cc948218ca8ba6be8124c1f5dbc8f548a94`. ORB-16195's auto-fix attempt
+  **1 of 3**, Gemini Flash, admitted retry at 03:10:55Z and added only the
+  missing executable helper as `b8761e59323dcf17be5965e31b110b9a82c01cf5`.
+  All four final local gates **passed** on that head; the affected-test gate
+  selected **no Rust packages** for the script-only repair.
+  Fresh durable provider evidence now records its hosted run
+  [38675154825](https://github.com/constellation-works/orbit/actions/runs/38675154825)
+  **passed** and PR #4824 **merged** at 03:31:51Z as
+  `ab854b40578511953774f162a51929e246a2780c`. Main Check 116226985792 ran
+  03:13:48–03:31:46Z (**1,078 seconds**): functional repair passed, but the
+  under-900-second CI budget was **unmet by 178 seconds**. The earlier
+  03:28:35Z observation was pending and is not credited as a pass.
+  Prevention requires compatible workflow and checkout generations, plus
+  exact-head hosted validation after recovery; parent ORB-16190 retains that
+  rollout/verification obligation. This classifier leaf changes no workflow,
+  settings, deployment or release. Installed/deployed source and owner
+  after-landing review are **not verified by this leaf** or implied by DONE.
+- **Tasks:** ORB-16192 (`jrun-20261015-0211-c3`), ORB-16195
+  (`jrun-20261015-0225-c3`); prevention closure remains with ORB-16190.
+  ORB-16195 retains `delivery/hosted-check-116219627401.log.gz`
+  (gzip SHA-256 `9161918a0b0e27df80fd97618b34dc5508e3b1cd45988433fdfb9656e6372727`),
+  the exact repair attestation above, `delivery/final-provider-receipt.json`,
+  and `delivery/final-check-116226985792.log.gz`. Original failed evidence
+  remains preserved. Remove this open prevention entry once its parent fix
+  lands, following this log's lifecycle.
+- **Final recovery:** ORB-16192's verified same-run `prepare_branch` resume
+  was applied; ORB-16195 used bounded same-run auto-fix retry rather than a
+  final-recovery restart. Neither recovery repaired disk capacity.
+
 ## 2026-10-12: Loaded-host wall-clock bounds in orbit-web tests fail unrelated Mac gates
 
 - **Where:** Mac follower, the before-landing affected-test gate of

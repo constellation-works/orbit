@@ -1187,7 +1187,7 @@
     "output": {
       "run_id": "34060485218",
       "scope": "failed",
-      "log": "2026-10-11T09:00:00Z \n[... 2200443 bytes omitted; raise the byte budget for more ...]\n 2810 tests run: 1 failed\n2026-10-11T09:20:00Z ##[error]Process completed with exit code 100.\n\n[... retained nextest failure blocks ...]\n2026-10-11T09:10:00Z FAIL [ 0.123s] (2021/2810) suite failing_test\n2026-10-11T09:10:00Z ──────── STDOUT ────────\n2026-10-11T09:10:00Z captured output\n2026-10-11T09:10:00Z ──────── STDERR ────────\n2026-10-11T09:10:00Z thread 'failing_test' panicked at tests/sample.rs:12:3:\n2026-10-11T09:10:00Z expected a completed operation\n",
+      "log": "2026-10-11T09:00:00Z \n[... 2200477 bytes omitted; raise the byte budget for more ...]\n 2810 tests run: 1 failed\n2026-10-11T09:20:00Z ##[error]Process completed with exit code 100.\n\n[... retained nextest failure blocks ...]\n2026-10-11T09:10:00Z FAIL [ 0.123s] (2021/2810) suite failing_test\n2026-10-11T09:10:00Z ──────── STDOUT ────────\n2026-10-11T09:10:00Z captured output\n2026-10-11T09:10:00Z ──────── STDERR ────────\n2026-10-11T09:10:00Z thread 'failing_test' panicked at tests/sample.rs:12:3:\n2026-10-11T09:10:00Z expected a completed operation\n",
       "diagnostic_unit": null,
       "failure_regions": {
         "kind": "runner_failure_regions",
@@ -1196,15 +1196,15 @@
         "selection_complete": true,
         "text": "2026-10-11T09:10:00Z FAIL [ 0.123s] (2021/2810) suite failing_test\n2026-10-11T09:10:00Z ──────── STDOUT ────────\n2026-10-11T09:10:00Z captured output\n2026-10-11T09:10:00Z ──────── STDERR ────────\n2026-10-11T09:10:00Z thread 'failing_test' panicked at tests/sample.rs:12:3:\n2026-10-11T09:10:00Z expected a completed operation\n",
         "returned_bytes": 389,
-        "command_bytes": 2200571,
+        "command_bytes": 2200605,
         "retained_source_bytes": 389,
-        "omitted_bytes": 2200182,
+        "omitted_bytes": 2200216,
         "assertion_payload_omitted_bytes": 0,
         "failure_anchor_count": 1,
         "byte_ranges": [
           {
-            "start_byte": 1100052,
-            "end_byte": 1100441,
+            "start_byte": 1100086,
+            "end_byte": 1100475,
             "retained_source_bytes": 389,
             "omitted_bytes": 0
           }
@@ -1213,7 +1213,7 @@
       "source_complete": true,
       "truncated": true,
       "returned_bytes": 612,
-      "total_bytes": 2200571,
+      "total_bytes": 2200605,
       "source": "job_api_log",
       "source_jobs": [
         {
@@ -1228,7 +1228,7 @@
       "checkout_commits": [],
       "checkout_evidence": [],
       "checkout_evidence_complete": true,
-      "checkout_evidence_scanned_bytes": 2200571,
+      "checkout_evidence_scanned_bytes": 2200605,
       "checkout_evidence_source_truncated": false
     },
     "calls": [

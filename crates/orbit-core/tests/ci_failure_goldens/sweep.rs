@@ -388,6 +388,7 @@ fn ci_retired_ref_candidates_do_not_starve_an_agent_main_failure() {
     let log = [
         "HEAD is now at {checkout} Merge into agent-main",
         "##[group]Run cargo nextest run --workspace",
+        "##[endgroup]",
         "        FAIL [   0.120s] orbit-core::ci_failure_goldens sweep::landing_red",
         "thread 'sweep::landing_red' panicked at crates/orbit-core/tests/sweep.rs:9:5:",
         "assertion `left == right` failed",

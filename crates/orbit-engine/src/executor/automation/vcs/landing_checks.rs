@@ -47,7 +47,9 @@ use serde_json::{Value, json};
 
 use crate::context::{HandoffLandingContext, RuntimeHost};
 
-use super::super::ci::log_signature::error_signature;
+use super::super::ci::log_signature::{
+    LineKind, classify_log_lines, diagnostic_excerpt, error_signature,
+};
 use super::baseline::network_inconclusive;
 use super::git::{git_command_success, git_output};
 use super::operations;
@@ -206,7 +208,7 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
             ));
         };
         let label = job_label(job);
-        let log = match job_log(host, workspace, run_id, job_id) {
+        let log = match job_log(host, workspace, run_id, job_id, failed_step(job)) {
             Ok(log) => log,
             Err(error) => {
                 return Ok(unclassified(format!(
@@ -381,7 +383,7 @@ pub(super) fn head_check_evidence<H: RuntimeHost + ?Sized>(
                 "the failed job behind check '{label}' reported no identity"
             ));
         };
-        let log = match job_log(host, workspace, run_id, job_id) {
+        let log = match job_log(host, workspace, run_id, job_id, failed_step(job)) {
             Ok(log) => log,
             Err(error) => {
                 return HeadCheckEvidence::Stop(format!(
@@ -398,6 +400,12 @@ pub(super) fn head_check_evidence<H: RuntimeHost + ?Sized>(
             ));
         }
         let signature = error_signature(&log, failed_step(job));
+        if signature.step_fallback {
+            return HeadCheckEvidence::Stop(format!(
+                "the log of '{}' names no emitted diagnostic, only the failed step",
+                job_label(job)
+            ));
+        }
         details.push(format!(
             "'{}' failed in step `{}` on head {head} (run {run_id}, job {job_id}) with signature `{}`; log excerpt:\n{}",
             job_label(job),
@@ -444,9 +452,10 @@ fn inherited<H: RuntimeHost + ?Sized>(
         else {
             return Err(format!("a failed job on base {base} reported no identity"));
         };
-        let log = job_log(host, workspace, run_id, job_id).map_err(|error| {
-            format!("the log of the failed job on base {base} could not be read: {error}")
-        })?;
+        let log =
+            job_log(host, workspace, run_id, job_id, failed_step(candidate)).map_err(|error| {
+                format!("the log of the failed job on base {base} could not be read: {error}")
+            })?;
         let found = error_signature(&log, failed_step(candidate));
         if found.step_fallback {
             return Err(format!(
@@ -501,6 +510,7 @@ pub(super) fn landed_check_repair<H: RuntimeHost + ?Sized>(
             workspace,
             job["run_id"].as_u64()?,
             job["job_id"].as_u64()?,
+            failed_step(job),
         )
         .ok()?;
         if transient_evidence(&log).is_some() {
@@ -520,6 +530,7 @@ pub(super) fn landed_check_repair<H: RuntimeHost + ?Sized>(
                 workspace,
                 base_job["run_id"].as_u64()?,
                 base_job["job_id"].as_u64()?,
+                failed_step(base_job),
             )
             .ok()?;
             let base_signature = error_signature(&base_log, failed_step(base_job));
@@ -570,6 +581,7 @@ fn job_log<H: RuntimeHost + ?Sized>(
     workspace: &Path,
     run_id: u64,
     job_id: u64,
+    step: &str,
 ) -> Result<String, OrbitError> {
     let response = host.run_private_vcs_operation(
         operations::CI_JOB_LOG,
@@ -584,10 +596,41 @@ fn job_log<H: RuntimeHost + ?Sized>(
             "the log read recovered no text: {reason}"
         )));
     }
-    response["log"]
-        .as_str()
-        .map(str::to_string)
-        .ok_or_else(|| OrbitError::Execution("the log answer carried no log".to_string()))
+    if response["source_complete"] == false {
+        return Err(OrbitError::Execution(
+            "the job log source is incomplete".to_string(),
+        ));
+    }
+    let selected = response["diagnostic"].as_str();
+    if response["truncated"] == true && selected.is_none() {
+        return Err(OrbitError::Execution(
+            "the job log is truncated and has no complete failing command".to_string(),
+        ));
+    }
+    let text = selected
+        .or_else(|| response["log"].as_str())
+        .ok_or_else(|| OrbitError::Execution("the log answer carried no log".to_string()))?;
+    // gh's columns bind command evidence to the provider's failed step.
+    // Raw job API logs have no columns; a unique complete failed command is
+    // preferred there so successful setup cannot supply the cause.
+    let mut selected_lines = Vec::new();
+    for line in text.lines() {
+        let mut columns = line.splitn(3, '\t');
+        if let (Some(_), Some(line_step), Some(_)) =
+            (columns.next(), columns.next(), columns.next())
+            && line_step != step
+            && line_step != "UNKNOWN STEP"
+        {
+            if selected.is_some() {
+                return Err(OrbitError::Execution(
+                    "the failing command does not match the failed step".to_string(),
+                ));
+            }
+            continue;
+        }
+        selected_lines.push(line);
+    }
+    Ok(selected_lines.join("\n"))
 }
 
 /// A job that finished without passing.
@@ -617,8 +660,22 @@ fn job_label(job: &Value) -> String {
 
 /// The network or runner failure a log shows, if any.
 fn transient_evidence(log: &str) -> Option<String> {
-    network_inconclusive(log).or_else(|| {
-        let lowered = log.to_ascii_lowercase();
+    let emitted = classify_log_lines(log)
+        .into_iter()
+        .filter(|(kind, _)| {
+            !matches!(
+                kind,
+                LineKind::RunCommand
+                    | LineKind::CommandBody
+                    | LineKind::ParamDump
+                    | LineKind::EndGroup
+            )
+        })
+        .map(|(_, line)| line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    network_inconclusive(&emitted).or_else(|| {
+        let lowered = emitted.to_ascii_lowercase();
         RUNNER_LOSS
             .iter()
             .find(|marker| lowered.contains(*marker))
@@ -626,14 +683,9 @@ fn transient_evidence(log: &str) -> Option<String> {
     })
 }
 
-/// The log's tail, where a failed step's diagnostic ends up.
+/// Keep the selected emitted diagnostic even when cleanup dominates the tail.
 fn excerpt(log: &str) -> String {
-    let log = log.trim();
-    let mut start = log.len().saturating_sub(MAX_EXCERPT_BYTES);
-    while !log.is_char_boundary(start) {
-        start += 1;
-    }
-    log[start..].to_string()
+    diagnostic_excerpt(log, MAX_EXCERPT_BYTES)
 }
 
 fn describe(class: CheckFailureClass, jobs: &[FailedJob]) -> String {

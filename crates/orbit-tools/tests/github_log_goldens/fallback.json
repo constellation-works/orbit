@@ -1983,7 +1983,7 @@
     },
     "job_logs": {
       "101560010340": [
-        "2026-10-11T09:00:00Z ##[group]Run cargo nextest run\n",
+        "2026-10-11T09:00:00Z ##[group]Run cargo nextest run\n2026-10-11T09:00:00Z ##[endgroup]\n",
         {
           "text": "2026-10-11T09:00:01Z PASS [ 0.001s] suite passing_test\n",
           "repeat": 20000
