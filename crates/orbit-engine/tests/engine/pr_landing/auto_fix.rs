@@ -1111,9 +1111,7 @@ fn auto_fix_anchors_emitted_failure_after_printed_commands_and_before_cleanup() 
                         response["diagnostic"] = json!(format!(
                             "{display}{actual}\n##[error]Process completed with exit code 127."
                         ));
-                    } else if case == "wrong_step" {
-                        response["diagnostic"] = response["log"].clone();
-                    } else if case == "raw_timestamp_tabs" {
+                    } else if matches!(case, "wrong_step" | "raw_timestamp_tabs") {
                         response["diagnostic"] = response["log"].clone();
                     } else if case == "incomplete" {
                         response["source_complete"] = json!(false);
