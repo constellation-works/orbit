@@ -75,7 +75,7 @@ const confirmations = [];
 const readinessTasks = [
   { task_id: 'ORB-1', status: 'backlog', eligible: true, reason: 'ready' },
   { task_id: 'ORB-2', status: 'backlog', eligible: false, reason: 'unmet_dependency', dependencies: [{ task_id: 'ORB-20', status: 'in-progress' }] },
-  { task_id: 'ORB-14334', status: 'backlog', eligible: false, reason: 'conflict_deferred', blocking_task_ids: ['ORB-14488'], conflicts: [{ requested_file: 'file:crates/shared/src/a-long-lock-selector-for-the-drain-layout-fixture.rs', locking_task_id: 'ORB-14488' }] },
+  { task_id: 'ORB-14334', status: 'backlog', eligible: false, reason: 'conflict_deferred', blocking_task_ids: ['ORB-14488', 'ORB-14489', 'ORB-14488'], conflicts: [{ requested_file: 'file:crates/shared/src/a-long-lock-selector-for-the-drain-layout-fixture.rs', locking_task_id: 'ORB-14488' }] },
   { task_id: 'ORB-4', status: 'backlog', eligible: false, reason: 'claimed_by_live_child', run_ids: ['jrun-claimed-child'] },
   { task_id: 'ORB-5', status: 'backlog', eligible: false, reason: 'capacity_saturated', active_run_ids: ['jrun-active-leaf'] },
   { task_id: 'ORB-6', status: 'backlog', eligible: false, reason: 'crew_not_allowed', crew: 'luna', allowed_crews: ['sol', 'terra'] },
@@ -212,7 +212,7 @@ assert(durations.every(node => node.type === 'button' && ['true', 'false'].inclu
 assert(durations.find(node => node.getAttribute('aria-pressed') === 'true')?.textContent === '1h', 'one hour is the default window');
 const pools = ids => ids.map(id => drainReadinessFor(id)?.pool).join(' ');
 assert(pools(['ORB-1', 'ORB-14334', 'ORB-4', 'ORB-5', 'ORB-2', 'ORB-6', 'ORB-7', 'ORB-8', 'ORB-9']) === 'eligible locks locks capacity other other other other other', 'the card hands every readiness task to the Tasks list in its pool');
-assert(drainReadinessFor('ORB-14334').title.includes('ORB-14488') && drainReadinessFor('ORB-4').title.includes('jrun-claimed-child'), 'a lock wait names its holder for the task row');
+assert(drainReadinessFor('ORB-14334').title.includes('ORB-14489') && !drainReadinessFor('ORB-14334').title.includes('file:') && drainReadinessFor('ORB-14334').title.includes('ORB-14488') && drainReadinessFor('ORB-4').title.includes('jrun-claimed-child'), 'a lock wait names its holder for the task row');
 const capacityBar = () => drainBody.querySelector('.drain-capacity-bar');
 assert(capacityBar().getAttribute('aria-label') === 'Workspace: 4 of 4 leaf slots in use' && capacityBar().querySelectorAll('.drain-capacity-seg.used').length === 4, `capacity shows workspace slot occupancy: ${capacityBar().getAttribute('aria-label')}`);
 assert(drainBody.querySelector('.drain-capacity-free').classList.contains('full'), 'no free slot is flagged');
@@ -431,7 +431,7 @@ for (const task of drainTasksOverride) {
   poolSizes[pool] = (poolSizes[pool] || 0) + 1;
 }
 assert(JSON.stringify(poolSizes) === JSON.stringify({ locks: 17, capacity: 16, other: 3 }), `pool groups: ${JSON.stringify(poolSizes)}`);
-assert(drainReadinessFor('ORB-9017').title.includes('resource_throttled') && drainReadinessFor('ORB-9033').title.includes('operator_validation_handoff'), 'each row keeps its server reason');
+assert(drainReadinessFor('ORB-9017').title.includes('throttled') && drainReadinessFor('ORB-9033').title.includes('operator validation handoff'), 'each row keeps its readable waiting cause');
 assert(!drainTasksOverride.some(task => /blocked/i.test(drainReadinessFor(task.task_id).label)), 'no pool label calls a readiness group blocked');
 drainTasksOverride = null;
 

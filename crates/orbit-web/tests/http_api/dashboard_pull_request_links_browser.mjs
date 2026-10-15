@@ -18,7 +18,7 @@ export async function assertPullRequestLinks(page, evidence) {
       { id: 'PRL-3', status: 'review', external_refs: [pr('13', 'javascript:alert(1)')] },
       { id: 'PRL-4', status: 'in-progress', external_refs: [pr('14', 'https://github.com/o/r/pull/14')] },
     ].map(task => ({
-      ...task, title: `Pull request link ${task.id}`, priority: 'medium', status_transitions: [],
+      ...task, title: `Pull request link ${task.id} ${"Long task title with wrapping content ".repeat(8)}`, priority: 'medium', status_transitions: [],
       comments: [], history: [], artifacts: [],
     }));
     const context = {
@@ -59,6 +59,21 @@ export async function assertPullRequestLinks(page, evidence) {
       throw new Error(`Review and in-progress rows must link only an http(s) PR page: ${JSON.stringify(rows)}`);
     }
 
+    const layout = [];
+    for (const width of [1440, 375]) {
+      await page.setViewportSize({ width, height: 1100 });
+      const bounds = await page.locator('[data-key="task-PRL-1"]').evaluate(row => {
+        const rect = node => { const r = node.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right }; };
+        return { row: rect(row), link: rect(row.querySelector('.task-quick-link')), button: rect(row.querySelector('.task-quick')), title: rect(row.querySelector('.title')) };
+      });
+      if (Math.abs(bounds.link.y - bounds.button.y) > 1 || Math.abs(bounds.link.height - bounds.button.height) > 1 || bounds.button.x - bounds.link.right < 7 || bounds.button.right > bounds.row.right + 1) {
+        throw new Error(`PR and Approve must share one aligned, separated action row at ${width}: ${JSON.stringify(bounds)}`);
+      }
+      layout.push({ width, ...bounds });
+      await page.screenshot({ path: path.join(evidence, `pull-request-actions-${width}.png`) });
+    }
+    await page.setViewportSize({ width: 1440, height: 1100 });
+
     const detailRefs = async (id) => {
       await page.locator(`#tasks-body [data-key="task-${id}"] .title`).click();
       const refs = page.locator(`#detail-${id} .external-ref-line`);
@@ -77,7 +92,7 @@ export async function assertPullRequestLinks(page, evidence) {
     if (JSON.stringify(unlinked) !== JSON.stringify([{ text: 'PR #13', href: null }])) {
       throw new Error(`A ref without an http(s) page must stay text: ${JSON.stringify(unlinked)}`);
     }
-    fs.writeFileSync(path.join(evidence, 'pull-request-links-result.json'), JSON.stringify({ passed: true, rows, linked, unlinked }, null, 2));
+    fs.writeFileSync(path.join(evidence, 'pull-request-links-result.json'), JSON.stringify({ passed: true, rows, linked, unlinked, layout }, null, 2));
   } finally {
     await page.evaluate(() => { globalThis.fetch = globalThis.pullRequestLinkFixture.priorFetch; delete globalThis.pullRequestLinkFixture; });
   }
