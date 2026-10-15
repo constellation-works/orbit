@@ -11,6 +11,8 @@ spec:
     type: object
     required: [job_run_id, workspace_path, completed_task_ids, base]
     properties:
+      authenticate_preparation:
+        type: boolean
       job_run_id:
         type: string
       completed_task_ids:
@@ -36,6 +38,8 @@ spec:
       [phase, decision, head, head_sha, base, base_ref, base_sha,
        commits_behind, commits_ahead, sync_required]
     properties:
+      preparation:
+        type: object
       phase:
         type: string
       decision:

@@ -51,6 +51,7 @@ pub(crate) use commit::{
 pub use deferral_probe::run_deferral_probe;
 pub(crate) use deferred_sandbox::{ImplementerLane, accept_implementer_deferral};
 pub(super) use failure::pr_failure_handoff;
+pub(crate) use freshness::refreshed_input;
 pub(super) use freshness::{prepare_pr_handoff, rebase_pr_branch};
 pub use git::fetch_remote_base;
 pub(super) use landing::handoff_land;

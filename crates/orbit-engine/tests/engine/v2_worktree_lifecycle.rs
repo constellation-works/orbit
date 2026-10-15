@@ -62,6 +62,7 @@ mod conflict_adoption;
 mod declared_reclaim;
 #[cfg(unix)]
 mod dirty_rescue;
+mod preparation;
 mod trash;
 
 // ---------------------------------------------------------------------------
@@ -4269,9 +4270,12 @@ struct LifecycleHost {
     recovery_owner_refusal: Mutex<Option<String>>,
     /// Why step recovery authorization was revoked.
     recovery_revocation: Mutex<Option<String>>,
+    /// Deterministic race after host certification and before synchronization.
+    preparation_hook: Mutex<Option<PreparationHook>>,
 }
 
 type Widening = (String, ContextWideningStep, String, Vec<String>);
+type PreparationHook = Box<dyn FnMut(&Value) + Send>;
 
 impl LifecycleHost {
     fn new(repo: &Path) -> Self {
@@ -4753,7 +4757,25 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
             })
             .rebase_recovery_checkpoints
             .insert(step_id.to_string(), output.clone());
+        if let Some(hook) = self.preparation_hook.lock().unwrap().as_mut() {
+            hook(output);
+        }
         Ok(())
+    }
+
+    fn rebase_recovery_attempts(
+        &self,
+        run_id: &str,
+        step_id: &str,
+    ) -> Result<Vec<RebaseRecoveryAttemptScope>, OrbitError> {
+        Ok(self
+            .recovery_attempts
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(run, step, _)| run == run_id && step == step_id)
+            .map(|(_, _, scope)| scope.clone())
+            .collect())
     }
 
     /// Only the newest completion recorded for a run's step vouches for it,

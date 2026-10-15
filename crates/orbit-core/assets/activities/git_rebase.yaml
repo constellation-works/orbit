@@ -6,13 +6,18 @@ spec:
   type: deterministic
   description: >
     Rebase a task branch onto the exact prepared base checkpoint, or verify and
-    reuse a rewrite completed by step recovery.
+    reuse a rewrite completed by step recovery. A host-certified delivery
+    preparation permits bounded descendant-only fresh preparation when its base
+    advances; an ordinary pinned invocation retains the stale-base refusal.
   input_schema_json:
     type: object
     required:
       [job_run_id, workspace_path, completed_task_ids, head, head_sha,
        base, base_ref, base_sha, commits_behind, sync_required]
     properties:
+      # Complete prepare output, including its host certificate when present.
+      preparation:
+        type: [object, "null"]
       job_run_id:
         type: string
       completed_task_ids:

@@ -943,7 +943,7 @@ fn absorbed_step() -> Value {
     })
 }
 
-fn conflict_recovery_activity() -> ActivityV2 {
+pub(super) fn conflict_recovery_activity() -> ActivityV2 {
     let asset = json!({
         "schemaVersion": 2,
         "kind": "Activity",
@@ -964,7 +964,7 @@ fn conflict_recovery_activity() -> ActivityV2 {
         .spec
 }
 
-fn deterministic_activity(name: &str) -> ActivityV2 {
+pub(super) fn deterministic_activity(name: &str) -> ActivityV2 {
     let asset = json!({
         "schemaVersion": 2,
         "kind": "Activity",
@@ -1016,14 +1016,14 @@ fn execute(host: &LifecycleHost, prepared: &PreparedRebase, job: &JobV2) -> Abso
 }
 
 impl LifecycleHost {
-    fn stub(&self, action: &str, reply: Result<Value, String>) {
+    pub(super) fn stub(&self, action: &str, reply: Result<Value, String>) {
         self.stubs.lock().unwrap().insert(
             action.to_string(),
             reply.map_err(|message| DispatchError::action_failed(action, message)),
         );
     }
 
-    fn stub_calls_of(&self, action: &str) -> Vec<Value> {
+    pub(super) fn stub_calls_of(&self, action: &str) -> Vec<Value> {
         self.stub_calls
             .lock()
             .unwrap()

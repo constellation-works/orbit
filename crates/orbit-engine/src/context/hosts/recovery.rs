@@ -12,9 +12,10 @@ pub enum StepRecoveryAdmission {
     Denied { reason: String },
 }
 
-/// What one admitted conflict recovery may complete, fixed before its provider
-/// runs: the checkout, the HEAD the stopped rebase started from, and the
-/// pinned base it continues onto.
+/// What one host-owned preparation or rebase recovery may certify: the
+/// checkout, its candidate HEAD before rewriting, and the observed target
+/// base. A preparation certifies these observations without rewriting HEAD;
+/// conflict recovery fixes them before its provider runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RebaseRecoveryAttemptScope {
     pub workspace_path: String,
