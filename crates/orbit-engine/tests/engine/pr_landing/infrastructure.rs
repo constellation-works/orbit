@@ -51,8 +51,19 @@ fn put(fx: &Fixture, name: &str, value: Value) {
 }
 fn setup(fx: &Fixture, mode: &str) {
     let head = &fx.candidate;
-    let repo = json!({"id":500,"full_name":"orbit/test"});
+    let repo =
+        json!({"id":500,"full_name":"orbit/test","url":"https://api.github.com/repos/orbit/test"});
     put(fx, "repo", repo.clone());
+    put(
+        fx,
+        "statuses-before",
+        json!({"sha":head,"repository":repo,"total_count":0,"statuses":[]}),
+    );
+    put(
+        fx,
+        "statuses-after",
+        json!({"sha":head,"repository":repo,"total_count":0,"statuses":[]}),
+    );
     put(
         fx,
         "pr",
@@ -317,6 +328,8 @@ fn missing_required_prerequisite_recovers_once_without_source_repair() {
                 "foreign_after",
                 "advanced_after",
                 "changed_policy",
+                "legacy_success",
+                "legacy_substitute",
                 "moved",
                 "deleted",
             ] {
@@ -331,6 +344,33 @@ fn missing_required_prerequisite_recovers_once_without_source_repair() {
                     )
                     .unwrap();
                     setup(&fx, mode);
+                    if mode == "legacy_success" {
+                        update(&fx, "rules", |value| {
+                            value[0]["parameters"]["required_status_checks"]
+                                .as_array_mut()
+                                .unwrap()
+                                .push(json!({"context":"external-ci","integration_id":null}));
+                        });
+                        for phase in ["before", "after"] {
+                            update(&fx, &format!("statuses-{phase}"), |value| {
+                                value["total_count"] = json!(1);
+                                value["statuses"] = json!([{"id":10,"context":"external-ci","state":"success","url":format!("https://api.github.com/repos/orbit/test/statuses/{}", fx.candidate)}]);
+                            });
+                        }
+                    }
+                    if mode == "legacy_substitute" {
+                        update(&fx, "rules", |value| {
+                            value[0]["parameters"]["required_status_checks"][0]["integration_id"] =
+                                Value::Null
+                        });
+                        update(&fx, "checks-after", |value| {
+                            *value = json!({"total_count":0,"check_runs":[]})
+                        });
+                        update(&fx, "statuses-after", |value| {
+                            value["total_count"] = json!(1);
+                            value["statuses"] = json!([{"id":10,"context":"Protected (rust)","state":"success","url":format!("https://api.github.com/repos/orbit/test/statuses/{}", fx.candidate)}]);
+                        });
+                    }
                     if mode == "clean_missing" {
                         update(&fx, "checks-after", |value| {
                             value["total_count"] = json!(0);
@@ -366,7 +406,7 @@ fn missing_required_prerequisite_recovers_once_without_source_repair() {
                         },
                         || action(&host, "pr_complete", &input),
                     );
-                    if matches!(mode, "positive" | "merge" | "lost") {
+                    if matches!(mode, "positive" | "merge" | "lost" | "legacy_success") {
                         let output = outcome.expect(mode);
                         assert_eq!(
                             if mode == "merge" {
@@ -511,6 +551,8 @@ fn missing_required_prerequisite_refuses_incomplete_or_foreign_evidence() {
                 "dag_malformed",
                 "wrong_job",
                 "review_unreadable",
+                "legacy_pending",
+                "legacy_failed",
             ] {
                 in_fresh_row(sandbox, |row| {
                     tracing::info!(case, "prerequisite counterfactual");
@@ -528,6 +570,18 @@ fn missing_required_prerequisite_refuses_incomplete_or_foreign_evidence() {
                     .unwrap();
                     setup(&fx, "positive");
                     match case {
+                        "legacy_pending" | "legacy_failed" => {
+                            update(&fx, "rules", |value| {
+                                value[0]["parameters"]["required_status_checks"]
+                                    .as_array_mut()
+                                    .unwrap()
+                                    .push(json!({"context":"external-ci","integration_id":null}));
+                            });
+                            update(&fx, "statuses-before", |value| {
+                                value["total_count"] = json!(1);
+                                value["statuses"] = json!([{"id":10,"context":"external-ci","state":if case == "legacy_pending" { "pending" } else { "failure" },"url":format!("https://api.github.com/repos/orbit/test/statuses/{}", fx.candidate)}]);
+                            });
+                        }
                         "api403" => fs::write(fx.forge.join("infra-auth403"), "denied").unwrap(),
                         "rules_truncated" => update(&fx, "rules", |value| {
                             *value = json!(vec![value[0].clone(); 100]);
@@ -717,6 +771,9 @@ fn missing_required_prerequisite_refuses_incomplete_or_foreign_evidence() {
                         "dag_malformed" => "no unique source-bound",
                         "wrong_job" => "job run",
                         "review_unreadable" => "unreadable review decision",
+                        "legacy_pending" | "legacy_failed" => {
+                            "legacy status is not an absent workflow context"
+                        }
                         _ => unreachable!(),
                     };
                     assert!(

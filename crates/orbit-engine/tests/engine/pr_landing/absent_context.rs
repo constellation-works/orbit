@@ -59,6 +59,8 @@ fn absent_context_refreshes_once_before_normal_owner_completion() {
         |sandbox| {
             let (fx, host) = setup(sandbox, NEW);
             fs::write(fx.forge.join("lost-reply"), "lost").unwrap();
+            fs::write(fx.forge.join("legacy-state"), "success").unwrap();
+            fs::write(fx.forge.join("legacy-extra"), "control").unwrap();
             let mut input = fx.complete_input();
             input["auto_fix"] = json!(true);
             let completed = orbit_engine::test_support::with_vcs_retry_wait(
@@ -222,6 +224,8 @@ fn unsupported_or_unproven_emission_never_updates_or_repairs() {
                 "push",
                 "no-runs",
                 "source-truncated",
+                "legacy-pending",
+                "legacy-failed",
             ] {
                 in_fresh_row(sandbox, |row| {
                     let source = match case {
@@ -247,6 +251,18 @@ fn unsupported_or_unproven_emission_never_updates_or_repairs() {
                         _ => NEW.into(),
                     };
                     let (fx, host) = setup(row, &source);
+                    if matches!(case, "legacy-pending" | "legacy-failed") {
+                        fs::write(
+                            fx.forge.join("legacy-state"),
+                            if case == "legacy-pending" {
+                                "pending"
+                            } else {
+                                "failure"
+                            },
+                        )
+                        .unwrap();
+                        fs::write(fx.forge.join("legacy-extra"), "control").unwrap();
+                    }
                     if case == "old_emits" {
                         git(
                             &fx.repo,
@@ -321,6 +337,7 @@ fn reserved_refresh_observes_lost_unapplied_and_pending_outcomes_without_another
                 "clean-missing",
                 "unreadable-after",
                 "revision-after",
+                "legacy-substitute",
             ] {
                 in_fresh_row(sandbox, |row| {
                     let (fx, host) = setup(row, NEW);
@@ -502,4 +519,149 @@ fn expired_refresh_still_settles_an_exact_existing_merge_without_another_provide
             );
         },
     );
+}
+
+/// Shared provider fixture for the public handoff landing regressions.
+pub(crate) fn adopted_policy_cases(cases: &[&str]) {
+    let parent = tempfile::tempdir().unwrap();
+    for case in cases {
+        in_fresh_row(parent.path(), |row| {
+            let (fx, host) = setup(row, NEW);
+            let mut host = accepted_landing(&fx, host);
+            host.context.owed_hosted_checks = vec!["test".into()];
+            let accepted = host.context.candidate.clone();
+            // An external provider cleanly merges the current base into the
+            // accepted head, without an Orbit emission reservation or mutation.
+            let remote = fx.forge.join("orbit/test.git");
+            let remote_args = ["--git-dir", path_str(&remote)];
+            let base = git(
+                &fx.repo,
+                &[remote_args[0], remote_args[1], "rev-parse", BASE],
+            );
+            let tree = git(
+                &fx.repo,
+                &[
+                    remote_args[0],
+                    remote_args[1],
+                    "merge-tree",
+                    "--write-tree",
+                    &fx.candidate,
+                    &base,
+                ],
+            );
+            let head = git(
+                &fx.repo,
+                &[
+                    remote_args[0],
+                    remote_args[1],
+                    "-c",
+                    "user.name=Forge",
+                    "-c",
+                    "user.email=forge@example.invalid",
+                    "commit-tree",
+                    &tree,
+                    "-p",
+                    &fx.candidate,
+                    "-p",
+                    &base,
+                    "-m",
+                    "External provider base update",
+                ],
+            );
+            git(
+                &fx.repo,
+                &[
+                    remote_args[0],
+                    remote_args[1],
+                    "update-ref",
+                    &format!("refs/heads/{BRANCH}"),
+                    &head,
+                    &fx.candidate,
+                ],
+            );
+            fs::write(fx.forge.join("base-applied"), "external").unwrap();
+            match *case {
+                "empty" | "unavailable" | "no-rule" => {
+                    fs::write(
+                        fx.forge.join(if *case == "no-rule" {
+                            "policy-no-rule"
+                        } else {
+                            "policy-empty"
+                        }),
+                        "control",
+                    )
+                    .unwrap();
+                    if *case == "unavailable" {
+                        fs::write(fx.forge.join("policy-unreadable"), "control").unwrap();
+                    }
+                }
+                _ => {
+                    let state = match *case {
+                        "pending" => "pending",
+                        "failed" => "failure",
+                        _ => "success",
+                    };
+                    fs::write(fx.forge.join("legacy-state"), state).unwrap();
+                    if !matches!(*case, "success" | "pending" | "failed") {
+                        fs::write(fx.forge.join(format!("legacy-{case}")), "control").unwrap();
+                    }
+                }
+            }
+            let result = execute_deterministic_action(
+                &host,
+                "handoff_land",
+                &json!({}),
+                &json!({"handoff_id":"accepted-fixture","run_id":RUN_ID,"max_wait_seconds":0}),
+                false,
+                &HashMap::new(),
+                None,
+            );
+            let should_merge = matches!(*case, "empty" | "no-rule" | "success");
+            if should_merge {
+                assert_eq!(
+                    result.unwrap_or_else(|error| panic!("{case}: {error}"))["phase"],
+                    "landed"
+                );
+                assert_eq!(
+                    fs::read_to_string(fx.forge.join("mutations")).unwrap(),
+                    "merge\n",
+                    "one ordinary merge and no owner base update: {case}"
+                );
+            } else {
+                assert!(result.is_err(), "{case}: {result:?}");
+                assert!(
+                    !fx.forge.join("mutations").exists(),
+                    "refused evidence never merges: {case}"
+                );
+            }
+            let calls = fs::read_to_string(fx.forge.join("calls")).unwrap();
+            assert!(
+                calls.contains("requiredStatusChecks"),
+                "real adapter policy read: {case}"
+            );
+            let updates = host.updates.lock().unwrap();
+            if should_merge {
+                assert_eq!(
+                    updates.last().unwrap().observed.as_ref(),
+                    Some(&accepted),
+                    "settlement names original acceptance: {case}"
+                );
+            }
+            assert!(
+                updates
+                    .iter()
+                    .filter_map(|row| row.observed.as_ref())
+                    .all(|candidate| *candidate == accepted),
+                "original acceptance survives: {case}"
+            );
+            assert_eq!(
+                matches!(
+                    updates.last().unwrap().step,
+                    orbit_engine::HandoffLandingStep::Complete
+                ),
+                should_merge,
+                "settlement: {case}"
+            );
+        });
+    }
 }

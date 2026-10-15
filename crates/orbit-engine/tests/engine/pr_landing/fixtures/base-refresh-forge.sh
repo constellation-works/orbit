@@ -11,7 +11,7 @@ export GIT_COMMITTER_NAME=Forge GIT_COMMITTER_EMAIL=forge@example.invalid
 printf '%s\n' "$*" >> "$forge/calls"
 head=$(git --git-dir="$remote" rev-parse "refs/heads/$branch")
 base_sha=$(git --git-dir="$remote" rev-parse "refs/heads/$base")
-repo="{\"id\":500,\"full_name\":\"$slug\"}"
+repo="{\"id\":500,\"full_name\":\"$slug\",\"url\":\"https://api.github.com/repos/$slug\"}"
 rollup='{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS","isRequired":false}'
 checks="{\"id\":1,\"name\":\"test\",\"head_sha\":\"$head\",\"app\":{\"id\":900},\"check_suite\":{\"id\":800},\"status\":\"completed\",\"conclusion\":\"success\"}"
 state=OPEN
@@ -31,6 +31,9 @@ fi
 if [ -f "$forge/clean-missing" ] && [ -f "$forge/base-applied" ]; then
     checks=$(printf '%s' "$checks" | sed 's/"name":"Protected (rust)"/"name":"Not emitted"/')
 fi
+if [ -f "$forge/legacy-state" ]; then
+    rollup="$rollup,"'{"__typename":"StatusContext","context":"external-ci","state":"SUCCESS","isRequired":true}'
+fi
 if [ -f "$forge/merged" ]; then
     state=MERGED; merge_state=UNKNOWN
     merged_at='"2026-10-15T08:00:00Z"'
@@ -45,8 +48,10 @@ case "$1 ${2:-}" in
         printf '{"number":42,"state":"%s","mergedAt":%s,"mergeable":"MERGEABLE","mergeStateStatus":"%s","reviewDecision":"%s","statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":%s,"url":"https://github.com/%s/pull/42"}\n' "$state" "$merged_at" "$merge_state" "$review" "$rollup" "$branch" "$head" "$base" "$merge_commit" "$slug" ;;
     'repo view') printf '{"nameWithOwner":"%s"}\n' "$slug" ;;
     'api graphql')
+        if [ -f "$forge/policy-unreadable" ]; then echo '{"errors":[{"message":"unavailable"}]}'; exit; fi
         case "$*" in
             *requiredStatusChecks*)
+                if [ -f "$forge/policy-no-rule" ]; then printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","baseRefName":"%s","reviewDecision":null,"baseRef":{"branchProtectionRule":null}}}}}\n' "$head" "$base"; exit; fi
                 printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","baseRefName":"%s","reviewDecision":null,"baseRef":{"branchProtectionRule":{"id":"RULE-1","requiredStatusChecks":[]}}}}}}\n' "$head" "$base" ;;
             *statusCheckRollup*)
                 printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[%s]}}}}]}}}}}\n' "$head" "$head" "$rollup" ;;
@@ -92,6 +97,18 @@ case "$1 ${2:-}" in
     'api '*)
         case "$2" in
             *'/rules/branches/'*)
+                if [ -f "$forge/policy-empty" ] || [ -f "$forge/policy-no-rule" ]; then echo '[]'; exit; fi
+                if [ -f "$forge/legacy-extra" ]; then
+                    echo '[{"type":"required_status_checks","ruleset_id":55,"ruleset_source":"orbit/test","ruleset_source_type":"Repository","parameters":{"required_status_checks":[{"context":"Protected (rust)","integration_id":900},{"context":"external-ci","integration_id":null}]}}]'; exit
+                fi
+                if [ -f "$forge/legacy-substitute" ]; then
+                    echo '[{"type":"required_status_checks","ruleset_id":55,"ruleset_source":"orbit/test","ruleset_source_type":"Repository","parameters":{"required_status_checks":[{"context":"Protected (rust)","integration_id":null}]}}]'; exit
+                fi
+                if [ -f "$forge/legacy-state" ]; then
+                    integration=null
+                    [ ! -f "$forge/legacy-app-bound" ] || integration=900
+                    printf '[{"type":"required_status_checks","ruleset_id":55,"ruleset_source":"%s","ruleset_source_type":"Repository","parameters":{"required_status_checks":[{"context":"external-ci","integration_id":%s}]}}]\n' "$slug" "$integration"; exit
+                fi
                 if [ -f "$forge/policy-after" ] && [ -f "$forge/base-applied" ]; then echo '[{"type":"required_status_checks","ruleset_id":56,"ruleset_source":"orbit/test","ruleset_source_type":"Repository","parameters":{"required_status_checks":[{"context":"Protected (rust)","integration_id":900}]}}]'; exit; fi
                 if [ -f "$forge/foreign_app" ]; then echo '[{"type":"required_status_checks","ruleset_id":55,"ruleset_source":"orbit/test","ruleset_source_type":"Repository","parameters":{"required_status_checks":[{"context":"Protected (rust)","integration_id":901}]}}]'; exit; fi
                 if [ -f "$forge/changed_policy" ]; then
@@ -101,8 +118,28 @@ case "$1 ${2:-}" in
                 echo '[{"type":"required_status_checks","ruleset_id":55,"ruleset_source":"'"$slug"'","ruleset_source_type":"Repository","parameters":{"required_status_checks":[{"context":"Protected (rust)","integration_id":900}]}}]' ;;
             *'/check-runs?'*)
                 if [ -f "$forge/unreadable-after" ] && [ -f "$forge/base-applied" ]; then echo '{"total_count":3,"check_runs":[]}'; exit; fi
+                if [ -f "$forge/legacy-shadow-pending" ]; then checks=$(printf '%s' "$checks" | sed 's/"name":"Protected (rust)"/"name":"external-ci"/;s/"status":"completed"/"status":"in_progress"/g'); fi
+                if [ -f "$forge/legacy-substitute" ] && [ -f "$forge/base-applied" ]; then checks=$(printf '%s' "$checks" | sed 's/"name":"Protected (rust)"/"name":"Not emitted"/'); fi
                 printf '{"total_count":%s,"check_runs":[%s]}\n' "$([ -f "$forge/base-applied" ] && echo 2 || echo 1)" "$checks" ;;
-            *'/status?'*) echo '{"total_count":0,"statuses":[]}' ;;
+            *'/status?'*)
+                status_head=$head; status_repo=$repo; statuses=''; count=0
+                if [ -f "$forge/legacy-state" ]; then
+                    status_state=$(cat "$forge/legacy-state")
+                    row_head=$head; row_slug=$slug; row_host=https://api.github.com
+                    [ ! -f "$forge/legacy-wrong-head" ] || status_head=$(printf '%040d' 1)
+                    [ ! -f "$forge/legacy-foreign" ] || status_repo='{"id":501,"full_name":"foreign/repo"}'
+                    [ ! -f "$forge/legacy-wrong-row" ] || row_head=$(printf '%040d' 1)
+                    [ ! -f "$forge/legacy-foreign-row" ] || row_slug=foreign/repo
+                    [ ! -f "$forge/legacy-foreign-host" ] || row_host=https://foreign.invalid
+                    statuses="{\"id\":10,\"context\":\"external-ci\",\"state\":\"$status_state\",\"url\":\"$row_host/repos/$row_slug/statuses/$row_head\"}"
+                    count=1
+                fi
+                if [ -f "$forge/legacy-substitute" ] && [ -f "$forge/base-applied" ]; then
+                    statuses="{\"id\":10,\"context\":\"Protected (rust)\",\"state\":\"success\",\"url\":\"https://api.github.com/repos/$slug/statuses/$head\"}"
+                    count=1
+                fi
+                printf '{"sha":"%s","repository":%s,"total_count":%s,"statuses":[%s]}\n' "$status_head" "$status_repo" "$count" "$statuses" ;;
+
             *'/actions/runs?'*|*'/actions/runs/700')
                 if [ -f "$forge/no-runs" ]; then echo '{"total_count":0,"workflow_runs":[]}'; exit; fi
                 old_base=$(cat "$forge/old-base")

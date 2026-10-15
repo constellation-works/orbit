@@ -70,6 +70,7 @@ pub(super) struct Snapshot {
     pub(super) required: Vec<RequiredGate>,
     pub(super) policy: Value,
     pub(super) checks: Value,
+    pub(super) statuses: Value,
     pub(super) runs: Value,
 }
 pub(super) fn snapshot(
@@ -231,9 +232,8 @@ pub(super) fn snapshot(
             }
         }
     }
-    if required.is_empty() {
-        return Err(unreadable("no effective protected context"));
-    }
+    // A successfully read empty policy is valid for current-gate observation.
+    // Recovery callers must still prove an actual missing workflow context.
     let checks = api(
         deadline,
         workspace,
@@ -244,6 +244,34 @@ pub(super) fn snapshot(
         number(check, "id")?;
         text(check, "name")?;
         number(&check["app"], "id")?;
+    }
+    // Combined status pins the latest legacy contexts to this repository and
+    // commit. A context has no app identity and cannot satisfy an app-bound gate.
+    let statuses = api(
+        deadline,
+        workspace,
+        &format!("repos/{{owner}}/{{repo}}/commits/{head}/status?per_page=100"),
+    )?;
+    same(&statuses["sha"], json!(head), "status head")?;
+    same(
+        &statuses["repository"]["id"],
+        json!(repository_id),
+        "status repository",
+    )?;
+    same(
+        &statuses["repository"]["full_name"],
+        json!(repository),
+        "status repository name",
+    )?;
+    for status in complete_list(&statuses, "statuses")? {
+        number(status, "id")?;
+        text(status, "context")?;
+        text(status, "state")?;
+        same(
+            &status["url"],
+            json!(format!("{}/statuses/{head}", text(&repo, "url")?)),
+            "status context repository/head",
+        )?;
     }
     let runs = api(
         deadline,
@@ -258,6 +286,7 @@ pub(super) fn snapshot(
         required,
         policy: json!({"classic":classic,"effective_rules":rules}),
         checks,
+        statuses,
         runs,
     })
 }
@@ -403,15 +432,37 @@ pub(super) fn workflow(
     }
     Ok((path, blob, source))
 }
-pub(super) fn gate_passed(gate: &RequiredGate, checks: &[Value]) -> bool {
+/// Presence, including unsuccessful evidence, prevents absent-workflow diagnosis.
+pub(super) fn gate_present(gate: &RequiredGate, checks: &[Value], statuses: &[Value]) -> bool {
     checks.iter().any(|check| {
         check["name"].as_str() == Some(&gate.context)
-            && check["status"] == "completed"
-            && check["conclusion"] == "success"
             && gate
                 .app_id
                 .is_none_or(|app| check["app"]["id"].as_u64() == Some(app))
-    })
+    }) || (gate.app_id.is_none()
+        && statuses
+            .iter()
+            .any(|status| status["context"] == gate.context))
+}
+
+pub(super) fn gate_passed(gate: &RequiredGate, checks: &[Value], statuses: &[Value]) -> bool {
+    // When a context has both representations, neither may conceal a failure
+    // or pending result in the other. Only explicit success pays an owed gate.
+    gate_present(gate, checks, statuses)
+        && checks
+            .iter()
+            .filter(|check| {
+                check["name"].as_str() == Some(&gate.context)
+                    && gate
+                        .app_id
+                        .is_none_or(|app| check["app"]["id"].as_u64() == Some(app))
+            })
+            .all(|check| check["status"] == "completed" && check["conclusion"] == "success")
+        && (gate.app_id.is_some()
+            || statuses
+                .iter()
+                .filter(|status| status["context"] == gate.context)
+                .all(|status| status["state"] == "success"))
 }
 
 /// Diagnose only an absent protected context with a static failed dependency.
@@ -424,20 +475,21 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
     let deadline = Deadline::from_input(input)?;
     let snapshot = snapshot(deadline, workspace, pr, head, branch, base)?;
     let checks = complete_list(&snapshot.checks, "check_runs")?;
+    let statuses = complete_list(&snapshot.statuses, "statuses")?;
     let missing = snapshot
         .required
         .iter()
-        .filter(|gate| {
-            !checks.iter().any(|check| {
-                check["name"].as_str() == Some(&gate.context)
-                    && gate
-                        .app_id
-                        .is_none_or(|app| check["app"]["id"].as_u64() == Some(app))
-            })
-        })
+        .filter(|gate| !gate_present(gate, checks, statuses))
         .collect::<Vec<_>>();
     if missing.is_empty() {
         return Ok(json!({"evidence":null}));
+    }
+    if statuses.iter().any(|status| {
+        status["state"] != "success" || missing.iter().any(|gate| status["context"] == gate.context)
+    }) {
+        return Err(unreadable(
+            "legacy status is not an absent workflow context",
+        ));
     }
     let mut candidates = Vec::new();
     let runs = complete_list(&snapshot.runs, "workflow_runs")?;
@@ -608,7 +660,7 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
                 run_attempt: u32::try_from(attempt).map_err(|_| unreadable("attempt overflow"))?,
                 event: "pull_request".into(),
                 policy: snapshot.policy.clone(),
-                provider: json!({"pr":snapshot.pr,"checks":snapshot.checks,"suite":suite,"workflow_runs":snapshot.runs}),
+                provider: json!({"pr":snapshot.pr,"checks":snapshot.checks,"statuses":snapshot.statuses,"suite":suite,"workflow_runs":snapshot.runs}),
                 run: run.clone(),
                 jobs: jobs.clone(),
                 log: log.into(),
@@ -632,6 +684,9 @@ pub(super) fn observe(input: &Value) -> Result<Value, OrbitError> {
     let evidence: PrInfrastructureEvidence = serde_json::from_value(input["evidence"].clone())
         .map_err(|_| unreadable("reserved evidence"))?;
     let deadline = Deadline::from_input(input)?;
+    if evidence.required.is_empty() {
+        return Err(unreadable("reserved protected contexts"));
+    }
     let snapshot = snapshot(
         deadline,
         workspace,
@@ -673,10 +728,11 @@ pub(super) fn observe(input: &Value) -> Result<Value, OrbitError> {
         return Err(unreadable("superseded/ambiguous reserved attempt"));
     }
     let checks = complete_list(&snapshot.checks, "check_runs")?;
+    let statuses = complete_list(&snapshot.statuses, "statuses")?;
     let passed = snapshot
         .required
         .iter()
-        .all(|gate| gate_passed(gate, checks))
+        .all(|gate| gate_passed(gate, checks, statuses))
         && checks.iter().any(|check| {
             check["name"].as_str() == Some(&evidence.missing.context)
                 && check["app"]["id"].as_u64() == Some(evidence.app_id)
@@ -706,6 +762,6 @@ pub(super) fn observe(input: &Value) -> Result<Value, OrbitError> {
     }
     deadline.remaining()?;
     Ok(
-        json!({"attempt":attempt,"status":state,"conclusion":run["conclusion"],"gates_passed": passed && attempt > u64::from(evidence.run_attempt) && state == "completed", "run":run,"checks":snapshot.checks}),
+        json!({"attempt":attempt,"status":state,"conclusion":run["conclusion"],"gates_passed": passed && attempt > u64::from(evidence.run_attempt) && state == "completed", "run":run,"checks":snapshot.checks,"statuses":snapshot.statuses}),
     )
 }
