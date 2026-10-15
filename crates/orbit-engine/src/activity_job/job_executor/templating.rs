@@ -6,6 +6,18 @@ pub(super) fn render_input(
     tctx: &TemplateContext,
     input_schema: Option<&Value>,
 ) -> Result<Value, DispatchError> {
+    // An exact whole-input reference forwards opaque caller data, including
+    // absent optional fields. Recursing through it would interpret prompt
+    // text as templates, and optional-string normalization would manufacture
+    // empty declarations (notably repo_root) that were never submitted.
+    if let Some(Value::String(template)) = default_input
+        && template
+            .strip_prefix("{{")
+            .and_then(|token| token.strip_suffix("}}"))
+            .is_some_and(|token| token.trim() == "input")
+    {
+        return Ok(base_input.clone());
+    }
     let src = default_input.cloned().unwrap_or_else(|| base_input.clone());
     let normalized_context = normalize_optional_string_inputs(tctx, input_schema);
     render_value(&src, normalized_context.as_ref().unwrap_or(tctx))

@@ -26,6 +26,8 @@ fn plant_invoke_provider(fixture: &Fixture, body: &str) {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+mod checkout;
+
 fn agent_wait_redacts_sensitive_warning_content_in_progress_and_output() {
     let fixture = Fixture::init();
     plant_invoke_provider(&fixture, &format!("printf '%s\\n' '{AGENT_TEST_ANSWER}'"));

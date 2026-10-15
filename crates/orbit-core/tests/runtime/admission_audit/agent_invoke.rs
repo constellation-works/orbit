@@ -276,6 +276,32 @@ fn an_unauthorized_keyed_submission_claims_nothing() {
     assert_no_run_created(&runtime);
 }
 
+fn invalid_invocation_directories_create_no_run() {
+    let (root, runtime, repo_root) = test_runtime_with_codex_crew("workspace-write");
+    let session = ToolSessionContext {
+        effective_capabilities: [McpCapability::Operator].into_iter().collect(),
+        ..ToolSessionContext::default()
+    };
+    let file = repo_root.join("file");
+    std::fs::write(&file, "not a directory").unwrap();
+    for cwd in [
+        String::new(),
+        "relative".to_string(),
+        repo_root.join("missing").display().to_string(),
+        file.display().to_string(),
+        root.path().display().to_string(),
+    ] {
+        let error = runtime
+            .submit_agent_invoke_run(request(&cwd, &session))
+            .expect_err("an invalid or unrelated cwd must not create a run");
+        assert!(
+            matches!(error, OrbitError::InvalidInput(_)),
+            "{cwd}: {error:?}"
+        );
+        assert_no_run_created(&runtime);
+    }
+}
+
 // ------------------------------------------------------ provider sandbox
 
 // Related boundary scenarios share the isolated table fixture.
@@ -285,5 +311,6 @@ crate::scenario_table!(
     ordinary_job_input_cannot_carry_a_trusted_host_admission,
     a_foreground_job_run_cannot_carry_a_trusted_host_admission,
     an_admitted_run_cannot_be_resumed,
-    an_unauthorized_keyed_submission_claims_nothing
+    an_unauthorized_keyed_submission_claims_nothing,
+    invalid_invocation_directories_create_no_run
 );

@@ -99,6 +99,14 @@ Step-local input layering landed earlier, but the shipped job-level `default_inp
 
 Step-level `default_input` is still recursively template-rendered before dispatch. Support landed in [T20260413-0141], entered the v2 DAG path in [T20260418-2018], and was corrected for job-level merges in [T20260423-0445].
 
+An exact `default_input: "{{ input }}"` forwards the complete inherited input as
+opaque JSON. It preserves absent optional fields and literal template tokens in
+caller strings, bypassing recursive rendering and optional-string normalization.
+The operator invocation job uses this to carry its internally derived checkout
+pair without manufacturing an empty `repo_root` for primary invocations. The
+reserved trusted-host admission stays at the run input's top level, where ordinary
+submission and replay apply their existing admission guards.
+
 ---
 
 ## 4. Load-Time Normalization Pipeline

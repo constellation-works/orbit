@@ -271,8 +271,18 @@ rather than being overwritten with `cancelled`.
 
 A run of `agent_invoke_pipeline` is one operator invocation of an agent for exploration
 or debugging (`orbit run agent <prompt>`, or the `orbit.agent.invoke` tool). It is a
-single-step run with no worktree, no task ownership, and no delivery tail, so most of
+single-step run that creates no worktree, has no task ownership or delivery tail, so most of
 this runbook's task-recovery steps do not apply to one.
+
+`--cwd` may name the registered primary checkout, a directory inside it, or an
+existing linked worktree root beneath the workspace's `.orbit/state/worktrees/`.
+For a linked root, governed submission derives the assigned checkout identity
+from its Git common directory and carries matching internal `workspace_path`
+and `repo_root` fields to the activity. The admission and audit name that linked
+checkout; the provider starts there. The primary remains the registered owner,
+not the assigned `repo_root`. Unrelated repositories and mismatched pairs fail
+before provider startup. Primary interior directories retain their requested
+cwd without declaring a linked-worktree pair.
 
 Four differences matter when triaging one:
 
