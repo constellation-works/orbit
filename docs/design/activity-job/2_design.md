@@ -3,8 +3,8 @@ summary: "Activity / Job — Design"
 type: design
 title: "Activity / Job — Design"
 owner: codex
-last_updated: 2026-10-11
-last_validated: 2026-10-10
+last_updated: 2026-10-14
+last_validated: 2026-10-14
 status: Draft
 feature: activity-job
 doc_role: design
@@ -1420,18 +1420,13 @@ ordering under the `max_workers` cap, loop exit on break, failure or an
 exhausted iteration budget, and rejection of non-array JSON in `fan_out.items`
 and `loop.items` while a bare comma-separated list and a JSON array still run.
 
-The unit tests under
-`crates/orbit-engine/src/activity_job/job_executor/tests/` are the admitted
-exceptions:
-
-- `step.rs` covers the `compute_backoff_ms` bounds.
-- `validate.rs` rejects reading the output of a conditionally run step.
-- `resume.rs` checks that a re-executed PR step's output reaches promotion and
-  its checkpoint.
-
-Their shared scaffolding (`ScriptedHost`, `Action`, job/step builders) lives in
-`tests/mod.rs`. A new executor block is covered first by a boundary job in
-`v2_runtime.rs`. It gets a unit test only when it meets the admission criteria.
+The remaining module-local test is in
+`crates/orbit-engine/src/activity_job/job_executor/tests/step.rs`; it checks
+retry backoff arithmetic. Checkpoint/resume coverage formerly in that module
+now lives in `crates/orbit-engine/tests/engine/admission_audit/resume.rs`,
+where it exercises the public `execute_job_with_resume` boundary. The module's
+`tests/mod.rs` only declares the `step` test. New executor behavior is covered
+first through the public workflow boundary, following the test strategy.
 
 ### 8.13 Automatic recovery
 

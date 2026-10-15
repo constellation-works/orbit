@@ -3,8 +3,8 @@ summary: "Activity / Job — Vision"
 type: design
 title: "Activity / Job — Vision"
 owner: codex
-last_updated: 2026-10-06
-last_validated: 2026-10-10
+last_updated: 2026-10-14
+last_validated: 2026-10-14
 status: Draft
 feature: activity-job
 doc_role: vision
@@ -106,7 +106,7 @@ None of these are research contributions. Activity / Job earns its keep only if 
 
 - [1_overview.md](./1_overview.md) — feature purpose and core concepts
 - [2_design.md](./2_design.md) — current implementation
-- [4_decisions.md](./4_decisions.md) — ADR log
+- [4_decisions.md](./4_decisions.md) — recorded design decisions and their reasoning
 - [specs/backend-resolution.md](./specs/backend-resolution.md) — retired agent backend selection and its migration
 - [specs/audit-envelope.md](./specs/audit-envelope.md) — v2 audit event tree and persistence layout
 
