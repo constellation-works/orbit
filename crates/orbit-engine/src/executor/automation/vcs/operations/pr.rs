@@ -506,13 +506,22 @@ pub(super) fn pr_status(input: &Value) -> Result<Value, OrbitError> {
         "--json".to_string(),
         "number,state,mergedAt,mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,headRefName,headRefOid,baseRefName,mergeCommit,url".to_string(),
     ];
-    let result = execute_with_transient_retry(
-        "gh",
-        &args,
-        Some(Path::new(workspace_path)),
-        DEFAULT_TIMEOUT_MS,
-        "PR status",
-    )?;
+    let result = if input.get("deadline_ms").is_some() {
+        super::super::completion_deadline::Deadline::from_input(input)?.execute(
+            "gh",
+            args,
+            Path::new(workspace_path),
+            "PR status",
+        )?
+    } else {
+        execute_with_transient_retry(
+            "gh",
+            &args,
+            Some(Path::new(workspace_path)),
+            DEFAULT_TIMEOUT_MS,
+            "PR status",
+        )?
+    };
     let pull_request: Value = serde_json::from_str(&result.stdout).map_err(|error| {
         OrbitError::Execution(format!(
             "private automation VCS PR status returned invalid JSON: {error}"
@@ -538,9 +547,9 @@ pub(super) fn pr_required_checks(input: &Value) -> Result<Value, OrbitError> {
     let query = "query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){\
         pullRequest(number:$pr){headRefOid commits(last:1){nodes{commit{oid \
         statusCheckRollup{contexts(first:100){pageInfo{hasNextPage} nodes{__typename \
-        ... on CheckRun{name isRequired(pullRequestNumber:$pr) \
+        ... on CheckRun{name status conclusion isRequired(pullRequestNumber:$pr) \
         checkSuite{workflowRun{workflow{name}}}} \
-        ... on StatusContext{context isRequired(pullRequestNumber:$pr)}}}}}}}}}}";
+        ... on StatusContext{context state isRequired(pullRequestNumber:$pr)}}}}}}}}}}";
     let args = vec![
         "api".to_string(),
         "graphql".to_string(),

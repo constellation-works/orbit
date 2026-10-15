@@ -1395,7 +1395,15 @@ fn a_base_modified_merge_refusal_retries_the_same_candidate_on_fresh_evidence() 
                 // the retry.
                 let fresh_reads = checks.len().max(2) - 1;
                 let mut expected = vec!["pr view", "repo view", "api graphql", MERGE_CALL];
-                expected.extend(std::iter::repeat_n("pr view", fresh_reads));
+                for check in checks.iter().skip(1) {
+                    expected.push("pr view");
+                    if *check == "pending" {
+                        expected.push("api graphql");
+                    }
+                }
+                if checks.len() == 1 {
+                    expected.push("pr view");
+                }
                 expected.extend(["repo view", "api graphql", MERGE_CALL, "pr view"]);
                 assert_eq!(
                     fx.forge_calls()[published..],
@@ -8091,6 +8099,14 @@ case "$1 ${2:-}" in
         esac ;;
     "repo view") echo '{"nameWithOwner":"orbit/test"}' ;;
     "api graphql")
+        case "$*" in
+            *statusCheckRollup*)
+                observed=$(sed -n "$(cat "$forge/reads")p" "$forge/checks")
+                [ -n "$observed" ] || observed=$(tail -n 1 "$forge/checks")
+                rollup=$(check "$observed")
+                printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[%s]}}}}]}}}}}\n' "$(head_sha)" "$(head_sha)" "$(printf '%s' "$rollup" | sed 's/}$/,"isRequired":true}/')"
+                exit ;;
+        esac
         # An unreviewed push that lands after the freshness check, while the
         # merge strategy is being resolved and before the merge request.
         if [ -f "$forge/push-before-merge" ] && [ ! -f "$forge/pushed" ]; then

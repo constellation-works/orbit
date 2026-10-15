@@ -344,13 +344,30 @@ pub(in crate::executor::automation::vcs) fn read_pr_status<H: RuntimeHost + ?Siz
     workspace_path: &Path,
     pr_number: &str,
 ) -> Result<PullRequestStatus, OrbitError> {
-    let response = host.run_private_vcs_operation(
-        operations::PR_STATUS,
-        json!({
-            "pr": pr_number,
-            "workspace_path": workspace_path.to_string_lossy(),
-        }),
-    )?;
+    read_pr_status_with_deadline(host, workspace_path, pr_number, None)
+}
+
+/// The same status observation within an existing completion/landing budget.
+pub(in crate::executor::automation::vcs) fn read_pr_status_before<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    pr_number: &str,
+    deadline_ms: u64,
+) -> Result<PullRequestStatus, OrbitError> {
+    read_pr_status_with_deadline(host, workspace_path, pr_number, Some(deadline_ms))
+}
+
+fn read_pr_status_with_deadline<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    pr_number: &str,
+    deadline_ms: Option<u64>,
+) -> Result<PullRequestStatus, OrbitError> {
+    let mut input = json!({"pr":pr_number,"workspace_path":workspace_path.to_string_lossy()});
+    if let Some(deadline) = deadline_ms {
+        input["deadline_ms"] = json!(deadline);
+    }
+    let response = host.run_private_vcs_operation(operations::PR_STATUS, input)?;
     Ok(PullRequestStatus::from_status_response(&response))
 }
 
@@ -361,6 +378,10 @@ pub(in crate::executor::automation::vcs) fn read_pr_status<H: RuntimeHost + ?Siz
 pub(in crate::executor::automation::vcs) struct RequiredChecks {
     pub(in crate::executor::automation::vcs) head_sha: String,
     pub(in crate::executor::automation::vcs) required: Vec<(Option<String>, String)>,
+    /// The independently reported PR head, checked against its commit before waiting.
+    pub(super) reported_head_sha: Option<String>,
+    /// Required contexts and their provider states from this same observation.
+    pub(super) checks: Vec<StatusCheck>,
 }
 
 impl RequiredChecks {
@@ -389,12 +410,15 @@ impl RequiredChecks {
             return Ok(Self {
                 head_sha,
                 required: Vec::new(),
+                reported_head_sha: reported(pull_request.get("headRefOid")),
+                checks: Vec::new(),
             });
         };
         if contexts.pointer("/pageInfo/hasNextPage") != Some(&Value::Bool(false)) {
             return Err(unreadable("was truncated or carried no page information"));
         }
         let mut required = Vec::new();
+        let mut checks = Vec::new();
         for node in contexts["nodes"]
             .as_array()
             .ok_or_else(|| unreadable("carried no check list"))?
@@ -402,12 +426,16 @@ impl RequiredChecks {
             let name = reported(node.get("name").or_else(|| node.get("context")))
                 .ok_or_else(|| unreadable("named no check"))?;
             match node.get("isRequired").and_then(Value::as_bool) {
-                Some(true) => required.push((
-                    node.pointer("/checkSuite/workflowRun/workflow/name")
+                Some(true) => {
+                    let workflow = node
+                        .pointer("/checkSuite/workflowRun/workflow/name")
                         .and_then(Value::as_str)
-                        .map(|workflow| workflow.trim().to_string()),
-                    name,
-                )),
+                        .map(|workflow| workflow.trim().to_string());
+                    let mut check = StatusCheck::parse(node);
+                    check.workflow_name = workflow.clone();
+                    checks.push(check);
+                    required.push((workflow, name));
+                }
                 Some(false) => {}
                 None => {
                     return Err(unreadable(&format!(
@@ -416,7 +444,12 @@ impl RequiredChecks {
                 }
             }
         }
-        Ok(Self { head_sha, required })
+        Ok(Self {
+            head_sha,
+            required,
+            checks,
+            reported_head_sha: reported(pull_request.get("headRefOid")),
+        })
     }
 
     /// Whether the rollup entry `(workflow, name)` is required. A rollup
