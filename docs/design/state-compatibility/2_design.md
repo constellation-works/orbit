@@ -154,12 +154,15 @@ binary, and the apply path are otherwise unchanged.
   that carries it.
 - **The layout half is not write-gated.** See §4: an additive-newer layout
   permits ordinary operation, so the classification carries the whole weight.
-- **Audit appends require a writable, supported schema.** Tool dispatch from
-  a foreign-generation reader appends through a separate connection to the
-  existing database, without migration, when its schema exactly matches this
+- **Audit appends require a writable, supported schema.** Native CLI commands
+  and tool dispatch from a foreign-generation reader share an append path
+  through a separate connection to the existing database, without migration,
+  when its schema exactly matches this
   binary. The runtime's state handles remain read-only. A newer read-only store
   or unwritable database still refuses the audit write; the CLI warns without
-  failing a read-only tool result.
+  failing the read result. Native CLI audit records retain the command's success
+  or failure outcome; tool dispatch owns its audit row and suppresses the
+  command guard's duplicate emission.
 - **The task registry fences binaries from before its ledger.** The global
   task registry runs this contract on its own ledger (§8). Binaries from
   before that ledger read only its `PRAGMA user_version`, so they cannot be

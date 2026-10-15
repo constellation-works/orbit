@@ -4,7 +4,8 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
     AuditActorAggregate, AuditAttributionAggregate, AuditEventFilter, AuditEventInsertParams,
-    AuditRoleAggregate, AuditToolAggregate, FailureIncidentQuery, FailureIncidentReport,
+    AuditInvocationFields, AuditRoleAggregate, AuditToolAggregate, FailureIncidentQuery,
+    FailureIncidentReport,
 };
 use orbit_types::telemetry::{AuditEvent, AuditEventStatus, AuditStats};
 
@@ -148,9 +149,7 @@ impl OrbitRuntime {
     }
 
     pub fn record_audit_event(&self, params: &AuditEventInsertParams) -> Result<(), OrbitError> {
-        self.stores()
-            .audit_events()
-            .insert_audit_event_record(params)
+        self.record_audit_event_with_invocation(params, AuditInvocationFields::default())
     }
 
     /// Hourly count buckets `(rfc3339_hour_start, count)` for audit events at or

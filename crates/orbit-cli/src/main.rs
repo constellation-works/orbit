@@ -800,12 +800,10 @@ fn run() {
         }
         None => Ok(()),
     };
-    let skip_audit = _generation
-        .as_ref()
-        .is_some_and(orbit_common::fs::generation::GenerationGuard::joined_foreign_generation);
-    let guard = audit_meta
-        .filter(|_| !skip_audit)
-        .map(|meta| audit_middleware::AuditGuard::new(&runtime, meta));
+    // The runtime appends telemetry separately from write-free state handles.
+    // Foreign-generation reads still need their native command outcome; the
+    // guard itself suppresses emission when tool dispatch already owns it.
+    let guard = audit_meta.map(|meta| audit_middleware::AuditGuard::new(&runtime, meta));
     let result = authorize(&runtime).and_then(|()| dispatch(cli.command, context));
 
     finish_command(result, &sink, json_error_preference, guard);

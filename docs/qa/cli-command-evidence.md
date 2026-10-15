@@ -6,6 +6,8 @@ Evidence comes from actual `QA_CLI` argv records emitted only after successful c
 
 The fixtures isolate HOME, USERPROFILE, XDG configuration, registry and workspace data, and clear inherited authority. Provider tests use synthetic executables or deterministic replacement graphs; they do not certify real provider invocation. Runtime APIs used to establish a consumer baseline or workflow-failure block are fixture setup; the listed command behavior is executed through the real CLI.
 
+[`audit_cli_native_reads_persist_once_in_writable_and_foreign_generations`](../../crates/orbit-cli/tests/task/audit_cli/native_reads.rs) covers native task artifact reads, task status reads and a missing-artifact failure in both writable and live compatible foreign generations. Public audit list/show must expose exactly one row per invocation with the original outcome, while output bytes, database schema and generation record stay unchanged across the foreign-generation reads.
+
 The final aggregate at the pre-rebase local delivery snapshot `9d24863d9` completed on 2026-10-03 with **1,071 passed, 0 failed, 0 ignored**, across **54 suite summaries**, exit 0. Opt-in tracing emitted **145 actual successful argv records**. The path map combines those records with the earlier isolated QA runner captures and reviewed named passing cases; the aggregate count alone is not evidence for a command path. Two platform-only integration targets contain zero cases on Mac and provide no Linux evidence.
 
 Run-observation fixtures pin an enabled deterministic crew and give every child an empty executable search path. The seven cases pass without installed provider launchers; failures include exit status, stdout and stderr for diagnosis.

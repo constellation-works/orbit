@@ -114,9 +114,9 @@ impl OrbitRuntime {
         Ok(self.context.stores().host.sqlite.clone())
     }
 
-    /// Persist dispatch telemetry without widening a foreign-generation
-    /// reader's operational state access or running database migrations.
-    pub(crate) fn record_tool_dispatch_audit(
+    /// Persist native CLI and tool-dispatch telemetry without widening a
+    /// foreign-generation reader's state access or running database migrations.
+    pub(crate) fn record_audit_event_with_invocation(
         &self,
         params: &AuditEventInsertParams,
         invocation: AuditInvocationFields<'_>,
