@@ -516,6 +516,7 @@ fn claim_repair_input(repair: &ClaimRepair) -> serde_json::Value {
 }
 
 pub(crate) const CLAIMED_PR_PIPELINE: &str = "task_claimed_pr_pipeline";
+pub(crate) const CLAIMED_ADJUDICATION_PIPELINE: &str = "task_claimed_adjudication_pipeline";
 pub(crate) const CLAIMED_LOCAL_PIPELINE: &str = "task_claimed_local_pipeline";
 
 /// The loose-leaf wrapper the legacy drain dispatches. It occupies a slot on
@@ -528,7 +529,11 @@ const LEGACY_WRAPPER_PIPELINE: &str = "task_auto_pipeline";
 fn is_leaf_pipeline(job: &str) -> bool {
     matches!(
         job,
-        "task_pr_pipeline" | "task_local_pipeline" | CLAIMED_PR_PIPELINE | CLAIMED_LOCAL_PIPELINE
+        "task_pr_pipeline"
+            | "task_local_pipeline"
+            | CLAIMED_PR_PIPELINE
+            | CLAIMED_LOCAL_PIPELINE
+            | CLAIMED_ADJUDICATION_PIPELINE
     )
 }
 
@@ -647,7 +652,9 @@ pub(super) fn mutate(
                 let claim = record.receipt.as_ref().and_then(|r| r.claim.as_ref()).ok_or_else(|| invalid("claim missing"))?;
                 let now = Utc::now();
                 let run_id = next_run_id_conn(conn, workspace, RunIdRole::Child, now)?;
-                let job = pipeline(&record.request)?;
+                let adjudication = record.receipt.as_ref().and_then(|r|r.task.as_ref()).and_then(|t|t.resume_candidate.as_ref()).and_then(|c|c.held_recovery.as_ref())
+                    .is_some_and(|a| a.binding.disposition == orbit_types::workflow::HeldRecoveryDisposition::AdjudicateEvidence);
+                let job = if adjudication {CLAIMED_ADJUDICATION_PIPELINE} else {pipeline(&record.request)?};
                 // The claimed task lives in the owner's store, not this one, so
                 // the leaf carries the owner's snapshot of it. Crew resolution
                 // (`orbit-core` `task_crew_from_run_input`) reads `claimed_task`

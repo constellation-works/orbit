@@ -134,6 +134,7 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
 
     ensure_origin_publishes_elsewhere(workspace_path, &branch)?;
 
+    super::candidate_resume::held_recovery::validate_publication(host, input, workspace_path)?;
     let local_sha = commit_sha(workspace_path, &branch)?;
     let probe = pre_push_remote_branch(workspace_path, &branch)?;
     let remote_sha = &probe.sha;

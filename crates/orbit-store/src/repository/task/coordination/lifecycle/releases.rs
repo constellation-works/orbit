@@ -62,6 +62,7 @@ impl TaskCommitBoundary {
             let carry = hold.candidate_carry.as_ref();
             let branch = published_branch.or_else(|| carry.map(|carry| carry.branch.as_str()))?;
             Some(ClaimCandidateRef {
+                held_recovery: None,
                 branch: branch.to_string(),
                 head_sha: hold.candidate.commit.clone(),
                 pull_request: evidence
@@ -222,6 +223,12 @@ impl TaskCommitBoundary {
         history: &[orbit_types::task::TaskHistoryEntry],
         machine_id: &str,
     ) -> Result<Option<CandidateOffer>, OrbitError> {
+        if let Some(candidate) = self.recovery_candidate(task, history)? {
+            return Ok(Some(CandidateOffer {
+                candidate,
+                fresh: None,
+            }));
+        }
         if let Some(held) = held_candidate_offer(task, history, machine_id) {
             return Ok(Some(held));
         }
@@ -375,6 +382,7 @@ fn held_candidate_offer(
     };
     Some(CandidateOffer {
         candidate: ClaimCandidateRef {
+            held_recovery: None,
             branch: held.branch,
             head_sha: held.head_sha,
             pull_request: None,

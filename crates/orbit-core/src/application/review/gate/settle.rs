@@ -285,6 +285,23 @@ fn settle(
     }
 
     let head = orbit_engine::review_gate::revision(&context.workspace_path, "HEAD")?;
+    if let Some(recovery) = super::super::recovery::claimed_admission(runtime, &context.run_id)?
+        && recovery.binding.disposition
+            == orbit_types::workflow::HeldRecoveryDisposition::AdjudicateEvidence
+        && (head.commit != recovery.binding.candidate_sha
+            || context.base_sha()? != recovery.binding.source_base_sha
+            || !uncommitted_paths(&context.workspace_path)?.is_empty())
+    {
+        return Err(OrbitError::CapabilityDenied(
+            "evidence adjudication changed its exact candidate or base".into(),
+        ));
+    }
+
+    if super::super::recovery::claimed_admission(runtime, &context.run_id)?.is_some_and(|a| {
+        a.binding.disposition == orbit_types::workflow::HeldRecoveryDisposition::AdjudicateEvidence
+    }) {
+        super::super::recovery::prepare(runtime, &json!({"observe":true}), Some(&context.run_id))?;
+    }
     let committed_repair = if head.commit == attempt.candidate.commit {
         None
     } else {
@@ -579,7 +596,15 @@ fn settle(
                 .tasks
                 .first()
                 .map(orbit_types::task::Task::spec_digest),
-            published_ref: if context.claimed {
+            published_ref: if let Some(admission) =
+                super::super::recovery::claimed_admission(runtime, &context.run_id)?
+                && admission.binding.disposition
+                    == orbit_types::workflow::HeldRecoveryDisposition::AdjudicateEvidence
+            {
+                // Already published, still lease-checked above. Read-only
+                // adjudication never pushes or renames the source branch.
+                Some(format!("refs/heads/{}", admission.binding.branch))
+            } else if context.claimed {
                 publish_held_candidate(context, &certificate.final_candidate.commit)
             } else {
                 None

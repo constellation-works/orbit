@@ -33,6 +33,7 @@ mod handoff;
 mod landing;
 mod projection;
 pub(crate) mod reconciliation;
+pub(crate) mod recovery;
 mod switches;
 #[cfg(test)]
 mod tests;

@@ -396,6 +396,10 @@ pub struct AdmissionRequest {
     /// `review.before_pr` on admits only an executor that declares it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub review_gate: bool,
+    /// The executor understands authenticated held recovery and both typed
+    /// continuations. Older receipts default false and cannot consume one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub held_recovery: bool,
     pub run_context: AdmissionRunContext,
     pub ship: AdmissionShipContract,
     /// What the executor can run. Absent for an owner-local admission and

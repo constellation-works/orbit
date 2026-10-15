@@ -34,6 +34,16 @@ impl Judgement {
         carry: Option<&orbit_types::workflow::ReviewEvidenceCarried>,
         host: BTreeMap<String, ReviewExternalEvidence>,
     ) -> Result<(), OrbitError> {
+        if crate::application::review::recovery::claimed_admission(runtime, &context.run_id)?
+            .is_some_and(|a| {
+                a.binding.disposition
+                    == orbit_types::workflow::HeldRecoveryDisposition::AdjudicateEvidence
+            })
+        {
+            // A prospective decision never spends old or newly attached proof.
+            // Receipt and ordinary completion happen after this claim holds.
+            return Ok(());
+        }
         if context.task_ids.len() != 1
             || self.external_evidence.is_empty()
             || self.has_open_findings()

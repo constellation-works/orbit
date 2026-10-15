@@ -296,6 +296,7 @@ enum Render {
     ArtifactGet { out: Option<PathBuf> },
     ReviewReset,
     Reconcile,
+    Recovery,
     ToolRun { full: bool, fields: Vec<String> },
 }
 
@@ -406,6 +407,11 @@ fn task_call(command: &TaskSubcommand, holder: &HostEntry) -> Result<RoutedCall,
                 name: invocation.spec.tool_name.into(),
                 input: without_host(&invocation.input),
                 render: Render::ReviewReset,
+            },
+            TaskVerb::ReviewRecover => RoutedCall {
+                name: invocation.spec.tool_name.into(),
+                input: without_host(&invocation.input),
+                render: Render::Recovery,
             },
             TaskVerb::ReconcileReview => RoutedCall {
                 name: invocation.spec.tool_name.into(),
@@ -529,6 +535,7 @@ fn render(name: &str, render: Render, value: Value, holder: &HostEntry) -> Comma
             super::task::review_reset::REVIEW_RESET_TEXT,
         )
         .into()),
+        Render::Recovery => Ok(Payload::document(with_host(value, holder)).into()),
         Render::Reconcile => {
             let text = super::task::reconcile_review::reconciliation_text(&value);
             Ok(Payload::detail(with_host(value, holder), text).into())

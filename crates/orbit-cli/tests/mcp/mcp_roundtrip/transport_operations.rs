@@ -497,6 +497,10 @@ fn review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions() {
     let args = json!({"workspace":selector,"id":id,"lineage_key":lineage,"reason":"Repair old timeout charges"});
     let mut client = workspace.serve();
     client.call_tool_err("orbit_task_review_reset", args.clone());
+    client.call_tool_err(
+        "orbit_task_review_recover",
+        json!({"workspace":selector,"id":id,"action":"status"}),
+    );
     assert_eq!(
         persisted(),
         original,
@@ -537,12 +541,31 @@ fn review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions() {
         "a managed agent cannot use elevated operator authority to reset its budget"
     );
     assert_eq!(persisted(), original);
+    let refused_recovery = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args(["task", "review-recover", id, "--action", "status", "--json"])
+        .env("ORBIT_AGENT_NAME", "fixture-agent")
+        .env("ORBIT_OPERATOR", "1")
+        .output()
+        .unwrap();
+    assert!(
+        !refused_recovery.status.success(),
+        "managed CLI callers cannot gain held recovery authority through operator override"
+    );
     let mut client = workspace.serve_with_args(&["--operator"]);
     client.call_tool_err(
         "orbit_task_review_reset",
         json!({"workspace":selector,"id":id,"lineage_key":lineage,"reason":" "}),
     );
     assert_eq!(persisted(), original, "a blank decision changes nothing");
+    let recovery = client.call_tool_ok(
+        "orbit_task_review_recover",
+        json!({"workspace":selector,"id":id,"action":"status"}),
+    );
+    assert_eq!(
+        recovery["reservations"],
+        json!([]),
+        "trusted operator status reaches the public recovery handler without creating an admission"
+    );
     let reset = client.call_tool_ok("orbit_task_review_reset", args);
     assert_eq!(reset["ledger"]["attempts"], current["attempts"]);
     assert_eq!(reset["ledger"]["consumed_seconds"], 0);

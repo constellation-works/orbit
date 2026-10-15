@@ -106,6 +106,7 @@ pub(super) fn preserved_candidate(
     let continued = text(step("resume_candidate"), "reused_branch")
         .and_then(|_| text(step("resume_candidate"), "prior_pull_request"));
     let mut candidate = ClaimCandidateRef {
+        held_recovery: None,
         branch: String::new(),
         head_sha: String::new(),
         pull_request: text(step("pr_open"), "pr_number").or(continued),
@@ -117,6 +118,15 @@ pub(super) fn preserved_candidate(
         carry_failure: None,
         interrupted_review: kept_interrupted_review(state),
     };
+    if run.job_id == "task_claimed_adjudication_pipeline"
+        && text(step("worktree"), "phase").as_deref() == Some("held_recovery_prepare")
+    {
+        candidate.branch = text(step("worktree"), "head_ref")?;
+        candidate.head_sha = text(step("worktree"), "head_sha")?;
+        candidate.published = true;
+        candidate.failed_step_id = Some("review_gate_settle".into());
+        return Some(candidate);
+    }
     let committed = text(step("commit"), "commit_sha");
     if run.job_id == CLAIMED_LOCAL_PIPELINE {
         (candidate.branch, candidate.head_sha) = (text(step("worktree"), "head_ref")?, committed?);

@@ -62,6 +62,7 @@ pub(crate) fn execute(
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
             | TaskVerb::ReconcileReview
+            | TaskVerb::ReviewRecover
             | TaskVerb::RetryHandoff
             | TaskVerb::Reject
             | TaskVerb::Delete => true,
@@ -274,6 +275,7 @@ pub(crate) fn execute(
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
             | TaskVerb::ReconcileReview
+            | TaskVerb::ReviewRecover
             | TaskVerb::RetryHandoff
             | TaskVerb::Reject
             | TaskVerb::Delete => {

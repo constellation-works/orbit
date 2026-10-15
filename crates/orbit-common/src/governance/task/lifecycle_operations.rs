@@ -376,3 +376,85 @@ pub(super) const RETRY_HANDOFF: TaskOperation = TaskOperation {
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
 };
+
+/// Audited recovery never supplies implementation or merge authority itself.
+pub(super) const REVIEW_RECOVER: TaskOperation = TaskOperation {
+    verb: TaskVerb::ReviewRecover,
+    cli_path: &["review-recover"],
+    tool_name: "orbit.task.review_recover",
+    tool_description: "Inspect or admit one authenticated retained-candidate recovery: adjudicate_evidence requests an independent judgement of unavailable external proof; source_repair approves an exact contract amendment and repair scope. Requires a trusted operator. Reuse the same payload and request key after a lost reply. Grants no completion or merge authority.",
+    cli_about: "Inspect or admit audited recovery of a held candidate",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[&[
+        HOST_PARAM,
+        WORKSPACE_PARAM,
+        required(both(
+            "id",
+            ParamType::String,
+            "Task whose retained candidate is being recovered",
+            CliArgKind::Positional,
+            "Task whose retained candidate is being recovered",
+        )),
+        required(both(
+            "action",
+            ParamType::Enum(&[
+                EnumValue::plain("inspect"),
+                EnumValue::plain("submit"),
+                EnumValue::plain("status"),
+            ]),
+            "inspect, submit or status",
+            CliArgKind::flag("action"),
+            "inspect, submit or status",
+        )),
+        both(
+            "disposition",
+            ParamType::Enum(&[
+                EnumValue::plain("adjudicate_evidence"),
+                EnumValue::plain("source_repair"),
+            ]),
+            "Typed permission to inspect or submit",
+            CliArgKind::flag("disposition"),
+            "adjudicate_evidence or source_repair",
+        ),
+        both(
+            "original",
+            ParamType::Object,
+            "Original retained task contract; required for source repair",
+            CliArgKind::flag("original"),
+            "Original retained task contract as JSON",
+        ),
+        both(
+            "repair_selectors",
+            ParamType::StringList,
+            "Explicit current task selectors permitted for repair",
+            CliArgKind::flag("repair-selectors"),
+            "Permitted repair selectors",
+        ),
+        both(
+            "binding",
+            ParamType::Object,
+            "submit: exact inspected binding and approved delta",
+            CliArgKind::flag("binding"),
+            "Exact inspected binding as JSON",
+        ),
+        both(
+            "request_key",
+            ParamType::String,
+            "submit: durable payload-bound replay key",
+            CliArgKind::flag("request"),
+            "Durable replay key",
+        ),
+        free_text(both(
+            "reason",
+            ParamType::String,
+            "submit: operator rationale",
+            CliArgKind::flag("reason"),
+            "Operator rationale",
+        )),
+    ]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Refuse,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+};

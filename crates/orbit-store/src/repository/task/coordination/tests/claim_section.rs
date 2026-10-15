@@ -212,6 +212,7 @@ fn request(id: &str) -> AdmissionRequest {
         caller_fingerprint: None,
         caller_before_pr: false,
         review_gate: false,
+        held_recovery: false,
         run_context: AdmissionRunContext {
             run_id: "drain".into(),
             job_name: "auto".into(),

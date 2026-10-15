@@ -49,6 +49,24 @@ pub(in crate::executor::automation) fn candidate_resume<H: RuntimeHost + ?Sized>
             &base_sha,
         ));
     };
+    if let Some(admission) = host.held_recovery_admission(&run_id)? {
+        return super::held_recovery::continue_candidate(
+            host,
+            &run_id,
+            &admission,
+            &workspace_path,
+            &base_sha,
+        );
+    }
+    if input
+        .get("candidate")
+        .and_then(|c| c.get("held_recovery"))
+        .is_some_and(|v| !v.is_null())
+    {
+        return Err(OrbitError::CapabilityDenied(
+            "held recovery requires the authenticated owner receipt".into(),
+        ));
+    }
     if input.get("claimed").and_then(Value::as_bool) == Some(true) {
         if let Some(repair) = input
             .get("claim_repair")

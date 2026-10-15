@@ -127,6 +127,19 @@ impl OrbitRuntime {
         if let Ok(spec) = &spec {
             delivery::normalize_delivery_input(spec, &mut input)?;
         }
+        if spec.as_ref().is_ok_and(|spec| spec.holds_task_delivery()) {
+            for id in input
+                .get("task_ids")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                if crate::application::review::recovery::pending(self, id)? {
+                    return Err(OrbitError::CapabilityDenied("an admitted held recovery must execute through its one authenticated PR claim; discard the candidate explicitly to implement afresh".into()));
+                }
+            }
+        }
         let reuse_admission = resume.is_some() && !source_repair;
         self.capture_auto_concurrency(
             job_name,

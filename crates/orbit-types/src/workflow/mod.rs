@@ -180,3 +180,9 @@ pub use pr_base_update::{
     PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission, PrBaseUpdateReservation,
     decide_pr_base_update, pr_base_update_reservations,
 };
+
+mod held_recovery;
+pub use held_recovery::{
+    HELD_RECOVERY_ADMITTED, HELD_RECOVERY_CLAIMED, HeldEvidenceDecision, HeldRecoveryAdmission,
+    HeldRecoveryBinding, HeldRecoveryChange, HeldRecoveryDisposition, HeldRecoveryMeaning,
+};

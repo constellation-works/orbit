@@ -58,6 +58,7 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         // agents, or an arbitrary process.
         "orbit.task.retry_handoff"
         | "orbit.task.reconcile_review"
+        | "orbit.task.review_recover"
         | "orbit.pipeline.invoke"
         | "orbit.workflow.auto"
         | "orbit.routine.control"

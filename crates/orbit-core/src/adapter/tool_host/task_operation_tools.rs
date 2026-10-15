@@ -79,6 +79,11 @@ pub(super) fn dispatch(
         TaskVerb::Eligible => read(eligible(runtime, &input)),
         TaskVerb::Show => read(show(runtime, &input)),
         TaskVerb::Lint => read(lint(runtime, &input)),
+        TaskVerb::ReviewRecover => reviewed(crate::application::review::recovery::recover_review(
+            runtime,
+            caller.session_context,
+            input.as_value(),
+        )),
         TaskVerb::ReviewReset => reviewed(crate::application::review::reset_review(
             runtime,
             input.as_value(),

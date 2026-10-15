@@ -59,6 +59,7 @@ macro_rules! deterministic_action_catalog {
                 ReviewGateAdmit => "review_gate_admit",
                 ReviewGateSettle => "review_gate_settle",
                 ReviewReconciliationPrepare => "review_reconciliation_prepare",
+                ReviewAdjudicationPrepare => "review_adjudication_prepare",
                 ReviewReconciliationSettle => "review_reconciliation_settle",
                 ReviewReconciliationValidate => "review_reconciliation_validate",
                 RevertOnRed => "revert_on_red",

@@ -374,6 +374,7 @@ pub(crate) fn pull_refill(
                         // The claimed PR leaf runs the before-PR gate the
                         // ship contract captures [ORB-13908].
                         review_gate: true,
+                        held_recovery: true,
                         run_context: AdmissionRunContext {
                             run_id: run_id.clone(),
                             job_name: PULL_DRAIN_JOB_NAME.to_string(),

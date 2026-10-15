@@ -1077,6 +1077,7 @@ fn wait_for(path: &Path, limit: Duration) {
 
 fn manifest(task: &str, attempt_id: &str, candidate: &SourceRevision) -> ReviewManifest {
     ReviewManifest {
+        held_recovery: None,
         satisfied_external_evidence: BTreeMap::new(),
         evidence_carried: None,
         previous_report: None,

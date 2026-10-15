@@ -177,7 +177,7 @@ fn prepare(
             }
             Ok(ListView::default())
         }
-        TaskVerb::ReviewReset | TaskVerb::ReconcileReview => {
+        TaskVerb::ReviewReset | TaskVerb::ReconcileReview | TaskVerb::ReviewRecover => {
             input.shift_remove("host");
             input.insert("workspace".to_string(), json!(runtime.paths().repo_root));
             Ok(ListView::default())
@@ -403,6 +403,7 @@ fn render(
         TaskVerb::ReviewReset => {
             Ok(Payload::detail(value, super::review_reset::REVIEW_RESET_TEXT).into())
         }
+        TaskVerb::ReviewRecover => Ok(Payload::document(value).into()),
         TaskVerb::ReconcileReview => {
             let text = super::reconcile_review::reconciliation_text(&value);
             Ok(Payload::detail(value, text).into())

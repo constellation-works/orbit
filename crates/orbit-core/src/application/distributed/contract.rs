@@ -297,6 +297,7 @@ impl crate::OrbitRuntime {
             // Every executor of this binary runs the before-PR gate on its
             // claimed PR leaves [ORB-13908].
             review_gate: true,
+            held_recovery: false,
             run_context: AdmissionRunContext {
                 run_id: "probe".to_string(),
                 job_name: "probe".to_string(),

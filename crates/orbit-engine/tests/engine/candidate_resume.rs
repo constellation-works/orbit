@@ -262,11 +262,54 @@ fn resumed(outcome: &str, implement: bool, repair: Value) -> Value {
     })
 }
 
+fn adjudication_runs_native_validation_and_one_reviewer_without_source_or_delivery_actions() {
+    for settlement in [Settlement::Accept, Settlement::Reject] {
+        let host = ScriptedHost::new(settlement, Revalidation::Passes);
+        let _ = run_shipped_job(
+            &host,
+            "task_claimed_adjudication_pipeline",
+            json!({"task_ids":["T-1"],"base_branch":"main"}),
+        );
+        let actions = host.actions();
+        assert_eq!(
+            host.inputs("claim_validate").len(),
+            1,
+            "the historical source receives fresh native validation"
+        );
+        assert_eq!(
+            host.inputs("agent_review_repair").len(),
+            1,
+            "one independent reviewer is invoked"
+        );
+        assert_eq!(
+            host.inputs("review_gate_settle").len(),
+            1,
+            "the new judgement settles normally"
+        );
+        for forbidden in [
+            "agent_implement",
+            "git_commit",
+            "git_rebase",
+            "git_push",
+            "pr_open",
+            "claim_handoff",
+            "pr_complete",
+            "final_recovery",
+        ] {
+            assert!(
+                !actions.iter().any(|action| action == forbidden),
+                "adjudication must grant no source or delivery effect: {actions:?}"
+            );
+        }
+    }
+}
+
 /// Behavior-distinct rows share one bounded family process.
 #[test]
 fn candidate_resume_contracts_1() {
     crate::git_fixture::isolated(module_path!(), "candidate_resume_contracts_1", || {
         crate::git_fixture::run_scenarios(&[
+            ("adjudication_runs_native_validation_and_one_reviewer_without_source_or_delivery_actions",adjudication_runs_native_validation_and_one_reviewer_without_source_or_delivery_actions),
             (
                 "a_validated_candidate_delivers_without_an_implementation_step",
                 a_validated_candidate_delivers_without_an_implementation_step,

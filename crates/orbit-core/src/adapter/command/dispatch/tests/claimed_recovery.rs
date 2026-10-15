@@ -131,6 +131,7 @@ impl Leaf {
             caller_fingerprint: None,
             caller_before_pr: true,
             review_gate: true,
+            held_recovery: false,
             run_context: AdmissionRunContext {
                 run_id: drain.run_id.clone(),
                 job_name: drain.job_id.clone(),

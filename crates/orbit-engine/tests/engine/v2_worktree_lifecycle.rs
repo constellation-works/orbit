@@ -1878,6 +1878,7 @@ fn a_local_claim_leaf_falls_back_to_the_candidate_its_claim_kept() {
                 claim_id: "claim-1".to_string(),
                 machine_id: "hm_local".to_string(),
                 candidate: ClaimCandidateRef {
+                    held_recovery: None,
                     branch: preserved.branch.clone(),
                     head_sha: preserved.candidate.clone(),
                     pull_request: None,

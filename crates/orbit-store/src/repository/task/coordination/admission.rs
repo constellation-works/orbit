@@ -452,6 +452,34 @@ impl TaskCommitBoundary {
                 .as_ref()
                 .filter(|offer| offer.fresh.is_none())
                 .map(|offer| offer.candidate.clone());
+            if let Some(recovery) = resume_candidate
+                .as_ref()
+                .and_then(|c| c.held_recovery.as_ref())
+            {
+                let policy = &recovery.binding.review;
+                let consistent = request.held_recovery
+                    && request.ship.mode == "pr"
+                    && request.ship.base_branch == recovery.binding.base_branch
+                    && request.ship.landing_branch == recovery.binding.base_branch
+                    && request.ship.review_timing() == policy.timing
+                    && request.ship.review.as_ref().is_some_and(|review| {
+                        review.budget == policy.budget
+                            && (review.crew == policy.crew
+                                || policy.crew.is_none()
+                                    && review.crew.as_ref().is_some_and(|crew| {
+                                        policy.crew_pool.iter().any(|member| &member.name == crew)
+                                    }))
+                            && review.required_validation_commands
+                                == policy.required_validation_commands
+                            && review.baseline_commands == policy.baseline_commands
+                            && review.host_evidence == policy.host_evidence
+                    });
+                if !consistent {
+                    receipt.deferred_conflicts.push(AdmissionDiagnostic {task_id:task.id.clone(),
+                        reason:"held recovery requires its approved PR review and native validation policy".into(),blocked_by:Vec::new()});
+                    continue;
+                }
+            }
             let params = TaskCoordinationCommitParams {
                 task_id: task.id.clone(),
                 actor: receipt.machine_id.clone(),
@@ -475,11 +503,25 @@ impl TaskCommitBoundary {
                 }),
                 // [ORB-14338] A kept candidate this claim cannot resume is
                 // never dropped silently: the task's history says why.
-                append_history: offer
-                    .as_ref()
-                    .and_then(|offer| fresh_offer_history(offer, &claim_id, machine_id))
-                    .into_iter()
-                    .collect(),
+                append_history: {
+                    let mut entries: Vec<_> = offer
+                        .as_ref()
+                        .and_then(|offer| fresh_offer_history(offer, &claim_id, machine_id))
+                        .into_iter()
+                        .collect();
+                    if let Some(recovery) = resume_candidate
+                        .as_ref()
+                        .and_then(|c| c.held_recovery.as_ref())
+                    {
+                        entries.push(orbit_types::task::TaskHistoryEntry {
+                            at: chrono::Utc::now(), by: "system".into(),
+                            event: orbit_types::workflow::HELD_RECOVERY_CLAIMED.into(),
+                            note: Some(encode(&serde_json::json!({"request_key":recovery.request_key,"claim_id":claim_id}))?),
+                            from_status: None, to_status: None, operation_id: None, decision: None,
+                        });
+                    }
+                    entries
+                },
                 rows: vec![
                     row(RECEIPT_KIND, &key, &())?,
                     row(CLAIM_KIND, &claim_id, &())?,

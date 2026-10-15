@@ -1,0 +1,16 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: review_adjudication_prepare
+spec:
+  type: deterministic
+  description: Authenticate the owner recovery receipt and current PR/target leases, then open an exact read-only checkout of the retained source for independent adjudication. Observation never publishes or rebases it.
+  input_schema_json:
+    type: object
+    properties:
+      observe:
+        type: boolean
+  output_schema_json:
+    type: object
+  action: review_adjudication_prepare
+  config: {}

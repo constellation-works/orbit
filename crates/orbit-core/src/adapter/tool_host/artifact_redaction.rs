@@ -309,6 +309,7 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
             | TaskVerb::ReconcileReview
+            | TaskVerb::ReviewRecover
             | TaskVerb::RetryHandoff
             | TaskVerb::Reject
             | TaskVerb::Delete => ActionPolicy {
@@ -408,6 +409,7 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             | TaskVerb::ArtifactPut
             | TaskVerb::ReviewReset
             | TaskVerb::ReconcileReview
+            | TaskVerb::ReviewRecover
             | TaskVerb::RetryHandoff
             | TaskVerb::Reject => true,
             TaskVerb::List
@@ -720,6 +722,7 @@ fn artifact_target<'a>(
             | TaskVerb::ArtifactPut
             | TaskVerb::ReviewReset
             | TaskVerb::ReconcileReview
+            | TaskVerb::ReviewRecover
             | TaskVerb::RetryHandoff
             | TaskVerb::Reject => {
                 let id = persisted_task_id.ok_or_else(|| {

@@ -363,7 +363,7 @@ fn returned_to_backlog(pair: &Pair, task: &str) {
         .expect("back to the backlog");
 }
 
-fn owner_jobs(pair: &Pair) -> Arc<dyn JobRunStoreBackend> {
+pub(super) fn owner_jobs(pair: &Pair) -> Arc<dyn JobRunStoreBackend> {
     orbit_store::compose::workspace_job_run_store(
         pair.wire.owner.sqlite_store().unwrap(),
         pair.wire.owner.workspace_id().unwrap(),

@@ -80,6 +80,7 @@ const CASES: &[(&[&str], &str)] = &[
     (&["task", "locks", "reserve"], "task/locks-reserve.txt"),
     (&["task", "locks", "release"], "task/locks-release.txt"),
     (&["task", "review-reset"], "task/review-reset.txt"),
+    (&["task", "review-recover"], "task/review-recover.txt"),
     (&["task", "retry-handoff"], "task/retry-handoff.txt"),
     (&["task", "reconcile-review"], "task/reconcile-review.txt"),
     (

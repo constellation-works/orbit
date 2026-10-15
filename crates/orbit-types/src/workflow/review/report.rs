@@ -41,6 +41,9 @@ pub struct ReviewFinding {
 /// and the repository state; it is a claim, not a certificate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewReport {
+    /// Explicit independent disposition of an operator-admitted evidence hold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adjudication: Option<super::super::HeldEvidenceDecision>,
     /// Named external checks still needed; only an otherwise complete review
     /// with no open defects may enter an evidence hold.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

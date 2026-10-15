@@ -658,3 +658,91 @@ handoff output must show acceptance for the same final candidate. For
   reviewer's coordinator route, its smoke procedure and rollout record.
 - [Recover stuck job runs](./stuck-job-runs.md) — runs that never reached the
   gate's failure handoff.
+
+## Audited retained-candidate recovery
+
+A trusted operator can use `orbit task review-recover` when a settled claim
+retains a rejected or evidence-held candidate with an open PR. This is a
+prospective decision. It does not approve delivery, renew a review budget,
+produce an evidence receipt, complete a task or authorize a merge. The
+cancelled owner-local `orbit run resume --source-repair` flow remains separate.
+
+Two dispositions have different permissions:
+
+- `adjudicate_evidence` asks a fresh independent reviewer to uphold, reject or
+  prospectively replace an unavailable external requirement at the exact held
+  commit and existing PR, in a separate read-only claimed continuation. It runs
+  native validation and independent review without implementation, commit,
+  rebase, push or handoff. Task meaning and source must stay unchanged. A
+  failed assertion or open source defect cannot enter this path. A replacement
+  needs a meaningful explanation preserving the user goal and test guarantees,
+  named executable checks and genuine passing replacement evidence. Until
+  that evidence arrives, the replacement remains an incomplete hold.
+  Existing importers still enforce source/head and hosted provenance checks;
+  this operation does not make local receipts hosted evidence.
+- `source_repair` approves the exact original/current task amendment and a
+  nonempty list of permitted repair selectors. Save the original task contract
+  before amending it. Ordinary meaning changes still refuse candidate reuse;
+  only this exact admission admits the retained candidate under the amended
+  contract. The retained source patch is restored on the inspected current
+  target base. The new claimed continuation always runs implementation, all
+  fresh configured native gates and independent review of the actual repaired head.
+  No old host pass or certificate substitutes for these checks.
+
+Run inspection on the owning workspace. Use `--json` to preserve the binding:
+
+```bash
+orbit task review-recover <task> --action inspect \
+  --disposition adjudicate_evidence --json
+```
+
+For source repair, supply `--disposition source_repair`, `--original` with the
+original contract as JSON, and `--repair-selectors` with the explicitly approved
+current selectors. The original contract contains `id`, `title`, `description`,
+`acceptance_criteria`, `plan`, `context_files`, `tags`, `relations`, `task_type`
+and `required_tools`. Its existing spec and review-meaning digests must match
+the retained candidate; an operator assertion alone cannot establish it.
+Inspection returns the field-by-field delta, both meanings, rejected attempt,
+source claim/run/machine, candidate/tree/historical source base, current target
+base lease, repository, PR, branch leases, original diagnostics and configured
+validation/review policy.
+
+Submit the complete returned `binding` with an operator rationale and a durable
+request key:
+
+```bash
+orbit task review-recover <task> --action submit \
+  --binding '<exact binding JSON>' --request <key> --reason '<decision>' --json
+orbit task review-recover <task> --action status --json
+```
+
+Submission appends an immutable admission with the original certificate, hold
+and claim diagnostics, and queues one normal claim. Normal reservation and
+footprint admission still apply. Executors must declare held-recovery support;
+the type-derived pull fingerprint includes this capability, and older receipts
+default to unsupported rather than silently ignoring recovery context. The
+consuming claim is recorded atomically with its receipt. A source-repair claim
+carries the approved repair context to the implementer.
+Source repair keeps the existing PR and branch and cannot publish changes
+outside its approved selectors. Adjudication inspects the original commit and
+historical base exactly, while binding the independently observed current
+target lease; it refuses source edits. The original rejected/incomplete
+evidence, claim settlement and history remain available.
+
+After a lost reply or restart, replay the **same key and payload**. Status and
+replay read the original decision even after task ownership changes; they do
+not admit a second claim. A different payload or operator identity under the
+same key is refused. A new key cannot re-admit the same source head.
+
+Managed/untrusted callers, active or conflicting claims, missing original
+contracts or scope, discarded candidates, changed task meaning, foreign source
+identity, moved candidate/base/branch leases, and enabled or uncertain auto-merge
+intent are refused. This recovery currently requires an authenticated retained
+claim, its historical source base, and exact GitHub PR head and current target
+leases. Owner-local cancellations, unpublished candidates and already-merged
+PRs require their existing recovery flows or a fresh delivery. Inspection
+fetches the exact authenticated retained
+branch if its source object is missing locally. A target advance before
+inspection is supported; a lease moving after inspection refuses the approval.
+Admission is not deployment: keep consumers held until the admitted recovery actually
+produces its required evidence and independent review.

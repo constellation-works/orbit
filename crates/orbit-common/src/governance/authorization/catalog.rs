@@ -323,6 +323,12 @@ pub fn governed_plugin_tool(mutating: bool) -> &'static GovernedOperation {
 ///    authority actually lives in.
 pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     GovernedOperation {
+        id: "orbit.task.review_recover",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "a held-candidate amendment or evidence adjudication requires explicit independent operator authority",
+    },
+    GovernedOperation {
         id: "orbit.task.retry_handoff",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],

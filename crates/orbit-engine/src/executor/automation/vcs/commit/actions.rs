@@ -279,6 +279,14 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
     // changed_head_error only when HEAD is a descendant of the pinned base;
     // unrelated or otherwise non-descendant history still fails closed.
     let no_diff_expected = task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG);
+    let recovery = host.held_recovery_admission(batch_id)?;
+    if recovery.as_ref().is_some_and(|r| {
+        r.binding.disposition == orbit_types::workflow::HeldRecoveryDisposition::AdjudicateEvidence
+    }) {
+        return Err(OrbitError::CapabilityDenied(
+            "read-only adjudication cannot commit source".into(),
+        ));
+    }
     let allow_empty = input
         .get("allow_empty")
         .and_then(Value::as_bool)

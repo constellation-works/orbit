@@ -332,6 +332,7 @@ const REVIEW_FIXES: &str = "## Review fixes\n\n- `F1` [high] Missing guard — a
 /// Every activity the shipped PR pipeline dispatches, as scripted stand-ins.
 const ACTIVITIES: &[&str] = &[
     "worktree_setup",
+    "review_adjudication_prepare",
     "candidate_resume",
     "agent_implement",
     "step_failure_recovery",
@@ -619,6 +620,9 @@ impl orbit_engine::test_support::NullRuntimeHost for ScriptedHost {
             .push((action.to_string(), input.clone()));
         let head = self.head.lock().expect("candidate").clone();
         let output = match action {
+            "review_adjudication_prepare" => {
+                json!({"phase":"held_recovery_prepare","job_run_id":RUN_ID,"workspace_path":WORKSPACE,"source_base_sha":"base-sha","target_base_sha":"advanced-base","before_landing":false,"pr_number":"41","head":"orbit/held"})
+            }
             "worktree_setup" => json!({
                 "job_run_id": RUN_ID,
                 "workspace_path": WORKSPACE,

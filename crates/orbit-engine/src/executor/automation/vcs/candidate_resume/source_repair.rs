@@ -207,6 +207,16 @@ pub(in crate::executor::automation::vcs) fn publication_admission<H: RuntimeHost
     else {
         return Ok(None);
     };
+    if let Some(admission) = host.held_recovery_admission(id)? {
+        let workspace = input
+            .get("workspace_path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                OrbitError::InvalidInput("recovery publication workspace missing".into())
+            })?;
+        return super::held_recovery::publication_binding(host, &admission, Path::new(workspace))
+            .map(Some);
+    }
     let Some(admission) = host.source_repair_admission(id)? else {
         return host.owner_publication_binding(id);
     };
@@ -263,7 +273,10 @@ pub(in crate::executor::automation::vcs) fn publication_lease<H: RuntimeHost + ?
     let state = host.read_run_state(id)?.ok_or_else(refused)?;
     let published = state.pipeline.get("push").ok_or_else(refused)?;
     if state.run_id != id
-        || state.job_id != "task_pr_pipeline"
+        || !matches!(
+            state.job_id.as_str(),
+            "task_pr_pipeline" | "task_claimed_pr_pipeline"
+        )
         || published["phase"] != "push"
         || published["branch"] != binding.branch
         || published["local_sha"] != lease

@@ -877,3 +877,14 @@ different contracts; a future equivalent surface can use this shape.
   owner-workspace list with MCP instead of keeping their own.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
+
+### Held-candidate recovery placement (2026-10-15)
+
+`orbit.task.review_recover` is advertised on MCP and routes by task identity,
+like the other operator review commands. Its `inspect`, `submit` and `status`
+actions all require the operator capability; managed executions are refused
+independently. Advertisement makes the audited recovery discoverable and
+confers no authority. The operation is open-world because inspection observes
+Git and the provider, and submission admits prospective work through normal
+claim admission. It grants no completion or merge permission. The live
+placement matrix and CLI/MCP snapshots record this surface.

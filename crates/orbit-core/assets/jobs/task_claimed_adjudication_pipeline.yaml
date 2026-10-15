@@ -1,0 +1,64 @@
+# Claim-only independent adjudication of an exact retained source. No
+# implementation, commit, rebase, push, handoff, merge or final recovery.
+# Every valid disposition ends in an honest hold or rejection; subsequent
+# genuine evidence queues ordinary completion through the existing workflow.
+schemaVersion: 2
+kind: Job
+metadata:
+  name: task_claimed_adjudication_pipeline
+spec:
+  state: enabled
+  task_delivery: {}
+  kind: workflow
+  max_active_runs: 0
+  default_input:
+    task_ids: []
+    base_branch: main
+    base_sync: remote
+  steps:
+    - id: worktree
+      target: activity:review_adjudication_prepare
+    - id: pr_open
+      target: activity:review_adjudication_prepare
+      default_input:
+        observe: true
+    - id: validate
+      target: activity:claim_validate
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base_sha: "{{ steps.worktree.output.source_base_sha }}"
+        base_sync: remote
+    - id: review_gate_admit
+      target: activity:review_gate_admit
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base: "{{ input.base_branch }}"
+        base_sha: "{{ steps.worktree.output.source_base_sha }}"
+        base_sync: remote
+        mode: pr
+        before_landing: "{{ steps.worktree.output.before_landing }}"
+        host_validation_step: validate
+    - id: review
+      target: activity:agent_review_repair
+      default_input:
+        task_id: "{{ steps.review_gate_admit.output.first_task_id }}"
+        task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        repo_root: "{{ steps.worktree.output.workspace_path }}"
+        attempt_id: "{{ steps.review_gate_admit.output.attempt_id }}"
+        lineage_key: "{{ steps.review_gate_admit.output.lineage_key }}"
+        manifest_artifact: "{{ steps.review_gate_admit.output.manifest_artifact }}"
+        report_artifact: "{{ steps.review_gate_admit.output.report_artifact }}"
+        crew: "{{ steps.review_gate_admit.output.reviewer.crew }}"
+    - id: review_gate_settle
+      target: activity:review_gate_settle
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base: "{{ input.base_branch }}"
+        base_sha: "{{ steps.worktree.output.source_base_sha }}"
+        base_sync: remote
+        admission: "{{ steps.review_gate_admit.output }}"

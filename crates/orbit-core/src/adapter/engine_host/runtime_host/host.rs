@@ -919,6 +919,13 @@ impl RuntimeHost for OrbitRuntime {
         crate::runtime::recovery_decision::read(slot)
     }
 
+    fn held_recovery_admission(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<orbit_types::workflow::HeldRecoveryAdmission>, OrbitError> {
+        crate::application::review::recovery::claimed_admission(self, run_id)
+    }
+
     fn source_repair_admission(
         &self,
         run_id: &str,

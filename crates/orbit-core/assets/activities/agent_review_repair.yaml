@@ -135,6 +135,24 @@ spec:
        Skip absent optional paths without an artifact.get call. A refused
        prior-evidence read is not a mismatch or a reason to stop; review
        from the manifest.
+       If the manifest carries `held_recovery`, read its exact operator approval,
+       original certificate/hold/claim evidence, task amendment and repair scope.
+       This is prospective authority, never a passing check or inherited review.
+       For `source_repair`, review the actual new source and all current criteria;
+       the original failed assertion stays failed in its original certificate.
+       For `adjudicate_evidence`, keep the exact candidate and task unchanged:
+       this review is read-only. Independently judge the original external
+       requirement. Record `adjudication` with `kind` and a meaningful `reason`:
+       `uphold` repeats the original requirements in `external_evidence`;
+       `reject` records a non-pass with no external requirements; `replace`
+       also supplies `requirements`, copied into `external_evidence`, and
+       verdict `incomplete`. Explain how replacement proof preserves the user
+       goal, confinement/cleanup assertions and negative incomplete-evidence
+       controls. Name executable replacement checks prospectively; record their
+       unavailable results as required `not_run`, never as passed. Keep all
+       configured native gates and required-record continuity. Replacement
+       still holds for genuine matching passing result/log evidence before
+       ordinary completion. Failed assertions cannot use this disposition.
        The manifest's `satisfied_external_evidence` maps result artifact paths
        to passing external checks whose separate logs the host verified for
        `candidate.tree`. Reuse a matching kind and exact command while the
@@ -422,6 +440,9 @@ spec:
           "attempt_id":{"type":"string","description":"the supplied attempt_id"},
           "verdict":{"enum":["accept","accept_with_fixes","reject","incomplete"]},
           "summary":{"type":"string","description":"one paragraph"},
+          "adjudication":{"type":"object","required":["kind","reason"],
+            "properties":{"kind":{"enum":["uphold","reject","replace"]},
+              "reason":{"type":"string"},"requirements":{"type":"array","items":{"type":"object"}}}},
           "external_evidence":{"type":"array","items":{"type":"object",
             "required":["kind","name","command","artifact"],
             "properties":{

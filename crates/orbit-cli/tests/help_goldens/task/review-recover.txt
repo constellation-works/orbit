@@ -1,0 +1,58 @@
+Inspect or admit audited recovery of a held candidate
+
+Usage: orbit task review-recover [OPTIONS] --action <ACTION> <ID>
+
+Arguments:
+  <ID>
+          Task whose retained candidate is being recovered
+
+Options:
+      --host <HOST>
+          Host that `--workspace` names, by registered host name or `machine_id` (see `orbit host list`). Orbit reads that host's live workspace list and uses the selector it lists for the workspace. Without it, a task id goes to the host its prefix names
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --action <ACTION>
+          inspect, submit or status
+          
+          [possible values: inspect, submit, status]
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --disposition <DISPOSITION>
+          adjudicate_evidence or source_repair
+          
+          [possible values: adjudicate_evidence, source_repair]
+
+      --original <ORIGINAL>
+          Original retained task contract as JSON
+
+      --repair-selectors <REPAIR_SELECTORS>
+          Permitted repair selectors
+
+      --binding <BINDING>
+          Exact inspected binding as JSON
+
+      --request <REQUEST_KEY>
+          Durable replay key
+
+      --reason <REASON>
+          Operator rationale
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+  -h, --help
+          Print help (see a summary with '-h')

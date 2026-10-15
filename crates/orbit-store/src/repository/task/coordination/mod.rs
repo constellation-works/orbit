@@ -138,6 +138,7 @@ mod boundary;
 mod branch_observation;
 mod commit;
 mod handoff;
+mod held_recovery;
 mod landing;
 mod lifecycle;
 mod owner_wave;

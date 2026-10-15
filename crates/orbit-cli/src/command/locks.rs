@@ -34,6 +34,7 @@ pub(crate) fn render(verb: TaskVerb, value: Value) -> CommandOut {
         | TaskVerb::ArtifactGet
         | TaskVerb::ReviewReset
         | TaskVerb::ReconcileReview
+        | TaskVerb::ReviewRecover
         | TaskVerb::RetryHandoff
         | TaskVerb::Reject
         | TaskVerb::Delete => Err(OrbitError::Execution(

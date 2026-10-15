@@ -59,6 +59,16 @@ pub trait RuntimeHost: Send + Sync {
     fn register_worker_process(&self, pid: u32) -> Result<(), OrbitError>;
 
     fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation>;
+
+    /// Read recovery authority from this run's authenticated owner receipt,
+    /// never from activity input. Unsupported hosts grant no such authority.
+    fn held_recovery_admission(
+        &self,
+        _run_id: &str,
+    ) -> Result<Option<orbit_types::workflow::HeldRecoveryAdmission>, OrbitError> {
+        Ok(None)
+    }
+
     /// Record a direct landing's intent before it lands. A host without a
     /// scheduler store observes nothing.
     fn record_direct_landing_intent(

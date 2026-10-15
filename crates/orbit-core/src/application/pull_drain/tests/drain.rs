@@ -365,6 +365,7 @@ fn request(jobs: &dyn JobRunStoreBackend) -> (PullDestination, AdmissionRequest)
             caller_fingerprint: None,
             caller_before_pr: false,
             review_gate: false,
+            held_recovery: false,
             run_context: AdmissionRunContext {
                 run_id: parent.run_id,
                 job_name: "workspace_auto_pipeline".into(),
@@ -483,6 +484,7 @@ fn pull_claimed_local_leaf_resumes_and_keeps_its_committed_candidate() {
     let jobs = runtime.stores().jobs();
     let (destination, template) = request(jobs);
     let kept = ClaimCandidateRef {
+        held_recovery: None,
         branch: "orbit/task-earlier".into(),
         head_sha: "a".repeat(40),
         pull_request: None,

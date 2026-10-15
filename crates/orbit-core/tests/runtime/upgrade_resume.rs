@@ -245,6 +245,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
             caller_fingerprint: None,
             caller_before_pr: false,
             review_gate: false,
+            held_recovery: false,
             run_context: AdmissionRunContext {
                 run_id: "parent-run".into(),
                 job_name: "workspace_auto_pipeline".into(),

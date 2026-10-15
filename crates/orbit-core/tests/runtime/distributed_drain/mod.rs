@@ -78,6 +78,8 @@ mod flaky_validation;
 #[cfg(unix)]
 mod forge_hold;
 #[cfg(unix)]
+mod held_recovery;
+#[cfg(unix)]
 mod interrupted_review;
 mod landing_attribution;
 mod landing_repair;
@@ -976,11 +978,15 @@ impl Pair {
     /// Every claimed leaf run, a follower's PR leaves and an owner-local
     /// drain's local ones alike.
     fn leaf_runs(&self) -> Vec<String> {
-        [LEAF_JOB, LOCAL_LEAF_JOB]
-            .into_iter()
-            .flat_map(|job| self.follower_jobs.list_job_runs(job).expect("leaf runs"))
-            .map(|run| run.run_id)
-            .collect()
+        [
+            LEAF_JOB,
+            LOCAL_LEAF_JOB,
+            "task_claimed_adjudication_pipeline",
+        ]
+        .into_iter()
+        .flat_map(|job| self.follower_jobs.list_job_runs(job).expect("leaf runs"))
+        .map(|run| run.run_id)
+        .collect()
     }
 }
 

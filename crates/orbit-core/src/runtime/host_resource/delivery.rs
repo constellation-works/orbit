@@ -22,8 +22,11 @@ pub(crate) const SUBMITTED_DELIVERY_JOBS: &[&str] = &[
 
 /// Leaf definitions that only a claim may run; each claimed leaf is a whole
 /// delivery.
-pub(crate) const CLAIMED_LEAF_JOBS: &[&str] =
-    &["task_claimed_local_pipeline", "task_claimed_pr_pipeline"];
+pub(crate) const CLAIMED_LEAF_JOBS: &[&str] = &[
+    "task_claimed_local_pipeline",
+    "task_claimed_pr_pipeline",
+    "task_claimed_adjudication_pipeline",
+];
 
 /// Every job definition whose runs belong to a delivery.
 pub(crate) fn delivery_jobs() -> Vec<&'static str> {

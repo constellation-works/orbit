@@ -269,4 +269,5 @@ enum Outcome {
     Repair(Value),
 }
 
+pub(super) mod held_recovery;
 pub(super) mod source_repair;

@@ -1396,6 +1396,70 @@
     ]
   },
   {
+    "name": "orbit.task.review_recover",
+    "description": "Inspect or admit one authenticated retained-candidate recovery: adjudicate_evidence requests an independent judgement of unavailable external proof; source_repair approves an exact contract amendment and repair scope. Requires a trusted operator. Reuse the same payload and request key after a lost reply. Grants no completion or merge authority.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "workspace",
+        "description": "Workspace selector from discovery. Omitted, a bound session uses its workspace and an unbound one resolves the task id through this host's task registry",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "id",
+        "description": "Task whose retained candidate is being recovered",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "action",
+        "description": "inspect, submit or status",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "disposition",
+        "description": "Typed permission to inspect or submit",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "original",
+        "description": "Original retained task contract; required for source repair",
+        "param_type": "object",
+        "required": false
+      },
+      {
+        "name": "repair_selectors",
+        "description": "Explicit current task selectors permitted for repair",
+        "param_type": "string_list",
+        "required": false
+      },
+      {
+        "name": "binding",
+        "description": "submit: exact inspected binding and approved delta",
+        "param_type": "object",
+        "required": false
+      },
+      {
+        "name": "request_key",
+        "description": "submit: durable payload-bound replay key",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "reason",
+        "description": "submit: operator rationale",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
     "name": "orbit.task.review_reset",
     "description": "Record an operator decision closing the open review attempt and renewing one explicitly selected lineage budget while preserving every attempt. Requires trusted operator authority; unavailable to managed runs. Inspect the returned ledger after a lost reply before retrying.",
     "enabled": true,

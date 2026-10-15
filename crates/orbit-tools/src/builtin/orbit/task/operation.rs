@@ -65,7 +65,7 @@ impl GuardedModes for TaskVerb {
                     ))
                 })
             }
-            TaskVerb::ReconcileReview => {
+            TaskVerb::ReconcileReview | TaskVerb::ReviewRecover => {
                 managed_run_refusal(ctx, "managed runs cannot reconcile reviews")
             }
             TaskVerb::RetryHandoff => {
@@ -102,6 +102,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
             | TaskVerb::ReconcileReview
+            | TaskVerb::ReviewRecover
             | TaskVerb::RetryHandoff
             | TaskVerb::Reject => return,
         };
@@ -183,6 +184,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
             | TaskVerb::ReconcileReview
+            | TaskVerb::ReviewRecover
             | TaskVerb::RetryHandoff
             | TaskVerb::Reject
             | TaskVerb::Delete => None,
@@ -219,6 +221,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
             | TaskVerb::ReconcileReview
+            | TaskVerb::ReviewRecover
             | TaskVerb::RetryHandoff
             | TaskVerb::Reject
             | TaskVerb::Delete => Ok(()),
@@ -240,6 +243,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
             | TaskVerb::ReconcileReview
+            | TaskVerb::ReviewRecover
             | TaskVerb::RetryHandoff
             | TaskVerb::Reject
             | TaskVerb::Delete => None,

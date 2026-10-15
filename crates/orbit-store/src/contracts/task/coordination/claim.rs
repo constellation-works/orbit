@@ -265,6 +265,9 @@ impl ClaimFailure {
 /// worktree branch.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaimCandidateRef {
+    /// Exact operator admission carried by the one consuming claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_recovery: Option<orbit_types::workflow::HeldRecoveryAdmission>,
     pub branch: String,
     pub head_sha: String,
     /// The pull request the leaf opened for it, when it got that far.

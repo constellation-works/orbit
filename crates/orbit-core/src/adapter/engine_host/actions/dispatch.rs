@@ -349,6 +349,14 @@ pub(crate) fn run_deterministic(
         // foreign delivery head: re-observe and pin the head, run required
         // validation at the head (and its base for failures), then settle the
         // read-only reviewer's report into one recorded outcome.
+        CoreDeterministicAction::ReviewAdjudicationPrepare => reconciliation_step(
+            action,
+            crate::application::review::recovery::prepare(
+                runtime,
+                input,
+                recovery_run_id(&tool_context),
+            ),
+        ),
         CoreDeterministicAction::ReviewReconciliationPrepare => reconciliation_step(
             action,
             crate::application::review::reconciliation::prepare(

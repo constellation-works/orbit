@@ -714,6 +714,7 @@ fn pull_request(run_id: &str, request_id: &str) -> AdmissionRequest {
         caller_fingerprint: None,
         caller_before_pr: false,
         review_gate: false,
+        held_recovery: false,
         run_context: AdmissionRunContext {
             run_id: run_id.into(),
             job_name: "workspace_auto_pipeline".into(),
@@ -1278,6 +1279,7 @@ fn owner_request(id: &str) -> AdmissionRequest {
         caller_fingerprint: None,
         caller_before_pr: false,
         review_gate: false,
+        held_recovery: false,
         run_context: AdmissionRunContext {
             run_id: "drain".into(),
             job_name: "auto".into(),

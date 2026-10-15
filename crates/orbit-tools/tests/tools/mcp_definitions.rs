@@ -75,6 +75,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.task.list",
             "orbit.task.reconcile_review",
             "orbit.task.retry_handoff",
+            "orbit.task.review_recover",
             "orbit.task.review_reset",
             "orbit.task.show",
             "orbit.task.update",
@@ -232,6 +233,7 @@ fn read_only_tools_advertise_the_hint_and_mutating_ones_do_not() {
         "orbit.agent.invoke",
         "orbit.command.exec",
         "orbit.task.reconcile_review",
+        "orbit.task.review_recover",
     ] {
         assert_eq!(annotations_of(name).read_only, Some(false), "{name}");
     }

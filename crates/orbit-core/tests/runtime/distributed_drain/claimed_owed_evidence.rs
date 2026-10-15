@@ -100,6 +100,7 @@ pub(super) fn report(
     escalation: Option<&str>,
 ) -> ReviewReport {
     ReviewReport {
+        adjudication: None,
         external_evidence: Vec::new(),
         schema_version: orbit_types::workflow::REVIEW_CONTRACT_VERSION,
         attempt_id: admitted["attempt_id"].as_str().unwrap().into(),

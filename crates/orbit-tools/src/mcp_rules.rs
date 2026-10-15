@@ -17,6 +17,7 @@ pub const ID_ROUTED_TASK_TOOLS: &[&str] = &[
     "orbit.task.artifact.put",
     "orbit.task.review_reset",
     "orbit.task.reconcile_review",
+    "orbit.task.review_recover",
 ];
 
 /// Tools that take a required `id` and an optional workspace but are not

@@ -38,6 +38,7 @@ Health:
   lint         Lint tasks for context-file and acceptance-criteria problems
   flow         Show filed-vs-closed rates over time — is the backlog draining?
   locks        Inspect, reserve, and release the file locks that gate dispatch
+  review-recover Admit audited recovery of a held candidate
   review-reset Reset one review lineage budget with an audited reason
   reconcile-review
                Validate and review a recovered delivery's changed merged head

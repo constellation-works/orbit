@@ -1354,6 +1354,92 @@
     }
   },
   {
+    "name": "orbit_task_review_recover",
+    "description": "Inspect or admit one authenticated retained-candidate recovery: adjudicate_evidence requests an independent judgement of unavailable external proof; source_repair approves an exact contract amendment and repair scope. Requires a trusted operator. Reuse the same payload and request key after a lost reply. Grants no completion or merge authority.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workspace": {
+          "type": "string",
+          "description": "Workspace selector from discovery. Omitted, a bound session uses its workspace and an unbound one resolves the task id through this host's task registry"
+        },
+        "id": {
+          "type": "string",
+          "description": "Task whose retained candidate is being recovered"
+        },
+        "action": {
+          "type": "string",
+          "description": "inspect, submit or status"
+        },
+        "disposition": {
+          "type": "string",
+          "description": "Typed permission to inspect or submit"
+        },
+        "original": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          ],
+          "description": "Original retained task contract; required for source repair"
+        },
+        "repair_selectors": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Explicit current task selectors permitted for repair"
+        },
+        "binding": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          ],
+          "description": "submit: exact inspected binding and approved delta"
+        },
+        "request_key": {
+          "type": "string",
+          "description": "submit: durable payload-bound replay key"
+        },
+        "reason": {
+          "type": "string",
+          "description": "submit: operator rationale"
+        }
+      },
+      "required": [
+        "id",
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
     "name": "orbit_task_review_reset",
     "description": "Record an operator decision closing the open review attempt and renewing one explicitly selected lineage budget while preserving every attempt. Requires trusted operator authority; unavailable to managed runs. Inspect the returned ledger after a lost reply before retrying.",
     "inputSchema": {

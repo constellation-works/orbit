@@ -370,6 +370,7 @@ impl crate::OrbitRuntime {
             caller_before_pr: ship.before_pr,
             // This binary's claimed PR leaves run the before-PR gate.
             review_gate: true,
+            held_recovery: false,
             run_context: AdmissionRunContext {
                 run_id: "entry-point".to_string(),
                 job_name: "entry-point".to_string(),

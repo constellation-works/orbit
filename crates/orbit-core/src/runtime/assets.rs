@@ -182,6 +182,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/review_gate_settle.yaml"),
     ),
     (
+        "review_adjudication_prepare",
+        include_str!("../../assets/activities/review_adjudication_prepare.yaml"),
+    ),
+    (
         "review_reconciliation_prepare",
         include_str!("../../assets/activities/review_reconciliation_prepare.yaml"),
     ),
@@ -316,6 +320,10 @@ pub(crate) const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
     (
         "task_claimed_local_pipeline",
         include_str!("../../assets/jobs/task_claimed_local_pipeline.yaml"),
+    ),
+    (
+        "task_claimed_adjudication_pipeline",
+        include_str!("../../assets/jobs/task_claimed_adjudication_pipeline.yaml"),
     ),
     (
         "task_claimed_pr_pipeline",

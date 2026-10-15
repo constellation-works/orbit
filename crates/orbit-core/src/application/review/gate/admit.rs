@@ -215,6 +215,15 @@ fn awaiting_external_evidence(
     runtime: &OrbitRuntime,
     context: &GateContext,
 ) -> Result<bool, OrbitError> {
+    if let Some(recovery) = super::super::recovery::claimed_admission(runtime, &context.run_id)?
+        && recovery.binding.disposition
+            == orbit_types::workflow::HeldRecoveryDisposition::AdjudicateEvidence
+        && context.base_sha()? == recovery.binding.source_base_sha
+        && orbit_engine::review_gate::revision(&context.workspace_path, "HEAD")?.commit
+            == recovery.binding.candidate_sha
+    {
+        return Ok(false);
+    }
     for task in &context.tasks {
         if let Some(hold) = super::super::evidence::evidence_hold(runtime, &task.id)?
             && hold.task_meaning_digest == context.task_digests.1
@@ -320,7 +329,9 @@ fn admit(
     }
     // A held review whose owed evidence arrived for this exact candidate
     // settles under its original reviewer; no new reviewer is started.
+    let held_recovery = super::super::recovery::claimed_admission(runtime, &context.run_id)?;
     let received = match rebase {
+        _ if held_recovery.is_some() => None,
         None => owed_hold_received(runtime, context, &candidate)?,
         Some(_) => None,
     };
@@ -416,6 +427,7 @@ fn admit(
         &candidate.head,
     )?);
     let manifest = ReviewManifest {
+        held_recovery,
         satisfied_external_evidence,
         evidence_carried: carry.carried().cloned(),
         owed_external_evidence,

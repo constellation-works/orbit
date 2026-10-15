@@ -85,13 +85,26 @@ impl Judgement {
             initial_only &= initial;
             reports.push(report);
         }
-        let Some(report) = merge_reports(reports) else {
+        let Some(mut report) = merge_reports(reports) else {
             return Ok(incomplete(if stale {
                 "report_stale: review-report.json predates this attempt"
             } else {
                 "report_missing: the reviewer persisted no review-report.json"
             }));
         };
+        if let Some(recovery) =
+            crate::application::review::recovery::claimed_admission(runtime, &context.run_id)?
+        {
+            if let Err(reason) =
+                crate::application::review::recovery::check_report(&recovery, &mut report)
+            {
+                return Ok(incomplete(&reason));
+            }
+        } else if report.adjudication.is_some() {
+            return Ok(incomplete(
+                "adjudication requires an authenticated evidence recovery",
+            ));
+        }
         let retained_obligations = retained_obligations(revisions, &report.validation);
         Ok(Self {
             external_evidence: report.external_evidence,

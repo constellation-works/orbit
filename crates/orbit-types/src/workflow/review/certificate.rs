@@ -14,6 +14,10 @@ use super::{
 /// The pinned, immutable input handed to the reviewer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewManifest {
+    /// Authenticated prospective recovery context. Original evidence remains
+    /// incomplete/rejected; this conveys no inherited coverage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_recovery: Option<super::super::HeldRecoveryAdmission>,
     /// Passing external results and their artifact paths, re-read with their
     /// logs for this candidate tree. Attempt and commit changes do not expire
     /// these checks; a reviewer repair that changes the tree does.

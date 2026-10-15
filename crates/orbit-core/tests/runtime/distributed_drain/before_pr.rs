@@ -212,6 +212,7 @@ impl ReviewedHandoff {
             caller_fingerprint: None,
             caller_before_pr: false,
             review_gate: true,
+            held_recovery: false,
             run_context: AdmissionRunContext {
                 run_id: "drain".into(),
                 job_name: "workspace_pull_pipeline".into(),

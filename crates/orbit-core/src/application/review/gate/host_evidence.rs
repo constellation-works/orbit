@@ -56,6 +56,15 @@ impl Judgement {
         candidate: &SourceRevision,
         scope: &[String],
     ) -> Result<BTreeMap<String, ReviewExternalEvidence>, OrbitError> {
+        if crate::application::review::recovery::claimed_admission(runtime, &context.run_id)?
+            .is_some_and(|a| {
+                a.binding.disposition
+                    == orbit_types::workflow::HeldRecoveryDisposition::AdjudicateEvidence
+            })
+        {
+            return Ok(BTreeMap::new());
+        }
+
         let mut satisfied = BTreeMap::new();
         let [task_id] = context.task_ids.as_slice() else {
             return Ok(satisfied);

@@ -29,7 +29,11 @@ use crate::OrbitRuntime;
 
 /// Claimed leaves, whose task lives on the owner: their record reaches it
 /// through the settlement, not a comment here.
-const CLAIMED_PIPELINES: [&str; 2] = ["task_claimed_pr_pipeline", "task_claimed_local_pipeline"];
+const CLAIMED_PIPELINES: [&str; 3] = [
+    "task_claimed_pr_pipeline",
+    "task_claimed_local_pipeline",
+    "task_claimed_adjudication_pipeline",
+];
 
 impl OrbitRuntime {
     /// Keep the uncommitted repair of the review `run` stopped inside, if

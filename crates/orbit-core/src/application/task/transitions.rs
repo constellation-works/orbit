@@ -595,6 +595,11 @@ impl OrbitRuntime {
     }
 
     fn admit_task_for_workflow_locked(&self, id: &str, workflow: &str) -> Result<Task, OrbitError> {
+        if crate::application::review::recovery::pending(self, id)? {
+            return Err(OrbitError::CapabilityDenied(
+                "held recovery is reserved for its authenticated claimed continuation".into(),
+            ));
+        }
         let task = self.ensure_task_can_enter_workflow_as_system(id, workflow)?;
 
         if task.status == TaskStatus::InProgress {
