@@ -41,6 +41,9 @@ impl Fixture {
     pub(super) fn with_policy(timing: &str) -> Self {
         Self::build(timing, false, "17", Vec::new())
     }
+    pub(super) fn publication() -> Self {
+        Self::build("none", false, "4818", Vec::new())
+    }
     pub(super) fn as_agent() -> Self {
         Self::build("none", true, "17", Vec::new())
     }
@@ -264,14 +267,15 @@ impl Fixture {
             )
             .unwrap();
         let answer = root.path().join("pr.json");
-        std::fs::write(&answer,json!({"number":number.parse::<u64>().unwrap(),"state":"OPEN","headRefName":branch,"headRefOid":head,"baseRefName":"main","url":format!("https://github.com/owner/repository/pull/{number}"),"autoMergeRequest":null,"isDraft":true}).to_string()).unwrap();
+        std::fs::write(&answer,json!({"number":number.parse::<u64>().unwrap(),"state":"OPEN","headRefName":branch,"headRefOid":head,"baseRefName":"main","url":format!("https://github.com/owner/repository/pull/{number}"),"autoMergeRequest":null,"mergedAt":null,"mergeCommit":null,"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","statusCheckRollup":[],"reviewDecision":"","isDraft":true}).to_string()).unwrap();
         let bin = root.path().join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let gh = bin.join("gh");
         std::fs::write(
             &gh,
             format!(
-                "#!/bin/sh\n[ \"$1 $2 $3\" = \"pr view {number}\" ] || exit 99\ncat '{}'\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n[ \"$1 $2 $3\" = \"pr view {number}\" ] || exit 99\ncat '{}'\n",
+                root.path().join("gh-calls").display(),
                 answer.display()
             ),
         )

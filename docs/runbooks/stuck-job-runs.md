@@ -470,6 +470,27 @@ repair run through `orbit.workflow.run.resume` with
 Submit that fresh binding with a new `request_key` and a diagnosis of the
 remaining work to authorize another attempt.
 
+If publication refuses the PR identity after pushing, inspect the task history's
+`source_repair_publication_refused` entries. Each entry retains a versioned JSON
+record with named `mismatches` (`field`, `expected`, `observed`), the admitted
+source/task digests and binding hash, the checked-out `published_head`, and the
+PR read's operation, selector and timestamps. `successful_push` quotes only a
+matching successful step/checkpoint from this run; null means that provenance
+could not be confirmed. It never infers publication from caller input.
+Entries are retained per refused read, even when the ordinary handoff comment
+for that run and phase already exists.
+
+Missing fields are distinguished from present values and unreadable responses.
+Merge absence requires explicit null `mergeCommit` and `mergedAt` GraphQL
+metadata; a REST provisional `merge_commit_sha` supplies no merge evidence.
+Evidence retains only selected identity fields, redacts secrets and URL
+credentials/query payloads, and bounds each string to 512 UTF-8 bytes (long
+values carry a prefix, byte count and truncation marker). Arbitrary provider
+objects and error streams are not copied. The refusal names the failing fields
+and still forbids creating or replacing the PR. A diagnostic record does not
+authorize retry, replacement, merge or a change in completion policy; reconcile
+it against the reservation and exact publication before further operator action.
+
 Inspection and submission corroborate the authenticated publication against the
 task's PR references, regardless of their order. Historical references are
 preserved. The current PR number must be recorded on that task; when its
