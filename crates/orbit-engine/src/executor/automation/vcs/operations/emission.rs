@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use super::super::completion_deadline::Deadline;
 use super::input::required_string;
 use super::prerequisite::{
-    api, complete_list, gate_passed, number, same, snapshot, text, unreadable,
+    api, complete_list, gate_passed, gate_present, number, same, snapshot, text, unreadable,
 };
 use super::workflow_dependency::job_names;
 
@@ -192,15 +192,11 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
     let deadline = Deadline::from_input(input)?;
     let current = snapshot(deadline, workspace, pr, head, branch, base)?;
     let checks = complete_list(&current.checks, "check_runs")?;
+    let statuses = complete_list(&current.statuses, "statuses")?;
     let missing: Vec<_> = current
         .required
         .iter()
-        .filter(|gate| {
-            !checks.iter().any(|check| {
-                check["name"] == gate.context
-                    && gate.app_id.is_none_or(|id| check["app"]["id"] == id)
-            })
-        })
+        .filter(|gate| !gate_present(gate, checks, statuses))
         .collect();
     if missing.is_empty() {
         return Ok(json!({"evidence":null}));
@@ -273,12 +269,7 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
         .lines()
         .next()
         .ok_or_else(|| unreadable("clean emission merge tree"))?;
-    let legacy = api(
-        deadline,
-        workspace,
-        &format!("repos/{{owner}}/{{repo}}/commits/{head}/status?per_page=100"),
-    )?;
-    for status in complete_list(&legacy, "statuses")? {
+    for status in statuses {
         if status["state"] != "success"
             || missing.iter().any(|gate| status["context"] == gate.context)
         {
@@ -424,7 +415,7 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
     }
     deadline.remaining()?;
     Ok(
-        json!({"evidence":{"repository":current.repository,"repository_id":current.repository_id,"pr_number":pr,"head_sha":head,"head_branch":branch,"base_branch":base,"base_sha":base_sha,"accepted_base":old_base,"merged_tree":tree,"required":current.required,"missing":missing,"policy":current.policy,"app":app,"workflows":workflows,"old_sources":old,"base_sources":new,"provider":current.pr,"checks":current.checks,"runs":current.runs,"bound_runs":bound_runs,"policy_revisions":revisions}}),
+        json!({"evidence":{"repository":current.repository,"repository_id":current.repository_id,"pr_number":pr,"head_sha":head,"head_branch":branch,"base_branch":base,"base_sha":base_sha,"accepted_base":old_base,"merged_tree":tree,"required":current.required,"missing":missing,"policy":current.policy,"app":app,"workflows":workflows,"old_sources":old,"base_sources":new,"provider":current.pr,"checks":current.checks,"statuses":current.statuses,"runs":current.runs,"bound_runs":bound_runs,"policy_revisions":revisions}}),
     )
 }
 
@@ -495,24 +486,27 @@ pub(super) fn observe(input: &Value) -> Result<Value, OrbitError> {
         "required integration identities",
     )?;
     let checks = complete_list(&current.checks, "check_runs")?;
+    let statuses = complete_list(&current.statuses, "statuses")?;
+    let missing = proof["missing"]
+        .as_array()
+        .filter(|gates| !gates.is_empty())
+        .ok_or_else(|| unreadable("reserved missing gates"))?;
     let passed = current
         .required
         .iter()
-        .all(|gate| gate_passed(gate, checks))
-        && proof["missing"]
-            .as_array()
-            .ok_or_else(|| unreadable("reserved missing gates"))?
-            .iter()
-            .all(|gate| {
-                checks.iter().any(|check| {
-                    check["name"] == gate["context"]
-                        && check["app"]["id"] == proof["app"]["id"]
-                        && check["status"] == "completed"
-                        && check["conclusion"] == "success"
-                })
-            });
+        .all(|gate| gate_passed(gate, checks, statuses))
+        && missing.iter().all(|gate| {
+            checks.iter().any(|check| {
+                check["name"] == gate["context"]
+                    && check["app"]["id"] == proof["app"]["id"]
+                    && check["status"] == "completed"
+                    && check["conclusion"] == "success"
+            })
+        });
     deadline.remaining()?;
-    Ok(json!({"gates_passed":passed,"checks":current.checks,"policy":policy}))
+    Ok(
+        json!({"gates_passed":passed,"checks":current.checks,"statuses":current.statuses,"policy":policy}),
+    )
 }
 
 /// Identity and revision of each active policy source, not just its names.
@@ -568,11 +562,12 @@ pub(super) fn current_gates(input: &Value) -> Result<Value, OrbitError> {
     )?;
     let revisions = policy_revisions(deadline, workspace, &current.policy)?;
     let checks = complete_list(&current.checks, "check_runs")?;
+    let statuses = complete_list(&current.statuses, "statuses")?;
     let passed = current
         .required
         .iter()
-        .all(|gate| gate_passed(gate, checks));
+        .all(|gate| gate_passed(gate, checks, statuses));
     Ok(
-        json!({"gates_passed":passed,"required":current.required,"policy":current.policy,"policy_revisions":revisions,"checks":current.checks}),
+        json!({"gates_passed":passed,"required":current.required,"policy":current.policy,"policy_revisions":revisions,"checks":current.checks,"statuses":current.statuses}),
     )
 }

@@ -68,6 +68,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 mod absent_context;
+pub(super) use absent_context::adopted_policy_cases;
 mod auto_fix;
 mod flaky;
 mod infrastructure;
@@ -8004,8 +8005,8 @@ status() {
             rollup='{"__typename":"CheckRun","name":"Read state","workflowName":"Guarded CI","status":"COMPLETED","conclusion":"FAILURE"}'
             if [ -f "$forge/rerun-applied" ]; then
                 case "$(cat "$forge/infrastructure")" in
-                    positive|merge|lost|moved|deleted) merge_state=CLEAN; rollup='{"__typename":"CheckRun","name":"Protected (rust)","workflowName":"Guarded CI","status":"COMPLETED","conclusion":"SUCCESS"}' ;;
-                    clean_missing) merge_state=CLEAN; rollup=$(check success) ;;
+                    positive|merge|lost|moved|deleted|legacy_success) merge_state=CLEAN; rollup='{"__typename":"CheckRun","name":"Protected (rust)","workflowName":"Guarded CI","status":"COMPLETED","conclusion":"SUCCESS"}' ;;
+                    clean_missing|legacy_substitute) merge_state=CLEAN; rollup=$(check success) ;;
                 esac
             fi ;;
         review_required) merge_state=BLOCKED; review=REVIEW_REQUIRED; rollup=$(check success) ;;
@@ -8182,6 +8183,7 @@ if [ -f "$forge/infrastructure" ]; then
             exit ;;
         "api "*)
             case "$2" in
+                *'/commits/'*'/status?'*) cat "$forge/infra-statuses-$phase"; exit ;;
                 *'/commits/'*'/check-runs?'*) cat "$forge/infra-checks-$phase"; exit ;;
                 *'/actions/runs?head_sha='*) cat "$forge/infra-runs-$phase"; exit ;;
                 *'/contents/'*) cat "$forge/infra-contents"; exit ;;

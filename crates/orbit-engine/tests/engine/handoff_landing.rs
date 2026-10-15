@@ -1882,3 +1882,50 @@ fn owner_landing_waits_for_unknown_then_clean_and_retains_expired_or_blocked_evi
         },
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn adopted_provider_head_accepts_readable_empty_policy() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "adopted_provider_head_accepts_readable_empty_policy",
+        || {
+            crate::pr_landing::adopted_policy_cases(&["empty", "no-rule"]);
+        },
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn adopted_provider_head_accepts_authentic_legacy_success() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "adopted_provider_head_accepts_authentic_legacy_success",
+        || {
+            crate::pr_landing::adopted_policy_cases(&["success"]);
+        },
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn adopted_provider_head_refuses_unavailable_or_unsatisfied_policy() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "adopted_provider_head_refuses_unavailable_or_unsatisfied_policy",
+        || {
+            crate::pr_landing::adopted_policy_cases(&[
+                "unavailable",
+                "pending",
+                "failed",
+                "wrong-head",
+                "foreign",
+                "wrong-row",
+                "foreign-row",
+                "foreign-host",
+                "shadow-pending",
+                "app-bound",
+            ]);
+        },
+    );
+}

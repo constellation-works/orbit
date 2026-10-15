@@ -316,7 +316,12 @@ attachment. Previous attempts and their stopped evidence remain inspectable thro
 The normal owner landing job first reconciles any unresolved external merge intent.
 An already-merged exact head completes from provider readback without sending another
 merge. Otherwise all repository, remote head/base, review, required-check, native
-certificate, lease and merge-certainty checks still apply. UNKNOWN/PENDING uses the
+certificate, lease and merge-certainty checks still apply. After adopting a verified
+provider base merge, a fully readable policy with no required contexts is valid.
+An app-unbound context can be satisfied by an authentic successful legacy commit
+status bound to the exact repository and new head; it cannot satisfy an
+app-bound workflow gate. Pending, failed, foreign or unreadable evidence refuses
+completion, and owner-owed checks still require explicit success. UNKNOWN/PENDING uses the
 existing bounded wait; administrative or review refusal is not widened into a wait.
 A candidate that needs repair must produce a fresh validated handoff instead.
 
@@ -330,6 +335,8 @@ precedes the expected-head provider update; an unknown outcome is observed,
 never repeated. Current effective policy and every exact new-head required and
 owner-owed success gate the ordinary merge. Other conditional/dynamic or incomplete
 emission evidence refuses; it grants no source-repair or policy-bypass authority.
+A legacy status cannot stand in for the positive workflow CheckRun proof in
+absent-context refresh or prerequisite-rerun recovery.
 
 Save the request key and reuse the exact input after an uncertain reply. The dashboard
 retains its key in browser storage before sending; if storage is unavailable it refuses
