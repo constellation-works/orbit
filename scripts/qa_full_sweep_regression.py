@@ -110,6 +110,7 @@ def self_test():
     harness = Path(os.environ.get("QA_SWEEP_HARNESS_UNDER_TEST", Path(__file__).with_name("test-qa-full-sweep.py"))).resolve()
     scratch = Path(__file__).resolve().parent.parent / ".orbit/tmp"
     scratch.mkdir(parents=True, exist_ok=True)
+    native_recorder_prefix_self_test(harness, scratch)
     with tempfile.TemporaryDirectory(prefix="qa-evidence-regression-", dir=scratch) as tmp:
         repo = Path(tmp)
         for directory in ["bin", "scripts", ".orbit/tmp", "browsers"]:
@@ -234,7 +235,7 @@ def self_test():
         actual = json.loads(Path(__file__).with_name("fixtures").joinpath("qa-native-test-env.json").read_text())
         original_command = command
         command = ["cargo", "test", "--no-fail-fast", "-p", "orbit-common", "--test", "test_env", "--locked"]
-        for mode in ["success", "multiple-success", "nocapture", "directory-target", "outer-failure", "early-target-failure", "nonzero", "missing-target",
+        for mode in ["success", "multiple-success", "nocapture", "wrapper", "directory-target", "outer-failure", "early-target-failure", "nonzero", "missing-target",
                      "wrong-target", "extra-target", "zero", "incomplete-rows", "child-only",
                      "ambiguous", "truncated", "seatbelt", "ps", "unstable", "wrong-revision"]:
             execution = {"stdout": actual["stdout"], "stderr": actual["stderr"], "exit_code": 0,
@@ -256,6 +257,9 @@ def self_test():
             elif mode == "nocapture":
                 command = [*command, "--", "--nocapture"]
                 execution["executed_command"] = [*command[:-1], "--show-output"]
+            elif mode == "wrapper":
+                command = ["env", "--", *command]
+                execution["executed_command"] = [*command, "--", "--show-output"]
             elif mode == "early-target-failure":
                 execution["stdout"] = "running 1 test\ntest earlier ... FAILED\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n" + execution["stdout"]
                 execution["stderr"] = "     Running tests/earlier.rs (target/debug/deps/earlier)\n" + execution["stderr"]
@@ -307,10 +311,10 @@ def self_test():
                     recorded[key] = execution[key]
             (repo / "transcript.json").write_text(json.dumps(recorded))
             report = sweep([native], f"native-{mode}")
-            assert (report["decision"] == "PASS") == (mode in ["success", "multiple-success", "nocapture", "directory-target"]), (mode, report)
+            assert (report["decision"] == "PASS") == (mode in ["success", "multiple-success", "nocapture", "wrapper", "directory-target"]), (mode, report)
             if mode in ["outer-failure", "early-target-failure"]:
                 assert "failing outer tests" in row(report, "platform-evidence-import")["stderr"], (mode, report)
-            if mode in ["success", "multiple-success", "nocapture", "directory-target"]:
+            if mode in ["success", "multiple-success", "nocapture", "wrapper", "directory-target"]:
                 retained = row(report, "macos-platform")["native_evidence"]["execution"][0]
                 assert "test result: FAILED. 0 passed; 1 failed;" in retained["stdout"], retained
                 assert retained["test_counts"] == {"passed": 12 if mode == "multiple-success" else 11, "failed": 0, "ignored": 6, "suites": 2 if mode == "multiple-success" else 1}, retained
@@ -430,3 +434,52 @@ def self_test():
         assert all(row(report, name)["outcome"] == "NOT_RUN" for name in ["first", "second"]), report
         # Repeated invocations also retain earlier report bytes.
         assert all(Path(directory).is_dir() for directory in directories), directories
+
+
+def native_recorder_prefix_self_test(harness, scratch):
+    """Wrapper delimiters must not consume Cargo's separator or libtest options."""
+    with tempfile.TemporaryDirectory(prefix="qa-native-prefix-", dir=scratch) as tmp:
+        repo = Path(tmp)
+        (repo / "Cargo.toml").write_text(
+            '[package]\nname = "recorder-prefix"\nversion = "0.0.0"\nedition = "2021"\n'
+            '[workspace]\n[[test]]\nname = "boundary"\npath = "boundary.rs"\n')
+        (repo / "boundary.rs").write_text(
+            '#[test]\nfn selected() { println!("selected test diagnostics"); }\n'
+            '#[test]\nfn unrelated() { panic!("the recorder must preserve the test filter"); }\n')
+        wrapper = repo / "wrapper.py"
+        wrapper.write_text(
+            'import os, sys\n'
+            'start = 3 if sys.argv[1] == "-p" else sys.argv.index("--") + 1\n'
+            'command = sys.argv[start:]\n'
+            'os.execvp(command[0], command)\n')
+        cargo = ["cargo", "test", "--offline", "--test", "boundary", "selected"]
+        prefix = [sys.executable, str(wrapper), "--"]
+        options = ["--exact", "--test-threads=1", "--nocapture", "--show-output"]
+        cases = [
+            ("direct", [], [], ["--show-output"]),
+            ("direct-options", [], options, [flag for flag in options if flag != "--nocapture"]),
+            ("wrapper", prefix, [], ["--show-output"]),
+            ("wrapper-options", prefix, options, [flag for flag in options if flag != "--nocapture"]),
+            ("sandbox-style-prefix", [sys.executable, str(wrapper), "-p", "(version 1)(allow default)"],
+             ["--exact", "--nocapture"], ["--exact", "--show-output"]),
+            ("prefix-options", [sys.executable, str(wrapper), "--show-output", "--nocapture", "--"],
+             ["--exact", "--nocapture"], ["--exact", "--show-output"]),
+        ]
+        env = {**os.environ, "CARGO_TARGET_DIR": str(repo / "target"),
+               "RUSTC_WRAPPER": "", "RUSTC_WORKSPACE_WRAPPER": ""}
+        for name, wrapper_args, libtest_args, expected_args in cases:
+            print(f"native recorder prefix regression: {name}", flush=True)
+            command = [*wrapper_args, *cargo, *(["--", *libtest_args] if libtest_args else [])]
+            records = repo / name
+            child = subprocess.run(
+                [sys.executable, str(harness), "--repo-root", str(repo),
+                 "--native-execution-dir", str(records), "--record-native-command", *command],
+                cwd=repo, env=env, capture_output=True, text=True, timeout=60)
+            assert child.returncode == 0, (name, child.stdout, child.stderr)
+            recorded = json.loads(next(records.glob("*.json")).read_text())
+            assert recorded["command"] == command, (name, recorded)
+            assert recorded["executed_command"] == [*wrapper_args, *cargo, "--", *expected_args], (name, recorded)
+            assert recorded["exit_code"] == 0 and recorded["cleanup_verified"], (name, recorded)
+            assert "test selected ... ok" in recorded["stdout"], (name, recorded)
+            assert "selected test diagnostics" in recorded["stdout"], (name, recorded)
+            assert "test result: ok. 1 passed; 0 failed;" in recorded["stdout"], (name, recorded)
