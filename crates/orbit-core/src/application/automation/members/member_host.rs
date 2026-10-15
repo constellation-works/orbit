@@ -250,6 +250,16 @@ impl MemberHost for Host<'_> {
                 if self.fingerprint(&task, &source.commit)? != member.fingerprint {
                     return Ok(MemberAdmission::Retire("material_changed".into()));
                 }
+                // Pending members can be off the observation page when an
+                // explicit pilot settles. Recheck accepted evidence here too,
+                // after the active-holder guard, before creating any run.
+                if self
+                    .runtime
+                    .fresh_task_pilot_assessment(id, &member.fingerprint)?
+                    .is_some()
+                {
+                    return Ok(MemberAdmission::Retire("assessment_fresh".into()));
+                }
             }
             return Ok(MemberAdmission::Admit);
         }
@@ -376,6 +386,18 @@ impl MemberHost for Host<'_> {
                 JobRunTrigger::state_routine(self.routine, &attempt.consumer),
             )
             .map(|run| run.run_id)
+            .map_err(Into::into)
+    }
+
+    fn accepted_assessment(&self, member: &StateMember) -> Result<Option<bool>, AutomationError> {
+        if self.trigger.kind != StateTriggerKind::PreparationEligible {
+            return Ok(None);
+        }
+        let [task_id] = member.task_ids.as_slice() else {
+            return Ok(None);
+        };
+        self.runtime
+            .fresh_task_pilot_assessment(task_id, &member.fingerprint)
             .map_err(Into::into)
     }
 

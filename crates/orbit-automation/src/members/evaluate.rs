@@ -148,11 +148,12 @@ pub fn evaluate(
     // still does not fit waits for a later pass, while the scan and the
     // retained members keep moving.
     let batch_size = trigger.effective_batch_size();
-    if absorb(host, &mut members.clone(), &page) > 0 || members.failed.len() + batch_size > CAPACITY
+    if absorb(host, &mut members.clone(), &page)?.deferred > 0
+        || members.failed.len() + batch_size > CAPACITY
     {
         retire_unobserved(host, members, observed(&page))?;
     }
-    let deferred = absorb(host, members, &page);
+    let absorbed = absorb(host, members, &page)?;
     retire_superseded(members, &BTreeSet::new());
     compact_failed(members);
     members.scan_after = page.next;
@@ -204,7 +205,7 @@ pub fn evaluate(
     candidates.sort_by(|(a, _), (b, _)| a.first_seen.cmp(&b.first_seen).then(a.key.cmp(&b.key)));
 
     if candidates.is_empty() {
-        let reason = if deferred > 0 {
+        let reason = if absorbed.deferred > 0 {
             "source_backpressure"
         } else if members.failed.iter().any(|(key, failed)| {
             members.pending.get(key).is_some_and(|pending| {
@@ -218,7 +219,9 @@ pub fn evaluate(
             "debouncing"
         } else if !members.withheld.is_empty() {
             "work_withheld"
-        } else if members.assessed.values().any(|assessed| !assessed.ready) {
+        } else if absorbed.fresh_unready
+            || members.assessed.values().any(|assessed| !assessed.ready)
+        {
             "fresh_unready"
         } else {
             "fresh"
