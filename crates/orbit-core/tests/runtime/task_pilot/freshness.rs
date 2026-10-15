@@ -69,7 +69,7 @@ fn assert_preparation_due(workspace: &Workspace, routine: &RoutineDefinition, ta
     .unwrap();
     assert_eq!(due.reason, "would_fire", "{due:?}");
     assert_eq!(due.batch.len(), 1);
-    assert_eq!(due.batch[0].task_ids, [task.id.clone()]);
+    assert_eq!(due.batch[0].task_ids, std::slice::from_ref(&task.id));
 }
 
 fn explicit_assessment_survives_selector_apply_promotion_and_administrative_edits() {
