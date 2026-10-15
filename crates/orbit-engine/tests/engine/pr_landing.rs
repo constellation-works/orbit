@@ -1955,10 +1955,11 @@ fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_pass
         |sandbox| {
             let fx = Fixture::new(sandbox);
             let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
-            // The base has no src/feature.txt, so it passes: the failure is
-            // the candidate's to repair.
-            let format_check = "test ! -e src/feature.txt || grep -qx formatted src/feature.txt || \
-                 { echo 'src/feature.txt: not formatted' >&2; exit 3; }";
+            // Comparable base-pass control: both executions declare the same
+            // selection and a counted check; candidate validation still fails.
+            let format_check = r#"printf '%s' '{"schema_version":1,"selection":{"packages":["fixture"]},"tests_run":1}' > "$ORBIT_VALIDATION_SUMMARY";
+                 test ! -e src/feature.txt || grep -qx formatted src/feature.txt ||
+                 { echo 'src/feature.txt: not formatted' >&2; exit 3; }"#;
             host.require_commands(&["echo suite-ok", format_check]);
             let remote_before = fx.remote_tip(BRANCH);
 
@@ -1975,7 +1976,8 @@ fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_pass
             );
             assert!(
                 !is_baseline_red_failure(None, Some(&message))
-                    && message.contains("passes this command, so the candidate introduced"),
+                    && message.contains("failure was not reproduced")
+                    && !message.contains("candidate introduced"),
                 "a failure the base does not share stays the candidate's: {message}"
             );
             let passed = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
@@ -1990,6 +1992,12 @@ fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_pass
             let base_log =
                 host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/1.baseline.json"));
             assert_eq!(base_log["exit_code"], 0, "the base ran the same command");
+            assert_eq!(
+                base_log["summary"]["selection"],
+                failed["summary"]["selection"]
+            );
+            assert_eq!(base_log["summary"]["tests_run"], 1);
+            assert_eq!(failed["failure_kind"], "candidate");
             assert_eq!(
                 failed["output"],
                 format!(
@@ -2030,10 +2038,13 @@ fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_pass
                 "command elapsed evidence survives capture"
             );
             assert_eq!(attempt["admission_waits"]["deadline_extension_ms"], 0);
-            assert!(
-                attempt["phase_timings"].is_null(),
-                "unmeasured phases are not fabricated"
+            assert_eq!(
+                attempt["phase_timings"],
+                json!({"compile_ms": null, "test_ms": null, "package_timings": null}),
+                "a counted check without phase measurements must not fabricate timings"
             );
+            assert!(host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"))
+                ["timing"]["attempts"][0]["phase_timings"].is_null());
 
             let measured = r#"printf '%s' '{"schema_version":1,"selection":{"packages":["fixture"]},"tests_run":1,"compile_ms":11,"test_ms":22,"package_timings":[{"package":"fixture","compile_ms":11,"test_ms":22}]}' > "$ORBIT_VALIDATION_SUMMARY""#;
             host.require_commands(&[measured]);
@@ -2505,7 +2516,7 @@ fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs() 
                 "exit 3",
                 "actual_failure",
                 "Base verdict:",
-                "passes this command",
+                "failure was not reproduced",
                 &candidate_path,
                 &base_path,
             ] {
@@ -2515,13 +2526,26 @@ fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs() 
                 );
             }
             assert!(
+                message.contains("Neither run declared a selection")
+                    && message.contains("source causation is unconfirmed")
+                    && !message.contains("candidate introduced"),
+                "[F2026-10-378] a no-summary base that skips the failing guard proves no source causation: {message}"
+            );
+            assert!(
                 !message.contains("foo_bar:"),
                 "passing output must stay in artifacts"
             );
             let log = host.validation_log(TASK_ID, &candidate_path);
             assert!(log["output"].as_str().unwrap().starts_with(&output));
             assert_eq!(log["baseline"]["log"], base_path);
-            assert_eq!(host.validation_log(TASK_ID, &base_path)["exit_code"], 0);
+            let base = host.validation_log(TASK_ID, &base_path);
+            assert_eq!(base["exit_code"], 0);
+            assert_eq!(base["command"], log["command"]);
+            assert_eq!(base["base_sha"], fx.base_sha);
+            assert_eq!(log["tested_head"], fx.candidate);
+            assert_eq!(log["failure_kind"], "candidate");
+            assert!(log["summary"].is_null() && base["summary"].is_null());
+            assert_eq!(base["output"], "", "the base skipped the failing guard");
 
             let input =
                 json!({"workspace_path": fx.repo, "base_sync": "local", "base_sha": fx.base_sha});
@@ -2529,7 +2553,16 @@ fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs() 
                 .unwrap_err()
                 .to_string();
             assert!(message.len() <= 16 * 1024);
+            assert!(
+                message.contains("failure was not reproduced")
+                    && message.contains("Neither run declared a selection")
+                    && message.contains("source causation is unconfirmed")
+                    && !message.contains("candidate introduced"),
+                "[F2026-10-378] claimed validation retains uncertainty about the skipped guard: {message}"
+            );
             for field in [
+                &fx.candidate,
+                &fx.base_sha,
                 "actual_failure",
                 "exit 3",
                 "validation/claim-landing/0.failed.json",
@@ -2544,6 +2577,14 @@ fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs() 
             let log: Value =
                 serde_json::from_slice(&logs["validation/claim-landing/0.failed.json"]).unwrap();
             assert!(log["output"].as_str().unwrap().starts_with(&output));
+            assert_eq!(log["failure_kind"], "candidate");
+            assert_eq!(log["tested_head"], fx.candidate);
+            let base: Value =
+                serde_json::from_slice(&logs["validation/claim-landing/0.baseline.json"]).unwrap();
+            assert_eq!(base["base_sha"], fx.base_sha);
+            assert_eq!(base["command"], log["command"]);
+            assert_eq!(base["exit_code"], 0);
+            assert_eq!(base["output"], "");
             drop(logs);
 
             // Shared exit status without failure identities proves no shared
@@ -2565,6 +2606,26 @@ fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs() 
                 );
                 assert!(!message.contains("failed identically"), "{message}");
                 assert!(!message.contains(&output));
+            }
+
+            host.require_commands(&[
+                "if test -e src/feature.txt; then exit 3; else orbit-missing-base-tool; fi",
+            ]);
+            for (route, input) in [
+                ("candidate_validate", fx.validate_input()),
+                (
+                    "claim_validate",
+                    json!({"workspace_path": fx.repo, "base_sync": "local", "base_sha": fx.base_sha}),
+                ),
+            ] {
+                let message = action(&host, route, &input).unwrap_err().to_string();
+                assert!(
+                    message.contains("could not be judged")
+                        && message.contains("source causation is unconfirmed")
+                        && !message.contains("candidate introduced"),
+                    "an inconclusive base cannot establish source causation: {message}"
+                );
+                assert!(!is_baseline_red_failure(None, Some(&message)), "{message}");
             }
         },
     );
@@ -2791,7 +2852,8 @@ fn a_required_pass_that_deferred_a_sandbox_path_is_an_environment_failure() {
             let failed = failed.to_string();
             assert!(
                 !orbit_types::workflow::is_validation_environment_failure(None, Some(&failed))
-                    && failed.contains("passes this command, so the candidate introduced"),
+                    && failed.contains("failure was not reproduced")
+                    && !failed.contains("candidate introduced"),
                 "a failing gate with a notice is the candidate's failure: {failed}"
             );
             let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
@@ -8558,13 +8620,13 @@ fn claimed_publication_and_merge_pins() {
 #[test]
 fn validation_repairs_and_logs() {
     isolated("validation_repairs_and_logs", |_| {
-        required_validation_refuses_a_failing_candidate_until_a_committed_repair_passes();
-        test_env::record_scenario_pass(
-            "required_validation_refuses_a_failing_candidate_until_a_committed_repair_passes",
-        );
         required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs();
         test_env::record_scenario_pass(
             "required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs",
+        );
+        required_validation_refuses_a_failing_candidate_until_a_committed_repair_passes();
+        test_env::record_scenario_pass(
+            "required_validation_refuses_a_failing_candidate_until_a_committed_repair_passes",
         );
         required_validation_retains_reported_evidence_after_scratch_lifetime();
         printed_supervisor_notes_remain_candidate_failures_on_both_streams();

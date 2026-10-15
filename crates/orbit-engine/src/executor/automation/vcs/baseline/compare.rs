@@ -617,7 +617,7 @@ pub(in super::super) fn baseline_red_failure(
     OrbitError::Execution(message)
 }
 
-/// A candidate failure the base does not share, with the base's result.
+/// A candidate validation failure, with the observed base result and its limits.
 pub(in super::super) fn candidate_failure(
     run: &RequiredCommandRun,
     candidate: &str,
@@ -636,13 +636,27 @@ pub(in super::super) fn candidate_failure(
         Some(check) => match (&check.result, &check.not_comparable) {
             (Ok(_), Some(reason)) => format!(
                 "Base {} ran the command, but its run is not comparable with the candidate's \
-                 ({reason}), so the failure is judged the candidate's.",
+                 ({reason}). Candidate validation still failed; source causation is unconfirmed.",
                 check.base_sha
             ),
-            (Ok(base), None) if base.passed => format!(
-                "Base {} passes this command, so the candidate introduced the failure.",
-                check.base_sha
-            ),
+            (Ok(base), None) if base.passed => {
+                let scope = if check.exact_replay {
+                    "The base replayed only the candidate's failing tests, not the full candidate \
+                     selection; this does not establish full-suite or load equivalence."
+                } else if run.selection().is_none() && base.summary.is_none() {
+                    "Neither run declared a selection, so matching command text does not establish \
+                     that the same guards ran."
+                } else {
+                    "The base ran the command with its recorded selection; matching command text \
+                     or test counts does not establish full-suite or load equivalence."
+                };
+                format!(
+                    "Base {} passed the recorded pinned-base execution; the candidate failure was \
+                     not reproduced. {scope} Candidate validation still failed; source causation is \
+                     unconfirmed.",
+                    check.base_sha
+                )
+            }
             (Ok(base), None) if run.timed_out || base.timed_out => format!(
                 "Base {} also fails this command (exit {}{}), but a timed-out run cannot \
                  establish matching failures, so the candidate still requires validation repair.",
@@ -661,8 +675,8 @@ pub(in super::super) fn candidate_failure(
                 check.base_sha, base.exit_code
             ),
             (Err(reason), _) => format!(
-                "Base {} could not be judged ({reason}), so the failure is judged the \
-                 candidate's.",
+                "Base {} could not be judged ({reason}). Candidate validation still failed; \
+                 source causation is unconfirmed.",
                 check.base_sha
             ),
         },
