@@ -311,6 +311,10 @@ fn context_files_outside_freshness_stay_context_files_changed() {
 fn task_prepared_in_progress_is_not_rewritten() {
     let workspace = workspace(None);
     let task = add_task(&workspace.runtime, "active", TaskStatus::Backlog);
+    let mut prepared = prepare(&workspace, &task.id);
+    // Older preparations could capture active work. Keep exercising apply's
+    // persisted-input fence even though prepare now refuses that selection.
+    prepared["tasks"][0]["status"] = json!(TaskStatus::InProgress);
     workspace
         .runtime
         .force_update_task_with_identity(
@@ -324,7 +328,6 @@ fn task_prepared_in_progress_is_not_rewritten() {
         )
         .expect("start");
     let started = workspace.runtime.get_task(&task.id).expect("started");
-    let prepared = prepare(&workspace, &task.id);
     let output = apply(&workspace, &prepared).expect("apply");
     assert_refused(
         &workspace,
