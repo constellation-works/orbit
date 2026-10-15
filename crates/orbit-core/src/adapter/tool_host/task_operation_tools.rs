@@ -123,14 +123,10 @@ pub(super) fn dispatch(
             let request = serde_json::from_value(request).map_err(|error| {
                 OrbitError::InvalidInput(format!("invalid retry request: {error}"))
             })?;
-            read(
-                runtime
-                    .retry_handoff_as_operator(&owner, &request, &actor)
-                    .and_then(|value| {
-                        serde_json::to_value(value)
-                            .map_err(serialize_error("serialize landing retry"))
-                    }),
-            )
+            let dispatch = runtime.retry_handoff_as_operator(&owner, &request, &actor)?;
+            let response = serde_json::to_value(&dispatch)
+                .map_err(serialize_error("serialize landing retry"))?;
+            Ok((response, Some(dispatch.task_id)))
         }
         TaskVerb::Reject => written(reject(runtime, &input, caller.agent, caller.model)),
         TaskVerb::Delete => read(delete(runtime, &input)),

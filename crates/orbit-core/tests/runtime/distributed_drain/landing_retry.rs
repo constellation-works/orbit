@@ -49,6 +49,93 @@ fn a_stopped_authorized_handoff_retries_once_through_the_public_operator_tool() 
     );
 }
 
+fn a_redacted_retry_reason_preserves_success_audit_and_replay() {
+    let (owner, task, mut request, stopped) = stopped_retry_fixture();
+    let runtime = &owner.pair.wire.owner;
+    let home = std::env::var("HOME").unwrap();
+    request.reason = format!("provider state refreshed under {home}/provider");
+    let result = retry_tool(runtime, &request, McpCapability::Operator);
+
+    // Read the durable outcome even if the tool loses its successful reply.
+    let boundary = orbit_store::TaskCommitBoundary::new(
+        runtime.sqlite_store().unwrap(),
+        orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+            &orbit_store::maintenance::task_registry::task_registry_path(&runtime.global_root()),
+        )
+        .unwrap(),
+        runtime.workspace_id().unwrap(),
+    )
+    .unwrap();
+    let receipt = boundary
+        .landing_retry_receipt(&request.handoff_id, &request.request_key)
+        .unwrap()
+        .unwrap();
+    let mut sanitized_request = request.clone();
+    sanitized_request.reason = "provider state refreshed under ~/provider".into();
+    assert_eq!(receipt.request, sanitized_request);
+    assert_eq!(receipt.attempt, stopped.attempt + 1);
+    let attempt = runtime.landing_attempts().unwrap().remove(0);
+    let run_id = owner
+        .pair
+        .follower_jobs
+        .automation_job_for_key(&format!(
+            "landing:{}:{}",
+            request.handoff_id, receipt.attempt
+        ))
+        .unwrap()
+        .unwrap();
+    assert_eq!(attempt.job_run_id.as_deref(), Some(run_id.as_str()));
+    let response = result.expect("a redacted reason must return the durably submitted retry");
+    assert_eq!(response["task_id"], task);
+    assert_eq!(response["run_id"], run_id);
+    assert_eq!(response["attempt"], receipt.attempt);
+    assert_eq!(response["submitted"], true);
+    assert_eq!(response["redactions_applied"], true);
+
+    let rows = runtime
+        .list_audit_events(None, None, None, None, 100)
+        .unwrap();
+    let audit = rows
+        .iter()
+        .find(|row| {
+            row.command == "artifact_redaction"
+                && row.tool_name.as_deref() == Some("orbit.task.retry_handoff")
+                && row.task_id.as_deref() == Some(task.as_str())
+        })
+        .expect("retry reason redaction must be attributable to the persisted task");
+    assert_eq!(audit.target_type.as_deref(), Some("task"));
+    assert_eq!(audit.target_id.as_deref(), Some(task.as_str()));
+    let payload: Value = serde_json::from_str(audit.arguments_json.as_deref().unwrap()).unwrap();
+    assert_eq!(payload["field_path"], "reason");
+    assert_eq!(payload["artifact_id"], task);
+    assert!(!audit.arguments_json.as_deref().unwrap().contains(&home));
+
+    let replay = retry_tool(runtime, &request, McpCapability::Operator).unwrap();
+    assert_eq!(replay["run_id"], response["run_id"]);
+    assert_eq!(replay["attempt"], response["attempt"]);
+    assert_eq!(replay["submitted"], false);
+    assert_eq!(runtime.landing_attempts().unwrap(), vec![attempt]);
+    assert_eq!(owner.land(&task).unwrap()["phase"], "landed");
+    let settled = runtime.landing_attempts().unwrap();
+    let replay = retry_tool(runtime, &request, McpCapability::Operator).unwrap();
+    assert_eq!(replay["run_id"], response["run_id"]);
+    assert_eq!(replay["attempt"], response["attempt"]);
+    assert_eq!(replay["submitted"], false);
+    assert_eq!(runtime.landing_attempts().unwrap(), settled);
+    assert_eq!(
+        boundary
+            .landing_retry_receipt(&request.handoff_id, &request.request_key)
+            .unwrap(),
+        Some(receipt)
+    );
+    assert_eq!(
+        runtime
+            .landing_attempt_record(&request.handoff_id, stopped.attempt)
+            .unwrap(),
+        Some(stopped)
+    );
+}
+
 fn retry_tool(
     runtime: &OrbitRuntime,
     request: &orbit_types::workflow::handoff::LandingRetryRequest,
@@ -386,6 +473,7 @@ fn revoked_changed_and_repair_pending_handoffs_refuse_operator_retry() {
 
 crate::scenario_table!(
     public_owner_handoff_retry_scenarios,
+    a_redacted_retry_reason_preserves_success_audit_and_replay,
     a_stopped_authorized_handoff_retries_once_through_the_public_operator_tool,
     competing_operator_retries_reserve_one_attempt_and_refuse_stale_inputs,
     operator_retry_reservations_recover_before_submission_and_after_lost_attachment,
