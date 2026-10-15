@@ -56,6 +56,17 @@ impl Stub {
 
 impl Drop for Stub {
     fn drop(&mut self) {
+        if thread::panicking() {
+            for name in ["calls.jsonl", "bind-events.jsonl", "phases.jsonl"] {
+                // Diagnostic I/O must not interrupt child cleanup during unwind.
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "SSH fixture {name}: {}",
+                    fs::read_to_string(self.dir.path().join(name))
+                        .unwrap_or_else(|error| format!("unavailable: {error}"))
+                );
+            }
+        }
         for call in self.calls() {
             if let Some(pid) = call["pid"].as_i64() {
                 // SAFETY: signalling a pid this test's stub recorded.
