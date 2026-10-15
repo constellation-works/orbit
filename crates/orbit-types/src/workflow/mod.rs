@@ -172,5 +172,5 @@ pub use pr_infrastructure::{
 mod source_repair;
 pub use source_repair::{
     SOURCE_REPAIR_KEY, SOURCE_REPAIR_LINKED, SOURCE_REPAIR_RESERVED, SourceRepairAdmission,
-    SourceRepairBinding, source_repair_reservations,
+    SourceRepairBinding, SourceRepairSuccessor, source_repair_reservations,
 };

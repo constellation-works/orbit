@@ -16,11 +16,19 @@ mod fixture;
 use fixture::{Fixture, git};
 #[path = "source_repair/generations.rs"]
 mod generations;
+#[path = "source_repair/published_owner.rs"]
+mod published_owner;
 #[path = "source_repair/replay.rs"]
 mod replay;
 #[path = "source_repair/reviewers.rs"]
 mod reviewers;
 use generations::cancelled_published_repair_accepts_fresh_generation;
+use published_owner::{
+    legacy_publication_behind_a_stopped_successor_cannot_start_fresh,
+    published_completion_requeue_adopts_without_reimplementation,
+    published_requeue_refuses_changed_scope_head_and_incomplete_source,
+    stopped_successor_is_explicitly_bound_when_repairing_older_publication,
+};
 use replay::lost_spawn_reply_reconciles_the_reserved_run_after_older_retries;
 
 fn cancelled_candidate_requires_explicit_intent_and_continues_same_branch() {
@@ -785,6 +793,10 @@ fn model_context_and_forged_run_inputs_cannot_grant_repair_authority() {
 
 crate::scenario_table!(
     cancelled_source_repair_scenarios,
+    published_completion_requeue_adopts_without_reimplementation,
+    published_requeue_refuses_changed_scope_head_and_incomplete_source,
+    stopped_successor_is_explicitly_bound_when_repairing_older_publication,
+    legacy_publication_behind_a_stopped_successor_cannot_start_fresh,
     cancelled_published_repair_accepts_fresh_generation,
     cancelled_candidate_requires_explicit_intent_and_continues_same_branch,
     cancelled_admission_refuses_identity_liveness_lease_and_evidence_drift,

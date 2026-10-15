@@ -96,7 +96,7 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
         super::super::candidate_resume::source_repair::publication_admission(host, input)
             .map_err(|e| Box::new((FailedHandoffPhase::PrLookup, e)))?
     {
-        let binding = &admission.binding;
+        let binding = &admission;
         let pr = read_pr_status(host, &context.workspace_path, &binding.pull_request)
             .map_err(|e| Box::new((FailedHandoffPhase::PrLookup, e)))?;
         let published =

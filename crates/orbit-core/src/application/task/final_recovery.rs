@@ -671,6 +671,11 @@ impl OrbitRuntime {
                 outcome,
             }),
         });
+        let published = if matches!(plan.outcome, FinalRecoveryOutcome::Requeued) {
+            self.published_owner_requeue_record(task, &request.run_id)?
+        } else {
+            None
+        };
         let transition = plan.status != task.status;
         // A requeue is a new retry decision even if the task is already in
         // backlog. Its event must guard cleanup and count toward the bound.
@@ -688,6 +693,7 @@ impl OrbitRuntime {
                     append_history: decided
                         .clone()
                         .into_iter()
+                        .chain(published.clone())
                         .chain(if transition && plan.status == TaskStatus::Done {
                             pending_resolves_history(task)
                         } else {

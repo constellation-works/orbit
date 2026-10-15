@@ -428,6 +428,40 @@ A run with no successful checkpoints degrades to a full replay.
 
 ## A cancelled published source repair
 
+A transient completion-observation failure can requeue an owner-local task
+whose candidate is already published. Final recovery records the task meaning
+with its requeue decision. The next admission authenticates the successful host
+commit, preparation, synchronization, review correction (if any), push and PR
+checkpoints, then checks the retained branch, remote lease and exact open PR.
+If setup lost its reply after rebinding the task, admission selects only the
+immediate preceding owner PR run from durable task-bound history; it never
+searches past a newer attempt for a usable publication.
+It adopts that PR's branch and skips implementation when the candidate applies
+cleanly. Conflicts require repair. Current validation, review and completion
+policy still apply; old successful checks confer no approval, and review and
+recovery budgets retain their existing charges. The original execution records
+and retained checkout remain available; branch adoption renames the old local
+branch aside without changing its commit or files.
+
+A missing task-meaning binding, changed task/head, incomplete publication,
+foreign source or ambiguous association stops admission. It never authorizes
+fresh replacement implementation for that known publication. Reconcile a
+merged/closed PR or uncertain merge intent explicitly before trying again.
+
+For a publication requeued before preservation bindings were introduced, use
+explicit source repair against the **original publishing run**. Inspection also
+accepts an owner-local failed source with a durable applied final-recovery
+requeue. If the task now names a newer cancelled replacement, inspection binds
+that successor's entire stopped execution and checkpoints in `binding.superseded`.
+The successor must belong to the same task and machine, be conclusively stopped,
+and have no commit or publication attempt. Its retained files are left intact.
+Missing, live, foreign or candidate-producing successors refuse inspection.
+Review the returned original head, branch, PR and successor binding, then submit
+that exact binding with a new request key and a diagnosis. A changed successor
+invalidates it. Do not reconstruct checkpoints, clear the newer run link, or
+restart the replacement. A lost submission reply is reconciled by replaying the
+identical request key and payload.
+
 An operator source-repair admission authorizes one attempt. Generic resume
 cannot restart that attempt. If a repair publishes a new head on the original
 PR and is then cancelled with its task still in review, inspect the cancelled
