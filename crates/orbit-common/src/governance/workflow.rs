@@ -205,7 +205,15 @@ const RUN_RESUME: OperationSpec<WorkflowVerb> = OperationSpec {
     cli_about: "",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
-    params: &[&[RUN_ID_PARAM, CLAIM_TOKEN_PARAM]],
+    params: &[&[
+        RUN_ID_PARAM,
+        CLAIM_TOKEN_PARAM,
+        mcp_only(
+            "source_repair",
+            ParamType::Object,
+            "Explicit operator recovery of a cancelled owner-local published candidate. Inspect: {action: inspect, task_id}. Submit: {action: submit, task_id, request_key, binding, diagnosis}. Uses fresh policy and review; grants no completion or auto-fix authority.",
+        ),
+    ]],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,

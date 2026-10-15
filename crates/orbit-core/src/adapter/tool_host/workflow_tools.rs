@@ -29,6 +29,7 @@ const MAX_RUN_LIST_LIMIT: usize = 200;
 /// submits.
 pub(super) fn dispatch(
     runtime: &OrbitRuntime,
+    session: &orbit_types::tool::ToolSessionContext,
     verb: WorkflowVerb,
     input: Value,
     agent: Option<String>,
@@ -48,6 +49,9 @@ pub(super) fn dispatch(
             &actor(runtime, agent.as_deref(), model.as_deref()),
         ),
         WorkflowVerb::RunList => list(runtime, input),
+        WorkflowVerb::RunResume if input.get("source_repair").is_some() => {
+            runtime.source_repair_request(session, &input)
+        }
         WorkflowVerb::RunResume => resume(runtime, input, agent, model),
         WorkflowVerb::RunShow => show(runtime, input),
         WorkflowVerb::Ship => ship(runtime, input, agent, model, trigger),

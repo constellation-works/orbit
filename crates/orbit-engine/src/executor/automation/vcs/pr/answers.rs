@@ -31,6 +31,8 @@ pub struct PullRequestStatus {
     pub url: Option<String>,
     /// The provider's state: `OPEN`, `CLOSED` or `MERGED`.
     pub state: Option<String>,
+    /// Explicit automatic merge intent; absent metadata stays uncertain.
+    pub auto_merge_enabled: Option<bool>,
     /// The head branch name.
     pub head_branch: Option<String>,
     /// The head commit.
@@ -43,7 +45,8 @@ pub struct PullRequestStatus {
     pub(in crate::executor::automation::vcs) exact_head_branch: Option<String>,
     pub(in crate::executor::automation::vcs) exact_head_sha: Option<String>,
     pub(in crate::executor::automation::vcs) exact_merge_commit: Option<String>,
-    pub(crate) merged_at: Option<String>,
+    /// The provider-reported merge timestamp, when one exists.
+    pub merged_at: Option<String>,
     pub(crate) merge_state_status: Option<String>,
     pub(crate) review_decision: ReviewDecision,
     /// `None` when the provider reported no readable rollup.
@@ -82,6 +85,9 @@ impl PullRequestStatus {
                 .map(ToOwned::to_owned)
         };
         Self {
+            auto_merge_enabled: pull_request
+                .get("autoMergeRequest")
+                .map(|value| !value.is_null()),
             number: pull_request.get("number").and_then(Value::as_u64),
             number_selector: pull_request.get("number").and_then(number_selector),
             url: text("url"),

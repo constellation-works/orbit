@@ -2115,6 +2115,20 @@
           "type": "string",
           "description": "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`."
         },
+        "source_repair": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          ],
+          "description": "Explicit operator recovery of a cancelled owner-local published candidate. Inspect: {action: inspect, task_id}. Submit: {action: submit, task_id, request_key, binding, diagnosis}. Uses fresh policy and review; grants no completion or auto-fix authority."
+        },
         "workspace": {
           "type": "string",
           "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."

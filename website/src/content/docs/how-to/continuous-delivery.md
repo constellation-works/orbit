@@ -378,6 +378,86 @@ A cancelled task leaf is already back in `backlog` by default, with its
 candidate resumable on the next delivery. If you cancelled with `--block`,
 return it to `backlog` when it is ready to run again.
 
+### Repair a cancelled owner-local published PR
+
+Generic resume still refuses cancelled runs. When an owner-local task PR run
+was deliberately cancelled after publication and its task remains in review,
+an operator on the owning host can explicitly authorize remaining source work
+on that same task, branch and PR. This does not admit claimed leaves or foreign
+runs, and does not release a draft/evidence hold.
+
+First make the canonical task description, criteria, plan and complete context
+selectors describe the work you now authorize. Restore any temporarily released
+selectors before inspection. The cancelled worker must have conclusively stopped;
+its successful host commit, prepare, sync, push and PR checkpoints, retained Git
+objects and exact local and remote branch must still be available. The PR must
+be open, unmerged and have automatic merge disabled. Unreadable or uncertain
+merge intent refuses admission.
+
+Run these public tool requests as the operator (a model session cannot confer
+this authority). Use a deployment whose `orbit tool show
+orbit.workflow.run.resume` schema advertises `source_repair`; the owner, worker
+and any long-lived client must be on the compatible executable generation and
+store schema before use. Existing resume callers need no new argument. This
+feature adds a version-1 binding and append-only repair ledger, with no store
+schema migration. Installation and client restart remain operator actions.
+
+```bash
+orbit tool run orbit.workflow.run.resume --input \
+  '{"id":"<cancelled-run-id>","source_repair":{"action":"inspect","task_id":"<task-id>"}}'
+```
+
+If the workspace has an exclusive claim, include its authorized `claim_token`
+as a top-level field in both requests; operator authority does not bypass it.
+
+Inspection returns `binding`, current `review`, and prior `reservations`.
+Copy the entire returned `binding` object verbatim into a local request file;
+do not construct a head or digest yourself:
+
+```json
+{
+  "id": "<cancelled-run-id>",
+  "source_repair": {
+    "action": "submit",
+    "task_id": "<task-id>",
+    "request_key": "published-source-repair-1",
+    "binding": { "<replace with the entire inspected binding>": "" },
+    "diagnosis": "Name the failing CI run/job or observed source defect, its published head, and the remaining source edits explicitly authorized."
+  }
+}
+```
+
+```bash
+orbit tool run orbit.workflow.run.resume --input-file source-repair-request.json
+```
+
+The binding pins the workspace, owner machine, source run and checkpoints,
+repository and origin URL, task meaning/tools/crew and footprint, PR, branch,
+published head and recorded base. A successful host rebase is authenticated by
+the complete prepare/sync/push/PR chain; the pre-rebase commit need not be an
+ancestor of the published head. Changed evidence or scope requires a fresh
+inspection; a changed payload under an existing request key is refused.
+
+A request key contains 1–128 ASCII letters, digits, `-`, `_`, `.`, or `:`.
+Submission durably reserves the bounded per-PR repair budget before admitting
+one linked run. Repeat the identical request after a lost reply: it returns the
+same run without spawning another worker, even after that run stops. A new key
+cannot recharge the same head, and cancellation does not refund a reservation.
+The new attempt continues the saved candidate with today's authorized task
+specification under normal footprint locks, crew/OS/capacity and build budget.
+It inherits no validation or review checkpoint and reruns required commands on
+the repaired source. It captures the current host's review schedule: none for
+an after-landing coverage setup, or before-landing review on the published head
+when configured (before-PR configuration also retains its normal meaning).
+No configuration change or additional review gate is needed. Independent review
+uses that captured schedule; after-landing coverage remains the configured
+`delivery-code-review` automation.
+
+The attempt always requests `completion: review` and `auto_fix: false`.
+Inspect its resulting PR and validation/review evidence before separately
+requesting completion or automatic repair authority. This operator diagnosis
+path does not depend on automatic CI annotation classification.
+
 A host-specific or environmental failure that keeps recurring needs the host
 fixed, not another attempt.
 

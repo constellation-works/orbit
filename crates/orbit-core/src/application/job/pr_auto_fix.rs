@@ -95,7 +95,17 @@ impl OrbitRuntime {
                 let decided = decide_pr_auto_fix(
                     &attempts,
                     &claim,
-                    PR_AUTO_FIX_BUDGET,
+                    PR_AUTO_FIX_BUDGET.saturating_sub(
+                        orbit_types::workflow::source_repair_reservations(&history)
+                            .map_err(|e| {
+                                OrbitError::JobValidation(format!(
+                                    "unreadable source repair ledger: {e}"
+                                ))
+                            })?
+                            .iter()
+                            .filter(|record| record.binding.pull_request == request.pr_number)
+                            .count() as u32,
+                    ),
                     &crew.name,
                     &crew_source,
                 );

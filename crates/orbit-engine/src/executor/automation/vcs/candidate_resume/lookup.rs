@@ -59,6 +59,24 @@ pub(in crate::executor::automation) fn candidate_resume<H: RuntimeHost + ?Sized>
         return claimed_resume(input, task_id, &workspace_path, &base_sha);
     }
     let task = host.get_task(task_id)?;
+    if host.source_repair_admission(&run_id)?.is_some() {
+        let run = host
+            .get_job_run(&run_id)?
+            .ok_or_else(|| OrbitError::Execution("source repair run disappeared".into()))?;
+        let request = run
+            .input
+            .as_ref()
+            .and_then(|input| input.get(orbit_types::workflow::SOURCE_REPAIR_KEY))
+            .ok_or_else(|| OrbitError::Execution("source repair admission disappeared".into()))?;
+        return super::source_repair::continue_source(
+            host,
+            &run,
+            &task,
+            request,
+            &workspace_path,
+            &base_sha,
+        );
+    }
     let foreign = input.get("prior_foreign_run").and_then(|run| {
         Some(ForeignRun {
             run_id: input_string_field(run, "run_id")?,

@@ -1896,6 +1896,12 @@
         "description": "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.",
         "param_type": "string",
         "required": false
+      },
+      {
+        "name": "source_repair",
+        "description": "Explicit operator recovery of a cancelled owner-local published candidate. Inspect: {action: inspect, task_id}. Submit: {action: submit, task_id, request_key, binding, diagnosis}. Uses fresh policy and review; grants no completion or auto-fix authority.",
+        "param_type": "object",
+        "required": false
       }
     ]
   },

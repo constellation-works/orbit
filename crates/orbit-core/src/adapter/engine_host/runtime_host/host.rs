@@ -919,6 +919,24 @@ impl RuntimeHost for OrbitRuntime {
         crate::runtime::recovery_decision::read(slot)
     }
 
+    fn source_repair_admission(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<orbit_types::workflow::SourceRepairAdmission>, OrbitError> {
+        self.get_job_run_backend(run_id)?
+            .and_then(|run| run.input)
+            .and_then(|input| input.get(orbit_types::workflow::SOURCE_REPAIR_KEY).cloned())
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|e| {
+                OrbitError::JobValidation(format!("source repair admission unreadable: {e}"))
+            })
+    }
+
+    fn validate_source_repair(&self, run_id: &str) -> Result<(), OrbitError> {
+        self.validate_operator_source_repair(run_id)
+    }
+
     fn admit_pr_auto_fix(
         &self,
         request: &orbit_engine::PrAutoFixRequest,

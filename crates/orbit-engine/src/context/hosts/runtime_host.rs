@@ -202,6 +202,15 @@ pub trait RuntimeHost: Send + Sync {
         task_ids: &[String],
         workspace_path: &Path,
     ) -> Result<(), OrbitError>;
+    /// The immutable source-repair admission on this run, if any. Hosts that
+    /// cannot admit this recovery return none without requiring run storage.
+    fn source_repair_admission(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<orbit_types::workflow::SourceRepairAdmission>, OrbitError>;
+    /// Recheck the durable operator admission and exact source/scope before
+    /// applying a cancelled owner's published candidate. Other hosts refuse.
+    fn validate_source_repair(&self, run_id: &str) -> Result<(), OrbitError>;
     /// Admit one `--auto-fix` repair of a pull request's failed required
     /// checks or merge conflict before any agent runs. The host draws the
     /// run's repair crew from `workflow.low_complexity_crews` and decides the

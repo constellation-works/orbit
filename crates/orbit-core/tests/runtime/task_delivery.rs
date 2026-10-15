@@ -12,6 +12,8 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 mod resume;
+#[path = "source_repair.rs"]
+mod source_repair;
 use resume::{
     inherited_commit_refuses_invalid_parent_evidence,
     legacy_checkpoint_and_wire_shape_remain_readable_after_resume,

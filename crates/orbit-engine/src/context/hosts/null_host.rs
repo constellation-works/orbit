@@ -245,6 +245,17 @@ pub trait NullRuntimeHost: Send + Sync {
             "read_step_recovery_decision",
         ))
     }
+    fn source_repair_admission(
+        &self,
+        _run_id: &str,
+    ) -> Result<Option<orbit_types::workflow::SourceRepairAdmission>, OrbitError> {
+        Ok(None)
+    }
+    fn validate_source_repair(&self, _run_id: &str) -> Result<(), OrbitError> {
+        Err(OrbitError::CapabilityDenied(
+            "operator source repair is unavailable on this host".into(),
+        ))
+    }
     fn admit_pr_auto_fix(
         &self,
         _request: &PrAutoFixRequest,
@@ -901,6 +912,15 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
         slot: &StepRecoveryDecisionSlot,
     ) -> Result<StepRecoveryDecisionRead, OrbitError> {
         NullRuntimeHost::read_step_recovery_decision(self, slot)
+    }
+    fn source_repair_admission(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<orbit_types::workflow::SourceRepairAdmission>, OrbitError> {
+        NullRuntimeHost::source_repair_admission(self, run_id)
+    }
+    fn validate_source_repair(&self, run_id: &str) -> Result<(), OrbitError> {
+        NullRuntimeHost::validate_source_repair(self, run_id)
     }
     fn admit_pr_auto_fix(
         &self,

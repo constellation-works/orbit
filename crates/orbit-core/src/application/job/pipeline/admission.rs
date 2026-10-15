@@ -97,11 +97,28 @@ impl OrbitRuntime {
         if !reconciliation && run_input_declares_review_reconciliation(&input) {
             return Err(reserved_reconciliation_key_error(job_name));
         }
+        let source_repair = resume.is_some_and(|plan| {
+            plan.source.state == JobRunState::Cancelled
+                && plan
+                    .input
+                    .get(orbit_types::workflow::SOURCE_REPAIR_KEY)
+                    .is_some()
+        });
+        if input
+            .get(orbit_types::workflow::SOURCE_REPAIR_KEY)
+            .is_some()
+            && !source_repair
+        {
+            return Err(OrbitError::CapabilityDenied(
+                "source repair input is reserved for explicit operator admission".into(),
+            ));
+        }
+        let reuse_admission = resume.is_some() && !source_repair;
         let mut input = input;
         self.capture_auto_concurrency(
             job_name,
             &mut input,
-            resume.is_some() || replay_source_run_id.is_some(),
+            reuse_admission || replay_source_run_id.is_some(),
         )?;
         self.reclaim_worktrees_on_admission();
         // [ORB-11333] The review admission follows the same discipline: a
@@ -119,14 +136,14 @@ impl OrbitRuntime {
             job_name,
             &mut input,
             admission.map(|admission| admission.parent_run_id.as_str()),
-            resume.is_some(),
+            reuse_admission,
             &mut crew_pools::random_crew_ticket,
         )?;
         self.install_resource_class_admission(
             job_name,
             &mut input,
             admission.map(|admission| admission.parent_run_id.as_str()),
-            resume.is_some() || replay_source_run_id.is_some(),
+            reuse_admission || replay_source_run_id.is_some(),
         );
         let result = (|| {
             let spec = match &definition {
