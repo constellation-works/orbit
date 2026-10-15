@@ -220,7 +220,7 @@ impl OrbitRuntime {
         attempt: u32,
         resume: Option<&ResumePlan>,
     ) -> Result<V2JobRunResult, OrbitError> {
-        let job_name = load_job_name(yaml_path)?;
+        let (job_name, spec) = load_job_definition(yaml_path)?;
         // [ORB-11354] The foreground path takes caller-shaped input too, so it
         // gets the same reserved-key refusal as the detached submission path.
         // Nothing runs a trusted-host activity in the foreground: an admitted
@@ -242,6 +242,7 @@ impl OrbitRuntime {
             ));
         }
         let mut input = input;
+        super::delivery::normalize_pr_delivery_input(&spec, &mut input)?;
         self.capture_auto_concurrency(
             &job_name,
             &mut input,
@@ -912,10 +913,12 @@ pub(super) fn seeded_resume_state(source_state: &PipelineState, run: &JobRun) ->
     seeded
 }
 
-fn load_job_name(yaml_path: &Path) -> Result<String, OrbitError> {
+fn load_job_definition(
+    yaml_path: &Path,
+) -> Result<(String, orbit_types::workflow::JobV2), OrbitError> {
     let yaml = std::fs::read_to_string(yaml_path)
         .map_err(|err| OrbitError::InvalidInput(format!("read {}: {err}", yaml_path.display())))?;
     let asset = load_job_asset(&yaml)
         .map_err(|err| OrbitError::InvalidInput(format!("load {}: {err}", yaml_path.display())))?;
-    Ok(asset.name)
+    Ok((asset.name, asset.spec))
 }

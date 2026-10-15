@@ -42,7 +42,8 @@ pub struct ShipCommand {
     /// Optional task IDs to seed explicit gated shipment. Omit for auto mode.
     #[arg(value_name = "TASK_ID", num_args = 0..)]
     pub task_ids: Vec<String>,
-    /// Pipeline mode for selected or auto-discovered task bundles. When omitted,
+    /// Pipeline mode. Each PR leaf accepts one task; explicit selections are
+    /// dispatched as singletons. When omitted,
     /// the mode is resolved from the current workspace's registry entry
     /// (explicit `ship_mode`, else defaults to `pr`).
     #[arg(short = 'm', long, value_enum)]

@@ -232,9 +232,398 @@ fn pilot_preparation_skips_work_a_forgeless_pr_workspace_cannot_deliver() {
     );
 }
 
+/// A bundled PR must fail at the gate's public route resolver, before a
+/// reservation or worker can exist. The same input remains valid locally.
+fn multi_task_pr_is_refused_before_gate_reservation() {
+    let fixture = open();
+    let runtime = &fixture.runtime;
+    let first = seed(runtime, "first", &[]);
+    let second = seed(runtime, "second", &[]);
+    git(
+        &fixture.repo,
+        &[
+            "remote",
+            "add",
+            "upstream",
+            "https://github.com/example/repo.git",
+        ],
+    );
+    let tasks = [first, second];
+    let refused = runtime
+        .run_deterministic(
+            "resolve_delivery_job",
+            &json!({}),
+            &json!({"task_ids": tasks, "mode": "pr"}),
+            ToolContext::default(),
+        )
+        .expect_err("multi-task PR delivery must refuse before reserving locks");
+    assert!(
+        refused.to_string().contains("exactly one distinct task"),
+        "{refused}"
+    );
+    assert!(refused.to_string().contains("local"), "{refused}");
+    let local = action(
+        runtime,
+        "resolve_delivery_job",
+        json!({"task_ids": tasks, "mode": "local"}),
+    );
+    assert_eq!(local["job_name"], "task_local_pipeline");
+    let duplicate = action(
+        runtime,
+        "resolve_delivery_job",
+        json!({"task_ids": [tasks[0], tasks[0]], "mode": "pr"}),
+    );
+    assert_eq!(duplicate["job_name"], "task_pr_pipeline");
+    for id in tasks {
+        let task = runtime.get_task(&id).unwrap();
+        assert_eq!(task.status, TaskStatus::Backlog);
+        assert!(task.job_run_id.is_none());
+    }
+    assert!(
+        runtime
+            .list_job_runs(JobRunListParams::default())
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        git(&fixture.repo, &["worktree", "list", "--porcelain"])
+            .matches("worktree ")
+            .count(),
+        1
+    );
+}
+
+/// The shared submission API rejects bundled PR leaves regardless of catalog
+/// name or snapshot origin. A deliberately unavailable worker makes accepted
+/// controls stop at startup, so the test never launches a provider or leaves a
+/// detached process alive.
+#[test]
+fn bundled_pr_submission_refuses_before_any_delivery_effect() {
+    if !super::dispatch_admission::isolated(
+        "pr_forge_admission::bundled_pr_submission_refuses_before_any_delivery_effect",
+    ) {
+        return;
+    }
+    let fixture = open();
+    let runtime = &fixture.runtime;
+    orbit_core::bootstrap::init::init_workspace_at_root(
+        &runtime.global_root(),
+        orbit_core::bootstrap::init::InitOptions {
+            global_only: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    orbit_core::test_support::install_substitute_pipeline_worker([fixture
+        ._root
+        .path()
+        .join("worker-must-not-start")
+        .to_string_lossy()
+        .into_owned()]);
+    git(
+        &fixture.repo,
+        &[
+            "remote",
+            "add",
+            "upstream",
+            "https://github.com/example/repo.git",
+        ],
+    );
+    let ids = [seed(runtime, "first", &[]), seed(runtime, "second", &[])];
+    let before_tasks: Vec<_> = ids
+        .iter()
+        .map(|id| serde_json::to_value(runtime.get_task(id).unwrap()).unwrap())
+        .collect();
+    let before_git = git(&fixture.repo, &["show-ref"]);
+    let before_index = git(&fixture.repo, &["status", "--porcelain=v1"]);
+    let before_worktrees = git(&fixture.repo, &["worktree", "list", "--porcelain"]);
+
+    // Preserve a prior candidate and its durable checkpoint through every refusal.
+    let retained = fixture._root.path().join("retained");
+    git(
+        &fixture.repo,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            retained.to_str().unwrap(),
+            "HEAD",
+        ],
+    );
+    std::fs::write(retained.join("candidate.txt"), "retained candidate").unwrap();
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        runtime.sqlite_store().unwrap(),
+        runtime.workspace_id().unwrap(),
+    );
+    let parent = jobs
+        .insert_job_run(
+            "task_gate_pipeline",
+            1,
+            chrono::Utc::now(),
+            Some(json!({})),
+            None,
+        )
+        .unwrap();
+    let checkpoint = orbit_types::workflow::PipelineState::new(
+        parent.run_id.clone(),
+        parent.job_id.clone(),
+        json!({"retained": true}),
+    );
+    jobs.write_run_state(&parent.run_id, &checkpoint).unwrap();
+    let saved_checkpoint =
+        serde_json::to_value(jobs.read_run_state(&parent.run_id).unwrap()).unwrap();
+    let saved_runs =
+        serde_json::to_value(runtime.list_job_runs(JobRunListParams::default()).unwrap()).unwrap();
+
+    let yaml = std::fs::read_to_string(
+        runtime
+            .global_root()
+            .join("resources/jobs/task_pr_pipeline.yaml"),
+    )
+    .unwrap();
+    let copy = fixture._root.path().join("renamed-pr.yaml");
+    std::fs::write(
+        &copy,
+        yaml.replace("name: task_pr_pipeline", "name: renamed_pr"),
+    )
+    .unwrap();
+    let input = json!({"task_ids": ids});
+    for job in ["task_pr_pipeline", copy.to_str().unwrap()] {
+        let error = runtime
+            .submit_job_run(job, input.clone(), Some("test"))
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("exactly one distinct task"),
+            "{job}: {error}"
+        );
+        assert!(error.to_string().contains("singleton"), "{error}");
+        assert!(error.to_string().contains("local"), "{error}");
+    }
+    // A selected catalog copy must also refuse at the gate before reservation.
+    std::fs::write(
+        runtime.global_root().join("resources/jobs/renamed_pr.yaml"),
+        std::fs::read(&copy).unwrap(),
+    )
+    .unwrap();
+    let tagged = [
+        seed(runtime, "selected first", &["delivery:renamed_pr"]),
+        seed(runtime, "selected second", &["delivery:renamed_pr"]),
+    ];
+    let selected_error = runtime
+        .run_deterministic(
+            "resolve_delivery_job",
+            &json!({}),
+            &json!({"task_ids": tagged, "mode": "pr"}),
+            ToolContext::default(),
+        )
+        .unwrap_err();
+    assert!(
+        selected_error
+            .to_string()
+            .contains("exactly one distinct task"),
+        "{selected_error}"
+    );
+    let local_tagged = [
+        seed(runtime, "local first", &[LOCAL_TAG]),
+        seed(runtime, "local second", &[LOCAL_TAG]),
+    ];
+    assert_eq!(
+        action(
+            runtime,
+            "resolve_delivery_job",
+            json!({"task_ids": local_tagged, "mode": "pr"})
+        )["job_name"],
+        "task_local_pipeline"
+    );
+
+    // A snapshot's default selection is as authoritative as explicit input.
+    let mut defaulted: Value = serde_yaml::from_str(&yaml).unwrap();
+    defaulted["metadata"]["name"] = json!("defaulted_pr");
+    defaulted["spec"]["default_input"]["task_ids"] = json!(ids);
+    let default_copy = fixture._root.path().join("defaulted-pr.yaml");
+    std::fs::write(&default_copy, serde_yaml::to_string(&defaulted).unwrap()).unwrap();
+    let error = runtime
+        .submit_job_run(default_copy.to_str().unwrap(), json!({}), None)
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("exactly one distinct task"),
+        "{error}"
+    );
+
+    // Inline and nested action forms keep the same singleton commit contract.
+    let mut inline: Value = serde_yaml::from_str(&yaml).unwrap();
+    inline["metadata"]["name"] = json!("inline_pr");
+    let steps = inline["spec"]["steps"].as_array_mut().unwrap();
+    let commit = steps
+        .iter_mut()
+        .find(|step| step["id"] == "commit")
+        .unwrap();
+    commit.as_object_mut().unwrap().remove("target");
+    commit["spec"] = json!({"type": "deterministic", "action": "git_commit", "config": {}});
+    *commit = json!({"id": "commit_wrapper", "parallel": {"join": {"mode": "all"}, "branches": [commit.clone()]}});
+    let inline_copy = fixture._root.path().join("inline-pr.yaml");
+    std::fs::write(&inline_copy, serde_yaml::to_string(&inline).unwrap()).unwrap();
+    let error = runtime
+        .submit_job_run(inline_copy.to_str().unwrap(), input.clone(), None)
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("exactly one distinct task"),
+        "{error}"
+    );
+
+    // The public foreground API also refuses before inserting a run. An
+    // executable fail-fast first step prevents worktree/provider effects if
+    // this regression ever loses its admission check.
+    for hook in [
+        "recovery_activity",
+        "final_recovery_activity",
+        "failure_activity",
+    ] {
+        inline["spec"].as_object_mut().unwrap().remove(hook);
+    }
+    inline["spec"]["steps"].as_array_mut().unwrap().insert(0, json!({
+        "id": "safe_stop", "spec": {"type": "deterministic", "action": "pipeline_success_guard", "config": {}},
+        "default_input": {"results": [{"status": "failed"}]}
+    }));
+    std::fs::write(&inline_copy, serde_yaml::to_string(&inline).unwrap()).unwrap();
+    let foreground = runtime
+        .run_job_v2_from_yaml(&inline_copy, input.clone())
+        .unwrap_err();
+    assert!(
+        foreground.to_string().contains("exactly one distinct task"),
+        "{foreground}"
+    );
+
+    let child = runtime.run_deterministic(
+        "invoke_and_wait", &json!({}),
+        &json!({"job_name": "task_pr_pipeline", "run_input": input, "run_id": parent.run_id, "step_id": "deliver", "timeout_seconds": 1}),
+        ToolContext {
+            session_context: orbit_types::tool::ToolSessionContext {
+                effective_capabilities: std::collections::BTreeSet::from([orbit_types::tool::McpCapability::Operator]),
+                ..Default::default()
+            }, ..Default::default()
+        },
+    ).unwrap_err();
+    assert!(
+        child.to_string().contains("exactly one distinct task"),
+        "{child}"
+    );
+    assert_eq!(
+        serde_json::to_value(runtime.list_job_runs(JobRunListParams::default()).unwrap()).unwrap(),
+        saved_runs
+    );
+    assert_eq!(
+        serde_json::to_value(jobs.read_run_state(&parent.run_id).unwrap()).unwrap(),
+        saved_checkpoint
+    );
+    assert!(runtime.list_task_reservation_history().unwrap().is_empty());
+    assert_eq!(git(&fixture.repo, &["show-ref"]), before_git);
+    assert_eq!(
+        git(&fixture.repo, &["status", "--porcelain=v1"]),
+        before_index
+    );
+    assert_eq!(
+        std::fs::read_to_string(retained.join("candidate.txt")).unwrap(),
+        "retained candidate"
+    );
+    git(
+        &fixture.repo,
+        &["worktree", "remove", "--force", retained.to_str().unwrap()],
+    );
+    assert_eq!(
+        git(&fixture.repo, &["worktree", "list", "--porcelain"]),
+        before_worktrees
+    );
+    for (id, before) in ids.iter().zip(before_tasks) {
+        assert_eq!(
+            serde_json::to_value(runtime.get_task(id).unwrap()).unwrap(),
+            before
+        );
+    }
+
+    // Ship selects several tasks for separate singleton leaves; its coordinator
+    // remains admissible and does not bind either task during submission.
+    let ship_error = runtime
+        .submit_ship_run(
+            ShipMode::Pr,
+            Some("main"),
+            &ids,
+            CompletionPolicy::Review,
+            &[],
+            None,
+            None,
+            JobRunTrigger::cli(),
+        )
+        .unwrap_err();
+    assert!(
+        ship_error.to_string().contains("spawn pipeline worker"),
+        "{ship_error}"
+    );
+    for id in &ids {
+        let task = runtime.get_task(id).unwrap();
+        assert_eq!(task.status, TaskStatus::Backlog);
+        assert!(task.job_run_id.is_none());
+    }
+    let unrelated = fixture._root.path().join("array-job.yaml");
+    std::fs::write(&unrelated, serde_json::to_string(&json!({
+        "schemaVersion": 2, "kind": "Job", "metadata": {"name": "array_job"},
+        "spec": {"state": "enabled", "steps": [{"id": "check", "spec": {"type": "deterministic", "action": "pipeline_success_guard", "config": {}}}]}
+    })).unwrap()).unwrap();
+    let unrelated_error = runtime
+        .submit_job_run(unrelated.to_str().unwrap(), input.clone(), None)
+        .unwrap_err();
+    assert!(
+        unrelated_error
+            .to_string()
+            .contains("spawn pipeline worker"),
+        "{unrelated_error}"
+    );
+    assert_eq!(
+        jobs.list_job_runs("array_job").unwrap()[0]
+            .input
+            .as_ref()
+            .unwrap()["task_ids"],
+        json!(ids)
+    );
+
+    // Accepted controls reach worker startup, where the unavailable executable
+    // fails deterministically without a process. Their persisted inputs prove
+    // cardinality validation did not globally reject arrays or widen authority.
+    for (job, tasks) in [
+        ("task_pr_pipeline", json!([ids[0], ids[0]])),
+        ("task_local_pipeline", json!(ids)),
+        ("task_auto_pipeline", json!(ids)),
+    ] {
+        let error = runtime
+            .submit_job_run(
+                job,
+                json!({"task_ids": tasks, "mode": "pr", "completion": "review", "auto_fix": false}),
+                None,
+            )
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("spawn pipeline worker"),
+            "{job}: {error}"
+        );
+        let runs = jobs.list_job_runs(job).unwrap();
+        let admitted = runs
+            .first()
+            .expect("accepted control persists a run before worker startup");
+        let expected = if job == "task_pr_pipeline" {
+            json!([ids[0]])
+        } else {
+            json!(ids)
+        };
+        assert_eq!(admitted.input.as_ref().unwrap()["task_ids"], expected);
+        assert_eq!(admitted.input.as_ref().unwrap()["completion"], "review");
+        assert_eq!(admitted.input.as_ref().unwrap()["auto_fix"], false);
+    }
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_pr_workspace_without_a_forge_remote_refuses_untagged_work_before_any_run_scenarios,
     a_pr_workspace_without_a_forge_remote_refuses_untagged_work_before_any_run,
-    pilot_preparation_skips_work_a_forgeless_pr_workspace_cannot_deliver
+    pilot_preparation_skips_work_a_forgeless_pr_workspace_cannot_deliver,
+    multi_task_pr_is_refused_before_gate_reservation
 );
