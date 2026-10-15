@@ -201,7 +201,17 @@ these forecasts, including requests enforce held; `PULL_SENT` counts requests
 sent to the owner, including idle responses and failed attempts.
 `PULL_WOULD_HOLD` counts shadow requests enforce would have held because no
 kind of work fit (`forecast_no_headroom`), even if no claim returned.
-`--json` adds the raw pairs. Records are kept for
+`--since <RFC3339>`, `--drain <RUN>` and `--mode shadow|enforce` intersect to
+select a cohort; without filters the report uses all drains and modes from
+the last 30 days. Both output formats identify that selection and report
+time. Only fully ended target minutes with measurements form error pairs.
+`pending` counts future/incomplete minutes, even with a partial measured row;
+`missing` counts ended minutes with no row. The compatible `unmeasured` count
+is their sum. `--json` adds the raw pairs and effective selection. A selected
+drain/time range does not attest source, build-budget or threshold settings:
+those are not stored in forecast rows. Per-task profiles remain a separate
+population whose sparsity and spread still limit confidence. See the
+[operator runbook](runbooks/forecast-accuracy.md). Records are kept for
 30 days and pruned by `orbit gc runs --apply`. See
 [auto-concurrency §8.1](design/auto-concurrency/2_design.md#81-the-accuracy-report).
 

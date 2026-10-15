@@ -31,8 +31,10 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
         const reliabilityReport = (host, label) => {
           const runs = host === 'beta' ? 5 : 17;
           const workspace = `${host}-only-workspace`;
-          const counts = { total: runs, succeeded: runs - 2, failed: 2, cancelled: 0, skipped: 0, in_flight: 0, unknown: 0 };
-          const rate = { numerator: 2, denominator: runs, denominator_label: 'settled runs', value: 2 / runs, low_sample: true };
+          const counts = globalThis.reliabilityAccounting?.counts
+            || { total: runs, succeeded: runs - 2, failed: 2, cancelled: 0, skipped: 0, held: 0, in_flight: 0, unknown: 0 };
+          const rate = globalThis.reliabilityAccounting?.rate
+            || { numerator: 2, denominator: runs, denominator_label: 'settled runs', value: 2 / runs, low_sample: true };
           return {
             scope: 'fleet',
             window: { label, since: '2026-10-10T00:00:00Z', until: '2026-10-11T00:00:00Z', bucket: '1h' },
@@ -203,7 +205,9 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
             throw new Error(`Opening ${label} must not move dashboard rail entries: ${JSON.stringify({ initialRailPositions, positions })}`);
           }
         }
+        const accounting = await assertReliabilityAccounting(page, evidence);
         reliabilityEvidence = await assertReliabilityScope(page);
+        reliabilityEvidence.accounting = accounting;
       }
       if (errors.length) throw new Error(errors.join('\n'));
       fs.writeFileSync(path.join(evidence, `workspace-scope-${workspaceCount}.json`), JSON.stringify({ passed: true, workspaceCount, requests, reliability: reliabilityEvidence }, null, 2));
@@ -215,6 +219,79 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
     }
   }
   console.log('Single-workspace scope preservation and multi-workspace chip clearing passed.');
+}
+
+// Exercise held accounting through the shipped app's public fetch/render path.
+// The captured incident populations must reconcile without changing their rates.
+async function assertReliabilityAccounting(page, evidenceDirectory) {
+  await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('analytics/reliability'));
+  const cases = [
+    { name: 'captured-7d', window: '7d',
+      counts: { total: 7060, succeeded: 6555, failed: 431, cancelled: 54, skipped: 0, held: 13, in_flight: 7, unknown: 0 },
+      settled: 6986, excluded: 74, display: '6.2% (n=6986)' },
+    { name: 'captured-30d', window: '30d',
+      counts: { total: 16790, succeeded: 14880, failed: 1710, cancelled: 171, skipped: 0, held: 22, in_flight: 7, unknown: 0 },
+      settled: 16590, excluded: 200, display: '10.3% (n=16590)' },
+    { name: 'all-excluded-states', window: '7d',
+      counts: { total: 38, succeeded: 25, failed: 5, cancelled: 1, skipped: 2, held: 2, in_flight: 1, unknown: 2 },
+      settled: 30, excluded: 8, display: '16.7% (n=30)' },
+    { name: 'held-only', window: '7d',
+      counts: { total: 13, succeeded: 0, failed: 0, cancelled: 0, skipped: 0, held: 13, in_flight: 0, unknown: 0 },
+      settled: 0, excluded: 13, display: 'n/a' },
+    { name: 'zero-excluded-low-sample', window: '7d',
+      counts: { total: 3, succeeded: 2, failed: 1, cancelled: 0, skipped: 0, held: 0, in_flight: 0, unknown: 0 },
+      settled: 3, excluded: 0, display: '1/3 · n too small', lowSample: true },
+  ];
+  const observations = [];
+  const failures = [];
+  for (const scenario of cases) {
+    const rate = { numerator: scenario.counts.failed, denominator: scenario.settled,
+      denominator_label: 'settled runs', value: scenario.settled ? scenario.counts.failed / scenario.settled : null,
+      low_sample: scenario.lowSample || false };
+    await page.evaluate(({ counts, rate }) => {
+      globalThis.reliabilityAccounting = { counts, rate };
+    }, { counts: scenario.counts, rate });
+    await page.locator(`#reliability-window-selector [data-window="${scenario.window}"]`).click();
+    await page.evaluate(async () => (await import('/js/reliability.js')).fetchAndRenderReliability());
+    const shown = await page.evaluate(() => {
+      const tiles = Object.fromEntries(Array.from(document.querySelectorAll('#reliability-summary .rel-tile')).map(tile => [
+        tile.querySelector('.rel-tile-label').textContent,
+        { value: tile.querySelector('.rel-tile-value, .rel-rate').textContent,
+          title: tile.querySelector('.rel-rate')?.title, hint: tile.querySelector('.rel-tile-hint').textContent },
+      ]));
+      return { tiles, note: document.getElementById('reliability-denominator-note').textContent,
+        count: document.getElementById('reliability-count').textContent,
+        scope: document.getElementById('reliability-scope-badge').textContent };
+    });
+    const runs = shown.tiles['Runs in window'];
+    const failureRate = shown.tiles['Job-run failure rate'];
+    const accounting = runs.hint.match(/^(\d+) settled · (\d+) not counted$/);
+    if (runs.value !== String(scenario.counts.total) || !accounting
+      || Number(accounting[1]) !== scenario.settled || Number(accounting[2]) !== scenario.excluded
+      || Number(runs.value) !== Number(accounting[1]) + Number(accounting[2])) {
+      failures.push(`${scenario.name}: Runs in window must reconcile total = settled + excluded: ${JSON.stringify(runs)}`);
+    }
+    const explainedExcluded = shown.note.match(/(\d+) further run/);
+    if (!['held', 'cancelled', 'skipped', 'flight', 'unrecognized'].every(state => shown.note.includes(state))
+      || (scenario.excluded > 0 ? Number(explainedExcluded?.[1]) !== scenario.excluded : !shown.note.includes('No cancelled'))) {
+      failures.push(`${scenario.name}: the denominator explanation must account for every excluded state: ${shown.note}`);
+    }
+    if (failureRate.value !== scenario.display
+      || failureRate.hint !== `${scenario.counts.failed} failed of ${scenario.settled} settled runs`
+      || (scenario.settled > 0 && !failureRate.title.startsWith(`${rate.numerator} / ${rate.denominator} `))
+      || shown.count !== `${scenario.counts.total} runs / ${scenario.window}` || shown.scope !== 'Fleet-wide') {
+      failures.push(`${scenario.name}: failure-rate counts, rounding, low-sample handling and scope must remain unchanged: ${JSON.stringify(shown)}`);
+    }
+    observations.push({ scenario, rate, shown,
+      originalMissing: scenario.counts.total - scenario.settled
+        - scenario.counts.cancelled - scenario.counts.skipped - scenario.counts.in_flight - scenario.counts.unknown });
+  }
+  fs.writeFileSync(path.join(evidenceDirectory, 'reliability-accounting.json'), JSON.stringify({ observations, failures }, null, 2));
+  if (failures.length) throw new Error(failures.join('\n'));
+  await page.evaluate(() => { delete globalThis.reliabilityAccounting; });
+  await page.locator('#reliability-window-selector [data-window="24h"]').click();
+  await page.evaluate(async () => (await import('/js/reliability.js')).fetchAndRenderReliability());
+  return observations;
 }
 
 // Reliability's report belongs to one host and window. A replacement read that

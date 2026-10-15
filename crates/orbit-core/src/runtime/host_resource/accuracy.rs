@@ -4,8 +4,9 @@
 //! - **Pairs.** A point forecast at `forecast_at` for `+n` minutes pairs with
 //!   the `host_resource_minutes` row of the minute starting at
 //!   `forecast_at`, truncated to the minute, plus `n`. A point whose minute
-//!   has no measured row (it is still ahead, or no worker sampled the host
-//!   then) is counted as unmeasured.
+//!   has not fully ended at report time is pending, even with a partial
+//!   measurement. Ended minutes without a row are missing. Both count as
+//!   unmeasured; only ended, measured minutes contribute error pairs.
 //! - **Error** is forecast minus measured, so a negative error is an
 //!   under-forecast: the host carried more than admission expected.
 //! - **Shadow decisions.** Per drain, over its `shadow` passes: the tasks
@@ -22,21 +23,46 @@ use orbit_store::contracts::{AdmissionForecastRecord, HostResourceMinute};
 use serde::Serialize;
 
 use super::forecast::ACCURACY_OFFSETS;
+use super::profile::PROFILE_HISTORY_DAYS;
 
 const SHADOW: &str = "shadow";
+
+/// An operator-selected cohort of stored forecasts, with inclusive time bounds.
+/// Drain and mode are exact matches; these rows do not attest source or settings.
+#[derive(Debug, Clone, Serialize)]
+pub struct AccuracySelection {
+    pub since: DateTime<Utc>,
+    pub drain: Option<String>,
+    pub mode: Option<String>,
+}
+
+impl AccuracySelection {
+    /// The legacy population: all drains and modes over the last 30 days.
+    pub fn last_30_days(report_at: DateTime<Utc>) -> Self {
+        Self {
+            since: report_at - Duration::days(PROFILE_HISTORY_DAYS),
+            drain: None,
+            mode: None,
+        }
+    }
+}
 
 /// The forecast accuracy report.
 #[derive(Debug, Clone, Serialize)]
 pub struct ForecastAccuracy {
-    /// The oldest forecast considered: the forecast retention window.
+    /// The oldest forecast considered (inclusive); retained for compatibility.
     pub since: DateTime<Utc>,
+    /// One snapshot for the forecast upper bound and target-minute maturity.
+    pub report_at: DateTime<Utc>,
+    /// Effective selection, applied to points, errors and decisions alike.
+    pub selection: AccuracySelection,
     /// Recorded admission passes.
     pub forecasts: u64,
     /// Accuracy at each recorded offset.
     pub offsets: Vec<OffsetAccuracy>,
     /// Shadow decisions against actual admissions, per drain.
     pub drains: Vec<DrainShadowDecisions>,
-    /// Every forecast point that has a measured minute, oldest first.
+    /// Every finalized forecast/measured-minute pair, oldest first.
     pub pairs: Vec<ForecastPair>,
 }
 
@@ -45,8 +71,12 @@ pub struct ForecastAccuracy {
 pub struct OffsetAccuracy {
     pub offset_minutes: u32,
     pub paired: u64,
-    /// Points recorded at this offset with no measured minute.
+    /// Compatible total of pending and missing points.
     pub unmeasured: u64,
+    /// Target minutes not fully ended at report time, including partial rows.
+    pub pending: u64,
+    /// Ended target minutes with no measured row.
+    pub missing: u64,
     /// In cores.
     pub cpu: ErrorSummary,
     /// In bytes.
@@ -115,19 +145,20 @@ pub struct DrainShadowDecisions {
     pub pull_would_hold: u64,
 }
 
-/// The report over `records`, made at or after `since`, against the host's
-/// measured `minutes`.
+/// The report over preselected `records` against the host's measured `minutes`.
 pub(crate) fn forecast_accuracy(
     records: &[AdmissionForecastRecord],
     minutes: &[HostResourceMinute],
-    since: DateTime<Utc>,
+    selection: AccuracySelection,
+    report_at: DateTime<Utc>,
 ) -> ForecastAccuracy {
     let measured: BTreeMap<DateTime<Utc>, &HostResourceMinute> = minutes
         .iter()
         .map(|minute| (minute.minute_at, minute))
         .collect();
     let mut pairs = Vec::new();
-    let mut unmeasured: BTreeMap<u32, u64> = BTreeMap::new();
+    let mut pending: BTreeMap<u32, u64> = BTreeMap::new();
+    let mut missing: BTreeMap<u32, u64> = BTreeMap::new();
     for record in records {
         let start = record
             .forecast_at
@@ -135,8 +166,12 @@ pub(crate) fn forecast_accuracy(
             .unwrap_or(record.forecast_at);
         for point in &record.points {
             let minute_at = start + Duration::minutes(i64::from(point.offset_minutes));
+            if minute_at + Duration::minutes(1) > report_at {
+                *pending.entry(point.offset_minutes).or_default() += 1;
+                continue;
+            }
             let Some(host) = measured.get(&minute_at) else {
-                *unmeasured.entry(point.offset_minutes).or_default() += 1;
+                *missing.entry(point.offset_minutes).or_default() += 1;
                 continue;
             };
             pairs.push(ForecastPair {
@@ -156,7 +191,8 @@ pub(crate) fn forecast_accuracy(
 
     let mut offsets: BTreeSet<u32> = ACCURACY_OFFSETS.into_iter().collect();
     offsets.extend(pairs.iter().map(|pair| pair.offset_minutes));
-    offsets.extend(unmeasured.keys().copied());
+    offsets.extend(pending.keys().copied());
+    offsets.extend(missing.keys().copied());
     let offsets = offsets
         .into_iter()
         .map(|offset| {
@@ -164,10 +200,14 @@ pub(crate) fn forecast_accuracy(
                 .iter()
                 .filter(|pair| pair.offset_minutes == offset)
                 .collect();
+            let pending = pending.get(&offset).copied().unwrap_or(0);
+            let missing = missing.get(&offset).copied().unwrap_or(0);
             OffsetAccuracy {
                 offset_minutes: offset,
                 paired: at_offset.len() as u64,
-                unmeasured: unmeasured.get(&offset).copied().unwrap_or(0),
+                unmeasured: pending + missing,
+                pending,
+                missing,
                 cpu: summarize(&at_offset, |pair| {
                     (pair.forecast_cpu_cores, pair.measured_cpu_cores)
                 }),
@@ -182,7 +222,9 @@ pub(crate) fn forecast_accuracy(
         .collect();
 
     ForecastAccuracy {
-        since,
+        since: selection.since,
+        report_at,
+        selection,
         forecasts: records.len() as u64,
         offsets,
         drains: shadow_decisions(records),

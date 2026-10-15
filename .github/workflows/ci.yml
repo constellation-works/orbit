@@ -170,29 +170,34 @@ jobs:
           shared-key: rust-1.98.1
           cache-on-failure: true
 
+      # Each public pinned download allows at most three attempts in one 60s
+      # budget. Attempt diagnostics and backoff remain part of the complete
+      # Check job elapsed time (including failed setup and post actions).
       - name: Install cargo-nextest
         run: |
           set -euo pipefail
           cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
-          archive="$(mktemp)"
+          mkdir -p .orbit/tmp
+          download_dir="$(mktemp -d .orbit/tmp/tool-download.XXXXXX)"
+          trap 'python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$download_dir"' EXIT
+          archive="$download_dir/archive"
           mkdir -p "$cargo_bin"
-          curl -LsSf "https://get.nexte.st/${NEXTEST_VERSION}/linux" -o "$archive"
-          echo "${NEXTEST_LINUX_SHA256}  ${archive}" | sha256sum -c -
+          scripts/ci-download-verified.sh "https://get.nexte.st/${NEXTEST_VERSION}/linux" "$NEXTEST_LINUX_SHA256" "$archive"
           tar zxf "$archive" -C "$cargo_bin"
-          rm -f "$archive"
-          cargo nextest --version
+          cargo nextest --version | awk -v expected="${NEXTEST_VERSION}" '{print} $1 == "cargo-nextest" && $2 == expected {ok=1} END {exit !ok}'
 
       - name: Install cargo-deny
         run: |
           set -euo pipefail
           cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
-          archive="$(mktemp)"
+          mkdir -p .orbit/tmp
+          download_dir="$(mktemp -d .orbit/tmp/tool-download.XXXXXX)"
+          trap 'python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$download_dir"' EXIT
+          archive="$download_dir/archive"
           mkdir -p "$cargo_bin"
-          curl -LsSf "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz" -o "$archive"
-          echo "${CARGO_DENY_LINUX_SHA256}  ${archive}" | sha256sum -c -
+          scripts/ci-download-verified.sh "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz" "$CARGO_DENY_LINUX_SHA256" "$archive"
           tar zxf "$archive" --strip-components=1 -C "$cargo_bin" "cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl/cargo-deny"
-          rm -f "$archive"
-          cargo deny --version | grep -F "${CARGO_DENY_VERSION}"
+          cargo deny --version | awk -v expected="${CARGO_DENY_VERSION}" '{print} $1 == "cargo-deny" && $2 == expected {ok=1} END {exit !ok}'
 
       # The guardrail scripts shell out to ripgrep; the ubuntu-latest runner
       # image no longer ships it, and a missing `rg` makes
@@ -211,13 +216,14 @@ jobs:
         run: |
           set -euo pipefail
           cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
-          archive="$(mktemp)"
+          mkdir -p .orbit/tmp
+          download_dir="$(mktemp -d .orbit/tmp/tool-download.XXXXXX)"
+          trap 'python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$download_dir"' EXIT
+          archive="$download_dir/archive"
           mkdir -p "$cargo_bin"
-          curl -LsSf "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" -o "$archive"
-          echo "${UV_LINUX_SHA256}  ${archive}" | sha256sum -c -
+          scripts/ci-download-verified.sh "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" "$UV_LINUX_SHA256" "$archive"
           tar zxf "$archive" --strip-components=1 -C "$cargo_bin" uv-x86_64-unknown-linux-gnu/uv
-          rm -f "$archive"
-          uv --version | grep -F "${UV_VERSION}"
+          uv --version | awk -v expected="${UV_VERSION}" '{print} $1 == "uv" && $2 == expected {ok=1} END {exit !ok}'
 
       # Ubuntu 24.04 can restrict unprivileged user namespaces through AppArmor.
       # Probe the trusted Bubblewrap first, preparing signed packages if needed,

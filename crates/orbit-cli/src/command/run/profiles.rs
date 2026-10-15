@@ -3,9 +3,12 @@
 
 use std::fmt::Write as _;
 
+use chrono::{DateTime, Utc};
 use clap::Args;
 use orbit_core::OrbitRuntime;
-use orbit_core::runtime::host_resource::accuracy::{ErrorSummary, ForecastAccuracy};
+use orbit_core::runtime::host_resource::accuracy::{
+    AccuracySelection, ErrorSummary, ForecastAccuracy,
+};
 use orbit_core::runtime::host_resource::profile::{
     BUILD_LIKE_CORES, BUILD_LIKE_MINUTES, ResourceProfile,
 };
@@ -38,29 +41,55 @@ design, such as qa-sweep, are never flagged.\n\n\
 memory_bytes, memory_stddev_bytes), its deliveries and its flagged deliveries.\n\n\
 `--accuracy` reports instead how well the host load forecast held up, from what drains in \
 effective auto-concurrency mode `shadow` or `enforce` recorded each admission pass over the last \
-30 days: the forecast 5, 10, 20 and 30 minutes ahead, counting what the pass admitted, against \
+30 days by default: the forecast 5, 10, 20 and 30 minutes ahead, counting what the pass admitted, against \
 the host's measured CPU and memory for that minute. Error is forecast minus measured: MEAN_ERR \
 is its mean, UNDER how often the forecast was below the measured load, and WORST the largest \
-miss with the minute it forecast. A point whose minute has no measurement yet is counted as \
-unmeasured. Below, per drain, its shadow passes against what it admitted: WOULD_HOLD counts the \
+miss with the minute it forecast. PENDING counts target minutes that have not fully ended at \
+report time, even if partly measured; MISSING counts ended minutes without measurements. \
+Their sum is the compatible unmeasured count. Only ended measured minutes form error pairs. \
+Below, per drain, its shadow passes against what it admitted: WOULD_HOLD counts the \
 tasks it admitted that gap fit would have held, WOULD_ADD those gap fit would have admitted \
 that it did not. Pull drains record one forecast per request, counting a returned claim. \
 PULL_REQUESTS counts these forecasts, PULL_SENT the requests sent to the owner, and \
 PULL_WOULD_HOLD the shadow requests enforce would have held because no work fit. \
 `--json` adds every forecast point paired with its measured minute.\n\n\
+Accuracy selectors compose: `--since` is an inclusive RFC3339 forecast timestamp (default: \
+30 days ago), `--drain` matches an exact drain run id, and `--mode shadow|enforce` matches the \
+recorded mode. Forecast timestamps are bounded by one report-time snapshot. Text and JSON echo the effective \
+selection. This read-only report does not attest source revision, build budget or thresholds: \
+a drain/time cohort is an operator selection, not proof of homogeneous configuration. \
+Per-task profiles are a separate population; sparse deliveries or wide spread do not become \
+calibrated confidence from selecting an accuracy cohort.\n\n\
 Examples:\n  orbit run profiles\n  orbit run profiles --json\n  orbit run profiles --accuracy\n  \
-orbit run profiles --accuracy --json"
+orbit run profiles --accuracy --json\n  \
+orbit run profiles --accuracy --since 2026-10-15T00:00:00Z --drain <RUN> --mode enforce --json"
 )]
 pub struct RunProfilesArgs {
     /// Compare recorded admission forecasts with the host's measured load
     #[arg(long)]
     pub accuracy: bool,
+    /// Include forecasts at or after this RFC3339 timestamp (accuracy only)
+    #[arg(long, requires = "accuracy", value_name = "TIMESTAMP")]
+    pub since: Option<DateTime<Utc>>,
+    /// Select an exact drain run id (accuracy only)
+    #[arg(long, requires = "accuracy", value_name = "RUN")]
+    pub drain: Option<String>,
+    /// Select the recorded admission mode: shadow or enforce (accuracy only)
+    #[arg(long, requires = "accuracy", value_parser = ["shadow", "enforce"], hide_possible_values = true)]
+    pub mode: Option<String>,
 }
 
 impl Execute for RunProfilesArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         if self.accuracy {
-            return accuracy(runtime);
+            let report_at = Utc::now();
+            let mut selection = AccuracySelection::last_30_days(report_at);
+            if let Some(since) = self.since {
+                selection.since = since;
+            }
+            selection.drain = self.drain;
+            selection.mode = self.mode;
+            return accuracy(runtime, selection, report_at);
         }
         let profiles = runtime.resource_profiles()?;
         let doc = json!({
@@ -173,17 +202,23 @@ fn build_flags(profiles: &[std::sync::Arc<ResourceProfile>]) -> Option<String> {
 }
 
 /// `--accuracy`: per-offset forecast error, then per-drain shadow decisions.
-fn accuracy(runtime: &OrbitRuntime) -> CommandOut {
+fn accuracy(
+    runtime: &OrbitRuntime,
+    selection: AccuracySelection,
+    report_at: DateTime<Utc>,
+) -> CommandOut {
     use crate::output::table::{Column, Table};
     use comfy_table::Cell;
 
-    let report = runtime.forecast_accuracy()?;
+    let report = runtime.forecast_accuracy_selected(selection, report_at)?;
     let doc = serde_json::to_value(&report).map_err(|error| {
         orbit_core::OrbitError::Execution(format!("encode forecast accuracy: {error}"))
     })?;
     let mut offsets = Table::new(vec![
         Column::new("OFFSET").fixed(),
         Column::new("PAIRS").fixed(),
+        Column::new("PENDING").fixed(),
+        Column::new("MISSING").fixed(),
         Column::new("CPU_MEAN_ERR").fixed(),
         Column::new("CPU_UNDER").fixed(),
         Column::new("CPU_WORST").fixed(),
@@ -199,6 +234,8 @@ fn accuracy(runtime: &OrbitRuntime) -> CommandOut {
             } else {
                 offset.paired.to_string()
             }),
+            Cell::new(offset.pending),
+            Cell::new(offset.missing),
         ];
         row.extend(error_cells(&offset.cpu, |cores| {
             format!("{cores:+.1} cores")
@@ -248,9 +285,12 @@ fn accuracy(runtime: &OrbitRuntime) -> CommandOut {
 
 fn summary(report: &ForecastAccuracy) -> String {
     format!(
-        "{} admission forecasts since {}; error is forecast minus measured.",
+        "{} admission forecasts since {} through {}; drain={}; mode={}; error is forecast minus measured.",
         report.forecasts,
-        report.since.format("%Y-%m-%d %H:%MZ")
+        report.since.to_rfc3339(),
+        report.report_at.to_rfc3339(),
+        report.selection.drain.as_deref().unwrap_or("all"),
+        report.selection.mode.as_deref().unwrap_or("all"),
     )
 }
 

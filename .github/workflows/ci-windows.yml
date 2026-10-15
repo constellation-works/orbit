@@ -4,19 +4,13 @@ name: Windows Compile Check
 # Windows is compile-checked only, so every workspace target (libraries,
 # binaries and tests) keeps building for x86_64-pc-windows-msvc. Non-Unix code
 # paths are explicit "unsupported"/`Unknown` stubs, and POSIX-only tests are
-# gated `cfg(unix)`, so nothing here runs or tests Windows behaviour. This job
-# is advisory: do not make it a required status check.
+# gated `cfg(unix)`, so nothing here runs or tests Windows behaviour. Every
+# open PR runs this compile check so it can be required without missing checks.
 
 on:
   push:
     branches: [main, agent-main]
   pull_request:
-    paths:
-      - "crates/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".cargo/**"
-      - ".github/workflows/ci-windows.yml"
 
 # Superseded PR heads must not compete with their replacement. Every non-PR
 # run gets its own group, preserving independent push and scheduled runs.

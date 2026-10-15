@@ -164,8 +164,6 @@ else:
             packages=[dict(id="path+file:///fixture/orbit-types#0.1.0", name="orbit-types")])))
         (workflows / "ci-macos.yml").write_text('''on:
   pull_request:
-    paths:
-      - Cargo.toml
 jobs:
   test:
     steps:
@@ -513,6 +511,28 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertEqual(calls, [["test", "-p", "orbit-types", "--locked", "fixture_test", "--", "--list"]])
+
+    def test_macos_check_requires_unrestricted_pull_request_coverage(self):
+        # Required native checks must report even for unrelated docs changes.
+        # Exercise the public guard with real workflow-event counterfactuals.
+        for event, accepted in (
+            ("  pull_request:\n", True),
+            ("  pull_request: {}\n", True),
+            ("  push:\n", False),
+            ("  pull_request:\n    branches: [main]\n", False),
+            ("  pull_request:\n    branches-ignore: [agent-main]\n", False),
+            ("  pull_request:\n    paths:\n      - Cargo.toml\n", False),
+            ("  pull_request:\n    paths-ignore: ['docs/**']\n", False),
+            ("  pull_request: {paths: ['crates/**']}\n", False),
+        ):
+            with self.subTest(event=event):
+                self.prepare_ci()
+                workflow = self.root / ".github/workflows/ci-macos.yml"
+                workflow.write_text(workflow.read_text().replace("  pull_request:\n", event))
+                result = self.run_guard("check-ci-macos.sh")
+                self.assertEqual(result.returncode, 0 if accepted else 1, result.stdout + result.stderr)
+                if not accepted:
+                    self.assertIn("unfiltered pull_request event", result.stderr)
 
     def test_macos_check_forwards_target_selectors_and_exact_to_the_listing(self):
         self.prepare_ci()
@@ -1307,6 +1327,73 @@ class OrphanModuleTests(unittest.TestCase):
     def run_guard(self):
         return subprocess.run(["bash", str(self.guard)], cwd=self.root,
                               text=True, capture_output=True, check=False)
+
+    def test_ignored_module_owners_still_register_their_children(self):
+        # Candidate files are checked regardless of ignore rules, so owners
+        # must remain visible too, including directories named like outputs.
+        (self.root / ".ignore").write_text("build/\n")
+        self.write_source("lib.rs", "mod build;\n#[cfg(test)] mod tests;\n")
+        self.write_source("tests/mod.rs", "mod build;\n")
+        for directory in ("build/", "tests/build/"):
+            self.write_source(f"{directory}mod.rs", "mod live;\n")
+            self.write_source(f"{directory}live.rs", "#[test] fn registered() {}\n")
+
+        binary = self.root / "fixture-test"
+        compiled = subprocess.run(["rustc", "--edition=2024", "--test",
+                                   str(self.source / "lib.rs"), "-o", str(binary)],
+                                  text=True, capture_output=True)
+        self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+        listing = subprocess.run([str(binary), "--list"], text=True, capture_output=True)
+        self.assertEqual(listing.returncode, 0, listing.stdout + listing.stderr)
+        self.assertEqual(set(re.findall(r"^(.*): test$", listing.stdout, re.MULTILINE)), {
+            "build::live::registered", "tests::build::live::registered",
+        })
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        for directory in ("build/", "tests/build/"):
+            self.write_source(f"{directory}lost.rs", "#[test] fn never_runs() {}\n")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(set(re.findall(r"^(orphan(?: test)? module): (\S+)",
+                                        result.stdout, re.MULTILINE)), {
+            ("orphan module", "crates/fixture/src/build/lost.rs"),
+            ("orphan test module", "crates/fixture/src/tests/build/lost.rs"),
+        })
+
+    def test_path_override_does_not_register_same_name_files(self):
+        self.write_source("lib.rs", '#[path="other.rs"] mod lost;\n'
+                          'mod ordinary;\n#[cfg(test)] mod tests;\n')
+        self.write_source("tests/mod.rs", '#[path="other.rs"] mod lost;\n'
+                          'mod ordinary;\n')
+        for directory in ("", "tests/"):
+            self.write_source(f"{directory}other.rs", "#[test] fn live() {}\n")
+            self.write_source(f"{directory}ordinary.rs", "#[test] fn plain() {}\n")
+
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        for directory in ("", "tests/"):
+            self.write_source(f"{directory}lost.rs",
+                              '#[test] fn never_runs() { panic!("lost test"); }\n')
+        binary = self.root / "fixture-test"
+        compiled = subprocess.run(["rustc", "--edition=2024", "--test",
+                                   str(self.source / "lib.rs"), "-o", str(binary)],
+                                  text=True, capture_output=True)
+        self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+        listing = subprocess.run([str(binary), "--list"], text=True, capture_output=True)
+        self.assertEqual(listing.returncode, 0, listing.stdout + listing.stderr)
+        self.assertEqual(set(re.findall(r"^(.*): test$", listing.stdout, re.MULTILINE)), {
+            "lost::live", "ordinary::plain", "tests::lost::live", "tests::ordinary::plain",
+        })
+
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(set(re.findall(r"^(orphan(?: test)? module): (\S+)",
+                                        result.stdout, re.MULTILINE)), {
+            ("orphan module", "crates/fixture/src/lost.rs"),
+            ("orphan test module", "crates/fixture/src/tests/lost.rs"),
+        })
 
     def test_path_attribute_only_registers_its_resolved_file(self):
         self.write_source("lib.rs", '#[path = "feature.rs"] mod production;\n'
