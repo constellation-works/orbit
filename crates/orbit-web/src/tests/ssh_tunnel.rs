@@ -144,7 +144,9 @@ impl Drop for StubDir {
     fn drop(&mut self) {
         if thread::panicking() {
             for name in ["spawns.log", "spawns.log.pids", "phases.jsonl"] {
-                eprintln!(
+                // Diagnostic I/O must not interrupt child cleanup during unwind.
+                let _ = writeln!(
+                    std::io::stderr(),
                     "SSH fixture {name}: {}",
                     fs::read_to_string(self.path().join(name))
                         .unwrap_or_else(|error| format!("unavailable: {error}"))
