@@ -56,11 +56,20 @@ fn agent_invocation_in_a_linked_checkout() {
     let observed_input = fixture.home.join("provider-input");
     let child_denial = fixture.home.join("child-denial");
     let quote = |path: &Path| quote_posix_arg(path.to_str().unwrap());
+    // Provider environments intentionally drop ambient coverage variables.
+    // Restore the collector for the recursive test CLI, or its default profile
+    // dirties the requested checkout. Keep LLVM's filename substitutions intact.
+    let profile = std::path::absolute(
+        std::env::var_os("LLVM_PROFILE_FILE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| fixture.home.join("recursive-%p-%m.profraw")),
+    )
+    .unwrap();
     let provider = fixture.home.join("empty-bin/codex");
     fs::write(&provider, format!(
-        "#!/bin/sh\n/bin/cat > {}\n/bin/pwd -P > {}\nprintf 'start\\n' >> {}\nif {} tool run orbit.agent.invoke --input '{{\"cwd\":\"/\",\"prompt\":\"recursive\"}}' > {} 2>&1; then exit 90; fi\nprintf '%s\\n' '{AGENT_TEST_ANSWER}'\n",
+        "#!/bin/sh\n/bin/cat > {}\n/bin/pwd -P > {}\nprintf 'start\\n' >> {}\nif LLVM_PROFILE_FILE={} {} tool run orbit.agent.invoke --input '{{\"cwd\":\"/\",\"prompt\":\"recursive\"}}' > {} 2>&1; then exit 90; fi\nprintf '%s\\n' '{AGENT_TEST_ANSWER}'\n",
         quote(&observed_input), quote(&observed_cwd), quote(&starts),
-        quote(Path::new(env!("CARGO_BIN_EXE_orbit"))), quote(&child_denial),
+        quote(&profile), quote(Path::new(env!("CARGO_BIN_EXE_orbit"))), quote(&child_denial),
     )).unwrap();
     fs::set_permissions(&provider, fs::Permissions::from_mode(0o755)).unwrap();
 
