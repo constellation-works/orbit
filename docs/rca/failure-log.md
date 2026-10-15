@@ -34,6 +34,46 @@ before you close it out, or extend the entry that already names the cause.
 Delete an entry once its fix has landed. Git history keeps the resolved
 entries.
 
+## 2026-10-15: Supported Python lacks the mandatory fixture's PyYAML dependency
+
+- **Where:** mac-mini-1, ORB-16198's candidate `make ci-fast`, with base
+  `3943cbf406d1f61f93f5822d1bafac31730d6fa7` and clean candidate
+  `b4f41f82b6e006fa897391ada768df1a6219d884`.
+- **Symptom:** after 599 seconds in repository guards, the unchanged
+  verified-download fixture failed at its unconditional `import yaml`.
+- **Cause:** `/opt/homebrew/opt/python@3.14/bin/python3.14` was Python 3.14.7
+  without PyYAML. The early preflight checked only Python's minimum version
+  for `tomllib`; contributor setup omitted the mandatory module. Script
+  changes selected the fixture on the candidate, while the baseline skipped
+  it. That baseline pass did not exercise the failing fixture and therefore
+  did not establish a causal source regression. The local workflow linter's
+  optional warning/skip could not cover this mandatory test.
+- **Host repair and proof:** the same exact interpreter now imports PyYAML
+  6.0.3 from `/Users/daniel/Library/Python/3.14/lib/python/site-packages`,
+  with user site enabled and no `PYTHONPATH` override. The supported repair
+  used that interpreter's `-m pip install --only-binary=:all: --no-deps
+  --no-cache-dir --require-hashes --target` with that user-site destination
+  and a requirements file containing `PyYAML==6.0.3` pinned to SHA-256
+  `34d5fcd24b8445fadc33f9cf348c1047101756fd760b4dacb5c3e99755703310`
+  (the `pyyaml-6.0.3-cp314-cp314-macosx_11_0_arm64.whl` wheel). It changed
+  no Homebrew/global packages, persistent environment, source or claim.
+  On the unchanged clean candidate, that interpreter ran
+  `scripts/test-ci-download-verified.py -v`: **9/9 passed in 23.049s**,
+  exit 0. Full commands, install plan/result, import path, clean-environment
+  proof and fixture output are preserved in ORB-16198 artifact
+  `environment/pyyaml-host-repair-20261015.json`.
+- **Fix:** ORB-16209 adds a selected-fixture PyYAML preflight before Cargo
+  and repository guards, with the exact interpreter and manual environment
+  setup guidance, plus isolated public-entrypoint regression controls and
+  contributor documentation. Selection rules and Python version checks stay
+  intact; no automatic installer or mandatory-test skip is introduced. This
+  is candidate prevention, pending normal delivery and review; the host repair
+  above is separate. Generic baseline-selection attribution is outside scope.
+- **Tasks:** ORB-16198; incident F2026-10-378; prevention ORB-16209.
+- **Final recovery:** none for this dependency repair. The original failed
+  receipt and historical reliability counts remain unchanged; the later
+  host fixture pass does not relabel the original attempt as successful.
+
 ## 2026-10-15: Native artifact puts lose genuine operator provenance
 
 - **Where:** native `task artifact put` on dk-server-2, submitting the result

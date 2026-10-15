@@ -5,8 +5,10 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -204,6 +206,68 @@ jobs:
         self.assertEqual(actual, expected if ran else set())
         self.assertTrue((self.guard_calls / "test-qa-full-sweep.py").exists(),
                         "the live surface inventory must run on crates changes")
+
+    def prepare_python_prerequisite(self):
+        self.prepare_ci()
+        shutil.copy2(SCRIPTS / "require-python.sh", self.scripts)
+        shutil.copy2(SCRIPTS.parent / "Makefile", self.root)
+        # Only version/module probes are stubbed. Other Python consumers
+        # (including the Cargo stub and runner cleanup) use the real interpreter.
+        self.yaml_probe = self.root / "yaml-probe.log"
+        self.env["GUARD_TEST_YAML_PROBE"] = str(self.yaml_probe)
+        self.write_executable(self.bin / "python3", f'''#!/bin/sh
+if [ "$1" = -c ]; then
+  case "$2" in
+    *sys.version_info*) echo 3.14.7; exit 0 ;;
+    'import yaml')
+      echo probe >> "$GUARD_TEST_YAML_PROBE"
+      exit "$GUARD_TEST_YAML_STATUS" ;;
+  esac
+fi
+exec {shlex.quote(sys.executable)} "$@"
+''')
+        self.write_executable(self.bin / "budget", '#!/bin/sh\nshift\nexec "$@"\n')
+        self.init_ci_git()
+
+    def test_selected_yaml_prerequisite_stops_before_cargo_and_guards(self):
+        """Missing PyYAML must refuse before work, not skip mandatory fixtures."""
+        self.prepare_python_prerequisite()
+        (self.scripts / "changed-input.sh").touch()
+        commands = (("make", "ci-fast", f"BUILD_BUDGET={self.bin / 'budget'}"),
+                    ("/bin/bash", str(self.scripts / "ci-guardrails.sh"), "--fast"),
+                    ("/bin/bash", str(self.scripts / "ci-guardrails.sh")))
+        for command in commands:
+            for available in (False, True):
+                with self.subTest(command=command, yaml=available):
+                    self.log.unlink(missing_ok=True)
+                    self.yaml_probe.unlink(missing_ok=True)
+                    for call in self.guard_calls.iterdir():
+                        call.unlink()
+                    result = subprocess.run(
+                        command, cwd=self.root, text=True, capture_output=True,
+                        env=dict(self.env, GUARD_TEST_YAML_STATUS="0" if available else "1"))
+                    self.assertEqual(result.returncode == 0, available, result.stderr)
+                    if available:
+                        self.assertTrue(self.yaml_probe.exists())
+                        self.assert_self_tests(True)
+                        self.assertTrue((self.guard_calls / "test-ci-download-verified.py").exists())
+                    else:
+                        self.assertIn("PyYAML", result.stderr)
+                        self.assertIn(f"python3 3.14.7 at {self.bin}/python3", result.stderr)
+                        self.assertIn("-m pip install PyYAML", result.stderr)
+                        self.assertIn("venv", result.stderr)
+                        self.assertFalse(self.log.exists(), "Cargo ran before YAML preflight")
+                        self.assertEqual(list(self.guard_calls.iterdir()), [],
+                                         "a guard/fixture ran before YAML preflight")
+                        self.assertNotIn("SKIPPED", result.stdout)
+
+    def test_crates_only_fast_selection_does_not_require_yaml(self):
+        self.prepare_python_prerequisite()
+        self.env["GUARD_TEST_YAML_STATUS"] = "1"
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.yaml_probe.exists(), "unselected fixtures imposed YAML dependency")
+        self.assert_self_tests(False)
 
     def test_fast_crates_only_skips_self_tests_for_explicit_and_merge_bases(self):
         self.prepare_ci()
@@ -1625,7 +1689,9 @@ class PythonPreflightTests(unittest.TestCase):
     """Drive scripts/require-python.sh and the make gates with a stub python3."""
 
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
+        scratch = SCRIPTS.parent / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(prefix="python-preflight-", dir=scratch)
         self.addCleanup(self.temporary.cleanup)
         self.bin = Path(self.temporary.name)
         self.log = self.bin / "cargo.log"
@@ -1669,9 +1735,9 @@ class PythonPreflightTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unknown version", result.stderr)
         (self.bin / "python3").unlink()
-        if shutil.which("python3", path="/usr/bin:/bin"):
-            self.skipTest("a system python3 remains on the minimal PATH")
-        result = self.run_command("/bin/bash", str(SCRIPTS / "require-python.sh"))
+        result = subprocess.run(["/bin/bash", str(SCRIPTS / "require-python.sh")],
+                                env=dict(self.env(), PATH=str(self.bin)),
+                                text=True, capture_output=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("no python3 is on PATH", result.stderr)
 
