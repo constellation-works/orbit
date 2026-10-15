@@ -188,15 +188,14 @@ sub source_code {
 }
 
 # Track only lexical attributes, module openings and braces, not cfg or macro
-# expansion. Outside inline modules a path is relative to the source directory;
-# ordinary declarations and inline modules also add an ordinary file's stem.
+# expansion. Outside inline modules a path is relative to the source directory.
+# The declaring module supplies the directory for ordinary children: an ordinary
+# file module adds its stem, while a redirected file owns its containing directory.
 sub index_module_targets {
-  my ($path, $targets) = @_;
+  my ($path, $inline_directory, $targets, $pending) = @_;
   my $source = source_text($path);
   my $code = source_code($path);
   my $directory = dirname($path);
-  my $inline_directory = basename($path) =~ /^(?:mod|lib|main)\.rs$/
-    ? $directory : File::Spec->catdir($directory, basename($path, '.rs'));
   my @scopes = ([$directory, $inline_directory]);
   my $module_path;
 
@@ -230,7 +229,13 @@ sub index_module_targets {
       for my $target (@destinations) {
         if (-f $target) {
           my $resolved = abs_path($target);
-          $targets->{$resolved} = 1 if defined $resolved;
+          if (defined $resolved) {
+            $targets->{$resolved} = 1;
+            my $child_directory = defined($module_path) || basename($resolved) eq 'mod.rs'
+              ? dirname($resolved)
+              : File::Spec->catdir(dirname($resolved), basename($resolved, '.rs'));
+            push @$pending, [$resolved, $child_directory];
+          }
         }
       }
     } elsif (defined($module) && $ending eq '{') {
@@ -262,11 +267,28 @@ sub is_declared {
     my @paths;
     while (my $path = <$paths>) { chomp $path; push @paths, $path; }
     close $paths or die "Cannot list $crate_src: ripgrep failed\n";
-    my %targets;
+    my (%targets, %indexed);
+    # Resolve owners before their children so redirected files never acquire a
+    # guessed stem directory. Keep disconnected owners visible as before, after
+    # walking declarations from crate/directory roots (including ignored ones).
+    @paths = sort {
+      (basename($b) =~ /^(?:mod|lib|main)\.rs$/ ? 1 : 0)
+        <=> (basename($a) =~ /^(?:mod|lib|main)\.rs$/ ? 1 : 0)
+        || $a cmp $b
+    } @paths;
     for my $path (@paths) {
-      # Index actual destinations once per invocation, regardless of cfg. A
-      # basename elsewhere in the crate is not registration.
-      index_module_targets($path, \%targets);
+      $path = abs_path($path);
+      next if exists $indexed{$path};
+      my $directory = basename($path) =~ /^(?:mod|lib|main)\.rs$/
+        ? dirname($path) : File::Spec->catdir(dirname($path), basename($path, '.rs'));
+      my @pending = ([$path, $directory]);
+      while (my $owner = pop @pending) {
+        my ($owner_path, $owner_directory) = @$owner;
+        # A file can be loaded both ordinarily and through #[path]. Index both
+        # real contexts, but never revisit cycles or add a default to a redirect.
+        next if $indexed{$owner_path}{$owner_directory}++;
+        index_module_targets($owner_path, $owner_directory, \%targets, \@pending);
+      }
     }
     $crate_targets{$crate_src} = \%targets;
   }

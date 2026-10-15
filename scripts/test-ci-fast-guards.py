@@ -1328,6 +1328,62 @@ class OrphanModuleTests(unittest.TestCase):
         return subprocess.run(["bash", str(self.guard)], cwd=self.root,
                               text=True, capture_output=True, check=False)
 
+    def test_redirected_parent_children_inherit_the_resolved_module_directory(self):
+        self.write_source("lib.rs", '#[path="other.rs"] mod renamed;\n'
+                          '#[cfg(test)] mod tests;\n'
+                          'mod shared;\n#[path="shared.rs"] mod alias;\n')
+        self.write_source("tests/mod.rs", '#[path="other.rs"] mod renamed;\n')
+        # One physical file may have both ordinary and redirected ownership.
+        self.write_source("shared.rs", "mod dual;\n")
+        for path in ("dual.rs", "shared/dual.rs"):
+            self.write_source(path, "#[test] fn live() {}\n")
+        expected = {"shared::dual::live", "alias::dual::live"}
+        orphans = set()
+        for directory, prefix in (("", ""), ("tests/", "tests::")):
+            self.write_source(directory + "other.rs", 'mod child;\n'
+                              'mod inner { mod leaf; }\n'
+                              '#[path="nested/redirect.rs"] mod redirected;\n')
+            self.write_source(directory + "child.rs", 'mod deep;\n'
+                              '#[test] fn live() {}\n')
+            self.write_source(directory + "nested/redirect.rs", 'mod child;\n'
+                              'mod inner { mod leaf; }\n')
+            destinations = {
+                "child/deep.rs": "renamed::child::deep",
+                "inner/leaf.rs": "renamed::inner::leaf",
+                "nested/child.rs": "renamed::redirected::child",
+                "nested/inner/leaf.rs": "renamed::redirected::inner::leaf",
+            }
+            expected.add(prefix + "renamed::child::live")
+            for path, module in destinations.items():
+                self.write_source(directory + path, "#[test] fn live() {}\n")
+                expected.add(prefix + module + "::live")
+            # Neither the declared name nor the redirected source's stem
+            # licenses an ordinary destination or a child directory.
+            orphans.update(directory + path for path in (
+                "renamed.rs", "other/child.rs", "other/inner/leaf.rs",
+                "nested/redirected.rs", "nested/redirect/child.rs",
+            ))
+
+        binary = self.root / "fixture-test"
+        compiled = subprocess.run(["rustc", "--edition=2024", "--test",
+                                   str(self.source / "lib.rs"), "-o", str(binary)],
+                                  text=True, capture_output=True)
+        self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+        listing = subprocess.run([str(binary), "--list"], text=True, capture_output=True)
+        self.assertEqual(listing.returncode, 0, listing.stdout + listing.stderr)
+        self.assertEqual(set(re.findall(r"^(.*): test$", listing.stdout, re.MULTILINE)),
+                         expected)
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        for path in orphans:
+            self.write_source(path, '#[test] fn never_registered() { panic!("lost test"); }\n')
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(set(re.findall(r"^orphan(?: test)? module: (\S+)",
+                                        result.stdout, re.MULTILINE)),
+                         {f"crates/fixture/src/{path}" for path in orphans})
+
     def test_ignored_module_owners_still_register_their_children(self):
         # Candidate files are checked regardless of ignore rules, so owners
         # must remain visible too, including directories named like outputs.
