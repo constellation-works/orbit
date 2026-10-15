@@ -236,6 +236,11 @@ Fixture forwarders that bypass libtest capture frame their complete child stdout
 with `qa-child-output-begin/end: <owner>` under one stdout lock. Every frame must
 close and its owner must appear as a passing outer case. The child bytes remain
 in the transcript, and genuine notices still invalidate coverage.
+With one libtest thread, the begin marker may follow `test <owner> ... ` on
+the same line. The parser retains that pending case prefix across its child
+frames and requires the matching outer result after the final frame closes.
+The public regression compiles a miniature libtest executable and records its
+actual one-thread and two-thread output, including genuine outer failures.
 The public recorder/import regression replays the retained hosted `test_env`
 transcript, including its intentional failed-child control, alongside contrasting
 outer failures. This parser check does not establish native release readiness;

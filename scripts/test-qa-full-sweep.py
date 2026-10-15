@@ -537,6 +537,7 @@ def cargo_outer_suites(command, evidence):
     active = None
     diagnostic = False
     child_owner = None
+    pending_case = None
     tables = {}
     lines = stdout.splitlines()
     index = 0
@@ -547,15 +548,31 @@ def cargo_outer_suites(command, evidence):
             if line == f"qa-child-output-end: {child_owner}":
                 child_owner = None
             continue
-        child_start = re.fullmatch(r"qa-child-output-begin: (\S+)", line)
+        # Serial libtest writes the case prefix before invoking it. A locked
+        # stdout frame can therefore split its result row across child output.
+        child_start = re.fullmatch(
+            r"(?:(test (\S+)(?: - should panic)? \.\.\. ))?qa-child-output-begin: (\S+)", line)
         if child_start and not diagnostic:
             if not active:
                 raise ValueError("cargo test child output has no owning outer suite")
-            child_owner = child_start[1]
+            child_owner = child_start[3]
+            if child_start[1]:
+                if pending_case or child_start[2] != child_owner:
+                    raise ValueError("cargo test child frame disagrees with pending outer case")
+                pending_case = (child_start[1], child_start[2])
+            if pending_case and pending_case[1] != child_owner:
+                raise ValueError("cargo test child frame disagrees with pending outer case")
             active["child_owners"].add(child_owner)
             continue
         if line.startswith("qa-child-output-end:") and not diagnostic:
             raise ValueError("cargo test child output has an unmatched end")
+        if pending_case:
+            if not line.strip():
+                continue
+            if not re.fullmatch(r"(ok|FAILED|ignored)(?:, .*)?", line):
+                raise ValueError("cargo test has an incomplete pending outer result")
+            line = pending_case[0] + line
+            pending_case = None
         # Libtest encloses captured output under a known case. A diagnostic
         # may itself contain running/results/FAILED lines; none owns a suite.
         header = re.fullmatch(r"---- (.+) stdout ----", line)
@@ -615,7 +632,7 @@ def cargo_outer_suites(command, evidence):
             if not active or case[1] in active["cases"]:
                 raise ValueError("cargo test row has no unique outer owner")
             active["cases"][case[1]] = case[2]
-    if active or child_owner is not None or len(suites) != len(targets):
+    if active or child_owner is not None or pending_case is not None or len(suites) != len(targets):
         raise ValueError("cargo test has missing or incomplete outer target reports")
     for suite, target in zip(suites, targets):
         suite["target"] = target
