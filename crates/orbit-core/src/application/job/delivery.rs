@@ -26,13 +26,11 @@ use crate::OrbitRuntime;
 use crate::application::review::LOCAL_ROUTE_JOB;
 use crate::runtime::task::locks::parse_task_ids;
 
-/// Recognize the singleton PR handoff from its contract, including renamed
-/// YAML snapshots and inline or nested equivalents of its activities. Local
-/// delivery and coordinators that dispatch singleton children are unaffected.
-pub(crate) fn has_single_task_pr_delivery(spec: &JobV2) -> bool {
-    let pr = spec.delivers_mode(ShipMode::Pr)
-        || any_target(&spec.steps, &|action, _| action == "pr_open");
-    pr && any_target(&spec.steps, &|action, input| {
+/// `git_commit` defaults to the singleton `all` scope in both PR and local
+/// leaves. Recognize renamed snapshots and inline/nested actions by contract;
+/// per-task commit jobs and coordinators dispatching children remain supported.
+fn has_single_task_delivery(spec: &JobV2) -> bool {
+    any_target(&spec.steps, &|action, input| {
         action == "git_commit"
             && input
                 .and_then(|input| input.get("scope"))
@@ -64,13 +62,13 @@ fn any_target(
     })
 }
 
-/// Validate the effective PR task selection before admission effects, and
+/// Validate the effective singleton task selection before admission effects, and
 /// normalize repeated IDs so the implementation loop runs once per task.
-pub(crate) fn normalize_pr_delivery_input(
+pub(crate) fn normalize_delivery_input(
     spec: &JobV2,
     input: &mut serde_json::Value,
 ) -> Result<(), OrbitError> {
-    if !has_single_task_pr_delivery(spec) {
+    if !has_single_task_delivery(spec) {
         return Ok(());
     }
     let task_ids = input
@@ -80,7 +78,7 @@ pub(crate) fn normalize_pr_delivery_input(
         && task_ids.as_array().is_none_or(|ids| !ids.is_empty())
     {
         let ids = parse_task_ids(&serde_json::json!({"task_ids": task_ids}))?;
-        require_single_pr_task(ids.len())?;
+        require_single_delivery_task(ids.len())?;
         if input.is_null() {
             *input = serde_json::json!({});
         }
@@ -94,13 +92,15 @@ pub(crate) fn normalize_pr_delivery_input(
     Ok(())
 }
 
-/// Admission must reject unsupported PR bundles before any delivery effects.
-pub(crate) fn require_single_pr_task(count: usize) -> Result<(), OrbitError> {
+/// Admission must reject unsupported singleton bundles before any delivery effects.
+pub(crate) fn require_single_delivery_task(count: usize) -> Result<(), OrbitError> {
     if count > 1 {
         return Err(OrbitError::InvalidInput(
-            "PR delivery supports exactly one distinct task per run; submit separate singleton \
-             PR runs (orbit run ship dispatches selections as singletons), or use supported \
-             local multi-task delivery with git_commit scope: per_task"
+            "delivery with git_commit scope: all supports exactly one distinct task per run; \
+             submit separate singleton PR or local runs (orbit run ship dispatches selections \
+             as singletons). For bundled local delivery, use a custom pipeline with explicit \
+             git_commit scope: per_task and compatible per-task validation, no-diff and recovery; \
+             task_local_pipeline is a singleton leaf"
                 .to_string(),
         ));
     }
@@ -177,9 +177,9 @@ impl OrbitRuntime {
         let route = self.resolve_delivery_route(tasks, mode)?;
         if tasks.len() > 1
             && (route.opens_pull_request()
-                || has_single_task_pr_delivery(&self.resolved_job_spec(&route.job_name)?))
+                || has_single_task_delivery(&self.resolved_job_spec(&route.job_name)?))
         {
-            require_single_pr_task(
+            require_single_delivery_task(
                 tasks
                     .iter()
                     .map(|task| &task.id)

@@ -125,7 +125,7 @@ impl OrbitRuntime {
         };
         let mut input = input;
         if let Ok(spec) = &spec {
-            delivery::normalize_pr_delivery_input(spec, &mut input)?;
+            delivery::normalize_delivery_input(spec, &mut input)?;
         }
         let reuse_admission = resume.is_some() && !source_repair;
         self.capture_auto_concurrency(

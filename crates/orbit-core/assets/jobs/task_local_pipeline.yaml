@@ -1,19 +1,23 @@
-# Task bundle local pipeline.
+# Single-task local delivery pipeline.
+#
+# Admission rejects more than one distinct task before creating a run or worktree.
+# `orbit run ship` and `task_auto_pipeline` coordinate multi-selection as separate
+# singleton leaves. Custom multi-task local jobs must use git_commit scope: per_task.
 #
 # Failure semantics:
-# - `implement_bundle` runs one task at a time in the shared worktree.
+# - `implement_bundle` implements the one admitted task.
 # - If `implement_one` fails, pending changes remain in the shared worktree for inspection.
-# - An implementer-declared blocker (`task_blocked_by_agent`) stops the bundle
+# - An implementer-declared blocker (`task_blocked_by_agent`) stops the leaf
 #   before the next step. Step and final recovery do not run, and pending
 #   changes stay in the worktree.
-# - If all implementations succeed, `commit` snapshots the bundle branch before merge.
+# - If implementation succeeds, `commit` snapshots the task branch before merge.
 # - `validate` runs `workflow.required_validation_commands` on that committed
 #   candidate; a failing command stops the run before anything is merged.
-# - Tasks move to `terminal_status` only after the full bundle commits and merges cleanly.
+# - The task moves to `terminal_status` only after its candidate commits and merges cleanly.
 # - ORB-11187: when the submitting operator authorized completion
 #   (`completion: done`), `complete_tasks` runs *after* `push`, so a failed merge
 #   or a failed push fails the run with the tasks still in `review`. Completion is
-#   never reached by a bundle whose publication did not succeed.
+#   never reached by a leaf whose publication did not succeed.
 #
 schemaVersion: 2
 kind: Job
@@ -93,7 +97,7 @@ spec:
       when: "{{ steps.resume_candidate.output.implement }} == true"
       loop:
         items: "{{ input.task_ids }}"
-        max_iterations: 256
+        max_iterations: 1
         steps:
           - id: implement_one
             recovery_activity: step_failure_recovery
@@ -159,7 +163,7 @@ spec:
     - id: mark_review
       loop:
         items: "{{ input.task_ids }}"
-        max_iterations: 256
+        max_iterations: 1
         steps:
           - id: mark_review_one
             target: activity:update_task
@@ -182,7 +186,7 @@ spec:
       when: "{{ input.completion }} == done"
       loop:
         items: "{{ input.task_ids }}"
-        max_iterations: 256
+        max_iterations: 1
         steps:
           - id: complete_one
             target: activity:task_complete
