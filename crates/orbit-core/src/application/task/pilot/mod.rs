@@ -39,6 +39,7 @@ mod assessment;
 mod attachment_budget;
 mod blockers;
 mod drain_promotion;
+mod freshness;
 pub(crate) mod input;
 mod no_diff;
 mod persist;

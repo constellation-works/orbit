@@ -380,8 +380,17 @@ prevents repeatedly edited work from starving other tasks.
 The prepare/apply domain boundary recomputes fingerprints and eligibility under
 task locks. Accepted selectors/assessment fields written by that same apply are
 part of the certified *post-apply* fingerprint, with the pre-apply fingerprint
-retained for audit. They do not invalidate their own assessment. External edits
-still do. Apply owns the prepared `context_files_before` snapshot and fills it
+retained for audit. A preparation routine also reuses the latest atomic task
+receipt when its certified post-apply fingerprint matches that consumer's
+current fingerprint, including evidence from an explicit pilot. Matching
+evidence reports `fresh` or `fresh_unready` without another provider run,
+preparation hold or a new consumer-local receipt. The fingerprint must match
+under the consumer's resolved material fields, source sensitivity and
+eligibility policy; missing markers or a different contract require normal
+preparation. Active pilots still withhold their tasks before this reuse check,
+and explicit task selections can deliberately request another assessment. Accepted writes do not invalidate their own
+assessment; external material edits still do.
+Apply owns the prepared `context_files_before` snapshot and fills it
 into the persisted assessment; an agent need only return `context_files_after`.
 Legacy before echoes are ignored, so ordering, selector spelling, or an omitted
 echo cannot invalidate a fresh assessment or change its replay receipt.

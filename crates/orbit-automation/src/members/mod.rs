@@ -65,6 +65,16 @@ pub trait MemberHost {
 
     fn outcome(&self, attempt: &MemberAttempt) -> Result<MemberOutcome, AutomationError>;
 
+    /// Readiness of an assessment already accepted outside this consumer's
+    /// working set, or `None` when no matching accepted evidence exists.
+    /// The host must verify that its certified output matches this member's
+    /// fingerprint under the requesting consumer's policy. This imports
+    /// evidence for a scheduling skip only; it grants no admission or
+    /// promotion authority and creates no consumer-local receipt.
+    fn accepted_assessment(&self, _member: &StateMember) -> Result<Option<bool>, AutomationError> {
+        Ok(None)
+    }
+
     /// Drop what [`Self::admit`] retained for `attempt` [ORB-14164]. Called
     /// once a committed checkpoint settled, exhausted or retired it, so no
     /// run or retry can need it again. Best effort: a host that cannot

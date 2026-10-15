@@ -7,19 +7,32 @@ use std::collections::BTreeSet;
 
 pub(super) use orbit_types::workflow::automation::members::MEMBER_CAPACITY as CAPACITY;
 
+pub(super) struct Absorbed {
+    pub deferred: usize,
+    pub fresh_unready: bool,
+}
+
 /// Fold one page into the working set without exceeding [`CAPACITY`], and
-/// return how many of its entries must wait for room. Entries already
+/// report entries that must wait for room and accepted unready evidence.
+/// Entries already
 /// retained always update; at capacity, a member's fresh fingerprint takes
 /// the place of its superseded assessment, whose receipt stays durable.
-pub(super) fn absorb(host: &dyn MemberHost, members: &mut MemberState, page: &MemberPage) -> usize {
-    let mut deferred = 0;
+pub(super) fn absorb(
+    host: &dyn MemberHost,
+    members: &mut MemberState,
+    page: &MemberPage,
+) -> Result<Absorbed, AutomationError> {
+    let mut absorbed = Absorbed {
+        deferred: 0,
+        fresh_unready: false,
+    };
 
     for (key, reason) in &page.withheld {
         if members.pending.remove(key).is_none()
             && !members.withheld.contains_key(key)
             && members.retained() >= CAPACITY
         {
-            deferred += 1;
+            absorbed.deferred += 1;
             continue;
         }
         members.withheld.insert(key.clone(), reason.clone());
@@ -30,6 +43,29 @@ pub(super) fn absorb(host: &dyn MemberHost, members: &mut MemberState, page: &Me
         members.withheld.remove(&member.key);
         for task_id in &member.task_ids {
             members.withheld.remove(task_id);
+        }
+
+        // Explicit assessments use the same material contract as routines.
+        // Reuse the latest accepted output, including an unready verdict,
+        // before trusting an older consumer-local assessment or scheduling.
+        if let Some(ready) = host.accepted_assessment(&member)? {
+            absorbed.fresh_unready |= !ready;
+            members.pending.remove(&member.key);
+            // The task audit remains the authority. Retire superseded local
+            // working state, never mint an automation receipt for this skip.
+            if members.assessed.get(&member.key).is_some_and(|assessment| {
+                assessment.resulting_fingerprint != member.fingerprint || assessment.ready != ready
+            }) {
+                members.assessed.remove(&member.key);
+            }
+            if members
+                .active
+                .as_ref()
+                .is_none_or(|active| active.member_for(&member.key).is_none())
+            {
+                members.failed.remove(&member.key);
+            }
+            continue;
         }
 
         // Already assessed at exactly this fingerprint, or under an earlier
@@ -50,14 +86,14 @@ pub(super) fn absorb(host: &dyn MemberHost, members: &mut MemberState, page: &Me
                 member.changed_at = old.changed_at;
             }
         } else if members.retained() >= CAPACITY && members.assessed.remove(&member.key).is_none() {
-            deferred += 1;
+            absorbed.deferred += 1;
             continue;
         }
 
         members.pending.insert(member.key.clone(), member);
     }
 
-    deferred
+    Ok(absorbed)
 }
 
 /// Every key `page` observes: each candidate's member key and task ids, and
