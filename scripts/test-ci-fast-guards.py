@@ -1445,6 +1445,59 @@ class OrphanModuleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("orphan test module: crates/fixture/src/tests/lost.rs", result.stdout)
 
+    def test_raw_path_literals_match_compiler_and_reject_false_registrations(self):
+        variants = {
+            "plain": lambda path: f'"{path}"',
+            "raw": lambda path: f'r"{path}"',
+            "hashed": lambda path: f'r#"{path}"#',
+            "multi_hash": lambda path: f'r###"{path}"###',
+        }
+        expected = set()
+        orphans = set()
+        for directory, module_prefix in (("", ""), ("tests/", "tests::")):
+            owner = '#[cfg(test)] mod tests;\n' if not directory else ""
+            for name, literal in variants.items():
+                owner += (f'#[path = {literal(f"{name}/direct.rs")}] mod direct_{name};\n'
+                          f'mod {name} {{ #[path = {literal("chosen.rs")}] mod renamed; }}\n'
+                          f'#[path = {literal(f"relocated_{name}")}] mod override_{name} {{\n'
+                          f'    #[path = {literal("chosen.rs")}] mod renamed;\n'
+                          '}\n')
+                for path, module in (
+                    (f"{name}/direct.rs", f"direct_{name}"),
+                    (f"{name}/chosen.rs", f"{name}::renamed"),
+                    (f"relocated_{name}/chosen.rs", f"override_{name}::renamed"),
+                ):
+                    self.write_source(directory + path, "#[test] fn registered() {}\n")
+                    expected.add(f"{module_prefix}{module}::registered")
+                # A path override must not license the default same-name file
+                # or an unrelated file with the destination's basename.
+                for path in (f"{name}/renamed.rs", f"unregistered/{name}/chosen.rs"):
+                    orphans.add(directory + path)
+            owner += ('/* #[path = r#"comment.rs"#] mod comment_only; */\n'
+                      'const TEXT: &str = r####"#[path = r###"raw_text.rs"###] '
+                      'mod string_only;"####;\n')
+            orphans.update({directory + "comment.rs", directory + "raw_text.rs"})
+            self.write_source(directory + ("mod.rs" if directory else "lib.rs"), owner)
+
+        binary = self.root / "fixture-test"
+        compiled = subprocess.run(["rustc", "--edition=2024", "--test",
+                                   str(self.source / "lib.rs"), "-o", str(binary)],
+                                  text=True, capture_output=True)
+        self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+        listing = subprocess.run([str(binary), "--list"], text=True, capture_output=True)
+        self.assertEqual(listing.returncode, 0, listing.stdout + listing.stderr)
+        self.assertEqual(set(re.findall(r"^(.*): test$", listing.stdout, re.MULTILINE)), expected)
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        for path in orphans:
+            self.write_source(path, '#[test] fn never_registered() { panic!("lost test"); }\n')
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(set(re.findall(r"^orphan(?: test)? module: (\S+)",
+                                        result.stdout, re.MULTILINE)),
+                         {f"crates/fixture/src/{path}" for path in orphans})
+
     def test_inline_path_directories_match_compiler_and_reject_collisions(self):
         self.write_source("lib.rs", 'mod external;\nmod directory;\n'
                           'mod inner {\n'
