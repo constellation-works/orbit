@@ -58,6 +58,8 @@ fn apply(workspace: &Workspace, input: &Value) -> Result<Value, String> {
 }
 
 fn malformed_apply_input_is_refused_before_any_task_is_written() {
+    #[cfg(unix)]
+    explicit_status_is_refused_before_assessment();
     let workspace = Workspace::new();
     let task = proposed(&workspace, "malformed");
     let other = proposed(&workspace, "sibling");
@@ -351,6 +353,192 @@ fn malformed_partition_result_fails_only_its_partition() {
             "{label}"
         );
     }
+}
+
+// Run the shipped job, with only the provider's answer scripted. Counting the
+// launcher proves refusal happens before assessment, rather than at apply.
+#[cfg(unix)]
+fn explicit_status_is_refused_before_assessment() {
+    use orbit_core::application::task::TaskUpdateParams;
+    use orbit_types::resource::ExecutorResource;
+    use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind};
+    use std::os::unix::fs::PermissionsExt;
+
+    let workspace = Workspace::new();
+    let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    let calls = workspace.root.path().join("provider-calls");
+    let response = workspace.root.path().join("response.json");
+    let provider = workspace.root.path().join("codex");
+    std::fs::write(&calls, "").unwrap();
+    std::fs::write(
+        &provider,
+        format!(
+            "#!/bin/sh\n/bin/cat > /dev/null\nprintf 'call\\n' >> '{}'\n/bin/cat '{}'\n",
+            calls.display(),
+            response.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut executor: ExecutorResource = serde_yaml::from_str(
+        &std::fs::read_to_string(assets.join("executors/codex.yaml")).unwrap(),
+    )
+    .unwrap();
+    executor.spec.command = Some(provider.display().to_string());
+    // This fixture observes dispatch and state, independently of OS confinement.
+    executor.spec.sandbox = Some(ExecutorSandboxKind::Off);
+    workspace
+        .runtime
+        .upsert_executor_def(&ExecutorDef::from_resource_spec(
+            executor.metadata.name,
+            executor.spec,
+            None,
+            None,
+        ))
+        .unwrap();
+    let allowed = proposed(&workspace, "allowed sibling");
+    let target = proposed(&workspace, "unsupported target");
+    let reservations = workspace
+        .runtime
+        .paths()
+        .state_dir
+        .join("task-pilot-reservations.json");
+    // The third row models a successful command preflight followed by a move
+    // before the authoritative prepare starts. No scheduling or timing race.
+    for (mixed, moved) in [(false, false), (true, false), (true, true)] {
+        if moved {
+            workspace
+                .runtime
+                .force_update_task_with_identity(
+                    &target.id,
+                    TaskUpdateParams {
+                        status: Some(TaskStatus::Backlog),
+                        ..Default::default()
+                    },
+                    None,
+                    None,
+                )
+                .unwrap();
+            assert_eq!(
+                workspace.runtime.get_task(&target.id).unwrap().status,
+                TaskStatus::Backlog
+            );
+        }
+        workspace
+            .runtime
+            .force_update_task_with_identity(
+                &target.id,
+                TaskUpdateParams {
+                    status: Some(TaskStatus::Blocked),
+                    ..Default::default()
+                },
+                None,
+                None,
+            )
+            .unwrap();
+        let ids = if mixed {
+            vec![allowed.id.as_str(), target.id.as_str()]
+        } else {
+            vec![target.id.as_str()]
+        };
+        let before = [&allowed.id, &target.id].map(|id| {
+            json!({
+                "task": workspace.runtime.get_task(id).unwrap(),
+                "history": workspace.runtime.get_task_history(id).unwrap(),
+            })
+        });
+        let reservation_before = std::fs::read(&reservations).ok();
+        let outcome = workspace
+            .runtime
+            .run_job_v2_from_yaml(
+                &assets.join("jobs/task_pilot_pipeline.yaml"),
+                json!({"task_ids": ids, "workspace_path": workspace.repo, "base_branch": "main"}),
+            )
+            .expect_err("unsupported explicit selections must refuse preparation");
+        let evidence = outcome.to_string();
+        for expected in [target.id.as_str(), "blocked", "proposed", "backlog"] {
+            assert!(
+                evidence.contains(expected),
+                "refusal must name task/status and eligibility: {evidence}"
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(&calls).unwrap(),
+            "",
+            "refused before provider"
+        );
+        assert_eq!(std::fs::read(&reservations).ok(), reservation_before);
+        for (id, before) in [&allowed.id, &target.id].into_iter().zip(before) {
+            assert_eq!(
+                json!({"task": workspace.runtime.get_task(id).unwrap(),
+                "history": workspace.runtime.get_task_history(id).unwrap()}),
+                before
+            );
+        }
+    }
+    let rows = workspace
+        .runtime
+        .v2_audit_store()
+        .unwrap()
+        .list_v2_audit_events(&orbit_store::contracts::V2AuditEventFilter {
+            workspace_id: workspace.runtime.workspace_id().unwrap(),
+            limit: Some(1000),
+            ..Default::default()
+        })
+        .unwrap();
+    let events = rows
+        .iter()
+        .map(|row| serde_json::from_str::<Value>(&row.payload_json).unwrap())
+        .collect::<Vec<_>>();
+    let finished = events
+        .iter()
+        .filter(|event| event["body_kind"] == "run_finished")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        finished.len(),
+        3,
+        "each refusal keeps its terminal audit record"
+    );
+    for event in finished {
+        assert_eq!(event["outcome"], "error", "{event}");
+        assert!(
+            event["error_message"]
+                .as_str()
+                .unwrap()
+                .contains("only proposed and backlog"),
+            "{event}"
+        );
+    }
+    // Both eligible states still traverse the real agent and apply steps.
+    for status in [TaskStatus::Proposed, TaskStatus::Backlog] {
+        let task = proposed(&workspace, &format!("eligible {status}"));
+        if status == TaskStatus::Backlog {
+            workspace
+                .runtime
+                .update_task_as_human(
+                    &task.id,
+                    TaskUpdateParams {
+                        status: Some(status),
+                        ..Default::default()
+                    },
+                    "fixture".into(),
+                )
+                .unwrap();
+        }
+        std::fs::write(&response, json!({"schemaVersion": 1, "status": "success", "error": null,
+            "result": {"partition_index": 0, "task_ids": [task.id], "tasks": [assessment(&task.id)]}
+        }).to_string()).unwrap();
+        let outcome = workspace.runtime.run_job_v2_from_yaml(
+            &assets.join("jobs/task_pilot_pipeline.yaml"),
+            json!({"task_ids": [task.id], "workspace_path": workspace.repo, "base_branch": "main"}),
+        ).unwrap();
+        assert!(outcome.success, "{status}: {outcome:?}");
+        assert_eq!(outcome.pipeline["apply"]["applied_count"], 1);
+        let after = workspace.runtime.get_task(&task.id).unwrap();
+        assert_eq!(after.status, status);
+        assert_eq!(after.context_files, ["file:README.md"]);
+    }
+    assert_eq!(std::fs::read_to_string(calls).unwrap().lines().count(), 2);
 }
 
 // Related boundary scenarios share the isolated table fixture.

@@ -36,8 +36,9 @@
 #
 # Only this host evaluates the trigger (`owner_machine`); a second host
 # registering the same workspace seeds its own owner. Explicit task-ID runs
-# (`orbit run task-pilot <id>`) remain available for any workspace task and do
-# not use this gate.
+# (`orbit run task-pilot <id>`) remain available for proposed/backlog workspace
+# tasks and do not use this routine's configurable eligibility gate. Other
+# statuses refuse the entire explicit selection before assessment.
 schemaVersion: 1
 name: __ORBIT_ROUTINE_NAME__
 description: >
