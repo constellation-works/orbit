@@ -1356,6 +1356,21 @@ This operator-surface repair keeps `orbit run ship --json`, direct `orbit job ru
 
 After [ORB-00075], `orbit run ship` is the single public shipment command: omitted task IDs run auto mode, provided task IDs seed explicit singleton bundles, and both forms submit `task_auto_pipeline` asynchronously. Dispatch output is workflow/job/run identity plus pointers to `orbit run history -j task_auto_pipeline` and `orbit run show <RUN_ID>`; waiting reasons and terminal details live on those durable inspection surfaces.
 
+PR delivery supports one distinct task per leaf run. The shared submission boundary
+loads the submitted definition and rejects multiple tasks in a PR leaf using
+`git_commit scope: all` before worktree reclamation, admission-policy capture or
+run insertion.
+This applies to catalog jobs, direct YAML snapshots and parent-authorized children,
+including renamed copies of the PR leaf. The public foreground YAML API checks
+the same contract before inserting its run. The gate's delivery resolver rejects the
+same unsupported bundle before reserving any footprint. Duplicate task IDs normalize
+to a singleton. Existing retained runs and checkpoints are not rewritten by a refusal.
+`task_auto_pipeline` and `orbit run ship` may carry multiple task IDs because they
+dispatch separate singleton leaves. Supported local pipelines using
+`scope: per_task` keep their multi-task commit ownership and attribution. The PR
+commit singleton guard and its summary, validation, review, publication, auto-fix
+and no-diff contracts remain unchanged.
+
 After [T20260505-8], active job runs can be cancelled through the same durable run surface. `pending` and `running` runs transition to `cancelled`; terminal runs remain immutable. Pending cancellation only rewrites the run bundle and pipeline snapshot, so a later pipeline worker observes `cancelled` and exits without claiming the run. Running cancellation first validates the stored owner PID start-time token, then signals the owner process group on Unix with a bounded graceful period and `SIGKILL` escalation. `JobRunCancelled` legacy audit payloads include run id, previous/final state, actor/source, whether signaling was attempted, and the signal outcome. A `run.cancelled` v2 event records the actor, source, optional reason, and prior/final state for `orbit run events`. Operator cancellation records its task disposition and reason durably before signaling: the default returns coupled tasks to `backlog` with the candidate preserved, while `orbit run cancel --block` keeps the prior blocked transition. Dashboard cancellation uses the backlog default.
 
 Admissions stop and graceful pull-drain cancellation preserve a worker's first checkpoint even when the run is already `running` but has no pipeline state yet. On `NoState`, each control inserts an empty base state only if absent, then retries its transactional update against the current run status. A worker checkpoint or child lineage written in that window survives; a run that terminalized receives no new effective control [ORB-15611].

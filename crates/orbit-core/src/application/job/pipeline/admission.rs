@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::application::job::crew_pools;
+use crate::application::job::{crew_pools, delivery};
 use orbit_common::fs::io::open_read_only_no_follow;
 
 impl OrbitRuntime {
@@ -113,8 +113,19 @@ impl OrbitRuntime {
                 "source repair input is reserved for explicit operator admission".into(),
             ));
         }
-        let reuse_admission = resume.is_some() && !source_repair;
+        // Resolve cardinality before reclamation, policy capture, run insertion
+        // or resume seeding. Refusal must leave retained candidates untouched.
+        let spec = match &definition {
+            SubmittedDefinition::Catalog => self
+                .load_v2_job_asset_by_name(job_name)
+                .map(|(_, spec)| spec),
+            SubmittedDefinition::Snapshot { spec, .. } => Ok((*spec).clone()),
+        };
         let mut input = input;
+        if let Ok(spec) = &spec {
+            delivery::normalize_pr_delivery_input(spec, &mut input)?;
+        }
+        let reuse_admission = resume.is_some() && !source_repair;
         self.capture_auto_concurrency(
             job_name,
             &mut input,
@@ -146,10 +157,9 @@ impl OrbitRuntime {
             reuse_admission || replay_source_run_id.is_some(),
         );
         let result = (|| {
-            let spec = match &definition {
-                SubmittedDefinition::Catalog => self.load_v2_job_asset_by_name(job_name)?.1,
-                SubmittedDefinition::Snapshot { spec, .. } => (*spec).clone(),
-            };
+            // Preserve policy refusals for unavailable definitions while every
+            // resolved PR leaf was already checked before those policies ran.
+            let spec = spec?;
             if spec.state != JobScheduleState::Enabled {
                 return Err(OrbitError::InvalidInput(format!(
                     "job '{job_name}' is disabled"

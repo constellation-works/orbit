@@ -1,9 +1,10 @@
-# Task bundle PR pipeline.
+# Single-task PR pipeline.
 #
 # Failure semantics:
-# - `implement_bundle` runs one task at a time in the shared worktree.
-# - If `implement_one` fails, earlier commits remain on the bundle branch.
-# - While the run is still alive, tasks stay `in-progress`: a mid-bundle step
+# - Admission accepts one distinct task before creating a run or worktree.
+#   Use separate singleton PR runs, or local delivery for a multi-task bundle.
+# - `implement_bundle` retains its checkpoint shape but implements only that task.
+# - While the run is still alive, the task stays `in-progress`: a step
 #   failure that the run recovers from does not block anything. Commit, branch
 #   preparation, base synchronization, required validation, push, PR
 #   creation/reuse, and promotion are independent durable steps, so recovery
@@ -159,7 +160,7 @@ spec:
       when: "{{ steps.resume_candidate.output.implement }} == true"
       loop:
         items: "{{ input.task_ids }}"
-        max_iterations: 256
+        max_iterations: 1
         steps:
           # The engine injects typed final_recovery_resume into every nested
           # target of a resumed phase. agent_implement addresses its rationale
