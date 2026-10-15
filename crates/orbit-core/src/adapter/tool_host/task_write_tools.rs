@@ -8,6 +8,7 @@
 //! which no MCP request can reach.
 
 use orbit_common::OrbitError;
+use orbit_common::governance::authorization::agent_context_declared;
 use orbit_common::governance::task::TASK_CLI_OPTIONS_PARAM;
 use orbit_common::protocol::tool_input::{
     optional_csv_or_string_list_alias, optional_raw_string, optional_string,
@@ -345,6 +346,7 @@ pub(super) fn artifact_put(
     runtime: &OrbitRuntime,
     caller: ToolCaller<'_>,
     input: &Value,
+    operator: bool,
 ) -> Result<TaskWriteOutput, OrbitError> {
     let origin = runtime.artifact_origin(caller.session_context);
     let id = required_string(input, &["id"], "id")?;
@@ -353,14 +355,35 @@ pub(super) fn artifact_put(
         upsert_artifacts: parse_artifacts(input)?,
         ..TaskUpdateParams::default()
     };
-    let written = runtime.update_task_screened_for_tool(
-        &id,
-        params,
-        &write_screen(false, false, caller.reservation_owner),
-        caller.agent,
-        caller.model,
-        None,
-    )?;
+    // Preserve the authenticated native operator decision, using the same
+    // screened lifecycle write as `task update --artifact`. A transport or
+    // worker call keeps the owner-aware tool path even on a human host.
+    // The shared writer classifier still refuses agent identities/envelopes;
+    // labels, omitted models and operator overrides cannot erase them.
+    let native_operator = operator
+        && !agent_context_declared()
+        && caller.session_context.transport.is_none()
+        && caller.session_context.worker_invocation.is_none();
+    let screen = write_screen(native_operator, false, caller.reservation_owner);
+    let written = if native_operator {
+        runtime.update_task_screened(
+            &id,
+            params,
+            &screen,
+            TaskUpdateAuthority::Lifecycle,
+            caller.agent,
+            caller.model,
+        )?
+    } else {
+        runtime.update_task_screened_for_tool(
+            &id,
+            params,
+            &screen,
+            caller.agent,
+            caller.model,
+            None,
+        )?
+    };
     screened_write_response(runtime, written, None)
 }
 

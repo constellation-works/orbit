@@ -605,6 +605,348 @@ fn operator_workflow_is_network_free_labelled_and_fail_closed() {
     assert_eq!(repository_state(&source_repo), source_before);
 }
 
+/// The shared artifact route must preserve the native operator's authority,
+/// while a human-looking agent cannot release the same hold (ORB-16220).
+#[test]
+fn native_artifact_put_preserves_operator_evidence_and_requeues_once() {
+    use chrono::Utc;
+    use orbit_core::TaskStatus;
+    use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+    use orbit_engine::RuntimeHost;
+    use orbit_types::task::ArtifactWriter;
+    use orbit_types::workflow::{
+        REVIEW_CONTRACT_VERSION, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT,
+        REVIEW_REPORT_ARTIFACT, ReviewAdmission, ReviewBudget, ReviewEvidenceHold, ReviewTiming,
+    };
+    use serde_json::json;
+
+    const TEST: &str =
+        "task_publication::native_artifact_put_preserves_operator_evidence_and_requeues_once";
+    if !crate::review_after_landing_cli::in_isolated_child(TEST) {
+        return;
+    }
+    let fixture = crate::isolated_cli_fixture::Fixture::new();
+    configure_git(&fixture.repo);
+    fs::write(fixture.repo.join("candidate.txt"), "before\n").unwrap();
+    git(&fixture.repo, &["add", "candidate.txt"]);
+    git(&fixture.repo, &["commit", "-m", "base"]);
+    git(&fixture.repo, &["branch", "-M", "main"]);
+    git(&fixture.repo, &["checkout", "-b", "candidate"]);
+    fs::write(fixture.repo.join("candidate.txt"), "after\n").unwrap();
+    git(&fixture.repo, &["commit", "-am", "candidate"]);
+    crate::fixture_crew::configure_sol(&fixture.root);
+    let config_path = fixture.root.join("config.toml");
+    let mut config: toml_edit::DocumentMut =
+        fs::read_to_string(&config_path).unwrap().parse().unwrap();
+    config["operation"]["review_crew"] = toml_edit::value("sol");
+    config["review"]["before_pr"] = toml_edit::value(true);
+    fs::write(&config_path, config.to_string()).unwrap();
+    let runtime = crate::review_after_landing_cli::open_runtime(&fixture);
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Native evidence fixture".into(),
+            description: "Preserve authenticated artifact writer provenance".into(),
+            acceptance_criteria: vec!["Queue fresh review after the exact evidence pair".into()],
+            plan: "Review candidate.txt".into(),
+            context_files: vec!["file:candidate.txt".into()],
+            status: Some(TaskStatus::InProgress),
+            ..Default::default()
+        })
+        .unwrap();
+    let id = task.id.as_str();
+    let policy = runtime.operation_policy();
+    let admission = ReviewAdmission {
+        contract_version: REVIEW_CONTRACT_VERSION,
+        policy_version: policy.version,
+        timing: ReviewTiming::BeforePr,
+        timing_source: policy.review_before_pr.source.label().into(),
+        crew: Some("sol".into()),
+        crew_pool: Vec::new(),
+        crew_source: policy.review_crew.source.label().into(),
+        budget: ReviewBudget { minutes: 10 },
+        required_validation_commands: Some(vec!["native fixture".into()]),
+        baseline_commands: Vec::new(),
+        captured_at: Utc::now(),
+        host_evidence: Vec::new(),
+    };
+    let run = runtime
+        .insert_job_run(
+            "task_pr_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({"review": admission, "task_ids": [id], "task_id": id})),
+            None,
+        )
+        .unwrap();
+    runtime
+        .update_task_with_identity(
+            id,
+            TaskUpdateParams {
+                job_run_id: Some(Some(run.run_id.clone())),
+                ..Default::default()
+            },
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+    let mut input = json!({
+        "job_run_id": run.run_id, "completed_task_ids": [id],
+        "workspace_path": fixture.repo.canonicalize().unwrap(),
+        "base": "main", "base_sync": "local", "mode": "pr",
+    });
+    input["admission"] = runtime
+        .run_deterministic("review_gate_admit", &json!({}), &input, Default::default())
+        .unwrap();
+    let scratch = fixture.repo.join(".orbit/tmp");
+    fs::create_dir_all(&scratch).unwrap();
+    let report = scratch.join("report.json");
+    fs::write(&report, json!({
+        "schema_version": 1, "attempt_id": input["admission"]["attempt_id"],
+        "verdict": "incomplete", "summary": "Native check remains unavailable",
+        "findings": [], "escalation": "Native evidence pending",
+        "validation": [{"id": "V1", "command": "native fixture", "outcome": "not_run", "role": "required"}],
+        "external_evidence": [{"kind": "native_os", "name": "Native fixture", "command": "native fixture", "artifact": "evidence/native.json"}],
+    }).to_string()).unwrap();
+    runtime
+        .run_tool(
+            "orbit.task.artifact.put",
+            json!({
+                "id": id, "model": "codex", "path": REVIEW_REPORT_ARTIFACT, "source_path": report,
+            }),
+        )
+        .unwrap();
+    assert!(matches!(
+        runtime.run_deterministic("review_gate_settle", &json!({}), &input, Default::default()),
+        Err(orbit_engine::DispatchError::ReviewEvidenceHold(_))
+    ));
+    let certificate = runtime
+        .get_task_artifact(id, REVIEW_GATE_ARTIFACT)
+        .unwrap()
+        .unwrap();
+    let held = runtime
+        .get_task_artifact(id, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+        .unwrap()
+        .unwrap();
+    let hold: ReviewEvidenceHold = serde_json::from_slice(&held.content).unwrap();
+    let before = runtime.get_task(id).unwrap();
+    let result = scratch.join("result.json");
+    let log = scratch.join("log.json");
+    fs::write(
+        &result,
+        json!({
+            "schema_version": 1, "attempt_id": hold.attempt_id, "candidate": hold.candidate,
+            "kind": "native_os", "name": "Native fixture", "command": "native fixture",
+            "outcome": "passed", "log_artifact": "evidence/native.log.json",
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let log_bytes = b"{\"output\":\"fixture native run; cleanup paths remain DEFERRED\"}";
+    fs::write(&log, log_bytes).unwrap();
+    let put = |source: &Path, path: &str| {
+        fixture.command(&[
+            "task",
+            "artifact",
+            "put",
+            id,
+            source.to_str().unwrap(),
+            "--path",
+            path,
+            "--json",
+        ])
+    };
+    // All negative callers deliberately carry both an operator override and
+    // a human label. Neither may erase their agent/managed provenance.
+    for (name, value) in [
+        ("ORBIT_AGENT_MODEL", "codex"),
+        ("ORBIT_TASK_ACTOR_KIND", "agent"),
+        ("ORBIT_MANAGED_RUN_CONTEXT", "1"),
+    ] {
+        for (source, path) in [
+            (&result, "evidence/native.json"),
+            (&log, "evidence/native.log.json"),
+        ] {
+            put(source, path)
+                .env("ORBIT_OPERATOR", "1")
+                .env("ORBIT_ACTOR", "human:operator")
+                .env(name, value)
+                .assert()
+                .success();
+            assert_eq!(
+                runtime
+                    .get_task_artifact_manifest(id)
+                    .unwrap()
+                    .into_iter()
+                    .find(|file| file.path == path)
+                    .unwrap()
+                    .writer,
+                None
+            );
+        }
+        assert_eq!(
+            runtime.get_task(id).unwrap().status,
+            TaskStatus::InProgress,
+            "a matching agent pair must not release the hold: {name}"
+        );
+    }
+    put(&result, "evidence/native.json")
+        .env("ORBIT_OPERATOR", "1")
+        .args(["--model", "codex"])
+        .assert()
+        .success();
+    assert_eq!(
+        runtime
+            .get_task_artifact_manifest(id)
+            .unwrap()
+            .into_iter()
+            .find(|file| file.path == "evidence/native.json")
+            .unwrap()
+            .writer,
+        None
+    );
+    let refused_before = (
+        runtime.get_task(id).unwrap(),
+        runtime.get_task_artifact_manifest(id).unwrap(),
+        runtime.get_task_history(id).unwrap(),
+    );
+    let foreign = fixture.home.join("foreign.json");
+    fs::write(&foreign, b"foreign bytes").unwrap();
+    put(&foreign, "evidence/foreign.json")
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .failure();
+    #[cfg(unix)]
+    {
+        let link = scratch.join("foreign-link.json");
+        std::os::unix::fs::symlink(&foreign, &link).unwrap();
+        put(&link, "evidence/foreign-link.json")
+            .env("ORBIT_OPERATOR", "1")
+            .assert()
+            .failure();
+    }
+    put(&result, REVIEW_GATE_ARTIFACT)
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .failure();
+    put(&result, "evidence/wrong-workspace.json")
+        .env("ORBIT_OPERATOR", "1")
+        .args(["--workspace", fixture.home.to_str().unwrap()])
+        .assert()
+        .failure();
+    fixture
+        .command_at_root(
+            &fixture._temp.path().join("foreign-root"),
+            &[
+                "task",
+                "artifact",
+                "put",
+                id,
+                result.to_str().unwrap(),
+                "--path",
+                "evidence/wrong-root.json",
+            ],
+        )
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .failure();
+    assert_eq!(
+        (
+            runtime.get_task(id).unwrap(),
+            runtime.get_task_artifact_manifest(id).unwrap(),
+            runtime.get_task_history(id).unwrap()
+        ),
+        refused_before,
+        "foreign sources, symlinks, roots/workspaces and protected receipts must not mutate the held task"
+    );
+    for (source, path) in [
+        (&result, "evidence/native.json"),
+        (&log, "evidence/native.log.json"),
+    ] {
+        put(source, path)
+            .env("ORBIT_OPERATOR", "1")
+            .env("ORBIT_ACTOR", "human:operator")
+            .assert()
+            .success();
+        let manifest = runtime.get_task_artifact_manifest(id).unwrap();
+        let stored = manifest.iter().find(|file| file.path == path).unwrap();
+        assert_eq!(
+            stored.writer,
+            Some(ArtifactWriter::Operator),
+            "native operator authority must survive artifact put"
+        );
+        assert_eq!(
+            runtime
+                .get_task_artifact(id, path)
+                .unwrap()
+                .unwrap()
+                .content,
+            fs::read(source).unwrap()
+        );
+        if path == "evidence/native.json" {
+            assert_eq!(
+                runtime.get_task(id).unwrap().status,
+                TaskStatus::InProgress,
+                "one trusted member cannot release the hold"
+            );
+        }
+    }
+    assert_eq!(runtime.get_task(id).unwrap().status, TaskStatus::Backlog);
+    put(&log, "evidence/native.log.json")
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .success();
+    let history = runtime.get_task_history(id).unwrap();
+    let received: Vec<_> = history
+        .iter()
+        .filter(|entry| entry.event == "review_evidence_received")
+        .collect();
+    assert_eq!(
+        received.len(),
+        1,
+        "the exact pair queues only one fresh review"
+    );
+    assert!(
+        received[0]
+            .note
+            .as_deref()
+            .unwrap()
+            .contains("queued for fresh review")
+    );
+    let after = runtime.get_task(id).unwrap();
+    assert_eq!(after.id, before.id);
+    assert_eq!(after.job_run_id, before.job_run_id);
+    assert_eq!(
+        git_output(&fixture.repo, &["rev-parse", "HEAD"]),
+        hold.candidate.commit
+    );
+    assert_eq!(
+        runtime
+            .get_task_artifact(id, REVIEW_GATE_ARTIFACT)
+            .unwrap()
+            .unwrap()
+            .content,
+        certificate.content,
+        "receipt must preserve the original incomplete certificate"
+    );
+    assert_eq!(
+        runtime
+            .get_task_artifact(id, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+            .unwrap()
+            .unwrap()
+            .content,
+        held.content,
+        "receipt must preserve the held candidate, attempt and lineage"
+    );
+    assert_eq!(
+        runtime
+            .get_task_artifact(id, "evidence/native.log.json")
+            .unwrap()
+            .unwrap()
+            .content,
+        log_bytes
+    );
+}
+
 fn add_task(repo: &Path, home: &Path, bare: &Path, title: &str, description: &str) -> String {
     orbit_json(
         repo,

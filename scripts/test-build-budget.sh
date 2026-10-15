@@ -146,6 +146,11 @@ try:
     elif mode in {"block", "term-delay"}:
         while True:
             time.sleep(1)
+    elif mode in {"release-success", "release-fail"}:
+        while not (state / "release-owner").exists():
+            time.sleep(0.02)
+        if mode == "release-fail":
+            raise SystemExit(23)
     elif mode == "fail":
         time.sleep(duration)
         raise SystemExit(23)
@@ -253,31 +258,45 @@ done
 run_queue_case() {
   local case_name="$1" first_mode="$2"
   local case_state="$TMP/$case_name"
-  local owner_status
+  local owner_status owner_mode wait_interval=0.05
   mkdir -p "$case_state"
+  case "$first_mode" in
+    sleep) owner_mode=release-success ;;
+    fail) owner_mode=release-fail ;;
+    block) owner_mode=block ;;
+  esac
   ORBIT_BUILD_BUDGET_DIR="$TMP/locks-$case_name" ORBIT_BUILD_SLOTS=1 \
-    "$WRAPPER" -- "$TMP/helper.py" "$case_state" owner "$first_mode" 0.25 &
+    "$WRAPPER" -- "$TMP/helper.py" "$case_state" owner "$owner_mode" 0.25 &
   local owner_pid=$!
+  BACKGROUND_PIDS+=("$owner_pid")
   wait_for "$case_state/started-owner"
   ORBIT_BUILD_BUDGET_DIR="$TMP/locks-$case_name" ORBIT_BUILD_SLOTS=1 \
-    timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- "$TMP/helper.py" "$case_state" queued sleep 0.01 &
+    _ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS="$wait_interval" \
+    timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- "$TMP/helper.py" "$case_state" queued sleep 0.01 \
+    2>"$case_state/queued.err" &
   local queued_pid=$!
-  sleep 0.08
+  BACKGROUND_PIDS+=("$queued_pid")
+  wait_for_match '^build-budget: still waiting for admission \(elapsed [0-9]+\.[0-9]s\)$' \
+    "$case_state/queued.err"
   [[ ! -e "$case_state/started-queued" ]] || fail "$case_name queue started before the owner released its slot"
 
   if [[ "$first_mode" == "block" ]]; then
     kill -TERM "$owner_pid"
+  else
+    touch "$case_state/release-owner"
   fi
   set +e
   wait "$owner_pid" 2>/dev/null
   owner_status=$?
   set -e
+  forget_pid "$owner_pid"
   case "$first_mode" in
     sleep) [[ "$owner_status" == "0" ]] || fail "$case_name owner returned $owner_status" ;;
     fail) [[ "$owner_status" == "23" ]] || fail "$case_name did not preserve failure status" ;;
     block) [[ "$owner_status" == "143" ]] || fail "$case_name terminated owner returned $owner_status" ;;
   esac
   wait "$queued_pid"
+  forget_pid "$queued_pid"
   [[ -e "$case_state/started-queued" ]] || fail "$case_name queue did not proceed"
 }
 

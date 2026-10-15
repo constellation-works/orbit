@@ -36,7 +36,7 @@ pub(super) fn dispatch(
     // The attachment surface has already authenticated/prepared its path-free
     // payload. Its public source_path parameter is no longer present here.
     if verb == TaskVerb::ArtifactPut {
-        let output = super::task_write_tools::artifact_put(runtime, caller, &input)?;
+        let output = super::task_write_tools::artifact_put(runtime, caller, &input, operator)?;
         return Ok((output.response, Some(output.persisted_id)));
     }
     // Re-wraps the input the tool entry already parsed; see `parse_input`.

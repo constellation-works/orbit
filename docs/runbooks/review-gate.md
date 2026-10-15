@@ -266,6 +266,25 @@ the kind, exact command and candidate tree. Attempt, commit, display name and
 artifact path changes do not expire a result on the same tree. Unrelated,
 different-tree, failed or incomplete evidence leaves the hold in place.
 
+The native attachment command preserves the already authenticated local
+operator context through the screened task write. Both the result and log
+must have `writer: operator` in the artifact manifest; `created_by: human:…`
+alone is attribution, not evidence authority. Agent model declarations,
+managed-run envelopes, MCP agent sessions and claimed workers cannot gain
+that stamp by omitting a model, using a human label, inheriting a terminal or
+setting an operator override.
+
+If an older native attachment has no writer stamp, leave the held receipts
+and incomplete certificate intact. After deploying the repaired binary, a
+genuine operator can resubmit the exact result and log from files under the
+checkout's `.orbit/tmp/` using `orbit task artifact put <task-id>
+<source-file> --path <artifact-name>`. Check both manifest entries and the
+`review_evidence_received` history event. One trusted member alone leaves the
+hold in place; the pair queues review once. Do not edit manifests, copy a
+certificate, or force the task's status to substitute for receipt validation.
+Resubmission preserves the evidence bytes: ignored helpers and `DEFERRED`
+cleanup paths remain unverified, even when other checks in the log passed.
+
 A hold whose every requirement is kind `codeql` or a `linux`
 `host_sandbox_test` is fulfilled by a Linux owner without an operator. The
 owner runs each named command at the held commit and attaches the result and
