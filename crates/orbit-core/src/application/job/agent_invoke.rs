@@ -222,6 +222,11 @@ impl OrbitRuntime {
 
         let prompt = require_non_empty(request.prompt, "prompt")?;
         let cwd = self.resolve_workspace_cwd("cwd", request.cwd)?;
+        // Containment alone cannot identify a checkout: linked worktrees can
+        // live beneath the primary's .orbit directory. Derive the assigned
+        // identity from Git's shared directory, never from caller metadata.
+        let primary_root = self.paths().repo_root.canonicalize()?;
+        let linked_root = crate::paths::find_linked_worktree_root(&cwd, &primary_root);
         let crew = self.canonical_crew_name(request.crew)?;
         let timeout_seconds = resolve_timeout(request.timeout_seconds)?;
         let provider_sandbox =
@@ -241,12 +246,17 @@ impl OrbitRuntime {
             authorizer_provenance: authorizer.provenance.to_string(),
             caller_machine_id: authorizer.remote_caller_machine_id,
             authorized_at: Utc::now().to_rfc3339(),
-            workspace_path: self.paths().repo_root.display().to_string(),
+            workspace_path: linked_root
+                .as_ref()
+                .unwrap_or(&primary_root)
+                .display()
+                .to_string(),
             cwd: cwd.display().to_string(),
         };
 
-        let input = json!({
+        let mut input = json!({
             "prompt": prompt,
+            "workspace_path": cwd.display().to_string(),
             "cwd": cwd.display().to_string(),
             "crew": crew,
             "timeout_seconds": timeout_seconds,
@@ -254,6 +264,12 @@ impl OrbitRuntime {
             TRUSTED_HOST_ADMISSION_KEY: serde_json::to_value(&admission)
                 .map_err(|error| OrbitError::Execution(format!("encode admission: {error}")))?,
         });
+        // The engine requires a matching exact-root pair for a distinct
+        // checkout. Primary/interior invocations intentionally have no pair:
+        // declaring the primary as an assigned worktree is refused there.
+        if let Some(root) = linked_root {
+            input["repo_root"] = json!(root);
+        }
 
         let (invoke, deduplicated) =
             self.submit_trusted_host_pipeline_run(input, &actor, request.idempotency_key)?;

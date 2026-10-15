@@ -62,10 +62,6 @@ fn plant_agent_cli_stub(bin: &Path, name: &str) {
     }
 }
 
-fn plant_agent_response_stub(bin: &Path, name: &str) {
-    plant_agent_stub_printing(bin, name, AGENT_ANSWER_ENVELOPE);
-}
-
 /// [ORB-13899] An answer using every part of the envelope `result` an
 /// operator reads: the named fields and one the prompt asked for.
 const AGENT_ANSWER_ENVELOPE: &str = r##"{"schemaVersion":1,"status":"success","result":{"summary":"remote probe complete","findings":["the clock restarts on reload"],"next_steps":["pin the reload interval"],"report_markdown":"# Probe\n\nAll clear."},"error":null}"##;
@@ -1343,11 +1339,40 @@ fn leftover_caller_authorization_files_are_ignored_rather_than_enforced() {
 /// file anywhere in the path.
 fn a_remote_operator_session_invokes_an_agent_end_to_end() {
     let workspace = McpWorkspace::init();
+    std::fs::write(workspace.work.join(".gitignore"), ".orbit/\n").unwrap();
+    crate::git_repo::run(&workspace.work, &["add", ".gitignore"]);
+    crate::git_repo::run(
+        &workspace.work,
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "seed",
+        ],
+    );
+    let linked = workspace.work.join(".orbit/state/worktrees/invoke");
+    crate::git_repo::run(
+        &workspace.work,
+        &["worktree", "add", "--detach", linked.to_str().unwrap()],
+    );
+    let linked = linked.canonicalize().unwrap();
+    let observed_cwd = workspace.home.join("provider-cwd");
     // `model` attributes the caller; the workspace's frozen default crew picks
     // the provider. Stub both possible selected providers, because an inherited
     // host `claude` binary makes `opus` the default crew during fixture init.
-    plant_agent_response_stub(&McpWorkspace::stub_bin_dir(&workspace.home), "codex");
-    plant_agent_response_stub(&McpWorkspace::stub_bin_dir(&workspace.home), "claude");
+    for provider in ["codex", "claude"] {
+        plant_agent_cli_stub(&McpWorkspace::stub_bin_dir(&workspace.home), provider);
+        std::fs::write(
+            McpWorkspace::stub_bin_dir(&workspace.home).join(provider),
+            format!("#!/bin/sh\ncat > /dev/null\n/bin/pwd -P > {}\nprintf '%s\\n' '{AGENT_ANSWER_ENVELOPE}'\n",
+                orbit_common::process::shell::quote_posix_arg(observed_cwd.to_str().unwrap())),
+        ).unwrap();
+    }
     admit_fixture_claude_worker_token(&workspace);
 
     let mut client = workspace.serve_with_args_and_env(
@@ -1362,7 +1387,7 @@ fn a_remote_operator_session_invokes_an_agent_end_to_end() {
         "orbit_agent_invoke",
         json!({
             "prompt": "read-only remote probe",
-            "cwd": workspace.work,
+            "cwd": linked,
             "timeout_seconds": 30,
             "wait_seconds": 30,
             "model": "codex",
@@ -1371,10 +1396,7 @@ fn a_remote_operator_session_invokes_an_agent_end_to_end() {
     assert_eq!(submitted["authorized_by"], "hm_caller");
     assert_eq!(submitted["authorizer_provenance"], "session");
     assert_eq!(submitted["caller_machine_id"], "hm_caller");
-    assert_eq!(
-        submitted["workspace_path"],
-        workspace.work.display().to_string()
-    );
+    assert_eq!(submitted["workspace_path"], linked.display().to_string());
     let run_id = submitted["run_id"].as_str().expect("run id").to_string();
 
     let deadline = Instant::now() + RESPONSE_TIMEOUT;
@@ -1397,6 +1419,14 @@ fn a_remote_operator_session_invokes_an_agent_end_to_end() {
     assert_eq!(submitted["waited"], true);
     assert_eq!(submitted["agent_invocation"]["completed_envelope"], true);
     assert_eq!(terminal["agent_invocation"]["completed_envelope"], true);
+    assert_eq!(
+        std::fs::read_to_string(&observed_cwd).unwrap().trim(),
+        linked.to_str().unwrap()
+    );
+    assert_eq!(
+        crate::git_repo::run(&workspace.work, &["status", "--porcelain"]),
+        ""
+    );
 
     // The full run response keeps the parsed result fields and blob refs while
     // dropping the duplicate raw final message and captured-stream preview.
@@ -1480,6 +1510,12 @@ fn a_remote_operator_session_invokes_an_agent_end_to_end() {
     assert_eq!(
         input["trusted_host_admission"]["caller_machine_id"],
         "hm_caller"
+    );
+    assert_eq!(input["repo_root"], linked.to_str().unwrap());
+    assert_eq!(input["workspace_path"], linked.to_str().unwrap());
+    assert_eq!(
+        input["trusted_host_admission"]["workspace_path"],
+        linked.to_str().unwrap()
     );
 }
 
