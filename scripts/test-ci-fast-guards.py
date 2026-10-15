@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise guardrail routing and dependency policy with non-compiling fixtures."""
+"""Exercise guardrail routing, source registration and dependency policy."""
 
 import json
 import os
@@ -1283,6 +1283,80 @@ class ErrorTranslationGuardTests(unittest.TestCase):
         self.write_script(text.replace("allowlist=()", "allowlist=(stray_error_to_orbit)"))
         result = self.run_guard()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class OrphanModuleTests(unittest.TestCase):
+    """Run the public orphan guard against disposable Rust source trees."""
+
+    def setUp(self):
+        scratch = SCRIPTS.parent / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(prefix="orphan-guard-", dir=scratch)
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        (self.root / "scripts").mkdir()
+        self.guard = self.root / "scripts/check-orphan-modules.sh"
+        shutil.copy2(SCRIPTS / self.guard.name, self.guard)
+        self.source = self.root / "crates/fixture/src"
+
+    def write_source(self, path, content):
+        target = self.source / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+
+    def run_guard(self):
+        return subprocess.run(["bash", str(self.guard)], cwd=self.root,
+                              text=True, capture_output=True, check=False)
+
+    def test_path_attribute_only_registers_its_resolved_file(self):
+        self.write_source("lib.rs", '#[path = "feature.rs"] mod production;\n'
+                          '#[cfg(test)] mod tests;\n')
+        self.write_source("feature.rs", "pub fn feature() {}\n")
+        self.write_source("tests/mod.rs", "")
+        self.write_source("tests/feature.rs", '#[test] fn lost_coverage() { panic!("must run"); }\n')
+        self.write_source("unregistered/feature.rs", "pub fn unregistered() {}\n")
+
+        # The compiler proves the colliding test is absent, rather than merely
+        # relying on the guard's interpretation of module registration.
+        binary = self.root / "fixture-test"
+        compiled = subprocess.run(["rustc", "--test", str(self.source / "lib.rs"),
+                                   "-o", str(binary)], text=True, capture_output=True)
+        self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+        listing = subprocess.run([str(binary), "--list"], text=True, capture_output=True)
+        self.assertEqual(listing.returncode, 0, listing.stdout + listing.stderr)
+        self.assertIn("0 tests, 0 benchmarks", listing.stdout)
+
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(set(re.findall(r"^(orphan(?: test)? module): (\S+)",
+                                        result.stdout, re.MULTILINE)), {
+            ("orphan test module", "crates/fixture/src/tests/feature.rs"),
+            ("orphan module", "crates/fixture/src/unregistered/feature.rs"),
+        })
+
+    def test_genuine_paths_and_lexical_declarations_still_register(self):
+        self.write_source("lib.rs", '#[path = "feature.rs"] mod production;\n'
+                          'mod nested;\n#[cfg(test)] mod tests;\n')
+        self.write_source("feature.rs", "")
+        self.write_source("nested/mod.rs", '#[path = "./../relative.rs"] mod relocated;\n'
+                          '#[cfg(any())]\n#[path = "disabled.rs"] mod inactive;\n')
+        self.write_source("relative.rs", "")
+        self.write_source("nested/disabled.rs", "")
+        self.write_source("tests/mod.rs", '#[path = "../nested/../tests/feature.rs"] mod renamed;\n'
+                          'mod r#type;\n/* mod lost; */\n'
+                          'const TEXT: &str = r#"mod lost;"#;\n')
+        self.write_source("tests/feature.rs", "")
+        self.write_source("tests/type.rs", "")
+
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        # Neither a comment nor a raw string declares the test. Conditional
+        # declarations above remain accepted without evaluating their cfg.
+        self.write_source("tests/lost.rs", "")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("orphan test module: crates/fixture/src/tests/lost.rs", result.stdout)
 
 
 class PythonPreflightTests(unittest.TestCase):
