@@ -1006,12 +1006,20 @@ over days; past it the drain ends and a new one carries its admissions. The drai
 retuned, is the only ceiling on its leaves: the claimed leaf jobs declare no
 active-run limit of their own. A leaf in its before-landing review (the owner's
 `review.before_landing`) runs no implementer but keeps its claim until it
-settles, so the drain admits a replacement beside it: at most `--concurrency`
-reviewing leaves free their slots this way, so one drain carries at most
-`--concurrency` implementing leaves plus as many reviewing ones. Build-budget
-slots still limit the compilers they run. `orbit run show <run-id>` counts the
-`Claimed leaves:` it carries as implementing and reviewing (`.claimed_leaves[].stage`),
-and so does the dashboard's run page. `--for` is at most 24 hours. Ship-sweep
+settles. Admission counts `occupied - min(reviewing, --concurrency)` against
+`--concurrency` before each claim. Reviewing starts after the persisted
+before-landing admission has `applies=true`; validation and publishing before
+that boundary count as implementing, while later review revalidation and
+handoff remain reviewing. The replacement credit is capped at
+`--concurrency`, but reviewing leaves can exceed it as replacements reach
+review. With an unchanged ceiling and no pre-existing excess, total occupied
+leaves stay at most twice the ceiling and implementing leaves at most the
+ceiling. Lowering it preserves running leaves, so existing excess can remain
+temporarily. Owner/local drains continue counting all in-flight children
+against their ceiling. `orbit run show <run-id>` counts the `Claimed leaves:` it
+carries by stage (`.claimed_leaves[].stage`), and so does the dashboard's run
+page. Review rebuilds still compete for repository build-budget slots. `--for`
+is at most 24 hours. Ship-sweep
 enablement is unchanged by any of this.
 
 To close the feature entirely, set `DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED`

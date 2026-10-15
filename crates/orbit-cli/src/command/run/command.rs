@@ -45,6 +45,13 @@ Maintenance:
   orbit run concurrency <run_id> --set 7
   orbit run extend <run_id> --for 2h [--concurrency <N>]
   orbit run profiles [--accuracy] [--json]
+
+Owner/local drains count every in-flight child against N. Pull drains grant capped replacement
+credit for leaves in before-landing review: admission counts occupied - min(reviewing, N)
+against N. Reviewing leaves can exceed N as replacements reach review; with an unchanged N and
+no pre-existing excess, total occupied is at most 2N and implementing at most N. Lowering N
+preserves running leaves, so existing excess can remain temporarily. orbit run show reports
+stage counts, and review rebuilds still use repository build-budget slots.
 ";
 
 #[derive(Args)]
@@ -77,7 +84,7 @@ Audits:
 
 Maintenance:
   cancel       Cancel a pending or running job run
-  concurrency  Change how many tasks a running drain keeps in flight
+  concurrency  Retune a running drain's admission ceiling
   extend       Lengthen a running drain's window, and optionally retune it
   readiness    Explain why backlog tasks are waiting in auto-drain
   profiles     Show what each kind of delivery costs on this host, minute by minute
@@ -130,7 +137,7 @@ pub enum RunSubcommand {
     Settlements(RunSettlementsArgs),
     /// Cancel a pending or running job run
     Cancel(RunCancelArgs),
-    /// Change how many tasks a running drain keeps in flight
+    /// Retune a running drain's admission ceiling
     Concurrency(RunConcurrencyArgs),
     /// Lengthen a running drain's window, and optionally retune it
     Extend(RunExtendArgs),

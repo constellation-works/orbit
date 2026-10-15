@@ -46,13 +46,26 @@ before shipping it again.
 The window bounds only the *start* of new work — a task already shipping when
 it expires still finishes.
 
-It keeps `--concurrency` tasks in flight (5 by default) and re-lists the whole
-backlog every pass, so a slot is refilled as soon as its own task finishes and a
-task filed mid-window starts without waiting for the batch around it. That
-number is a workspace-wide bound: workers left running by stopped coordinators,
-explicit `run ship` deliveries, and unsettled pull admissions all consume slots.
-A wrapper and its delivery consume one slot together. The delivery jobs impose
-no active-run limit of their own, so size the ceiling to what the host can carry.
+It re-lists the whole backlog every pass, so a slot is refilled as soon as its
+own task finishes and a task filed mid-window starts without waiting for the
+batch around it. For owner/local drains, `--concurrency` (5 by default) is a
+workspace-wide bound: workers left running by stopped coordinators, explicit
+`run ship` deliveries, and unsettled pull admissions all consume slots. A
+wrapper and its delivery consume one slot together. Delivery jobs impose no
+active-run limit of their own.
+
+A replica's pull drain uses `--concurrency` as an admission ceiling with capped
+before-landing review credit. Before each claim it counts
+`occupied - min(reviewing, N)` against N. A leaf becomes reviewing after the
+owner's persisted before-landing admission has `applies=true`; validation and
+publishing before then count as implementing, while later review revalidation
+and handoff remain reviewing. The credit is capped at N, but reviewing leaves
+can exceed N as replacements reach review. With an unchanged N and no
+pre-existing excess, total occupied leaves stay at most 2N and implementing
+leaves at most N. Lowering N preserves running leaves, so existing excess can
+remain temporarily. `orbit run show` reports the leaf stages. Review rebuilds
+still compete for repository build-budget slots, so N is not a hard total-live
+task cap for pull drains.
 
 Resource forecasting is an additional admission check, not a replacement for
 that worker ceiling. Global `machine.auto_concurrency.mode` defaults to `off`;
