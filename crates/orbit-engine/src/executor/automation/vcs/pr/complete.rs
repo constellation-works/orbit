@@ -100,7 +100,8 @@ use super::auto_fix::{
     repair_failed_checks, stopped,
 };
 use super::delivery::{
-    DeliveryEvidence, DeliveryPin, PrMergeState, checked_pr_state, classify_pr_state,
+    BlockedCheckWait, DeliveryEvidence, DeliveryPin, PrMergeState, checked_pr_state,
+    classify_pr_state,
 };
 use super::head_lag::HeadLag;
 use super::merge::{MergeStrategy, PermittedMerge, resolve_permitted_merge};
@@ -405,7 +406,11 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
             Path::new(workspace_path),
             pr_number,
             &status,
-            &[],
+            if auto_fix.is_some() {
+                BlockedCheckWait::AutoFix
+            } else {
+                BlockedCheckWait::Owner(&[])
+            },
             completion_deadline_ms,
         )
         .map_err(|reason| stopped(pr_number, &reason))?;

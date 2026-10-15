@@ -1001,6 +1001,7 @@ fn owner_landing_pending_evidence_never_extends_refusal_or_merge_authority() {
         || {
             for case in [
                 "optional",
+                "optional_failed_required_pending",
                 "administrative",
                 "review",
                 "review_failed",
@@ -1047,6 +1048,12 @@ fn owner_landing_pending_evidence_never_extends_refusal_or_merge_authority() {
                     "optional" => {
                         policy = pending_policy(&head, "IN_PROGRESS", false);
                         patch["statusCheckRollup"] = json!([{"name":"optional","status":"QUEUED"}]);
+                    }
+                    "optional_failed_required_pending" => {
+                        patch["statusCheckRollup"] = json!([
+                            {"name":"clippy","workflowName":"CI","status":"IN_PROGRESS"},
+                            {"name":"coverage","status":"COMPLETED","conclusion":"FAILURE"}
+                        ]);
                     }
                     "administrative" => policy = pending_policy(&head, "COMPLETED", true),
                     "review" => patch["reviewDecision"] = json!("REVIEW_REQUIRED"),
@@ -1185,10 +1192,18 @@ fn owner_landing_pending_evidence_never_extends_refusal_or_merge_authority() {
                 );
                 assert_eq!(waits.get(), expected_waits, "{case}: {result:?}");
                 for operation in ["ci.commit_jobs", "ci.rerun_failed", "pr.update_branch"] {
-                    assert!(
-                        host.forge.sent(operation).is_empty(),
-                        "{case}: no recovery bypass of a refusal"
-                    );
+                    if case == "optional_failed_required_pending" && operation == "ci.commit_jobs" {
+                        assert_eq!(
+                            host.forge.sent(operation).len(),
+                            1,
+                            "owner landing retains its existing failed-rollup diagnosis before stopping"
+                        );
+                    } else {
+                        assert!(
+                            host.forge.sent(operation).is_empty(),
+                            "{case}: no recovery bypass of a refusal"
+                        );
+                    }
                 }
                 assert_eq!(
                     host.forge.sent("pr.merge").len(),

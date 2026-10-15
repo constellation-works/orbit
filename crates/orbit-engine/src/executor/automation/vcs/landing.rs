@@ -53,8 +53,8 @@ use super::landing_checks::{
 };
 use super::operations;
 use super::pr::{
-    DeliveryPin, OwedHostedChecks, PrMergeState, PullRequestStatus, checked_pr_state,
-    classify_pr_state, owed_hosted_checks, read_pr_status, read_pr_status_before,
+    BlockedCheckWait, DeliveryPin, OwedHostedChecks, PrMergeState, PullRequestStatus,
+    checked_pr_state, classify_pr_state, owed_hosted_checks, read_pr_status, read_pr_status_before,
     resolve_permitted_merge,
 };
 use super::remote_probe::fixed_wait as sleep;
@@ -376,7 +376,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
             &workspace,
             &pr_number,
             &status,
-            &context.owed_hosted_checks,
+            BlockedCheckWait::Owner(&context.owed_hosted_checks),
             deadline_ms,
         ) {
             Ok(state) => state,

@@ -7702,8 +7702,10 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
         operation: &str,
         input: Value,
     ) -> Result<Value, OrbitError> {
-        if matches!(operation, "ci.job_log" | "ci.commit_jobs")
-            && let Some(answer) = self.scripted.lock().unwrap().get(operation).cloned()
+        if matches!(
+            operation,
+            "ci.job_log" | "ci.commit_jobs" | "ci.prerequisite_evidence"
+        ) && let Some(answer) = self.scripted.lock().unwrap().get(operation).cloned()
         {
             return Ok(answer);
         }
@@ -7847,6 +7849,11 @@ head_sha() {
 
 check() {
     case "$1" in
+        mixed_pending|mixed_success|mixed_failure)
+            test_state=IN_PROGRESS; conclusion=''
+            if [ "$1" = mixed_success ]; then test_state=COMPLETED; conclusion=SUCCESS; fi
+            if [ "$1" = mixed_failure ]; then test_state=COMPLETED; conclusion=FAILURE; fi
+            printf '{"__typename":"CheckRun","name":"test","status":"%s","conclusion":"%s","isRequired":true},{"__typename":"CheckRun","name":"coverage","status":"COMPLETED","conclusion":"FAILURE","isRequired":false}' "$test_state" "$conclusion" ;;
         pending) printf '{"__typename":"CheckRun","name":"test","status":"IN_PROGRESS","conclusion":""}' ;;
         success) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS"}' ;;
         failure) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE"}' ;;
@@ -7897,6 +7904,8 @@ status() {
     merged_at=null
     review=""
     case "$observed" in
+        mixed_pending|mixed_failure) merge_state=BLOCKED; rollup=$(check "$observed") ;;
+        mixed_success) merge_state=CLEAN; rollup=$(check "$observed") ;;
         pending) merge_state=BLOCKED; rollup=$(check pending) ;;
         success) merge_state=CLEAN; rollup=$(check success) ;;
         failure) merge_state=BLOCKED; rollup=$(check failure) ;;
@@ -7915,6 +7924,7 @@ status() {
         contradictory) merged_at='"2026-10-05T12:47:15Z"'; merge_state=CLEAN; rollup=$(check success) ;;
         *) echo "fake gh: unknown check state '$observed'" >&2; exit 2 ;;
     esac
+    if [ -f "$forge/review-decision" ]; then review=$(cat "$forge/review-decision"); fi
     printf '{"number":42,"state":"%s","mergedAt":%s,"mergeable":"MERGEABLE","mergeStateStatus":"%s","reviewDecision":"%s","statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":null,"url":"%s"}\n' \
         "$state" "$merged_at" "$merge_state" "$review" "$rollup" "$pr_head" "$reported_head" "$pr_base" "$url"
 }
@@ -8108,8 +8118,14 @@ case "$1 ${2:-}" in
             *statusCheckRollup*)
                 observed=$(sed -n "$(cat "$forge/reads")p" "$forge/checks")
                 [ -n "$observed" ] || observed=$(tail -n 1 "$forge/checks")
+                if [ -f "$forge/required-auth" ]; then echo 'HTTP 401: Bad credentials' >&2; exit 1; fi
+                if [ -f "$forge/required-policy" ]; then cat "$forge/required-policy"; exit; fi
                 rollup=$(check "$observed")
-                printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[%s]}}}}]}}}}}\n' "$(head_sha)" "$(head_sha)" "$(printf '%s' "$rollup" | sed 's/}$/,"isRequired":true}/')"
+                case "$observed" in
+                    mixed_*) ;;
+                    *) rollup=$(printf '%s' "$rollup" | sed 's/}$/,"isRequired":true}/') ;;
+                esac
+                printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[%s]}}}}]}}}}}\n' "$(head_sha)" "$(head_sha)" "$rollup"
                 exit ;;
         esac
         # An unreviewed push that lands after the freshness check, while the

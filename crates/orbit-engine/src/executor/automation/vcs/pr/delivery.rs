@@ -388,6 +388,14 @@ fn classify_blocked_pr(pull_request: &PullRequestStatus) -> PrMergeState {
     PrMergeState::Blocked("required reviews or checks are not satisfied".into())
 }
 
+/// Which consumer may refine a failed rollup into a bounded required-check wait.
+pub(in crate::executor::automation::vcs) enum BlockedCheckWait<'a> {
+    /// Owner landing retains its failed-rollup refusal and captured owed checks.
+    Owner(&'a [String]),
+    /// Auto-fix classifies failures against policy before deciding to recover.
+    AutoFix,
+}
+
 /// Refine BLOCKED only from authenticated current policy on the observed head,
 /// or an actually running check captured as owner-owed. Never infer pending
 /// from absent checks or a completed neutral/skipped result. This grants only
@@ -397,7 +405,7 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
     workspace: &Path,
     pr: &str,
     status: &PullRequestStatus,
-    owed: &[String],
+    wait: BlockedCheckWait<'_>,
     deadline_ms: u64,
 ) -> Result<PrMergeState, String> {
     let state = classify_pr_state(status);
@@ -410,12 +418,18 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
         return Err("pull request state is unavailable for a blocked check wait".into());
     }
     let checks = blocked_checks(status)?;
-    if checks
-        .iter()
-        .any(|check| check.state == Some(CheckState::Failed))
-    {
-        return Ok(state);
-    }
+    let owed = match wait {
+        BlockedCheckWait::Owner(owed) => {
+            if checks
+                .iter()
+                .any(|check| check.state == Some(CheckState::Failed))
+            {
+                return Ok(state);
+            }
+            owed
+        }
+        BlockedCheckWait::AutoFix => &[],
+    };
     let required = host
         .run_private_vcs_operation(
             operations::PR_REQUIRED_CHECKS,
