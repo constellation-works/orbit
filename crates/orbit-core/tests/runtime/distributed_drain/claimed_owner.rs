@@ -328,6 +328,32 @@ fn a_claimed_worker_cannot_plant_review_records_that_its_gate_still_writes() {
         )
     };
 
+    // Native operator propagation must not promote a claimed worker, even
+    // with an omitted model and a human-looking runtime actor (ORB-16220).
+    bound
+        .clone()
+        .with_actor(orbit_core::ActorIdentity::human("human:operator"))
+        .run_tool(
+            "orbit.task.artifact.put",
+            json!({
+                "id": task, "path": "evidence/worker.json", "source_path": source,
+            }),
+        )
+        .unwrap();
+    owner_put("evidence/owner-worker.json", &forged).unwrap();
+    let manifest = owner.get_task_artifact_manifest(&task).unwrap();
+    for path in ["evidence/worker.json", "evidence/owner-worker.json"] {
+        assert_eq!(
+            manifest
+                .iter()
+                .find(|file| file.path == path)
+                .unwrap()
+                .writer,
+            None,
+            "a claimed worker's artifact cannot acquire operator provenance"
+        );
+    }
+
     let before = task_view();
     for path in [
         "review-gate.json",

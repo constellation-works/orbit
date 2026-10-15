@@ -184,9 +184,103 @@ fn agent_written_evidence_neither_reaches_the_reviewer_nor_settles_nor_releases_
     assert_eq!(last_event(&fixture), "review_evidence_received");
 }
 
+fn mcp_agent_artifact_put_never_inherits_the_hosts_human_operator_identity() {
+    use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
+    use std::collections::BTreeSet;
+
+    let fixture = Fixture::new();
+    let runtime = fixture
+        .runtime
+        .clone()
+        .with_actor(orbit_core::ActorIdentity::human("human:operator"));
+    let source = fixture.repo.join(".orbit/tmp/operator-looking.json");
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    std::fs::write(&source, b"{\"output\":\"agent supplied\"}").unwrap();
+    // Even a server with operator grants is a transport-backed caller, not
+    // the native human entry. Client labels and omitted models grant nothing.
+    for capability in [McpCapability::Agent, McpCapability::Operator] {
+        for model in [None, Some("codex")] {
+            let path = format!("evidence/{capability:?}-{model:?}.json");
+            let input =
+                json!({"id": fixture.task_id, "source_path": source, "path": path, "model": model});
+            let session = ToolSessionContext {
+                transport: Some(McpTransport::Local),
+                effective_capabilities: BTreeSet::from([capability]),
+                self_reported_actor: Some("human:operator".into()),
+                ..Default::default()
+            };
+            let mut forged = input.clone();
+            forged["operator_decision_authority"] = json!(true);
+            forged["writer"] = json!("operator");
+            forged["created_by"] = json!("human:operator");
+            let before = runtime
+                .get_task_artifact_manifest(&fixture.task_id)
+                .unwrap();
+            runtime
+                .execute_tool_command_with_session_context(
+                    "orbit.task.artifact.put",
+                    forged,
+                    None,
+                    None,
+                    session.clone(),
+                )
+                .expect_err("input fields cannot manufacture writer authority");
+            assert_eq!(
+                runtime
+                    .get_task_artifact_manifest(&fixture.task_id)
+                    .unwrap(),
+                before
+            );
+            runtime
+                .execute_tool_command_with_session_context(
+                    "orbit.task.artifact.put",
+                    input,
+                    None,
+                    None,
+                    session,
+                )
+                .unwrap();
+            let stored = runtime
+                .get_task_artifact_manifest(&fixture.task_id)
+                .unwrap();
+            assert_eq!(
+                stored.iter().find(|file| file.path == path).unwrap().writer,
+                None,
+                "MCP must not borrow its host's human identity"
+            );
+        }
+    }
+    for actor in [
+        orbit_core::ActorIdentity::unknown(),
+        orbit_core::ActorIdentity::agent("human:operator"),
+    ] {
+        runtime.clone().with_actor(actor).execute_tool_command_with_session_context(
+            "orbit.task.artifact.put",
+            json!({"id": fixture.task_id, "source_path": source, "path": "evidence/override.json"}),
+            None, None,
+            ToolSessionContext {
+                effective_capabilities: BTreeSet::from([McpCapability::Operator]),
+                ..Default::default()
+            },
+        ).unwrap();
+        assert_eq!(
+            runtime
+                .get_task_artifact_manifest(&fixture.task_id)
+                .unwrap()
+                .iter()
+                .find(|file| file.path == "evidence/override.json")
+                .unwrap()
+                .writer,
+            None,
+            "operator capability alone cannot turn an unknown or agent actor into a human writer"
+        );
+    }
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     refused_agent_hold_does_not_fail_later_artifact_writes_or_review_admission_scenarios,
     refused_agent_hold_does_not_fail_later_artifact_writes_or_review_admission,
-    agent_written_evidence_neither_reaches_the_reviewer_nor_settles_nor_releases_a_hold
+    agent_written_evidence_neither_reaches_the_reviewer_nor_settles_nor_releases_a_hold,
+    mcp_agent_artifact_put_never_inherits_the_hosts_human_operator_identity
 );

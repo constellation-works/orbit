@@ -34,6 +34,40 @@ before you close it out, or extend the entry that already names the cause.
 Delete an entry once its fix has landed. Git history keeps the resolved
 entries.
 
+## 2026-10-15: Native artifact puts lose genuine operator provenance
+
+- **Where:** native `task artifact put` on dk-server-2, submitting the result
+  and log for a held native review of ORB-16198.
+- **Symptom:** the actual operator submitted the staged pair at
+  2026-10-15T04:23:45Z. Both artifacts retained `created_by: human:daniel`
+  and byte-identical hashes, but neither had an `ArtifactWriter` stamp.
+  Exact receipt validation correctly kept the original run held, the task
+  in progress and the incomplete certificate unchanged.
+- **Cause:** the shared artifact route introduced by ORB-15939 dropped the
+  authenticated operator decision at `TaskVerb::ArtifactPut`. The tool's
+  screened owner write constructed a context with operator decision authority
+  unset. The trusted-writer classifier introduced by ORB-14530 correctly
+  refused to infer authority from the human attribution label.
+- **Fix:** ORB-16220 forwards the authenticated decision and uses the existing
+  screened lifecycle write for a local operator, preserving the agent/tool
+  route for transport and worker calls. It changes no grants, writer policy,
+  receipt validator, claim lineage or legacy artifacts. After deployment,
+  only a genuine operator's supported resubmission of both files can provide
+  trusted evidence; see [review evidence receipt](../runbooks/review-gate.md).
+  This implementation does not resubmit or rewrite the real receipts.
+- **Prevention:** a public native CLI process regression checks both writer
+  stamps, exact bytes, single-member hold retention, one fresh-review queue
+  event and unchanged candidate, attempt and incomplete certificate. Negative
+  controls retain agent provenance with omitted models, human-looking labels
+  and operator overrides, and exercise MCP/worker and confinement boundaries.
+- **Evidence limits:** the original native log reports 11 passed checks,
+  six ignored helper entries and two `ps`-denied `DEFERRED` cleanup paths.
+  Those cleanup paths remain unverified; provenance repair cannot relabel
+  them as covered.
+- **Tasks:** ORB-16198; diagnosed by ORB-16190.
+- **Final recovery:** none; the evidence hold must await supported human
+  resubmission and the ordinary validator, never a status or certificate bypass.
+
 ## 2026-10-15: Printed runner commands become deterministic failure causes
 
 - **Where:** owner `complete_pr` / `pr_complete`, and the shared CI signature
