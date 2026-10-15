@@ -436,6 +436,16 @@ repair run through `orbit.workflow.run.resume` with
 Submit that fresh binding with a new `request_key` and a diagnosis of the
 remaining work to authorize another attempt.
 
+Inspection and submission corroborate the authenticated publication against the
+task's PR references, regardless of their order. Historical references are
+preserved. The current PR number must be recorded on that task; when its
+reference includes a URL, it must match the authenticated repository and PR.
+A reference giving that number a different URL, or that URL a different number,
+refuses recovery even alongside a matching reference.
+Key-only references remain supported because repository authority comes from
+the host checkpoints, origin and provider. The association is checked again
+before applying the admitted source.
+
 Inspection selects the final authenticated host publication, including a
 reviewer's correction before PR creation or before landing. A correction must
 extend the head its successful review settlement identifies, and successful
