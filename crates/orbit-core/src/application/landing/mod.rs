@@ -17,9 +17,10 @@
 //! Handoff identity. The attempt row is keyed by handoff, the job's action key
 //! is derived from handoff plus attempt number, and a handoff whose attempt has
 //! already merged is refused rather than dispatched again. A live owner job is
-//! left alone; a dead one is reconciled by
-//! [`OrbitRuntime::show_job_run`](crate::OrbitRuntime::show_job_run) before this
-//! module decides anything from its state.
+//! left alone. Dispatch observes its stored state without reconciling process
+//! liveness; opening a successor for an attached dispatched attempt requires
+//! the store to prove that exact owner job is terminal and retain its stop in
+//! attempt history. Missing run evidence never proves stoppage.
 //!
 //! # What this module never does
 //!
