@@ -1384,6 +1384,52 @@ class OrphanModuleTests(unittest.TestCase):
                                         result.stdout, re.MULTILINE)),
                          {f"crates/fixture/src/{path}" for path in orphans})
 
+    def check_trailing_comment_paths(self, destination):
+        variants = (
+            ("plain", '"{}" /* explanation */'),
+            ("raw", 'r"{}" /* explanation */'),
+            ("hashed", 'r#"{}"# /* outer /* nested ] */ comment */'),
+            ("multi_hash", 'r###"{}"### // closing ] is in a comment\n'),
+        )
+        expected = set()
+        orphans = set()
+        for directory, prefix in (("", ""), ("tests/", "tests::")):
+            owner = '#[cfg(test)] mod tests;\n' if not directory else ""
+            for name, literal in variants:
+                # Comment-like text inside the literal must remain path data.
+                path = f"{name}//{destination}"
+                owner += f'#[path = {literal.format(path)}] mod {name};\n'
+                self.write_source(directory + path, "#[test] fn registered() {}\n")
+                expected.add(f"{prefix}{name}::registered")
+                orphans.add(directory + name + ".rs")
+            owner += ('/* #[path = "comment.rs" /* trailing */] mod comment; */\n'
+                      'const TEXT: &str = r##"#[path = r#"string.rs"# '
+                      '/* trailing */] mod string;"##;\n')
+            orphans.update({directory + "comment.rs", directory + "string.rs"})
+            self.write_source(directory + ("mod.rs" if directory else "lib.rs"), owner)
+
+        self.compile_and_execute(expected)
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for path in orphans:
+            self.write_source(path, '#[test] fn unregistered() { panic!("orphan"); }\n')
+        self.compile_and_execute(expected)
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(set(re.findall(r"^(orphan(?: test)? module): (\S+)",
+                                        result.stdout, re.MULTILINE)), {
+            ("orphan test module" if path.startswith("tests/") else "orphan module",
+             f"crates/fixture/src/{path}") for path in orphans
+        })
+
+    def test_trailing_comment_paths_accept_compiler_registered_files(self):
+        self.check_trailing_comment_paths("live.rs")
+
+    def test_trailing_comment_paths_reject_uncompiled_default_files(self):
+        # mod.rs is exempt from candidate checks: a missed override otherwise
+        # silently licenses the default sibling without any false-positive clue.
+        self.check_trailing_comment_paths("mod.rs")
+
     def test_symlinked_owners_preserve_each_logical_child_directory(self):
         # Three logical owners share one physical file outside the src scan.
         physical = self.root / "shared/owner.rs"
