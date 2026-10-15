@@ -1,5 +1,6 @@
 //! Explicit owner-local recovery. Generic resume remains deliberately unchanged.
 mod adoption;
+mod publication;
 
 use chrono::Utc;
 use orbit_common::fs::git::run_git;
@@ -577,7 +578,17 @@ impl OrbitRuntime {
             Some(binding) => binding.branch.as_str(),
             None => field(worktree, "head_ref")?,
         };
-        let head = field(push, "local_sha")?;
+        let pushed = field(push, "local_sha")?;
+        let synced = field(sync, "head_sha")?;
+        let head = publication::published_head(
+            job,
+            &state,
+            &checkpoint,
+            sync,
+            push,
+            branch,
+            &self.paths().repo_root,
+        )?;
         let base_sha = field(sync, "base_sha")?;
         let base_branch = field(sync, "base")?;
         let number = field(pr, "pr_number")?;
@@ -600,7 +611,6 @@ impl OrbitRuntime {
             || field(push, "branch")? != branch
             || field(pr, "head")? != branch
             || field(prepared, "head_sha")? != field(sync, "head_sha_before")?
-            || field(sync, "head_sha")? != head
             || field(prepared, "base")? != base_branch
             || field(pr, "base")? != base_branch
             || field(prepared, "base_sha")? != base_sha
@@ -611,7 +621,7 @@ impl OrbitRuntime {
             || prepared.get("remote_sha") != sync.get("remote_sha_before")
             || push.get("remote_sha_before").is_none()
             || (push.get("remote_sha_before") != sync.get("remote_sha_before")
-                && push.get("remote_sha_before").and_then(Value::as_str) != Some(head))
+                && push.get("remote_sha_before").and_then(Value::as_str) != Some(pushed))
         {
             return Err(refuse("task, source branch and published PR disagree"));
         }
@@ -641,6 +651,8 @@ impl OrbitRuntime {
             Ok(output.stdout.trim().to_string())
         };
         for sha in [
+            synced,
+            pushed,
             head,
             base_sha,
             commit.head_sha.as_deref().unwrap_or_default(),
@@ -664,9 +676,9 @@ impl OrbitRuntime {
         // rather than treating a caller's after-head as provenance.
         if git(&["rev-parse", "--verify", &format!("{before}^{{commit}}")])? != before
             || !run_git(repo, &["merge-base", "--is-ancestor", committed, before])?.success
-            || !run_git(repo, &["merge-base", "--is-ancestor", base_sha, head])?.success
-            || sync.get("rewritten").and_then(Value::as_bool) != Some(before != head)
-            || (before != head
+            || !run_git(repo, &["merge-base", "--is-ancestor", base_sha, synced])?.success
+            || sync.get("rewritten").and_then(Value::as_bool) != Some(before != synced)
+            || (before != synced
                 && prepared.get("sync_required").and_then(Value::as_bool) != Some(true))
         {
             return Err(refuse(

@@ -97,6 +97,8 @@ impl Fixture {
             "git_push",
             "pr_open",
             "pr_complete",
+            "review_gate_settle",
+            "candidate_validate",
         ] {
             std::fs::copy(
                 Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -279,6 +281,95 @@ impl Fixture {
             answer,
             _env: env,
         }
+    }
+    /// Model the durable host checkpoints after a reviewer correction was published.
+    pub(super) fn publish_review(&mut self, landing: bool) {
+        let implementation = self.head.clone();
+        std::fs::write(self.repo.join("review.txt"), "reviewer correction\n").unwrap();
+        git(&self.repo, &["add", "review.txt"]);
+        git(&self.repo, &["commit", "-qm", "review: correct candidate"]);
+        self.head = git(&self.repo, &["rev-parse", "HEAD"]);
+        git(&self.repo, &["push", "-q", "origin", &self.branch]);
+        let mut answer: Value =
+            serde_json::from_slice(&std::fs::read(&self.answer).unwrap()).unwrap();
+        answer["headRefOid"] = json!(self.head);
+        std::fs::write(&self.answer, answer.to_string()).unwrap();
+        let settle = if landing {
+            "landing_review_gate_settle"
+        } else {
+            "review_gate_settle"
+        };
+        let validate = if landing {
+            "landing_review_validate"
+        } else {
+            "review_validate"
+        };
+        self.state.pipeline[settle] = json!({"gate":"passed","reviewer_fixed":true,
+            "implementation_head_sha":implementation,"reviewed_head_sha":self.head,"reviewed_base_sha":self.base});
+        self.state.pipeline[validate] = json!({"phase":"validate","decision":"passed",
+            "branch":self.branch,"tested_head":self.head});
+        if landing {
+            self.state.pipeline["landing_push"] = json!({"phase":"push","branch":self.branch,
+                "local_sha":self.head,"remote_sha_before":implementation});
+        } else {
+            self.state.pipeline["push"]["local_sha"] = json!(self.head);
+        }
+        let path = self
+            ._root
+            .path()
+            .join("global/resources/jobs/task_pr_pipeline.yaml");
+        let mut job: Value =
+            serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let steps = job["spec"]["steps"].as_array_mut().unwrap();
+        let offset = if landing { 6 } else { 4 };
+        steps.insert(
+            offset,
+            json!({"id":settle,"target":"activity:review_gate_settle"}),
+        );
+        steps.insert(offset + 1, json!({"id":validate,"target":"activity:candidate_validate",
+            "default_input":{"ownership_base_sha":format!("{{{{ steps.{settle}.output.implementation_head_sha }}}}")}}));
+        if landing {
+            steps.insert(
+                offset + 2,
+                json!({"id":"landing_push","target":"activity:git_push",
+                "default_input":{"lease_remote_sha":"{{ steps.push.output.local_sha }}",
+                    "pr_number":"{{ steps.pr_open.output.pr_number }}"}}),
+            );
+        }
+        self.state.step_states.clear();
+        self.state.step_outputs.clear();
+        self.state.step_output_pointers.clear();
+        for (index, step) in steps.iter().enumerate() {
+            let id = step["id"].as_str().unwrap();
+            if let Some(output) = self.state.pipeline.get(id).cloned() {
+                self.state
+                    .record_step(index as u32, JobRunState::Success, Some(output), None);
+                self.runtime
+                    .complete_job_run_step(
+                        &self.source.run_id,
+                        &JobRunStepParams {
+                            step_index: index,
+                            target_type: JobTargetType::Activity,
+                            target_id: id.into(),
+                            state: JobRunState::Success,
+                            started_at: self.source.created_at,
+                            finished_at: Utc::now(),
+                            duration_ms: Some(1),
+                            exit_code: Some(0),
+                            lock_wait_ms: None,
+                            agent_response_json: None,
+                            error_code: None,
+                            error_message: None,
+                        },
+                    )
+                    .unwrap();
+            }
+        }
+        self.state.compact_for_terminal(JobRunState::Cancelled);
+        std::fs::write(path, serde_yaml::to_string(&job).unwrap()).unwrap();
+        self.runtime
+            .write_run_state(&self.source.run_id, &self.state)
+            .unwrap();
     }
     pub(super) fn request(&self, action: &str) -> Value {
         json!({"id":self.source.run_id,"source_repair":{"action":action,"task_id":self.task}})

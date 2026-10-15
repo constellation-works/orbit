@@ -436,6 +436,14 @@ repair run through `orbit.workflow.run.resume` with
 Submit that fresh binding with a new `request_key` and a diagnosis of the
 remaining work to authorize another attempt.
 
+Inspection selects the final authenticated host publication, including a
+reviewer's correction before PR creation or before landing. A correction must
+extend the head its successful review settlement identifies, and successful
+host validation must name that exact corrected head. A before-landing push must
+also retain the original publication's lease and PR binding. Missing, failed or
+inconsistent review, validation or publication evidence refuses recovery; a
+local or remote head change alone never authorizes it.
+
 Inspection authenticates the repair's successful `resume_candidate` branch
 adoption against its immutable operator admission, durable reservation and run
 link. Its temporary setup branch may differ from the original PR branch. The
