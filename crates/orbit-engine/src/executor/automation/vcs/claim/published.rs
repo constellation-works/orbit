@@ -2,7 +2,7 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::automation::SourceRevision;
-use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery};
+use orbit_types::workflow::handoff::{AcceptedHandoff, HandoffCandidate, HandoffDelivery};
 
 use crate::context::RuntimeHost;
 
@@ -82,6 +82,27 @@ pub fn observe_published_candidate<H: RuntimeHost + ?Sized>(
     workspace_path: &Path,
     submitted: &HandoffCandidate,
 ) -> Result<HandoffCandidate, OrbitError> {
+    observe_published(host, workspace_path, submitted, false)
+}
+
+/// Re-observe an already accepted handoff for an authorized owner retry.
+/// The runtime supplies its immutable stored acceptance, never tool input.
+/// A different head requires the same fresh clean-base proof landing uses;
+/// the returned observation and every certificate remain on the accepted SHA.
+pub fn observe_accepted_published_handoff<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    accepted: &AcceptedHandoff,
+) -> Result<HandoffCandidate, OrbitError> {
+    observe_published(host, workspace_path, &accepted.handoff.candidate, true)
+}
+
+fn observe_published<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    submitted: &HandoffCandidate,
+    accepted: bool,
+) -> Result<HandoffCandidate, OrbitError> {
     let HandoffDelivery::PullRequest { number } = submitted.delivery else {
         return Err(refused(
             "owner observation of a published candidate requires a pull-request delivery",
@@ -114,12 +135,20 @@ pub fn observe_published_candidate<H: RuntimeHost + ?Sized>(
         | PrMergeState::Pending => {}
     }
 
-    DeliveryPin::pinned(
+    let mut pin = DeliveryPin::pinned(
         &submitted.source_branch,
         &submitted.base_branch,
         &submitted.candidate.commit,
-    )
-    .ensure_pinned_candidate(&status, &pr_number)?;
+    );
+    if accepted && status.head_sha.as_deref() != Some(&submitted.candidate.commit) {
+        super::super::landing_checks::verify_published_base_update(
+            workspace_path,
+            submitted,
+            &status,
+        )?;
+        pin.adopt_refreshed_candidate(status.head_sha.as_deref());
+    }
+    pin.ensure_pinned_candidate(&status, &pr_number)?;
 
     // `gh` resolves a bare PR number against the *checkout's* own remote, so
     // the delivery is already scoped to this repository. Comparing the URL it

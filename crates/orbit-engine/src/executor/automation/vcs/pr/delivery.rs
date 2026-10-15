@@ -89,7 +89,7 @@ impl DeliveryPin {
     }
 
     /// The task branch this run published, if recorded.
-    pub(super) fn head(&self) -> Option<&str> {
+    pub(in crate::executor::automation::vcs) fn head(&self) -> Option<&str> {
         self.head.as_deref()
     }
 

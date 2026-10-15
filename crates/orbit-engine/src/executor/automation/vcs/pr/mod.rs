@@ -18,8 +18,8 @@ mod merge;
 mod open;
 mod promote;
 
-pub(in crate::executor::automation::vcs) use answers::CheckState;
 pub use answers::PullRequestStatus;
+pub(in crate::executor::automation::vcs) use answers::{CheckState, ReviewDecision};
 pub(in crate::executor::automation::vcs) use answers::{read_pr_status, read_pr_status_before};
 pub(in crate::executor::automation) use attribution::ship_done_attribution;
 pub(in crate::executor::automation::vcs) use body::meaningful_execution_summary;

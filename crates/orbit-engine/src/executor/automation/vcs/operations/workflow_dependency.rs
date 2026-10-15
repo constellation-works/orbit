@@ -135,7 +135,7 @@ pub(super) fn dependency(
     })
 }
 
-fn job_names(id: &str, job: &Value) -> Result<Vec<String>, OrbitError> {
+pub(super) fn job_names(id: &str, job: &Value) -> Result<Vec<String>, OrbitError> {
     let name = match job.get("name") {
         None => id,
         Some(Value::String(name)) => name,

@@ -3,6 +3,7 @@ mod attribution;
 mod base_chase;
 mod base_claim;
 mod base_obsolescence;
+mod base_refresh;
 mod baseline;
 mod build_output;
 mod candidate_resume;

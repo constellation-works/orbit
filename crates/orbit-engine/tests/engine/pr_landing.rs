@@ -67,6 +67,7 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod absent_context;
 mod auto_fix;
 mod flaky;
 mod infrastructure;
@@ -7384,6 +7385,26 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
             auto_fix::seed_auto_fix_history(self, PR_AUTO_FIX_ADMITTED_EVENT, attempt);
         }
         Ok(orbit_engine::PrAutoFixAdmission::Decided(decision))
+    }
+
+    fn admit_pr_base_update(
+        &self,
+        _tasks: &[String],
+        request: &orbit_types::workflow::PrBaseUpdateReservation,
+    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
+        use orbit_types::workflow::{
+            PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission, decide_pr_base_update,
+        };
+        let decision = decide_pr_base_update(&self.history(TASK_ID), request);
+        if matches!(decision, PrBaseUpdateAdmission::Reserved) {
+            auto_fix::seed_auto_fix_history(self, PR_BASE_UPDATE_RESERVED_EVENT, request);
+            fs::write(
+                self.repo.parent().unwrap().join("forge/base-reserved"),
+                "reserved",
+            )
+            .unwrap();
+        }
+        Ok(decision)
     }
 
     fn admit_pr_infrastructure(

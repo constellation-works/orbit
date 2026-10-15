@@ -293,6 +293,17 @@ completion authorization. Only a stopped attempt, or an uncertain merge intent w
 owner job is no longer live, is eligible. A stale expectation refuses without reserving
 another attempt. The foreign leaf binding and the immutable handoff remain unchanged.
 
+For an already accepted handoff, retry and landing share the provider
+base-update proof: exact repository/PR/branches, fresh successful base fetch,
+base ancestry, two exact parents and the computed clean merge tree. The owner
+observes the stored acceptance and its original evidence; it never substitutes
+a certificate for the provider head. Initial settlement still requires the
+exact submitted head. Unknown or edited source, a foreign or rewound base,
+unreadable native evidence and unsupported proof refuse before dispatch.
+A provider-reported existing merge must also be contained in the fetched
+landing branch and have the exact delivery tree. This permits normal settlement
+of a clean already-merged provider update without sending another merge.
+
 The existing claim journal atomically records the operator request receipt and reserves
 its attempt before pipeline submission. The job uses the normal handoff/attempt action
 key. Concurrent independent requests cannot reserve a second attempt from the same
@@ -308,6 +319,17 @@ merge. Otherwise all repository, remote head/base, review, required-check, nativ
 certificate, lease and merge-certainty checks still apply. UNKNOWN/PENDING uses the
 existing bounded wait; administrative or review refusal is not widened into a wait.
 A candidate that needs repair must produce a fresh validated handoff instead.
+
+Under existing completion/auto-fix authority, an otherwise successful old head
+with absent required contexts has one bounded base-refresh path. Adapter-owned
+PR-event/integration evidence and complete old/base workflow blobs must prove
+non-emission and exact supported emission on the fresh descendant base. The
+inherited-failure and absent-context paths share one durable owner-task
+reservation and absolute deadline across attempts and runs. Reservation
+precedes the expected-head provider update; an unknown outcome is observed,
+never repeated. Current effective policy and every exact new-head required and
+owner-owed success gate the ordinary merge. Other conditional/dynamic or incomplete
+emission evidence refuses; it grants no source-repair or policy-bypass authority.
 
 Save the request key and reuse the exact input after an uncertain reply. The dashboard
 retains its key in browser storage before sending; if storage is unavailable it refuses

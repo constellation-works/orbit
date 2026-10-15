@@ -246,6 +246,30 @@ pub trait RuntimeHost: Send + Sync {
         ))
     }
 
+    /// Recheck current accepted handoff authority/native evidence and reserve
+    /// its base update under the same owner lock. Generic hosts refuse.
+    fn admit_handoff_base_update(
+        &self,
+        _handoff_id: &str,
+        _request: &orbit_types::workflow::PrBaseUpdateReservation,
+    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
+        Ok(orbit_types::workflow::PrBaseUpdateAdmission::Refused(
+            "current handoff authority is unavailable".into(),
+        ))
+    }
+
+    /// Reserve the one cumulative provider base update under the owning task
+    /// lock. A host without durable owner admission cannot mutate.
+    fn admit_pr_base_update(
+        &self,
+        _task_ids: &[String],
+        _request: &orbit_types::workflow::PrBaseUpdateReservation,
+    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
+        Ok(orbit_types::workflow::PrBaseUpdateAdmission::Refused(
+            "this host cannot durably reserve a base update".into(),
+        ))
+    }
+
     // ── Before-PR review coverage [ORB-11333] ───────────────────────────
 
     /// Record how a reviewed candidate actually landed after a managed

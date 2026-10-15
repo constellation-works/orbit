@@ -108,12 +108,32 @@ pub(super) struct ReviewedHandoff {
 
 impl ReviewedHandoff {
     pub(super) fn accept(timing: ReviewTiming) -> Self {
+        Self::accept_with_commands(timing, Vec::new())
+    }
+
+    pub(super) fn accept_with_commands(timing: ReviewTiming, commands: Vec<String>) -> Self {
         let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+        if !commands.is_empty() {
+            let orbit = root.path().join(OWNER).join("repo/.orbit");
+            std::fs::create_dir_all(&orbit).unwrap();
+            std::fs::write(
+                orbit.join("config.toml"),
+                format!(
+                    "[workflow]\nrequired_validation_commands = {}\n",
+                    serde_json::to_string(&commands).unwrap()
+                ),
+            )
+            .unwrap();
+        }
         let (owner, repo) = open_runtime(root.path(), OWNER);
         let task_id = backlog_task(&owner, &repo, "src/work.rs", None);
 
         git(&repo, &["init", "-q", "-b", "main"]);
         std::fs::write(repo.join(".gitignore"), "/.orbit/\n").unwrap();
+        if !commands.is_empty() {
+            std::fs::create_dir_all(repo.join(".github/workflows")).unwrap();
+            std::fs::write(repo.join(".github/workflows/ci.yml"),"name: CI\non: [pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo test\n").unwrap();
+        }
         git(&repo, &["add", "-A"]);
         git(&repo, &["commit", "-q", "-m", "baseline"]);
         git(
@@ -174,7 +194,7 @@ impl ReviewedHandoff {
                 contract_version: REVIEW_CONTRACT_VERSION,
                 crew: Some("reviewer".into()),
                 budget: ReviewBudget::default(),
-                required_validation_commands: Some(vec![]),
+                required_validation_commands: Some(commands.clone()),
                 baseline_commands: Vec::new(),
                 host_evidence: Vec::new(),
             }),
@@ -251,7 +271,7 @@ impl ReviewedHandoff {
 
         // The leaf's gate issued this certificate and sent it as claim evidence.
         let task = owner.get_task(&task_id).unwrap();
-        let certificate = ReviewCertificate {
+        let mut certificate = ReviewCertificate {
             schema_version: REVIEW_CONTRACT_VERSION,
             attempt_id: "follower-attempt".into(),
             lineage_key: "follower-lineage".into(),
@@ -283,7 +303,7 @@ impl ReviewedHandoff {
                 deferred: Vec::new(),
                 baseline: None,
             }],
-            required_validation_commands: Some(vec![]),
+            required_validation_commands: Some(commands.clone()),
             baseline_commands: Vec::new(),
             validation_complete: true,
             reviewer: ReviewerIdentity {
@@ -312,6 +332,15 @@ impl ReviewedHandoff {
             host_validation: Vec::new(),
             resumed_hold_attempt: None,
         };
+        if !commands.is_empty() {
+            certificate.validation = commands
+                .iter()
+                .map(|command| ReviewValidation {
+                    command: command.clone(),
+                    ..certificate.validation[0].clone()
+                })
+                .collect();
+        }
         let content = serde_json::to_vec(&certificate).unwrap();
         let reference = HandoffArtifactRef {
             path: REVIEW_GATE_ARTIFACT.into(),
@@ -349,7 +378,7 @@ impl ReviewedHandoff {
             ReviewTiming::BeforeLanding => HandoffReviewDisposition::BeforeLanding(evidence),
             _ => HandoffReviewDisposition::BeforePr(evidence),
         };
-        let handoff = TaskHandoff {
+        let mut handoff = TaskHandoff {
             schema_version: 1,
             workspace_id: owner.workspace_id().unwrap(),
             task_id: task_id.clone(),
@@ -373,12 +402,63 @@ impl ReviewedHandoff {
             validation: vec![],
             footprint_widening: vec![],
         };
+        if !commands.is_empty() {
+            git(&repo, &["checkout", "-q", &branch]);
+            for (index, command) in commands.iter().enumerate() {
+                let output = std::process::Command::new("sh")
+                    .args(["-c", command])
+                    .current_dir(&repo)
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "fixture native validation runs on the original candidate"
+                );
+                let log = orbit_types::workflow::handoff::HandoffValidationLog {
+                    schema_version: 1,
+                    workspace_id: owner.workspace_id().unwrap(),
+                    task_id: task_id.clone(),
+                    claim_id: claim.claim_id.clone(),
+                    machine_id: FOLLOWER.into(),
+                    run_id: "leaf".into(),
+                    candidate: handoff.candidate.clone(),
+                    tested_head: candidate.commit.clone(),
+                    command: command.clone(),
+                    exit_code: 0,
+                    output: String::from_utf8_lossy(&output.stdout).into_owned(),
+                    known_red: None,
+                    flaky: None,
+                };
+                let content = serde_json::to_vec(&log).unwrap();
+                let reference = HandoffArtifactRef {
+                    path: format!("validation/native-gate-{index}.json"),
+                    sha256: lower_hex(Sha256::digest(&content)),
+                };
+                owner
+                    .mutate_execution_claim(
+                        Some(&worker),
+                        &format!("native-gate-{index}"),
+                        &ClaimMutation::Evidence(ClaimEvidence {
+                            artifacts: vec![TaskArtifact {
+                                path: reference.path.clone(),
+                                content,
+                                media_type: "application/json".into(),
+                                created_by: None,
+                            }],
+                            ..Default::default()
+                        }),
+                    )
+                    .unwrap();
+                handoff.validation.push(reference);
+            }
+            git(&repo, &["checkout", "-q", "main"]);
+        }
         // The provider read and Git observation the settle tool makes, standing
         // in for a published pull request no test here has.
         let observation = HandoffObservation {
             footprint_widening: vec![],
             candidate: handoff.candidate.clone(),
-            required_commands: vec![],
+            required_commands: commands,
             owner_completion_authority: None,
             review: Some(HandoffReviewObservation {
                 reviewed_base_sha: base.commit.clone(),

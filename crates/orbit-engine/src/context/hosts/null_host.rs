@@ -277,6 +277,24 @@ pub trait NullRuntimeHost: Send + Sync {
             "this host keeps no auto-fix ledger".to_string(),
         ))
     }
+    fn admit_handoff_base_update(
+        &self,
+        _handoff_id: &str,
+        _request: &orbit_types::workflow::PrBaseUpdateReservation,
+    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
+        Ok(orbit_types::workflow::PrBaseUpdateAdmission::Refused(
+            "current handoff authority is unavailable".into(),
+        ))
+    }
+    fn admit_pr_base_update(
+        &self,
+        _task_ids: &[String],
+        _request: &orbit_types::workflow::PrBaseUpdateReservation,
+    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
+        Ok(orbit_types::workflow::PrBaseUpdateAdmission::Refused(
+            "no base update ledger".into(),
+        ))
+    }
     fn admit_pr_infrastructure(
         &self,
         _execution: &str,
@@ -953,6 +971,20 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
         request: &PrAutoFixRequest,
     ) -> Result<PrAutoFixAdmission, OrbitError> {
         NullRuntimeHost::admit_pr_auto_fix(self, request)
+    }
+    fn admit_handoff_base_update(
+        &self,
+        handoff_id: &str,
+        request: &orbit_types::workflow::PrBaseUpdateReservation,
+    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
+        NullRuntimeHost::admit_handoff_base_update(self, handoff_id, request)
+    }
+    fn admit_pr_base_update(
+        &self,
+        task_ids: &[String],
+        request: &orbit_types::workflow::PrBaseUpdateReservation,
+    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
+        NullRuntimeHost::admit_pr_base_update(self, task_ids, request)
     }
     fn admit_pr_infrastructure(
         &self,

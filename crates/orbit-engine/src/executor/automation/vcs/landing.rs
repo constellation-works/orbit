@@ -49,7 +49,8 @@ use super::super::ci::bounded_u64;
 use super::super::input::input_string_field;
 use super::git::{fetch_remote_base, git_command_success, git_output};
 use super::landing_checks::{
-    CheckRecovery, CheckRecoveryStep, failed_checks, recover_failed_checks, verified_base_update,
+    CheckRecovery, CheckRecoveryStep, failed_checks, recover_failed_checks,
+    verify_published_base_update,
 };
 use super::operations;
 use super::pr::{
@@ -288,7 +289,6 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
     let workspace = context.workspace_path.clone();
     let workspace_path = workspace.to_string_lossy().into_owned();
     let mut pin = pin_for(candidate);
-    let mut recovery = CheckRecovery::default();
 
     let max_wait_seconds = bounded_u64(
         input,
@@ -306,7 +306,14 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
 
     let started = Instant::now();
     let deadline_ms =
-        super::completion_deadline::now_ms()?.saturating_add(max_wait_seconds.saturating_mul(1000));
+        super::completion_deadline::now_ms()?.saturating_add(if max_wait_seconds == 0 {
+            // Zero disables poll waits; synchronous provider operations still
+            // receive a finite recovery deadline.
+            60_000
+        } else {
+            max_wait_seconds.saturating_mul(1000)
+        });
+    let mut recovery = CheckRecovery::before(deadline_ms);
     let mut waited_seconds = 0_u64;
     let mut intent: Option<String> = None;
     loop {
@@ -332,6 +339,26 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
         // [ORB-15956] A branch update this landing (or an earlier attempt)
         // requested moved the head onto a verified merge with the base.
         let updated_head = adopt_base_update(&mut pin, context, &status);
+        let refresh = super::base_refresh::recover(
+            host,
+            &workspace,
+            std::slice::from_ref(&context.task_id),
+            &context.handoff_id,
+            candidate,
+            &status,
+            deadline_ms,
+            false,
+            Some(&context.handoff_id),
+        )
+        .map_err(|error| stop(host, context, &error.to_string()).unwrap_or(error))?;
+        if matches!(refresh, super::base_refresh::RefreshStep::Changed) {
+            continue;
+        }
+        let mut refresh_wait = matches!(
+            refresh,
+            super::base_refresh::RefreshStep::Wait
+                | super::base_refresh::RefreshStep::Adopted { waiting: true }
+        );
         if let PrMergeState::Merged = state {
             let delivered = match pin.ensure_delivered(&status, &pr_number) {
                 Ok(delivered) => delivered,
@@ -388,6 +415,28 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 )?);
             }
         };
+        if !refresh_wait && matches!(state, PrMergeState::Blocked(_)) {
+            match super::base_refresh::recover(
+                host,
+                &workspace,
+                std::slice::from_ref(&context.task_id),
+                &context.handoff_id,
+                candidate,
+                &status,
+                deadline_ms,
+                true,
+                Some(&context.handoff_id),
+            )
+            .map_err(|error| stop(host, context, &error.to_string()).unwrap_or(error))?
+            {
+                super::base_refresh::RefreshStep::Changed => continue,
+                super::base_refresh::RefreshStep::Wait
+                | super::base_refresh::RefreshStep::Adopted { waiting: true } => {
+                    refresh_wait = true
+                }
+                _ => {}
+            }
+        }
         waited_seconds = waited_seconds.max(started.elapsed().as_secs());
         // [ORB-15677] [ORB-15812] The review owed these checks to the pull
         // request's hosted CI instead of running them: nothing merges until
@@ -416,7 +465,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
             }
             _ => None,
         };
-        let mut waiting_on_recovery = false;
+        let mut waiting_on_recovery = refresh_wait;
         if let Some(reason) = check_reason {
             if failed.is_empty() {
                 return Err(stop(
@@ -501,6 +550,28 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                         max_wait_seconds,
                         &context.owed_hosted_checks,
                     )?);
+                }
+                if updated_head.is_some() {
+                    let current = host.run_private_vcs_operation(operations::CI_CURRENT_GATES, json!({"workspace_path":workspace,"pr":pr_number,"head_sha":status.head_sha,"head_branch":status.head_branch,"base_branch":status.base_branch,"deadline_ms":deadline_ms}))
+                        .map_err(|error| stop(host,context,&error.to_string()).unwrap_or(error))?;
+                    if current["gates_passed"] != true {
+                        // A newly required context that has not succeeded is
+                        // still a gate, including on a provider-reported CLEAN.
+                        if max_wait_seconds == 0 {
+                            return Err(landing_timeout(
+                                host,
+                                context,
+                                number,
+                                max_wait_seconds,
+                                &context.owed_hosted_checks,
+                            )?);
+                        }
+                        let delay = poll_interval_seconds
+                            .min(max_wait_seconds.saturating_sub(waited_seconds));
+                        sleep(Duration::from_secs(delay));
+                        waited_seconds = waited_seconds.saturating_add(delay);
+                        continue;
+                    }
                 }
                 let capabilities = resolve_permitted_merge(host, &workspace_path, &pr_number)
                     .map_err(|error| {
@@ -956,32 +1027,10 @@ fn adopt_base_update(
     {
         return None;
     }
-    if pin.candidate_sha() != Some(head)
-        && git_command_success(&context.workspace_path, &["remote", "get-url", "origin"])
-            .unwrap_or(false)
-        && let Err(error) = fetch_remote_base(&context.workspace_path, &candidate.landing_branch)
-    {
-        tracing::warn!(
-            head,
-            %error,
-            "handoff_land: the landing ref could not be refreshed to verify the pull request's \
-             updated head"
-        );
-        return None;
+    if pin.candidate_sha() == Some(head) {
+        return Some(head.to_string());
     }
-    let landing = resolve_landing_ref(
-        &context.workspace_path,
-        &candidate.landing_branch,
-        &candidate.delivery,
-    )
-    .ok()?;
-    match verified_base_update(
-        &context.workspace_path,
-        &candidate.candidate.commit,
-        head,
-        &candidate.source_branch,
-        &landing,
-    ) {
+    match verify_published_base_update(&context.workspace_path, candidate, status) {
         Ok(()) => {
             if pin.candidate_sha() != Some(head) {
                 pin.adopt_refreshed_candidate(Some(head));
@@ -991,7 +1040,7 @@ fn adopt_base_update(
         Err(refusal) => {
             tracing::warn!(
                 head,
-                refusal,
+                %refusal,
                 "handoff_land: the pull request's head is not a verified base update of the \
                  candidate"
             );

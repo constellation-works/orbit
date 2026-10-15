@@ -93,6 +93,7 @@ impl CheckFailureClass {
 pub(super) struct CheckRecovery {
     rerun: bool,
     updated: bool,
+    deadline_ms: u64,
     /// Failed jobs already acted on, so a rollup that still shows them
     /// before the provider registers the rerun or update waits instead.
     handled: BTreeSet<u64>,
@@ -101,6 +102,12 @@ pub(super) struct CheckRecovery {
 }
 
 impl CheckRecovery {
+    pub(super) fn before(deadline_ms: u64) -> Self {
+        Self {
+            deadline_ms,
+            ..Default::default()
+        }
+    }
     /// The actions this attempt took, for the landing's completion evidence.
     pub(super) fn evidence(&self) -> Option<Value> {
         (!self.actions.is_empty()).then(|| json!(self.actions))
@@ -291,9 +298,13 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
         CheckFailureClass::Transient => Ok(CheckRecoveryStep::Stop(evidence(
             "it failed again after its one rerun, so the candidate stays in review",
         ))),
-        CheckFailureClass::Inherited if recovery.updated => Ok(CheckRecoveryStep::Stop(evidence(
-            "it failed again after one branch update, so the candidate stays in review",
-        ))),
+        CheckFailureClass::Inherited
+            if recovery.updated || head != context.candidate.candidate.commit =>
+        {
+            Ok(CheckRecoveryStep::Stop(evidence(
+                "it failed again after one branch update, so the candidate stays in review",
+            )))
+        }
         CheckFailureClass::Inherited => {
             let Some(tip) = moved_tip.filter(|tip| !contains(workspace, tip, head)) else {
                 return Ok(CheckRecoveryStep::Stop(evidence(
@@ -301,14 +312,37 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
                      candidate stays in review",
                 )));
             };
-            host.run_private_vcs_operation(
+            let request = orbit_types::workflow::PrBaseUpdateReservation {
+                execution: context.handoff_id.clone(),
+                repository: context.candidate.repository.clone(),
+                pr_number: pr.to_string(),
+                head_sha: head.into(),
+                head_branch: context.candidate.source_branch.clone(),
+                base_branch: context.candidate.base_branch.clone(),
+                base_sha: tip.into(),
+                deadline_ms: recovery.deadline_ms,
+                evidence: json!({"cause":"inherited","classification":classified}),
+            };
+            match host.admit_handoff_base_update(&context.handoff_id, &request)? {
+                orbit_types::workflow::PrBaseUpdateAdmission::Reserved => {}
+                orbit_types::workflow::PrBaseUpdateAdmission::Observe(previous) => {
+                    super::completion_deadline::Deadline(previous.deadline_ms).remaining()?;
+                    return Ok(CheckRecoveryStep::Wait);
+                }
+                orbit_types::workflow::PrBaseUpdateAdmission::Refused(reason) => {
+                    return Ok(CheckRecoveryStep::Stop(reason));
+                }
+            }
+            // The reservation survives an unknown provider reply. Re-observe
+            // its actual head; never repeat the expected-head update.
+            let _reply = host.run_private_vcs_operation(
                 operations::PR_UPDATE_BRANCH,
                 json!({
                     "pr": pr.to_string(),
                     "expected_head_sha": head,
                     "workspace_path": workspace.to_string_lossy(),
                 }),
-            )?;
+            );
             recovery.updated = true;
             recovery.handled.extend(jobs.iter().map(|job| job.job_id));
             recovery.actions.push(format!(
@@ -765,6 +799,123 @@ pub(super) fn verified_base_update(
         return Err(format!(
             "head {head} changes more than the merge of candidate {candidate} with {base_side}"
         ));
+    }
+    Ok(())
+}
+
+/// Shared owner retry/landing proof for a provider base-only update. A cached
+/// base never stands in for a successful fetch. Source and native evidence
+/// continue to describe the original immutable accepted candidate.
+pub(super) fn verify_published_base_update(
+    workspace: &Path,
+    candidate: &orbit_types::workflow::handoff::HandoffCandidate,
+    status: &PullRequestStatus,
+) -> Result<(), OrbitError> {
+    let refuse =
+        |reason: String| OrbitError::Execution(format!("provider base update refused: {reason}"));
+    let orbit_types::workflow::handoff::HandoffDelivery::PullRequest { number } =
+        candidate.delivery
+    else {
+        return Err(refuse("published delivery required".into()));
+    };
+    super::pr::DeliveryPin::pinned(
+        &candidate.source_branch,
+        &candidate.base_branch,
+        &candidate.candidate.commit,
+    )
+    .ensure_candidate_identity(status, &number.to_string())?;
+    if status.number != Some(number)
+        || status.url.as_deref()
+            != Some(&format!(
+                "https://github.com/{}/pull/{number}",
+                candidate.repository
+            ))
+    {
+        return Err(refuse("repository or PR changed".into()));
+    }
+    let head = status
+        .head_sha
+        .as_deref()
+        .ok_or_else(|| refuse("head unavailable".into()))?;
+    if !matches!(head.len(), 40 | 64) || !head.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(refuse(
+            "provider head is not an exact commit identity".into(),
+        ));
+    }
+    let remote = git_command_success(workspace, &["remote", "get-url", "origin"])?;
+    let landing = if remote {
+        super::git::fetch_remote_base(workspace, &candidate.landing_branch)?;
+        format!("origin/{}", candidate.landing_branch)
+    } else {
+        candidate.landing_branch.clone()
+    };
+    if !contains(workspace, &candidate.base.commit, &landing) {
+        return Err(refuse("landing base rewound or unrelated".into()));
+    }
+    verified_base_update(
+        workspace,
+        &candidate.candidate.commit,
+        head,
+        &candidate.source_branch,
+        &landing,
+    )
+    .map_err(refuse)?;
+    let parents = git_output(workspace, &["rev-list", "--parents", "-n", "1", head])?;
+    let base_side = parents
+        .split_whitespace()
+        .skip(1)
+        .find(|parent| *parent != candidate.candidate.commit)
+        .ok_or_else(|| refuse("base parent unavailable".into()))?;
+    if !contains(workspace, &candidate.base.commit, base_side)
+        || contains(workspace, base_side, &candidate.candidate.commit)
+    {
+        return Err(refuse(
+            "provider base parent is rewound, unrelated or has not advanced".into(),
+        ));
+    }
+    if matches!(
+        super::pr::classify_pr_state(status),
+        super::pr::PrMergeState::Merged
+    ) {
+        let merge = status
+            .merge_commit
+            .as_deref()
+            .ok_or_else(|| refuse("merge commit unavailable".into()))?;
+        if !matches!(merge.len(), 40 | 64) || !merge.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(refuse(
+                "provider merge is not an exact commit identity".into(),
+            ));
+        }
+        if !contains(workspace, merge, &landing) {
+            return Err(refuse(
+                "reported merge is absent from the fetched landing base".into(),
+            ));
+        }
+        let parents = git_output(workspace, &["rev-list", "--parents", "-n", "1", merge])?;
+        let parent = parents
+            .split_whitespace()
+            .nth(1)
+            .ok_or_else(|| refuse("merge parent unavailable".into()))?;
+        let clean = git_output(workspace, &["merge-tree", "--write-tree", head, parent])?;
+        let tree = git_output(workspace, &["rev-parse", &format!("{merge}^{{tree}}")])?;
+        if clean.lines().next().map(str::trim) != Some(tree.trim()) {
+            return Err(refuse(
+                "reported merge tree does not deliver this provider head".into(),
+            ));
+        }
+    } else if remote {
+        let actual = git_output(
+            workspace,
+            &[
+                "ls-remote",
+                "--heads",
+                "origin",
+                &format!("refs/heads/{}", candidate.source_branch),
+            ],
+        )?;
+        if actual.split_whitespace().next() != Some(head) {
+            return Err(refuse("remote/provider head lease changed".into()));
+        }
     }
     Ok(())
 }

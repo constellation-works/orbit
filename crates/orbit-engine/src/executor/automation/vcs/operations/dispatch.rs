@@ -21,6 +21,9 @@ use super::{CI_PREREQUISITE_EVIDENCE, CI_PREREQUISITE_OBSERVE};
 /// through public tool authorization or activity allowlists.
 pub(crate) fn run(operation: &str, input: &Value) -> Result<Value, OrbitError> {
     match operation {
+        super::CI_CURRENT_GATES => super::emission::current_gates(input),
+        super::CI_EMISSION_EVIDENCE => super::emission::evidence(input),
+        super::CI_EMISSION_OBSERVE => super::emission::observe(input),
         PUSH => push(input),
         CANDIDATE_REF_PUSH => push_candidate_ref(input),
         PR_LIST => pr_list(input),
