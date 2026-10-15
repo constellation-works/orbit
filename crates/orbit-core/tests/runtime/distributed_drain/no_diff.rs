@@ -247,6 +247,82 @@ struct CleanLeaf {
     lose_evidence_read: Arc<Mutex<bool>>,
 }
 
+/// Seed the unobserved clean Git graph in-process. Every leaf still has its
+/// own objects, index, refs and bare origin, and its commit names its real task.
+/// Production actions below continue to use their ordinary Git subprocesses.
+fn prepare_clean_owner(pair: &Pair, task: &str) -> String {
+    let url = "https://github.com/owner/repository.git";
+    let repo = &pair.owner_repo;
+    std::fs::write(repo.join(".gitignore"), "/.orbit/\n").unwrap();
+    let owner = git2::Repository::init_opts(
+        repo,
+        git2::RepositoryInitOptions::new().initial_head("main"),
+    )
+    .unwrap();
+    let mut index = owner.index().unwrap();
+    index
+        .add_all(["*"], git2::IndexAddOption::DEFAULT, None)
+        .unwrap();
+    index.write().unwrap();
+    let tree = owner.find_tree(index.write_tree().unwrap()).unwrap();
+    let author = git2::Signature::now("Orbit Test", "test@orbit.invalid").unwrap();
+    let base = owner
+        .commit(
+            Some("HEAD"),
+            &author,
+            &author,
+            &format!("Deliver [{task}]"),
+            &tree,
+            &[],
+        )
+        .unwrap();
+    let origin = repo.with_file_name("origin.git");
+    git2::Repository::init_opts(
+        &origin,
+        git2::RepositoryInitOptions::new()
+            .bare(true)
+            .initial_head("main"),
+    )
+    .unwrap();
+    let redirect = format!("url.{}.insteadOf", origin.display());
+    owner.config().unwrap().set_str(&redirect, url).unwrap();
+    owner
+        .remote("origin", url)
+        .unwrap()
+        .push(&["refs/heads/main:refs/heads/main"], None)
+        .unwrap();
+    base.to_string()
+}
+
+/// Match the replica's initial fetch/reset after the leaf has been admitted.
+fn prepare_clean_follower(pair: &Pair, task: &str, base: &str) {
+    let url = "https://github.com/owner/repository.git";
+    let redirect = format!(
+        "url.{}.insteadOf",
+        pair.owner_repo.with_file_name("origin.git").display()
+    );
+    let follower = git2::Repository::init_opts(
+        &pair.follower_repo,
+        git2::RepositoryInitOptions::new().initial_head("main"),
+    )
+    .unwrap();
+    follower.config().unwrap().set_str(&redirect, url).unwrap();
+    follower
+        .remote("origin", url)
+        .unwrap()
+        .fetch(&["main"], None, None)
+        .unwrap();
+    let commit = follower
+        .find_commit(git2::Oid::from_str(base).unwrap())
+        .unwrap();
+    follower
+        .reset(commit.as_object(), git2::ResetType::Hard, None)
+        .unwrap();
+    let branch = format!("orbit/{task}");
+    follower.branch(&branch, &commit, false).unwrap();
+    follower.set_head(&format!("refs/heads/{branch}")).unwrap();
+}
+
 impl CleanLeaf {
     fn new(already_landed: bool, completion: &str) -> Self {
         Self::build(already_landed, completion, &[], true)
@@ -412,22 +488,7 @@ impl CleanLeaf {
         let config = naming(gated.is_some_and(GateOn::follower)) + follower_config;
         let pair = Pair::with_owner_config(&owner_config, &[None]);
         let task = pair.tasks[0].clone();
-        let repo = &pair.owner_repo;
-        std::fs::write(repo.join(".gitignore"), "/.orbit/\n").unwrap();
-        git(repo, &["init", "-q", "-b", "main"]);
-        git(repo, &["add", "-A"]);
-        git(repo, &["commit", "-q", "-m", &format!("Deliver [{task}]")]);
-        git(
-            repo,
-            &[
-                "remote",
-                "add",
-                "origin",
-                "https://github.com/owner/repository.git",
-            ],
-        );
-        publish_origin(repo);
-        let base = git(repo, &["rev-parse", "HEAD"]).trim().to_string();
+        let base = prepare_clean_owner(&pair, &task);
         if !tags.is_empty() {
             pair.wire
                 .owner
@@ -458,34 +519,8 @@ impl CleanLeaf {
         let leaf = pair.launched_leaf(&drain, 1, std::process::id());
         assert_eq!(pair.claimed_task(&leaf), task);
 
+        prepare_clean_follower(&pair, &task, &base);
         let follower = &pair.follower_repo;
-        git(follower, &["init", "-q", "-b", "main"]);
-        git(
-            follower,
-            &[
-                "remote",
-                "add",
-                "origin",
-                "https://github.com/owner/repository.git",
-            ],
-        );
-        git(
-            follower,
-            &[
-                "config",
-                &format!(
-                    "url.{}.insteadOf",
-                    repo.with_file_name("origin.git").display()
-                ),
-                "https://github.com/owner/repository.git",
-            ],
-        );
-        git(follower, &["fetch", "-q", "origin", "main"]);
-        git(follower, &["reset", "-q", "--hard", "origin/main"]);
-        git(
-            follower,
-            &["checkout", "-q", "-b", &format!("orbit/{task}")],
-        );
         std::fs::write(follower.join(".orbit/config.toml"), &config).unwrap();
         let record = pair.admission(&leaf);
         let claim = record.receipt.as_ref().unwrap().claim.as_ref().unwrap();

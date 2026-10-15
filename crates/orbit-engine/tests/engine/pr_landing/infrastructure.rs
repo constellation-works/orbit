@@ -9,6 +9,25 @@ fn fixture_with_workflow(row: &Path) -> Fixture {
 }
 
 fn fixture_with_source(row: &Path, source: &str) -> Fixture {
+    // Most counterfactuals use the same workflow. Prepare its real commits and
+    // published refs once, before any public action or evidence mutation, then
+    // copy every Git/forge file into an independent row. Other sources (notably
+    // the malformed-DAG control) still receive their own preparation.
+    if source == SOURCE {
+        thread_local! {
+            static WORKFLOW: std::cell::RefCell<Option<Fixture>> = const { std::cell::RefCell::new(None) };
+        }
+        return WORKFLOW.with(|slot| {
+            let mut template = slot.borrow_mut();
+            template
+                .get_or_insert_with(|| prepare_source(row, source))
+                .copy_to(row)
+        });
+    }
+    prepare_source(row, source)
+}
+
+fn prepare_source(row: &Path, source: &str) -> Fixture {
     let initial = Fixture::new(row);
     initial.commit_on_base(".github/workflows/guard.yml", source);
     git(&initial.repo, &["rebase", BASE]);

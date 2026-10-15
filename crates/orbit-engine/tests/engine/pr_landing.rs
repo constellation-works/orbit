@@ -6708,19 +6708,26 @@ impl Fixture {
         TEMPLATE.with(|slot| {
             let mut template = slot.borrow_mut();
             let seed = template.get_or_insert_with(|| Self::fresh(sandbox));
-            let root = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
-            git_fixture::copy_template(seed._root.path(), root.path());
-            let repo = root.path().join("repo").canonicalize().unwrap();
-            let forge = root.path().join("forge");
-            fs::write(sandbox.join("active-forge"), path_str(&forge)).unwrap();
-            Self {
-                _root: root,
-                repo,
-                forge,
-                base_sha: seed.base_sha.clone(),
-                candidate: seed.candidate.clone(),
-            }
+            seed.copy_to(sandbox)
         })
+    }
+
+    /// Copy only pristine preparation, before any action or scripted response
+    /// mutates it. Objects, refs, index and forge files belong to this copy;
+    /// the template's local remote URL is rewritten by `copy_template`.
+    fn copy_to(&self, sandbox: &Path) -> Self {
+        let root = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
+        git_fixture::copy_template(self._root.path(), root.path());
+        let repo = root.path().join("repo").canonicalize().unwrap();
+        let forge = root.path().join("forge");
+        fs::write(sandbox.join("active-forge"), path_str(&forge)).unwrap();
+        Self {
+            _root: root,
+            repo,
+            forge,
+            base_sha: self.base_sha.clone(),
+            candidate: self.candidate.clone(),
+        }
     }
 
     fn fresh(sandbox: &Path) -> Self {
