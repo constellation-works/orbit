@@ -446,18 +446,28 @@ fn is_successful_test_result(lowered: &str) -> bool {
         || status.starts_with("ignored ")
 }
 
-/// Cap `text` at `max_bytes` while keeping `anchor_line`, not the head.
-/// Strip the `job<TAB>step<TAB>timestamp ` columns a runner log carries.
+/// Strip a raw timestamp or the `job<TAB>step<TAB>timestamp ` runner columns,
+/// preserving payload tabs and indentation used to distinguish printed source.
 pub fn log_payload(line: &str) -> &str {
+    // Raw job API logs have no job/step columns. Their payload can contain
+    // arbitrary tabs, so recognize the leading timestamp before splitting.
+    if let Some(payload) = timestamp_payload(line) {
+        return payload;
+    }
     let mut columns = line.splitn(3, '\t');
     let rest = match (columns.next(), columns.next(), columns.next()) {
         (Some(_job), Some(_step), Some(rest)) => rest,
         _ => line,
     };
-    match rest.split_once(' ') {
-        Some((first, tail)) if first.contains('T') && first.ends_with('Z') => tail,
-        _ => rest,
-    }
+    timestamp_payload(rest).unwrap_or(rest)
+}
+
+fn timestamp_payload(line: &str) -> Option<&str> {
+    line.split_once(' ')
+        .filter(|(prefix, _)| {
+            prefix.ends_with('Z') && prefix.contains('T') && !prefix.contains('\t')
+        })
+        .map(|(_, payload)| payload)
 }
 
 /// Payload used for classification and the normalized signature: runner

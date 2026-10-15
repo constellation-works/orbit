@@ -1009,7 +1009,10 @@ fn auto_fix_anchors_emitted_failure_after_printed_commands_and_before_cleanup() 
             for case in [
                 "raw",
                 "raw_timestamp_tabs",
+                "raw_timestamp_tabbed_error",
+                "raw_timestamp_tabbed_compiler",
                 "columns",
+                "columns_tabbed_compiler",
                 "successful_step",
                 "annotation",
                 "compiler",
@@ -1048,6 +1051,13 @@ fn auto_fix_anchors_emitted_failure_after_printed_commands_and_before_cleanup() 
                             "error[E0433]: cannot find module `real`",
                             "error[e0433]: cannot find module `real`",
                         ),
+                        "raw_timestamp_tabbed_error" => {
+                            ("error:\tactual\tinvariant", "error: actual invariant")
+                        }
+                        "raw_timestamp_tabbed_compiler" | "columns_tabbed_compiler" => (
+                            "error[E0433]:\tcannot find module\t`real`",
+                            "error[e0433]: cannot find module `real`",
+                        ),
                         "panic" => (
                             "thread 'real_test' panicked at src/lib.rs:8:1:",
                             "thread 'real_test' panicked at src/lib.rs:<n>:<n>:",
@@ -1063,13 +1073,17 @@ fn auto_fix_anchors_emitted_failure_after_printed_commands_and_before_cleanup() 
                         "{display}preflight passed\n{display}{diagnostic}\n##[error]Process completed with exit code 127.\n{}",
                         "post-job cleanup completed\n".repeat(1000)
                     );
-                    if case == "raw_timestamp_tabs" {
+                    let raw_timestamp = case.starts_with("raw_timestamp_");
+                    if raw_timestamp {
                         let timestamp = "2026-10-15T02:42:56Z";
                         log = format!(
-                            "{timestamp} ##[group]Run preflight\n{timestamp}   printf 'key\tvalue\tdetail\\n'\n{timestamp} ##[endgroup]\n{timestamp} {diagnostic}\n{timestamp} ##[error]Process completed with exit code 127."
+                            "{timestamp} ##[group]Run preflight\n{timestamp}   printf 'key\tvalue\tdetail\\n'\n{timestamp}   key\tvalue\t##[endgroup]\n{timestamp}   error[E0123]: printed compiler text\n{timestamp} ##[endgroup]\n{timestamp} {diagnostic}\n{timestamp} ##[error]Process completed with exit code 127."
                         );
                     }
-                    if matches!(case, "columns" | "successful_step" | "wrong_step") {
+                    if matches!(
+                        case,
+                        "columns" | "columns_tabbed_compiler" | "successful_step" | "wrong_step"
+                    ) {
                         let step = if case == "wrong_step" {
                             "successful setup"
                         } else {
@@ -1096,7 +1110,7 @@ fn auto_fix_anchors_emitted_failure_after_printed_commands_and_before_cleanup() 
                     } else if case == "orphan" {
                         log = "  ##[error]printed failure\n##[endgroup]\n##[error]Process completed with exit code 127.\n".into();
                     }
-                    let source = if case == "raw_timestamp_tabs" {
+                    let source = if raw_timestamp {
                         orbit_tools::github_cli::SOURCE_JOB_API_LOG
                     } else {
                         orbit_tools::github_cli::SOURCE_RUN_LOG
@@ -1111,7 +1125,7 @@ fn auto_fix_anchors_emitted_failure_after_printed_commands_and_before_cleanup() 
                         response["diagnostic"] = json!(format!(
                             "{display}{actual}\n##[error]Process completed with exit code 127."
                         ));
-                    } else if matches!(case, "wrong_step" | "raw_timestamp_tabs") {
+                    } else if case == "wrong_step" || raw_timestamp {
                         response["diagnostic"] = response["log"].clone();
                     } else if case == "incomplete" {
                         response["source_complete"] = json!(false);
