@@ -13,6 +13,9 @@
 //! each substitute's kernel identity behind a release-observation handshake,
 //! then waits for the supervisor's reap before deleting the temporary root,
 //! including when an observation returns an error or an assertion unwinds.
+//! The accepted control stream explicitly uses blocking I/O: on Darwin it
+//! inherits the listener's nonblocking flag, so readiness alone cannot prove
+//! the identity is readable. A gated real worker covers that preparation gap.
 
 use std::collections::BTreeSet;
 #[cfg(unix)]
@@ -52,6 +55,8 @@ struct Fixture {
     workers: Mutex<Vec<Substitute>>,
     #[cfg(unix)]
     cleaned: Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(unix)]
+    acquisition_events: Option<std::sync::mpsc::SyncSender<&'static str>>,
 }
 
 #[cfg(unix)]
@@ -134,6 +139,8 @@ impl Fixture {
             workers: Mutex::new(Vec::new()),
             #[cfg(unix)]
             cleaned: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            #[cfg(unix)]
+            acquisition_events: None,
         }
     }
 
@@ -200,6 +207,33 @@ impl Fixture {
 
     #[cfg(unix)]
     fn own_worker(&self, child: &str) -> io::Result<()> {
+        let phase = std::cell::Cell::new("poll_listener");
+        let acquired = self.acquire_worker(child, &phase).inspect_err(|error| {
+            // Preserve the OS error itself, rather than wrapping it and losing
+            // raw_os_error(). Keep the phase in the same failure record.
+            let _ = writeln!(
+                io::stderr(),
+                "owned worker acquisition failed: run={child} phase={} kind={:?} raw_os_error={:?} error={error} root={}",
+                phase.get(), error.kind(), error.raw_os_error(), self.root.path().display()
+            );
+            if let Ok(log) = std::fs::read_to_string(
+                self.runtime.paths().logs_dir.join(format!("{child}.worker.log")),
+            ) {
+                let _ = writeln!(io::stderr(), "unacquired worker log: run={child}\n{log}");
+            }
+        });
+        if let Some(events) = &self.acquisition_events {
+            let _ = events.send(if acquired.is_ok() {
+                "acquired"
+            } else {
+                "failed"
+            });
+        }
+        acquired
+    }
+
+    #[cfg(unix)]
+    fn acquire_worker(&self, child: &str, phase: &std::cell::Cell<&'static str>) -> io::Result<()> {
         use std::os::fd::AsRawFd;
         let mut ready = libc::pollfd {
             fd: self.listener.as_raw_fd(),
@@ -207,6 +241,7 @@ impl Fixture {
             revents: 0,
         };
         // A bounded readiness wait, not a sleep to provoke the marker race.
+        phase.set("poll_listener");
         // SAFETY: one initialized pollfd, retained listener, bounded timeout.
         let polled = unsafe { libc::poll(&mut ready, 1, 5_000) };
         if polled <= 0 {
@@ -216,24 +251,54 @@ impl Fixture {
                 io::Error::last_os_error()
             });
         }
+        let _ = writeln!(
+            io::stderr(),
+            "owned worker readiness: run={child} revents={:#x}",
+            ready.revents
+        );
+        phase.set("accept");
         let (control, _) = self.listener.accept()?;
+        // Darwin inherits O_NONBLOCK from this fixture's listener. Readiness
+        // proves a connection is queued, not that the peer has written its
+        // identity. SO_RCVTIMEO does not make a nonblocking read wait.
+        phase.set("set_blocking");
+        control.set_nonblocking(false)?;
+        phase.set("set_read_timeout");
         control.set_read_timeout(Some(Duration::from_secs(5)))?;
+        phase.set("set_write_timeout");
         control.set_write_timeout(Some(Duration::from_secs(5)))?;
         let mut reader = io::BufReader::new(control);
         let mut identity = String::new();
-        reader.read_line(&mut identity)?;
+        phase.set("read_identity");
+        if let Some(events) = &self.acquisition_events {
+            let _ = events.send("reading");
+        }
+        reader.read_line(&mut identity).inspect_err(|_| {
+            let _ = writeln!(
+                io::stderr(),
+                "partial worker identity: run={child} bytes={identity:?}"
+            );
+        })?;
+        phase.set("parse_identity");
         let (run, pid) = identity
             .trim()
             .split_once(' ')
             .ok_or_else(|| io::Error::other("worker handshake identity"))?;
         let pid: u32 = pid.parse().map_err(io::Error::other)?;
+        let _ = writeln!(
+            io::stderr(),
+            "owned worker identity: run={child} reported_run={run} pid={pid}"
+        );
+        phase.set("kernel_identity");
         let (key, parent) = orbit_common::process::ancestry::process_start_and_parent(pid)
             .ok_or_else(|| io::Error::other("worker kernel identity"))?;
         if run != child || parent != std::process::id() {
             return Err(io::Error::other("worker is not this fixture's child"));
         }
+        phase.set("bind_process");
         let process = orbit_common::process::signal::BoundProcess::bind(pid, None)?
             .ok_or_else(|| io::Error::other("worker exited before ownership"))?;
+        phase.set("recheck_identity");
         if orbit_common::process::ancestry::process_start_and_parent(pid) != Some((key, parent)) {
             return Err(io::Error::other("worker changed during identity binding"));
         }
@@ -324,9 +389,21 @@ impl Drop for Fixture {
         let release_deadline = Instant::now() + Duration::from_secs(1);
         for worker in workers.iter_mut() {
             let release = std::fs::write(self.root.path().join(format!("ran-{}", worker.run)), "")
-                .and_then(|()| worker.control.write_all(&[1]));
-            if let Err(error) = release {
-                failure = Some(format!("release {}: {error}", worker.run));
+                .map_err(|error| ("write_release_marker", error))
+                .and_then(|()| {
+                    worker
+                        .control
+                        .write_all(&[1])
+                        .map_err(|error| ("write_release", error))
+                });
+            if let Err((phase, error)) = release {
+                failure = Some(format!(
+                    "run={} pid={} phase={phase} kind={:?} raw_os_error={:?} error={error}",
+                    worker.run,
+                    worker.pid,
+                    error.kind(),
+                    error.raw_os_error()
+                ));
                 let _ = worker.process.signal(libc::SIGKILL);
             }
         }
@@ -416,6 +493,63 @@ fn a_child_wait_row_names_the_child_and_why_and_only_failures_are_incidents() {
         "child_wait_audit::a_child_wait_row_names_the_child_and_why_and_only_failures_are_incidents",
     ) {
         return;
+    }
+    #[cfg(unix)]
+    {
+        // Hold the real substitute between connect and identity preparation.
+        // Listener readiness must not let acquisition fail before it writes.
+        let gate = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        gate.set_nonblocking(true).unwrap();
+        let mut fixture = Fixture::new();
+        fixture.listener = crate::worker_fixture::install_owned_with_identity_gate(
+            &fixture.root.path().join("ran-{run_id}"),
+            &gate.local_addr().unwrap().to_string(),
+        );
+        let (events, observed) = std::sync::mpsc::sync_channel(2);
+        fixture.acquisition_events = Some(events);
+        std::thread::scope(|scope| {
+            let preparation = scope.spawn(move || {
+                use std::os::fd::AsRawFd;
+                let mut ready = libc::pollfd {
+                    fd: gate.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                // SAFETY: one initialized pollfd and a retained listener.
+                assert!(unsafe { libc::poll(&mut ready, 1, 5_000) } > 0);
+                let (mut permit, _) = gate.accept().unwrap();
+                permit.set_nonblocking(false).unwrap();
+                permit
+                    .set_write_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let reading = observed.recv_timeout(Duration::from_secs(5));
+                let premature = observed.recv_timeout(Duration::from_millis(100));
+                // Always let the worker finish, even when the regression fires.
+                permit.write_all(&[1]).unwrap();
+                assert_eq!(reading.unwrap(), "reading");
+                assert!(
+                    matches!(premature, Err(std::sync::mpsc::RecvTimeoutError::Timeout)),
+                    "identity acquisition must wait for peer preparation: {premature:?}"
+                );
+                assert_eq!(
+                    observed.recv_timeout(Duration::from_secs(5)).unwrap(),
+                    "acquired"
+                );
+            });
+            let (_, row, _) = fixture.observe(json!([]), 60, |runtime, child| {
+                runtime.cancel_job_run(child).unwrap();
+            });
+            assert_eq!(payload(&row)["status"], "cancelled");
+            assert_eq!(row.status, AuditEventStatus::Success);
+            preparation.join().unwrap();
+        });
+        let pids = fixture.worker_pids();
+        let root = fixture.root.path().to_path_buf();
+        let cleaned = fixture.cleaned.clone();
+        drop(fixture);
+        assert!(cleaned.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(pids.iter().all(|pid| reaped(*pid)));
+        assert!(!root.exists());
     }
     let fixture = Fixture::new();
 
