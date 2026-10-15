@@ -248,8 +248,10 @@ sub is_declared {
   my ($crate_src) = $file =~ m{^(.*?)/src/};
   $crate_src .= '/src';
   if (!exists $crate_targets{$crate_src}) {
-    # Keep ripgrep's original hidden/ignore/glob selection for source search.
-    open my $paths, '-|', 'rg', '--files', '--glob', '*.rs', $crate_src
+    # Candidate discovery checks the physical source tree, including ignored
+    # directories. Its owners must use the same scope: ignore rules (and
+    # ripgrep-version differences in negations) cannot hide declarations.
+    open my $paths, '-|', 'rg', '--files', '--hidden', '--no-ignore', '--glob', '*.rs', $crate_src
       or die "Cannot list $crate_src: $!\n";
     my @paths;
     while (my $path = <$paths>) { chomp $path; push @paths, $path; }
