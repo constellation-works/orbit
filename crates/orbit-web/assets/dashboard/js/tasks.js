@@ -1095,10 +1095,9 @@ function readinessTaskLink(taskId, workspace) {
   return bindTaskLink(link, taskId, workspace ? { workspace } : {});
 }
 
-// The Readiness card's drain part: the pool and the row dot's badge text as
-// the headline, then what holds the task, each holder or dependency linked,
-// the server's detail and the raw reason. Without an entry it says whether a
-// read is pending, failed or found nothing, and never claims a pool.
+// The Readiness card leads with the pool, then links every reported blocker.
+// Without an entry it says whether a read is pending, failed or found nothing,
+// and never claims a pool.
 function buildDrainReadiness(drain, workspace) {
   const entry = drain && drain.entry;
   if (!entry) {
@@ -1114,7 +1113,6 @@ function buildDrainReadiness(drain, workspace) {
   const head = el("div", { class: "readiness-drain-head" }, [
     dot,
     el("strong", { text: view.poolLabel }),
-    el("span", { text: badge ? badge.text : "nothing holds it" }),
   ]);
   const wrap = el("div", { class: "readiness-drain" }, [head]);
   wrap.dataset.pool = view.pool;
@@ -1126,15 +1124,14 @@ function buildDrainReadiness(drain, workspace) {
     wrap.appendChild(el("div", { class: "readiness-fix", text: view.title }));
     return wrap;
   }
-  if (badge.holder) wrap.appendChild(line("Waits on", [readinessTaskLink(badge.holder, workspace)]));
-  else if (badge.runId) {
-    const run = el("a", { class: "mono", text: badge.runId });
-    run.href = runHref(badge.runId, workspace ? { workspace } : {});
-    wrap.appendChild(line("Waits on", [run]));
+  const blockers = badge.holders.map(id => readinessTaskLink(id, workspace));
+  for (const runId of badge.runIds) {
+    const run = el("a", { class: "mono", text: runId });
+    run.href = runHref(runId, workspace ? { workspace } : {});
+    blockers.push(run);
   }
-  if (badge.selectors.length > 0) {
-    wrap.appendChild(line("Lock", badge.selectors.map((selector) => el("span", { class: "mono", text: selector }))));
-  }
+  if (blockers.length) wrap.appendChild(line("Waits on", blockers));
+  else if (!badge.dependencies.length) wrap.appendChild(el("div", { class: "readiness-message", text: view.pool === "locks" ? "Lock holder unavailable" : badge.text }));
   if (badge.dependencies.length > 0) {
     wrap.appendChild(line("Depends on", badge.dependencies.map(({ taskId, status }) =>
       el("span", { class: "readiness-dependency" }, [
@@ -1143,7 +1140,6 @@ function buildDrainReadiness(drain, workspace) {
       ]))));
   }
   if (badge.detail) wrap.appendChild(el("div", { class: "readiness-message", text: badge.detail }));
-  wrap.appendChild(el("div", { class: "readiness-fix mono", text: `Reason: ${badge.reason}` }));
   return wrap;
 }
 
@@ -1570,24 +1566,18 @@ function refreshFileList(ul) {
   const task = ul.contentionTask;
   const applicable = task.status === "backlog" || task.status === "in-progress";
   const nodes = [];
-  let unknown = false;
   for (const path of Array.isArray(task.context_files) ? task.context_files : []) {
     const matches = applicable ? taskContextContenders(task, path) : [];
-    if (matches === null) unknown = true;
-    const li = el("li", {}, [el("span", { class: "context-selector" }, selectorParts(path))]);
-    if (matches?.length) {
-      li.classList.add(task.status === "backlog" ? "context-contended-backlog" : "context-contended-active");
-      const note = el("span", { class: "context-contention" }, [" overlaps "]);
-      matches.forEach((match, index) => {
-        if (index) note.appendChild(document.createTextNode("; "));
-        note.appendChild(readinessTaskLink(match.id, task.workspace_id));
-        note.appendChild(document.createTextNode(` · ${match.selector}`));
-      });
-      li.appendChild(note);
-    }
+    const state = matches === null ? "Contention unknown: current workspace data unavailable"
+      : matches.length ? task.status === "backlog" ? "Contended context" : "Active context contention" : "";
+    const link = el("a", { class: "context-selector", title: [path, state].filter(Boolean).join(" · ") }, selectorParts(path));
+    bindTaskLink(link, task.id, task.workspace_id ? { workspace: task.workspace_id } : {});
+    if (state) link.setAttribute("aria-label", `${path}: ${state}`);
+    const li = el("li", {}, [link]);
+    if (matches === null) li.classList.add("context-contention-unknown");
+    if (matches?.length) li.classList.add(task.status === "backlog" ? "context-contended-backlog" : "context-contended-active");
     nodes.push(li);
   }
-  if (unknown) nodes.push(el("li", { class: "context-contention-unknown", text: "Contention unknown — current workspace data unavailable." }));
   if (nodes.length === 0) nodes.push(el("li", { class: "field-empty", text: "no context files" }));
   ul.replaceChildren(...nodes);
 }
@@ -3795,6 +3785,7 @@ export function renderTasks(tasks, context) {
   // groups; when no visible row has an action (a Done-only view) the whole
   // column is dead space, so the list gives it back as one.
   body.dataset.quickActions = filtered.some(hasQuickAction) ? "some" : "none";
+  body.dataset.quickActionPair = String(filtered.some(task => task.status === "review" && pullRequestLink(task)));
   $("tasks-count").textContent = formatTaskCount(filtered.length, tasks.length, tasksMeta(context));
   renderTaskPagination(context);
   // ORB-10972: the rail shows the matching total the panel header reports, so

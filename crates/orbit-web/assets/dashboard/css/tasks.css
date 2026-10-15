@@ -234,7 +234,7 @@
    where the run is. */
 .row {
   display: grid;
-  grid-template-columns: 92px minmax(0, 1fr) 84px 72px;
+  grid-template-columns: 92px minmax(0, 1fr) 84px var(--task-action-width, 72px);
   column-gap: 12px;
   min-height: 46px;
   padding: 0 16px;
@@ -245,7 +245,7 @@
   transition: background 0.15s ease;
   border-top: 1px solid var(--hair);
 }
-.row.run-layout { grid-template-columns: 92px minmax(0, 1fr) 84px 148px 72px; }
+.row.run-layout { grid-template-columns: 92px minmax(0, 1fr) 84px 148px var(--task-action-width, 72px); }
 
 .row:hover { background: var(--bg-hover); }
 #tasks-body > .row:hover { background: color-mix(in srgb, var(--bg-elev) 92%, white); }
@@ -425,11 +425,14 @@
 .row .status-cell:focus-within .task-status-select,
 .row .crew-cell:focus-within .task-crew-select { opacity: 1; }
 
+#tasks-body[data-quick-action-pair="true"] { --task-action-width: 160px; }
+
 .task-quick-cell {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
   min-width: 0;
 }
 .task-quick-cell .exec-origin {
@@ -460,7 +463,7 @@
 .task-quick:disabled { opacity: 0.6; cursor: not-allowed; }
 .task-quick:focus-visible,
 .task-quick-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.task-quick-link { font-size: 13px; font-weight: 500; color: var(--accent); white-space: nowrap; text-decoration: none; }
+.task-quick-link { display: inline-flex; align-items: center; min-height: 32px; font-size: 13px; font-weight: 500; color: var(--accent); white-space: nowrap; text-decoration: none; }
 .task-quick-link:hover { color: var(--accent-hi); }
 .row.has-quick-error {
   padding-block: 8px;
@@ -614,7 +617,7 @@
     /* Line 1 is the ID and the title; line 2 the crew, the run and the
        action. The action column keeps the desktop row's width, so actions
        line up between groups. */
-    grid-template-columns: 92px minmax(0, 1fr) 72px;
+    grid-template-columns: 92px minmax(0, 1fr) var(--task-action-width, 72px);
     grid-template-areas:
       "id title title"
       "crew run quick";

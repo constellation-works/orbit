@@ -9,9 +9,9 @@
 import { onWorkspaceChange } from './common.js';
 
 // Readiness reasons that mean "waiting on another task or run": a context lock, a
-// grouped member, a same-wave deferral, a live child's claim, or a task with no
+// grouped member, a reserved surface, a same-wave deferral, a live child's claim, or a task with no
 // footprint waiting for the other leaves to finish so it can run alone.
-export const DRAIN_LOCK_REASONS = new Set(["context_lock_conflict", "group_member_conflict", "conflict_deferred", "claimed_by_live_child", "awaiting_exclusive_slot"]);
+export const DRAIN_LOCK_REASONS = new Set(["context_lock_conflict", "group_member_conflict", "surface_reserved", "conflict_deferred", "claimed_by_live_child", "awaiting_exclusive_slot"]);
 
 // Readiness reasons that mean "waiting on slots or host pressure": a full
 // workspace, a throttle, a scheduled shutdown or stopped admissions.
@@ -33,24 +33,14 @@ export function drainReason(task) {
 function drainHolders(task) {
   const holders = new Set();
   for (const conflict of Array.isArray(task.conflicts) ? task.conflicts : []) {
-    const holder = conflict?.locking_task_id || conflict?.blocking_task_id;
-    if (holder) holders.add(holder);
+    for (const holder of [conflict?.locking_task_id, conflict?.blocking_task_id]) {
+      if (typeof holder === "string" && holder) holders.add(holder);
+    }
   }
   for (const holder of Array.isArray(task.blocking_task_ids) ? task.blocking_task_ids : []) {
-    if (holder) holders.add(holder);
+    if (typeof holder === "string" && holder) holders.add(holder);
   }
   return [...holders].sort();
-}
-
-function drainConflictSelectors(task, holder) {
-  const selectors = [];
-  for (const conflict of Array.isArray(task.conflicts) ? task.conflicts : []) {
-    const conflictHolder = conflict?.locking_task_id || conflict?.blocking_task_id;
-    if (holder && conflictHolder && conflictHolder !== holder) continue;
-    const selector = conflict?.requested_file || conflict?.requested_selector || conflict?.blocking_selector;
-    if (selector && !selectors.includes(selector)) selectors.push(selector);
-  }
-  return selectors;
 }
 
 // Which pool group a readiness entry falls in. Every entry lands in exactly one.
@@ -83,26 +73,23 @@ function drainDependencies(entry) {
 }
 
 // The compact badge for one waiting readiness entry: `text` fits a row, `title`
-// carries everything the entry reports. The parts `title` is built from come
-// back too (`holder`, `runId`, `selectors`, `dependencies`, `detail`,
-// `reason`), so a Readiness card can link them rather than re-derive them.
+// carries its cause without raw lock metadata. Structured task and run ids
+// let the Readiness card link every blocker without interpreting file names.
 export function drainWaitBadge(entry) {
   const reason = drainReason(entry);
   const detail = typeof entry.detail === "string" ? entry.detail.trim() : "";
   const lines = [];
   let text;
-  let holder = null;
-  let runId = null;
-  let selectors = [];
+  let holders = [];
+  let runIds = [];
   let dependencies = [];
   if (DRAIN_LOCK_REASONS.has(reason)) {
-    holder = drainHolders(entry)[0] || null;
-    runId = Array.isArray(entry.run_ids) ? entry.run_ids[0] || null : null;
-    selectors = drainConflictSelectors(entry, holder);
-    text = holder ? `waits on ${holder}` : runId ? "waits on live run" : "waits on lock";
-    if (selectors.length > 0 || reason === "context_lock_conflict") text += " · lock";
-    lines.push(holder ? `Waits on ${holder}` : runId ? `Waits on live run ${runId}` : "Waits on a lock");
-    if (selectors.length > 0) lines.push(`Lock: ${selectors.join(", ")}`);
+    holders = drainHolders(entry);
+    runIds = [...new Set((Array.isArray(entry.run_ids) ? entry.run_ids : [])
+      .filter(id => typeof id === "string" && id))];
+    text = holders.length ? `waits on ${holders.join(", ")}` : runIds.length ? "waits on live run" : "waits on lock";
+    const blockers = [...holders, ...runIds];
+    lines.push(blockers.length ? `Waits on ${blockers.join(", ")}` : "Lock holder unavailable");
   } else if (DRAIN_HOST_WAIT_REASONS.has(reason)) {
     const os = /\bos:([a-z0-9_-]+)/i.exec(detail)?.[1] || /\b(macos|linux|windows)\b/i.exec(detail)?.[1];
     text = os ? `needs ${os.toLowerCase()} host` : "needs other host";
@@ -119,9 +106,10 @@ export function drainWaitBadge(entry) {
       }
     }
   }
-  if (detail) lines.push(detail);
-  lines.push(`Reason: ${reason}`);
-  return { text, title: lines.join("\n"), pool: drainPoolKey(entry), holder, runId, selectors, dependencies, detail, reason };
+  const message = DRAIN_LOCK_REASONS.has(reason) ? "" : detail;
+  if (!lines.length) lines.push(text);
+  if (message && !lines.includes(message)) lines.push(message);
+  return { text, title: lines.join("\n"), pool: drainPoolKey(entry), holders, runIds, dependencies, detail: message, reason };
 }
 
 // The readiness pools in the order the Backlog card lists them, each with the
