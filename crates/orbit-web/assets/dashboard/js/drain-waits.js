@@ -9,9 +9,9 @@
 import { onWorkspaceChange } from './common.js';
 
 // Readiness reasons that mean "waiting on another task or run": a context lock, a
-// grouped member, a same-wave deferral, a live child's claim, or a task with no
+// grouped member, a reserved surface, a same-wave deferral, a live child's claim, or a task with no
 // footprint waiting for the other leaves to finish so it can run alone.
-export const DRAIN_LOCK_REASONS = new Set(["context_lock_conflict", "group_member_conflict", "conflict_deferred", "claimed_by_live_child", "awaiting_exclusive_slot"]);
+export const DRAIN_LOCK_REASONS = new Set(["context_lock_conflict", "group_member_conflict", "surface_reserved", "conflict_deferred", "claimed_by_live_child", "awaiting_exclusive_slot"]);
 
 // Readiness reasons that mean "waiting on slots or host pressure": a full
 // workspace, a throttle, a scheduled shutdown or stopped admissions.

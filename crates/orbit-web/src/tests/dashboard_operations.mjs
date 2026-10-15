@@ -430,7 +430,7 @@ for (const task of drainTasksOverride) {
   const pool = drainReadinessFor(task.task_id)?.pool;
   poolSizes[pool] = (poolSizes[pool] || 0) + 1;
 }
-assert(JSON.stringify(poolSizes) === JSON.stringify({ locks: 17, capacity: 16, other: 3 }), `pool groups: ${JSON.stringify(poolSizes)}`);
+assert(JSON.stringify(poolSizes) === JSON.stringify({ locks: 18, capacity: 16, other: 2 }), `pool groups: ${JSON.stringify(poolSizes)}`);
 assert(drainReadinessFor('ORB-9017').title.includes('throttled') && drainReadinessFor('ORB-9033').title.includes('operator validation handoff'), 'each row keeps its readable waiting cause');
 assert(!drainTasksOverride.some(task => /blocked/i.test(drainReadinessFor(task.task_id).label)), 'no pool label calls a readiness group blocked');
 drainTasksOverride = null;

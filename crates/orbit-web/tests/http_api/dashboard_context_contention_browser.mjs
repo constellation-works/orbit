@@ -187,6 +187,7 @@ try {
   await page.locator('#detail-CTX-1 .field-block').filter({ has: page.locator('.file-list') }).screenshot({ path: path.join(evidence, 'narrow.png'), animations: 'disabled' });
   for (const [name, entry, text, links] of [
     ['absent-holder', { reason: 'context_lock_conflict', conflicts: [{ requested_file: 'file:CTX-999.rs' }] }, 'Lock holder unavailable', []],
+    ['reserved-surface', { reason: 'surface_reserved', blocking_task_ids: ['CTX-3', 'CTX-2', 'CTX-3'], conflicts: [{ reserved_by_task_id: 'CTX-2', requested_file: 'file:src/shared.rs' }], detail: 'Reserved for CTX-2, CTX-3, ranked ahead of this task and waiting only on context locks.' }, 'Waits on', ['CTX-2', 'CTX-3']],
     ['tasks-and-run', { reason: 'conflict_deferred', conflicts: [{ locking_task_id: 'CTX-2', blocking_task_id: 'CTX-3' }], run_ids: ['jrun-first'] }, 'Waits on', ['CTX-2', 'CTX-3', 'jrun-first']],
     ['live-runs', { reason: 'claimed_by_live_child', run_ids: ['jrun-first', 'jrun-second'] }, 'Waits on', ['jrun-first', 'jrun-second']],
     ['dependencies', { reason: 'unmet_dependency', dependencies: [{ task_id: 'CTX-2', status: 'in-progress' }, { task_id: 'CTX-3', status: 'review' }] }, 'Depends on', ['CTX-2', 'CTX-3']],
@@ -198,6 +199,7 @@ try {
     await refresh();
     await page.waitForFunction(text => document.querySelector('#detail-CTX-1 .readiness-drain')?.textContent.includes(text), text);
     assert.deepEqual(await drain.locator('a').allTextContents(), links, name);
+    if (name === 'reserved-surface') assert.equal(await drain.textContent(), 'Waiting on locksWaits onCTX-2CTX-3', 'reservations show one category and one linked blocker list without duplicated detail');
     assert(!(await drain.textContent()).includes('file:'), 'never infer blockers from paths');
     assert(!(await page.locator('#detail-CTX-1 .readiness-list').textContent()).includes('Ready: nothing'), 'wait never implies eligibility');
     for (const link of await drain.locator('a').all()) {
@@ -207,7 +209,7 @@ try {
     assert.equal(await drain.evaluate(node => node.scrollWidth > node.clientWidth + 1), false, `${name} wraps at narrow width`);
     await drain.screenshot({ path: path.join(evidence, `${name}.png`) });
   }
-  results.push({ scenario: 'multiple blockers, absent holder, multiple runs, dependencies, capacity, host and unknown reasons, scoped links', passed: true });
+  results.push({ scenario: 'multiple blockers, absent holder, reserved surface, multiple runs, dependencies, capacity, host and unknown reasons, scoped links', passed: true });
   await page.evaluate(async () => { (await import('/static/js/common.js')).setWorkspace('ws_other'); });
   await refresh();
   await open('CTX-1');
