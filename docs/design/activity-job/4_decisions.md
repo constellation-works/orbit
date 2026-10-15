@@ -4,7 +4,7 @@ type: design
 title: "Activity / Job — Decisions"
 owner: codex
 last_updated: 2026-10-11
-last_validated: 2026-10-10
+last_validated: 2026-10-14
 status: Draft
 feature: activity-job
 doc_role: decisions
