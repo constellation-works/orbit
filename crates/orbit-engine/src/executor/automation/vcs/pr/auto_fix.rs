@@ -7,8 +7,9 @@
 //! - a required review, an unavailable review decision or an unreadable
 //!   check rollup is an administrative blocker: the watcher stops and no
 //!   agent runs;
-//! - any check still running waits, within the ordinary wait budget;
-//! - failed checks, once nothing is running, are filtered to the ones branch
+//! - a conclusive required check still running waits, within the ordinary
+//!   wait budget;
+//! - failed checks are filtered to the ones branch
 //!   protection requires on that head (an optional failure alone leaves the
 //!   state `UNSTABLE`, which is mergeable, and beside a `BLOCKED` state it is
 //!   not the blocker); none required, or an unreadable answer, stops. The
@@ -57,8 +58,8 @@ use super::super::git::{
 };
 use super::super::landing_checks::{HeadCheckEvidence, head_check_evidence};
 use super::super::push::push_batch_changes;
-use super::answers::{CheckState, PullRequestStatus, ReviewDecision, read_required_checks};
-use super::delivery::DeliveryPin;
+use super::answers::{CheckState, PullRequestStatus, read_required_checks};
+use super::delivery::{DeliveryPin, blocked_checks};
 
 /// Polls a `BLOCKED` head with no failed and no running check is waited on
 /// before it counts as blocked: a freshly published head can report no
@@ -173,38 +174,17 @@ pub(super) enum BlockedVerdict {
 
 /// Read a `BLOCKED` pull request for auto-fix. A review gate or an
 /// unreadable rollup stops before any check is considered, as completion
-/// already does; a running check waits before a failed one is acted on.
-pub(super) fn blocked_verdict(status: &PullRequestStatus, unsettled_polls: u32) -> BlockedVerdict {
-    match &status.review_decision {
-        ReviewDecision::Reported(decision)
-            if matches!(decision.as_str(), "REVIEW_REQUIRED" | "CHANGES_REQUESTED") =>
-        {
-            return BlockedVerdict::Stop(format!("review is required ({decision})"));
-        }
-        ReviewDecision::NotApplicable => {}
-        ReviewDecision::Reported(decision) if decision == "APPROVED" => {}
-        _ => return BlockedVerdict::Stop("review decision is unavailable".into()),
-    }
-    let Some(checks) = &status.status_checks else {
-        return BlockedVerdict::Stop("status check rollup is unreadable".into());
+/// already does; only policy-bound pending evidence authorizes a check wait.
+pub(super) fn blocked_verdict(
+    status: &PullRequestStatus,
+    unsettled_polls: u32,
+    pending_required: bool,
+) -> BlockedVerdict {
+    let checks = match blocked_checks(status) {
+        Ok(checks) => checks,
+        Err(reason) => return BlockedVerdict::Stop(reason),
     };
-    let mut pending = false;
-    for check in checks {
-        let name = check.name.as_deref().unwrap_or_default();
-        match check.state {
-            _ if name.is_empty() => {
-                return BlockedVerdict::Stop("status check rollup is unreadable".into());
-            }
-            Some(CheckState::Pending) => pending = true,
-            Some(CheckState::Passed | CheckState::Failed) => {}
-            None => {
-                return BlockedVerdict::Stop(format!(
-                    "status check rollup is unreadable for '{name}'"
-                ));
-            }
-        }
-    }
-    if pending {
+    if pending_required {
         return BlockedVerdict::Wait;
     }
     let failed = checks

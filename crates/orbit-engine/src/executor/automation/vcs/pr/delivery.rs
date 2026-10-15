@@ -25,7 +25,9 @@ use serde_json::{Value, json};
 use super::super::super::input::input_string_field;
 use super::super::freshness::{branch_freshness_against_ref, commit_sha};
 use super::super::git::{base_sync_mode_from_input, resolve_worktree_start_point};
-use super::answers::{CheckState, PullRequestStatus, ReviewDecision};
+use super::super::operations;
+use super::answers::{CheckState, PullRequestStatus, RequiredChecks, ReviewDecision, StatusCheck};
+use crate::context::RuntimeHost;
 
 /// The candidate identity a completion-authorized run is allowed to deliver.
 ///
@@ -339,50 +341,128 @@ pub(in crate::executor::automation::vcs) fn classify_pr_state(
     }
 }
 
-/// GitHub also reports BLOCKED while required checks are still running. Wait
-/// only when the rollup proves that a check is in flight and no review gate or
-/// failed check is visible. An absent or unfamiliar provider shape refuses.
-fn classify_blocked_pr(pull_request: &PullRequestStatus) -> PrMergeState {
+/// Review and readable-rollup guards shared by landing and auto-fix. They
+/// precede any pending-check or source-repair authority.
+pub(super) fn blocked_checks(pull_request: &PullRequestStatus) -> Result<&[StatusCheck], String> {
     match &pull_request.review_decision {
         ReviewDecision::Reported(decision)
             if matches!(decision.as_str(), "REVIEW_REQUIRED" | "CHANGES_REQUESTED") =>
         {
-            return PrMergeState::Blocked(format!("review is required ({decision})"));
+            return Err(format!("review is required ({decision})"));
         }
-        // No review decision applies. That only permits waiting on in-flight
-        // checks below; a field that is absent altogether stays unavailable.
         ReviewDecision::NotApplicable => {}
         ReviewDecision::Reported(decision) if decision == "APPROVED" => {}
-        _ => return PrMergeState::Blocked("review decision is unavailable".into()),
+        _ => return Err("review decision is unavailable".into()),
     }
-
-    let Some(checks) = &pull_request.status_checks else {
-        return PrMergeState::Blocked("status check rollup is unreadable".into());
-    };
-    let mut pending = false;
+    let checks = pull_request
+        .status_checks
+        .as_deref()
+        .ok_or_else(|| "status check rollup is unreadable".to_string())?;
     for check in checks {
-        let Some(name) = &check.name else {
-            return PrMergeState::Blocked("status check rollup is unreadable".into());
-        };
-        match check.state {
-            Some(CheckState::Failed) => {
-                return PrMergeState::Blocked(format!("status check '{name}' failed"));
-            }
-            Some(CheckState::Pending) => pending = true,
-            Some(CheckState::Passed) => {}
-            None => {
-                return PrMergeState::Blocked(format!(
-                    "status check rollup is unreadable for '{name}'"
-                ));
-            }
+        let name = check
+            .name
+            .as_deref()
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| "status check rollup is unreadable".to_string())?;
+        if check.state.is_none() {
+            return Err(format!("status check rollup is unreadable for '{name}'"));
         }
     }
+    Ok(checks)
+}
 
-    if pending {
+fn classify_blocked_pr(pull_request: &PullRequestStatus) -> PrMergeState {
+    let checks = match blocked_checks(pull_request) {
+        Ok(checks) => checks,
+        Err(reason) => return PrMergeState::Blocked(reason),
+    };
+    for check in checks {
+        if check.state == Some(CheckState::Failed) {
+            return PrMergeState::Blocked(format!(
+                "status check '{}' failed",
+                check.name.as_deref().unwrap_or_default()
+            ));
+        }
+    }
+    // A rollup alone cannot say which pending checks protection requires.
+    PrMergeState::Blocked("required reviews or checks are not satisfied".into())
+}
+
+/// Refine BLOCKED only from authenticated current policy on the observed head,
+/// or an actually running check captured as owner-owed. Never infer pending
+/// from absent checks or a completed neutral/skipped result. This grants only
+/// another bounded observation; only the provider's mergeable state can merge.
+pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &Path,
+    pr: &str,
+    status: &PullRequestStatus,
+    owed: &[String],
+    deadline_ms: u64,
+) -> Result<PrMergeState, String> {
+    let state = classify_pr_state(status);
+    if status.merge_state_status.as_deref() != Some("BLOCKED")
+        || !matches!(state, PrMergeState::Blocked(_))
+    {
+        return Ok(state);
+    }
+    if status.state.as_deref() != Some("OPEN") {
+        return Err("pull request state is unavailable for a blocked check wait".into());
+    }
+    let checks = blocked_checks(status)?;
+    if checks
+        .iter()
+        .any(|check| check.state == Some(CheckState::Failed))
+    {
+        return Ok(state);
+    }
+    let required = host
+        .run_private_vcs_operation(
+            operations::PR_REQUIRED_CHECKS,
+            json!({
+                "pr":pr,"workspace_path":workspace.to_string_lossy(),"deadline_ms":deadline_ms,
+            }),
+        )
+        .and_then(|answer| RequiredChecks::from_response(&answer));
+    let required = match required {
+        Ok(required) => required,
+        Err(error) => return Err(format!("required-check evidence is unavailable: {error}")),
+    };
+    if status.head_sha.as_deref() != Some(required.head_sha.as_str())
+        || required.reported_head_sha.as_deref() != Some(required.head_sha.as_str())
+    {
+        return Err("required-check evidence does not identify the current head".into());
+    }
+    let mut pending = false;
+    for check in &required.checks {
+        match check.state {
+            Some(CheckState::Pending) => pending = true,
+            Some(CheckState::Passed) => {}
+            Some(CheckState::Failed) => {
+                return Ok(PrMergeState::Blocked(format!(
+                    "required check '{}' failed",
+                    check.name.as_deref().unwrap_or_default()
+                )));
+            }
+            None => return Err("required-check evidence is unreadable".into()),
+        }
+    }
+    pending |= checks.iter().any(|check| {
+        check.state == Some(CheckState::Pending)
+            && owed.iter().any(|name| {
+                check.name.as_deref() == Some(name.as_str())
+                    || check
+                        .workflow_name
+                        .as_ref()
+                        .zip(check.name.as_ref())
+                        .is_some_and(|(workflow, own)| name == &format!("{workflow} / {own}"))
+            })
+    });
+    Ok(if pending {
         PrMergeState::Pending
     } else {
-        PrMergeState::Blocked("required reviews or checks are not satisfied".into())
-    }
+        state
+    })
 }
 
 /// [ORB-15677] Where the owner-owed hosted checks stand on a pull request.

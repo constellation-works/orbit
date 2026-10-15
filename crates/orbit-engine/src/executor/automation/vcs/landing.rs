@@ -34,8 +34,7 @@
 //! evidence. This activity only supplies the merge evidence that permits it.
 
 use std::path::Path;
-use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::automation::{DirectLandingRequest, SourceRevision};
@@ -54,9 +53,11 @@ use super::landing_checks::{
 };
 use super::operations;
 use super::pr::{
-    DeliveryPin, OwedHostedChecks, PrMergeState, PullRequestStatus, classify_pr_state,
-    owed_hosted_checks, read_pr_status, resolve_permitted_merge,
+    DeliveryPin, OwedHostedChecks, PrMergeState, PullRequestStatus, checked_pr_state,
+    classify_pr_state, owed_hosted_checks, read_pr_status, read_pr_status_before,
+    resolve_permitted_merge,
 };
+use super::remote_probe::fixed_wait as sleep;
 use super::worktree::{checkout_holding_branch, ensure_clean_checkout};
 
 /// Budget for waiting out required checks on a pull request before the attempt
@@ -303,11 +304,31 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
     )?
     .max(MIN_POLL_INTERVAL_SECONDS);
 
+    let started = Instant::now();
+    let deadline_ms =
+        super::completion_deadline::now_ms()?.saturating_add(max_wait_seconds.saturating_mul(1000));
     let mut waited_seconds = 0_u64;
     let mut intent: Option<String> = None;
     loop {
-        let status = read_pr_status(host, &workspace, &pr_number)?;
-        let state = classify_pr_state(&status);
+        if max_wait_seconds > 0
+            && (waited_seconds >= max_wait_seconds
+                || super::completion_deadline::now_ms()? >= deadline_ms)
+        {
+            return Err(landing_timeout(
+                host,
+                context,
+                number,
+                max_wait_seconds,
+                &context.owed_hosted_checks,
+            )?);
+        }
+        let status = if max_wait_seconds == 0 {
+            read_pr_status(host, &workspace, &pr_number)?
+        } else {
+            read_pr_status_before(host, &workspace, &pr_number, deadline_ms)?
+        };
+        let mut state = classify_pr_state(&status);
+        waited_seconds = waited_seconds.max(started.elapsed().as_secs());
         // [ORB-15956] A branch update this landing (or an earlier attempt)
         // requested moved the head onto a verified merge with the base.
         let updated_head = adopt_base_update(&mut pin, context, &status);
@@ -350,6 +371,24 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
         if let Err(error) = pin.ensure_pinned_candidate(&status, &pr_number) {
             return Err(stop(host, context, &error.to_string())?);
         }
+        state = match checked_pr_state(
+            host,
+            &workspace,
+            &pr_number,
+            &status,
+            &context.owed_hosted_checks,
+            deadline_ms,
+        ) {
+            Ok(state) => state,
+            Err(reason) => {
+                return Err(stop(
+                    host,
+                    context,
+                    &format!("pull request #{pr_number} cannot be merged ({reason})"),
+                )?);
+            }
+        };
+        waited_seconds = waited_seconds.max(started.elapsed().as_secs());
         // [ORB-15677] [ORB-15812] The review owed these checks to the pull
         // request's hosted CI instead of running them: nothing merges until
         // each reports an explicit success on the pinned head. A skipped or
@@ -359,6 +398,14 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
         // recovered before anything stops on it.
         let failed = failed_checks(&status);
         let check_reason = match (&owed, &state) {
+            _ if matches!(
+                state,
+                PrMergeState::Closed | PrMergeState::Contradictory(_) | PrMergeState::Conflict
+            ) || behind_base(&status)
+                || status.merge_state_status.as_deref() == Some("DRAFT") =>
+            {
+                None
+            }
             (OwedHostedChecks::Failed(reason), _) => Some(format!(
                 "pull request #{pr_number}: {reason}; the review owed it to that check"
             )),
@@ -446,6 +493,15 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 )?);
             }
             PrMergeState::Mergeable if intent.is_none() && owed == OwedHostedChecks::Passed => {
+                if max_wait_seconds > 0 && super::completion_deadline::now_ms()? >= deadline_ms {
+                    return Err(landing_timeout(
+                        host,
+                        context,
+                        number,
+                        max_wait_seconds,
+                        &context.owed_hosted_checks,
+                    )?);
+                }
                 let capabilities = resolve_permitted_merge(host, &workspace_path, &pr_number)
                     .map_err(|error| {
                         OrbitError::Execution(format!(
@@ -453,6 +509,15 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                                  #{pr_number}: {error}"
                         ))
                     })?;
+                if max_wait_seconds > 0 && super::completion_deadline::now_ms()? >= deadline_ms {
+                    return Err(landing_timeout(
+                        host,
+                        context,
+                        number,
+                        max_wait_seconds,
+                        &context.owed_hosted_checks,
+                    )?);
+                }
                 let observed = observe_or_stop(host, context, Some(&status), view)?;
                 if observed.repository != capabilities.repository {
                     return Err(stop(
@@ -509,24 +574,42 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
 
         if waited_seconds >= max_wait_seconds {
             let waiting = match &owed {
-                OwedHostedChecks::Waiting(names) if intent.is_none() => {
-                    format!(" (owed hosted checks not yet passed: {})", names.join(", "))
-                }
-                _ => String::new(),
+                OwedHostedChecks::Waiting(names) if intent.is_none() => names.as_slice(),
+                _ => &[],
             };
-            return Err(stop(
+            return Err(landing_timeout(
                 host,
                 context,
-                &format!(
-                    "pull request #{pr_number} did not reach a merged state within \
-                     {max_wait_seconds}s{waiting}; the candidate stays in review"
-                ),
+                number,
+                max_wait_seconds,
+                waiting,
             )?);
         }
         let sleep_seconds = poll_interval_seconds.min(max_wait_seconds - waited_seconds);
         sleep(Duration::from_secs(sleep_seconds));
         waited_seconds = waited_seconds.saturating_add(sleep_seconds);
     }
+}
+
+fn landing_timeout<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &HandoffLandingContext,
+    number: u64,
+    max_wait_seconds: u64,
+    owed: &[String],
+) -> Result<OrbitError, OrbitError> {
+    let waiting = if owed.is_empty() {
+        String::new()
+    } else {
+        format!(" (owed hosted checks not yet passed: {})", owed.join(", "))
+    };
+    stop(
+        host,
+        context,
+        &format!(
+            "pull request #{number} did not reach a merged state within {max_wait_seconds}s{waiting}; the candidate stays in review"
+        ),
+    )
 }
 
 /// Owner-local delivery: no origin, no pull request, and a fast-forward of the

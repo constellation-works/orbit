@@ -721,6 +721,15 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                     }],
                 }}))
             }
+            "pr.required_checks" => Ok(pending_policy(
+                &state.head,
+                if state.jobs.contains_key(&state.head) {
+                    "COMPLETED"
+                } else {
+                    "IN_PROGRESS"
+                },
+                true,
+            )),
             "ci.commit_jobs" => {
                 let commit = input["commit"].as_str().unwrap();
                 if state
@@ -811,6 +820,397 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
             other => panic!("the landing sent an unexpected {other}"),
         }
     }
+}
+
+/// Two authenticated provider reads can settle at different times: the PR
+/// rollup has only the aggregate NEUTRAL result while the exact-head policy
+/// read already observes the required Rust job queued. Neither is success.
+struct PendingForge {
+    forge: FakeForge,
+    observations: Mutex<std::collections::VecDeque<Value>>,
+    policies: Mutex<std::collections::VecDeque<Value>>,
+}
+
+impl orbit_engine::test_support::NullRuntimeHost for PendingForge {
+    fn handoff_landing_context(&self, id: &str) -> Result<HandoffLandingContext, OrbitError> {
+        RuntimeHost::handoff_landing_context(&self.forge, id)
+    }
+
+    fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
+        RuntimeHost::record_handoff_landing(&self.forge, update)
+    }
+
+    fn run_private_vcs_operation(
+        &self,
+        operation: &str,
+        input: Value,
+    ) -> Result<Value, OrbitError> {
+        if operation == "pr.required_checks" {
+            self.forge
+                .ops
+                .lock()
+                .unwrap()
+                .push((operation.into(), input));
+            let mut policies = self.policies.lock().unwrap();
+            let answer = policies.front().unwrap().clone();
+            if policies.len() > 1 {
+                policies.pop_front();
+            }
+            if answer == json!("auth") {
+                return Err(OrbitError::Execution("HTTP 401: Bad credentials".into()));
+            }
+            return Ok(answer);
+        }
+        let mut answer = RuntimeHost::run_private_vcs_operation(&self.forge, operation, input)?;
+        if operation == "pr.status" && answer["pull_request"]["state"] != "MERGED" {
+            let mut observations = self.observations.lock().unwrap();
+            let patch = observations.front().unwrap().as_object().unwrap();
+            if let Some(error) = patch.get("error").and_then(Value::as_str) {
+                return Err(OrbitError::Execution(error.into()));
+            }
+            answer["pull_request"]
+                .as_object_mut()
+                .unwrap()
+                .extend(patch.clone());
+            if observations.len() > 1 {
+                observations.pop_front();
+            }
+        }
+        Ok(answer)
+    }
+}
+
+fn pending_policy(head: &str, status: &str, required: bool) -> Value {
+    json!({"pull_request":{"headRefOid":head,"commits":{"nodes":[{"commit":{
+        "oid":head,"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},
+        "nodes":[{"__typename":"CheckRun","name":"clippy","status":status,
+        "conclusion":if status == "COMPLETED" {"SUCCESS"} else {""},"isRequired":required,
+        "checkSuite":{"workflowRun":{"workflow":{"name":"CI"}}}}]}}
+    }}]}}})
+}
+
+fn pending_forge(repo: &Path, observations: Vec<Value>, policies: Vec<Value>) -> PendingForge {
+    let forge = FakeForge::new(repo, false);
+    forge.job(&forge.context.candidate.candidate.commit, passed(1, 11));
+    PendingForge {
+        forge,
+        observations: Mutex::new(observations.into()),
+        policies: Mutex::new(policies.into()),
+    }
+}
+
+fn blocked_aggregate() -> Value {
+    json!({"mergeStateStatus":"BLOCKED","statusCheckRollup":[{
+        "__typename":"CheckRun","name":"CodeQL","status":"COMPLETED","conclusion":"NEUTRAL"
+    }]})
+}
+
+#[test]
+fn owner_landing_waits_for_exact_required_checks_before_one_verified_merge() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "owner_landing_waits_for_exact_required_checks_before_one_verified_merge",
+        || {
+            let sandbox = tempdir().unwrap();
+            let host = pending_forge(
+                sandbox.path(),
+                vec![
+                    blocked_aggregate(),
+                    blocked_aggregate(),
+                    json!({"mergeStateStatus":"CLEAN"}),
+                ],
+                vec![],
+            );
+            let head = host.forge.context.candidate.candidate.commit.clone();
+            *host.policies.lock().unwrap() = vec![
+                pending_policy(&head, "QUEUED", true),
+                pending_policy(&head, "IN_PROGRESS", true),
+            ]
+            .into();
+            let waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let captured = waits.clone();
+            let result = orbit_engine::test_support::with_vcs_retry_wait(
+                move |duration| captured.borrow_mut().push(duration.as_secs()),
+                || {
+                    land_with(
+                        &host,
+                        json!({"max_wait_seconds":15,"poll_interval_seconds":5}),
+                    )
+                },
+            );
+            assert_eq!(
+                result.expect("BLOCKED with conclusive exact-head required pending must wait")["phase"],
+                "landed"
+            );
+            assert_eq!(*waits.borrow(), [5, 5]);
+            assert_eq!(
+                host.forge.sent("pr.required_checks").len(),
+                2,
+                "current policy is read on every blocked observation"
+            );
+            assert_eq!(host.forge.sent("pr.status").len(), 4);
+            assert_eq!(host.forge.sent("pr.merge").len(), 1);
+            let ops = host.forge.ops.lock().unwrap();
+            let deadlines: Vec<u64> = ops
+                .iter()
+                .filter(|(op, _)| matches!(op.as_str(), "pr.status" | "pr.required_checks"))
+                .map(|(_, input)| {
+                    input["deadline_ms"]
+                        .as_u64()
+                        .expect("poll reads carry the original deadline")
+                })
+                .collect();
+            assert_eq!(deadlines.len(), 6);
+            assert!(
+                deadlines.iter().all(|deadline| *deadline == deadlines[0]),
+                "queued/running/success transitions never reset the enclosing deadline"
+            );
+            let merge = ops.iter().position(|(op, _)| op == "pr.merge").unwrap();
+            assert_eq!(
+                ops[..merge]
+                    .iter()
+                    .filter(|(op, _)| op == "pr.status")
+                    .count(),
+                3,
+                "no merge before checks settle"
+            );
+            assert_eq!(
+                host.forge.steps(),
+                [
+                    HandoffLandingStep::PublishIntent {
+                        intent_id: "handoff-1:42".into()
+                    },
+                    HandoffLandingStep::ResolveIntent {
+                        intent_id: "handoff-1:42".into(),
+                        merged: true
+                    },
+                    HandoffLandingStep::Complete
+                ]
+            );
+        },
+    );
+}
+
+/// Controls share the public accepted-candidate setup, without real sleeps.
+#[test]
+#[allow(clippy::print_stderr)] // Identify each control in isolated child failure output.
+fn owner_landing_pending_evidence_never_extends_refusal_or_merge_authority() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "owner_landing_pending_evidence_never_extends_refusal_or_merge_authority",
+        || {
+            for case in [
+                "optional",
+                "administrative",
+                "review",
+                "review_failed",
+                "draft_failed",
+                "contradiction_failed",
+                "missing_state",
+                "changes_requested",
+                "unknown_review",
+                "unreadable_rollup",
+                "auth",
+                "foreign_policy",
+                "foreign_commit",
+                "missing_policy",
+                "missing_policy_head",
+                "truncated",
+                "unknown_check",
+                "contradiction",
+                "head_changed",
+                "base_changed",
+                "policy_changed",
+                "timeout",
+                "changing_checks_timeout",
+                "cancelled",
+                "owed",
+                "neutral",
+                "skipped",
+                "owed_absent",
+                "owed_foreign",
+                "required_neutral",
+                "required_skipped",
+            ] {
+                eprintln!("pending evidence control: {case}");
+                let sandbox = tempdir().unwrap();
+                let mut host = pending_forge(sandbox.path(), vec![blocked_aggregate()], vec![]);
+                let head = host.forge.context.candidate.candidate.commit.clone();
+                let mut patch = blocked_aggregate();
+                let mut policy = pending_policy(&head, "IN_PROGRESS", true);
+                let mut after = None;
+                let mut next_policy = None;
+                let mut expected_waits = 0;
+                let mut merges = false;
+                let mut reason = "cannot be merged";
+                match case {
+                    "optional" => {
+                        policy = pending_policy(&head, "IN_PROGRESS", false);
+                        patch["statusCheckRollup"] = json!([{"name":"optional","status":"QUEUED"}]);
+                    }
+                    "administrative" => policy = pending_policy(&head, "COMPLETED", true),
+                    "review" => patch["reviewDecision"] = json!("REVIEW_REQUIRED"),
+                    "missing_state" => {
+                        patch["state"] = Value::Null;
+                        reason = "unavailable";
+                    }
+                    "review_failed" | "draft_failed" | "contradiction_failed" => {
+                        host.forge.context.owed_hosted_checks = vec!["CI / clippy".into()];
+                        patch["statusCheckRollup"] = json!([{"name":"clippy","workflowName":"CI","status":"COMPLETED","conclusion":"FAILURE"}]);
+                        if case == "review_failed" {
+                            patch["reviewDecision"] = json!("REVIEW_REQUIRED");
+                        }
+                        if case == "draft_failed" {
+                            patch["mergeStateStatus"] = json!("DRAFT");
+                        }
+                        if case == "contradiction_failed" {
+                            patch["mergedAt"] = json!("2026-10-15T00:00:00Z");
+                            reason = "contradictory";
+                        }
+                    }
+                    "changes_requested" => patch["reviewDecision"] = json!("CHANGES_REQUESTED"),
+                    "unknown_review" => patch["reviewDecision"] = json!(42),
+                    "unreadable_rollup" => patch["statusCheckRollup"] = Value::Null,
+                    "auth" => {
+                        policy = json!("auth");
+                        reason = "HTTP 401";
+                    }
+                    "foreign_policy" => {
+                        policy = pending_policy("foreign", "QUEUED", true);
+                        reason = "current head";
+                    }
+                    "foreign_commit" => {
+                        policy["pull_request"]["commits"]["nodes"][0]["commit"]["oid"] =
+                            json!("foreign");
+                        reason = "current head";
+                    }
+                    "missing_policy" => {
+                        policy = json!({});
+                        reason = "no pull request";
+                    }
+                    "required_neutral" | "required_skipped" => {
+                        policy = pending_policy(&head, "COMPLETED", true);
+                        policy["pull_request"]["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
+                            ["contexts"]["nodes"][0]["conclusion"] =
+                            json!(if case == "required_neutral" {
+                                "NEUTRAL"
+                            } else {
+                                "SKIPPED"
+                            });
+                    }
+                    "missing_policy_head" => {
+                        policy["pull_request"]
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("headRefOid");
+                        reason = "current head";
+                    }
+                    "truncated" => {
+                        policy["pull_request"]["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
+                            ["contexts"]["pageInfo"]["hasNextPage"] = json!(true);
+                        reason = "truncated";
+                    }
+                    "unknown_check" => {
+                        policy["pull_request"]["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
+                            ["contexts"]["nodes"][0]["status"] = json!("UNRECOGNIZED");
+                        reason = "unreadable";
+                    }
+                    "contradiction" => {
+                        patch["mergedAt"] = json!("2026-10-15T00:00:00Z");
+                        reason = "contradictory";
+                    }
+                    "head_changed" | "base_changed" => {
+                        after = Some(
+                            json!({if case == "head_changed" { "headRefOid" } else { "baseRefName" }:"foreign"}),
+                        );
+                        expected_waits = 1;
+                        reason = "delivery_evidence_stale";
+                    }
+                    "policy_changed" => {
+                        next_policy = Some(pending_policy(&head, "QUEUED", false));
+                        expected_waits = 1;
+                    }
+                    "timeout" | "changing_checks_timeout" => {
+                        expected_waits = 2;
+                        reason = "within 10s";
+                        if case == "changing_checks_timeout" {
+                            let mut next = pending_policy(&head, "QUEUED", true);
+                            next["pull_request"]["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
+                                ["contexts"]["nodes"][0]["name"] = json!("another required job");
+                            next_policy = Some(next);
+                        }
+                    }
+                    "cancelled" => {
+                        after = Some(json!({"error":"execution cancelled"}));
+                        expected_waits = 1;
+                        reason = "cancelled";
+                    }
+                    "owed" | "neutral" | "skipped" | "owed_absent" | "owed_foreign" => {
+                        host.forge.context.owed_hosted_checks = vec!["CI / clippy".into()];
+                        policy = pending_policy(&head, "IN_PROGRESS", false);
+                        if case != "owed_absent" {
+                            patch["statusCheckRollup"] = json!([{"name":"clippy","workflowName":"CI","status":if case == "owed" {"QUEUED"} else {"COMPLETED"},"conclusion":if case == "neutral" {"NEUTRAL"} else {"SKIPPED"}}]);
+                        }
+                        if case == "owed_foreign" {
+                            patch["statusCheckRollup"] = json!([{"name":"clippy","workflowName":"Foreign","status":"QUEUED"}]);
+                        }
+                        if case == "owed" {
+                            after = Some(json!({"mergeStateStatus":"CLEAN"}));
+                            expected_waits = 1;
+                            merges = true;
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+                let mut observations = vec![patch];
+                if let Some(after) = after {
+                    observations.push(after);
+                }
+                let mut policies = vec![policy];
+                if let Some(next) = next_policy {
+                    policies.push(next);
+                }
+                *host.observations.lock().unwrap() = observations.into();
+                *host.policies.lock().unwrap() = policies.into();
+                let waits = std::rc::Rc::new(std::cell::Cell::new(0));
+                let captured = waits.clone();
+                let result = orbit_engine::test_support::with_vcs_retry_wait(
+                    move |_| captured.set(captured.get() + 1),
+                    || {
+                        land_with(
+                            &host,
+                            json!({"max_wait_seconds":10,"poll_interval_seconds":5}),
+                        )
+                    },
+                );
+                assert_eq!(waits.get(), expected_waits, "{case}: {result:?}");
+                for operation in ["ci.commit_jobs", "ci.rerun_failed", "pr.update_branch"] {
+                    assert!(
+                        host.forge.sent(operation).is_empty(),
+                        "{case}: no recovery bypass of a refusal"
+                    );
+                }
+                assert_eq!(
+                    host.forge.sent("pr.merge").len(),
+                    usize::from(merges),
+                    "{case}"
+                );
+                if merges {
+                    assert_eq!(result.unwrap()["phase"], "landed");
+                } else {
+                    let error = result.unwrap_err().to_string();
+                    assert!(error.contains(reason), "{case}: {error}");
+                    if case != "cancelled" {
+                        assert_eq!(
+                            host.forge.steps(),
+                            [HandoffLandingStep::Stop { repairable: false }],
+                            "{case}"
+                        );
+                    }
+                }
+            }
+        },
+    );
 }
 
 /// The provider's branch update of `head` on the published `remote`, after
@@ -1367,51 +1767,56 @@ fn owner_landing_waits_for_unknown_then_clean_and_retains_expired_or_blocked_evi
         module_path!(),
         "owner_landing_waits_for_unknown_then_clean_and_retains_expired_or_blocked_evidence",
         || {
-            for (case, states, review) in [
-                ("settles", vec!["UNKNOWN", "PENDING", "CLEAN"], ""),
-                ("expires", vec!["UNKNOWN"], ""),
-                ("review", vec!["BLOCKED"], "REVIEW_REQUIRED"),
-                ("administrative", vec!["BLOCKED"], ""),
-            ] {
-                let sandbox = tempdir().unwrap();
-                let forge = FakeForge::new(sandbox.path(), false);
-                forge.job(&forge.context.candidate.candidate.commit, passed(1, 11));
-                {
-                    let mut state = forge.state.lock().unwrap();
-                    state.merge_states = states.into();
-                    state.review_decision = Some(review);
-                }
-                let result = land_with(
-                    &forge,
-                    json!({"max_wait_seconds": if case == "settles" {10} else {0}, "poll_interval_seconds":5}),
-                );
-                if case == "settles" {
-                    assert_eq!(result.unwrap()["phase"], "landed");
-                    assert_eq!(forge.sent("pr.merge").len(), 1);
-                    assert_eq!(
-                        forge.sent("pr.status").len(),
-                        4,
-                        "bounded observations settle and verify the one merge"
-                    );
-                } else {
-                    assert!(result.is_err(), "{case}");
-                    assert_eq!(
-                        forge.sent("pr.status").len(),
-                        1,
-                        "no administrative wait expansion: {case}"
-                    );
-                    assert!(forge.sent("pr.merge").is_empty(), "{case}");
-                    assert_eq!(
-                        forge.steps(),
-                        [HandoffLandingStep::Stop { repairable: false }],
-                        "durable refusal without repair: {case}"
-                    );
-                    assert!(
-                        !forge.last_evidence().is_empty(),
-                        "expired/refused observations retain evidence"
-                    );
-                }
-            }
+            orbit_engine::test_support::with_vcs_retry_wait(
+                |_| {},
+                || {
+                    for (case, states, review) in [
+                        ("settles", vec!["UNKNOWN", "PENDING", "CLEAN"], ""),
+                        ("expires", vec!["UNKNOWN"], ""),
+                        ("review", vec!["BLOCKED"], "REVIEW_REQUIRED"),
+                        ("administrative", vec!["BLOCKED"], ""),
+                    ] {
+                        let sandbox = tempdir().unwrap();
+                        let forge = FakeForge::new(sandbox.path(), false);
+                        forge.job(&forge.context.candidate.candidate.commit, passed(1, 11));
+                        {
+                            let mut state = forge.state.lock().unwrap();
+                            state.merge_states = states.into();
+                            state.review_decision = Some(review);
+                        }
+                        let result = land_with(
+                            &forge,
+                            json!({"max_wait_seconds": if case == "settles" {15} else {0}, "poll_interval_seconds":5}),
+                        );
+                        if case == "settles" {
+                            assert_eq!(result.unwrap()["phase"], "landed");
+                            assert_eq!(forge.sent("pr.merge").len(), 1);
+                            assert_eq!(
+                                forge.sent("pr.status").len(),
+                                4,
+                                "bounded observations settle and verify the one merge"
+                            );
+                        } else {
+                            assert!(result.is_err(), "{case}");
+                            assert_eq!(
+                                forge.sent("pr.status").len(),
+                                1,
+                                "no administrative wait expansion: {case}"
+                            );
+                            assert!(forge.sent("pr.merge").is_empty(), "{case}");
+                            assert_eq!(
+                                forge.steps(),
+                                [HandoffLandingStep::Stop { repairable: false }],
+                                "durable refusal without repair: {case}"
+                            );
+                            assert!(
+                                !forge.last_evidence().is_empty(),
+                                "expired/refused observations retain evidence"
+                            );
+                        }
+                    }
+                },
+            )
         },
     );
 }

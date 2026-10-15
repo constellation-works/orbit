@@ -91,13 +91,17 @@ use super::super::git::{base_sync_mode_from_input, resolve_worktree_start_point}
 use super::super::handoff::load_handoff_context;
 use super::super::operations;
 use super::super::push::push_batch_changes;
-use super::answers::{PullRequestStatus, ReviewedMergeOutcome, read_pr_status};
+use super::answers::{
+    PullRequestStatus, ReviewedMergeOutcome, read_pr_status, read_pr_status_before,
+};
 use super::auto_fix::{
     AutoFix, BlockedVerdict, LocalRepair, admit, adopt_published_repairs, blocked_verdict,
     landed_repair, publish_local_repair, record_landed_repair, record_published_repair,
     repair_failed_checks, stopped,
 };
-use super::delivery::{DeliveryEvidence, DeliveryPin, PrMergeState, classify_pr_state};
+use super::delivery::{
+    DeliveryEvidence, DeliveryPin, PrMergeState, checked_pr_state, classify_pr_state,
+};
 use super::head_lag::HeadLag;
 use super::merge::{MergeStrategy, PermittedMerge, resolve_permitted_merge};
 
@@ -362,8 +366,17 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
 
     loop {
         waited_seconds = waited_seconds.max(completion_started.elapsed().as_secs());
-        let status = read_pr_status(host, Path::new(workspace_path), pr_number)?;
-        let state = classify_pr_state(&status);
+        let status = if max_wait_seconds == 0 {
+            read_pr_status(host, Path::new(workspace_path), pr_number)?
+        } else {
+            read_pr_status_before(
+                host,
+                Path::new(workspace_path),
+                pr_number,
+                completion_deadline_ms,
+            )?
+        };
+        let mut state = classify_pr_state(&status);
         if matches!(
             state,
             PrMergeState::Mergeable
@@ -387,6 +400,16 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
             pin.ensure_pinned_candidate(&status, pr_number)?;
             ensure_pr_head_is_reviewed(&status, pr_number, reviewed_head_sha.as_deref())?;
         }
+        state = checked_pr_state(
+            host,
+            Path::new(workspace_path),
+            pr_number,
+            &status,
+            &[],
+            completion_deadline_ms,
+        )
+        .map_err(|reason| stopped(pr_number, &reason))?;
+        let pending_required = matches!(state, PrMergeState::Pending);
         let mut infrastructure_wait = false;
         if let Some(auto_fix) = auto_fix
             && matches!(
@@ -394,7 +417,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 PrMergeState::Mergeable | PrMergeState::Pending | PrMergeState::Blocked(_)
             )
         {
-            let verdict = blocked_verdict(&status, unsettled_polls);
+            let verdict = blocked_verdict(&status, unsettled_polls, pending_required);
             // Outstanding reviews and unreadable rollups cannot authorize a
             // rerun, including when a reservation already exists.
             let diagnose = is_blocked_merge_state(&status)
@@ -485,7 +508,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                          not bypass them — the task stays in review.{diagnosis}"
                     )));
                 };
-                match blocked_verdict(&status, unsettled_polls) {
+                match blocked_verdict(&status, unsettled_polls, pending_required) {
                     BlockedVerdict::Wait => unsettled_polls += 1,
                     BlockedVerdict::Stop(reason) => return Err(stopped(pr_number, &reason)),
                     // A repair commit on a reviewed head is reviewed again

@@ -416,10 +416,36 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
                 &host.repo,
                 &["ls-remote", "origin", &format!("refs/heads/{BRANCH}")],
             );
-            Some(json!({"pull_request":{"commits":{"nodes":[{"commit":{
-                "oid":head.split_whitespace().next().unwrap(),
-                "statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[{"name":"test","isRequired":true}]}}
-            }}]}}}))
+            let forge = host.repo.parent().unwrap().join("forge");
+            let reads: usize = fs::read_to_string(forge.join("reads"))
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            let script = fs::read_to_string(forge.join("checks")).unwrap();
+            let observed = script
+                .lines()
+                .nth(reads.saturating_sub(1))
+                .or_else(|| script.lines().last())
+                .unwrap();
+            let status = if observed == "pending" {
+                "IN_PROGRESS"
+            } else {
+                "COMPLETED"
+            };
+            let conclusion = if observed == "pending" {
+                ""
+            } else if observed == "success" {
+                "SUCCESS"
+            } else {
+                "FAILURE"
+            };
+            Some(
+                json!({"pull_request":{"headRefOid":head.split_whitespace().next().unwrap(),"commits":{"nodes":[{"commit":{
+                    "oid":head.split_whitespace().next().unwrap(),
+                    "statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[{"name":"test","isRequired":true,"status":status,"conclusion":conclusion}]}}
+                }}]}}}),
+            )
         }
         "ci.commit_jobs" => {
             let commit = input["commit"].as_str().unwrap();
