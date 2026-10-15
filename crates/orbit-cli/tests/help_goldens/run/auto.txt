@@ -10,7 +10,7 @@ Options:
           Override the Orbit root directory (highest precedence)
 
       --concurrency <N>
-          How many tasks may be in flight at once. The drain tops these slots up from the whole backlog as each one frees, so this is the parallelism, not a batch size. Defaults to 5
+          Admission ceiling (default 5). Owner/local drains count every in-flight child; pull drains also apply the bounded before-landing review credit described below
 
       --workspace <SELECTOR>
           Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
@@ -87,9 +87,24 @@ Examples:
   orbit run auto --pull hm_owner/ws_orbit --for 8h --concurrency 3
   orbit run auto --pull hm_owner/ws_orbit --for 8h --allow-crew sol,luna
 
-The drain re-lists the whole backlog every pass and keeps `--concurrency`
-tasks in flight, starting a replacement as each one finishes rather than
-waiting for the batch.
+The drain re-lists the whole backlog every pass.
+Owner/local drains count every in-flight child against `--concurrency` and
+refill a slot as soon as its child finishes.
+A replica's pull drain uses the same value as an admission ceiling, with
+bounded before-landing review credit. Before each claim, it counts
+`occupied - min(reviewing, N)` against N.
+A leaf becomes reviewing after the owner's persisted before-landing
+admission has `applies=true`; validation and publishing before that
+boundary count as implementing. Later review revalidation and handoff
+remain reviewing.
+The credit is capped at N, but reviewing leaves can exceed N as
+replacements reach review.
+With an unchanged N and no pre-existing excess, pull occupancy stays at
+most 2N and implementing leaves at most N.
+Lowering N preserves running leaves, so existing excess can remain
+temporarily.
+See `orbit run show` for claimed leaves by stage. Review rebuilds still
+compete for repository build-budget slots.
 
 `--complete` is blanket authorization: it applies to every task the drain
 admits for the whole window, including work that reaches the backlog after

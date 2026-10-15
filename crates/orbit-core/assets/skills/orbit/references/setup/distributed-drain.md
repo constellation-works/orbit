@@ -264,10 +264,18 @@ returns.
   stale `Outcome: failed` needs no hand-clearing before re-dispatch.
 - `orbit run concurrency <run-id> --set N` retunes the slot ceiling live. It is
   the only ceiling: the claimed leaf jobs declare no active-run limit of their
-  own, so size it to what the follower can carry. A leaf in its before-landing
-  review admits a replacement beside it, up to N such leaves, so a drain may
-  carry N implementing plus N reviewing leaves; `orbit run show <run-id>`
-  splits its `Claimed leaves:` by stage.
+  own. Before each claim, the pull allocator counts `occupied - min(reviewing,
+  N)` against N. A leaf counts as reviewing after the owner's persisted
+  before-landing admission has `applies=true`; validation and publishing before
+  that boundary count as implementing, while later review revalidation and
+  handoff remain reviewing. Review credit is capped at N, but reviewing leaves
+  can exceed N as replacements reach review. With an unchanged N and no
+  pre-existing excess, total occupied leaves stay at most 2N and implementing
+  leaves at most N. Lowering N preserves running leaves, so existing excess can
+  remain temporarily. Owner/local drains continue counting every in-flight
+  child against their ceiling. `orbit run show <run-id>` splits `Claimed
+  leaves:` by stage; review rebuilds still compete for repository build-budget
+  slots.
 - `orbit run extend <run-id> --for <d> [--concurrency N]` lengthens a live
   pull drain's window on the same run, even in its settling tail after the
   window closed; a second `orbit run auto --pull` would only queue behind it.

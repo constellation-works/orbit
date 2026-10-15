@@ -425,11 +425,17 @@ fn occupancy(
 
 /// The slots a new pull admission competes for under `ceiling` [ORB-15194].
 ///
-/// A claimed leaf in its before-landing review runs no implementer, yet holds
-/// its slot until its claim settles, one to two hours later. Each such leaf
-/// frees its slot for a replacement, but at most `ceiling` of them do, so one
-/// drain carries at most `ceiling` implementing leaves plus `ceiling`
-/// reviewing ones. Build-budget admission still limits the compilers they run.
+/// Pull-only review credit starts after the persisted before-landing admission
+/// has `applies=true`; validation and publishing before that boundary remain
+/// implementing. The leaf then stays reviewing through revalidation and
+/// handoff while its claim settles. Admission counts occupied minus
+/// `min(reviewing, ceiling)`, so credit is capped at `ceiling` but the reviewing
+/// population can exceed it as replacements reach review. With an unchanged
+/// ceiling and no pre-existing excess, occupied leaves stay at most twice the
+/// ceiling and implementing leaves at most the ceiling. Lowering the ceiling
+/// preserves running leaves, so existing excess may remain. Owner/local drains
+/// continue counting every in-flight child against their ceiling. Review
+/// rebuilds still compete for the repository build budget.
 fn pull_admission_load(occupancy: &DrainLeafOccupancy, ceiling: usize) -> usize {
     occupancy
         .occupied

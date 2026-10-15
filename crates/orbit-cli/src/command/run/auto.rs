@@ -18,9 +18,24 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
     about = "Drain the workspace backlog for a window",
     override_usage = "orbit run auto [OPTIONS]",
     after_help = "Examples:\n  orbit run auto\n  orbit run auto --medium-complexity-crews grok,sol\n  orbit run auto --for 4h\n  orbit run auto --for 4h --concurrency 8\n  orbit run auto --for 4h --complete\n  orbit run auto --for 4h --auto-fix\n  orbit run auto --for 4h --approve-proposed\n  orbit run auto --stop\n  orbit run auto --pull hm_owner/ws_orbit --for 8h --concurrency 3\n  orbit run auto --pull hm_owner/ws_orbit --for 8h --allow-crew sol,luna\n\n\
-                  The drain re-lists the whole backlog every pass and keeps `--concurrency`\n\
-                  tasks in flight, starting a replacement as each one finishes rather than\n\
-                  waiting for the batch.\n\n\
+                  The drain re-lists the whole backlog every pass.\n\
+                  Owner/local drains count every in-flight child against `--concurrency` and\n\
+                  refill a slot as soon as its child finishes.\n\
+                  A replica's pull drain uses the same value as an admission ceiling, with\n\
+                  bounded before-landing review credit. Before each claim, it counts\n\
+                  `occupied - min(reviewing, N)` against N.\n\
+                  A leaf becomes reviewing after the owner's persisted before-landing\n\
+                  admission has `applies=true`; validation and publishing before that\n\
+                  boundary count as implementing. Later review revalidation and handoff\n\
+                  remain reviewing.\n\
+                  The credit is capped at N, but reviewing leaves can exceed N as\n\
+                  replacements reach review.\n\
+                  With an unchanged N and no pre-existing excess, pull occupancy stays at\n\
+                  most 2N and implementing leaves at most N.\n\
+                  Lowering N preserves running leaves, so existing excess can remain\n\
+                  temporarily.\n\
+                  See `orbit run show` for claimed leaves by stage. Review rebuilds still\n\
+                  compete for repository build-budget slots.\n\n\
                   `--complete` is blanket authorization: it applies to every task the drain\n\
                   admits for the whole window, including work that reaches the backlog after\n\
                   the run starts. The drain is asynchronous, so this prints the durable run ID\n\
@@ -96,9 +111,9 @@ pub struct AutoCommand {
     /// drain's window in place.
     #[arg(long = "for", value_name = "DURATION")]
     pub for_duration: Option<String>,
-    /// How many tasks may be in flight at once. The drain tops these slots up
-    /// from the whole backlog as each one frees, so this is the parallelism,
-    /// not a batch size. Defaults to 5.
+    /// Admission ceiling (default 5). Owner/local drains count every in-flight
+    /// child; pull drains also apply the bounded before-landing review credit
+    /// described below.
     #[arg(long, value_name = "N")]
     pub concurrency: Option<u32>,
     /// Forecast admission mode for this local drain: off, shadow or enforce.

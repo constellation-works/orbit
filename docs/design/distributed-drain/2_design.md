@@ -361,6 +361,19 @@ its transaction:
 `classify_workspace_auto_tasks` and the readiness diagnostic report `wrapper_leaf_runs` and
 `leaf_occupancy_by_pipeline`.
 
+**Pull review replacement credit.** Owner/local drains continue to count every occupied child
+against their worker ceiling. A pull drain uses the same ceiling N but computes its admission
+load as `occupied - min(reviewing, N)` and admits only while that load is below N. A leaf enters
+the reviewing count after the persisted before-landing admission has `applies=true`; validation
+and publishing before that boundary count as implementing, while review revalidation and
+handoff remain reviewing. The credit is capped at N, not the reviewing population: replacements
+can also reach review, so reviewing leaves may exceed N. With an unchanged ceiling and no
+pre-existing excess, total occupied leaves stay at most 2N and implementing leaves at most N;
+for N=3, 2 implementing plus 4 reviewing leaves occupy all 6 leaves and leave no admission
+credit. Lowering N preserves running leaves and can temporarily leave more than 2N already
+occupied. `orbit run show <run-id>` reports the pull leaves by stage. A review that rebuilds still
+competes for repository build-budget slots.
+
 **Crash cuts.** Request, create, bind and launch cuts leave one claim and one leaf. A failed
 launch leaves one settlement retried idempotently; a killed launch leaves a `Launching` record every
 generic path (drain, `orbit job resume`) refuses, pending deliberate recovery.
