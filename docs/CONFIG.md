@@ -951,10 +951,15 @@ complexity or crew.
 The PR watcher already used by `--complete` does the detecting, and the
 existing recovery activities, final validation and push do the repair:
 
-- Pending checks wait. A failed required check whose job log shows a code
-  failure is repaired, with that head's failed step, error signature and log
-  excerpt as evidence. A conflict is rebased onto the current base by PR
-  conflict recovery.
+- On an open blocked PR, the watcher reads authenticated required-check policy
+  for the pinned current head. Queued or running required checks keep waiting
+  within the original completion deadline, even beside an unrelated optional
+  failure. An unclassified or optional pending check grants no wait, and a
+  required failure still takes precedence over pending checks. Review gates and
+  unreadable or stale evidence still stop the watcher. A failed required check
+  whose job log shows a code failure is repaired, with that head's failed step,
+  error signature and log excerpt as evidence. A conflict is rebased onto the
+  current base by PR conflict recovery.
 - An admitted required-check repair may change the source files needed to fix
   its evidenced failure outside the original task description or selectors,
   including a defect already on the shared base. Ordinary step recovery keeps

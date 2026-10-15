@@ -1145,3 +1145,217 @@ fn auto_fix_anchors_emitted_failure_after_printed_commands_and_before_cleanup() 
         },
     );
 }
+
+/// An unrelated optional failure must not end the authenticated required wait.
+#[test]
+fn auto_fix_watches_required_running_beside_optional_failure() {
+    isolated(
+        "auto_fix::auto_fix_watches_required_running_beside_optional_failure",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+            open_for_completion(&fx, &host);
+            host.script("ci.prerequisite_evidence", json!({"evidence":null}));
+            fx.script_checks(&["mixed_pending", "mixed_pending", "mixed_success"]);
+            let mut input = fx.complete_ungated_input();
+            input["auto_fix"] = json!(true);
+            input["completion"] = json!("review");
+            input["max_wait_seconds"] = json!(15);
+            let clock = std::rc::Rc::new(std::cell::Cell::new(1_000_u64));
+            let reads = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let now = clock.clone();
+            let elapsed = clock.clone();
+            let captured = reads.clone();
+            let completed = orbit_engine::test_support::with_prerequisite_clock(
+                move || now.get(),
+                move |label, timeout| captured.borrow_mut().push((label.to_string(), timeout)),
+                || {
+                    orbit_engine::test_support::with_vcs_retry_wait(
+                        move |duration| elapsed.set(elapsed.get() + duration.as_millis() as u64),
+                        || action(&host, "pr_complete", &input),
+                    )
+                },
+            )
+            .expect("optional failure must not stop the current required running watcher");
+            assert_eq!(
+                *reads.borrow(),
+                [
+                    ("PR status".into(), 15_000),
+                    ("PR required checks".into(), 15_000),
+                    ("PR status".into(), 10_000),
+                    ("PR required checks".into(), 10_000),
+                    ("PR status".into(), 5_000)
+                ],
+                "all observations consume the original absolute completion deadline"
+            );
+            assert_eq!(completed["merge"]["reason"], "auto_fix_mergeable");
+            assert_eq!(completed["merge"]["head_sha"], fx.candidate);
+            assert_eq!(completed["merge"]["waited_seconds"], 10);
+            assert_eq!(fx.status_reads(), 3, "watch until required success");
+            assert!(pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).is_empty());
+            assert!(
+                fx.merge_requests().is_empty(),
+                "watch authority never merges"
+            );
+            assert_eq!(fx.head(), fx.candidate, "no source repair");
+            assert_eq!(fx.remote_tip(BRANCH), fx.candidate);
+            assert_eq!(fx.remote_tip(BASE), fx.base_sha);
+            assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+            assert!(!fx.forge_calls().iter().any(|call| call == "run rerun"));
+        },
+    );
+}
+
+#[test]
+fn auto_fix_mixed_failure_wait_preserves_recovery_and_refusals() {
+    isolated(
+        "auto_fix::auto_fix_mixed_failure_wait_preserves_recovery_and_refusals",
+        |sandbox| {
+            for case in [
+                "required_failure",
+                "optional_pending",
+                "administrative",
+                "review",
+                "foreign_head",
+                "foreign_commit",
+                "missing_head",
+                "unknown_required",
+                "unclassified",
+                "truncated",
+                "malformed",
+                "auth",
+                "timeout",
+                "changed_head",
+                "changed_base",
+            ] {
+                in_fresh_row(sandbox, |row| {
+                    let fx = Fixture::new(row);
+                    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+                    open_for_completion(&fx, &host);
+                    host.script("ci.prerequisite_evidence", json!({"evidence":null}));
+                    fx.script_checks(&["mixed_pending", "mixed_success"]);
+                    let mut input = fx.complete_ungated_input();
+                    input["auto_fix"] = json!(true);
+                    input["completion"] = json!("review");
+                    let mut policy = json!({"headRefOid":fx.candidate,"commits":{"nodes":[{"commit":{
+                        "oid":fx.candidate,"statusCheckRollup":{"contexts":{
+                            "pageInfo":{"hasNextPage":false},"nodes":[
+                                {"name":"test","isRequired":true,"status":"IN_PROGRESS","conclusion":""},
+                                {"name":"coverage","isRequired":false,"status":"COMPLETED","conclusion":"FAILURE"}
+                            ]}
+                        }
+                    }}]}});
+                    let mut expected = match case {
+                        "optional_pending" | "administrative" => "only optional checks failed",
+                        "review" => "review is required (REVIEW_REQUIRED)",
+                        "foreign_head" | "foreign_commit" | "missing_head" => "current head",
+                        "unknown_required" => "unreadable",
+                        "unclassified" => "did not say whether",
+                        "truncated" => "truncated",
+                        "malformed" => "no pull request",
+                        "auth" => "HTTP 401",
+                        _ => "auto_fix_stopped",
+                    };
+                    match case {
+                        "required_failure" => {
+                            fx.script_checks(&["mixed_failure"]);
+                            let nodes = &mut policy["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
+                                ["contexts"]["nodes"];
+                            nodes[0]["status"] = json!("COMPLETED");
+                            nodes[0]["conclusion"] = json!("FAILURE");
+                            nodes.as_array_mut().unwrap().push(json!({"name":"other_required","isRequired":true,"status":"IN_PROGRESS"}));
+                            host.script("ci.commit_jobs", json!({"jobs":[{"name":"test","conclusion":"failure","run_id":10,"job_id":11,"failed_step":"compile"}]}));
+                            host.script(
+                                "ci.job_log",
+                                json!({"log":"error[E0433]: cannot find module `broken`"}),
+                            );
+                        }
+                        "optional_pending" => {
+                            policy["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]
+                                ["nodes"][0]["isRequired"] = json!(false)
+                        }
+                        "administrative" => {
+                            let check = &mut policy["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
+                                ["contexts"]["nodes"][0];
+                            check["status"] = json!("COMPLETED");
+                            check["conclusion"] = json!("SUCCESS");
+                        }
+                        "review" => {
+                            fs::write(fx.forge.join("review-decision"), "REVIEW_REQUIRED").unwrap()
+                        }
+                        "foreign_head" => policy["headRefOid"] = json!("foreign"),
+                        "foreign_commit" => {
+                            policy["commits"]["nodes"][0]["commit"]["oid"] = json!("foreign")
+                        }
+                        "missing_head" => {
+                            policy.as_object_mut().unwrap().remove("headRefOid");
+                        }
+                        "unknown_required" => {
+                            policy["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]
+                                ["nodes"][0]["status"] = json!("UNKNOWN_STATE")
+                        }
+                        "unclassified" => {
+                            policy["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["nodes"][0].as_object_mut().unwrap().remove("isRequired");
+                        }
+                        "truncated" => {
+                            policy["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]
+                                ["pageInfo"]["hasNextPage"] = json!(true)
+                        }
+                        "malformed" => policy = Value::Null,
+                        "auth" => fs::write(fx.forge.join("required-auth"), "").unwrap(),
+                        "timeout" => {
+                            fx.script_checks(&["mixed_pending"]);
+                            input["max_wait_seconds"] = json!(10);
+                            expected = "timed out after 10s";
+                        }
+                        "changed_head" => {
+                            fs::write(fx.forge.join("pr-head"), "other-branch").unwrap();
+                            expected = "delivery_evidence_stale";
+                        }
+                        "changed_base" => {
+                            fs::write(fx.forge.join("pr-base"), "main").unwrap();
+                            expected = "delivery_evidence_stale";
+                        }
+                        _ => unreachable!(),
+                    }
+                    fs::write(
+                        fx.forge.join("required-policy"),
+                        serde_json::to_vec(&json!({"data":{"repository":{"pullRequest":policy}}}))
+                            .unwrap(),
+                    )
+                    .unwrap();
+                    let error = action(&host, "pr_complete", &input)
+                        .expect_err(case)
+                        .to_string();
+                    if case == "required_failure" {
+                        assert!(
+                            orbit_types::workflow::is_pr_auto_fix_check_repair(&error),
+                            "eligible required failure: {error}"
+                        );
+                    } else {
+                        assert!(error.contains(expected), "{case}: {error}");
+                    }
+                    assert_eq!(
+                        pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).len(),
+                        usize::from(case == "required_failure"),
+                        "{case}: only required failure admits recovery"
+                    );
+                    assert_eq!(
+                        fx.status_reads(),
+                        if case == "timeout" { 2 } else { 1 },
+                        "{case}: no broad pending-first wait"
+                    );
+                    assert!(fx.merge_requests().is_empty(), "{case}: no merge authority");
+                    assert!(
+                        !fx.forge_calls().iter().any(|call| call == "run rerun"),
+                        "{case}: no infrastructure rerun"
+                    );
+                    assert_eq!(fx.head(), fx.candidate);
+                    assert_eq!(fx.remote_tip(BRANCH), fx.candidate);
+                    assert_eq!(fx.remote_tip(BASE), fx.base_sha);
+                    assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+                });
+            }
+        },
+    );
+}
