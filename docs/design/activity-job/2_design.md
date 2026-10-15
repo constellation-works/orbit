@@ -1356,18 +1356,20 @@ This operator-surface repair keeps `orbit run ship --json`, direct `orbit job ru
 
 After [ORB-00075], `orbit run ship` is the single public shipment command: omitted task IDs run auto mode, provided task IDs seed explicit singleton bundles, and both forms submit `task_auto_pipeline` asynchronously. Dispatch output is workflow/job/run identity plus pointers to `orbit run history -j task_auto_pipeline` and `orbit run show <RUN_ID>`; waiting reasons and terminal details live on those durable inspection surfaces.
 
-PR delivery supports one distinct task per leaf run. The shared submission boundary
-loads the submitted definition and rejects multiple tasks in a PR leaf using
+PR delivery and the shipped `task_local_pipeline` support one distinct task per leaf run. The shared submission boundary
+loads the submitted definition and rejects multiple tasks in any leaf using
 `git_commit scope: all` before worktree reclamation, admission-policy capture or
 run insertion.
 This applies to catalog jobs, direct YAML snapshots and parent-authorized children,
-including renamed copies of the PR leaf. The public foreground YAML API checks
+including renamed copies of PR and local leaves. The public foreground YAML API checks
 the same contract before inserting its run. The gate's delivery resolver rejects the
 same unsupported bundle before reserving any footprint. Duplicate task IDs normalize
 to a singleton. Existing retained runs and checkpoints are not rewritten by a refusal.
 `task_auto_pipeline` and `orbit run ship` may carry multiple task IDs because they
-dispatch separate singleton leaves. Supported local pipelines using
-`scope: per_task` keep their multi-task commit ownership and attribution. The PR
+dispatch separate singleton leaves. The shipped local leaf is not a bundled-delivery alternative to the PR leaf.
+A custom local pipeline may accept multiple tasks when its commit steps explicitly use
+`git_commit scope: per_task` and it supplies compatible per-task validation, no-diff
+and recovery handling. That scope keeps multi-task commit ownership and attribution. The
 commit singleton guard and its summary, validation, review, publication, auto-fix
 and no-diff contracts remain unchanged.
 

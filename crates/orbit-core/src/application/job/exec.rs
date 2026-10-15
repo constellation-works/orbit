@@ -242,7 +242,7 @@ impl OrbitRuntime {
             ));
         }
         let mut input = input;
-        super::delivery::normalize_pr_delivery_input(&spec, &mut input)?;
+        super::delivery::normalize_delivery_input(&spec, &mut input)?;
         self.capture_auto_concurrency(
             &job_name,
             &mut input,
