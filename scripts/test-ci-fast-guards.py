@@ -164,8 +164,6 @@ else:
             packages=[dict(id="path+file:///fixture/orbit-types#0.1.0", name="orbit-types")])))
         (workflows / "ci-macos.yml").write_text('''on:
   pull_request:
-    paths:
-      - Cargo.toml
 jobs:
   test:
     steps:
@@ -513,6 +511,28 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertEqual(calls, [["test", "-p", "orbit-types", "--locked", "fixture_test", "--", "--list"]])
+
+    def test_macos_check_requires_unrestricted_pull_request_coverage(self):
+        # Required native checks must report even for unrelated docs changes.
+        # Exercise the public guard with real workflow-event counterfactuals.
+        for event, accepted in (
+            ("  pull_request:\n", True),
+            ("  pull_request: {}\n", True),
+            ("  push:\n", False),
+            ("  pull_request:\n    branches: [main]\n", False),
+            ("  pull_request:\n    branches-ignore: [agent-main]\n", False),
+            ("  pull_request:\n    paths:\n      - Cargo.toml\n", False),
+            ("  pull_request:\n    paths-ignore: ['docs/**']\n", False),
+            ("  pull_request: {paths: ['crates/**']}\n", False),
+        ):
+            with self.subTest(event=event):
+                self.prepare_ci()
+                workflow = self.root / ".github/workflows/ci-macos.yml"
+                workflow.write_text(workflow.read_text().replace("  pull_request:\n", event))
+                result = self.run_guard("check-ci-macos.sh")
+                self.assertEqual(result.returncode, 0 if accepted else 1, result.stdout + result.stderr)
+                if not accepted:
+                    self.assertIn("unfiltered pull_request event", result.stderr)
 
     def test_macos_check_forwards_target_selectors_and_exact_to_the_listing(self):
         self.prepare_ci()
