@@ -18,6 +18,7 @@ use orbit_types::workflow::handoff::*;
 use super::TaskCommitBoundary;
 use super::lifecycle::{decode, invalid, row};
 use crate::contracts::*;
+use crate::driver::sqlite::job_run_store::SqliteJobRunStore;
 
 const ATTEMPT: &str = "distributed-landing-attempt-v1";
 const HISTORY: &str = "distributed-landing-attempt-history-v1";
@@ -157,11 +158,15 @@ impl TaskCommitBoundary {
         {
             return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
         }
-        if attempt.state != LandingAttemptState::Stopped
-            && !(attempt.state == LandingAttemptState::Dispatched
-                && state.unresolved_merge_intent.is_some())
-        {
-            return Err(invalid("retry requires a stopped or uncertain landing"));
+        match attempt.state {
+            LandingAttemptState::Stopped => {}
+            LandingAttemptState::Dispatched if attempt.job_run_id.is_some() => {
+                // Eligibility comes from this owner's durable run, not request
+                // state, missing liveness, reservation age, or a caller boolean.
+                self.terminal_landing_job_evidence(&attempt)?;
+            }
+            LandingAttemptState::Dispatched if state.unresolved_merge_intent.is_some() => {}
+            _ => return Err(invalid("retry requires a stopped or uncertain landing")),
         }
         self.dispatch_landing_attempt(auth, state, &request.handoff_id, None, params, effects)?;
         let number =
@@ -187,6 +192,55 @@ impl TaskCommitBoundary {
         params.status_event = Some("landing_retry_reserved".into());
         Ok(())
     }
+    /// Prove the attached run belongs to this exact owner dispatch and has
+    /// irreversibly ended. Read in the reservation's admission section; terminal
+    /// job states cannot be restarted in place. The scoped action key fences
+    /// foreign/misattached runs even when their IDs or input resemble this one.
+    fn terminal_landing_job_evidence(
+        &self,
+        attempt: &LandingAttempt,
+    ) -> Result<String, OrbitError> {
+        let jobs = SqliteJobRunStore::new(self.store.clone(), &self.workspace_id);
+        let run_id = attempt
+            .job_run_id
+            .as_deref()
+            .ok_or_else(|| invalid("terminal owner landing job evidence required"))?;
+        if jobs
+            .automation_job_for_key(&format!(
+                "landing:{}:{}",
+                attempt.handoff_id, attempt.attempt
+            ))?
+            .as_deref()
+            != Some(run_id)
+        {
+            return Err(invalid("landing job does not match the owner dispatch key"));
+        }
+        let run = jobs
+            .get_job_run(run_id)?
+            .ok_or_else(|| invalid("terminal owner landing job evidence missing"))?;
+        if run.job_id != "task_landing_pipeline"
+            || run
+                .input
+                .as_ref()
+                .and_then(|input| input.get("handoff_id"))
+                .and_then(serde_json::Value::as_str)
+                != Some(attempt.handoff_id.as_str())
+            || run
+                .input
+                .as_ref()
+                .and_then(|input| input.get("task_id"))
+                .and_then(serde_json::Value::as_str)
+                != Some(attempt.task_id.as_str())
+            || !run.state.is_terminal()
+        {
+            return Err(invalid("exact terminal owner landing job required"));
+        }
+        Ok(format!(
+            "Owner landing job '{run_id}' is terminal ({}); retained for guarded recovery",
+            run.state
+        ))
+    }
+
     /// The latest attempt for each handoff. Historical stops remain available
     /// through `landing_attempt_record`. Read-only owner inspection.
     pub fn landing_attempts(&self) -> Result<Vec<LandingAttempt>, OrbitError> {
@@ -236,7 +290,7 @@ impl TaskCommitBoundary {
     /// carries an already open attempt.
     ///
     /// `job_run_id` is the whole distinction. `None` opens an attempt: the
-    /// first one, or the next after a stop or an owner job that died. `Some`
+    /// first one, or the next after a stop or a proven terminal owner job. `Some`
     /// attaches that job to the open attempt and refuses to replace a different
     /// job — a second consumer has to open its own attempt, and the merge-intent
     /// guard still refuses a second external merge either way.
@@ -293,11 +347,18 @@ impl TaskCommitBoundary {
                     ));
                 }
                 match job_run_id {
-                    // A stopped attempt reopens deliberately, and so does one
-                    // whose job is gone. The candidate, evidence and authority
-                    // are rechecked before any merge intent, so a stale
-                    // candidate stops again instead of merging unvalidated work.
+                    // A dispatched attempt may advance only with exact terminal
+                    // owner-job evidence. Archive the reconciled stop atomically
+                    // with its successor; never clear an uncertain merge intent.
                     None => {
+                        if attempt.state == LandingAttemptState::Dispatched
+                            && attempt.job_run_id.is_some()
+                        {
+                            let evidence = self.terminal_landing_job_evidence(&attempt)?;
+                            attempt.state = LandingAttemptState::Stopped;
+                            attempt.evidence = Some(evidence);
+                            attempt.updated_at = now;
+                        }
                         if attempt.state != LandingAttemptState::Dispatched
                             || attempt.job_run_id.is_some()
                         {
