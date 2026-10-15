@@ -66,7 +66,7 @@ mod compare;
 mod hold;
 
 // Preserve the existing module surface even for helpers used only by this split.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) use cache::recorded_base_runs;
 #[allow(unused_imports)]
 pub(super) use cache::{CachePaths, cache_paths};

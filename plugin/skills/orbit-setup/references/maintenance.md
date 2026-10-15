@@ -117,17 +117,23 @@ the removed paths.
 
 With `workflow.validation_env.build_output_env` configured, required validation
 binds the workspace's output variables to host-owned output under
-`.orbit/state/host-validation-targets/`, outside the checkout. The Linux collector
-keeps the same layout and lineage for historical output; an empty mapping allocates
-nothing and never deletes old output. Other platforms retain configured output for
-operator maintenance. GC attributes
+`.orbit/state/host-validation-targets/`, outside the checkout. Native Linux and macOS
+collectors keep the same layout and lineage for historical output; an empty mapping
+allocates nothing and never deletes old output. Other platforms retain configured
+output for operator maintenance. Darwin uses readable no-follow directory handles
+and `fchmod` on held descriptors; unreadable directories or unprovable identities
+refuse reclamation rather than relaxing permissions for measurement. GC attributes
 each target to the runs whose recorded worktree path it was built for, and
 reclaims it once they are terminal with no live worker and the checkout is gone
 (or its kept output is being reclaimed). A scratch checkout's target (base
 rerun, host evidence, recovery) is reclaimed only through its base-cache lock
 or lease record, while GC holds that lock; a held lock reports
 `skipped:host_target_in_use`. Targets with no such record stay
-`skipped:unattributed_host_target`.
+`skipped:unattributed_host_target`. The existing worktree-GC routine and pipeline
+use the same collector. Platform support does not authorize production deletion,
+resume paused routines or change schedules; validate disposable native fixtures
+and obtain the required review before rollout. Byte reports measure logical output,
+not physical disk headroom.
 
 ## Diagnose and repair
 
