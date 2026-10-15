@@ -276,6 +276,143 @@ pub(super) fn published_completion_requeue_adopts_without_reimplementation() {
     );
 }
 
+pub(super) fn failed_requeued_publisher_is_inspected_and_submitted_without_a_successor() {
+    let mut f = Fixture::new();
+    publication(&mut f);
+    requeue(&mut f);
+
+    let task = f.runtime.get_task(&f.task).unwrap();
+    assert_eq!(task.status, TaskStatus::Backlog);
+    assert_eq!(task.job_run_id.as_deref(), Some(f.source.run_id.as_str()));
+
+    let inspection = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", f.request("inspect"))
+        .unwrap();
+    let binding = inspection["binding"].clone();
+    assert_eq!(binding["source_run_id"], f.source.run_id);
+    assert!(binding["superseded"].is_null());
+    let still_directly_bound = f.runtime.get_task(&f.task).unwrap();
+    assert_eq!(still_directly_bound.status, TaskStatus::Backlog);
+    assert_eq!(
+        still_directly_bound.job_run_id.as_deref(),
+        Some(f.source.run_id.as_str()),
+        "inspection must not require or create a successor"
+    );
+
+    let admitted = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", f.submit(binding))
+        .unwrap();
+    assert_eq!(admitted["retry_source_run_id"], f.source.run_id);
+    assert_ne!(admitted["run_id"], f.source.run_id);
+    let run_id = admitted["run_id"].as_str().unwrap();
+    f.wait(run_id);
+    assert_eq!(
+        f.runtime
+            .show_job_run_observed(run_id)
+            .unwrap()
+            .retry_source_run_id
+            .as_deref(),
+        Some(f.source.run_id.as_str())
+    );
+    assert!(
+        f.runtime
+            .get_task_history(&f.task)
+            .unwrap()
+            .iter()
+            .any(|entry| entry.event == "source_repair_reserved")
+    );
+}
+
+pub(super) fn failed_requeued_direct_publisher_retains_authority_and_drift_refusals() {
+    for case in ["live", "foreign", "changed", "unacknowledged"] {
+        let mut f = Fixture::new();
+        publication(&mut f);
+
+        if case == "unacknowledged" {
+            f.source.state = JobRunState::Failed;
+            f.source.pid = None;
+            f.source.finished_at = Some(Utc::now());
+            save_run(&f, &f.source);
+            f.runtime
+                .apply_task_automation_update(
+                    &f.task,
+                    TaskAutomationUpdate {
+                        status: Some(TaskStatus::Backlog),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        } else {
+            requeue(&mut f);
+            match case {
+                "live" => {
+                    f.source.pid = Some(std::process::id());
+                    save_run(&f, &f.source);
+                }
+                "foreign" => {
+                    f.runtime
+                        .sqlite_store()
+                        .unwrap()
+                        .with_transaction(|tx| {
+                            tx.connection()
+                                .execute(
+                                    "UPDATE job_runs SET executed_on_json = ?1 WHERE run_id = ?2",
+                                    [
+                                        json!({"machine_id":"hm_foreign","machine_name":null})
+                                            .to_string(),
+                                        f.source.run_id.clone(),
+                                    ],
+                                )
+                                .unwrap();
+                            Ok(())
+                        })
+                        .unwrap();
+                }
+                "changed" => {}
+                _ => unreachable!(),
+            }
+        }
+
+        if case == "changed" {
+            let binding = f.inspect();
+            f.runtime
+                .update_task_with_identity(
+                    &f.task,
+                    orbit_core::application::task::TaskUpdateParams {
+                        description: Some("changed after source inspection".into()),
+                        ..Default::default()
+                    },
+                    None,
+                    Some("codex".into()),
+                )
+                .unwrap();
+            let refused = f
+                .runtime
+                .run_tool_as_human("orbit.workflow.run.resume", f.submit(binding))
+                .unwrap_err();
+            assert!(
+                refused.to_string().contains("binding is stale"),
+                "{refused}"
+            );
+        } else {
+            let refused = f
+                .runtime
+                .run_tool_as_human("orbit.workflow.run.resume", f.request("inspect"))
+                .unwrap_err();
+            assert!(refused.to_string().contains("refused"), "{case}: {refused}");
+        }
+        assert!(
+            !f.runtime
+                .get_task_history(&f.task)
+                .unwrap()
+                .iter()
+                .any(|entry| entry.event == "source_repair_reserved")
+        );
+    }
+}
+
 pub(super) fn published_requeue_refuses_changed_scope_head_and_incomplete_source() {
     for case in ["scope", "head", "before_commit", "lost_checkpoint"] {
         let mut f = Fixture::new();

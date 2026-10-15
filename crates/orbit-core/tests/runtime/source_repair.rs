@@ -24,6 +24,8 @@ mod replay;
 mod reviewers;
 use generations::cancelled_published_repair_accepts_fresh_generation;
 use published_owner::{
+    failed_requeued_direct_publisher_retains_authority_and_drift_refusals,
+    failed_requeued_publisher_is_inspected_and_submitted_without_a_successor,
     legacy_publication_behind_a_stopped_successor_cannot_start_fresh,
     published_completion_requeue_adopts_without_reimplementation,
     published_requeue_refuses_changed_scope_head_and_incomplete_source,
@@ -793,6 +795,8 @@ fn model_context_and_forged_run_inputs_cannot_grant_repair_authority() {
 
 crate::scenario_table!(
     cancelled_source_repair_scenarios,
+    failed_requeued_publisher_is_inspected_and_submitted_without_a_successor,
+    failed_requeued_direct_publisher_retains_authority_and_drift_refusals,
     published_completion_requeue_adopts_without_reimplementation,
     published_requeue_refuses_changed_scope_head_and_incomplete_source,
     stopped_successor_is_explicitly_bound_when_repairing_older_publication,

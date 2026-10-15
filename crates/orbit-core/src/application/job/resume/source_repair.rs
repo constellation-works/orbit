@@ -565,6 +565,13 @@ impl OrbitRuntime {
                     task.status,
                     TaskStatus::InProgress | TaskStatus::Blocked | TaskStatus::Backlog
                 ))
+            // Final recovery leaves an applied requeue in Backlog while the task
+            // still names its failed publisher. That durable decision is the
+            // acknowledgement for this direct-binding recovery path.
+            && !(source.state == JobRunState::Failed
+                && task.status == TaskStatus::Backlog
+                && self.recorded_final_recovery(task_id, source_id)?
+                    == Some(crate::application::task::FinalRecoveryOutcome::Requeued))
         {
             return Err(refuse(
                 "task must remain in review (or this reserved admission's in-progress stage)",
