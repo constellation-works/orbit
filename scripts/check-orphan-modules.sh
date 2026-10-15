@@ -4,8 +4,9 @@ set -euo pipefail
 # Every src/**/*.rs file (excluding mod.rs/lib.rs/main.rs and anything under a
 # tests/ dir) must be reachable from the module tree: declared as `mod <stem>`
 # resolved through its enclosing module directories, or referenced by a direct
-# `#[path = "..."]` attribute in the crate's src tree. An explicit path replaces
-# the ordinary destination; only the actual candidate file is registered.
+# `#[path = "..."]` attribute (also raw strings) in the crate's src tree.
+# An explicit path replaces the ordinary destination; only the actual candidate
+# file is registered.
 # Otherwise the file is never compiled, linted, or tested — see
 # docs/design/orbit-cleanup/orbitenginecleanup.md §1/§11.
 #
@@ -211,6 +212,11 @@ sub index_module_targets {
       my $attribute = substr($source, $start, pos($code) - $start);
       if ($attribute =~ /\A#\[path[[:space:]]*=[[:space:]]*"([^"\n]*)"/) {
         $module_path = $1;
+      } elsif ($attribute =~ /\A#\[path[[:space:]]*=[[:space:]]*r(\#*)"(.*?)"\1/s) {
+        # Raw path contents are literal; the closing delimiter must repeat
+        # the opening hash count. Read only attributes found in masked code,
+        # so path-like text inside comments and other literals stays inert.
+        $module_path = $2;
       }
       next;
     }
