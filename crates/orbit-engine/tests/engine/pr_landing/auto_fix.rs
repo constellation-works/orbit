@@ -1008,6 +1008,7 @@ fn auto_fix_anchors_emitted_failure_after_printed_commands_and_before_cleanup() 
             let display = "##[group]Run preflight\n  emit \"::error title=insufficient runner disk::need more space\"\n  error[E0123]: printed compiler text\n  lost communication with the server\n##[endgroup]\n";
             for case in [
                 "raw",
+                "raw_timestamp_tabs",
                 "columns",
                 "successful_step",
                 "annotation",
@@ -1062,6 +1063,12 @@ fn auto_fix_anchors_emitted_failure_after_printed_commands_and_before_cleanup() 
                         "{display}preflight passed\n{display}{diagnostic}\n##[error]Process completed with exit code 127.\n{}",
                         "post-job cleanup completed\n".repeat(1000)
                     );
+                    if case == "raw_timestamp_tabs" {
+                        let timestamp = "2026-10-15T02:42:56Z";
+                        log = format!(
+                            "{timestamp} ##[group]Run preflight\n{timestamp}   printf 'key\tvalue\tdetail\\n'\n{timestamp} ##[endgroup]\n{timestamp} {diagnostic}\n{timestamp} ##[error]Process completed with exit code 127."
+                        );
+                    }
                     if matches!(case, "columns" | "successful_step" | "wrong_step") {
                         let step = if case == "wrong_step" {
                             "successful setup"
@@ -1089,8 +1096,13 @@ fn auto_fix_anchors_emitted_failure_after_printed_commands_and_before_cleanup() 
                     } else if case == "orphan" {
                         log = "  ##[error]printed failure\n##[endgroup]\n##[error]Process completed with exit code 127.\n".into();
                     }
-                    let mut response =
-                        json!({"log":log, "truncated":false, "source_complete":true});
+                    let source = if case == "raw_timestamp_tabs" {
+                        orbit_tools::github_cli::SOURCE_JOB_API_LOG
+                    } else {
+                        orbit_tools::github_cli::SOURCE_RUN_LOG
+                    };
+                    let mut response = json!({"log":log, "truncated":false,
+                        "source_complete":true, "source":source});
                     if matches!(case, "truncated" | "selected" | "wrong_step") {
                         response["truncated"] = json!(true);
                     }
@@ -1100,6 +1112,8 @@ fn auto_fix_anchors_emitted_failure_after_printed_commands_and_before_cleanup() 
                             "{display}{actual}\n##[error]Process completed with exit code 127."
                         ));
                     } else if case == "wrong_step" {
+                        response["diagnostic"] = response["log"].clone();
+                    } else if case == "raw_timestamp_tabs" {
                         response["diagnostic"] = response["log"].clone();
                     } else if case == "incomplete" {
                         response["source_complete"] = json!(false);
