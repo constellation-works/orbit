@@ -97,22 +97,8 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
             .map_err(|e| Box::new((FailedHandoffPhase::PrLookup, e)))?
     {
         let binding = &admission;
-        let pr = read_pr_status(host, &context.workspace_path, &binding.pull_request)
+        super::source_identity::verify_publication(host, context, binding, head, base)
             .map_err(|e| Box::new((FailedHandoffPhase::PrLookup, e)))?;
-        let published =
-            git_output(&context.workspace_path, &["rev-parse", "HEAD"]).map_err(invalid_prepare)?;
-        if head != binding.branch
-            || base != binding.base_branch
-            || !super::super::candidate_resume::source_repair::exact_open_pr(
-                binding,
-                &pr,
-                published.trim(),
-            )
-        {
-            return Err(Box::new((FailedHandoffPhase::PrLookup, OrbitError::Execution(
-                "source repair PR identity changed; creating or replacing a pull request is not authorized".into(),
-            ))));
-        }
         return Ok(pr_output(PrOutput {
             decision: "reused",
             pr_created: false,

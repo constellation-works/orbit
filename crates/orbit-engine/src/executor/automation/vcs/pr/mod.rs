@@ -17,6 +17,7 @@ mod infrastructure;
 mod merge;
 mod open;
 mod promote;
+pub(in crate::executor::automation::vcs) mod source_identity;
 
 pub use answers::PullRequestStatus;
 pub(in crate::executor::automation::vcs) use answers::{CheckState, ReviewDecision};

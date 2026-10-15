@@ -45,6 +45,12 @@ pub struct PullRequestStatus {
     pub(in crate::executor::automation::vcs) exact_head_branch: Option<String>,
     pub(in crate::executor::automation::vcs) exact_head_sha: Option<String>,
     pub(in crate::executor::automation::vcs) exact_merge_commit: Option<String>,
+    /// Whether the provider returned a PR object rather than missing/scalar metadata.
+    pub(in crate::executor::automation::vcs) identity_metadata_readable: bool,
+    /// Explicit GraphQL absence; missing or malformed merge metadata stays unknown.
+    pub(in crate::executor::automation::vcs) merge_commit_absent: bool,
+    /// Explicit GraphQL absence of a merge timestamp.
+    pub(in crate::executor::automation::vcs) merged_at_absent: bool,
     /// The provider-reported merge timestamp, when one exists.
     pub merged_at: Option<String>,
     pub(crate) merge_state_status: Option<String>,
@@ -85,6 +91,9 @@ impl PullRequestStatus {
                 .map(ToOwned::to_owned)
         };
         Self {
+            identity_metadata_readable: pull_request.is_object(),
+            merge_commit_absent: pull_request.get("mergeCommit") == Some(&Value::Null),
+            merged_at_absent: pull_request.get("mergedAt") == Some(&Value::Null),
             auto_merge_enabled: pull_request
                 .get("autoMergeRequest")
                 .map(|value| !value.is_null()),

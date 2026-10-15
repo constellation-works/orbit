@@ -16,6 +16,8 @@ mod fixture;
 use fixture::{Fixture, git};
 #[path = "source_repair/generations.rs"]
 mod generations;
+#[path = "source_repair/publication.rs"]
+mod publication;
 #[path = "source_repair/published_owner.rs"]
 mod published_owner;
 #[path = "source_repair/replay.rs"]

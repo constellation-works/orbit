@@ -283,13 +283,5 @@ pub(in crate::executor::automation::vcs) fn exact_open_pr(
     pr: &super::super::pr::PullRequestStatus,
     expected_head: &str,
 ) -> bool {
-    pr.number.map(|n| n.to_string()).as_deref() == Some(binding.pull_request.as_str())
-        && pr.url.as_deref() == Some(binding.pull_request_url.as_str())
-        && pr.state.as_deref() == Some("OPEN")
-        && pr.head_branch.as_deref() == Some(binding.branch.as_str())
-        && pr.head_sha.as_deref() == Some(expected_head)
-        && pr.base_branch.as_deref() == Some(binding.base_branch.as_str())
-        && pr.auto_merge_enabled == Some(false)
-        && pr.merge_commit.is_none()
-        && pr.merged_at.is_none()
+    super::super::pr::source_identity::mismatches(binding, pr, expected_head).is_empty()
 }
