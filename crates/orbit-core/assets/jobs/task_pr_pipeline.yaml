@@ -197,6 +197,7 @@ spec:
       recovery_activity: step_failure_recovery
       target: activity:pr_prepare
       default_input:
+        authenticate_preparation: true
         job_run_id: "{{ steps.worktree.output.job_run_id }}"
         base: "{{ input.base_branch }}"
         base_sync: "{{ input.base_sync }}"
@@ -215,9 +216,12 @@ spec:
       # commit without dispatching its agent; any refusal reaches the agent
       # as `absorbed_refusal`.
       recovery_activity: pr_conflict_recovery
+      # A certified stale preparation is refreshed by the host at most twice
+      # within one 120-second budget; only real conflicts dispatch recovery.
       target: activity:git_rebase
       default_input:
         step_id: sync_base
+        preparation: "{{ steps.prepare_branch.output }}"
         final_validation: true
         job_run_id: "{{ steps.worktree.output.job_run_id }}"
         completed_task_ids: "{{ input.task_ids }}"

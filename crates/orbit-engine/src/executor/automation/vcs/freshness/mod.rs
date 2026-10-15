@@ -2,6 +2,8 @@
 
 mod checkpoint;
 mod divergence;
+mod preparation;
+pub(crate) use preparation::refreshed_input;
 mod rebase;
 mod rebase_recovery;
 

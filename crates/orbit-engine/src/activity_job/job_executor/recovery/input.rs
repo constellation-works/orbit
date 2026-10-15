@@ -31,7 +31,7 @@ pub(super) fn bind_recovery_context(
     ctx: &ExecCtx<'_>,
     input: &mut Value,
 ) -> Result<(), DispatchError> {
-    let failed_input = match &step.body {
+    let mut failed_input = match &step.body {
         JobV2StepBody::Target(target) => render_input(
             target.default_input.as_ref(),
             &ctx.input,
@@ -40,6 +40,15 @@ pub(super) fn bind_recovery_context(
         )?,
         _ => Value::Null,
     };
+    if step.id == "sync_base"
+        && failed_input
+            .get("preparation")
+            .is_some_and(|v| !v.is_null())
+    {
+        failed_input["run_id"] = Value::String(ctx.run_id.clone());
+        failed_input = crate::executor::automation::vcs::refreshed_input(ctx.host, &failed_input)
+            .map_err(|error| DispatchError::JobExecution(error.to_string()))?;
+    }
     for key in ["task_id", "task_ids", "workspace_path", "repo_root"] {
         if let Some(value) = failed_input.get(key) {
             input[key] = value.clone();

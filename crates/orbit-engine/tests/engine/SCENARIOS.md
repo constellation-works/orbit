@@ -163,6 +163,17 @@ after the wrapper signals that its queue interval earned the capped credit.
 
 - `repeated_dirty_integrity_failures_keep_current_content_and_prune_old_attempts`
 
+### `v2_worktree_lifecycle::preparation::preparation_contracts`
+
+- `a_descendant_advance_replaces_the_pin_without_editing_preparation`
+- `shipped_pipelines_refresh_and_validate_the_current_candidate`
+- `direct_stale_and_invalid_preparations_refuse_without_mutation`
+- `churn_and_deadline_exhaustion_keep_original_and_fresh_evidence`
+- `fresh_preparation_preserves_conflict_and_absorbed_paths`
+- `replacement_evidence_and_simultaneous_candidate_changes_fail_closed`
+- `an_uncertified_rewrite_is_never_reset_during_authenticated_sync`
+- `exhausted_preparation_never_dispatches_source_recovery`
+
 ### `v2_worktree_lifecycle::absorbed_candidate::absorption_contracts_1`
 
 - `an_identical_landed_patch_settles_before_candidate_validation`

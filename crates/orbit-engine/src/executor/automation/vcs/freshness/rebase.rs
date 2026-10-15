@@ -26,8 +26,25 @@ pub(in crate::executor::automation) fn prepare_pr_handoff<H: RuntimeHost + ?Size
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let context = load_handoff_context(host, input, "pr_prepare")?;
+    if input
+        .get("authenticate_preparation")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        super::preparation::validate_owner(host, recovery_run_id(input, &context), &context)?;
+    }
     match prepare_pr_handoff_inner(input, &context) {
-        Ok(output) => Ok(output),
+        Ok(mut output) => {
+            if input
+                .get("authenticate_preparation")
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                output["preparation"] =
+                    super::preparation::certify_preparation(host, input, &context, output.clone())?;
+            }
+            Ok(output)
+        }
         Err(failure) => {
             let (phase, error) = *failure;
             record_failed_handoff(host, &context, input, phase, &error)?;
@@ -36,7 +53,7 @@ pub(in crate::executor::automation) fn prepare_pr_handoff<H: RuntimeHost + ?Size
     }
 }
 
-fn prepare_pr_handoff_inner(
+pub(super) fn prepare_pr_handoff_inner(
     input: &Value,
     context: &HandoffContext,
 ) -> Result<Value, Box<(FailedHandoffPhase, OrbitError)>> {
@@ -98,7 +115,9 @@ pub(in crate::executor::automation) fn rebase_pr_branch<H: RuntimeHost + ?Sized>
     let context = load_handoff_context(host, input, "git_rebase")?;
     let result = {
         let _timeout_budget = GitTimeoutBudgetGuard::install(GitTimeoutBudget::from_input(input)?);
-        rebase_pr_branch_inner(host, input, &context)
+        super::preparation::synchronize(host, input, &context, |prepared, stale| {
+            rebase_pr_branch_inner(host, prepared, &context, stale)
+        })
     };
     // Absorption bypasses the later validate step. Run its captured commands
     // on the final continued/chased head before no-diff settlement. The Git
@@ -144,6 +163,7 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
     context: &HandoffContext,
+    stale: &mut bool,
 ) -> Result<Value, OrbitError> {
     let head = required_input_string(input, "head")?;
     let head_sha_before = required_input_string(input, "head_sha")?;
@@ -228,6 +248,7 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
 
     let observed_base_sha = commit_sha(&context.workspace_path, base_ref)?;
     if observed_base_sha != base_sha {
+        *stale = true;
         return Err(OrbitError::Execution(format!(
             "git_rebase: prepared base ref '{base_ref}' moved from checkpoint '{base_sha}' to '{observed_base_sha}'; refusing to lose concurrent base changes — prepare a fresh handoff checkpoint"
         )));

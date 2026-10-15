@@ -81,8 +81,8 @@ pub(super) fn checkpoint_failure_activity(
         })
 }
 
-/// Reserve the host-assigned attempt one admitted conflict recovery will
-/// certify. The reservation lives in the host-only authority, so neither the
+/// Reserve the host-assigned attempt one preparation or conflict recovery
+/// will certify. The reservation lives in the host-only authority, so neither the
 /// provider nor the shared run store can name or advance it.
 pub(super) fn begin_rebase_recovery_attempt(
     runtime: &OrbitRuntime,

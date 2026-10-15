@@ -691,8 +691,9 @@ pub trait RuntimeHost: Send + Sync {
         application: &FinalRecoveryApplication,
     ) -> Result<FinalRecoveryApplied, OrbitError>;
 
-    /// Reserve the host-only identity of one admitted conflict recovery of
-    /// `step_id`, before its provider runs.
+    /// Reserve the host-only identity of one preparation or rebase recovery
+    /// of `step_id`, before issuing its certificate (and, for conflicts,
+    /// before its provider runs).
     ///
     /// The host assigns the attempt; the caller only carries it, in memory, to
     /// the checkpoint it stamps as `recovery_attempt`. A later reservation for
@@ -706,8 +707,10 @@ pub trait RuntimeHost: Send + Sync {
         scope: &RebaseRecoveryAttemptScope,
     ) -> Result<u64, DispatchError>;
 
-    /// Persist an exact host-validated recovered rebase before reporting recovery
-    /// success. Unlike ordinary step checkpoints, durability failure is fatal.
+    /// Persist an exact host-validated preparation or recovered rebase before
+    /// reporting success. Preparations use separate step identities from
+    /// rewrites and bind their entire observation payload. Unlike ordinary
+    /// step checkpoints, durability failure is fatal.
     /// `output` carries the attempt reserved by
     /// [`Self::begin_rebase_recovery_attempt`] as `recovery_attempt`.
     fn checkpoint_rebase_recovery(

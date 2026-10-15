@@ -323,6 +323,39 @@ exclusion even if the excluded `.orbit/` root is absent. Future wildcard
 exclusions are a separately reported Landlock limitation, not an absent-root
 mount refusal; no Landlock behavior change is needed for this recovery fix.
 
+Both shipped PR pipelines request an authenticated `pr_prepare` output and
+pass the complete prepare output, including its certificate, to `sync_base`.
+A persisted output from before certificates existed still renders and retains
+the ordinary pinned refusal; missing evidence authorizes no automatic refresh. The ordinary `git_rebase`
+stale-pin equality refusal remains authoritative for direct invocations. At
+that exact refusal, a certified delivery may replace its preparation through
+host-owned recovery: the host rechecks the live run, task lineage and assigned
+worktree checkpoint, unchanged branch, candidate and remote lease, cleanliness
+and absence of a rebase. It observes Git again using the certified base/sync
+mode, requires the same base ref and a strict descendant of the previous pin,
+and issues a new preparation. No caller-provided replacement SHA is accepted.
+
+One run may reserve at most two fresh preparations in `sync_base_preparation`,
+within one signed 120-second deadline starting at its first refresh. All fetches
+and reads in a refresh share its remaining subprocess deadline; the ensuing
+rebase retains its normal timeout and owned-rebase cleanup. Host reservations
+survive retries, and missing or altered advisory evidence fails closed. The
+original refusal and the old/new-base trace are retained in each certificate;
+exhaustion reports both. Each preparation also has a separately named durable
+artifact under `validation/<run>/preparation/<step>-<attempt>.json`. Neither
+previous preparation nor historical failure evidence is edited.
+
+A fresh preparation feeds the ordinary pinned rebase. A real conflict uses the
+same authenticated replacement pin in the recovery leaf and its retry; an
+absorbed candidate uses existing certified no-diff settlement and captured
+validation. Successful synchronization still proceeds through the captured
+exact-candidate validation, review and lease-checked publication. This recovery
+never dispatches a source-repair agent. PR completion prepares its own published
+candidate and base on each attempt; it retains its published-head, review and
+base-chase contract rather than inheriting the pre-publication preparation.
+Preserved-failure resume likewise retains its independent ownership and bounded
+re-preparation checks; it does not edit any earlier certificate.
+
 Conflict recovery projects the failed target's rendered task IDs and assigned
 worktree into its own input. `repo_root` defaults to that same assigned path,
 and `failed_step_input` retains the candidate branch, pre-rewrite HEAD, and

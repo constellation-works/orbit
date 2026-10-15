@@ -110,6 +110,14 @@ pub(super) fn attempt_final_recovery(
     if matches!(budget, FinalRecoveryBudget::Spent) {
         return skip("final recovery already ran for this run");
     }
+    // A normal base race is owned by the deterministic preparation boundary.
+    // Its refusal/exhaustion preserves the candidate; an agent cannot renew
+    // its host authority or replenish its bounded attempts and deadline.
+    if step.id == "sync_base" && error_message.contains("prepared_base_refresh_refused:") {
+        return skip(
+            "host-owned preparation recovery refused or exhausted; preserve the candidate without source repair",
+        );
+    }
     // [ORB-13987] No decision about the task fixes a host that lacks a tool;
     // the failure handoff keeps the candidate for a resume instead.
     if orbit_types::workflow::is_validation_environment_failure(None, Some(error_message)) {
