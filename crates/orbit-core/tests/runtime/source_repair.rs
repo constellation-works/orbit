@@ -16,6 +16,8 @@ use fixture::{Fixture, git};
 mod generations;
 #[path = "source_repair/replay.rs"]
 mod replay;
+#[path = "source_repair/reviewers.rs"]
+mod reviewers;
 use generations::cancelled_published_repair_accepts_fresh_generation;
 use replay::lost_spawn_reply_reconciles_the_reserved_run_after_older_retries;
 
