@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use orbit_engine::ci_log_signature::LineKind;
 use orbit_tools::github_cli::strip_ansi_sequences;
 use serde_json::Value;
 
@@ -191,17 +192,19 @@ pub(super) fn failure_test_names(failure: &Value) -> Vec<String> {
         }
     }
 
-    let log = {
-        let excerpt = value_string(failure, "log_excerpt");
-        if excerpt.is_empty() {
-            value_string(&failure["diagnostic_unit"], "text")
-        } else {
-            excerpt
-        }
-    };
+    let log = selected_diagnostic(failure)
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| value_string(failure, "log_excerpt"));
     let log = strip_ansi_sequences(&log);
     let mut after_failures_header = false;
-    for line in log.lines() {
+    for (kind, line) in classify_log_lines(&log) {
+        if matches!(
+            kind,
+            LineKind::RunCommand | LineKind::CommandBody | LineKind::ParamDump | LineKind::EndGroup
+        ) {
+            after_failures_header = false;
+            continue;
+        }
         let payload = signature_payload(line);
         let line = payload.trim().to_string();
         if line == "failures:" || line == "errors:" {

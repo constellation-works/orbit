@@ -304,7 +304,11 @@ fn compiler_identity(log: &str, include_coordinates: bool) -> Option<String> {
 fn skip_from_excerpt(kind: LineKind) -> bool {
     matches!(
         kind,
-        LineKind::ParamDump | LineKind::EndGroup | LineKind::Bookkeeping | LineKind::CargoStatus
+        LineKind::CommandBody
+            | LineKind::ParamDump
+            | LineKind::EndGroup
+            | LineKind::Bookkeeping
+            | LineKind::CargoStatus
     )
 }
 
@@ -322,20 +326,22 @@ pub(super) struct FailedStepExcerpt {
 /// `max_bytes` on that region rather than the log head.
 pub(super) fn render_failed_step_excerpt(log: &str, max_bytes: usize) -> FailedStepExcerpt {
     let lines = classify_log_lines(log);
-    let command = lines
-        .iter()
-        .find(|(kind, _)| *kind == LineKind::RunCommand)
-        .map(|(_, line)| *line);
-
     let anchor = diagnostic_anchor(&lines).or_else(|| {
         lines
             .iter()
             .position(|(kind, _)| *kind == LineKind::GenericTrailer)
     });
 
+    let command = lines[..anchor.map_or(lines.len(), |index| index + 1)]
+        .iter()
+        .rposition(|(kind, _)| *kind == LineKind::RunCommand);
+
     let Some(anchor_idx) = anchor else {
         return FailedStepExcerpt {
-            body: command.unwrap_or("").to_string(),
+            body: command
+                .map(|index| lines[index].1)
+                .unwrap_or("")
+                .to_string(),
             has_anchor: false,
         };
     };
@@ -351,29 +357,39 @@ pub(super) fn render_failed_step_excerpt(log: &str, max_bytes: usize) -> FailedS
     let anchor_in_kept = kept.iter().position(|idx| *idx == anchor_idx).unwrap_or(0);
     let start = anchor_in_kept.saturating_sub(LINES_BEFORE);
     let end = (anchor_in_kept + 1 + LINES_AFTER).min(kept.len());
-    let mut window: Vec<&str> = kept[start..end].iter().map(|idx| lines[*idx].1).collect();
+    let mut window = kept[start..end].to_vec();
     if let Some(command) = command
         && !window.contains(&command)
     {
         window.insert(0, command);
     }
-    let joined = window.join("\n");
+    let anchor_start = window
+        .iter()
+        .take_while(|index| **index != anchor_idx)
+        .map(|index| lines[*index].1.len() + 1)
+        .sum();
+    let joined = window
+        .iter()
+        .map(|index| lines[*index].1)
+        .collect::<Vec<_>>()
+        .join("\n");
     FailedStepExcerpt {
-        body: cap_bytes_around_line(&joined, lines[anchor_idx].1, max_bytes),
+        body: cap_bytes_around_line(&joined, anchor_start, lines[anchor_idx].1.len(), max_bytes),
         has_anchor: true,
     }
 }
 
-fn cap_bytes_around_line(text: &str, anchor_line: &str, max_bytes: usize) -> String {
+fn cap_bytes_around_line(
+    text: &str,
+    anchor_start: usize,
+    anchor_len: usize,
+    max_bytes: usize,
+) -> String {
     if text.len() <= max_bytes {
         return text.to_string();
     }
-    let Some(anchor_start) = text.find(anchor_line) else {
-        return truncate_bytes(text, max_bytes);
-    };
-    let anchor_len = anchor_line.len();
     if anchor_len >= max_bytes {
-        return truncate_bytes(anchor_line, max_bytes);
+        return truncate_bytes(&text[anchor_start..anchor_start + anchor_len], max_bytes);
     }
     let extra = max_bytes - anchor_len;
     let want_before = extra / 3;
@@ -445,7 +461,13 @@ pub(super) fn relevant_log_query_errors<'a>(evidence: &'a Value, runs: &[Value])
 /// selector for it so CI-sweep tasks are filed with scope.
 pub(super) fn extract_context_files_from_log(log: &str) -> Vec<String> {
     let mut files = BTreeSet::new();
-    for line in log.lines() {
+    for (kind, line) in classify_log_lines(log) {
+        if matches!(
+            kind,
+            LineKind::RunCommand | LineKind::CommandBody | LineKind::ParamDump | LineKind::EndGroup
+        ) {
+            continue;
+        }
         if let Some(arrow_idx) = line.find("-->") {
             let after = &line[arrow_idx + 3..];
             for token in after.split_whitespace() {

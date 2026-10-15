@@ -7,7 +7,7 @@ reads. Repository names are fixture placeholders such as `acme/orbit` and
 tokens. No real credential was copied.
 
 JSON fixture names map to the retired unit tests below. A `/suffix` names a
-variant of that regression. Streamed `parts` concatenate strings and
+variant of that regression. Log arrays and streamed `parts` concatenate strings and
 `{"text": "...", "repeat": N}` segments, keeping large source/retention-limit
 fixtures small on disk. The fixtures vary chunk boundaries, ANSI, Unicode,
 checkout attribution, omitted source, command completeness, rerun metadata,
@@ -61,3 +61,15 @@ guard. The mapping records which fixture replaced each one.
 | `log_signature.rs` | `golden_assertion_help_text_does_not_outrank_the_failing_test_name` | `parsed.json` |
 | `log_signature.rs` | `wrangler_error_outranks_generic_npx_process_failed` | `parsed.json` |
 | `log_signature.rs` | `generic_only_truncated_excerpt_labels_step_name_fallback` | `parsed.json` |
+
+Printed-command provenance cases reconstruct the observed missing-helper / exit
+127 shape as fixture data. They distinguish printed command bodies in successful
+setup and failing steps from emitted annotations, compiler diagnostics, panic,
+libtest and nextest identities, including ANSI and runner columns. A cleanup
+tail must not hide the selected emitted diagnostic. Unclosed displays and orphan
+closing delimiters retain context and use the existing step fallback rather
+than turning source into a cause. Older synthetic single-line command fixtures
+now include the runner display closing delimiter before runtime output; that
+repairs their log shape without changing their original behavioral guarantee.
+The public engine PR completion regression independently checks the bounded
+repair mandate and refuses incomplete/truncated attribution.

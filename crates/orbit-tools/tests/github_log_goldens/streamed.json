@@ -3585,5 +3585,60 @@
       4096,
       8192
     ]
+  },
+  {
+    "name": "printed_command_diagnostics_never_become_nextest_regions",
+    "parts": [
+      "##[group]Run verify\n  ##[error]printed failure\n  error[E0123]: printed compiler text\n  FAIL [ 0.1s] suite printed_test\n  ##[error]Process completed with exit code 127.\n##[endgroup]\n",
+      "step.sh: line 8: scripts/ci-download-verified.sh: No such file or directory\n##[error]Process completed with exit code 127.\n"
+    ],
+    "max_bytes": 512,
+    "max_evidence_lines": 40,
+    "chunks": [
+      7,
+      4096
+    ]
+  },
+  {
+    "name": "failure_regions_preserve_display_boundary_and_only_emitted_anchors",
+    "parts": [
+      "##[group]Run verify\n  ##[error]printed failure\n  error[E0123]: printed compiler text\n  FAIL [ 0.1s] suite printed_test\n  ##[error]Process completed with exit code 127.\n##[endgroup]\n",
+      {
+        "text": "ordinary output\n",
+        "repeat": 20000
+      },
+      "error[E0433]: cannot find module `real`\n --> crates/sample/src/lib.rs:8:1\n##[error]Process completed with exit code 1.\n"
+    ],
+    "max_bytes": 512,
+    "max_evidence_lines": 40,
+    "chunks": [
+      7,
+      4096
+    ]
+  },
+  {
+    "name": "unclosed_command_display_has_no_emitted_failure",
+    "parts": [
+      "##[group]Run verify\nFAIL [ 0.1s] suite printed_test\n##[error]Process completed with exit code 127.\n"
+    ],
+    "max_bytes": 512,
+    "max_evidence_lines": 40,
+    "chunks": [
+      7,
+      4096
+    ]
+  },
+  {
+    "name": "emitted_nextest_after_display_remains_a_failure",
+    "parts": [
+      "##[group]Run verify\n  ##[error]printed failure\n  error[E0123]: printed compiler text\n  FAIL [ 0.1s] suite printed_test\n  ##[error]Process completed with exit code 127.\n##[endgroup]\n",
+      "FAIL [ 0.1s] suite real_test\noutput\nSummary [ 1.0s] 1 tests run: 1 failed\n##[error]Process completed with exit code 100.\n"
+    ],
+    "max_bytes": 512,
+    "max_evidence_lines": 40,
+    "chunks": [
+      7,
+      4096
+    ]
   }
 ]

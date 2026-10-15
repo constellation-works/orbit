@@ -7702,6 +7702,11 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
         operation: &str,
         input: Value,
     ) -> Result<Value, OrbitError> {
+        if matches!(operation, "ci.job_log" | "ci.commit_jobs")
+            && let Some(answer) = self.scripted.lock().unwrap().get(operation).cloned()
+        {
+            return Ok(answer);
+        }
         if self.scripted.lock().unwrap().contains_key("test_ci_repair")
             && let Some(answer) = auto_fix::ci_answer(self, operation, &input)
         {

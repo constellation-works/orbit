@@ -28,6 +28,7 @@ pub(super) struct NextestRegions {
     command_columns: Option<String>,
     command_conflict: bool,
     failed_commands: usize,
+    in_command_display: bool,
 }
 
 struct Block {
@@ -87,16 +88,29 @@ impl NextestRegions {
         let plain = strip_ansi_sequences(payload);
         let payload = plain.trim();
         let lower = payload.to_ascii_lowercase();
-        if (payload.starts_with("##[warning]")
-            || payload.starts_with("##[error]")
-            || payload.starts_with("Log output")
-            || payload.starts_with("[..."))
+        if !self.in_command_display
+            && (payload.starts_with("##[warning]")
+                || payload.starts_with("##[error]")
+                || payload.starts_with("Log output")
+                || payload.starts_with("[..."))
             && lower.contains("log")
             && (lower.contains("truncat") || lower.contains("omitted"))
         {
             self.complete = false;
         }
-        let command_start = payload.starts_with("##[group]Run ");
+        let command_start = !self.in_command_display && payload.starts_with("##[group]Run ");
+        if self.in_command_display {
+            if plain.trim_end() == "##[endgroup]" {
+                self.in_command_display = false;
+            }
+            if self.command.is_some() {
+                self.command_conflict |= self.command_columns.as_deref() != columns;
+            }
+            return;
+        }
+        if command_start {
+            self.in_command_display = true;
+        }
         let exit_code = payload
             .strip_prefix("##[error]Process completed with exit code ")
             .and_then(|code| code.strip_suffix('.'))

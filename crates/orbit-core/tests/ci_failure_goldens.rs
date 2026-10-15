@@ -939,7 +939,11 @@ fn filed_golden(case: &Value) -> Value {
         let runs = logs
             .iter()
             .map(|log| {
-                let run = failure(log.as_str().unwrap(), run_index, &checkout);
+                let text = log
+                    .as_str()
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| expand_parts(log));
+                let run = failure(&text, run_index, &checkout);
                 run_index += 1;
                 run
             })
@@ -2276,6 +2280,7 @@ fn ci_failure_released_from_pending_supersession_is_filed_naming_the_pending_run
         return;
     }
     let log = "build\tRun CI\t2026-10-07T15:10:00.0000000Z ##[group]Run cargo check --workspace\n\
+               build\tRun CI\t2026-10-07T15:10:00.0000000Z ##[endgroup]\n\
                build\tRun CI\t2026-10-07T15:10:00.0000000Z error[E0425]: cannot find value `probe_timeout` in this scope\n\
                build\tRun CI\t2026-10-07T15:10:00.0000000Z   --> crates/orbit-cmd/src/update/converge.rs:189:9\n\
                build\tRun CI\t2026-10-07T15:10:00.0000000Z ##[error]Process completed with exit code 101.\n";
@@ -2407,5 +2412,46 @@ fn ci_failure_sweep_strips_ansi_codes_and_extracts_context_files() {
     assert_eq!(
         panic_task.context_files,
         vec!["file:crates/orbit-core/src/application/job/tests/crew_pools.rs".to_string()]
+    );
+}
+
+#[test]
+fn ci_printed_test_names_and_locations_do_not_change_runtime_failure_identity() {
+    if !isolated("ci_printed_test_names_and_locations_do_not_change_runtime_failure_identity") {
+        return;
+    }
+    let (_root, runtime, commits) = operator_fixture("");
+    let emitted = "step.sh: line 8: scripts/ci-download-verified.sh: No such file or directory";
+    let printed = format!(
+        "##[group]Run verify\n  error[E0123]: printed compiler text\n   --> crates/printed/src/lib.rs:1:1\n  thread 'printed_test' panicked at crates/printed/src/lib.rs:1:1:\n  test printed_test ... FAILED\n##[endgroup]\n{emitted}\n##[error]Process completed with exit code 127.\n"
+    );
+    let first = file(&runtime, vec![failure(&printed, 0, &commits[0])]);
+    assert_eq!(first["filed_count"], 1, "{first}");
+    let task = runtime
+        .get_task(first["filed"][0]["task_id"].as_str().unwrap())
+        .unwrap();
+    assert!(task.description.contains(
+        "`step.sh: line <n>: scripts/ci-download-verified.sh: no such file or directory`"
+    ));
+    assert!(task.description.contains(emitted));
+    assert!(
+        !task.description.contains("printed_test"),
+        "printed tests are context, never repair identities"
+    );
+    assert!(
+        !task
+            .context_files
+            .iter()
+            .any(|selector| selector.contains("crates/printed")),
+        "printed locations cannot widen repair scope"
+    );
+    let later = printed
+        .replace("printed_test", "another_printed_test")
+        .replace("crates/printed", "crates/other");
+    let second = file(&runtime, vec![failure(&later, 1, &commits[1])]);
+    assert_eq!(second["filed_count"], 0, "{second}");
+    assert_eq!(
+        second["skipped_existing"][0]["failure_key"], first["filed"][0]["failure_key"],
+        "printed source cannot fragment a runtime cause"
     );
 }

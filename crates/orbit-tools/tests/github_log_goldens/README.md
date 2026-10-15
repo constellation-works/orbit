@@ -50,8 +50,10 @@ bounded buffers and avoid impossible command/identity matches on short lines;
 short lines inside an active command or failure block still count and survive.
 Unstyled lines bypass ANSI character reconstruction.
 
-All original 122 streamed rows, their chunk schedules, caps and golden outputs
-remain unchanged. In particular, the three 8 MiB source-limit negatives remain;
+All original 122 streamed rows, their chunk schedules and caps remain. The
+printed-command provenance update below adds a retained display closer to one
+existing region and adjusts its byte accounting; other existing streamed
+outputs remain unchanged. In particular, the three 8 MiB source-limit negatives remain;
 the retention-cut credential rows retain their 19 chunk sizes; checkout/event
 and action identity, ambiguous/hidden columns, overlong lines, source refusal,
 completeness, omitted-byte accounting, Unicode, multiline panic and secondary
@@ -166,3 +168,12 @@ target, not a hosted speedup or the whole-job 900-second budget.
 | `log_fallback.rs` | `a_repository_that_could_traverse_the_endpoint_is_rejected` | `fallback.golden.json` |
 | `log_fallback.rs` | `source_read_limit_defers_without_retrying_or_returning_a_partial_unit` | `fallback.golden.json` |
 | `log_fallback.rs` | `live_long_job_logs_retain_complete_command_and_checkout` | `fallback.golden.json` |
+
+Printed-command provenance cases distinguish source inside a runner `Run`
+display from emitted diagnostics after `##[endgroup]`. Printed nextest status,
+compiler text and process-completion annotations do not create failure blocks
+or complete a command. Selected oversized-command regions now retain the
+closing display delimiter, with retained/omitted byte counts adjusted for those
+source bytes. The fallback and mid-log nextest synthetic commands also include
+that real runner delimiter before runtime output. Their mid-log recovery,
+source-range, secondary-failure and budget assertions remain in place.

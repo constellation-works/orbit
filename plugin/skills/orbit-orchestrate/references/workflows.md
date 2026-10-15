@@ -201,6 +201,16 @@ run state retain the pilot run ID, result, and admission decision. Filing
 clusters failures by a normalized error signature that prefers a concrete test
 or panic identity over ANSI styling, generic runner/cargo/nextest trailers, and
 assertion payload help text; the raw excerpt stays in the description.
+Runner `Run` groups retain printed-command provenance through their closing
+`##[endgroup]`: command headers and bodies are reproduction context, never
+emitted failure anchors. An unclosed group or a prefix ending in an orphan
+closing delimiter cannot establish a source cause. Genuine emitted annotations,
+compiler diagnostics and test/panic identities keep their precedence after the
+command display closes. Repair excerpts stay bounded around that same emitted
+diagnostic, including when later cleanup would fill a tail-only excerpt.
+Landing refuses attribution from incomplete sources or truncated displays
+without a complete failing command; this does not grant any new repair or
+merge authority.
 
 The sweep routes each repair to a host that can reproduce it. Collection reads
 each failed job's runner labels from the GitHub jobs API; when a snapshot has
@@ -222,7 +232,7 @@ its nonzero process completion, up to 256 KiB (`kind: runner_command`,
 supply `kind: runner_failure_regions`, `complete: false`, with
 `command_complete: true` and `selection_complete: true`: the command boundaries
 and every recognized failure anchor were scanned, but the command was not fully
-retained. Regions keep the command header, every recognized failure anchor, summaries
+retained. Regions keep the command header and command-display closing delimiter, every recognized emitted failure anchor, summaries
 and the process exit. A failing test keeps its captured output from the anchor
 through the stdout/stderr block until the next test status line, the
 captured-output section end, or the summary. Compiler diagnostics and other
