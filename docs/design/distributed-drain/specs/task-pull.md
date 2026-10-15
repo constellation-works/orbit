@@ -287,11 +287,22 @@ The shared text sanitizer applies to the reason before persistence. A sanitized
 reason retains the successful dispatch response and records a redaction audit event
 attributed to the affected task; replaying the original input resolves the same receipt.
 
-The owner reconciles the prior owner job before admission and rechecks the current
-handed-off claim, accepted candidate, native validation/review evidence and unrevoked
-completion authorization. Only a stopped attempt, or an uncertain merge intent whose
-owner job is no longer live, is eligible. A stale expectation refuses without reserving
-another attempt. The foreign leaf binding and the immutable handoff remain unchanged.
+The runtime reads the recorded prior owner job without inferring stoppage from age or
+process liveness, and rechecks the current handed-off claim, accepted candidate, native
+validation/review evidence and unrevoked completion authorization. A stopped attempt is
+eligible. For a latest `dispatched` attempt with an attached job, the atomic store reservation
+requires durable terminal evidence from this owner's workspace: its handoff/attempt action key,
+attached run, landing job and task/handoff input must match exactly. It archives that attempt
+as stopped with terminal-run evidence and retains the original terminal run unchanged before
+reserving its successor. An unresolved merge intent stays unresolved for the normal consumer;
+a reserved attempt without an attached job can still recover submission under its existing key.
+A stale expectation refuses without reserving another attempt. The foreign leaf binding,
+claim, immutable handoff, native certificate and original completion authorization remain unchanged.
+
+Pending, running and retrying jobs cannot be displaced. Reservation expiry, missing or foreign
+run evidence, worker messages and payload-supplied state never prove stoppage. Revoked,
+invalidated or landed claims cannot reserve new work. Replaying an already submitted receipt
+is an advisory read of its original run, even after settlement; it grants no new launch authority.
 
 The existing claim journal atomically records the operator request receipt and reserves
 its attempt before pipeline submission. The job uses the normal handoff/attempt action
@@ -445,6 +456,13 @@ pull responses, concurrent mutations, duplicate local dispatch, reassignment wit
 worker, settlement during partitions, and merge-intent reconciliation. Contract review is not a
 substitute for these tests.
 
+The public owner-retry fixture retains the actual substitute worker until its run has an
+owner and cancellation or exit is requested. Cancelled evidence comes from public cancellation;
+failed evidence comes from the startup observer after a running worker exits. The fixture waits
+for the supervisor to reap each launched child before removing its root. Concurrent same-key
+requests, response replay, exact terminal-state assertions and refusal cases remain real calls;
+an already-exited substitute cannot race a manual replacement of its terminal outcome.
+
 ## Agent Signature
 
 claude authored the initial contract under [ORB-12488]; codex revised it after design review,
@@ -541,8 +559,8 @@ older executors refuse schema 2 rather than silently applying a transition witho
 Recording completion authority dispatches the owner-local `task_landing_pipeline` from the outbox in
 the same call, so authorized work lands with no drain, ship sweep, routine or schedule running.
 Handoff identity keys one durable landing attempt and the dispatch key: a merged handoff refuses
-re-dispatch, a live owner job is not dispatched twice, and a pending request whose job never started
-or whose job is terminal is recovered as the next attempt by an explicit dispatch pass.
+re-dispatch, a live owner job is not dispatched twice, and a pending request whose job was never submitted
+or whose exact owner job is durably terminal is recovered as the next attempt by an explicit dispatch pass.
 `OrbitRuntime::dispatch_landing_requests`, `land_handoff` and `landing_attempts` are internal
 owner-domain seams alongside the handoff ones; landing a named handoff is how a stopped attempt is
 retried and an uncertain one reconciled.

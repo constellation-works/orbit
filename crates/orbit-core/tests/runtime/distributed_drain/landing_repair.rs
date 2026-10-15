@@ -20,6 +20,11 @@
 //! no-diff fixture does. Every other step is the shipped one.
 
 use super::*;
+use std::io::Write;
+
+#[path = "landing_worker.rs"]
+mod worker;
+use worker::LandingWorkers;
 
 use orbit_types::tool::WorkerInvocation;
 use orbit_types::workflow::handoff::{AcceptedHandoff, LandingAttempt, LandingAttemptState};
@@ -184,6 +189,7 @@ fn a_second_base_stop_blocks_the_task_with_both_attempts_evidence() {
 struct OwnerLocal {
     pair: Pair,
     drain: String,
+    workers: LandingWorkers,
 }
 
 impl OwnerLocal {
@@ -210,9 +216,9 @@ impl OwnerLocal {
         git(&repo, &["add", "-A"]);
         git(&repo, &["commit", "-q", "-m", "baseline"]);
 
-        // Accepting a handoff dispatches the owner's shipped landing job. Its
-        // worker does nothing: `land` runs the job's one step in this process.
-        orbit_core::test_support::install_substitute_pipeline_worker(["true".to_string()]);
+        // The real supervisor owns/reaps a child held behind a handshake.
+        // `land` runs the shipped step in process while that child stays alive.
+        let workers = LandingWorkers::new();
         let jobs = unbound.global_root().join("resources/jobs");
         std::fs::create_dir_all(&jobs).unwrap();
         std::fs::copy(
@@ -281,7 +287,11 @@ impl OwnerLocal {
             tasks: vec![task],
         };
         let drain = pair.run_drain();
-        Self { pair, drain }
+        Self {
+            pair,
+            drain,
+            workers,
+        }
     }
 
     /// Admit the next claim as a running leaf, run its shipped pipeline with
@@ -426,6 +436,7 @@ impl OwnerLocal {
             })
             .unwrap_or_else(|| panic!("no landing dispatched for {task}"));
         let job_run_id = job_run_id.expect("acceptance submitted the landing job");
+        self.own_landing_worker(&job_run_id);
         orbit_engine::execute_deterministic_action(
             owner,
             "handoff_land",
@@ -435,6 +446,84 @@ impl OwnerLocal {
             &Default::default(),
             None,
         )
+    }
+
+    fn own_landing_worker(&self, run: &str) {
+        let pid = self.workers.own(run).unwrap();
+        let jobs = &self.pair.follower_jobs;
+        let recorded = jobs.get_job_run(run).unwrap().unwrap();
+        if recorded.pid.is_none() && !recorded.state.is_terminal() {
+            assert!(jobs.claim_pending_job_run_owner(run, pid).unwrap());
+        }
+    }
+
+    fn finish_landing_worker(&self, run: &str, terminal: JobRunState) {
+        self.own_landing_worker(run);
+        let runtime = &self.pair.wire.owner;
+        match terminal {
+            JobRunState::Cancelled => {
+                let result = runtime
+                    .cancel_job_run_with_options_and_policy(
+                        run,
+                        "operator",
+                        "fixture",
+                        Some("stop the owned landing"),
+                        false,
+                        false,
+                    )
+                    .unwrap();
+                assert_eq!(result.final_state, "cancelled", "{result:?}");
+            }
+            JobRunState::Failed => {
+                self.pair
+                    .follower_jobs
+                    .mark_job_run_running(run, Utc::now(), self.workers.pid(run).unwrap())
+                    .unwrap();
+            }
+            _ => panic!("unsupported fixture outcome {terminal}"),
+        }
+        // Reproduce the observer-first ordering deterministically: it observes
+        // and reaps the released child before the public retry reads evidence.
+        self.workers.release(run).unwrap();
+        // A reconciled read can itself interrupt a dead running owner. Wait on
+        // the store until the real startup observer has settled its exit first.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !self
+            .pair
+            .follower_jobs
+            .get_job_run(run)
+            .unwrap()
+            .unwrap()
+            .state
+            .is_terminal()
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "landing observer settlement"
+            );
+            std::thread::park_timeout(Duration::from_millis(10));
+        }
+        let observed = runtime
+            .wait_pipeline_runs(&[run.to_string()], 30, 1, None)
+            .unwrap();
+        assert_eq!(
+            observed.results[0].status,
+            terminal.to_string(),
+            "{observed:?}"
+        );
+        assert_eq!(
+            self.pair
+                .follower_jobs
+                .get_job_run(run)
+                .unwrap()
+                .unwrap()
+                .state,
+            terminal
+        );
+        let _ = writeln!(
+            std::io::stderr(),
+            "owned landing settled: run={run} terminal={terminal} reaped=true"
+        );
     }
 
     /// A commit reaches `main` after the handoff, rewriting the file the
@@ -484,6 +573,69 @@ impl OwnerLocal {
             .unwrap()
             .input
             .expect("leaf input")
+    }
+}
+
+impl Drop for OwnerLocal {
+    fn drop(&mut self) {
+        let cleanup = || -> Result<(), OrbitError> {
+            let runtime = &self.pair.wire.owner;
+            for attempt in runtime.landing_attempts()? {
+                for number in 1..=attempt.attempt {
+                    let Some(run) = self.pair.follower_jobs.automation_job_for_key(&format!(
+                        "landing:{}:{number}",
+                        attempt.handoff_id
+                    ))?
+                    else {
+                        continue;
+                    };
+                    if self.workers.is_persisted_only(&run) {
+                        continue;
+                    }
+                    // A refusal fixture may deliberately delete the run, but
+                    // only after its actual worker has been settled and reaped.
+                    self.workers
+                        .own(&run)
+                        .map_err(|e| OrbitError::Io(e.to_string()))?;
+                    if self
+                        .pair
+                        .follower_jobs
+                        .get_job_run(&run)?
+                        .is_some_and(|r| !r.state.is_terminal())
+                    {
+                        runtime.cancel_job_run_with_options_and_policy(
+                            &run,
+                            "operator",
+                            "fixture",
+                            Some("fixture teardown"),
+                            false,
+                            false,
+                        )?;
+                    }
+                    self.workers
+                        .release(&run)
+                        .map_err(|e| OrbitError::Io(e.to_string()))?;
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "landing cleanup: run={run} reaped=true root_present={}",
+                        self.pair._root.path().exists()
+                    );
+                }
+            }
+            Ok(())
+        };
+        if let Err(error) = cleanup() {
+            // Preserve the root if an ownership/reap failure prevents cleanup.
+            // Never remove a directory a supervisor may still need.
+            std::mem::forget(self.pair._root.clone());
+            let _ = writeln!(
+                std::io::stderr(),
+                "landing fixture cleanup failed; root retained: {error}"
+            );
+            if !std::thread::panicking() {
+                panic!("{error}");
+            }
+        }
     }
 }
 

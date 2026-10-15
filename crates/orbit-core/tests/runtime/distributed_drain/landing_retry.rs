@@ -49,6 +49,270 @@ fn a_stopped_authorized_handoff_retries_once_through_the_public_operator_tool() 
     );
 }
 
+/// A real cancelled owner run leaves its attempt dispatched. Recovery must
+/// prove that exact terminal run, preserve it, and reserve one normal retry.
+fn terminal_owner_jobs_reconcile_dispatched_attempts_through_the_operator_tool() {
+    for terminal in [JobRunState::Cancelled, JobRunState::Failed] {
+        let (owner, task, request, prior) = retry_fixture(false, Some(terminal));
+        let runtime = &owner.pair.wire.owner;
+        let jobs = &owner.pair.follower_jobs;
+        let original_run = prior.job_run_id.as_deref().unwrap();
+        let before = owner.pair.owner_task(&task);
+        let accepted = owner.accepted(&prior.claim_id);
+        let original = jobs.get_job_run(original_run).unwrap().unwrap();
+        assert_eq!(original.state, terminal);
+        let responses = std::thread::scope(|scope| {
+            let a = scope.spawn(|| retry_tool(runtime, &request, McpCapability::Operator));
+            let b = scope.spawn(|| retry_tool(runtime, &request, McpCapability::Operator));
+            [a.join().unwrap().unwrap(), b.join().unwrap().unwrap()]
+        });
+        assert_eq!(responses[0]["run_id"], responses[1]["run_id"]);
+        assert_eq!(responses[0]["attempt"], prior.attempt + 1);
+        // The first response could have been lost: identical replay names the
+        // same run; a changed payload cannot reuse the durable request key.
+        assert_eq!(
+            retry_tool(runtime, &request, McpCapability::Operator).unwrap()["run_id"],
+            responses[0]["run_id"]
+        );
+        let mut changed = request.clone();
+        changed.reason = "changed decision".into();
+        assert!(retry_tool(runtime, &changed, McpCapability::Operator).is_err());
+        let history = runtime
+            .landing_attempt_record(&request.handoff_id, prior.attempt)
+            .unwrap()
+            .unwrap();
+        assert_eq!(history.state, LandingAttemptState::Stopped);
+        assert_eq!(history.job_run_id, prior.job_run_id);
+        assert_eq!(history.claim_id, prior.claim_id);
+        assert_eq!(history.authorization_id, prior.authorization_id);
+        assert!(history.evidence.as_deref().unwrap().contains(original_run));
+        assert_eq!(jobs.get_job_run(original_run).unwrap().unwrap(), original);
+        assert_eq!(owner.accepted(&prior.claim_id), accepted);
+        assert_eq!(owner.land(&task).unwrap()["phase"], "landed");
+        assert_eq!(owner.pair.owner_status(&task), "done");
+        let after = owner.pair.owner_task(&task);
+        assert_eq!(before["job_run_id"], after["job_run_id"]);
+        assert_eq!(before["job_run_machine"], after["job_run_machine"]);
+        assert_eq!(
+            retry_tool(runtime, &request, McpCapability::Operator).unwrap()["run_id"],
+            responses[0]["run_id"]
+        );
+    }
+}
+
+/// Unknown/foreign evidence and live owner work never become dispatch
+/// authority, including when an unresolved external intent exists.
+fn dispatched_retry_requires_exact_terminal_owner_evidence() {
+    for case in [
+        "pending",
+        "running",
+        "missing",
+        "foreign",
+        "missing_with_intent",
+    ] {
+        let (owner, _task, mut request, mut prior) = retry_fixture(false, None);
+        let runtime = &owner.pair.wire.owner;
+        let jobs = &owner.pair.follower_jobs;
+        let run_id = prior.job_run_id.as_deref().unwrap();
+        match case {
+            "pending" => {}
+            "running" => {
+                jobs.mark_job_run_running(run_id, Utc::now(), owner.workers.pid(run_id).unwrap())
+                    .unwrap();
+            }
+            "missing" | "missing_with_intent" => {
+                if case == "missing_with_intent" {
+                    publish_retry_intent(&owner, &prior);
+                }
+                owner.finish_landing_worker(run_id, JobRunState::Cancelled);
+                jobs.delete_job_run(run_id).unwrap();
+            }
+            "foreign" => {
+                // Attach a real terminal owner job with matching-looking input
+                // but without this attempt's dispatch key. Worker/foreign labels
+                // and a terminal status cannot substitute for the exact binding.
+                RuntimeHost::record_handoff_landing(
+                    runtime,
+                    &orbit_engine::HandoffLandingUpdate {
+                        handoff_id: request.handoff_id.clone(),
+                        step: orbit_engine::HandoffLandingStep::Stop { repairable: false },
+                        observed: None,
+                        evidence: "prepare mismatched attachment".into(),
+                    },
+                )
+                .unwrap();
+                let auth = ClaimInvocation::trusted_operator(
+                    prior.task_id.clone(),
+                    prior.claim_id.clone(),
+                    "operator".into(),
+                );
+                runtime
+                    .mutate_execution_claim(
+                        Some(&auth),
+                        "fixture-open",
+                        &ClaimMutation::DispatchLanding {
+                            handoff_id: request.handoff_id.clone(),
+                            job_run_id: None,
+                        },
+                    )
+                    .unwrap();
+                let foreign = jobs
+                    .insert_job_run(
+                        orbit_core::application::landing::LANDING_JOB,
+                        1,
+                        Utc::now(),
+                        Some(json!({"handoff_id": request.handoff_id, "task_id": prior.task_id})),
+                        None,
+                    )
+                    .unwrap();
+                jobs.finalize_job_run(&foreign.run_id, JobRunState::Cancelled, Utc::now(), None)
+                    .unwrap();
+                runtime
+                    .mutate_execution_claim(
+                        Some(&auth),
+                        "fixture-attach",
+                        &ClaimMutation::DispatchLanding {
+                            handoff_id: request.handoff_id.clone(),
+                            job_run_id: Some(foreign.run_id),
+                        },
+                    )
+                    .unwrap();
+                prior = runtime.landing_attempts().unwrap().remove(0);
+                request.expected_latest_attempt = prior.attempt;
+            }
+            _ => unreachable!(),
+        }
+        let before = runtime.landing_attempts().unwrap();
+        assert!(
+            retry_tool(runtime, &request, McpCapability::Operator).is_err(),
+            "{case}"
+        );
+        assert_eq!(runtime.landing_attempts().unwrap(), before, "{case}");
+        if matches!(case, "missing" | "foreign" | "missing_with_intent") {
+            assert!(
+                runtime.land_handoff(&request.handoff_id).is_err(),
+                "the shared dispatch boundary also refuses {case} evidence"
+            );
+            assert_eq!(runtime.landing_attempts().unwrap(), before, "{case}");
+        }
+        assert!(
+            jobs.automation_job_for_key(&format!(
+                "landing:{}:{}",
+                request.handoff_id,
+                prior.attempt + 1
+            ))
+            .unwrap()
+            .is_none(),
+            "{case}"
+        );
+    }
+}
+
+fn publish_retry_intent(owner: &OwnerLocal, prior: &LandingAttempt) {
+    let accepted = owner.accepted(&prior.claim_id);
+    RuntimeHost::record_handoff_landing(
+        &owner.pair.wire.owner,
+        &orbit_engine::HandoffLandingUpdate {
+            handoff_id: prior.handoff_id.clone(),
+            step: orbit_engine::HandoffLandingStep::PublishIntent {
+                intent_id: "uncertain-owner-merge".into(),
+            },
+            observed: Some(accepted.handoff.candidate),
+            evidence: "owner sent merge before terminal job outcome".into(),
+        },
+    )
+    .unwrap();
+}
+
+/// Retry preserves uncertainty until the normal consumer reads the target.
+/// A merged target completes without moving it again; an unreadable target
+/// refuses before clearing the intent or performing a new merge.
+fn terminal_job_retry_reconciles_external_intent_before_landing() {
+    for case in ["not_merged", "already_merged", "unreadable"] {
+        let (owner, task, request, prior) = retry_fixture(false, Some(JobRunState::Cancelled));
+        let runtime = &owner.pair.wire.owner;
+        publish_retry_intent(&owner, &prior);
+        retry_tool(runtime, &request, McpCapability::Operator).unwrap();
+        assert_eq!(
+            runtime
+                .resolve_execution_claims()
+                .unwrap()
+                .into_iter()
+                .find(|c| c.claim.claim_id == prior.claim_id)
+                .unwrap()
+                .unresolved_merge_intent
+                .as_deref(),
+            Some("uncertain-owner-merge")
+        );
+        if case == "already_merged" {
+            git(
+                &owner.pair.owner_repo,
+                &["merge", "--ff-only", &request.expected_candidate_commit],
+            );
+        } else if case == "unreadable" {
+            git(
+                &owner.pair.owner_repo,
+                &["branch", "-m", "main", "unavailable-target"],
+            );
+            assert!(owner.land(&task).is_err());
+            assert_eq!(
+                runtime
+                    .resolve_execution_claims()
+                    .unwrap()
+                    .into_iter()
+                    .find(|c| c.claim.claim_id == prior.claim_id)
+                    .unwrap()
+                    .unresolved_merge_intent
+                    .as_deref(),
+                Some("uncertain-owner-merge")
+            );
+            assert_eq!(
+                git(&owner.pair.owner_repo, &["rev-parse", "HEAD"]).trim(),
+                request.expected_base_commit
+            );
+            git(
+                &owner.pair.owner_repo,
+                &["branch", "-m", "unavailable-target", "main"],
+            );
+        }
+        assert_eq!(owner.land(&task).unwrap()["phase"], "landed");
+        assert_eq!(
+            git(&owner.pair.owner_repo, &["rev-parse", "main"]).trim(),
+            request.expected_candidate_commit
+        );
+        assert!(
+            runtime
+                .resolve_execution_claims()
+                .unwrap()
+                .into_iter()
+                .find(|c| c.claim.claim_id == prior.claim_id)
+                .unwrap()
+                .unresolved_merge_intent
+                .is_none()
+        );
+        // A landed claim has no fresh retry authority even with a new key.
+        let mut fresh = request.clone();
+        fresh.request_key = "after-completion".into();
+        assert!(retry_tool(runtime, &fresh, McpCapability::Operator).is_err());
+    }
+}
+
+fn replica_and_managed_callers_cannot_recover_a_terminal_owner_job() {
+    let (owner, _task, request, _prior) = retry_fixture(false, Some(JobRunState::Cancelled));
+    let runtime = &owner.pair.wire.owner;
+    let before = runtime.landing_attempts().unwrap();
+    let replica = runtime
+        .clone()
+        .with_coordination_write_owner(Some("another-owner".into()));
+    assert!(retry_tool(&replica, &request, McpCapability::Operator).is_err());
+    assert!(retry_tool(runtime, &request, McpCapability::Agent).is_err());
+    {
+        let _managed = orbit_common::test_env::scoped([("ORBIT_MANAGED_RUN_CONTEXT", Some("1"))]);
+        assert!(retry_tool(runtime, &request, McpCapability::Operator).is_err());
+    }
+    assert_eq!(runtime.landing_attempts().unwrap(), before);
+}
+
 fn a_redacted_retry_reason_preserves_success_audit_and_replay() {
     let (owner, task, mut request, stopped) = stopped_retry_fixture();
     let runtime = &owner.pair.wire.owner;
@@ -171,6 +435,18 @@ fn stopped_retry_fixture() -> (
     orbit_types::workflow::handoff::LandingRetryRequest,
     LandingAttempt,
 ) {
+    retry_fixture(true, Some(JobRunState::Cancelled))
+}
+
+fn retry_fixture(
+    stop: bool,
+    terminal: Option<JobRunState>,
+) -> (
+    OwnerLocal,
+    String,
+    orbit_types::workflow::handoff::LandingRetryRequest,
+    LandingAttempt,
+) {
     let owner = OwnerLocal::new();
     let leaf = owner.handed_off_leaf(|checkout, _| {
         std::fs::write(checkout.join(FILE), FIRST).unwrap();
@@ -179,30 +455,26 @@ fn stopped_retry_fixture() -> (
     let runtime = &owner.pair.wire.owner;
     let task = owner.pair.claimed_task(&leaf);
     let accepted = owner.accepted(&owner.claim_of(&leaf));
-    RuntimeHost::record_handoff_landing(
-        runtime,
-        &orbit_engine::HandoffLandingUpdate {
-            handoff_id: accepted.handoff_id.clone(),
-            step: orbit_engine::HandoffLandingStep::Stop { repairable: false },
-            observed: None,
-            evidence: "required provider review was not yet satisfied".into(),
-        },
-    )
-    .unwrap();
-    let stopped = runtime.landing_attempts().unwrap().remove(0);
-    // The substitute has no landing activity. Settle its owner-local job at
-    // the public persistence boundary so the stopped fixture never depends
-    // on the short-lived substitute's exit timing.
-    owner
-        .pair
-        .follower_jobs
-        .finalize_job_run(
-            stopped.job_run_id.as_deref().unwrap(),
-            JobRunState::Cancelled,
-            Utc::now(),
-            None,
+    if stop {
+        RuntimeHost::record_handoff_landing(
+            runtime,
+            &orbit_engine::HandoffLandingUpdate {
+                handoff_id: accepted.handoff_id.clone(),
+                step: orbit_engine::HandoffLandingStep::Stop { repairable: false },
+                observed: None,
+                evidence: "required provider review was not yet satisfied".into(),
+            },
         )
         .unwrap();
+    }
+    let stopped = runtime.landing_attempts().unwrap().remove(0);
+    // Acquire the actual child before settling its run. Cancellation is public;
+    // Failed is produced by the real observer after a running child exits.
+    let run_id = stopped.job_run_id.as_deref().unwrap();
+    owner.own_landing_worker(run_id);
+    if let Some(terminal) = terminal {
+        owner.finish_landing_worker(run_id, terminal);
+    }
 
     let request = orbit_types::workflow::handoff::LandingRetryRequest {
         handoff_id: accepted.handoff_id,
@@ -219,14 +491,14 @@ fn stopped_retry_fixture() -> (
 /// Independent competing requests compare-and-reserve once. Replays keep
 /// naming the winner rather than opening a further landing attempt.
 fn competing_operator_retries_reserve_one_attempt_and_refuse_stale_inputs() {
-    let (owner, _task, request, stopped) = stopped_retry_fixture();
+    let (owner, _task, request, stopped) = retry_fixture(false, Some(JobRunState::Cancelled));
     let runtime = &owner.pair.wire.owner;
     for (field, value) in [
         ("workspace", json!("ws_foreign")),
         ("expected_candidate_commit", json!("a".repeat(40))),
         ("expected_base_commit", json!("b".repeat(40))),
         ("expected_latest_attempt", json!(stopped.attempt + 1)),
-        ("expected_latest_state", json!("dispatched")),
+        ("expected_latest_state", json!("stopped")),
         ("reason", json!(" ")),
         ("request_key", json!("")),
         ("auto_fix", json!(true)),
@@ -352,6 +624,9 @@ fn operator_retry_reservations_recover_before_submission_and_after_lost_attachme
             let orbit_store::contracts::KeyedJobRunAdmission::Admitted(run) = admission else {
                 panic!("one new run")
             };
+            // This crash window intentionally stops at persistence: no worker
+            // was launched, so fixture teardown has no child to acquire/reap.
+            owner.workers.persisted_only(&run.run_id);
             run.run_id
         } else {
             let recovered = runtime.dispatch_landing_requests().unwrap().remove(0);
@@ -403,7 +678,7 @@ fn operator_retry_reservations_recover_before_submission_and_after_lost_attachme
 
 fn revoked_changed_and_repair_pending_handoffs_refuse_operator_retry() {
     for case in ["revoked", "changed_candidate", "repair_pending"] {
-        let (owner, task, request, stopped) = stopped_retry_fixture();
+        let (owner, task, request, stopped) = retry_fixture(false, Some(JobRunState::Cancelled));
         let runtime = &owner.pair.wire.owner;
         match case {
             "revoked" => {
@@ -473,6 +748,10 @@ fn revoked_changed_and_repair_pending_handoffs_refuse_operator_retry() {
 
 crate::scenario_table!(
     public_owner_handoff_retry_scenarios,
+    terminal_owner_jobs_reconcile_dispatched_attempts_through_the_operator_tool,
+    dispatched_retry_requires_exact_terminal_owner_evidence,
+    terminal_job_retry_reconciles_external_intent_before_landing,
+    replica_and_managed_callers_cannot_recover_a_terminal_owner_job,
     a_redacted_retry_reason_preserves_success_audit_and_replay,
     a_stopped_authorized_handoff_retries_once_through_the_public_operator_tool,
     competing_operator_retries_reserve_one_attempt_and_refuse_stale_inputs,

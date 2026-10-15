@@ -113,11 +113,16 @@ fn a_conflicting_base_or_a_head_pushed_after_review_stays_pending() {
     );
 }
 
-/// The retained stopped owner shape with a healthy foreign before-landing
-/// certificate and a PR that has already squash-merged at the exact head.
-/// Public retry reconciles an uncertain intent without sending a merge or
-/// replacing the foreign leaf binding, native certificate or old stop.
+/// Both a recorded stop and a cancelled owner job whose attempt still says
+/// dispatched preserve the foreign native certificate. Already-merged readback
+/// completes with or without an unresolved intent, without another merge.
 fn public_retry_reconciles_an_already_merged_native_handoff_without_merging_again() {
+    for stop in [true, false] {
+        reconcile_native_handoff(stop);
+    }
+}
+
+fn reconcile_native_handoff(stop: bool) {
     let reviewed = ReviewedHandoff::accept(ReviewTiming::BeforeLanding);
     let owner = &reviewed.owner;
     let console = owner.distributed_claim_console().unwrap();
@@ -144,16 +149,18 @@ fn public_retry_reconciles_an_already_merged_native_handoff_without_merging_agai
             "approve-native-retry",
         )
         .unwrap();
-    RuntimeHost::record_handoff_landing(
-        owner,
-        &orbit_engine::HandoffLandingUpdate {
-            handoff_id: accepted.handoff_id.clone(),
-            step: orbit_engine::HandoffLandingStep::Stop { repairable: false },
-            observed: None,
-            evidence: "provider review was not satisfied at the first owner attempt".into(),
-        },
-    )
-    .unwrap();
+    if stop {
+        RuntimeHost::record_handoff_landing(
+            owner,
+            &orbit_engine::HandoffLandingUpdate {
+                handoff_id: accepted.handoff_id.clone(),
+                step: orbit_engine::HandoffLandingStep::Stop { repairable: false },
+                observed: None,
+                evidence: "provider review was not satisfied at the first owner attempt".into(),
+            },
+        )
+        .unwrap();
+    }
     let stopped = owner.landing_attempts().unwrap().remove(0);
     orbit_store::compose::workspace_job_run_store(
         owner.sqlite_store().unwrap(),
@@ -210,7 +217,7 @@ fn public_retry_reconciles_an_already_merged_native_handoff_without_merging_agai
         "workspace": owner.workspace_id().unwrap(), "handoff_id": accepted.handoff_id,
         "expected_candidate_commit": accepted.handoff.candidate.candidate.commit,
         "expected_base_commit": accepted.handoff.candidate.base.commit,
-        "expected_latest_attempt": stopped.attempt, "expected_latest_state":"stopped",
+        "expected_latest_attempt": stopped.attempt, "expected_latest_state": stopped.state,
         "reason":"provider reports the unchanged native head already merged", "request_key":"native-reconcile-1",
     });
     // Corrupt only this isolated fixture's certificate blob: the public retry
@@ -269,19 +276,21 @@ fn public_retry_reconciles_an_already_merged_native_handoff_without_merging_agai
             },
         )
         .unwrap();
-    // Model a lost external reply via the normal trusted intent boundary.
-    RuntimeHost::record_handoff_landing(
-        owner,
-        &orbit_engine::HandoffLandingUpdate {
-            handoff_id: accepted.handoff_id.clone(),
-            step: orbit_engine::HandoffLandingStep::PublishIntent {
-                intent_id: "native-merge-uncertain".into(),
+    if stop {
+        // Model a lost external reply via the normal trusted intent boundary.
+        RuntimeHost::record_handoff_landing(
+            owner,
+            &orbit_engine::HandoffLandingUpdate {
+                handoff_id: accepted.handoff_id.clone(),
+                step: orbit_engine::HandoffLandingStep::PublishIntent {
+                    intent_id: "native-merge-uncertain".into(),
+                },
+                observed: Some(accepted.handoff.candidate.clone()),
+                evidence: "external merge reply was lost".into(),
             },
-            observed: Some(accepted.handoff.candidate.clone()),
-            evidence: "external merge reply was lost".into(),
-        },
-    )
-    .unwrap();
+        )
+        .unwrap();
+    }
     let result = orbit_engine::execute_deterministic_action(
         owner,
         "handoff_land",
@@ -298,12 +307,27 @@ fn public_retry_reconciles_an_already_merged_native_handoff_without_merging_agai
     assert_eq!(completed.job_run_id, original.job_run_id);
     assert_eq!(completed.job_run_machine, original.job_run_machine);
     assert_eq!(owner.accepted_task_handoff(claim_id).unwrap(), accepted);
-    assert_eq!(
-        owner
-            .landing_attempt_record(&accepted.handoff_id, stopped.attempt)
-            .unwrap(),
-        Some(stopped)
-    );
+    let historical = owner
+        .landing_attempt_record(&accepted.handoff_id, stopped.attempt)
+        .unwrap()
+        .unwrap();
+    if stop {
+        assert_eq!(historical, stopped);
+    } else {
+        assert_eq!(
+            historical.state,
+            orbit_types::workflow::handoff::LandingAttemptState::Stopped
+        );
+        assert_eq!(historical.job_run_id, stopped.job_run_id);
+        assert_eq!(historical.claim_id, stopped.claim_id);
+        assert_eq!(historical.authorization_id, stopped.authorization_id);
+        assert!(
+            historical
+                .evidence
+                .unwrap()
+                .contains(stopped.job_run_id.as_deref().unwrap())
+        );
+    }
     let calls = std::fs::read_to_string(provider.with_extension("calls")).unwrap_or_else(|_| {
         std::fs::read_to_string(format!("{}.calls", provider.display())).unwrap()
     });

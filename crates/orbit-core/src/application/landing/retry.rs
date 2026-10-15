@@ -8,7 +8,9 @@ use super::{LANDING_JOB, LandingDispatch};
 use crate::OrbitRuntime;
 
 impl OrbitRuntime {
-    /// Retry a stopped or uncertain landing under trusted operator authority.
+    /// Retry a stopped, terminal-job dispatched, or uncertain landing under
+    /// trusted operator authority. The store proves exact terminal owner-job
+    /// evidence atomically with reservation; runtime liveness is only a refusal.
     /// `owner_workspace_id` is explicit and must identify this owner partition.
     /// Replaying a receipt returns its original run even after it settles.
     pub fn retry_handoff_as_operator(
