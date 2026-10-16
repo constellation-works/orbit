@@ -94,7 +94,10 @@ jobs:
       # [DANI-10428] rust-cache keys on the rustc version, so this 1.89 check
       # cache can never collide with the pinned-toolchain jobs; it prunes stale
       # registry/target entries before saving instead of growing to the cap.
+      # The virtual workspace root is not a member manifest in rust-cache metadata.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: msrv-${{ hashFiles('Cargo.toml') }}
 
       - name: Check workspace on MSRV toolchain
         run: |
@@ -167,7 +170,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         id: rust-cache
         with:
-          shared-key: rust-1.98.1
+          # Include root profiles as well as rust-cache's compiler/dependency key.
+          shared-key: rust-1.98.1-${{ hashFiles('Cargo.toml') }}
           cache-on-failure: true
 
       # Each public pinned download allows at most three attempts in one 60s

@@ -164,6 +164,26 @@ impl McpWorkspace {
         extra_workspace_args: &[&str],
         task_prefix: &str,
     ) -> Self {
+        if let Some(prefix) = std::env::var_os("ORBIT_TEST_MCP_HOST_SEED") {
+            let root = PathBuf::from(std::env::var_os("HOME").expect("seed HOME")).join(".orbit");
+            orbit_config::seed_default_config(
+                &root.join("config.toml"),
+                Some(&orbit_config::ConfigSeed::from_families(["codex"])),
+            )
+            .expect("seed independent MCP config");
+            let identity = orbit_registry::ensure_machine_identity(&root, || {
+                Ok(orbit_registry::NewMachineIdentity {
+                    name: "mcp-roundtrip-host".into(),
+                    task_prefix: prefix.to_string_lossy().into_owned(),
+                })
+            })
+            .expect("mint independent MCP machine identity");
+            assert!(matches!(
+                identity,
+                orbit_registry::MachineIdentityOutcome::Created(_)
+            ));
+            std::process::exit(0);
+        }
         let temp = tempdir().expect("tempdir");
         let home = temp.path().join("home");
         let work = temp.path().join("work");
@@ -174,11 +194,8 @@ impl McpWorkspace {
         // The default macOS temp directory sits behind `/var`, a symlink.
         let work = work.canonicalize().expect("resolve work");
 
-        // `orbit init` freezes crew seeding to the agent CLIs it finds on
-        // `PATH` (ADR-0193), so the fixture plants a stub `codex` before it
-        // runs. Without one, a host with no agent CLI installed — every CI
-        // runner — seeds an empty `[crews]` table, and any task naming a crew
-        // is rejected with `crew '<name>' is not defined in [crews.*]`.
+        // The config seeds codex deterministically. Give dispatch tests their
+        // own executable as well, independent of agent CLIs on the host.
         plant_agent_cli_stub(&Self::stub_bin_dir(&home), "codex");
 
         let output = crate::git_repo::command()
@@ -192,20 +209,37 @@ impl McpWorkspace {
             "fixture needs its own repository"
         );
 
-        let init_args = vec![
-            "init",
-            "--non-interactive",
-            // This disposable transport fixture does not dispatch sandboxed
-            // work. Host prerequisite probes would prevent its reads from
-            // being exercised inside a managed executor's outer sandbox.
-            "--skip-host-prerequisites",
-            "--machine-name",
-            "mcp-roundtrip-host",
-            "--task-prefix",
-            task_prefix,
-        ];
-        let output = orbit_ok(Self::orbit_command(&work, &home).args(init_args));
-        assert!(output.status.success());
+        // These are transport fixtures, not global-init tests. Seed only a
+        // fresh config and machine identity in an isolated child; the real
+        // workspace init below materializes all catalogs once at this HOME.
+        // Running global init first reconciled the same immutable defaults a
+        // second time during registration. Never copy a registry, identity,
+        // authorization, defaults stamp or root-rendered asset from a peer.
+        let test = std::thread::current()
+            .name()
+            .expect("MCP fixture called by a test")
+            .to_owned();
+        let mut seed = Self::orbit_program_command(
+            &std::env::current_exe().expect("MCP test executable"),
+            &work,
+            &home,
+        );
+        seed.args(["--exact", &test, "--nocapture", "--test-threads=1"])
+            .env("ORBIT_TEST_MCP_HOST_SEED", task_prefix);
+        let output = test_env::run_child_test(&mut seed, &test, temp.path());
+        // This is a setup command: it exits before the carrier's assertions,
+        // just like task_workspace's batch seeder. A zero-test child cannot
+        // pass merely by exiting zero: require its persisted identity too.
+        assert!(
+            output.status.success(),
+            "MCP host seed failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let identity = orbit_registry::load_machine_identity(&home.join(".orbit"))
+            .expect("child persisted its independent machine identity");
+        assert_eq!(identity.task_prefix, task_prefix);
+        assert_eq!(identity.name, "mcp-roundtrip-host");
 
         let mut workspace_init_args = vec!["workspace", "init", "--name", workspace_name];
         workspace_init_args.extend_from_slice(extra_workspace_args);
