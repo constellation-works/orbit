@@ -70,6 +70,8 @@ pub mod test_support {
     /// Freeze source budget time in an isolated test process and its CLI children.
     pub use crate::application::automation::source::SOURCE_ELAPSED_ENV;
     pub use crate::application::automation::source::test_support::with_delivery_source_clock;
+    #[cfg(unix)]
+    pub use crate::application::job::pipeline::with_pipeline_worker_log_open_hook;
     /// Replaced with the run id in every argv entry of a substitute worker.
     pub use crate::application::job::pipeline::worker_command_override::RUN_ID_PLACEHOLDER;
     /// Substitute the detached pipeline worker program for this whole test
@@ -77,6 +79,7 @@ pub mod test_support {
     /// must install one: a test harness has no production entry-point marker,
     /// so an unsubstituted submission fails.
     pub use crate::application::job::pipeline::worker_command_override::install_process_wide as install_substitute_pipeline_worker;
+    pub use crate::application::landing::with_landing_retry_reservation_hook;
     pub use crate::application::managed_assets::test_support::with_auto_task_manifest_read_hook;
     pub use crate::runtime::{
         with_host_load_sampling_wait, with_owner_read_retry_wait, with_pipeline_poll_wait,

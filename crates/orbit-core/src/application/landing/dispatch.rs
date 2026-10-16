@@ -1,7 +1,6 @@
 //! Dispatch pending landing-start requests and re-dispatch one named handoff.
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::JobRunState;
 use orbit_types::workflow::handoff::{LandingAttempt, LandingAttemptState, LandingStartState};
 use serde::Serialize;
 use serde_json::json;
@@ -84,9 +83,10 @@ impl OrbitRuntime {
                             submitted: false,
                         });
                     }
-                    // A job that died leaves the attempt open but unusable: its
-                    // dispatch key already resolves to that run, so landing this
-                    // handoff again needs the next attempt.
+                    // A terminal job leaves the attempt open but unusable. The
+                    // store proves it belongs to this exact dispatch and retains
+                    // its stopped evidence before opening the next attempt.
+                    // Missing or foreign evidence is refused there.
                     (Some(_), false) => true,
                     // Opened but never submitted — the crash window between the
                     // two. The same key resubmits, or resolves the run that was
@@ -123,18 +123,16 @@ impl OrbitRuntime {
         })
     }
 
-    /// Whether this attempt's owner job is still pending or running. A run that
-    /// died is reconciled by the lookup, so a crashed landing does not look live
-    /// forever.
+    /// Whether the recorded owner job has not terminally ended. This lookup
+    /// never infers stoppage from process liveness or age. Missing evidence is
+    /// not live, but opening a successor still requires exact terminal proof at
+    /// the store boundary.
     pub(super) fn landing_job_is_live(&self, attempt: &LandingAttempt) -> Result<bool, OrbitError> {
         let Some(run_id) = attempt.job_run_id.as_deref() else {
             return Ok(false);
         };
-        match self.show_job_run(run_id) {
-            Ok(run) => Ok(matches!(
-                run.state,
-                JobRunState::Pending | JobRunState::Running
-            )),
+        match self.show_job_run_observed(run_id) {
+            Ok(run) => Ok(!run.state.is_terminal()),
             Err(OrbitError::NotFound { .. }) => Ok(false),
             Err(error) => Err(error),
         }

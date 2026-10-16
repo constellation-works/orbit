@@ -78,6 +78,8 @@ pub(crate) use worker::log::configure_pipeline_worker_stdio;
 pub(crate) use worker::log::pipeline_worker_log_path;
 #[cfg(all(test, unix))]
 pub(crate) use worker::log::pipeline_worker_log_test_hook;
+#[cfg(all(feature = "test-support", unix))]
+pub use worker::log::pipeline_worker_log_test_hook::with_pipeline_worker_log_open_hook;
 pub(crate) use worker::supervisor::WorkerLaunchError;
 
 #[derive(Debug, Clone, Serialize)]

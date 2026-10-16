@@ -243,12 +243,15 @@ pub enum ClaimMutation {
     },
     /// Reserve the single live landing attempt for a handoff, or record the
     /// owner job that carries the reserved attempt. Handoff identity is the
-    /// deduplication key; a stopped attempt reopens as the next attempt.
+    /// deduplication key; a stopped attempt reopens as the next attempt. A
+    /// dispatched attached attempt requires exact terminal owner-job evidence
+    /// from the owner store, retained as a stop in the attempt history.
     DispatchLanding {
         handoff_id: String,
         job_run_id: Option<String>,
     },
-    /// Atomically compare the stopped/uncertain attempt and reserve its retry.
+    /// Atomically compare a stopped, terminal-job dispatched, or uncertain
+    /// attempt and reserve its retry; caller-supplied state is never stop proof.
     RetryLanding(orbit_types::workflow::handoff::LandingRetryRequest),
     /// Owner-only durable base-update reservation; acceptance remains immutable.
     ReserveBaseUpdate(orbit_types::workflow::PrBaseUpdateReservation),
