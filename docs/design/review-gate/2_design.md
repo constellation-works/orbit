@@ -2,7 +2,7 @@
 title: Review Gate — Design
 owner: codex
 last_updated: 2026-10-10
-last_validated: 2026-10-10
+last_validated: 2026-10-15
 status: Accepted
 feature: review-gate
 doc_role: design
@@ -97,10 +97,10 @@ decides. `orbit auto-task list`/`show` report that as `effective_enabled`. A
 `operation.review_minutes` becomes `review.minutes`. The budget keys
 `operation.review_reviewer_starts` and `operation.review_repair_cycles` are
 retired [ORB-13989]: one review per candidate counts neither, so both are
-warned about by name and ignored. The resolved-policy version is 2; a
-version-1 snapshot fails closed and must be replaced. A snapshot captured
-before the retirement still carries `reviewer_starts` or `repair_cycles`; it
-reads and the values are ignored.
+warned about by name and ignored. The resolved-policy version is 5; the
+review-admission contract remains version 1 and refuses unsupported contract
+versions. A snapshot captured before the retirement still carries
+`reviewer_starts` or `repair_cycles`; it reads and the values are ignored.
 
 ## 2. Captured timing
 

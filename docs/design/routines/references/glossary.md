@@ -1,7 +1,7 @@
 ---
 type: glossary
 summary: Vocabulary for the routines scheduler feature.
-last_validated: 2026-10-10
+last_validated: 2026-10-15
 tags: [routines, scheduler]
 ---
 
@@ -22,6 +22,6 @@ activity-job feature (activity, job, run, catalog) are defined in
 | Missed-run policy | Per-routine handling of slots that elapsed while the host was down: `catch_up_once` or `skip`. See [2_design.md §1](../2_design.md). |
 | Owner checkout | A registered checkout whose logical workspace this machine owns (host-registry). The unit of scheduling: each one is an independent schedule against its own store. See [2_design.md §2](../2_design.md). |
 | Routine | A per-checkout YAML definition of recurring work: trigger, target, enabled flag, policy. See [2_design.md §1](../2_design.md). |
-| Routine source | Any registered, active owner checkout on the host; where routine YAML lives. Registration is the whole opt-in. See [2_design.md §2](../2_design.md). |
+| Routine source | A registered, active checkout on the host where routine YAML lives. Owner checkouts schedule their routines; replica checkouts schedule only cron routines targeting `job:worktree_gc_pipeline`. Registration is the whole opt-in. See [2_design.md §2](../2_design.md). |
 | Sweep | Compatibility alias for `orbit clock tick`. See [2_design.md §3](../2_design.md). |
-| Tick | One invocation of the scheduler pass by the clock; it evaluates routines and auto-task definitions for every owner checkout, alongside other bounded recovery work. See [2_design.md §3](../2_design.md). |
+| Tick | One invocation of the scheduler pass by the clock; it evaluates routines and auto-task definitions for every owner checkout, replica-local worktree GC routines, and other bounded recovery work. See [2_design.md §3](../2_design.md). |

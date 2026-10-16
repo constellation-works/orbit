@@ -4,7 +4,7 @@ type: design
 title: "Task Artifacts — Design"
 owner: codex
 last_updated: 2026-10-10
-last_validated: 2026-10-10
+last_validated: 2026-10-15
 status: Draft
 feature: task-artifacts
 doc_role: design
@@ -190,7 +190,7 @@ To avoid spending the payload twice, the JSON text mirror is replaced with a one
 
 ### `source_path` is caller-local, and paths do not travel
 
-`source_path` on `orbit.task.artifact.put` is resolved **on the machine that makes the call**, relative to that caller's cwd, then confined to that machine's workspace checkout after symlink resolution. Absolute paths and in-workspace symlinks that escape the checkout are rejected as `invalid_input`. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR` in a managed worker; gitignored, run-scoped in a job worktree). Sources under `/tmp` are outside the workspace and are refused. The path is consumed locally and never crosses the coordination boundary: the spoke broker reads the bytes first and sends a path-free payload, which the hub accepts only over the authenticated `ssh-mcp` connector.
+`source_path` on `orbit.task.artifact.put` is resolved **on the machine that makes the call**, relative to that caller's cwd when not absolute, then confined to that machine's workspace checkout after symlink resolution. Absolute paths within the checkout are accepted; paths and in-workspace symlinks that resolve outside it are rejected as `invalid_input`. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR` in a managed worker; gitignored, run-scoped in a job worktree). Sources under `/tmp` are outside the workspace and are refused. The path is consumed locally and never crosses the coordination boundary: the spoke broker reads the bytes first and sends a path-free payload, which the hub accepts only over the authenticated `ssh-mcp` connector.
 
 CLI attachment preserves the supplied source filename, including leading
 or trailing whitespace, before filesystem resolution and bounded reads. MCP
