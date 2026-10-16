@@ -5,9 +5,13 @@ use std::path::Path;
 use std::process::Command;
 #[cfg(unix)]
 use std::time::{Duration, Instant};
+#[cfg(unix)]
+use std::{cell::Cell, path::PathBuf, rc::Rc};
 
 #[cfg(unix)]
-use orbit_common::test_env::canonical_temp_dir;
+use orbit_common::test_env::{
+    SupervisorSeam, canonical_temp_dir, with_supervision_clock, with_supervisor_seam,
+};
 #[cfg(unix)]
 use serde_json::json;
 
@@ -27,6 +31,43 @@ struct Host;
 
 #[cfg(unix)]
 impl crate::test_support::NullRuntimeHost for Host {}
+
+// These comparisons exercise verdicts and caches, not host scheduling speed.
+// Allow real setup time instead of requiring a one-second base checkout.
+// Intentional cuts advance only the owning subprocess supervisor after readiness;
+// Git preparation, subsequent base runs and cleanup still use real time.
+#[cfg(unix)]
+const COMPARISON_WINDOW: Duration = Duration::from_secs(60);
+
+#[cfg(unix)]
+fn cut_ready_process<T>(ready: PathBuf, operation: impl FnOnce() -> T) -> T {
+    let offset = Rc::new(Cell::new(Duration::ZERO));
+    let clock_offset = Rc::clone(&offset);
+    let wait_offset = Rc::clone(&offset);
+    let seam = SupervisorSeam {
+        wait: Some(Box::new(move |child| {
+            if ready.exists() {
+                fs::remove_file(&ready).unwrap();
+                // The wait hook runs after the supervisor's initial clock
+                // sample, so even an already-ready child reaches its deadline.
+                wait_offset.set(COMPARISON_WINDOW);
+                return Ok(None);
+            }
+            child.try_wait()
+        })),
+        ..SupervisorSeam::default()
+    };
+    let result = with_supervision_clock(
+        move || Instant::now() + clock_offset.get(),
+        || with_supervisor_seam(seam, operation),
+    );
+    assert_eq!(
+        offset.get(),
+        COMPARISON_WINDOW,
+        "the stalled subprocess reached readiness before its deadline cut"
+    );
+    result
+}
 
 // Fault injection [ORB-15590]: a small capture ceiling forces a genuine
 // supervisor stop without generating large output or load. Its process-wide
@@ -267,8 +308,9 @@ error: this `if` has identical blocks
 
 // Fault injection: the candidate's check prints a failure and then stalls, so
 // only the budget's reserve stops it. A real budget is minutes of review time;
-// this one is scaled down to seconds, keeping the production relation (the
-// candidate stops a quarter of the window early). The boundary test drives
+// this fixture advances the subprocess clock only after its failure is printed,
+// keeping the production relation (the candidate stops a quarter of the window
+// early) without spending that window asleep. The boundary test drives
 // the uncut paths [ORB-15328].
 #[test]
 #[cfg(unix)]
@@ -287,7 +329,7 @@ fn a_candidate_rerun_stopped_at_the_reserve_still_attributes_its_failures_to_the
          printf '{\"schema_version\":1,\"selection\":%s,\"executed_tests\":[\"suite::broken\"],\"tests_run\":1}' \"$selection\" \
          > \"$ORBIT_VALIDATION_SUMMARY\"\n\
          echo 'test suite::broken ... FAILED'\n\
-         if [ -f candidate.txt ]; then exec sleep 600; fi\n\
+         if [ -f candidate.txt ]; then : > candidate-ready; exec sleep 600; fi\n\
          exit 1\n",
     )
     .unwrap();
@@ -307,18 +349,20 @@ fn a_candidate_rerun_stopped_at_the_reserve_still_attributes_its_failures_to_the
     git_ok(&repo, &["add", "candidate.txt"]);
     git_ok(&repo, &["commit", "-q", "-m", "candidate"]);
 
-    let budget = ReplayBudget::new(Duration::from_secs(4));
+    let budget = ReplayBudget::new(COMPARISON_WINDOW);
     let started = Instant::now();
-    let check = verify_base_failure(
-        &Host,
-        &repo,
-        base.trim(),
-        "./check.sh",
-        &["suite::broken".to_string()],
-        "jrun-fixture",
-        budget,
-    )
-    .unwrap();
+    let check = cut_ready_process(repo.join("candidate-ready"), || {
+        verify_base_failure(
+            &Host,
+            &repo,
+            base.trim(),
+            "./check.sh",
+            &["suite::broken".to_string()],
+            "jrun-fixture",
+            budget,
+        )
+        .unwrap()
+    });
     assert!(
         started.elapsed() < Duration::from_secs(60),
         "the stalled candidate run was stopped"
@@ -338,11 +382,16 @@ fn a_candidate_rerun_stopped_at_the_reserve_still_attributes_its_failures_to_the
         "the base replayed only the failing test"
     );
     assert_eq!(check.candidate_log["timed_out"], true);
+    assert_eq!(check.base_log["timed_out"], false);
+    assert_eq!(
+        check.base_log["cached"], false,
+        "the reserve covers a real base replay"
+    );
 }
 
 // Fault injection: a base replay cut by a shortened review deadline is
-// inconclusive and not cached, so it cannot suppress a later retry with
-// enough budget to complete. Completed comparable results remain reusable.
+// inconclusive and not cached, so it cannot suppress a later completed run.
+// Completed comparable results remain reusable.
 // [ORB-15350]
 #[test]
 #[cfg(unix)]
@@ -351,18 +400,21 @@ fn a_base_replay_cut_by_a_shortened_deadline_is_inconclusive_and_not_cached() {
     let repo = root.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
     git_ok(&repo, &["init", "-q", "-b", "main"]);
-    // Candidate fails immediately with `suite::broken`.
-    // Base sleeps 3s when candidate.txt is absent, then fails with `suite::broken`.
+    // Both sides fail with `suite::broken`. Only the first base run stalls,
+    // after it publishes readiness; later comparisons execute normally.
+    let stall = root.path().join("stall-base");
+    let ready = root.path().join("base-ready");
+    fs::write(&stall, "").unwrap();
     fs::write(
         repo.join("check.sh"),
-        "#!/bin/sh\n\
+        format!("#!/bin/sh\n\
          selection=\"$ORBIT_VALIDATION_SELECTION\"\n\
-         [ -n \"$selection\" ] || selection='{\"packages\":[\"suite\"]}'\n\
-         printf '{\"schema_version\":1,\"selection\":%s,\"executed_tests\":[\"suite::broken\"],\"tests_run\":1}' \"$selection\" \
+         [ -n \"$selection\" ] || selection='{{\"packages\":[\"suite\"]}}'\n\
+         printf '{{\"schema_version\":1,\"selection\":%s,\"executed_tests\":[\"suite::broken\"],\"tests_run\":1}}' \"$selection\" \
          > \"$ORBIT_VALIDATION_SUMMARY\"\n\
-         if [ ! -f candidate.txt ]; then sleep 3; fi\n\
+         if [ ! -f candidate.txt ] && [ -f '{}' ]; then : > '{}'; exec sleep 600; fi\n\
          echo 'test suite::broken ... FAILED'\n\
-         exit 1\n",
+         exit 1\n", stall.display(), ready.display()),
     )
     .unwrap();
     fs::set_permissions(repo.join("check.sh"), fs::Permissions::from_mode(0o755)).unwrap();
@@ -381,20 +433,22 @@ fn a_base_replay_cut_by_a_shortened_deadline_is_inconclusive_and_not_cached() {
     git_ok(&repo, &["add", "candidate.txt"]);
     git_ok(&repo, &["commit", "-q", "-m", "candidate"]);
 
-    // (a) First attempt with a 2s budget: candidate fails in ~0.02s,
-    // so base replay deadline is ~2s. Base sleeps 3s and times out.
-    // The cut base run is inconclusive and must not be cached.
-    let short_budget = ReplayBudget::new(Duration::from_secs(2));
-    let check = verify_base_failure(
-        &Host,
-        &repo,
-        base.trim(),
-        "./check.sh",
-        &["suite::broken".to_string()],
-        "jrun-fixture-1",
-        short_budget,
-    )
-    .unwrap();
+    // (a) Cut the first base subprocess after it starts, under a deadline
+    // shorter than the normal validation ceiling. Checkout speed cannot decide
+    // whether the subprocess reaches the timeout path.
+    let budget = ReplayBudget::new(COMPARISON_WINDOW);
+    let check = cut_ready_process(ready, || {
+        verify_base_failure(
+            &Host,
+            &repo,
+            base.trim(),
+            "./check.sh",
+            &["suite::broken".to_string()],
+            "jrun-fixture-1",
+            budget,
+        )
+        .unwrap()
+    });
     assert!(
         matches!(check.verdict, BaseFailureVerdict::Inconclusive(_)),
         "the deadline-cut base replay was inconclusive: {:?}",
@@ -413,11 +467,9 @@ fn a_base_replay_cut_by_a_shortened_deadline_is_inconclusive_and_not_cached() {
         "no conclusive base result was cached"
     );
 
-    // (b) Retry with an 8s budget: candidate fails immediately, base has enough
-    // time to finish its 3s sleep and completes with the same failure.
-    // The failing test fails on the base too, so it is known red
-    // [ORB-15546].
-    let long_budget = ReplayBudget::new(Duration::from_secs(8));
+    // (b) A subsequent attempt can complete now. The timeout must not have
+    // poisoned the cache: this is a fresh run, with the same budget and command.
+    fs::remove_file(&stall).unwrap();
     let check_retry = verify_base_failure(
         &Host,
         &repo,
@@ -425,7 +477,7 @@ fn a_base_replay_cut_by_a_shortened_deadline_is_inconclusive_and_not_cached() {
         "./check.sh",
         &["suite::broken".to_string()],
         "jrun-fixture-2",
-        long_budget,
+        budget,
     )
     .unwrap();
     assert_eq!(
@@ -433,7 +485,7 @@ fn a_base_replay_cut_by_a_shortened_deadline_is_inconclusive_and_not_cached() {
         BaseFailureVerdict::KnownRed {
             failures: vec!["test suite::broken".to_string()],
         },
-        "with enough budget, the base failure is reproduced"
+        "once the injected stall is released, the base failure is reproduced"
     );
     assert_eq!(check_retry.base_log["cached"], false);
     assert_eq!(check_retry.base_log["timed_out"], false);
@@ -446,7 +498,7 @@ fn a_base_replay_cut_by_a_shortened_deadline_is_inconclusive_and_not_cached() {
         "./check.sh",
         &["suite::broken".to_string()],
         "jrun-fixture-3",
-        short_budget,
+        budget,
     )
     .unwrap();
     assert_eq!(
@@ -555,7 +607,7 @@ fn a_candidate_only_failure_yields_base_passes_and_completed_result_is_cached() 
                 "./check.sh",
                 &[],
                 "jrun-fixture",
-                ReplayBudget::new(Duration::from_secs(4)),
+                ReplayBudget::new(COMPARISON_WINDOW),
             )
             .unwrap();
             match verdict {
