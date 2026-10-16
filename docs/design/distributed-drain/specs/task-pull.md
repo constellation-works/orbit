@@ -1,7 +1,7 @@
 ---
 type: design
 summary: Spec for idempotent owner-side task admission, request receipts, execution claims, and lifecycle invariants.
-last_validated: 2026-10-10
+last_validated: 2026-10-15
 title: Spec — orbit.task.pull
 owner: claude
 status: Draft
@@ -469,7 +469,8 @@ inspection/recovery is required when no worker settles the claim. See [2_design.
 - Reservation cleanup can affect only the reservation associated with the settling claim.
 - Owner and follower drains use the same admission boundary; legacy local admission cannot bypass it.
 - Pull and task promotion do not grant merge authority; explicit handoff approval does.
-- `none` is the only review policy in v1; review status does not imply an automated review.
+- The handoff's captured `review` contract sets any required before-PR or before-landing
+  evidence; task status `review` alone is not review evidence.
 - Existing ship-sweep routines, wrapper, CLI, and owner-local drains cannot bypass this admission
   contract; queued/bound leaf runs and unrepresented admissions consume capacity exactly once.
 

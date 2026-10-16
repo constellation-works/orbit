@@ -4,7 +4,7 @@ type: design
 title: "Task Artifacts — Design"
 owner: codex
 last_updated: 2026-10-10
-last_validated: 2026-10-10
+last_validated: 2026-10-15
 status: Draft
 feature: task-artifacts
 doc_role: design

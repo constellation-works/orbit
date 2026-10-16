@@ -2,7 +2,7 @@
 title: Review Gate — Design
 owner: codex
 last_updated: 2026-10-10
-last_validated: 2026-10-10
+last_validated: 2026-10-15
 status: Accepted
 feature: review-gate
 doc_role: design
