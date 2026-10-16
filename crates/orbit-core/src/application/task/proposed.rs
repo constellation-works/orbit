@@ -72,12 +72,12 @@ impl OrbitRuntime {
         }
         let digest = sha256_hex(&payload);
         let key = format!("dashboard-create:{}", input.request_id);
-        if let Some(task) = self
+        if let Some(id) = self
             .stores()
             .tasks()
-            .lookup_desktop_creation(&key, &digest)?
+            .lookup_committed_creation_id(&key, &digest)?
         {
-            return Ok(task.id);
+            return Ok(id);
         }
         let human = self.clone().with_actor(ActorIdentity::human("human"));
         match human.add_task_screened_guarded(
