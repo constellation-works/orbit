@@ -49,6 +49,7 @@ fn list_workspaces_json(state: &DashboardState) -> Vec<Value> {
         .map(|entry| {
             json!({
                 "id": entry.id,
+                "creation_binding": super::task_create::binding_token(entry),
                 "name": entry.name,
                 "root": abbreviate_home(&entry.repo_root, home.as_deref()),
                 "orbit_dir": abbreviate_home(&entry.orbit_dir, home.as_deref()),

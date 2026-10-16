@@ -110,17 +110,6 @@ impl OrbitRuntime {
         self.add_task_admitted_guarded(params, agent, model, action_key, None)
     }
 
-    /// [`Self::add_task_with_identity`], also returning the advisory
-    /// `required_tools` warnings its validation produced.
-    pub(super) fn add_task_reporting(
-        &self,
-        params: TaskAddParams,
-        agent: Option<String>,
-        model: Option<String>,
-    ) -> Result<(Task, Vec<String>), OrbitError> {
-        self.add_task_validated(params, agent, model, None, None)
-    }
-
     pub(crate) fn add_task_admitted_guarded(
         &self,
         params: TaskAddParams,
@@ -133,7 +122,7 @@ impl OrbitRuntime {
             .map(|(task, _)| task)
     }
 
-    fn add_task_validated(
+    pub(super) fn add_task_validated(
         &self,
         mut params: TaskAddParams,
         agent: Option<String>,
