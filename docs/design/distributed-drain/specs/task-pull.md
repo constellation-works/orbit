@@ -283,6 +283,12 @@ identity, expected accepted candidate/base commits, expected latest attempt numb
 state, a reason, and a durable `request_key`. It accepts no saved job inputs, repair
 switches, replacement head, or authority. Managed agents and replica checkouts refuse it.
 
+The CLI's `--owner-workspace` also accepts a registered workspace name. It resolves
+that selector from any working directory and requires it to match `--workspace`
+when both are supplied. An internal task-partition ID is accepted when it names
+the selected runtime; an unknown or conflicting owner selector refuses before
+handoff lookup.
+
 The shared text sanitizer applies to the reason before persistence. A sanitized
 reason retains the successful dispatch response and records a redaction audit event
 attributed to the affected task; replaying the original input resolves the same receipt.

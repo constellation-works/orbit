@@ -597,6 +597,36 @@ impl RegisteredRuntimeFactory {
         })
     }
 
+    /// Normalize an explicit CLI owner selector without changing the runtime.
+    ///
+    /// Registered names, logical IDs and paths must resolve to the selected
+    /// checkout. The exact internal task-partition ID remains accepted too,
+    /// including when it differs from the logical registry ID, provided it
+    /// does not select another registered workspace. Core retains responsibility
+    /// for operator admission and the owner partition guard.
+    pub fn resolve_cli_owner_workspace(
+        runtime: &OrbitRuntime,
+        selector: &str,
+    ) -> Result<String, OrbitError> {
+        let owner = runtime.workspace_id()?;
+        let global_root = runtime.global_root();
+        let registry = Self::load_registry_for_selectors(&global_root)?;
+        if selector == owner && workspace_registry::find_workspace(&registry, selector)?.is_none() {
+            return Ok(owner);
+        }
+        let selected = Self::resolve_selector_in(
+            &registry,
+            selector,
+            inspect_machine_identity(&global_root)?.id(),
+        )?;
+        if !same_cli_checkout(runtime, &selected.checkout) {
+            return Err(OrbitError::CapabilityDenied(
+                "retry owner workspace must match the selected workspace".into(),
+            ));
+        }
+        Ok(owner)
+    }
+
     /// Bind a CLI `orbit tool run` invocation to the workspace named in `input`.
     ///
     /// This is the single local CLI resolver above the tools. A non-empty
