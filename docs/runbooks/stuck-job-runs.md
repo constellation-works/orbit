@@ -466,6 +466,59 @@ worker's continuation
 through this check. No successful receipt is rewritten and no replacement PR is
 created by the continuation.
 
+## Explicit rework of a successful unmerged publication
+
+A successful owner PR run can still leave an acceptance criterion unmet, such
+as a complete hosted Check exceeding its required runtime. An operator on the
+owning host can authorize bounded source rework through the same explicit
+source-repair protocol. A changed task description alone grants no continuation.
+Generic resume and automatic candidate reuse do not acquire this authority.
+
+First update the task's canonical remaining specification and record the
+diagnosis and evidence for the unmet acceptance on the published candidate.
+Inspect the original **successful publishing run**, using its `id` with
+`orbit.workflow.run.resume` and
+`source_repair: {action: "inspect", task_id: "<task>"}`. The task must remain
+in review and bound to that exact stopped, owner-local single-task run. A newer
+binding, a live or foreign owner, a claimed delivery, or a merged/closed PR
+refuses inspection. Original host publication checkpoints, candidate/base,
+retained branch, repository, PR identity and remote branch lease must agree.
+
+Review the returned `binding`, `review` and `policy_digest`. Submit the exact
+binding and policy digest with `action: "submit"`, a new `request_key`, a
+`diagnosis` describing the bounded implementation work, and `unmet_acceptance`
+identifying the criterion and evidence (for example, the measured Check
+duration and hosted run/job on this candidate). Both text fields accept
+1–32768 bytes. This is an explicit operator decision about the current task
+meaning; evidence text is retained as operator testimony, not independently
+certified by the recovery endpoint. Scope, publication, authority or policy
+drift requires another inspection. Policy covers the current resolved delivery
+definition, native gates, validation environment, crews and configured review;
+it is checked again before applying or publishing the admitted source.
+
+When the successful publisher was itself an operator repair, its original
+reservation, unique run link, successful branch adoption and immutable
+predecessor still authenticate the publication. That historical admission is
+provenance; a new operator decision binds the current specification separately.
+It does not reuse the old admission as authority for changed work.
+
+The append-only reservation binds that evidence and diagnosis, the inspected
+publication and current task meaning, the operator and current policy. Repeat
+an identical request key and payload after a lost reply to recover its one
+durable continuation. A divergent payload or another key for the reserved head
+cannot create a second worker. A replay reports the existing attempt, including
+a stopped attempt, and never restarts it.
+
+The continuation adopts the authenticated branch and original PR and requires
+fresh implementation. It inherits no validation, review or completion
+checkpoints. Native validation and configured review run on the new candidate;
+hosted checks and ordinary review remain required for acceptance. Previous green
+correctness checks do not establish rework acceptance. Completion stays at
+`review`, automatic repair is disabled, and this authorization grants no merge.
+The original successful execution, performance observations, receipts and
+retained checkout stay intact. No replacement PR, synthetic failure or
+cancellation, checkpoint edits, or release/install action is involved.
+
 ## A cancelled published source repair
 
 A transient completion-observation failure can requeue an owner-local task

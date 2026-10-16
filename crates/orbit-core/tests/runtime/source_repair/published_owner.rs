@@ -42,19 +42,24 @@ pub(super) fn checkpoint(f: &Fixture, run: &str, index: u32, id: &str, output: V
 /// Drive real host commit, push and PR opening, using a local Git forge and
 /// a deterministic GitHub process adapter. No load or external service is used.
 pub(super) fn publication(f: &mut Fixture) -> PathBuf {
-    publication_inner(f, false, false)
+    publication_inner(f, false, false, false)
 }
 
 pub(super) fn validated_publication(f: &mut Fixture, auto_fix: bool) -> PathBuf {
-    publication_inner(f, true, auto_fix)
+    publication_inner(f, true, auto_fix, false)
 }
 
-fn publication_inner(f: &mut Fixture, validated: bool, auto_fix: bool) -> PathBuf {
+fn publication_inner(
+    f: &mut Fixture,
+    validated: bool,
+    auto_fix: bool,
+    successful: bool,
+) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let gh = f._root.path().join("bin/gh");
     let created = f._root.path().join("created");
     let denied = f._root.path().join("observation-denied");
-    std::fs::write(&gh, format!("#!/bin/sh\ncase \"$1 $2\" in\n 'pr list') if [ -f '{}' ]; then printf '['; cat '{}'; printf ']'; else printf '[]'; fi;;\n 'pr create') touch '{}'; echo https://github.com/owner/repository/pull/17;;\n 'pr view') if [ -f '{}' ]; then echo 'TLS handshake timeout' >&2; exit 1; fi; cat '{}';;\n *) exit 99;;\nesac\n", created.display(), f.answer.display(), created.display(), denied.display(), f.answer.display())).unwrap();
+    std::fs::write(&gh, format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$1 $2\" in\n 'pr list') if [ -f '{}' ]; then printf '['; cat '{}'; printf ']'; else printf '[]'; fi;;\n 'pr create') touch '{}'; echo https://github.com/owner/repository/pull/17;;\n 'pr view') if [ -f '{}' ]; then echo 'TLS handshake timeout' >&2; exit 1; fi; cat '{}';;\n *) exit 99;;\nesac\n", f._root.path().join("gh-calls").display(), created.display(), f.answer.display(), created.display(), denied.display(), f.answer.display())).unwrap();
     std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
     // Replace the fixture's illustrative historical run with one whose host
     // actions actually produce every candidate/publication checkpoint.
@@ -64,7 +69,7 @@ fn publication_inner(f: &mut Fixture, validated: bool, auto_fix: bool) -> PathBu
             "task_pr_pipeline",
             1,
             Utc::now(),
-            Some(json!({"task_ids":[f.task],"completion":"done","auto_fix":auto_fix})),
+            Some(json!({"task_ids":[f.task],"completion":if successful {"review"} else {"done"},"auto_fix":auto_fix})),
             None,
         )
         .unwrap();
@@ -116,12 +121,14 @@ fn publication_inner(f: &mut Fixture, validated: bool, auto_fix: bool) -> PathBu
     checkpoint(f, &run.run_id, 3, "sync_base", sync);
     f.branch = git(&checkout, &["branch", "--show-current"]);
     f.head = git(&checkout, &["rev-parse", "HEAD"]);
-    if validated {
+    if validated || successful {
         let validation = f.action("candidate_validate", json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,"base_sha":setup["base_sha"]}));
         assert_eq!(validation["decision"], "passed");
-        checkpoint(f, &run.run_id, 4, "validate", validation);
-        let settled = f.action("review_gate_settle", json!({"admission":{"applies":false}}));
-        checkpoint(f, &run.run_id, 5, "review_gate_settle", settled);
+        if validated {
+            checkpoint(f, &run.run_id, 4, "validate", validation);
+            let settled = f.action("review_gate_settle", json!({"admission":{"applies":false}}));
+            checkpoint(f, &run.run_id, 5, "review_gate_settle", settled);
+        }
     }
     let push = f.action("git_push", json!({"job_run_id":run.run_id,"workspace_path":checkout,"branch":f.branch,"base":"main","base_ref":setup["base_ref"]}));
     checkpoint(f, &run.run_id, if validated { 6 } else { 4 }, "push", push);
@@ -142,6 +149,24 @@ fn publication_inner(f: &mut Fixture, validated: bool, auto_fix: bool) -> PathBu
         checkpoint(f, &run.run_id, 8, "resume_candidate", Value::Null);
         let promoted = f.action("pr_promote", json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,"head":f.branch,"base":"main","base_ref":setup["base_ref"],"base_sha":setup["base_sha"],"pr_number":"17","pr_url":"https://github.com/owner/repository/pull/17"}));
         checkpoint(f, &run.run_id, 9, "promote", promoted);
+    }
+    if successful {
+        // As in the review-mode pipeline, promotion finishes the delivery
+        // without asking for a merge or running the done-only completion step.
+        f.action("pr_promote", json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,"head":f.branch,"base":"main","base_ref":setup["base_ref"],"base_sha":setup["base_sha"],"pr_number":"17","pr_url":"https://github.com/owner/repository/pull/17"}));
+        run.state = JobRunState::Success;
+        run.pid = None;
+        run.finished_at = Some(Utc::now());
+        run.duration_ms = Some(
+            (run.finished_at.unwrap() - run.started_at.unwrap())
+                .num_milliseconds()
+                .try_into()
+                .unwrap(),
+        );
+        save_run(f, &run);
+        f.source = f.runtime.show_job_run_observed(&run.run_id).unwrap();
+        f.state = f.runtime.read_run_state(&run.run_id).unwrap().unwrap();
+        return checkout;
     }
     // A completion observation loses connectivity after the actual publication.
     std::fs::write(&denied, "offline").unwrap();
@@ -249,6 +274,482 @@ fn next(f: &Fixture) -> (JobRun, Value) {
     checkpoint(f, &run.run_id, 0, "worktree", setup.clone());
     (run, setup)
 }
+
+fn rework_request(f: &Fixture) -> Value {
+    let inspection = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", f.request("inspect"))
+        .unwrap();
+    let mut request = f.submit(inspection["binding"].clone());
+    request["source_repair"]["policy_digest"] = inspection["policy_digest"].clone();
+    request["source_repair"]["diagnosis"] = json!(
+        "Reduce fixture work under the current bounded source specification; preserve this PR."
+    );
+    request["source_repair"]["unmet_acceptance"] = json!(
+        "Published head's complete hosted Check took 1473 seconds (run 42, job 7), exceeding its 900-second acceptance. The existing green correctness result does not meet that criterion."
+    );
+    request
+}
+
+fn successful_publication_requires_fresh_same_pr_implementation() {
+    let mut f = Fixture::with_policy("before-landing");
+    let original_checkout = publication_inner(&mut f, false, false, true);
+    let original = serde_json::to_value(&f.source).unwrap();
+    let original_log_path = format!("validation/{}/0.json", f.source.run_id);
+    let original_validation = f
+        .runtime
+        .get_task_artifact(&f.task, &original_log_path)
+        .unwrap()
+        .unwrap()
+        .content;
+    assert_eq!(
+        serde_json::from_slice::<Value>(&original_validation).unwrap()["exit_code"],
+        0
+    );
+    let original_head = f.head.clone();
+    let original_branch = f.branch.clone();
+    // A current specification is necessary input, but does not itself admit
+    // another worker. Only the explicit operator request below grants that.
+    f.runtime.update_task_with_identity(&f.task,
+        orbit_core::application::task::TaskUpdateParams {
+            description: Some("Bounded current specification: reduce redundant fixture work while preserving critical behavioral coverage.".into()),
+            ..Default::default()
+        }, None, Some("codex".into())).unwrap();
+    assert!(
+        f.runtime
+            .submit_resume_run(&f.source.run_id, Some("operator"), None)
+            .is_err()
+    );
+    assert!(
+        f.runtime
+            .owner_published_candidate(&f.task, Some(&f.source.run_id))
+            .is_err(),
+        "automatic reuse cannot authorize rework of a successful publication"
+    );
+    let request = rework_request(&f);
+    let mut implicit = request.clone();
+    implicit["source_repair"]
+        .as_object_mut()
+        .unwrap()
+        .remove("unmet_acceptance");
+    assert!(
+        f.runtime
+            .run_tool_as_human("orbit.workflow.run.resume", implicit)
+            .is_err()
+    );
+
+    let barrier = std::sync::Barrier::new(2);
+    let (first, second) = std::thread::scope(|scope| {
+        let submit = || {
+            barrier.wait();
+            f.runtime
+                .run_tool_as_human("orbit.workflow.run.resume", request.clone())
+                .unwrap()
+        };
+        let a = scope.spawn(submit);
+        let b = scope.spawn(submit);
+        (a.join().unwrap(), b.join().unwrap())
+    });
+    assert_eq!(
+        first["run_id"], second["run_id"],
+        "concurrent identical requests admit one continuation"
+    );
+    let id = first["run_id"].as_str().unwrap();
+    f.wait(id);
+    let run = f.runtime.show_job_run_observed(id).unwrap();
+    let input = run.input.as_ref().unwrap();
+    assert_eq!(input["completion"], "review");
+    assert_eq!(input["auto_fix"], false);
+    assert_eq!(input["review"]["timing"], "before-landing");
+    assert_eq!(
+        input["review"]["required_validation_commands"],
+        json!(["true"])
+    );
+    assert!(
+        input["__source_repair"]["diagnosis"]
+            .as_str()
+            .unwrap()
+            .contains("1473")
+    );
+    assert!(
+        f.runtime
+            .read_run_state(id)
+            .unwrap()
+            .unwrap()
+            .step_states
+            .is_empty(),
+        "successful source gates and checkpoints are never inherited"
+    );
+
+    for field in ["request_key", "unmet_acceptance", "policy_digest"] {
+        let mut divergent = request.clone();
+        divergent["source_repair"][field] = json!("divergent");
+        assert!(
+            f.runtime
+                .run_tool_as_human("orbit.workflow.run.resume", divergent)
+                .is_err(),
+            "{field} cannot duplicate or change a durable authorization"
+        );
+    }
+    let repaired = super::generations::publish_and_stop(&f, id, 1, false);
+    assert_ne!(
+        repaired, original_head,
+        "implementation produces a fresh candidate"
+    );
+    let adopted =
+        f.runtime.read_run_state(id).unwrap().unwrap().pipeline["resume_candidate"].clone();
+    assert_eq!(adopted["implement"], true);
+    assert_eq!(adopted["reused_branch"], original_branch);
+    assert_eq!(adopted["prior_pull_request"], "17");
+    let artifact = f
+        .runtime
+        .get_task_artifact(&f.task, &format!("validation/{id}/0.json"))
+        .unwrap()
+        .unwrap();
+    let validation: Value = serde_json::from_slice(&artifact.content).unwrap();
+    assert_eq!(validation["tested_head"], repaired);
+    assert_eq!(validation["exit_code"], 0);
+    assert_eq!(
+        validation["run_id"], id,
+        "native evidence belongs to the fresh attempt"
+    );
+    assert_eq!(
+        f.runtime
+            .get_task_artifact(&f.task, &original_log_path)
+            .unwrap()
+            .unwrap()
+            .content,
+        original_validation,
+        "previous green correctness evidence is preserved rather than rewritten as rework acceptance"
+    );
+    let calls = std::fs::read_to_string(f._root.path().join("gh-calls")).unwrap();
+    assert_eq!(
+        calls
+            .lines()
+            .filter(|line| line.starts_with("pr create "))
+            .count(),
+        1,
+        "the rework reuses the original PR and never creates a replacement"
+    );
+    let replay = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", request)
+        .unwrap();
+    assert_eq!(replay["run_id"], id);
+    assert_eq!(replay["replayed"], true);
+    assert_eq!(
+        serde_json::to_value(f.runtime.show_job_run_observed(&f.source.run_id).unwrap()).unwrap(),
+        original,
+        "the original successful execution and timing observations remain immutable"
+    );
+    assert_eq!(
+        git(&original_checkout, &["rev-parse", "HEAD"]),
+        original_head
+    );
+    f.assert_original();
+
+    // A successful repair publication is itself a valid source for a later
+    // bounded specification. Its historical admission is provenance, while
+    // the new operator decision must bind the current task meaning afresh.
+    let mut successful = f.runtime.show_job_run_observed(id).unwrap();
+    successful.state = JobRunState::Success;
+    successful.duration_ms = Some(1);
+    save_run(&f, &successful);
+    f.source = successful;
+    f.head = repaired;
+    f.state = f.runtime.read_run_state(id).unwrap().unwrap();
+    f.runtime.update_task_with_identity(&f.task,
+        orbit_core::application::task::TaskUpdateParams {
+            description: Some("Second bounded specification after a successful same-PR publication; preserve the original provenance.".into()),
+            ..Default::default()
+        }, None, Some("codex".into())).unwrap();
+    let mut next_request = rework_request(&f);
+    next_request["source_repair"]["request_key"] = json!("successful-generation-2");
+    let next = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", next_request)
+        .unwrap();
+    let next_id = next["run_id"].as_str().unwrap();
+    f.wait(next_id);
+    assert_ne!(next_id, id);
+    assert!(
+        f.runtime
+            .read_run_state(next_id)
+            .unwrap()
+            .unwrap()
+            .step_states
+            .is_empty()
+    );
+    f.assert_original();
+}
+
+fn successful_rework_refuses_changed_authority_scope_and_publication() {
+    for case in [
+        "evidence",
+        "policy",
+        "scope",
+        "live",
+        "foreign",
+        "claimed",
+        "merged",
+        "head",
+        "branch",
+        "lease",
+        "checkpoint",
+        "superseded",
+        "terminal",
+        "source",
+    ] {
+        let mut f = Fixture::new();
+        publication_inner(&mut f, false, false, true);
+        let mut request = rework_request(&f);
+        match case {
+            "evidence" => request["source_repair"]["unmet_acceptance"] = json!("  "),
+            "policy" => request["source_repair"]["policy_digest"] = json!("obsolete"),
+            "source" => request["source_repair"]["binding"]["source_digest"] = json!("forged"),
+            "scope" => {
+                f.runtime
+                    .update_task_with_identity(
+                        &f.task,
+                        orbit_core::application::task::TaskUpdateParams {
+                            description: Some("unapproved change since inspection".into()),
+                            ..Default::default()
+                        },
+                        None,
+                        Some("codex".into()),
+                    )
+                    .unwrap();
+            }
+            "live" => {
+                f.source.pid = Some(std::process::id());
+                save_run(&f, &f.source);
+            }
+            "foreign" => {
+                f.runtime
+                    .sqlite_store()
+                    .unwrap()
+                    .with_transaction(|tx| {
+                        tx.connection()
+                            .execute(
+                                "UPDATE job_runs SET executed_on_json = ?1 WHERE run_id = ?2",
+                                [
+                                    json!({"machine_id":"hm_foreign","machine_name":null})
+                                        .to_string(),
+                                    f.source.run_id.clone(),
+                                ],
+                            )
+                            .unwrap();
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+            "claimed" => {
+                f.source.input.as_mut().unwrap()["claimed"] = json!(true);
+                save_run(&f, &f.source);
+            }
+            "merged" | "head" | "branch" => {
+                let mut answer: Value =
+                    serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
+                match case {
+                    "merged" => {
+                        answer["state"] = json!("MERGED");
+                        answer["mergeCommit"] = json!({"oid":f.head});
+                    }
+                    "head" => answer["headRefOid"] = json!(f.base),
+                    "branch" => answer["headRefName"] = json!("foreign"),
+                    _ => unreachable!(),
+                }
+                std::fs::write(&f.answer, answer.to_string()).unwrap();
+            }
+            "lease" => {
+                git(
+                    &f.repo,
+                    &[
+                        "push",
+                        "--force",
+                        "origin",
+                        &format!("main:refs/heads/{}", f.branch),
+                    ],
+                );
+            }
+            "checkpoint" => {
+                f.state.pipeline["push"]["local_sha"] = json!(f.base);
+                f.runtime
+                    .write_run_state(&f.source.run_id, &f.state)
+                    .unwrap();
+            }
+            "superseded" => {
+                let mut newer = f
+                    .runtime
+                    .insert_job_run(
+                        "task_pr_pipeline",
+                        2,
+                        Utc::now(),
+                        Some(json!({"task_ids":[f.task]})),
+                        None,
+                    )
+                    .unwrap();
+                newer.state = JobRunState::Cancelled;
+                newer.finished_at = Some(Utc::now());
+                save_run(&f, &newer);
+                f.runtime
+                    .apply_task_automation_update(
+                        &f.task,
+                        TaskAutomationUpdate {
+                            job_run_id: Some(newer.run_id),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+            }
+            "terminal" => {
+                f.runtime
+                    .apply_task_automation_update(
+                        &f.task,
+                        TaskAutomationUpdate {
+                            status: Some(TaskStatus::Done),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let error = f
+            .runtime
+            .run_tool_as_human("orbit.workflow.run.resume", request)
+            .unwrap_err();
+        assert!(error.to_string().contains("refused"), "{case}: {error}");
+        assert!(
+            !f.runtime
+                .get_task_history(&f.task)
+                .unwrap()
+                .iter()
+                .any(|e| e.event == "source_repair_reserved"),
+            "{case} must refuse before reserving another worker"
+        );
+    }
+}
+
+fn successful_rework_reconciles_unknown_spawn_reply() {
+    let mut f = Fixture::new();
+    publication_inner(&mut f, false, false, true);
+    let request = rework_request(&f);
+    orbit_core::test_support::install_substitute_pipeline_worker([f
+        ._root
+        .path()
+        .join("missing-worker")
+        .to_string_lossy()
+        .into_owned()]);
+    let error = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", request.clone())
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("spawn pipeline worker"),
+        "{error}"
+    );
+    orbit_core::test_support::install_substitute_pipeline_worker(["sh", "-c", "exit 0"]);
+    let first = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", request.clone())
+        .unwrap();
+    let second = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", request)
+        .unwrap();
+    assert_eq!(first["run_id"], second["run_id"]);
+    assert_eq!(first["replayed"], true);
+    assert_eq!(
+        f.runtime
+            .get_task_history(&f.task)
+            .unwrap()
+            .iter()
+            .filter(|e| e.event == "source_repair_reserved")
+            .count(),
+        1
+    );
+    f.assert_original();
+}
+
+fn successful_rework_binds_current_policy_before_submission_and_source_effects() {
+    let mut f = Fixture::with_policy("before-landing");
+    publication_inner(&mut f, false, false, true);
+    let old_request = rework_request(&f);
+    let config = f.repo.join(".orbit/config.toml");
+    let changed = std::fs::read_to_string(&config).unwrap().replace(
+        "before_landing = true",
+        "before_landing = false\nbefore_pr = true",
+    );
+    std::fs::write(&config, changed).unwrap();
+    let reload = |f: &mut Fixture| {
+        f.runtime = orbit_core::OrbitRuntime::from_roots(
+            &f._root.path().join("global"),
+            &f.repo.join(".orbit"),
+        )
+        .unwrap()
+        .with_automation_execution_location(Some(orbit_types::task::ExecutionLocation {
+            machine_id: "hm_fixture".into(),
+            machine_name: None,
+        }));
+    };
+    reload(&mut f);
+    let error = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", old_request)
+        .unwrap_err();
+    assert!(error.to_string().contains("policy_digest"), "{error}");
+    assert!(
+        !f.runtime
+            .get_task_history(&f.task)
+            .unwrap()
+            .iter()
+            .any(|e| e.event == "source_repair_reserved")
+    );
+    let request = rework_request(&f);
+    let admitted = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", request)
+        .unwrap();
+    let id = admitted["run_id"].as_str().unwrap();
+    f.wait(id);
+    assert_eq!(
+        f.runtime.show_job_run_observed(id).unwrap().input.unwrap()["review"]["timing"],
+        "before-pr"
+    );
+    f.start_actions(id);
+    let setup = f.action(
+        "worktree_setup",
+        json!({"job_run_id":id,"task_ids":[f.task],"base":"main","base_sync":"remote"}),
+    );
+    let changed = std::fs::read_to_string(&config).unwrap().replace(
+        "required_validation_commands = [\"true\"]",
+        "required_validation_commands = [\"false\"]",
+    );
+    std::fs::write(&config, changed).unwrap();
+    reload(&mut f);
+    let error = execute_deterministic_action(&f.runtime, "candidate_resume", &json!({}),
+        &json!({"job_run_id":id,"task_ids":[f.task],"workspace_path":setup["workspace_path"],"base_sha":setup["base_sha"]}),
+        false, &HashMap::new(), None).unwrap_err();
+    assert!(error.to_string().contains("current policy"), "{error}");
+    assert_eq!(
+        git(
+            PathBuf::from(setup["workspace_path"].as_str().unwrap()).as_path(),
+            &["branch", "--show-current"]
+        ),
+        setup["head_ref"].as_str().unwrap(),
+        "policy drift refuses before adopting or modifying the published branch"
+    );
+    f.assert_original();
+}
+
+crate::scenario_table!(
+    successful_source_rework_scenarios,
+    successful_publication_requires_fresh_same_pr_implementation,
+    successful_rework_refuses_changed_authority_scope_and_publication,
+    successful_rework_reconciles_unknown_spawn_reply,
+    successful_rework_binds_current_policy_before_submission_and_source_effects,
+);
 
 pub(super) fn published_completion_requeue_adopts_without_reimplementation() {
     let mut f = Fixture::new();

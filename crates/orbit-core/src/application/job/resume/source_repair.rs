@@ -33,6 +33,8 @@ struct Request {
     request_key: Option<String>,
     binding: Option<SourceRepairBinding>,
     diagnosis: Option<String>,
+    unmet_acceptance: Option<String>,
+    policy_digest: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -108,6 +110,43 @@ fn history(runtime: &OrbitRuntime, task: &str) -> Result<Vec<SourceRepairAdmissi
 }
 
 impl OrbitRuntime {
+    // Task meaning and the immutable publication are bound separately. Keeping
+    // policy independent of task selectors allows the host's recorded delivery
+    // widening while still refusing configuration changes before source effects.
+    fn source_rework_policy(&self, actor: &str, provenance: &str) -> Result<String, OrbitError> {
+        let mut definition = self.load_v2_job_asset_by_name("task_pr_pipeline")?.1;
+        orbit_engine::resolve_job_catalog_refs_for_execution(
+            &mut definition,
+            &self
+                .v2_activity_catalog()
+                .map_err(|e| refuse(e.to_string()))?,
+        )
+        .map_err(|e| refuse(e.to_string()))?;
+        let mut fresh = json!({"task_ids":[]});
+        crate::application::review::install_review_admission(
+            self,
+            "task_pr_pipeline",
+            &mut fresh,
+            None,
+            false,
+        )?;
+        // Capture time is not policy; every inspection resolves it afresh.
+        fresh[orbit_types::workflow::REVIEW_ADMISSION_KEY]
+            .as_object_mut()
+            .ok_or_else(|| refuse("current review admission unavailable"))?
+            .remove("captured_at");
+        let environment = self.validation_subprocess_environment();
+        digest(&json!({
+            "schema_version":1, "workspace":self.workspace_id()?,
+            "machine":self.automation_machine_identity(), "actor":actor, "provenance":provenance,
+            "definition":definition, "review":fresh,
+            "gates":self.host_validation_gates().gates,
+            "operation":self.operation_policy(), "crews":self.context.settings().crews(),
+            "validation_policy":format!("{:?}",self.context.settings().validation_env()),
+            "environment":format!("{environment:?}"),
+        }))
+    }
+
     pub(crate) fn validate_operator_source_repair(&self, run_id: &str) -> Result<(), OrbitError> {
         if self.worker_invocation().is_some() {
             return Err(refuse(
@@ -134,6 +173,24 @@ impl OrbitRuntime {
             .read_run_state(&binding.source_run_id)?
             .ok_or_else(|| refuse("source checkpoints disappeared"))?;
         let definition = self.source_repair_definition(&source)?;
+        if source.state == JobRunState::Success
+            && (record
+                .unmet_acceptance
+                .as_deref()
+                .is_none_or(|s| s.trim().is_empty())
+                || record.policy_digest.as_deref()
+                    != Some(
+                        self.source_rework_policy(
+                            &record.authorized_by,
+                            &record.authorizer_provenance,
+                        )?
+                        .as_str(),
+                    ))
+        {
+            return Err(refuse(
+                "successful publication requires unchanged explicit rework authority and current policy",
+            ));
+        }
         let prefix = "source, task, scope or reservation changed before source application";
         if !self.source_successor_unchanged(binding)? {
             return Err(refuse(format!("{prefix}: newer execution changed")));
@@ -214,7 +271,7 @@ impl OrbitRuntime {
         )?;
         match request.action.as_str() {
             "inspect" => {
-                let (_, _, binding) =
+                let (source, _, binding) =
                     self.observe_source_repair(&source_id, &request.task_id, false)?;
                 let mut fresh = json!({"task_ids":[request.task_id]});
                 crate::application::review::install_review_admission(
@@ -226,6 +283,9 @@ impl OrbitRuntime {
                 )?;
                 Ok(
                     json!({"binding":binding, "review":fresh[orbit_types::workflow::REVIEW_ADMISSION_KEY],
+                    "policy_digest":if source.state == JobRunState::Success {
+                        Some(self.source_rework_policy(&actor, &authority.provenance.to_string())?)
+                    } else { None },
                     "reservations":history(self, &request.task_id)?}),
                 )
             }
@@ -283,9 +343,29 @@ impl OrbitRuntime {
         }
         let diagnosis = request.diagnosis.as_deref().filter(|s| !s.trim().is_empty() && s.len() <= 32768)
             .ok_or_else(|| refuse("diagnosis must name observed failures and remaining source work (1-32768 bytes)"))?;
+        if request
+            .unmet_acceptance
+            .as_deref()
+            .is_some_and(|s| s.trim().is_empty() || s.len() > 32768)
+        {
+            return Err(refuse(
+                "unmet_acceptance must identify unmet criteria and evidence on this published candidate (1-32768 bytes)",
+            ));
+        }
+        let diagnosis = match &request.unmet_acceptance {
+            Some(evidence) => format!("{diagnosis}\n\nUnmet acceptance evidence:\n{evidence}"),
+            None => diagnosis.to_string(),
+        };
         let reservations = history(self, &request.task_id)?;
         let prior = reservations.iter().find(|record| record.request_key == key);
-        if prior.is_some_and(|record| record.binding != *binding || record.diagnosis != diagnosis) {
+        if prior.is_some_and(|record| {
+            record.binding != *binding
+                || record.diagnosis != diagnosis
+                || record.unmet_acceptance != request.unmet_acceptance
+                || record.policy_digest != request.policy_digest
+                || record.authorized_by != actor
+                || record.authorizer_provenance != provenance
+        }) {
             return Err(refuse("request_key already reserved different input"));
         }
         // Reconcile an interrupted reply before re-observing a task the admitted
@@ -360,6 +440,20 @@ impl OrbitRuntime {
                 "binding is stale; inspect the exact source, scope and lease again",
             ));
         }
+        if source.state == JobRunState::Success {
+            if request.unmet_acceptance.is_none()
+                || request.policy_digest.as_deref()
+                    != Some(self.source_rework_policy(actor, provenance)?.as_str())
+            {
+                return Err(refuse(
+                    "successful publication requires unmet_acceptance evidence and the inspected current policy_digest",
+                ));
+            }
+        } else if request.unmet_acceptance.is_some() || request.policy_digest.is_some() {
+            return Err(refuse(
+                "successful-publication rework fields do not authorize another source state",
+            ));
+        }
         let admission = match prior {
             Some(record) => record.clone(),
             None => {
@@ -401,7 +495,9 @@ impl OrbitRuntime {
                 let record = SourceRepairAdmission {
                     request_key: key.into(),
                     binding: binding.clone(),
-                    diagnosis: diagnosis.into(),
+                    diagnosis,
+                    unmet_acceptance: request.unmet_acceptance.clone(),
+                    policy_digest: request.policy_digest.clone(),
                     authorized_by: actor.into(),
                     authorizer_provenance: provenance.into(),
                     authorized_at: Utc::now(),
@@ -533,7 +629,7 @@ impl OrbitRuntime {
             || run_owner_liveness(&source) != RunOwnerLiveness::Stopped
         {
             return Err(refuse(
-                "requires a conclusively stopped cancelled or final-recovery-settled failed task PR pipeline",
+                "requires a conclusively stopped successful, cancelled or final-recovery-settled failed task PR pipeline",
             ));
         }
         if source
@@ -560,6 +656,11 @@ impl OrbitRuntime {
         {
             return Err(refuse(
                 "requires the exact owner-local single-task run; foreign, rebound and claimed deliveries are refused",
+            ));
+        }
+        if source.state == JobRunState::Success && task.job_run_id.as_deref() != Some(source_id) {
+            return Err(refuse(
+                "successful publication is superseded by a newer task binding",
             ));
         }
         let superseded = if task.job_run_id.as_deref() != Some(source_id) {

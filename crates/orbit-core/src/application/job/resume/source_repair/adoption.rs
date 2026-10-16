@@ -68,8 +68,14 @@ impl OrbitRuntime {
         {
             return Err(refuse("prior repair admission or run link changed"));
         }
-        if admitted_task_digest(task, &entries, &source.run_id, admission.authorized_at)?
-            != binding.task_digest
+        // A successful publication's admission is historical provenance, not
+        // authority over today's specification. Only explicit rework can admit
+        // that source state; it binds current meaning in a fresh reservation.
+        // Keep the original reservation, unique link and adoption authenticated
+        // below, and retain the stricter rule for interrupted repair sources.
+        if source.state != JobRunState::Success
+            && admitted_task_digest(task, &entries, &source.run_id, admission.authorized_at)?
+                != binding.task_digest
         {
             return Err(refuse(
                 "task meaning or scope changed since original repair admission",
