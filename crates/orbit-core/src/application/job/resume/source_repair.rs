@@ -1,5 +1,7 @@
 //! Authenticate and admit owner-local published-candidate recovery.
 mod adoption;
+mod handoff;
+mod identity;
 mod observation;
 mod publication;
 mod published_owner;
@@ -524,7 +526,7 @@ impl OrbitRuntime {
             || run_owner_liveness(&source) != RunOwnerLiveness::Stopped
         {
             return Err(refuse(
-                "requires a cancelled task PR pipeline with a conclusively stopped worker",
+                "requires a conclusively stopped cancelled or final-recovery-settled failed task PR pipeline",
             ));
         }
         if source
@@ -565,19 +567,15 @@ impl OrbitRuntime {
                     task.status,
                     TaskStatus::InProgress | TaskStatus::Blocked | TaskStatus::Backlog
                 ))
-            // Final recovery leaves an applied requeue in Backlog while the task
-            // still names its failed publisher. That durable decision is the
-            // acknowledgement for this direct-binding recovery path.
             && !(source.state == JobRunState::Failed
-                && task.status == TaskStatus::Backlog
-                && self.recorded_final_recovery(task_id, source_id)?
-                    == Some(crate::application::task::FinalRecoveryOutcome::Requeued))
+                && matches!(task.status, TaskStatus::Backlog | TaskStatus::Blocked)
+                && self.repairable_published_source(&source, task_id)?)
         {
             return Err(refuse(
                 "task must remain in review (or this reserved admission's in-progress stage)",
             ));
         }
-        let (source, task, mut binding) = self.observe_published_source(source, task)?;
+        let (source, task, mut binding) = self.observe_published_source(source, task, true)?;
         binding.superseded = superseded;
         Ok((source, task, binding))
     }

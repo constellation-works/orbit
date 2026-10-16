@@ -187,6 +187,67 @@ opening a PR does not grant that permission. Verify actual merge and reconcile
 task state with the evidence. Do not rerun implementation solely because the
 completion step failed.
 
+## Explicit source repair of stopped owner publications
+
+An operator on the owning host can inspect a published candidate without
+resuming its failed attempt:
+
+```bash
+orbit tool run orbit.workflow.run.resume --input '{"id":"<source-run>","source_repair":{"action":"inspect","task_id":"<task-id>"}}'
+```
+
+Submit the returned `binding` unchanged with `action: "submit"`, the same
+`task_id`, a new bounded `request_key`, and a `diagnosis` naming the observed
+failure and remaining source work. This is an explicit source decision. It
+creates a new attempt with current required commands, configured review,
+`completion: "review"` and `auto_fix: false`. It grants no merge authority.
+Keep the identical key, binding and diagnosis when a submission reply is lost:
+the durable reservation/link returns the same successor, even after it stops.
+Each newly published head needs another explicit inspection and fresh key;
+automatic fixes and explicit generations share the PR repair budget. Generic
+resume still cannot replay an admitted source-repair attempt.
+
+In addition to cancelled publications and failed publications with an applied
+requeue, inspection supports two conclusively stopped failed owner shapes
+after final recovery escalated:
+
+- **An admitted source repair pushed before `pr_open` failed.** Its original
+  system reservation and unique run link, successful branch adoption, host
+  commit, prepare, synchronization, review/publication chain and push must
+  agree. The original admission supplies the existing PR identity when no
+  successful `pr_open` checkpoint exists. The old source evidence remains
+  immutable. Host-recorded selector additions from that attempt are accounted
+  for when comparing its original task scope; other meaning/scope changes
+  refuse admission.
+- **The terminal failure hook published a repair.** The durable
+  `pr_failure_handoff` checkpoint must name the exact task, run, failed step,
+  setup owner/base, preservation commit, push and PR. Its commit must have an
+  authenticated host candidate or immutable setup base as its preservation
+  parent. The handoff's recorded task specification must still match. That
+  persisted specification covers description and acceptance criteria; it does
+  not certify historical selector hints or review approval. Inspection binds
+  the full current meaning/scope for submission and source application. The
+  retained handoff commit is selected even when it advances past the failed
+  validation candidate. If its worktree and local branch are gone, existing
+  exact commit objects and the unchanged remote branch lease permit
+  reconstruction. A local branch present at another head still refuses.
+
+Neither route treats publication as validation. The new worktree integrates
+the exact retained candidate onto the current remote base, preserves its PR
+and branch under the exact lease, and requires fresh complete host gates and
+normal configured review. A handoff repair was not certified by the old
+candidate's checks. Failure receipts and historical checkpoints are retained;
+there is no requeue/history rewrite or claimed held-evidence amendment here.
+
+Both inspection and submission freshly observe the origin repository,
+remote branch and provider PR number, URL, head, branch and base branch. The
+PR must remain open and unmerged with automatic merge explicitly disabled;
+a draft remains a draft. Missing, contradictory or changed evidence refuses
+before reservation. A live/foreign/claimed source or a newer attempt that
+may have written a candidate cannot be bypassed by selecting an older head.
+Diagnose the named missing receipt or identity mismatch, then inspect again;
+do not invent a checkpoint, copy another run's admission, or weaken gates.
+
 ## Repair tasks and activity boundaries
 
 Prefer a bounded task for actionable tooling, documentation, or operational
