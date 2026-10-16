@@ -320,7 +320,19 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     let completion_deadline_ms = super::super::completion_deadline::now_ms()?
         .checked_add(max_wait_seconds.saturating_mul(1000))
         .ok_or_else(|| stopped(pr_number, "completion deadline overflow"))?;
-    let mut waited_seconds = 0_u64;
+    let completion_deadline_ms = match input_string_field(input, "run_id")
+        .or_else(|| input_string_field(input, "job_run_id"))
+    {
+        Some(run_id) if max_wait_seconds > 0 => {
+            host.completion_deadline(&run_id, pr_number, completion_deadline_ms)?
+        }
+        _ => completion_deadline_ms,
+    };
+    let remaining_seconds =
+        completion_deadline_ms.saturating_sub(super::super::completion_deadline::now_ms()?) / 1000;
+    let mut waited_seconds = max_wait_seconds.saturating_sub(remaining_seconds);
+
+    let waited_before = waited_seconds;
     let mut auto_merge_requested = false;
     let mut merge_requested = false;
     let mut requested_landed_commit: Option<String> = None;
@@ -368,17 +380,37 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     }
 
     loop {
-        waited_seconds = waited_seconds.max(completion_started.elapsed().as_secs());
+        waited_seconds = waited_seconds
+            .max(waited_before.saturating_add(completion_started.elapsed().as_secs()));
         let status = if max_wait_seconds == 0 {
-            read_pr_status(host, Path::new(workspace_path), pr_number)?
+            read_pr_status(host, Path::new(workspace_path), pr_number)
         } else {
             read_pr_status_before(
                 host,
                 Path::new(workspace_path),
                 pr_number,
                 completion_deadline_ms,
-            )?
-        };
+            )
+        }
+        .map_err(|error| {
+            // Only a failed read before any mutation is eligible. Unknown merge
+            // replies, repairs and rebases keep their existing reconciliation path.
+            if auto_fix.is_none()
+                && !merge_requested
+                && !auto_merge_requested
+                && !conflict_refresh_attempted
+                && !landed_refresh_attempted
+                && (super::super::operations::is_transient_github_failure(&error.to_string())
+                    || error
+                        .to_string()
+                        .to_ascii_lowercase()
+                        .contains("tls handshake"))
+            {
+                OrbitError::Execution(format!("completion_observation_unavailable: {error}"))
+            } else {
+                error
+            }
+        })?;
         let mut state = classify_pr_state(&status);
         let mut base_refresh_wait = false;
         if let Some(auto_fix) = auto_fix {

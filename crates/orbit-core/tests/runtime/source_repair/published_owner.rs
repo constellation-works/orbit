@@ -42,6 +42,14 @@ pub(super) fn checkpoint(f: &Fixture, run: &str, index: u32, id: &str, output: V
 /// Drive real host commit, push and PR opening, using a local Git forge and
 /// a deterministic GitHub process adapter. No load or external service is used.
 fn publication(f: &mut Fixture) -> PathBuf {
+    publication_inner(f, false)
+}
+
+pub(super) fn validated_publication(f: &mut Fixture) -> PathBuf {
+    publication_inner(f, true)
+}
+
+fn publication_inner(f: &mut Fixture, validated: bool) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let gh = f._root.path().join("bin/gh");
     let created = f._root.path().join("created");
@@ -108,15 +116,33 @@ fn publication(f: &mut Fixture) -> PathBuf {
     checkpoint(f, &run.run_id, 3, "sync_base", sync);
     f.branch = git(&checkout, &["branch", "--show-current"]);
     f.head = git(&checkout, &["rev-parse", "HEAD"]);
+    if validated {
+        let validation = f.action("candidate_validate", json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,"base_sha":setup["base_sha"]}));
+        assert_eq!(validation["decision"], "passed");
+        checkpoint(f, &run.run_id, 4, "validate", validation);
+        let settled = f.action("review_gate_settle", json!({"admission":{"applies":false}}));
+        checkpoint(f, &run.run_id, 5, "review_gate_settle", settled);
+    }
     let push = f.action("git_push", json!({"job_run_id":run.run_id,"workspace_path":checkout,"branch":f.branch,"base":"main","base_ref":setup["base_ref"]}));
-    checkpoint(f, &run.run_id, 4, "push", push);
+    checkpoint(f, &run.run_id, if validated { 6 } else { 4 }, "push", push);
     let mut answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
     answer["headRefName"] = json!(f.branch);
     answer["headRefOid"] = json!(f.head);
     std::fs::write(&f.answer, answer.to_string()).unwrap();
     let opened = f.action("pr_open", json!({"job_run_id":run.run_id,"workspace_path":checkout,"completed_task_ids":[f.task],"head":f.branch,"base":"main","base_ref":setup["base_ref"],"base_sha":setup["base_sha"]}));
     assert_eq!(opened["pr_created"], true);
-    checkpoint(f, &run.run_id, 5, "pr_open", opened);
+    checkpoint(
+        f,
+        &run.run_id,
+        if validated { 7 } else { 5 },
+        "pr_open",
+        opened,
+    );
+    if validated {
+        checkpoint(f, &run.run_id, 8, "resume_candidate", Value::Null);
+        let promoted = f.action("pr_promote", json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,"head":f.branch,"base":"main","base_ref":setup["base_ref"],"base_sha":setup["base_sha"],"pr_number":"17","pr_url":"https://github.com/owner/repository/pull/17"}));
+        checkpoint(f, &run.run_id, 9, "promote", promoted);
+    }
     // A completion observation loses connectivity after the actual publication.
     std::fs::write(&denied, "offline").unwrap();
     let failure = orbit_engine::test_support::with_vcs_retry_wait(

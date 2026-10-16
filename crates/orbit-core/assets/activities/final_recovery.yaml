@@ -3,6 +3,9 @@ kind: Activity
 metadata:
   name: final_recovery
 spec:
+  # A read-only completion transport failure may spend this same once-only
+  # recovery slot without dispatch: the host authenticates the exact unchanged
+  # publication and successful validation/review prefix before retrying completion.
   type: agent_loop
   # The decision is the contract: a deterministic applier acts on it, so a
   # missing or malformed response must surface instead of passing silently.

@@ -89,6 +89,7 @@ impl OrbitRuntime {
             || status.head_branch.as_deref() != Some(branch)
             || status.head_sha.as_deref() != Some(head)
             || status.base_branch.as_deref() != Some(base_branch)
+            || !status.merge_absence_confirmed()
             || status.merge_commit.is_some()
             || status.merged_at.is_some()
             || status.auto_merge_enabled != Some(false)

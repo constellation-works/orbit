@@ -122,6 +122,10 @@ pub struct PipelineState {
     /// with the rest of the state so a resumed run keeps the same crew.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub activity_crew_draws: BTreeMap<String, ActivityCrewDraw>,
+    /// Absolute completion observation deadlines, keyed by PR. Retries and
+    /// checkpoint resumes retain the original budget instead of renewing it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub completion_deadlines: BTreeMap<String, u64>,
     /// This run's final recovery [ORB-13907]; present once it was admitted.
     /// Resume clones it, so a resumed run never invokes final recovery again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -168,6 +172,7 @@ impl PipelineState {
             failure_activity_checkpoint: None,
             rebase_recovery_checkpoints: BTreeMap::new(),
             activity_crew_draws: BTreeMap::new(),
+            completion_deadlines: BTreeMap::new(),
             final_recovery: None,
             trigger: None,
             env_pass_unset: Vec::new(),

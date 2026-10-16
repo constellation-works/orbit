@@ -1,5 +1,6 @@
 //! Authenticate and admit owner-local published-candidate recovery.
 mod adoption;
+mod completion;
 mod handoff;
 mod identity;
 mod observation;

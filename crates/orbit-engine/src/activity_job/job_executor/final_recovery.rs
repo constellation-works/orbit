@@ -242,6 +242,75 @@ pub(super) fn attempt_final_recovery(
         None => None,
     };
 
+    // Read-only completion transport failures spend the same durable final
+    // recovery budget, but need neither an agent nor a replacement candidate.
+    if matches!(error, DispatchError::DeterministicActionFailed { action, message }
+        if action == "pr_complete" && message.starts_with("execution failed: completion_observation_unavailable:"))
+    {
+        let authentication = ctx
+            .host
+            .authenticate_completion_tail(&ctx.run_id, &task_id, &step.id);
+        let refusal = match authentication {
+            Ok(true) => {
+                let rationale =
+                    "authenticated unchanged publication; retry current completion observation"
+                        .to_string();
+                let application = FinalRecoveryApplication {
+                    task_id,
+                    failed_step_id: step.id.clone(),
+                    decision: FinalRecoveryDecision::Resume {
+                        step_id: step.id.clone(),
+                        rationale: rationale.clone(),
+                    },
+                    resume_step_index: Some(step_index as u32),
+                    repair_commit: None,
+                    resume_context: Some(FinalRecoveryResume {
+                        step_id: step.id.clone(),
+                        failed_step_id: step.id.clone(),
+                        rationale,
+                        refusal: bounded_recovery_text(
+                            "refusal",
+                            &ctx.run_id,
+                            error_message,
+                            MAX_RECOVERY_ERROR_MESSAGE_BYTES,
+                        ),
+                        refused_output: Value::Null,
+                    }),
+                    workspace_path: worktree.workspace_path.into(),
+                    completion_done: ctx.input.get("completion").and_then(Value::as_str)
+                        == Some("done"),
+                };
+                return conclude(
+                    job,
+                    ctx,
+                    step,
+                    activity,
+                    &application,
+                    Some(step_index),
+                    None,
+                );
+            }
+            Ok(false) => "host has no authenticated completion prefix".to_string(),
+            Err(error) => error.to_string(),
+        };
+        // A refusal must not reach an agent that can request the same stale
+        // prefix again. Preserve the publication for explicit governed repair.
+        let application = FinalRecoveryApplication {
+            task_id,
+            failed_step_id: step.id.clone(),
+            decision: FinalRecoveryDecision::Escalate {
+                diagnosis: format!("unchanged completion reuse refused: {refusal}; original error: {error_message}"),
+                human_action: "Inspect the publication and admit current-policy source repair when its evidence or inputs changed.".into(),
+            },
+            resume_step_index: None,
+            repair_commit: None,
+            resume_context: None,
+            workspace_path: worktree.workspace_path.into(),
+            completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
+        };
+        return conclude(job, ctx, step, activity, &application, None, None);
+    }
+
     // These observations belong to the engine, not the activity's response.
     // A worktree without a resolvable HEAD may still settle a task, but cannot
     // authorize a moved HEAD in a later commit step.

@@ -50,7 +50,11 @@ impl OrbitRuntime {
         }))
     }
 
-    fn owner_source_identity(&self, source: &JobRun, task: &Task) -> Result<(), OrbitError> {
+    pub(super) fn owner_source_identity(
+        &self,
+        source: &JobRun,
+        task: &Task,
+    ) -> Result<(), OrbitError> {
         let local = self
             .automation_machine_identity()
             .ok_or_else(|| refuse("local identity missing"))?;
