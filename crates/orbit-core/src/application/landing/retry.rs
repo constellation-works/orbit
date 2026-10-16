@@ -8,7 +8,9 @@ use super::{LANDING_JOB, LandingDispatch};
 use crate::OrbitRuntime;
 
 impl OrbitRuntime {
-    /// Retry a stopped or uncertain landing under trusted operator authority.
+    /// Retry a stopped, terminal-job dispatched, or uncertain landing under
+    /// trusted operator authority. The store proves exact terminal owner-job
+    /// evidence atomically with reservation; runtime liveness is only a refusal.
     /// `owner_workspace_id` is explicit and must identify this owner partition.
     /// Replaying a receipt returns its original run even after it settles.
     pub fn retry_handoff_as_operator(
@@ -110,6 +112,8 @@ impl OrbitRuntime {
             .ok_or_else(|| OrbitError::Store("retry receipt missing after reservation".into()))?;
         // Use the reserved attempt's key, never land_handoff's read/open loop:
         // another request cannot turn this request into a later attempt.
+        #[cfg(feature = "test-support")]
+        retry_reservation_hook::notify();
         let result = self.submit_automation_pipeline_run(
             LANDING_JOB,
             serde_json::json!({"handoff_id": request.handoff_id, "task_id": claim.claim.task_id}),
@@ -151,5 +155,37 @@ impl OrbitRuntime {
             },
         )?;
         Ok(())
+    }
+}
+
+#[cfg(feature = "test-support")]
+pub(crate) mod retry_reservation_hook {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static HOOK: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    pub(super) fn notify() {
+        let hook = HOOK.with(|slot| slot.borrow_mut().take());
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
+    /// Rendezvous a public retry after durable reservation and before submission.
+    pub fn with_landing_retry_reservation_hook<T>(
+        hook: impl FnOnce() + 'static,
+        operation: impl FnOnce() -> T,
+    ) -> T {
+        struct Clear;
+        impl Drop for Clear {
+            fn drop(&mut self) {
+                HOOK.with(|slot| *slot.borrow_mut() = None);
+            }
+        }
+        HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+        let _guard = Clear;
+        operation()
     }
 }
