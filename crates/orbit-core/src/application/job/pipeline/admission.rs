@@ -98,9 +98,12 @@ impl OrbitRuntime {
             return Err(reserved_reconciliation_key_error(job_name));
         }
         let source_repair = resume.is_some_and(|plan| {
+            // The explicit operator path authenticates a successful unmerged
+            // publication and reserves fresh rework before constructing a plan.
+            // Generic resume never admits success or carries this reserved key.
             matches!(
                 plan.source.state,
-                JobRunState::Cancelled | JobRunState::Failed
+                JobRunState::Cancelled | JobRunState::Failed | JobRunState::Success
             ) && plan
                 .input
                 .get(orbit_types::workflow::SOURCE_REPAIR_KEY)

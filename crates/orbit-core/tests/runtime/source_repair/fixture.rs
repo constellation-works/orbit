@@ -138,6 +138,7 @@ impl Fixture {
             "git_push",
             "pr_open",
             "pr_complete",
+            "pr_promote",
             "review_gate_settle",
             "candidate_validate",
             "pr_failure_handoff",
@@ -499,7 +500,7 @@ impl Fixture {
                 .show_job_run_observed(&self.source.run_id)
                 .unwrap()
                 .state,
-            JobRunState::Cancelled
+            self.source.state
         );
         assert_eq!(
             self.runtime

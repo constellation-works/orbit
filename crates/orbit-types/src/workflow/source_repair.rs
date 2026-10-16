@@ -52,11 +52,18 @@ pub struct SourceRepairAdmission {
     pub binding: SourceRepairBinding,
     /// Explicit remaining source work and observed failure identities.
     pub diagnosis: String,
+    /// Operator evidence that the successful publication did not meet acceptance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unmet_acceptance: Option<String>,
+    /// Current execution policy and operator identity observed before submission.
+    /// Required for successful-publication rework; absent on older repairs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_digest: Option<String>,
     pub authorized_by: String,
     pub authorizer_provenance: String,
     pub authorized_at: DateTime<Utc>,
     pub attempt: u32,
-    /// Current policy captured for this attempt, never the cancelled run's.
+    /// Current policy captured for this attempt, never inherited from its source.
     pub review: ReviewAdmission,
 }
 
