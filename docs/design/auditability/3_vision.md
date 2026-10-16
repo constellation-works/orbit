@@ -3,8 +3,8 @@ summary: "Auditability — Vision"
 type: design
 title: "Auditability — Vision"
 owner: codex
-last_updated: 2026-07-18
-last_validated: 2026-10-10
+last_updated: 2026-10-15
+last_validated: 2026-10-15
 status: Draft
 feature: auditability
 doc_role: vision
@@ -19,10 +19,10 @@ This document captures the questions that remain before Orbit's auditability sto
 
 ## 1. Open Questions
 
-1. **Canonical query surface.** Should `orbit audit` stay command-row-only, or grow a run-centric view that joins command rows, job-run state, v2 envelopes, loop JSONL, blobs, and invocation metrics?
+1. **Canonical query surface.** Should `orbit audit` stay command-row-only, or grow a run-centric view that joins command rows, job-run state, v2 envelopes, loop-event rows, blobs, and invocation metrics?
 2. **Local tamper evidence.** Should Orbit use per-file hash chains, SQLite append proofs, signed manifests, git-backed checkpoints, or export-time attestations while staying self-hosted by default?
 3. **Auditing audit reads.** Should `orbit audit` reads, exports, and prunes remain outside the guard to avoid recursion, or be recorded through a separate path?
-4. **Stable identity across channels.** MCP now records trusted caller/process machine identity separately from managed agent identity; what joins those fields to human CLI usage, task attribution, v2 envelopes, metrics, commits, and PR metadata?
+4. **Stable identity across channels.** MCP now records adapter-supplied caller/process machine metadata separately from managed agent identity; what joins those fields to human CLI usage, task attribution, v2 envelopes, metrics, commits, and PR metadata?
 5. **Stdout/stderr retention.** The command schema has truncated stdout/stderr fields, but most paths leave them empty. What retention policy should exist before broad capture?
 6. **JSONL migration.** [T20260426-0519] moved run traces to `.orbit/state/audit/`; should old `.orbit/audit/` files be migrated, ignored, or read through a legacy fallback?
 7. **Replay payload depth.** When are redacted verbatim prompts/responses required, and when are summaries enough?
@@ -60,7 +60,7 @@ Security audit systems treat reads, writes, privilege decisions, and retention a
 
 ## 3. What May Be Distinctive
 
-1. **Code-aware audit joins.** Orbit can join records by run id, task id, context selector, lock reservation, worktree, graph node, and commit attribution.
+1. **Code-aware audit joins.** Orbit can join records by run id, task id, context selector, lock reservation, worktree, and commit attribution.
 2. **Agent identity as a first-class actor.** The trail can name humans, model families, provider backends, and task roles without treating agents as generic service accounts.
 3. **Transcript plus structure.** V2 envelopes describe the workflow tree while loop blobs preserve redacted provider/tool payloads.
 4. **Local tamper evidence.** A self-hosted team-scale runtime can produce verifiable local audit bundles without a hosted control plane.

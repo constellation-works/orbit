@@ -2,7 +2,7 @@
 type: design
 summary: "Glossary: Auditability"
 tags: ["auditability"]
-last_validated: 2026-10-10
+last_validated: 2026-10-15
 ---
 
 # Glossary: Auditability
@@ -16,7 +16,7 @@ This glossary covers Orbit-specific auditability terms only. Generic observabili
 | **Command audit row** | A compact SQLite `AuditEvent` record for a CLI or targeted runtime operation. See [../2_design.md §2](../2_design.md#2-command-audit-rows). |
 | **Coverage matrix** | The prescriptive map from operation class to required audit channel. See [../2_design.md §3](../2_design.md#3-tool-driven-and-runtime-audit-records) and [../specs/coverage-matrix.md](../specs/coverage-matrix.md). |
 | **Invocation trace** | A metrics-oriented usage record keyed by job run, activity, task ids, agent, model, tokens, and tool-call summaries. See [../2_design.md §8](../2_design.md#8-query-export-and-metrics-surfaces). |
-| **Loop audit event** | A provider/tool-level event emitted by the HTTP loop engine for sessions, HTTP turns, tool calls, iteration boundaries, or policy denials. See [../2_design.md §5](../2_design.md#5-retained-provider-and-tool-event-contracts). |
+| **Loop audit event** | The retained provider/tool-level event contract for sessions, HTTP turns, tool calls, iteration boundaries, or policy denials. Historical rows remain readable; current provider execution uses CLI subprocesses. See [../2_design.md §5](../2_design.md#5-retained-provider-and-tool-event-contracts). |
 | **Redaction boundary** | The point before durable write where Orbit removes known secret shapes from audit payloads or error strings. See [../2_design.md §6](../2_design.md#6-blob-storage-and-redaction). |
 | **Run trace** | The workspace-local reconstruction material for one activity/job run: v2 envelope rows, loop-event rows, and content-addressed blobs. See [../2_design.md §4](../2_design.md#4-activityjob-envelope-events). |
 | **Self-reported actor** | An unverified caller or client name captured at MCP initialization in a separate audit field; it is never an authentication or authorization input. See [the self-reported actor spec](../specs/self-reported-actor.md). |
