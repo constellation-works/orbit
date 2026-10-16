@@ -143,7 +143,13 @@ impl OrbitRuntime {
         {
             return Err(refuse(format!("{prefix}: source evidence changed")));
         }
-        if task_digest(&task)? != binding.task_digest {
+        if adoption::admitted_task_digest(
+            &task,
+            &self.get_task_history(&task.id)?,
+            run_id,
+            record.authorized_at,
+        )? != binding.task_digest
+        {
             return Err(refuse(format!("{prefix}: task meaning changed")));
         }
         if binding.schema_version != 1
