@@ -76,7 +76,9 @@ use std::time::Duration;
 
 use orbit_common::OrbitError;
 use orbit_types::task::{NO_DIFF_EXPECTED_TAG, Task};
-use orbit_types::workflow::PrAutoFixBlocker;
+use orbit_types::workflow::{
+    PR_COMPLETION_MUTATION_STARTED_EVENT, PrAutoFixBlocker, pr_completion_has_mutation_provenance,
+};
 use serde_json::{Value, json};
 
 use crate::context::{ReviewLandingRequest, RuntimeHost};
@@ -395,11 +397,11 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         .map_err(|error| {
             // Only a failed read before any mutation is eligible. Unknown merge
             // replies, repairs and rebases keep their existing reconciliation path.
-            if auto_fix.is_none()
-                && !merge_requested
+            if !merge_requested
                 && !auto_merge_requested
                 && !conflict_refresh_attempted
                 && !landed_refresh_attempted
+                && completion_history_is_read_only(host, input).unwrap_or(false)
                 && (super::super::operations::is_transient_github_failure(&error.to_string())
                     || error
                         .to_string()
@@ -800,6 +802,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                     );
                     match request_merge(
                         host,
+                        input,
                         workspace_path,
                         pr_number,
                         capabilities.strategy,
@@ -874,6 +877,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                     if capabilities.auto_merge_allowed {
                         request_merge(
                             host,
+                            input,
                             workspace_path,
                             pr_number,
                             capabilities.strategy,
@@ -1151,6 +1155,7 @@ fn rebase_conflicting_pr_branch<H: RuntimeHost + ?Sized>(
         "commits_behind": published_freshness.commits_behind,
         "sync_required": true,
     });
+    record_completion_mutation(host, input, "rebase")?;
     let rebased = rebase_pr_branch(host, &rebase_input)?;
     // Auto-fix can refresh inside the watcher without returning through the
     // pipeline's validation step. Validate the exact rewrite before either
@@ -1167,14 +1172,65 @@ fn rebase_conflicting_pr_branch<H: RuntimeHost + ?Sized>(
     Ok(rebased)
 }
 
+/// Read reservations after pre-observation repair adoption/publication as well
+/// as after polling. Absence is only eligibility: the host still authenticates
+/// the exact original publication, native receipts and current policy.
+fn completion_history_is_read_only<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+) -> Result<bool, OrbitError> {
+    let context = load_handoff_context(host, input, "pr_complete")?;
+    for task in context.tasks {
+        if pr_completion_has_mutation_provenance(&host.get_task_history(&task.id)?) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Persist before entering a mutation boundary. In particular an unknown merge
+/// reply must remain disqualified when a later invocation's local flags reset.
+fn record_completion_mutation<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    operation: &str,
+) -> Result<(), OrbitError> {
+    let context = load_handoff_context(host, input, "pr_complete")?;
+    for task in context.tasks {
+        host.apply_task_automation_update(
+            &task.id,
+            crate::context::TaskAutomationUpdate {
+                append_history: vec![orbit_types::task::TaskHistoryEntry {
+                    at: chrono::Utc::now(),
+                    by: "system".into(),
+                    event: PR_COMPLETION_MUTATION_STARTED_EVENT.into(),
+                    note: Some(
+                        json!({"run_id":context.batch_id,"operation":operation,
+                        "pr_number":input["pr_number"],"head_sha":input["published_head_sha"]})
+                        .to_string(),
+                    ),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: None,
+                    decision: None,
+                }],
+                ..Default::default()
+            },
+        )?;
+    }
+    Ok(())
+}
+
 fn request_merge<H: RuntimeHost + ?Sized>(
     host: &H,
+    input: &Value,
     workspace_path: &str,
     pr_number: &str,
     strategy: MergeStrategy,
     auto: bool,
     reviewed_head_sha: Option<&str>,
 ) -> Result<ReviewedMergeOutcome, OrbitError> {
+    record_completion_mutation(host, input, if auto { "auto_merge" } else { "merge" })?;
     let response = host.run_private_vcs_operation(
         operations::PR_MERGE,
         json!({

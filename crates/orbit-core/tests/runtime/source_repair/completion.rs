@@ -4,7 +4,14 @@ use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
 use orbit_engine::{FinalRecoveryAdmissionRequest, V2AuditWriter, execute_job_with_resume};
 use std::sync::Arc;
 
+#[path = "completion/mutation.rs"]
+pub(super) mod mutation;
+
 fn fixture() -> (Fixture, PathBuf) {
+    fixture_with_auto_fix(true)
+}
+
+fn fixture_with_auto_fix(auto_fix: bool) -> (Fixture, PathBuf) {
     let mut f = Fixture::new();
     let config = f.repo.join(".orbit/config.toml");
     let text = std::fs::read_to_string(&config).unwrap().replace(
@@ -29,7 +36,7 @@ fn fixture() -> (Fixture, PathBuf) {
     complete["default_input"] = json!({
         "job_run_id":"{{ steps.worktree.output.job_run_id }}", "completed_task_ids":[f.task],
         "workspace_path":"{{ steps.worktree.output.workspace_path }}", "pr_number":"17",
-        "completion":"done", "auto_fix":false, "head":"{{ steps.push.output.branch }}",
+        "completion":"done", "auto_fix":auto_fix, "head":"{{ steps.push.output.branch }}",
         "published_head_sha":"{{ steps.push.output.local_sha }}", "base":"main",
         "max_wait_seconds":60, "poll_interval_seconds":5
     });
@@ -59,7 +66,7 @@ fn fixture() -> (Fixture, PathBuf) {
     )
     .unwrap();
     std::fs::set_permissions(hook, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let checkout = published_owner::validated_publication(&mut f);
+    let checkout = published_owner::validated_publication(&mut f, auto_fix);
     (f, checkout)
 }
 
@@ -156,23 +163,52 @@ fn run_tail(f: &Fixture) -> Result<orbit_engine::JobOutcome, orbit_engine::Dispa
         Some(&f.repo),
     )
     .unwrap();
-    orbit_engine::test_support::with_vcs_retry_wait(
+    let outcome = orbit_engine::test_support::with_vcs_retry_wait(
         |_| {},
         || {
             execute_job_with_resume(
                 &job,
                 f.source.input.clone().unwrap(),
                 &f.source.run_id,
-                audit,
+                audit.clone(),
                 &f.runtime,
                 Some(&state),
             )
         },
-    )
+    );
+    if matches!(&outcome, Ok(outcome) if outcome.success) {
+        let started = audit
+            .events_snapshot()
+            .unwrap()
+            .into_iter()
+            .filter_map(|event| match event.kind {
+                orbit_types::workflow::V2AuditEventKind::StepStarted { step_id } => Some(step_id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            started,
+            ["complete_pr", "complete_pr"],
+            "only completion runs twice; implementation, commit, native validation and push never restart, including no-op attempts"
+        );
+    }
+    outcome
 }
 
 pub(super) fn unchanged_publication_retries_only_completion() {
-    let (f, checkout) = fixture();
+    for auto_fix in [false, true] {
+        unchanged_publication_tail(auto_fix, false);
+        if auto_fix {
+            unchanged_publication_tail(auto_fix, true);
+        }
+    }
+}
+
+fn unchanged_publication_tail(auto_fix: bool, review: bool) {
+    let (mut f, checkout) = fixture_with_auto_fix(auto_fix);
+    if review {
+        configure_review(&mut f, &checkout);
+    }
     let calls = tail_forge(&f, "lost_read");
     let state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
     let prefix = state.step_outputs.clone();
@@ -201,10 +237,9 @@ pub(super) fn unchanged_publication_retries_only_completion() {
             "immutable successful prefix"
         );
     }
-    for artifact in artifacts
-        .iter()
-        .filter(|a| a.path.starts_with("validation/"))
-    {
+    for artifact in artifacts.iter().filter(|a| {
+        a.path.starts_with("validation/") || a.path == orbit_types::workflow::REVIEW_GATE_ARTIFACT
+    }) {
         assert!(
             f.runtime
                 .get_task_artifact_manifest(&f.task)
@@ -264,6 +299,8 @@ pub(super) fn completion_reuse_refuses_drift() {
         "reviewer",
         "foreign",
         "other_worker",
+        "retry_ancestor",
+        "prior_recovery",
         "rebound",
         "pr",
         "merge_intent",
@@ -360,6 +397,17 @@ pub(super) fn completion_reuse_refuses_drift() {
                     state.pipeline["review_gate_settle"]["reviewer_fixed"] = json!(true);
                 }
                 f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+            }
+            "prior_recovery" => {
+                let mut state = before.clone();
+                state
+                    .rebase_recovery_checkpoints
+                    .insert("complete_pr".into(), json!({"head_sha":f.head}));
+                f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+            }
+            "retry_ancestor" => {
+                f.source.retry_source_run_id = Some("prior-attempt".into());
+                published_owner::save_run(&f, &f.source);
             }
             "other_worker" => {
                 f.source.pid = Some(u32::MAX);
@@ -543,7 +591,7 @@ pub(super) fn unknown_merge_reply_is_reconciled_without_republication() {
     let calls = tail_forge(&f, "lost_merge_reply");
     let input = json!({"job_run_id":f.source.run_id,"run_id":f.source.run_id,
         "completed_task_ids":[f.task],"workspace_path":checkout,"pr_number":"17",
-        "completion":"done","auto_fix":false,"head":f.branch,"published_head_sha":f.head,
+        "completion":"done","auto_fix":true,"head":f.branch,"published_head_sha":f.head,
         "base":"main","max_wait_seconds":60});
     let failed = execute_deterministic_action(
         &f.runtime,
@@ -564,6 +612,41 @@ pub(super) fn unknown_merge_reply_is_reconciled_without_republication() {
             .to_string()
             .contains("completion_observation_unavailable:"),
         "a lost mutation reply is never read-only authority"
+    );
+    let history = f.runtime.get_task_history(&f.task).unwrap();
+    assert!(
+        history
+            .iter()
+            .any(|row| row.event == orbit_types::workflow::PR_COMPLETION_MUTATION_STARTED_EVENT),
+        "the unknown reply has durable write-ahead provenance"
+    );
+    // A later failed lookup cannot become read-only just because local flags reset.
+    std::fs::rename(
+        f._root.path().join("lost-read"),
+        f._root.path().join("lost-read-again"),
+    )
+    .unwrap();
+    let retry = execute_deterministic_action(
+        &f.runtime,
+        "pr_complete",
+        &json!({}),
+        &input,
+        false,
+        &HashMap::new(),
+        None,
+    )
+    .unwrap_err();
+    assert!(
+        !retry
+            .to_string()
+            .contains("completion_observation_unavailable:"),
+        "{retry}"
+    );
+    admit(&f);
+    assert!(
+        f.runtime
+            .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
+            .is_err()
     );
     let result = f.action("pr_complete", input);
     assert_eq!(result["phase"], "complete");
@@ -591,68 +674,9 @@ pub(super) fn unknown_merge_reply_is_reconciled_without_republication() {
 }
 
 pub(super) fn configured_review_requires_unchanged_host_certificate() {
-    use orbit_types::workflow::{
-        REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewAdmission,
-        ReviewTiming,
-    };
+    use orbit_types::workflow::REVIEW_GATE_ARTIFACT;
     let (mut f, checkout) = fixture();
-    let config = f.repo.join(".orbit/config.toml");
-    std::fs::write(
-        &config,
-        std::fs::read_to_string(&config)
-            .unwrap()
-            .replace("before_pr = false", "before_pr = true"),
-    )
-    .unwrap();
-    f.runtime = orbit_core::OrbitRuntime::from_roots(
-        &f._root.path().join("global"),
-        &f.repo.join(".orbit"),
-    )
-    .unwrap()
-    .with_automation_execution_location(Some(orbit_types::task::ExecutionLocation {
-        machine_id: "hm_fixture".into(),
-        machine_name: None,
-    }));
-    let policy = f.runtime.operation_policy();
-    let admission = ReviewAdmission {
-        contract_version: REVIEW_CONTRACT_VERSION,
-        policy_version: policy.version,
-        timing: ReviewTiming::BeforePr,
-        timing_source: policy.review_before_pr.source.label().into(),
-        crew: Some(policy.review_crew.value[0].clone()),
-        crew_pool: Vec::new(),
-        crew_source: policy.review_crew.source.label().into(),
-        budget: policy.review_budget(),
-        required_validation_commands: Some(
-            f.runtime.workflow_required_validation_commands().to_vec(),
-        ),
-        baseline_commands: f.runtime.review_baseline_commands().to_vec(),
-        host_evidence: policy.review_host_evidence.value.clone(),
-        captured_at: Utc::now(),
-    };
-    f.source.input.as_mut().unwrap()["review"] = json!(admission);
-    published_owner::save_run(&f, &f.source);
-    let input = json!({"job_run_id":f.source.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,"base":"main","base_sync":"remote","mode":"pr","base_sha":f.state.pipeline["sync_base"]["base_sha"]});
-    let validation = f.action("candidate_validate", input.clone());
-    published_owner::checkpoint(&f, &f.source.run_id, 4, "validate", validation);
-    let review = f.action("review_gate_admit", input.clone());
-    assert_eq!(review["applies"], true);
-    let report = json!({"schema_version":REVIEW_CONTRACT_VERSION,"attempt_id":review["attempt_id"],"verdict":"accept","summary":"Checked unchanged publication","findings":[],"validation":[{"id":"V1","command":"true","outcome":"passed","role":"required"}],"escalation":null});
-    let source = f.repo.join(".orbit/tmp/completion-review.json");
-    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
-    std::fs::write(&source, report.to_string()).unwrap();
-    f.runtime
-        .run_tool(
-            "orbit.task.artifact.put",
-            json!({"id":f.task,"model":"codex","path":REVIEW_REPORT_ARTIFACT,"source_path":source}),
-        )
-        .unwrap();
-    let mut settle_input = input;
-    settle_input["admission"] = review;
-    let settled = f.action("review_gate_settle", settle_input);
-    assert_eq!(settled["gate"], "passed");
-    assert_eq!(settled["reviewer_fixed"], false);
-    published_owner::checkpoint(&f, &f.source.run_id, 5, "review_gate_settle", settled);
+    let source = configure_review(&mut f, &checkout);
     admit(&f);
     assert!(
         f.runtime
@@ -711,4 +735,68 @@ pub(super) fn refused_receipts_stop_before_agent_or_republication() {
             .count(),
         1
     );
+}
+
+fn configure_review(f: &mut Fixture, checkout: &std::path::Path) -> PathBuf {
+    use orbit_types::workflow::{
+        REVIEW_CONTRACT_VERSION, REVIEW_REPORT_ARTIFACT, ReviewAdmission, ReviewTiming,
+    };
+    let config = f.repo.join(".orbit/config.toml");
+    std::fs::write(
+        &config,
+        std::fs::read_to_string(&config)
+            .unwrap()
+            .replace("before_pr = false", "before_pr = true"),
+    )
+    .unwrap();
+    f.runtime = orbit_core::OrbitRuntime::from_roots(
+        &f._root.path().join("global"),
+        &f.repo.join(".orbit"),
+    )
+    .unwrap()
+    .with_automation_execution_location(Some(orbit_types::task::ExecutionLocation {
+        machine_id: "hm_fixture".into(),
+        machine_name: None,
+    }));
+    let policy = f.runtime.operation_policy();
+    let admission = ReviewAdmission {
+        contract_version: REVIEW_CONTRACT_VERSION,
+        policy_version: policy.version,
+        timing: ReviewTiming::BeforePr,
+        timing_source: policy.review_before_pr.source.label().into(),
+        crew: Some(policy.review_crew.value[0].clone()),
+        crew_pool: Vec::new(),
+        crew_source: policy.review_crew.source.label().into(),
+        budget: policy.review_budget(),
+        required_validation_commands: Some(
+            f.runtime.workflow_required_validation_commands().to_vec(),
+        ),
+        baseline_commands: f.runtime.review_baseline_commands().to_vec(),
+        host_evidence: policy.review_host_evidence.value.clone(),
+        captured_at: Utc::now(),
+    };
+    f.source.input.as_mut().unwrap()["review"] = json!(admission);
+    published_owner::save_run(f, &f.source);
+    let input = json!({"job_run_id":f.source.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,"base":"main","base_sync":"remote","mode":"pr","base_sha":f.state.pipeline["sync_base"]["base_sha"]});
+    let validation = f.action("candidate_validate", input.clone());
+    published_owner::checkpoint(f, &f.source.run_id, 4, "validate", validation);
+    let review = f.action("review_gate_admit", input.clone());
+    assert_eq!(review["applies"], true);
+    let report = json!({"schema_version":REVIEW_CONTRACT_VERSION,"attempt_id":review["attempt_id"],"verdict":"accept","summary":"Checked unchanged publication","findings":[],"validation":[{"id":"V1","command":"true","outcome":"passed","role":"required"}],"escalation":null});
+    let source = f.repo.join(".orbit/tmp/completion-review.json");
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    std::fs::write(&source, report.to_string()).unwrap();
+    f.runtime
+        .run_tool(
+            "orbit.task.artifact.put",
+            json!({"id":f.task,"model":"codex","path":REVIEW_REPORT_ARTIFACT,"source_path":source}),
+        )
+        .unwrap();
+    let mut settle_input = input;
+    settle_input["admission"] = review;
+    let settled = f.action("review_gate_settle", settle_input);
+    assert_eq!(settled["gate"], "passed");
+    assert_eq!(settled["reviewer_fixed"], false);
+    published_owner::checkpoint(f, &f.source.run_id, 5, "review_gate_settle", settled);
+    source
 }

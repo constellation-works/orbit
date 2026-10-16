@@ -42,14 +42,14 @@ pub(super) fn checkpoint(f: &Fixture, run: &str, index: u32, id: &str, output: V
 /// Drive real host commit, push and PR opening, using a local Git forge and
 /// a deterministic GitHub process adapter. No load or external service is used.
 pub(super) fn publication(f: &mut Fixture) -> PathBuf {
-    publication_inner(f, false)
+    publication_inner(f, false, false)
 }
 
-pub(super) fn validated_publication(f: &mut Fixture) -> PathBuf {
-    publication_inner(f, true)
+pub(super) fn validated_publication(f: &mut Fixture, auto_fix: bool) -> PathBuf {
+    publication_inner(f, true, auto_fix)
 }
 
-fn publication_inner(f: &mut Fixture, validated: bool) -> PathBuf {
+fn publication_inner(f: &mut Fixture, validated: bool, auto_fix: bool) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let gh = f._root.path().join("bin/gh");
     let created = f._root.path().join("created");
@@ -64,7 +64,7 @@ fn publication_inner(f: &mut Fixture, validated: bool) -> PathBuf {
             "task_pr_pipeline",
             1,
             Utc::now(),
-            Some(json!({"task_ids":[f.task],"completion":"done","auto_fix":false})),
+            Some(json!({"task_ids":[f.task],"completion":"done","auto_fix":auto_fix})),
             None,
         )
         .unwrap();
@@ -150,7 +150,7 @@ fn publication_inner(f: &mut Fixture, validated: bool) -> PathBuf {
         || {
             execute_deterministic_action(&f.runtime, "pr_complete", &json!({}),
             &json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,
-                "pr_number":"17","completion":"done","auto_fix":false,"head":f.branch,
+                "pr_number":"17","completion":"done","auto_fix":auto_fix,"head":f.branch,
                 "published_head_sha":f.head,"base":"main","max_wait_seconds":0}),
             false, &HashMap::new(), None).unwrap_err()
         },

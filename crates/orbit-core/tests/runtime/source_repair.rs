@@ -28,6 +28,10 @@ mod published_owner;
 mod replay;
 #[path = "source_repair/reviewers.rs"]
 mod reviewers;
+use completion::mutation::{
+    enabled_completion_refuses_repair_and_mutation_provenance,
+    expired_completion_budget_never_merges,
+};
 use completion::{
     changed_base_gets_fresh_native_validation, completion_reuse_refuses_drift,
     concurrent_and_lost_admission_keep_one_completion_budget,
@@ -834,5 +838,7 @@ crate::scenario_table!(
     concurrent_and_lost_admission_keep_one_completion_budget,
     unknown_merge_reply_is_reconciled_without_republication,
     configured_review_requires_unchanged_host_certificate,
-    refused_receipts_stop_before_agent_or_republication
+    refused_receipts_stop_before_agent_or_republication,
+    enabled_completion_refuses_repair_and_mutation_provenance,
+    expired_completion_budget_never_merges
 );
