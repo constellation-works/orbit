@@ -10,6 +10,7 @@
 //! and [`render`] builds the text output from the tool's answer. Both are
 //! exhaustive matches on [`TaskVerb`].
 
+use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb};
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::{Map, Value, json};
@@ -172,8 +173,10 @@ fn prepare(
         // The review verbs act on this checkout's workspace unless `--host`
         // routed them, which the preflight did before dispatch.
         TaskVerb::RetryHandoff => {
-            if let Some(workspace) = input.shift_remove("owner_workspace") {
-                input.insert("workspace".into(), workspace);
+            if let Some(Value::String(selector)) = input.shift_remove("owner_workspace") {
+                let workspace =
+                    RegisteredRuntimeFactory::resolve_cli_owner_workspace(runtime, &selector)?;
+                input.insert("workspace".into(), json!(workspace));
             }
             Ok(ListView::default())
         }

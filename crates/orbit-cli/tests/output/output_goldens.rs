@@ -1267,67 +1267,171 @@ fn doctor_terminal_findings_golden() {
 
 #[test]
 fn retry_handoff_cli_selects_its_explicit_owner_and_refuses_missing_operator() {
+    if crate::isolated_test::run_in_child(
+        "output_goldens::retry_handoff_cli_selects_its_explicit_owner_and_refuses_missing_operator",
+    ) {
+        return;
+    }
     let fixture = Fixture::new();
-    let args = [
-        "task",
-        "retry-handoff",
-        "handoff-absent",
-        "--owner-workspace",
-        fixture.work.to_str().unwrap(),
-        "--candidate",
-        "a",
-        "--base",
-        "b",
-        "--attempt",
-        "1",
-        "--state",
-        "stopped",
-        "--reason",
-        "inspect retained handoff",
-        "--request",
-        "cli-retry-1",
-        "--json",
-    ];
-    for operator in [false, true] {
+    let config: Value = serde_yaml::from_str(
+        &std::fs::read_to_string(fixture.work.join(".orbit/config.yaml")).unwrap(),
+    )
+    .unwrap();
+    let internal_id = config["workspace_id"].as_str().unwrap();
+    // Legacy owners can have different catalog and task-partition identities.
+    let registry_path = fixture.home.join(".orbit/workspaces.json");
+    let registry = std::fs::read_to_string(&registry_path).unwrap();
+    let logical_id = "ws_retry-owner";
+    std::fs::write(&registry_path, registry.replace(internal_id, logical_id)).unwrap();
+    assert_ne!(internal_id, logical_id);
+
+    let command = |cwd: &Path, operator: bool| {
         let mut command = cargo_bin_cmd!("orbit");
         test_env::clear_inherited_authority(|name| {
             command.env_remove(name);
         });
         command
-            .current_dir(&fixture.home)
+            .current_dir(cwd)
             .env("HOME", &fixture.home)
             .env("USERPROFILE", &fixture.home)
             .env("RUST_LOG", "off");
         if operator {
             command.env("ORBIT_OPERATOR", "1");
-        } else {
+        }
+        command
+    };
+    let foreign = fixture.home.join("foreign");
+    std::fs::create_dir(&foreign).unwrap();
+    crate::git_repo::init(&foreign);
+    command(&foreign, true)
+        .env("PATH", fixture._temp.path().join("empty-path"))
+        .args(["workspace", "init", "--name", "foreign", "--json"])
+        .assert()
+        .success();
+    let unregistered = fixture.home.join("unregistered");
+    crate::git_repo::init(&unregistered);
+    let path = fixture.work.to_str().unwrap();
+    let before = fixture.run(&["task", "list", "--json"], &[]);
+    let runs_before = fixture.run(&["run", "history", "--no-reconcile", "--json"], &[]);
+    let foreign_before = fixture.run(&["--workspace", "foreign", "task", "list", "--json"], &[]);
+
+    let retry = |selected: Option<&str>, owner: Option<&str>, caller: &str| {
+        let mut command = command(&fixture.home, caller == "operator");
+        if caller == "agent" {
             command
                 .env("ORBIT_AGENT_NAME", "codex")
                 .env("ORBIT_AGENT_MODEL", "gpt");
         }
-        let output = command.args(args).output().unwrap();
+        if let Some(selected) = selected {
+            command.args(["--workspace", selected]);
+        }
+        command.args(["task", "retry-handoff", "handoff-absent"]);
+        if let Some(owner) = owner {
+            command.args(["--owner-workspace", owner]);
+        }
+        let output = command
+            .args([
+                "--candidate",
+                "a",
+                "--base",
+                "b",
+                "--attempt",
+                "1",
+                "--state",
+                "stopped",
+                "--reason",
+                "inspect retained handoff",
+                "--request",
+                "cli-retry-1",
+                "--json",
+            ])
+            .output()
+            .unwrap();
         assert!(!output.status.success());
-        let error: Value = serde_json::from_slice(&output.stderr).unwrap_or_else(|error| {
+        serde_json::from_slice::<Value>(&output.stderr).unwrap_or_else(|error| {
             panic!(
                 "{error}: stdout={} stderr={}",
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
             )
-        });
-        assert_eq!(
-            error["code"],
-            if operator {
-                "invalid_input"
-            } else {
-                "capability_denied"
-            },
-            "{error}"
-        );
-        if operator {
-            assert!(
-                error["error"].as_str().unwrap().contains(args[2]),
-                "the selected owner looked up the exact handoff identity: {error}"
-            );
+        })
+    };
+    let expected = retry(Some(path), Some(path), "operator");
+    assert_eq!(expected["code"], "invalid_input", "{expected}");
+    assert!(
+        expected["error"]
+            .as_str()
+            .unwrap()
+            .contains("handoff-absent"),
+        "the selected owner looked up the exact handoff identity: {expected}"
+    );
+    for selector in ["output-goldens", logical_id, internal_id, path] {
+        let error = retry(Some(path), Some(selector), "operator");
+        assert_eq!(error, expected, "explicit owner {selector}");
+        for caller in ["unprivileged", "agent"] {
+            let denied = retry(Some(path), Some(selector), caller);
+            assert_eq!(denied["code"], "capability_denied", "{caller}: {denied}");
         }
     }
+    // An owner selector alone also selects its runtime from an unrelated cwd.
+    for selector in ["output-goldens", logical_id, path] {
+        assert_eq!(
+            retry(None, Some(selector), "operator"),
+            expected,
+            "{selector}"
+        );
+        assert_eq!(
+            retry(Some(selector), Some(selector), "operator"),
+            expected,
+            "selected workspace and owner {selector}"
+        );
+    }
+    for (selected, owner, code) in [
+        (path, Some("foreign"), "capability_denied"),
+        ("foreign", Some(path), "capability_denied"),
+        (path, Some("ws_not-registered"), "invalid_input"),
+        (path, Some(unregistered.to_str().unwrap()), "invalid_input"),
+        (path, None, "usage_error"),
+    ] {
+        let error = retry(Some(selected), owner, "operator");
+        assert_eq!(error["code"], code, "{selected} / {owner:?}: {error}");
+        assert_ne!(error, expected, "refuse before looking up a handoff");
+    }
+    let foreign_error = retry(Some("foreign"), Some("foreign"), "operator");
+    assert_eq!(
+        foreign_error, expected,
+        "a foreign partition cannot find the handoff"
+    );
+    // A registered foreign name must not be silently treated as our internal ID.
+    let registry = std::fs::read_to_string(&registry_path).unwrap();
+    let mut collision: Value = serde_json::from_str(&registry).unwrap();
+    let foreign_workspace = collision["workspaces"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|workspace| workspace["name"] == "foreign")
+        .unwrap();
+    foreign_workspace["name"] = json!(internal_id);
+    std::fs::write(&registry_path, serde_json::to_vec(&collision).unwrap()).unwrap();
+    let denied = retry(Some(path), Some(internal_id), "operator");
+    assert_eq!(denied["code"], "capability_denied", "{denied}");
+    std::fs::write(&registry_path, registry).unwrap();
+
+    assert_eq!(
+        fixture.run(&["task", "list", "--json"], &[]).stdout,
+        before.stdout
+    );
+    assert_eq!(
+        fixture
+            .run(&["run", "history", "--no-reconcile", "--json"], &[])
+            .stdout,
+        runs_before.stdout,
+    );
+    assert_eq!(
+        fixture
+            .run(&["--workspace", "foreign", "task", "list", "--json"], &[])
+            .stdout,
+        foreign_before.stdout,
+    );
+    assert!(!unregistered.join(".orbit").exists());
 }
