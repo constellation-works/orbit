@@ -191,7 +191,24 @@ impl OrbitRuntime {
                         "failure-handoff preceding host commit/synchronization disagrees",
                     ));
                 }
-                allowed.push(field(sync, "head_sha")?.into());
+                let synchronized = field(sync, "head_sha")?;
+                allowed.push(synchronized.into());
+                // A before-PR reviewer may advance the synchronized candidate.
+                // Reuse normal publication's settlement and exact-head host
+                // validation contract; the hook's push alone certifies no work.
+                let checkpoint = |id: &str, action: &str| {
+                    authenticated_checkpoint(&definition, &state, id, action)
+                };
+                let reviewed = super::publication::reviewed_head(
+                    &definition,
+                    &state,
+                    &checkpoint,
+                    false,
+                    synchronized,
+                    (branch, base_sha),
+                    repo,
+                )?;
+                allowed.push(reviewed.into());
             }
         }
         if !allowed.contains(&parent)

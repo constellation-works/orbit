@@ -41,7 +41,7 @@ pub(super) fn checkpoint(f: &Fixture, run: &str, index: u32, id: &str, output: V
 
 /// Drive real host commit, push and PR opening, using a local Git forge and
 /// a deterministic GitHub process adapter. No load or external service is used.
-fn publication(f: &mut Fixture) -> PathBuf {
+pub(super) fn publication(f: &mut Fixture) -> PathBuf {
     publication_inner(f, false)
 }
 
