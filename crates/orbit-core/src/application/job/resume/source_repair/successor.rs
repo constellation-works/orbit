@@ -10,8 +10,13 @@ impl OrbitRuntime {
     ) -> Result<bool, OrbitError> {
         Ok(source.state == JobRunState::Cancelled
             || (source.state == JobRunState::Failed
-                && self.recorded_final_recovery(task, &source.run_id)?
-                    == Some(crate::application::task::FinalRecoveryOutcome::Requeued)))
+                && matches!(
+                    self.recorded_final_recovery(task, &source.run_id)?,
+                    Some(
+                        crate::application::task::FinalRecoveryOutcome::Requeued
+                            | crate::application::task::FinalRecoveryOutcome::Escalated { .. }
+                    )
+                )))
     }
 
     pub(super) fn observe_source_successor(

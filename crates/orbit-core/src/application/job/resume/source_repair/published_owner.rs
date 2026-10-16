@@ -198,7 +198,7 @@ impl OrbitRuntime {
                 "published source is live, discarded, changed, or lacks an applied requeue",
             ));
         }
-        self.observe_published_source(source, task)
+        self.observe_published_source(source, task, false)
             .map(|(_, _, binding)| Some(binding))
     }
 

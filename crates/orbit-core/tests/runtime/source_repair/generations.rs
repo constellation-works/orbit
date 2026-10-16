@@ -40,7 +40,16 @@ fn checkpoint(f: &Fixture, id: &str, step: &str, output: Value) {
         .unwrap();
 }
 
-fn publish_and_cancel(f: &Fixture, id: &str, generation: usize) -> String {
+pub(super) fn publish_and_cancel(f: &Fixture, id: &str, generation: usize) -> String {
+    publish_and_stop(f, id, generation, false)
+}
+
+pub(super) fn publish_and_stop(
+    f: &Fixture,
+    id: &str,
+    generation: usize,
+    failed_open: bool,
+) -> String {
     f.wait(id);
     f.start_actions(id);
     let setup = f.action(
@@ -77,28 +86,54 @@ fn publish_and_cancel(f: &Fixture, id: &str, generation: usize) -> String {
     let mut answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
     answer["headRefOid"] = json!(head);
     std::fs::write(&f.answer, answer.to_string()).unwrap();
-    let opened = f.action("pr_open", input.clone());
-    assert_eq!(opened["pr_number"], "17");
-    assert_eq!(opened["pr_reused"], true);
-    checkpoint(f, id, "pr_open", opened);
-    f.runtime
-        .apply_task_automation_update(
-            &f.task,
-            TaskAutomationUpdate {
-                status: Some(TaskStatus::Review),
-                ..Default::default()
-            },
+    if failed_open {
+        answer["number"] = json!(18);
+        std::fs::write(&f.answer, answer.to_string()).unwrap();
+        let error = execute_deterministic_action(
+            &f.runtime,
+            "pr_open",
+            &json!({}),
+            &input,
+            false,
+            &HashMap::new(),
+            None,
         )
-        .unwrap();
-    let mut gate = input;
-    gate["before_landing"] = json!(true);
-    gate["mode"] = json!("pr");
-    let admitted = f.action("review_gate_admit", gate);
-    assert_eq!(admitted["applies"], true);
-    // Deliberately stop before any reviewer commit. Preserve the actual host
-    // checkpoints and task/run binding, unlike the earlier replay-only case.
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("creating or replacing"),
+            "{error}"
+        );
+        answer["number"] = json!(17);
+        std::fs::write(&f.answer, answer.to_string()).unwrap();
+        let mut state = f.runtime.read_run_state(id).unwrap().unwrap();
+        state.record_step(5, JobRunState::Failed, None, Some(json!(error.to_string())));
+        f.runtime.write_run_state(id, &state).unwrap();
+    } else {
+        let opened = f.action("pr_open", input.clone());
+        assert_eq!(opened["pr_number"], "17");
+        assert_eq!(opened["pr_reused"], true);
+        checkpoint(f, id, "pr_open", opened);
+        f.runtime
+            .apply_task_automation_update(
+                &f.task,
+                TaskAutomationUpdate {
+                    status: Some(TaskStatus::Review),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let mut gate = input;
+        gate["before_landing"] = json!(true);
+        gate["mode"] = json!("pr");
+        let admitted = f.action("review_gate_admit", gate);
+        assert_eq!(admitted["applies"], true);
+    }
     let mut run = f.runtime.show_job_run_observed(id).unwrap();
-    run.state = JobRunState::Cancelled;
+    run.state = if failed_open {
+        JobRunState::Failed
+    } else {
+        JobRunState::Cancelled
+    };
     run.finished_at = Some(Utc::now());
     run.pid = None;
     f.runtime
@@ -107,7 +142,7 @@ fn publish_and_cancel(f: &Fixture, id: &str, generation: usize) -> String {
         .upsert_job_run_for_workspace(&f.runtime.workspace_id().unwrap(), &run, None)
         .unwrap();
     let mut state = f.runtime.read_run_state(id).unwrap().unwrap();
-    state.compact_for_terminal(JobRunState::Cancelled);
+    state.compact_for_terminal(run.state);
     f.runtime.write_run_state(id, &state).unwrap();
     head
 }

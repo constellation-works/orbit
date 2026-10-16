@@ -1,4 +1,4 @@
-//! Authenticate a cancelled repair's branch adoption without reusing authority.
+//! Authenticate a stopped repair's branch adoption without reusing authority.
 use super::*;
 
 impl OrbitRuntime {
@@ -67,6 +67,49 @@ impl OrbitRuntime {
                     .map_err(|error| refuse(error.to_string()))?
         {
             return Err(refuse("prior repair admission or run link changed"));
+        }
+        // Delivery legitimately appends selectors for changed files. Account
+        // only for this attempt's system-recorded additions in memory; arbitrary
+        // scope edits still change the original digest and no history is edited.
+        let mut original_task = task.clone();
+        for entry in entries.iter().rev().filter(|entry| {
+            entry.by == "system"
+                && entry.at >= admission.authorized_at
+                && entry.event == orbit_types::task::CONTEXT_FILES_WIDENED_EVENT
+        }) {
+            let widening = entry
+                .note
+                .as_deref()
+                .and_then(orbit_types::task::ContextFilesWidening::from_note)
+                .ok_or_else(|| refuse("unreadable host selector widening"))?;
+            if widening.run_id == source.run_id {
+                for selector in widening.selectors {
+                    let index = original_task
+                        .context_files
+                        .iter()
+                        .position(|s| s == &selector)
+                        .ok_or_else(|| refuse("host-widened selector was removed"))?;
+                    original_task.context_files.remove(index);
+                }
+            }
+        }
+        if task_digest(&original_task)? != binding.task_digest {
+            return Err(refuse(
+                "task meaning or scope changed since original repair admission",
+            ));
+        }
+        let predecessor = self
+            .get_job_run_backend(&binding.source_run_id)?
+            .ok_or_else(|| refuse("prior repair source missing"))?;
+        let prior_state = self
+            .read_run_state(&binding.source_run_id)?
+            .ok_or_else(|| refuse("prior repair source checkpoints missing"))?;
+        let definition = self.source_repair_definition(&predecessor)?;
+        if digest(
+            &json!({"run":predecessor,"steps":predecessor.steps,"checkpoints":prior_state,"definition":definition}),
+        )? != binding.source_digest
+        {
+            return Err(refuse("immutable prior repair source changed"));
         }
         if field(adopted, "phase")? != "candidate_resume"
             || field(adopted, "outcome")? != "resumed_repaired"

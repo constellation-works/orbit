@@ -5,7 +5,7 @@ use orbit_core::application::task::{
 };
 use orbit_types::workflow::{JobRun, PipelineState};
 
-fn save_run(f: &Fixture, run: &JobRun) {
+pub(super) fn save_run(f: &Fixture, run: &JobRun) {
     f.runtime
         .sqlite_store()
         .unwrap()
@@ -13,7 +13,7 @@ fn save_run(f: &Fixture, run: &JobRun) {
         .unwrap();
 }
 
-fn checkpoint(f: &Fixture, run: &str, index: u32, id: &str, output: Value) {
+pub(super) fn checkpoint(f: &Fixture, run: &str, index: u32, id: &str, output: Value) {
     let mut state = f.runtime.read_run_state(run).unwrap().unwrap();
     state.record_step(index, JobRunState::Success, Some(output.clone()), None);
     state.record_pipeline_output(id, output);

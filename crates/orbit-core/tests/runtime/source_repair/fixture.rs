@@ -67,6 +67,25 @@ impl Fixture {
         fixture
     }
     fn build(timing: &str, agent: bool, number: &str, refs: Vec<ExternalRef>) -> Self {
+        Self::build_with_command(timing, agent, number, refs, "true")
+    }
+    pub(super) fn handoff() -> Self {
+        Self::build_with_command(
+            "before-landing",
+            false,
+            "17",
+            Vec::new(),
+            "test ! -f qa-inventory.txt || test -f qa-fixed.txt",
+        )
+    }
+    fn build_with_command(
+        timing: &str,
+        agent: bool,
+        number: &str,
+        refs: Vec<ExternalRef>,
+        command: &str,
+    ) -> Self {
+        let command = serde_json::to_string(command).unwrap();
         let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let repo = root.path().join("repo");
         let global = root.path().join("global");
@@ -76,7 +95,7 @@ impl Fixture {
             "before-pr" => "before_pr = true",
             _ => "before_pr = false\nbefore_landing = false",
         };
-        std::fs::write(repo.join(".orbit/config.toml"), format!("[crews.fixture]\nprovider = \"codex\"\nmodel = \"fixture-model\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"fixture\"\nrequired_validation_commands = [\"true\"]\n[operation]\nreview_crew = \"fixture\"\n[review]\n{review}\n")).unwrap();
+        std::fs::write(repo.join(".orbit/config.toml"), format!("[crews.fixture]\nprovider = \"codex\"\nmodel = \"fixture-model\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"fixture\"\nrequired_validation_commands = [{command}]\n[operation]\nreview_crew = \"fixture\"\n[review]\n{review}\n")).unwrap();
         git(&repo, &["init", "-q", "-b", "main"]);
         git(&repo, &["config", "user.email", "fixture@example.com"]);
         git(&repo, &["config", "user.name", "Fixture"]);
@@ -121,6 +140,7 @@ impl Fixture {
             "pr_complete",
             "review_gate_settle",
             "candidate_validate",
+            "pr_failure_handoff",
         ] {
             std::fs::copy(
                 Path::new(env!("CARGO_MANIFEST_DIR"))
