@@ -3,8 +3,8 @@ summary: "Agent Families — Decisions"
 type: design
 title: "Agent Families — Decisions"
 owner: grok
-last_updated: 2026-10-06
-last_validated: 2026-10-10
+last_updated: 2026-10-15
+last_validated: 2026-10-15
 status: Draft
 feature: agent-families
 doc_role: decisions
@@ -94,13 +94,13 @@ Planning-duel artifacts and scoreboards compared model strings even though model
 
 ### Decision
 
-Family is identity, model is configuration, and slot is role. The supported CLI-family registry uses exactly `codex`, `claude`, `gemini`, or `grok`; model inference separately recognizes `ollama:` labels for audit attribution, but that does not add an orchestrated CLI family. While planning duels existed, their assignments persisted `family`; `planner_a`, `planner_b`, and `arbiter` were slots used in artifact paths and signatures. The planning-duel surface was later removed. Exact model strings stay in crew config, CLI invocation translation, and resolved-crew run records; the retired `[duel.models]` setting is compatibility-only.
+Family is identity, model is configuration, and slot is role. The supported CLI-family registry uses exactly `codex`, `claude`, `gemini`, or `grok`; model inference recognizes those families and their known model prefixes. Unrecognized model labels do not add an orchestrated CLI family. While planning duels existed, their assignments persisted `family`; `planner_a`, `planner_b`, and `arbiter` were slots used in artifact paths and signatures. The planning-duel surface was later removed. Exact model strings stay in crew config, CLI invocation translation, and resolved-crew run records; the retired `[duel.models]` setting is compatibility-only.
 
 ### Consequences
 
 - Historical planning-duel artifacts used `planning-duel/{slot}.md` and signatures of `*authored by: {family} / {slot}*`; they remain inert in task bundles after the surface's removal.
 - Runtime tool boundaries treat envelope identity as authoritative. Agent-supplied `model` fields are overwritten with the canonical family before persistence/comparison so self-report drift cannot affect validation.
-- Scoreboard and friction projections are family-keyed (`by_family`) when they answer "who actually ran?". Resolved-crew projections remain the source for "who was selected?" because they describe configured routing.
+- The historical agent-family scoreboard and friction projections used family keys (`by_family`) to answer "who actually ran?". The agent-family scoreboard is now retired; dashboard Cost reports managed invocation accounting by task ownership. Resolved-crew projections remain the source for "who was selected?" because they describe configured routing.
 - The legacy resolver and alias-canonicalization surfaces are deleted from production code. `infer_agent_family_from_model` remains for legacy attribution labels and model hints in web projections, scoreboards, friction metrics, workflow commit attribution, and crew resolution.
 - ORB-00079 and ORB-00071 are superseded by this structural identity change.
 - Cost: model granularity is lost from identity comparisons. Two different Gemini model versions (e.g. `pro` vs `flash`) collapse to the same `gemini` identity in family-level scoreboards; distinguishing them requires drilling into resolved-crew run records or invocation records.
@@ -166,6 +166,7 @@ A crew is one provider-model-backend assignment. Every activity role resolves to
 ## Freeze Agent Detection at Init Seeding
 
 **Recorded:** 2026-05-30 20:17:29.805438Z · [ORB-00347]
+**Superseded in part by:** [Remove the planning duel and retain compatibility-only residue](../activity-job/4_decisions.md#remove-the-planning-duel-and-retain-compatibility-only-residue) (the duel-candidate-set portion).
 **Paths:** `crates/orbit-config/src/**`, `crates/orbit-core/src/command/init.rs`, `crates/orbit-cli/src/command/init.rs`, `crates/orbit-config/assets/default-config.toml`
 
 ### Context
@@ -200,7 +201,9 @@ Crew configuration accepts flat `provider`/`model` only; the retired `backend` k
 - A heterogeneous legacy crew now fails loudly at load instead of losing its planner and reviewer assignments behind a log line.
 - System activities that need a model distinct from the run's crew must name a configured crew through an input, making that choice visible in config rather than in engine code.
 - Cost: breaking config change. Any workspace carrying the three-role shape fails to load until rewritten, and shipped activity assets carrying `role:` must be reseeded in the same release.
-- Cost: the planning-duel override carve-out described by the superseded crew decision was removed with the planning-duel path; current activity assets use explicit crew input or the run's resolved crew.
+- Cost: the planning-duel override carve-out described by the superseded crew decision was removed with the planning-duel path.
+
+**Current routing clarification:** Activity inputs can select a named crew with `crew` or a configured pool with `crew_config_key`; without either, they inherit the run's resolved crew. See [automatic crew pools by complexity](../../CONFIG.md#automatic-crew-pools-by-complexity).
 
 ## Task References
 

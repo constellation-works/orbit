@@ -3,8 +3,8 @@ summary: "Auditability — Decisions"
 type: design
 title: "Auditability — Decisions"
 owner: codex
-last_updated: 2026-10-06
-last_validated: 2026-10-10
+last_updated: 2026-10-15
+last_validated: 2026-10-15
 status: Draft
 feature: auditability
 doc_role: decisions
@@ -14,6 +14,8 @@ tags: ["auditability"]
 # Auditability — Decisions
 
 This is the decision log for Auditability. Entries stay in historical order and use title-based links. New entries should use the template in [../CONVENTIONS.md](../CONVENTIONS.md) and cite the task that made the decision real.
+
+Entries preserve the storage layouts and behavior at the time of each decision. The [current implementation](./2_design.md) stores v2 envelopes and retained loop events in SQLite, keeps payload blobs under workspace audit state, and rotates the global process JSONL feeds. Earlier references here to run JSONL files or an unrotated process feed describe historical behavior.
 
 ---
 
@@ -334,6 +336,7 @@ Keep the loop sink available for HTTP agent-loop events and blob writes, but def
 
 ## Automated git commits carry implementer authorship
 
+**Superseded for pipeline commit authors by:** [Workflow alone creates shipment commits while dirty failures remain recoverable](#workflow-alone-creates-shipment-commits-while-dirty-failures-remain-recoverable).
 **Recorded:** 2026-07-26 21:51:41.039598Z · [ORB-10369], [ORB-10458]
 
 ### Context
@@ -354,6 +357,7 @@ Pass a per-commit `--author` derived from `task.implemented_by` for single-imple
 
 ## Workflow git commit identity is process-scoped
 
+**Superseded in part by:** [Workflow alone creates shipment commits while dirty failures remain recoverable](#workflow-alone-creates-shipment-commits-while-dirty-failures-remain-recoverable) (pipeline author selection; the process-scoped identity boundary remains).
 **Recorded:** 2026-07-26 21:51:41.628333Z · [ORB-10369], [ORB-10458]
 
 ### Context
