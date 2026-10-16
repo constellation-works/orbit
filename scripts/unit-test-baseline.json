@@ -401,6 +401,7 @@
         "executor/automation/vcs/tests/delivery_marker.rs::delivery_markers_preserve_valid_inner_candidates_and_marker_grammar",
         "executor/automation/vcs/tests/git.rs::host_git_classifies_failures_in_the_c_locale",
         "executor/automation/vcs/tests/git.rs::quiet_git_failures_keep_exit_status_and_signal_diagnostics",
+        "executor/automation/vcs/tests/git.rs::real_ssh_fetch_starts_under_lock_and_reaps_before_release",
         "executor/automation/vcs/tests/git.rs::stalled_delivery_fetch_releases_the_lock_before_a_waiter_times_out",
         "executor/automation/vcs/tests/remote_probe.rs::branch_lookup_retries_only_supervisor_timeouts_with_a_bounded_budget",
         "executor/automation/vcs/tests/required_command.rs::oversized_stdout_keeps_the_stderr_tail_and_names_the_missing_tool",
