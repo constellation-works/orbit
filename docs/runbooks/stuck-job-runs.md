@@ -470,6 +470,24 @@ repair run through `orbit.workflow.run.resume` with
 Submit that fresh binding with a new `request_key` and a diagnosis of the
 remaining work to authorize another attempt.
 
+After a confirmed source-repair replacement push, publication can wait for PR
+metadata that still names exactly the push receipt's previous head. Each read
+must retain the admitted owner, task scope, PR identity and merge intent, and
+an independent origin branch read must name the candidate, including when
+metadata catches up. Only a successful, matching, leased replacement push from
+this run supplies the previous head; unknown outcomes and foreign heads refuse.
+The bound is three re-reads with five-second waits (15 seconds reserved wait),
+shared across repeated calls in that run. Git/provider operation deadlines
+remain separate. Once a candidate is observed, regression to its previous head
+refuses. Settling performs reads only: it cannot push again or create a PR.
+
+The task history's `source_repair_publication_observed` entries retain waiting
+and converged observations with cumulative `settling` counters, reserved delay,
+independent `remote_branch` evidence and the authenticated push hash. Delay is
+recorded before waiting, so interruption cannot replenish the budget. Original
+pipeline receipts are unchanged. A later exact candidate read can reconcile an
+exhausted wait without repeating the push.
+
 If publication refuses the PR identity after pushing, inspect the task history's
 `source_repair_publication_refused` entries. Each entry retains a versioned JSON
 record with named `mismatches` (`field`, `expected`, `observed`), the admitted

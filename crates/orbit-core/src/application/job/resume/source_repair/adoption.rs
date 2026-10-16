@@ -68,32 +68,9 @@ impl OrbitRuntime {
         {
             return Err(refuse("prior repair admission or run link changed"));
         }
-        // Delivery legitimately appends selectors for changed files. Account
-        // only for this attempt's system-recorded additions in memory; arbitrary
-        // scope edits still change the original digest and no history is edited.
-        let mut original_task = task.clone();
-        for entry in entries.iter().rev().filter(|entry| {
-            entry.by == "system"
-                && entry.at >= admission.authorized_at
-                && entry.event == orbit_types::task::CONTEXT_FILES_WIDENED_EVENT
-        }) {
-            let widening = entry
-                .note
-                .as_deref()
-                .and_then(orbit_types::task::ContextFilesWidening::from_note)
-                .ok_or_else(|| refuse("unreadable host selector widening"))?;
-            if widening.run_id == source.run_id {
-                for selector in widening.selectors {
-                    let index = original_task
-                        .context_files
-                        .iter()
-                        .position(|s| s == &selector)
-                        .ok_or_else(|| refuse("host-widened selector was removed"))?;
-                    original_task.context_files.remove(index);
-                }
-            }
-        }
-        if task_digest(&original_task)? != binding.task_digest {
+        if admitted_task_digest(task, &entries, &source.run_id, admission.authorized_at)?
+            != binding.task_digest
+        {
             return Err(refuse(
                 "task meaning or scope changed since original repair admission",
             ));
@@ -133,4 +110,40 @@ impl OrbitRuntime {
         }
         Ok(admission.binding)
     }
+}
+
+/// Compare the admitted task while accounting only for this run's durable host
+/// additions. The task and the original reservation remain immutable here.
+pub(super) fn admitted_task_digest(
+    task: &Task,
+    entries: &[TaskHistoryEntry],
+    run_id: &str,
+    authorized_at: chrono::DateTime<Utc>,
+) -> Result<String, OrbitError> {
+    // Delivery legitimately appends selectors for changed files. Account
+    // only for this attempt's system-recorded additions in memory; arbitrary
+    // scope edits still change the original digest and no history is edited.
+    let mut original_task = task.clone();
+    for entry in entries.iter().rev().filter(|entry| {
+        entry.by == "system"
+            && entry.at >= authorized_at
+            && entry.event == orbit_types::task::CONTEXT_FILES_WIDENED_EVENT
+    }) {
+        let widening = entry
+            .note
+            .as_deref()
+            .and_then(orbit_types::task::ContextFilesWidening::from_note)
+            .ok_or_else(|| refuse("unreadable host selector widening"))?;
+        if widening.run_id == run_id {
+            for selector in widening.selectors {
+                let index = original_task
+                    .context_files
+                    .iter()
+                    .position(|s| s == &selector)
+                    .ok_or_else(|| refuse("host-widened selector was removed"))?;
+                original_task.context_files.remove(index);
+            }
+        }
+    }
+    task_digest(&original_task)
 }
