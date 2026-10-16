@@ -109,9 +109,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45 # Observed ~12 minutes; allows cold builds and slower test hosts.
     env:
-      # Separate from rust-cache's dependency target/ archive. Each runner gets
-      # a writable local copy; only the explicit trusted save below uploads it.
-      SCCACHE_DIR: ${{ runner.temp }}/orbit-ci-compiler-v1
       SCCACHE_CACHE_SIZE: 2G
       SCCACHE_CLIENT_SIDE: "1"
       SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
@@ -177,6 +174,14 @@ jobs:
         with:
           shared-key: rust-1.98.1
           cache-on-failure: true
+
+      - name: Configure runner-local compiler objects
+        id: compiler-env
+        run: |
+          set -euo pipefail
+          # Job-level env cannot access runner context. Export at runtime
+          # before identity, restore and setup consume this separate archive.
+          printf 'SCCACHE_DIR=%s/orbit-ci-compiler-v1\n' "${RUNNER_TEMP:?}" >> "$GITHUB_ENV"
 
       - name: Identify compiler-object cache
         id: compiler-key

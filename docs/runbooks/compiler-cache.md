@@ -45,6 +45,9 @@ installation is confined to the ephemeral hosted runner. It restores a separate
 2 GiB local LRU limit. The existing `Swatinem/rust-cache` dependency archive and
 its failure-save policy are unchanged. Compiler-object archives contain neither
 source files nor Cargo `target/`, fingerprints, test binaries or installer binaries.
+The job exports `SCCACHE_DIR` through `GITHUB_ENV` from `RUNNER_TEMP` at runtime,
+before computing the identity, restoring objects or setting up the wrapper.
+Runner context is unavailable in job-level `env`.
 
 `actions/cache/restore` has no post-job save. PR runs can modify their restored
 local copy but never upload it. The explicit `actions/cache/save` step runs only
@@ -104,7 +107,8 @@ startup, compression and upload. GitHub's complete job duration, including all
 setup, post actions and cache costs, remains the performance authority.
 
 Run the offline workflow controls with `python3 scripts/test-pr-state-workflows.py`:
-they execute the identity/setup snippets and writer condition, exercising trusted
+they resolve job environment contexts and execute the runtime environment handoff,
+identity/setup snippets and writer condition, exercising trusted
 pushes, PR no-upload, incompatible inputs and setup fallback. Also run the existing
 `scripts/test-compiler-cache.sh` and enabled-cache
 `scripts/test-compiler-cache-namespaces.sh`; the latter must be replayed on the

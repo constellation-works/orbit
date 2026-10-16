@@ -217,10 +217,29 @@ class CompilerCacheWorkflowTests(unittest.TestCase):
         self.bin.mkdir()
         self.env = dict(PATH=f"{self.bin}:{os.environ['PATH']}", HOME=str(self.root / "home"),
                         GITHUB_OUTPUT=str(self.output), GITHUB_ENV=str(self.envfile),
-                        SCCACHE_DIR=str(self.root / "objects"), SCCACHE_CACHE_SIZE=self.job["env"]["SCCACHE_CACHE_SIZE"],
-                        SCCACHE_CLIENT_SIDE=self.job["env"]["SCCACHE_CLIENT_SIDE"],
+                        RUNNER_TEMP=str(self.root / "runner temp"),
                         CARGO_INCREMENTAL=self.document["env"]["CARGO_INCREMENTAL"],
                         COMPILER_CACHE_RESTORE_STARTED="0", RESTORE_OUTCOME="success")
+        # Resolve job env before any runner exists, as Actions does. This
+        # fixture supports property lookups; runner/env/steps are unavailable
+        # at this boundary and must not be silently replaced by fixture data.
+        contexts = {name: {} for name in ("github", "needs", "strategy", "matrix", "vars", "secrets", "inputs")}
+
+        def resolve(match):
+            value = contexts
+            for part in match[1].strip().split("."):
+                value = value[part]
+            return str(value)
+
+        self.env.update({name: re.sub(r"\$\{\{(.*?)\}\}", resolve, str(value))
+                         for name, value in self.job["env"].items()})
+        for step in self.job["steps"]:
+            if step.get("id") == "compiler-key":
+                break
+            if step.get("id") == "compiler-env":
+                self.env.update(self.run_step(step)[1])
+        self.assertIn("SCCACHE_DIR", self.env,
+                      "runtime environment must reach cache identity before restore and setup")
 
     def write(self, name, text, *, executable=False):
         path = self.root / name
@@ -274,7 +293,8 @@ class CompilerCacheWorkflowTests(unittest.TestCase):
         # include source files, Cargo fingerprints, mtimes or executables.
         dependency = self.steps["rust-cache"]
         self.assertNotEqual(dependency["with"]["shared-key"], restore["with"]["key"])
-        self.assertRegex(self.job["env"]["SCCACHE_DIR"], r"^\$\{\{ runner\.temp \}\}/orbit-ci-compiler-v\d+$",
+        self.assertRegex(str(Path(self.env["SCCACHE_DIR"]).relative_to(self.env["RUNNER_TEMP"])),
+                         r"^orbit-ci-compiler-v\d+$",
                          "compiler objects must stay in a versioned runner-local archive apart from Cargo target state")
 
     def test_compatibility_identity_invalidates_inputs_but_not_source_content(self):
