@@ -493,6 +493,18 @@ invalidates it. Do not reconstruct checkpoints, clear the newer run link, or
 restart the replacement. A lost submission reply is reconciled by replaying the
 identical request key and payload.
 
+A stopped, escalated owner publication can also be inspected when its terminal
+hook recorded a blocked-publication receipt. The retained head must be the
+original host candidate or one preservation commit on an authenticated parent.
+A before-PR reviewer correction qualifies only with successful host settlement
+bound to the synchronized implementation and base, plus successful host
+validation of that exact reviewer head and branch before publication. A push
+alone provides no validation. Inspection checks the original PR, branch and
+remote lease; submission requires fresh validation and configured review and
+grants no merge approval. Source receipts stay unchanged. Completion-preservation
+receipts are a distinct contract and cannot substitute for blocked-publication
+evidence; a direct final-recovery requeue suppresses the terminal hook.
+
 An operator source-repair admission authorizes one attempt. Generic resume
 cannot restart that attempt. If a repair publishes a new head on the original
 PR and is then cancelled with its task still in review, inspect the cancelled

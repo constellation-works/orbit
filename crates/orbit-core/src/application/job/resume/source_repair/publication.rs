@@ -3,7 +3,7 @@ use super::*;
 
 /// A host settlement authorizes an advancing reviewer head only after the host
 /// validated that exact head and attributed its changes to the implementation.
-fn reviewed_head<'a>(
+pub(super) fn reviewed_head<'a>(
     job: &JobV2,
     state: &'a PipelineState,
     checkpoint: &impl Fn(&str, &str) -> Result<&'a Value, OrbitError>,
@@ -12,6 +12,11 @@ fn reviewed_head<'a>(
     identity: (&str, &str),
     repo: &std::path::Path,
 ) -> Result<&'a str, OrbitError> {
+    if !exact_sha(implementation) {
+        return Err(refuse(
+            "review implementation is not an exact commit identity",
+        ));
+    }
     let (branch, base) = identity;
     let (settle_id, validate_id, publication_id) = if landing {
         (
@@ -124,9 +129,6 @@ pub(super) fn published_head<'a>(
     repo: &std::path::Path,
 ) -> Result<&'a str, OrbitError> {
     let base = field(sync, "base_sha")?;
-    if !exact_sha(field(sync, "head_sha")?) {
-        return Err(refuse("synchronized head is not an exact commit identity"));
-    }
     let initial = reviewed_head(
         job,
         state,

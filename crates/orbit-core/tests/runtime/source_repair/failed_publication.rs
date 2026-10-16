@@ -1,6 +1,9 @@
 //! Stopped failed publications receive fresh authority through the public tool.
 use super::*;
-use orbit_core::application::task::{FinalRecoveryCompletion, FinalRecoveryRequest};
+use orbit_core::application::task::{
+    FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest,
+};
+use std::path::Path;
 
 fn escalate(f: &Fixture, id: &str) {
     let task = f.runtime.get_task(&f.task).unwrap();
@@ -13,8 +16,9 @@ fn escalate(f: &Fixture, id: &str) {
         completion: FinalRecoveryCompletion::Review,
         requeue_bound: Default::default(),
     };
-    f.runtime.apply_final_recovery(&request, Some(&json!({"decision":"escalate",
+    let outcome = f.runtime.apply_final_recovery(&request, Some(&json!({"decision":"escalate",
         "diagnosis":"publication needs explicit source repair", "human_action":"inspect retained host publication"}))).unwrap();
+    assert!(matches!(outcome, FinalRecoveryOutcome::Escalated { .. }));
 }
 
 fn failed_after_push_gets_fresh_authority_without_replaying_the_attempt() {
@@ -91,7 +95,17 @@ crate::scenario_table!(
 );
 
 fn failure_handoff_fixture() -> (Fixture, String) {
-    let mut f = Fixture::handoff();
+    handoff_fixture(None)
+}
+
+// Some(false) retains the reviewer head; Some(true) preserves one dirty repair
+// on top. None keeps the pre-review validation-failure scenario.
+fn handoff_fixture(reviewer: Option<bool>) -> (Fixture, String) {
+    let mut f = if reviewer.is_some() {
+        Fixture::with_policy("before-pr")
+    } else {
+        Fixture::handoff()
+    };
     std::fs::write(f._root.path().join("bin/gh"), format!(
         "#!/bin/sh\ncase \"$1 $2\" in\n 'pr list') printf '['; cat '{}'; printf ']';;\n 'pr create') echo https://github.com/owner/repository/pull/17;;\n 'pr view') cat '{}';;\n *) exit 99;;\nesac\n",
         f.answer.display(), f.answer.display())).unwrap();
@@ -107,6 +121,15 @@ fn failure_handoff_fixture() -> (Fixture, String) {
         .as_array_mut()
         .unwrap()
         .push(json!({"id":"validate","target":"activity:candidate_validate"}));
+    if reviewer.is_some() {
+        let steps = job["spec"]["steps"].as_array_mut().unwrap();
+        steps.insert(
+            4,
+            json!({"id":"review_gate_settle","target":"activity:review_gate_settle"}),
+        );
+        steps.insert(5, json!({"id":"review_validate","target":"activity:candidate_validate",
+            "default_input":{"ownership_base_sha":"{{ steps.review_gate_settle.output.implementation_head_sha }}"}}));
+    }
     std::fs::write(&definition_path, serde_yaml::to_string(&job).unwrap()).unwrap();
     let mut run = f.runtime.insert_job_run("task_pr_pipeline", 1, Utc::now(),
         Some(json!({"task_ids":[f.task],"base_branch":"main","completion":"review","auto_fix":false})), None).unwrap();
@@ -158,36 +181,87 @@ fn failure_handoff_fixture() -> (Fixture, String) {
     let old_head = git(&checkout, &["rev-parse", "HEAD"]);
     let validation = json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],
         "workspace_path":checkout,"base_sha":setup["base_sha"],"base_ref":setup["base_ref"]});
-    let error = execute_deterministic_action(
-        &f.runtime,
-        "candidate_validate",
-        &json!({}),
-        &validation,
-        false,
-        &HashMap::new(),
-        None,
-    )
-    .unwrap_err();
-    assert!(error.to_string().contains("required validation"), "{error}");
+    let (failed_index, failed_step, activity, error, parent) = if reviewer.is_some() {
+        let parent = settle_and_publish_reviewer(&f, &run.run_id, &checkout, &setup, &validation);
+        let open = json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],
+            "workspace_path":checkout,"head":f.branch,"base":"main",
+            "base_ref":setup["base_ref"],"base_sha":setup["base_sha"],
+            "reviewed_head_sha":parent,"reviewed_base_sha":setup["base_sha"]});
+        // The provider refuses this opening attempt; the terminal hook runs
+        // after connectivity recovers and produces the real blocked receipt.
+        let gh = f._root.path().join("bin/gh");
+        let healthy = std::fs::read_to_string(&gh).unwrap();
+        std::fs::write(
+            &gh,
+            healthy.replace(
+                "echo https://github.com/owner/repository/pull/17",
+                "echo 'provider unavailable' >&2; exit 1",
+            ),
+        )
+        .unwrap();
+        let error = execute_deterministic_action(
+            &f.runtime,
+            "pr_open",
+            &json!({}),
+            &open,
+            false,
+            &HashMap::new(),
+            None,
+        )
+        .unwrap_err();
+        std::fs::write(&gh, healthy).unwrap();
+        (7, "pr_open", "pr_open", error, parent)
+    } else {
+        let error = execute_deterministic_action(
+            &f.runtime,
+            "candidate_validate",
+            &json!({}),
+            &validation,
+            false,
+            &HashMap::new(),
+            None,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("required validation"), "{error}");
+        (8, "validate", "candidate_validate", error, old_head.clone())
+    };
     let mut state = f.runtime.read_run_state(&run.run_id).unwrap().unwrap();
-    state.record_step(8, JobRunState::Failed, None, Some(json!(error.to_string())));
+    state.record_step(
+        failed_index,
+        JobRunState::Failed,
+        None,
+        Some(json!(error.to_string())),
+    );
     f.runtime.write_run_state(&run.run_id, &state).unwrap();
-    // Recovery repaired the inventory after that failed check. The hook commits
-    // the repair, so the original validation head must never be selected.
-    std::fs::write(
-        checkout.join("qa-fixed.txt"),
-        "retained QA inventory repair\n",
-    )
-    .unwrap();
-    let handoff = f.action("pr_failure_handoff", json!({"run_id":run.run_id,"failed_step_id":"validate",
-        "activity_name":"candidate_validate","error_code":"execution","error_message":error.to_string(),
-        "job_input":run.input,"pipeline":state.pipeline}));
+    f.source = run.clone();
+    // Escalated permits the real terminal hook; direct Requeued suppresses it.
+    escalate(&f, &run.run_id);
+    if reviewer != Some(false) {
+        std::fs::write(
+            checkout.join("qa-fixed.txt"),
+            "retained QA inventory repair\n",
+        )
+        .unwrap();
+    }
+    let handoff = f.action(
+        "pr_failure_handoff",
+        json!({"run_id":run.run_id,"failed_step_id":failed_step,
+        "activity_name":activity,"error_code":"execution","error_message":error.to_string(),
+        "job_input":run.input,"pipeline":state.pipeline}),
+    );
     assert_eq!(handoff["decision"], "blocked_failure_pr");
-    assert_eq!(handoff["preservation_commit_created"], true);
-    assert_ne!(handoff["head_sha"], old_head);
+    assert_eq!(
+        handoff["preservation_commit_created"],
+        reviewer != Some(false)
+    );
+    if reviewer == Some(false) {
+        assert_eq!(handoff["head_sha"], parent);
+    } else {
+        assert_eq!(git(&checkout, &["rev-parse", "HEAD^"]), parent);
+    }
     state.record_failure_activity(
         "pr_failure_handoff".into(),
-        "validate".into(),
+        failed_step.into(),
         handoff.clone(),
     );
     f.runtime.write_run_state(&run.run_id, &state).unwrap();
@@ -196,18 +270,18 @@ fn failure_handoff_fixture() -> (Fixture, String) {
     answer["headRefName"] = json!(f.branch);
     answer["headRefOid"] = json!(f.head);
     std::fs::write(&f.answer, answer.to_string()).unwrap();
+    run = f.runtime.show_job_run_observed(&run.run_id).unwrap();
     run.state = JobRunState::Failed;
     run.pid = None;
     run.finished_at = Some(Utc::now());
     published_owner::save_run(&f, &run);
     f.source = run;
     f.state = state;
-    escalate(&f, &f.source.run_id);
     // Reconstruct from durable objects and remote identity, with no retained
     // worktree or branch. Git removes only this disposable fixture's worktree.
     git(&f.repo, &["worktree", "remove", checkout.to_str().unwrap()]);
     git(&f.repo, &["branch", "-D", &f.branch]);
-    (f, old_head)
+    (f, parent)
 }
 
 fn failure_handoff_reconstructs_the_exact_repair_and_requires_fresh_gates() {
@@ -531,3 +605,337 @@ fn handoff_refusals_require_the_exact_durable_publication() {
     );
     refused_without_writes(&f, &f.source.run_id, &binding, "remote lease drift");
 }
+
+fn settle_and_publish_reviewer(
+    f: &Fixture,
+    id: &str,
+    checkout: &Path,
+    setup: &Value,
+    validation: &Value,
+) -> String {
+    use orbit_types::workflow::{
+        REVIEW_CONTRACT_VERSION, REVIEW_REPORT_ARTIFACT, ReviewAdmission, ReviewTiming,
+    };
+    let prepared = f.action(
+        "pr_prepare",
+        json!({"job_run_id":id,"completed_task_ids":[f.task],"workspace_path":checkout,
+        "head":f.branch,"base":"main","base_ref":setup["base_ref"]}),
+    );
+    published_owner::checkpoint(f, id, 2, "prepare_branch", prepared.clone());
+    let mut sync_input = prepared.clone();
+    sync_input["job_run_id"] = json!(id);
+    sync_input["workspace_path"] = json!(checkout);
+    sync_input["completed_task_ids"] = json!([f.task]);
+    sync_input["preparation"] = prepared;
+    let sync = f.action("git_rebase", sync_input);
+    published_owner::checkpoint(f, id, 3, "sync_base", sync.clone());
+    let implementation = sync["head_sha"].clone();
+    let mut run = f.runtime.show_job_run_observed(id).unwrap();
+    let policy = f.runtime.operation_policy();
+    run.input.as_mut().unwrap()["review"] = json!(ReviewAdmission {
+        contract_version: REVIEW_CONTRACT_VERSION,
+        policy_version: policy.version,
+        timing: ReviewTiming::BeforePr,
+        timing_source: policy.review_before_pr.source.label().into(),
+        crew: policy.review_crew.value.first().cloned(),
+        crew_pool: Vec::new(),
+        crew_source: policy.review_crew.source.label().into(),
+        budget: policy.review_budget(),
+        required_validation_commands: Some(
+            f.runtime.workflow_required_validation_commands().to_vec()
+        ),
+        baseline_commands: f.runtime.review_baseline_commands().to_vec(),
+        host_evidence: policy.review_host_evidence.value.clone(),
+        captured_at: Utc::now(),
+    });
+    published_owner::save_run(f, &run);
+    let mut gate = validation.clone();
+    gate["base"] = json!("main");
+    gate["base_sync"] = json!("remote");
+    gate["mode"] = json!("pr");
+    let admission = f.action("review_gate_admit", gate.clone());
+    assert_eq!(admission["applies"], true);
+    std::fs::write(checkout.join("review.txt"), "reviewer correction\n").unwrap();
+    let report = json!({"schema_version":REVIEW_CONTRACT_VERSION,"attempt_id":admission["attempt_id"],
+        "verdict":"accept_with_fixes","summary":"Correct the inventory note",
+        "findings":[{"id":"F1","severity":"medium","summary":"Missing correction",
+        "paths":["review.txt"],"disposition":"repaired","change":"Added correction"}],
+        "validation":[{"id":"V1","command":"true","outcome":"passed","role":"required"}],"escalation":null});
+    let path = f.repo.join(".orbit/tmp/reviewer-report.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, report.to_string()).unwrap();
+    f.runtime
+        .run_tool(
+            "orbit.task.artifact.put",
+            json!({"id":f.task,"model":"codex",
+        "path":REVIEW_REPORT_ARTIFACT,"source_path":path}),
+        )
+        .unwrap();
+    gate["admission"] = admission;
+    let settled = f.action("review_gate_settle", gate);
+    assert_eq!(settled["gate"], "passed");
+    assert_eq!(settled["reviewer_fixed"], true);
+    assert_eq!(settled["implementation_head_sha"], implementation);
+    published_owner::checkpoint(f, id, 4, "review_gate_settle", settled.clone());
+    let mut input = validation.clone();
+    input["ownership_base_sha"] = implementation;
+    let validated = f.action("candidate_validate", input);
+    assert_eq!(validated["tested_head"], settled["reviewed_head_sha"]);
+    published_owner::checkpoint(f, id, 5, "review_validate", validated);
+    let pushed = f.action(
+        "git_push",
+        json!({"job_run_id":id,"workspace_path":checkout,
+        "branch":f.branch,"base":"main","base_ref":setup["base_ref"]}),
+    );
+    assert_eq!(pushed["local_sha"], settled["reviewed_head_sha"]);
+    published_owner::checkpoint(f, id, 6, "push", pushed);
+    settled["reviewed_head_sha"].as_str().unwrap().into()
+}
+
+fn validated_reviewer_handoffs_keep_identity_and_require_fresh_gates() {
+    for preservation in [false, true] {
+        let (f, reviewed) = handoff_fixture(Some(preservation));
+        let before =
+            serde_json::to_value(f.runtime.read_run_state(&f.source.run_id).unwrap()).unwrap();
+        let binding = f.inspect();
+        assert_eq!(binding["head_sha"], f.head);
+        assert_eq!(binding["branch"], f.branch);
+        assert_eq!(binding["pull_request"], "17");
+        if !preservation {
+            assert_eq!(f.head, reviewed);
+        }
+        let result = f
+            .runtime
+            .run_tool_as_human("orbit.workflow.run.resume", f.submit(binding))
+            .unwrap();
+        let id = result["run_id"].as_str().unwrap();
+        f.wait(id);
+        let run = f.runtime.show_job_run_observed(id).unwrap();
+        assert_eq!(run.input.as_ref().unwrap()["completion"], "review");
+        assert_eq!(run.input.as_ref().unwrap()["auto_fix"], false);
+        f.start_actions(id);
+        let setup = f.action(
+            "worktree_setup",
+            json!({"job_run_id":id,"run_id":id,
+            "task_ids":[f.task],"base":"main","base_sync":"remote"}),
+        );
+        let checkout = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+        let resumed = f.action(
+            "candidate_resume",
+            json!({"job_run_id":id,"task_ids":[f.task],
+            "workspace_path":checkout,"base_sha":setup["base_sha"]}),
+        );
+        assert_eq!(resumed["source_sha"], f.head);
+        assert_eq!(resumed["reused_head_sha"], f.head);
+        assert_eq!(resumed["implement"], true);
+        assert_eq!(resumed["reused_branch"], f.branch);
+        assert_eq!(resumed["prior_pull_request"], "17");
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("review.txt")).unwrap(),
+            "reviewer correction\n"
+        );
+        assert_eq!(checkout.join("qa-fixed.txt").exists(), preservation);
+        let state = f.runtime.read_run_state(id).unwrap().unwrap();
+        for step in ["review_gate_settle", "review_validate", "push", "pr_open"] {
+            assert!(
+                state.pipeline.get(step).is_none_or(Value::is_null),
+                "fresh attempt reused {step}"
+            );
+        }
+        f.action(
+            "git_commit",
+            json!({"job_run_id":id,"scope":"all","workspace_path":checkout,
+            "base_sha":setup["base_sha"],"base_ref":setup["base_ref"]}),
+        );
+        let validated = f.action(
+            "candidate_validate",
+            json!({"job_run_id":id,"completed_task_ids":[f.task],
+            "workspace_path":checkout,"base_sha":setup["base_sha"],"base_ref":setup["base_ref"]}),
+        );
+        assert_eq!(validated["decision"], "passed");
+        let admitted = f.action("review_gate_admit", json!({"job_run_id":id,"completed_task_ids":[f.task],
+            "workspace_path":checkout,"base":"main","base_sync":"remote","mode":"pr","base_sha":setup["base_sha"]}));
+        assert_eq!(admitted["applies"], true, "fresh review is required");
+        assert_eq!(
+            f.runtime.get_task(&f.task).unwrap().github_pr_number(),
+            Some("17")
+        );
+        assert_eq!(
+            serde_json::to_value(f.runtime.read_run_state(&f.source.run_id).unwrap()).unwrap(),
+            before
+        );
+    }
+}
+
+crate::scenario_table!(
+    validated_reviewer_handoff_scenarios,
+    validated_reviewer_handoffs_keep_identity_and_require_fresh_gates
+);
+
+fn reviewer_handoffs_refuse_unproven_transitions_without_writes() {
+    let (f, reviewed) = handoff_fixture(Some(true));
+    let binding = f.inspect();
+    let original = f.state.clone();
+    for case in [
+        "missing_settlement",
+        "failed_settlement",
+        "copied_settlement",
+        "settlement_head",
+        "settlement_base",
+        "settlement_implementation",
+        "settlement_fixed",
+        "settlement_verdict",
+        "missing_validation",
+        "failed_validation",
+        "copied_validation",
+        "validation_head",
+        "validation_branch",
+        "validation_decision",
+    ] {
+        let mut state = original.clone();
+        let (id, index) = if case.contains("settlement") {
+            ("review_gate_settle", 4)
+        } else {
+            ("review_validate", 5)
+        };
+        match case {
+            "missing_settlement" | "missing_validation" => {
+                state.pipeline.as_object_mut().unwrap().remove(id);
+            }
+            "failed_settlement" | "failed_validation" => {
+                state.step_states.insert(index, JobRunState::Failed);
+            }
+            "copied_settlement" | "copied_validation" => {
+                state.step_outputs.insert(index, json!({}));
+            }
+            _ => {
+                let (field, value) = match case {
+                    "settlement_head" => ("reviewed_head_sha", json!(f.base)),
+                    "settlement_base" => ("reviewed_base_sha", json!(reviewed)),
+                    "settlement_implementation" => ("implementation_head_sha", json!(reviewed)),
+                    "settlement_fixed" => ("reviewer_fixed", json!(false)),
+                    "settlement_verdict" => ("gate", json!("incomplete")),
+                    "validation_head" => (
+                        "tested_head",
+                        original.pipeline["sync_base"]["head_sha"].clone(),
+                    ),
+                    "validation_branch" => ("branch", json!("other")),
+                    "validation_decision" => ("decision", json!("failed")),
+                    _ => unreachable!(),
+                };
+                state.pipeline[id][field] = value;
+                state.step_outputs.insert(index, state.pipeline[id].clone());
+            }
+        }
+        f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+        refused_without_writes(&f, &f.source.run_id, &binding, case);
+    }
+    f.runtime
+        .write_run_state(&f.source.run_id, &original)
+        .unwrap();
+    let path = f
+        ._root
+        .path()
+        .join("global/resources/jobs/task_pr_pipeline.yaml");
+    let clean_job = std::fs::read_to_string(&path).unwrap();
+    for case in [
+        "ownership_binding",
+        "host_action",
+        "review_order",
+        "implementation_identity",
+    ] {
+        let mut job: Value = serde_yaml::from_str(&clean_job).unwrap();
+        let steps = job["spec"]["steps"].as_array_mut().unwrap();
+        let mut state = original.clone();
+        match case {
+            "ownership_binding" => steps[5]["default_input"]["ownership_base_sha"] = json!("HEAD"),
+            "host_action" => steps[4]["target"] = json!("activity:git_commit"),
+            "implementation_identity" => {
+                let symbolic = format!(
+                    "{}^{{commit}}",
+                    original.pipeline["sync_base"]["head_sha"].as_str().unwrap()
+                );
+                state.pipeline["sync_base"]["head_sha"] = json!(symbolic);
+                state.pipeline["sync_base"]["rewritten"] = json!(true);
+                state.pipeline["review_gate_settle"]["implementation_head_sha"] = json!(symbolic);
+                state
+                    .step_outputs
+                    .insert(3, state.pipeline["sync_base"].clone());
+                state
+                    .step_outputs
+                    .insert(4, state.pipeline["review_gate_settle"].clone());
+            }
+            "review_order" => {
+                steps.swap(4, 5);
+                state
+                    .step_outputs
+                    .insert(4, original.pipeline["review_validate"].clone());
+                state
+                    .step_outputs
+                    .insert(5, original.pipeline["review_gate_settle"].clone());
+            }
+            _ => unreachable!(),
+        }
+        std::fs::write(&path, serde_yaml::to_string(&job).unwrap()).unwrap();
+        f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+        refused_without_writes(&f, &f.source.run_id, &binding, case);
+    }
+    std::fs::write(&path, clean_job).unwrap();
+    f.runtime
+        .write_run_state(&f.source.run_id, &original)
+        .unwrap();
+    provider_refusals(&f, &f.source.run_id, &binding);
+
+    // Two extra commits cannot masquerade as the hook's single preservation
+    // child, even with a matching remote head and internally consistent receipt.
+    git(&f.repo, &["checkout", "-qb", &f.branch, &f.head]);
+    std::fs::write(f.repo.join("unproven.txt"), "unproven descendant\n").unwrap();
+    git(&f.repo, &["add", "unproven.txt"]);
+    git(&f.repo, &["commit", "-qm", "unproven descendant"]);
+    let descendant = git(&f.repo, &["rev-parse", "HEAD"]);
+    git(&f.repo, &["push", "-q", "origin", &f.branch]);
+    let mut state = original.clone();
+    let output = &mut state.failure_activity_checkpoint.as_mut().unwrap().output;
+    output["head_sha"] = json!(descendant);
+    output["push"]["local_sha"] = json!(descendant);
+    let mut answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
+    answer["headRefOid"] = json!(descendant);
+    std::fs::write(&f.answer, answer.to_string()).unwrap();
+    f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+    refused_without_writes(&f, &f.source.run_id, &binding, "arbitrary descendant");
+}
+
+fn escalated_completion_receipt_is_not_a_blocked_publication_receipt() {
+    let mut f = Fixture::new();
+    let binding = f.inspect();
+    let checkout = published_owner::publication(&mut f);
+    escalate(&f, &f.source.run_id);
+    let output = f.action("pr_failure_handoff", json!({"run_id":f.source.run_id,
+        "failed_step_id":"complete_pr","activity_name":"pr_complete","error_code":"execution",
+        "error_message":"completion observation failed","job_input":f.source.input,"pipeline":f.state.pipeline}));
+    assert_eq!(output["decision"], "review_completion_failure");
+    assert_eq!(output["candidate_preserved"], true);
+    assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), f.head);
+    let mut state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    state.record_step(
+        7,
+        JobRunState::Failed,
+        None,
+        Some(json!("completion observation failed")),
+    );
+    state.record_failure_activity("pr_failure_handoff".into(), "complete_pr".into(), output);
+    f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+    f.source.state = JobRunState::Failed;
+    f.source.pid = None;
+    f.source.finished_at = Some(Utc::now());
+    published_owner::save_run(&f, &f.source);
+    // A real completion-preservation receipt has a distinct contract. It is
+    // retained, never rewritten into a blocked-publication receipt for admission.
+    refused_without_writes(&f, &f.source.run_id, &binding, "completion receipt variant");
+}
+
+crate::scenario_table!(
+    reviewer_handoff_refusal_scenarios,
+    reviewer_handoffs_refuse_unproven_transitions_without_writes,
+    escalated_completion_receipt_is_not_a_blocked_publication_receipt
+);
