@@ -53,6 +53,48 @@ run_phase() {
   return "$status"
 }
 
+export GIT_OPTIONAL_LOCKS=0
+
+run_self_tests=true
+if [[ "$fast" == true ]]; then
+  # Match ci-test-affected's delivery-base override and merge-base fallback.
+  base=""
+  if [[ -n "${CI_TEST_BASE:-}" ]]; then
+    base="$(git rev-parse --verify "${CI_TEST_BASE}^{commit}" 2>/dev/null || true)"
+  else
+    for branch in refs/remotes/origin/agent-main refs/heads/agent-main; do
+      if git rev-parse --verify --quiet "$branch" >/dev/null; then
+        base="$(git merge-base HEAD "$branch" 2>/dev/null || true)"
+        break
+      fi
+    done
+  fi
+  # Include committed, staged, unstaged, deleted and non-ignored untracked
+  # inputs, including both sides of moves. A failed query runs every test.
+  if [[ -n "$base" ]] &&
+    git diff --name-only --no-renames -z "$base" -- >"$guard_logs/paths" &&
+    git ls-files --others --exclude-standard -z >>"$guard_logs/paths"; then
+    run_self_tests=false
+    while IFS= read -r -d '' path; do
+      case "$path" in
+        scripts/* | .github/* | Makefile | .cargo/* | Cargo.toml | Cargo.lock | \
+          install.sh | RELEASING.md | plugin/* | npm/* | .agents/* | .claude-plugin/*)
+          run_self_tests=true
+          break
+          ;;
+      esac
+    done <"$guard_logs/paths"
+  else
+    echo "ci-guardrails: cannot resolve changed inputs; running all self-tests" >&2
+  fi
+fi
+
+# Selection must precede Cargo and repository guards: these mandatory fixtures
+# import yaml even though the standalone local workflow linter can warn/skip.
+if [[ "$run_self_tests" == true ]]; then
+  "$repo_root/scripts/require-python.sh" --yaml
+fi
+
 # --fast runs formatting and script guardrails, never the Rust test suite.
 # `make ci-test-affected` supplies the separate pre-handoff test gate.
 run_phase fmt cargo fmt --all -- --check
@@ -90,41 +132,6 @@ fi
 # Keep all runtime output within the checkout, including on macOS. Separate
 # streams prevent interleaved diagnostics while guards execute concurrently.
 guards_started=$SECONDS
-export GIT_OPTIONAL_LOCKS=0
-
-run_self_tests=true
-if [[ "$fast" == true ]]; then
-  # Match ci-test-affected's delivery-base override and merge-base fallback.
-  base=""
-  if [[ -n "${CI_TEST_BASE:-}" ]]; then
-    base="$(git rev-parse --verify "${CI_TEST_BASE}^{commit}" 2>/dev/null || true)"
-  else
-    for branch in refs/remotes/origin/agent-main refs/heads/agent-main; do
-      if git rev-parse --verify --quiet "$branch" >/dev/null; then
-        base="$(git merge-base HEAD "$branch" 2>/dev/null || true)"
-        break
-      fi
-    done
-  fi
-  # Include committed, staged, unstaged, deleted and non-ignored untracked
-  # inputs, including both sides of moves. A failed query runs every test.
-  if [[ -n "$base" ]] &&
-    git diff --name-only --no-renames -z "$base" -- >"$guard_logs/paths" &&
-    git ls-files --others --exclude-standard -z >>"$guard_logs/paths"; then
-    run_self_tests=false
-    while IFS= read -r -d '' path; do
-      case "$path" in
-        scripts/* | .github/* | Makefile | .cargo/* | Cargo.toml | Cargo.lock | \
-          install.sh | RELEASING.md | plugin/* | npm/* | .agents/* | .claude-plugin/*)
-          run_self_tests=true
-          break
-          ;;
-      esac
-    done <"$guard_logs/paths"
-  else
-    echo "ci-guardrails: cannot resolve changed inputs; running all self-tests" >&2
-  fi
-fi
 
 pids=()
 names=()
