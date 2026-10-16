@@ -12,6 +12,7 @@ pub mod handoff;
 mod host_evidence;
 mod job;
 mod pr_auto_fix;
+mod pr_completion;
 mod reconciliation;
 mod review;
 mod review_evidence;
@@ -82,6 +83,9 @@ pub use pr_auto_fix::{
     PR_AUTO_FIX_CREWS_KEY, PR_AUTO_FIX_PUSHED_EVENT, PrAutoFixAttempt, PrAutoFixBlocker,
     PrAutoFixClaim, PrAutoFixDecision, PrAutoFixPush, decide_pr_auto_fix,
     is_pr_auto_fix_check_repair, pr_auto_fix_attempts, pr_auto_fix_pushes,
+};
+pub use pr_completion::{
+    PR_COMPLETION_MUTATION_STARTED_EVENT, pr_completion_has_mutation_provenance,
 };
 pub use reconciliation::{
     BaselineDisposition, BaselineRemediationCheck, REVIEW_RECONCILIATION_ADMISSION_KEY,

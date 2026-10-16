@@ -443,9 +443,18 @@ known-red result or damaged receipt grants no reuse. A configured review must
 have an unchanged successful settlement and matching host certificate.
 
 This continuation is limited to a failed observation before any merge, automatic
-merge, rebase or repair mutation, with automatic source repair disabled. Current
-hosted checks, merge policy, PR identity and merge state are read again by ordinary
-completion. Unknown mutation replies retain the existing reconciliation path;
+merge, rebase or repair mutation. Enabling automatic source repair does not
+exclude an otherwise unchanged original publication. The host checks the existing
+repair admissions/publications, source-repair, infrastructure and base-update
+reservations, including pending or unreadable records. Any such task history
+refuses this narrow continuation, even if the tree or head is unchanged. Merge,
+auto-merge and local rebase attempts record write-ahead mutation provenance;
+unknown replies keep it. Retry descendants and prior recovery checkpoints also
+require governed recovery. Native policy captures from before this provenance
+contract cannot authorize reuse.
+
+Current hosted checks, merge policy, PR identity and merge state are read again
+by ordinary completion. Unknown mutation replies retain the existing reconciliation path;
 they are not classified as read-only failures. The original completion deadline
 and final-recovery charge survive retries and checkpoint resumes.
 

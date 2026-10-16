@@ -31,7 +31,8 @@ impl OrbitRuntime {
         // Only the digest leaves the host. Environment values may contain secrets.
         let environment = self.validation_subprocess_environment();
         digest(&json!({
-            "schema_version": 1, "run_id": run_id, "input": run.input,
+            // Older captures predate write-ahead completion mutation provenance.
+            "schema_version": 2, "run_id": run_id, "input": run.input,
             "tasks": task_ids, "meanings": meanings,
             "definition": self.source_repair_definition(&run)?,
             "gates": self.host_validation_gates().gates,
@@ -58,18 +59,28 @@ impl OrbitRuntime {
         if source.state != JobRunState::Running
             || source.pid != Some(std::process::id())
             || source.finished_at.is_some()
+            || source.retry_source_run_id.is_some()
             || task.job_run_id.as_deref() != Some(run_id)
             || task.status != TaskStatus::Review
             || source
                 .input
                 .as_ref()
-                .is_none_or(|i| i["completion"] != "done" || i["auto_fix"] == true)
+                .is_none_or(|i| i["completion"] != "done" || i.get(SOURCE_REPAIR_KEY).is_some())
         {
             return Err(refuse("completion no longer belongs to this active owner"));
         }
         let state = self
             .read_run_state(run_id)?
             .ok_or_else(|| refuse("completion state missing"))?;
+        if orbit_types::workflow::pr_completion_has_mutation_provenance(
+            &self.get_task_history(task_id)?,
+        ) || !state.rebase_recovery_checkpoints.is_empty()
+            || state.failure_activity_checkpoint.is_some()
+        {
+            return Err(refuse(
+                "repair or mutation provenance requires governed candidate recovery",
+            ));
+        }
         let job = self.source_repair_definition(&source)?;
         let index = job
             .steps
