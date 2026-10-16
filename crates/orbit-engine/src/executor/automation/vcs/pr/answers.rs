@@ -64,6 +64,12 @@ pub struct PullRequestStatus {
 }
 
 impl PullRequestStatus {
+    /// Explicit provider evidence that neither merge commit nor merge time exists.
+    /// Missing metadata cannot authenticate an unchanged open publication.
+    pub fn merge_absence_confirmed(&self) -> bool {
+        self.merge_commit_absent && self.merged_at_absent
+    }
+
     /// Parse a `pr.status` response. A response without `pull_request`
     /// reads as a pull request that reported nothing.
     pub fn from_status_response(response: &Value) -> Self {

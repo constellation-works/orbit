@@ -16,6 +16,8 @@ mod failed_publication;
 #[path = "source_repair/fixture.rs"]
 mod fixture;
 use fixture::{Fixture, git};
+#[path = "source_repair/completion.rs"]
+mod completion;
 #[path = "source_repair/generations.rs"]
 mod generations;
 #[path = "source_repair/publication.rs"]
@@ -26,6 +28,14 @@ mod published_owner;
 mod replay;
 #[path = "source_repair/reviewers.rs"]
 mod reviewers;
+use completion::{
+    changed_base_gets_fresh_native_validation, completion_reuse_refuses_drift,
+    concurrent_and_lost_admission_keep_one_completion_budget,
+    configured_review_requires_unchanged_host_certificate,
+    refused_receipts_stop_before_agent_or_republication,
+    unchanged_publication_retries_only_completion,
+    unknown_merge_reply_is_reconciled_without_republication,
+};
 use generations::cancelled_published_repair_accepts_fresh_generation;
 use published_owner::{
     failed_requeued_direct_publisher_retains_authority_and_drift_refusals,
@@ -814,4 +824,15 @@ crate::scenario_table!(
     scope_and_cancellation_are_rechecked_before_source_effects,
     model_context_and_forged_run_inputs_cannot_grant_repair_authority,
     lost_spawn_reply_reconciles_the_reserved_run_after_older_retries
+);
+
+crate::scenario_table!(
+    published_completion_scenarios,
+    unchanged_publication_retries_only_completion,
+    completion_reuse_refuses_drift,
+    changed_base_gets_fresh_native_validation,
+    concurrent_and_lost_admission_keep_one_completion_budget,
+    unknown_merge_reply_is_reconciled_without_republication,
+    configured_review_requires_unchanged_host_certificate,
+    refused_receipts_stop_before_agent_or_republication
 );

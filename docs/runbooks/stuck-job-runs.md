@@ -426,6 +426,37 @@ definition snapshot needs its job in the catalog (`orbit job list --all`). Refer
 activities still resolve through the current activity catalog.
 A run with no successful checkpoints degrades to a full replay.
 
+## An unchanged published completion observation
+
+A transient read-only completion lookup can spend the run's one final-recovery
+attempt by retrying completion in the same worker. It keeps the published commit
+SHA, PR and successful checkpoints; it does not reimplement, recommit or repush the
+candidate, or restart hosted CI. Final recovery must be enabled for the run.
+
+The host first authenticates the successful commit, preparation, synchronization,
+push and PR chain, exact clean checkout, current task ownership, remote branch
+lease and unchanged remote base. Native validation must have captured the same
+task meaning, command list, resolved job, effective validation environment and
+review policy. Every command needs its complete successful host-written log and
+matching artifact hash. A missing capture, empty command list, deferred result,
+known-red result or damaged receipt grants no reuse. A configured review must
+have an unchanged successful settlement and matching host certificate.
+
+This continuation is limited to a failed observation before any merge, automatic
+merge, rebase or repair mutation, with automatic source repair disabled. Current
+hosted checks, merge policy, PR identity and merge state are read again by ordinary
+completion. Unknown mutation replies retain the existing reconciliation path;
+they are not classified as read-only failures. The original completion deadline
+and final-recovery charge survive retries and checkpoint resumes.
+
+Changed task meaning, policy, base, candidate, review repairs, publication,
+ownership or lease refuses reuse and preserves the publication for explicit
+governed source repair. The agent cannot override that refusal by requesting the
+same stale prefix. A stopped or foreign execution cannot acquire an active
+worker's continuation
+through this check. No successful receipt is rewritten and no replacement PR is
+created by the continuation.
+
 ## A cancelled published source repair
 
 A transient completion-observation failure can requeue an owner-local task

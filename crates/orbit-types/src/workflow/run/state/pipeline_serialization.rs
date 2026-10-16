@@ -60,6 +60,7 @@ impl Serialize for PipelineState {
             failure_activity_checkpoint: &self.failure_activity_checkpoint => self.failure_activity_checkpoint.is_none(),
             rebase_recovery_checkpoints: &self.rebase_recovery_checkpoints => self.rebase_recovery_checkpoints.is_empty(),
             activity_crew_draws: &self.activity_crew_draws => self.activity_crew_draws.is_empty(),
+            completion_deadlines: &self.completion_deadlines => self.completion_deadlines.is_empty(),
             final_recovery: &self.final_recovery => self.final_recovery.is_none(),
             forge_hold: &self.pull_drain.forge_hold => self.pull_drain.forge_hold.is_none(),
             forge_hold_expired_at: &self.pull_drain.forge_hold_expired_at => self.pull_drain.forge_hold_expired_at.is_none(),

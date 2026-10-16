@@ -897,6 +897,42 @@ impl RuntimeHost for OrbitRuntime {
         self.admit_run_final_recovery(run_id, request)
     }
 
+    fn completion_deadline(
+        &self,
+        run_id: &str,
+        pull_request: &str,
+        proposed: u64,
+    ) -> Result<u64, OrbitError> {
+        let mut deadline = proposed;
+        self.stores()
+            .jobs()
+            .update_run_state(run_id, &mut |_, state| {
+                deadline = *state
+                    .completion_deadlines
+                    .entry(pull_request.into())
+                    .or_insert(proposed);
+                Ok(())
+            })?;
+        Ok(deadline)
+    }
+
+    fn completion_policy_digest(
+        &self,
+        run_id: &str,
+        task_ids: &[String],
+    ) -> Result<Option<String>, OrbitError> {
+        self.published_completion_policy(run_id, task_ids)
+    }
+
+    fn authenticate_completion_tail(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        step_id: &str,
+    ) -> Result<bool, OrbitError> {
+        self.authenticate_published_completion(run_id, task_id, step_id)
+    }
+
     fn apply_final_recovery(
         &self,
         run_id: &str,

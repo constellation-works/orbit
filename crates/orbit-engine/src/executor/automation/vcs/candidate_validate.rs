@@ -151,6 +151,11 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
     }
     require_clean_checkout(&workspace_path, &branch, &candidate, "the candidate")?;
 
+    // Capturing optional reuse evidence must not change ordinary validation.
+    let completion_policy = host
+        .completion_policy_digest(&run_id, &task_ids)
+        .ok()
+        .flatten();
     let mut logs = Vec::new();
     let mut passed = Vec::new();
     let mut known_red = Vec::new();
@@ -346,9 +351,19 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
         passed.push(run.command);
     }
 
+    // A policy or mandate changed while commands ran cannot confer reusable evidence.
+    let completion_policy = completion_policy.filter(|before| {
+        host.completion_policy_digest(&run_id, &task_ids)
+            .ok()
+            .flatten()
+            .as_ref()
+            == Some(before)
+    });
     let references = attach_logs(host, &task_ids, &run_id, &logs)?;
     let mut output = json!({
         "phase": "validate",
+        "base_sha": base_sha,
+        "completion_policy": completion_policy,
         "decision": if !known_red.is_empty() { "passed_with_known_red" } else if !flaky.is_empty() { "passed_with_flaky_tests" } else { "passed" },
         "commands": passed,
         "known_red": known_red,

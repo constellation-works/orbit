@@ -716,6 +716,38 @@ pub trait RuntimeHost: Send + Sync {
         request: &FinalRecoveryAdmissionRequest,
     ) -> Result<FinalRecoveryAdmission, OrbitError>;
 
+    /// Keep one absolute completion budget across retries of a persisted run.
+    /// An unpersisted host uses the current invocation's deadline.
+    fn completion_deadline(
+        &self,
+        _run_id: &str,
+        _pull_request: &str,
+        proposed: u64,
+    ) -> Result<u64, OrbitError> {
+        Ok(proposed)
+    }
+
+    /// Bind native validation to task meaning and the effective completion policy.
+    /// Hosts without this evidence never reuse a published completion prefix.
+    fn completion_policy_digest(
+        &self,
+        _run_id: &str,
+        _task_ids: &[String],
+    ) -> Result<Option<String>, OrbitError> {
+        Ok(None)
+    }
+
+    /// Authenticate an unchanged publication before the once-only final recovery
+    /// retries a read-only completion observation in the same active execution.
+    fn authenticate_completion_tail(
+        &self,
+        _run_id: &str,
+        _task_id: &str,
+        _step_id: &str,
+    ) -> Result<bool, OrbitError> {
+        Ok(false)
+    }
+
     /// [ORB-13907] Act on an admitted final recovery's decision: record it,
     /// and apply every decision but `resume` to the task through the
     /// deterministic applier — or, for a claimed leaf, hand it to the claim
