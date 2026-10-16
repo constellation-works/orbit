@@ -234,18 +234,20 @@ sub index_module_targets {
   my $module_path;
 
   # Identifier bytes include UTF-8; keep offsets aligned with the source literals.
-  while ($code =~ /#\[|(?:\bpub(?:[[:space:]]*\([^)]*\))?[[:space:]]+)?\bmod[[:space:]]+(?:r#)?([[:word:]\x80-\xff]+)[[:space:]]*([;{])|[{}]|\S/g) {
+  # Rust permits whitespace/comments between # and [. Comments are already
+  # masked as whitespace here and in the attribute's literal-preserving view.
+  while ($code =~ /#[[:space:]]*\[|(?:\bpub(?:[[:space:]]*\([^)]*\))?[[:space:]]+)?\bmod[[:space:]]+(?:r#)?([[:word:]\x80-\xff]+)[[:space:]]*([;{])|[{}]|\S/g) {
     my ($token, $module, $ending, $start) = ($&, $1, $2, $-[0]);
-    if ($token eq '#[') {
+    if ($token =~ /\A#[[:space:]]*\[\z/) {
       my $depth = 1;
       while ($depth && $code =~ /[\[\]]/g) {
         $depth += $& eq '[' ? 1 : -1;
       }
       last if $depth;
       my $attribute = strip_rust_non_code(substr($source, $start, pos($code) - $start), 1);
-      if ($attribute =~ /\A#\[[[:space:]]*path[[:space:]]*=[[:space:]]*"((?:\\[\s\S]|[^"\\])*)"[[:space:]]*\]\z/) {
+      if ($attribute =~ /\A#[[:space:]]*\[[[:space:]]*path[[:space:]]*=[[:space:]]*"((?:\\[\s\S]|[^"\\])*)"[[:space:]]*\]\z/) {
         $module_path = rust_string_value($1);
-      } elsif ($attribute =~ /\A#\[[[:space:]]*path[[:space:]]*=[[:space:]]*r(\#*)"(.*?)"\1[[:space:]]*\]\z/s) {
+      } elsif ($attribute =~ /\A#[[:space:]]*\[[[:space:]]*path[[:space:]]*=[[:space:]]*r(\#*)"(.*?)"\1[[:space:]]*\]\z/s) {
         # Raw path contents are literal; the closing delimiter must repeat
         # the opening hash count. Read only attributes found in masked code,
         # so path-like text inside comments and other literals stays inert.

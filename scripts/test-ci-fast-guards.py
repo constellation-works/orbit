@@ -1448,6 +1448,52 @@ class OrphanModuleTests(unittest.TestCase):
                                         result.stdout, re.MULTILINE)),
                          {f"crates/fixture/src/{path}" for path in orphans})
 
+    def test_separated_attribute_openings_match_compiler_destinations(self):
+        variants = (
+            ("space", '# [path = "checks/space.rs"]', "checks/space.rs"),
+            ("multiline", '#\t\r\n[ path = "checks/multiline.rs" ]',
+             "checks/multiline.rs"),
+            ("block", '#/* outer /* nested [ ] */ comment */[path = "checks/block.rs"]',
+             "checks/block.rs"),
+            ("line", '#// ignored [ ]\n[path = r#"checks/line.rs"#]', "checks/line.rs"),
+            ("escaped", r'# /* gap */ [path = "checks/escaped\x2ers" /* trailing */]',
+             "checks/escaped.rs"),
+            ("raw", '# /* gap */ [path = r"checks/mod.rs" // trailing ]\n]',
+             "checks/mod.rs"),
+        )
+        expected = set()
+        orphans = set()
+        for directory, prefix in (("", ""), ("tests/", "tests::")):
+            owner = '#[cfg(test)] mod tests;\n' if not directory else ""
+            for name, attribute, destination in variants:
+                owner += f'{attribute} mod {name};\n'
+                self.write_source(directory + destination,
+                                  "#[test] fn registered() { assert_eq!(3_u32.checked_add(4), Some(7)); }\n")
+                expected.add(f"{prefix}{name}::registered")
+                orphans.add(directory + name + ".rs")
+            owner += ('// # [path = "line_text.rs"] mod line_text;\n'
+                      '/* # /* gap */ [path = "block_text.rs"] mod block_text; */\n'
+                      'const TEXT: &str = "# [path = \\"string_text.rs\\"] mod string_text;";\n'
+                      'const RAW: &str = r##"# /* gap */ [path = r#"raw_text.rs"#] '
+                      'mod raw_text;"##;\n')
+            orphans.update(directory + name + ".rs" for name in (
+                "line_text", "block_text", "string_text", "raw_text", "unregistered"))
+            self.write_source(directory + ("mod.rs" if directory else "lib.rs"), owner)
+
+        self.compile_and_execute(expected)
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for path in orphans:
+            self.write_source(path, '#[test] fn unregistered() { panic!("orphan"); }\n')
+        # rustc must still execute only the redirected files after the default
+        # destinations, inert lookalikes and a genuine orphan appear.
+        self.compile_and_execute(expected)
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(set(re.findall(r"^orphan(?: test)? module: (\S+)",
+                                        result.stdout, re.MULTILINE)),
+                         {f"crates/fixture/src/{path}" for path in orphans})
+
     def check_trailing_comment_paths(self, destination):
         variants = (
             ("plain", '"{}" /* explanation */'),
