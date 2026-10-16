@@ -1392,10 +1392,10 @@ class OrphanModuleTests(unittest.TestCase):
         return subprocess.run(["bash", str(self.guard)], cwd=self.root,
                               text=True, capture_output=True, check=False, timeout=30)
 
-    def compile_and_execute(self, expected):
+    def compile_and_execute(self, expected, entrypoint="lib.rs"):
         binary = self.root / "fixture-test"
         compiled = subprocess.run(["rustc", "--edition=2024", "--test",
-                                   str(self.source / "lib.rs"), "-o", str(binary)],
+                                   str(self.source / entrypoint), "-o", str(binary)],
                                   text=True, capture_output=True, timeout=60)
         self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
         listing = subprocess.run([str(binary), "--list"], text=True,
@@ -1539,6 +1539,35 @@ class OrphanModuleTests(unittest.TestCase):
         # mod.rs is exempt from candidate checks: a missed override otherwise
         # silently licenses the default sibling without any false-positive clue.
         self.check_trailing_comment_paths("mod.rs")
+
+    def test_symlinked_crate_roots_register_only_their_logical_children(self):
+        physical = self.root / "owner.rs"
+        physical.write_text('#[path="tests/case.rs"] mod case;\nmod ordinary;\n')
+        entrypoints = ("lib.rs", "main.rs", "bin/secondary/main.rs")
+        for entrypoint in entrypoints:
+            link = self.source / entrypoint
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(os.path.relpath(physical, link.parent))
+            for child in ("tests/case.rs", "ordinary.rs"):
+                self.write_source(str(Path(entrypoint).parent / child),
+                                  "#[test] fn registered() { "
+                                  "assert_eq!(3_u32.checked_add(4), Some(7)); }\n")
+        # Shared physical roots must each keep their own logical directory,
+        # even when another root has already populated the source cache.
+        expected = {"case::registered", "ordinary::registered"}
+        for entrypoint in entrypoints:
+            self.compile_and_execute(expected, entrypoint)
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        self.write_source("tests/lost.rs", '#[test] fn unregistered() { panic!("orphan"); }\n')
+        for entrypoint in entrypoints:
+            self.compile_and_execute(expected, entrypoint)
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.splitlines(), [
+            "orphan test module: crates/fixture/src/tests/lost.rs — no module declaration resolves to this file",
+        ])
 
     def test_symlinked_owners_preserve_each_logical_child_directory(self):
         # Three logical owners share one physical file outside the src scan.

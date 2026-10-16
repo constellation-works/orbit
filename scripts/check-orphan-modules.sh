@@ -20,11 +20,6 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
-if ! command -v rg >/dev/null 2>&1; then
-  echo "check-orphan-modules: ripgrep (rg) is required; install it before running" >&2
-  exit 1
-fi
-
 if ! command -v perl >/dev/null 2>&1; then
   echo "check-orphan-modules: Perl is required; install it before running" >&2
   exit 1
@@ -300,16 +295,14 @@ sub is_declared {
   $crate_src .= '/src';
   if (!exists $crate_targets{$crate_src}) {
     # Candidate discovery checks the physical source tree, including ignored
-    # directories. Its owners must use the same scope: ignore rules (and
-    # ripgrep-version differences in negations) cannot hide declarations.
-    open my $paths, '-|', 'rg', '--files', '--null', '--hidden', '--no-ignore', '--glob', '*.rs', $crate_src
-      or die "Cannot list $crate_src: $!\n";
+    # directories. Use the same non-following walk for owners, but include
+    # symlinked source files: crate roots have no declaring parent to discover
+    # them later. Directory symlinks are never traversed by discovery.
     my @paths;
-    {
-      local $/ = "\0";
-      while (my $path = <$paths>) { chomp $path; push @paths, $path; }
-    }
-    close $paths or die "Cannot list $crate_src: ripgrep failed\n";
+    find({ no_chdir => 1, wanted => sub {
+      my $path = $File::Find::name;
+      push @paths, $path if -f $path && $path =~ /\.rs$/;
+    }}, $crate_src);
     my (%targets, %indexed);
     # Resolve owners before their children so redirected files never acquire a
     # guessed stem directory. Keep disconnected owners visible as before, after
@@ -321,9 +314,12 @@ sub is_declared {
     } @paths;
     for my $path (@paths) {
       my $resolved = abs_path($path);
-      next if !defined($resolved) || exists $indexed{$resolved};
+      my $is_root = basename($path) =~ /^(?:mod|lib|main)\.rs$/;
+      # Roots sharing one physical source can still own different logical
+      # directories. Other owners retain their declaration-derived contexts.
+      next if !defined($resolved) || (!$is_root && exists $indexed{$resolved});
       my $source_directory = abs_path(dirname($path));
-      my $directory = basename($path) =~ /^(?:mod|lib|main)\.rs$/
+      my $directory = $is_root
         ? $source_directory : File::Spec->catdir($source_directory, basename($path, '.rs'));
       my @pending = ([$resolved, $source_directory, $directory]);
       while (my $owner = pop @pending) {
