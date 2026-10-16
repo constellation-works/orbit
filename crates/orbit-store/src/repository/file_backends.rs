@@ -325,6 +325,13 @@ impl TaskStoreBackend for TaskV2Store {
     fn lookup_desktop_creation(&self, key: &str, digest: &str) -> Result<Option<Task>, OrbitError> {
         self.lookup_desktop_creation(key, digest)
     }
+    fn lookup_committed_creation_id(
+        &self,
+        key: &str,
+        digest: &str,
+    ) -> Result<Option<String>, OrbitError> {
+        self.lookup_committed_creation_id(key, digest)
+    }
     fn read_desktop_task(&self, id: &str) -> Result<crate::contracts::DesktopTaskRead, OrbitError> {
         self.read_desktop_task(id)
     }

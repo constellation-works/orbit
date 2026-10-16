@@ -25,6 +25,242 @@ fn edit_registry(
     orbit_registry::workspace_registry::save_registry_to(&registry, &path).unwrap();
 }
 
+fn task_registry(fixture: &Fixture) -> orbit_store::maintenance::task_registry::TaskRegistryStore {
+    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+    TaskRegistryStore::open(&task_registry_path(&fixture.global)).unwrap()
+}
+
+#[test]
+fn receipt_recovery_does_not_read_or_repair_damaged_sidecars() {
+    isolated(
+        "task_create::receipt_recovery_does_not_read_or_repair_damaged_sidecars",
+        || {
+            let fixture = Fixture::new();
+            let server = fixture.server(true);
+            let body = proposal(&server);
+            let receipt = json_ok(server.send("POST", ACTION, body.clone()));
+            assert_eq!(receipt.as_object().unwrap().len(), 3);
+            let id = receipt["id"].as_str().unwrap();
+            let binding = task_registry(&fixture)
+                .find_task_binding(id)
+                .unwrap()
+                .unwrap();
+            let comments = binding.canonical_path.join("comments.jsonl");
+            let original = std::fs::read(&comments).unwrap();
+            let damaged = b"not a JSON comment\n{}\n";
+            std::fs::write(&comments, damaged).unwrap();
+            let detail = format!("/api/tasks/{id}?workspace=ws_http_fixture");
+            assert_eq!(server.get(&detail).status().as_u16(), 500);
+            // Restart rules out recovery from an in-memory successful response.
+            drop(server);
+            let server = fixture.server(true);
+            std::thread::scope(|scope| {
+                let requests: Vec<_> = (0..2)
+                    .map(|_| scope.spawn(|| json_ok(server.send("POST", ACTION, body.clone()))))
+                    .collect();
+                for request in requests {
+                    assert_eq!(request.join().unwrap(), receipt);
+                }
+            });
+            let mut changed = body.clone();
+            changed["title"] = json!("Changed input with damaged comments");
+            let response = server.send("POST", ACTION, changed);
+            assert_eq!(response.status().as_u16(), 400);
+            assert!(response.json::<Value>().unwrap().get("id").is_none());
+            assert_eq!(server.get(&detail).status().as_u16(), 500);
+            assert_eq!(std::fs::read(&comments).unwrap(), damaged);
+            std::fs::write(&comments, original).unwrap();
+            fixture
+                .runtime
+                .update_task_as_human(
+                    id,
+                    TaskUpdateParams {
+                        upsert_artifacts: vec![orbit_types::task::TaskArtifact {
+                            path: "receipt-evidence.txt".into(),
+                            media_type: "text/plain".into(),
+                            content: b"original evidence".to_vec(),
+                            created_by: None,
+                        }],
+                        ..Default::default()
+                    },
+                    "human".into(),
+                )
+                .unwrap();
+            let manifest: orbit_types::task::ArtifactManifestV2 = serde_yaml::from_str(
+                &std::fs::read_to_string(binding.canonical_path.join("artifacts/manifest.yaml"))
+                    .unwrap(),
+            )
+            .unwrap();
+            let blob = binding
+                .canonical_path
+                .join("artifacts")
+                .join(&manifest.files[0].blob);
+            let artifact_path =
+                format!("/api/tasks/{id}/artifacts/receipt-evidence.txt?workspace=ws_http_fixture");
+            let response = server.get(&artifact_path);
+            assert!(response.status().is_success());
+            assert_eq!(response.text().unwrap(), "original evidence");
+            std::fs::rename(&blob, binding.canonical_path.join("saved-evidence.txt")).unwrap();
+            assert_eq!(json_ok(server.send("POST", ACTION, body)), receipt);
+            assert_eq!(server.get(&detail).status().as_u16(), 500);
+            assert!(!server.get(&artifact_path).status().is_success());
+            assert!(
+                !blob.exists(),
+                "replay must not repair or conceal missing payloads"
+            );
+            assert_eq!(
+                task_registry(&fixture)
+                    .tasks_for_workspace("ws_http_fixture")
+                    .unwrap()
+                    .len(),
+                1
+            );
+        },
+    );
+}
+
+#[test]
+fn receipt_recovery_requires_committed_matching_identity_and_reuses_reservation() {
+    isolated(
+        "task_create::receipt_recovery_requires_committed_matching_identity_and_reuses_reservation",
+        || {
+            let fixture = Fixture::new();
+            let server = fixture.server(true);
+            let mut body = proposal(&server);
+            let template = json_ok(server.send("POST", ACTION, body.clone()));
+            let registry = task_registry(&fixture);
+            let template_binding = registry
+                .find_task_binding(template["id"].as_str().unwrap())
+                .unwrap()
+                .unwrap();
+            let mut envelope: orbit_types::task::TaskEnvelopeV2 = serde_yaml::from_str(
+                &std::fs::read_to_string(template_binding.canonical_path.join("task.yaml"))
+                    .unwrap(),
+            )
+            .unwrap();
+            body["request_id"] = json!("interrupted-proposal");
+            let mut input: orbit_core::application::task::ProposedTaskInput =
+                serde_json::from_value(body.clone()).unwrap();
+            input.task_type = Some(orbit_core::TaskType::Chore);
+            let digest =
+                orbit_common::security::release::sha256_hex(&serde_json::to_vec(&input).unwrap());
+            let id = registry.allocate_task_id("ws_http_fixture").unwrap();
+            let connection = rusqlite::Connection::open(
+                orbit_store::maintenance::task_registry::task_registry_path(&fixture.global),
+            )
+            .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO task_action_keys VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![
+                        "ws_http_fixture",
+                        "dashboard-create:interrupted-proposal",
+                        id,
+                        digest
+                    ],
+                )
+                .unwrap();
+            let path = registry
+                .canonical_task_bundle_path("ws_http_fixture", &id)
+                .unwrap();
+            std::fs::create_dir_all(&path).unwrap();
+            envelope.id = id.clone();
+            std::fs::write(
+                path.join("task.yaml"),
+                serde_yaml::to_string(&envelope).unwrap(),
+            )
+            .unwrap();
+            let assert_refused = || {
+                let response = server.send("POST", ACTION, body.clone());
+                assert!(!response.status().is_success());
+                assert!(response.json::<Value>().unwrap().get("id").is_none());
+                let reserved: String = connection
+                    .query_row(
+                        "SELECT task_id FROM task_action_keys WHERE action_key = ?1",
+                        ["dashboard-create:interrupted-proposal"],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(reserved, id, "a refused replay retains its allocation");
+            };
+            // A valid envelope alone is not a committed bundle.
+            assert_refused();
+            assert!(registry.find_task_binding(&id).unwrap().is_none());
+            // Even a registration cannot turn a missing or mismatched envelope
+            // into a historical receipt.
+            registry
+                .register_task_bundle(&id, "ws_http_fixture", &path)
+                .unwrap();
+            std::fs::rename(path.join("task.yaml"), path.join("saved-envelope.yaml")).unwrap();
+            assert_refused();
+            envelope.id = template["id"].as_str().unwrap().into();
+            std::fs::write(
+                path.join("task.yaml"),
+                serde_yaml::to_string(&envelope).unwrap(),
+            )
+            .unwrap();
+            assert_refused();
+            // A contradictory owner binding must fail closed as well.
+            registry
+                .register_workspace(
+                    orbit_store::maintenance::task_registry::RegisterWorkspaceParams {
+                        partition_id: "ws_other_owner".into(),
+                        slug: "other".into(),
+                        repo_fingerprint: None,
+                    },
+                )
+                .unwrap();
+            connection.execute("UPDATE task_bundle_bindings SET workspace_id = 'ws_other_owner' WHERE task_id = ?1", [&id]).unwrap();
+            envelope.id = id.clone();
+            std::fs::write(
+                path.join("task.yaml"),
+                serde_yaml::to_string(&envelope).unwrap(),
+            )
+            .unwrap();
+            assert_refused();
+            connection.execute("UPDATE task_bundle_bindings SET workspace_id = 'ws_http_fixture' WHERE task_id = ?1", [&id]).unwrap();
+            connection
+                .execute(
+                    "UPDATE task_bundle_bindings SET canonical_path = ?1 WHERE task_id = ?2",
+                    rusqlite::params![template_binding.canonical_path.to_str().unwrap(), id],
+                )
+                .unwrap();
+            assert_refused();
+            connection
+                .execute(
+                    "UPDATE task_bundle_bindings SET canonical_path = ?1 WHERE task_id = ?2",
+                    rusqlite::params![path.to_str().unwrap(), id],
+                )
+                .unwrap();
+            registry
+                .unregister_task_bundle(&id, "ws_http_fixture")
+                .unwrap();
+            // Retain the interrupted bytes outside the canonical namespace. The
+            // same request can now publish, using its original reserved ID.
+            std::fs::rename(&path, fixture.path("interrupted-bundle")).unwrap();
+            let receipt = json_ok(server.send("POST", ACTION, body.clone()));
+            assert_eq!(receipt["id"], id);
+            // A complete publication interrupted before registration is
+            // reconciled by the existing recovery path, without a new task.
+            registry
+                .unregister_task_bundle(&id, "ws_http_fixture")
+                .unwrap();
+            assert_eq!(json_ok(server.send("POST", ACTION, body)), receipt);
+            assert_eq!(
+                json_ok(server.get(&format!("/api/tasks/{id}?workspace=ws_http_fixture")))["id"],
+                id
+            );
+            assert_eq!(
+                registry
+                    .tasks_for_workspace("ws_http_fixture")
+                    .unwrap()
+                    .len(),
+                2
+            );
+        },
+    );
+}
+
 #[test]
 fn proposed_creation_is_atomic_and_receipt_survives_mutation_and_restart() {
     isolated(
@@ -232,9 +468,22 @@ fn replay_rechecks_live_permission_owner_role_binding_and_registry() {
             let server = fixture.server(true);
             let body = proposal(&server);
             let receipt = json_ok(server.send("POST", ACTION, body.clone()));
+            // A historical receipt remains behind live authorization even when
+            // normal task materialization would fail on mutable corruption.
+            let binding = task_registry(&fixture)
+                .find_task_binding(receipt["id"].as_str().unwrap())
+                .unwrap()
+                .unwrap();
+            let comments = binding.canonical_path.join("comments.jsonl");
+            let original_comments = std::fs::read(&comments).unwrap();
+            std::fs::write(&comments, b"invalid comment JSON\n{}\n").unwrap();
             let assert_refused = |server: &Server| {
                 let response = server.send("POST", ACTION, body.clone());
-                assert!(!response.status().is_success());
+                assert!(
+                    response.status().is_client_error(),
+                    "authority refusal must precede damaged-bundle reads: {}",
+                    response.status()
+                );
                 let refused: Value = response.json().unwrap();
                 assert!(
                     refused.get("id").is_none(),
@@ -287,6 +536,7 @@ fn replay_rechecks_live_permission_owner_role_binding_and_registry() {
             assert_refused(&server);
             std::fs::write(&registry_path, &original).unwrap();
             assert_eq!(json_ok(server.send("POST", ACTION, body)), receipt);
+            std::fs::write(&comments, original_comments).unwrap();
             assert_eq!(fixture.runtime.list_tasks().unwrap().len(), 1);
         },
     );

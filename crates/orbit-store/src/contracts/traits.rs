@@ -418,6 +418,18 @@ pub trait TaskStoreBackend: Send + Sync {
             "guarded desktop creation unsupported by backend".into(),
         ))
     }
+    /// Recover only the identity of a committed creation, without materializing
+    /// mutable sidecars or artifact payloads. A bare action-key reservation is
+    /// not a receipt; an inconsistent registered identity fails closed.
+    fn lookup_committed_creation_id(
+        &self,
+        _key: &str,
+        _digest: &str,
+    ) -> Result<Option<String>, OrbitError> {
+        Err(OrbitError::Store(
+            "committed creation lookup unsupported by backend".into(),
+        ))
+    }
     /// Coherently read a task without claiming write authority or creating a write lock.
     fn read_desktop_task(&self, _id: &str) -> Result<DesktopTaskRead, OrbitError> {
         Err(OrbitError::Store(

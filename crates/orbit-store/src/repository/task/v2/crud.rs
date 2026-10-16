@@ -35,6 +35,19 @@ impl TaskV2Store {
             },
         )
     }
+    pub(crate) fn lookup_committed_creation_id(
+        &self,
+        key: &str,
+        digest: &str,
+    ) -> Result<Option<String>, OrbitError> {
+        self.in_boundary(
+            || match self.registry.task_action(&self.workspace_id, key, digest)? {
+                Some(id) => self.bundle_store.committed_creation_id(&id),
+                None => Ok(None),
+            },
+        )
+    }
+
     pub(crate) fn create_desktop_task(
         &self,
         params: TaskCreateParams,
@@ -42,7 +55,12 @@ impl TaskV2Store {
         digest: &str,
     ) -> Result<(Task, bool), OrbitError> {
         self.in_boundary(|| {
-            if let Some(task) = self.lookup_desktop_creation(key, digest)? {
+            // Only a registered publication can take the replay shortcut.
+            // A complete bundle left before registration must go through
+            // create_or_recover_action_bundle to commit that registration.
+            if self.lookup_committed_creation_id(key, digest)?.is_some()
+                && let Some(task) = self.lookup_desktop_creation(key, digest)?
+            {
                 return Ok((task, true));
             }
             self.create_task_locked(params, Some(key), Some(digest))

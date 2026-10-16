@@ -207,6 +207,43 @@ impl TaskBundleStoreV2 {
         read_bundle_consistently(&bundle_dir)
     }
 
+    /// Registration is the creation commit point, after the complete bundle and
+    /// its parent directory have been synced. Check it under the publication /
+    /// deletion lock, then verify only the envelope identity. Mutable documents,
+    /// history, comments and artifacts are deliberately outside receipt recovery.
+    pub(crate) fn committed_creation_id(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<String>, OrbitError> {
+        let bundle_dir = self.bundle_path(task_id)?;
+        with_shared_file_lock(
+            &bundle_lock_target(&bundle_dir),
+            "task creation receipt",
+            || {
+                let Some(binding) = self.registry.find_task_binding(task_id)? else {
+                    // The existing creation path will either finish publication at
+                    // the reserved ID or refuse an unreadable retained bundle.
+                    return Ok(None);
+                };
+                if binding.partition_id != self.workspace_id
+                    || crate::fs::path_safety::normalize_path(&binding.canonical_path)
+                        != crate::fs::path_safety::normalize_path(&bundle_dir)
+                {
+                    return Err(OrbitError::Store(
+                        "creation task registration does not match its workspace and bundle".into(),
+                    ));
+                }
+                // Do not translate missing/corrupt registered envelopes to None:
+                // that would route damage into the creation/recovery path.
+                let envelope = read_envelope_at(&bundle_dir)?;
+                envelope
+                    .validate()
+                    .map_err(|error| OrbitError::Store(error.to_string()))?;
+                Ok(Some(envelope.id))
+            },
+        )
+    }
+
     /// Assemble a task bundle without opening artifact payload bytes.
     pub(crate) fn read_bundle_lightweight(
         &self,
