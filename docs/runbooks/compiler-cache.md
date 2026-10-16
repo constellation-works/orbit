@@ -36,6 +36,91 @@ a host that can create Linux mount namespaces.
   the first namespace's mounts and the second fails with a missing rlib.
   The wrapper defaults prevent this (see [Daemon ownership](#daemon-ownership)).
 
+## Ordinary Linux CI compiler objects
+
+The ordinary **Check / Clippy / Test** job in `.github/workflows/ci.yml` installs
+the existing SHA-256-pinned sccache through `scripts/compiler-cache.sh`. This
+installation is confined to the ephemeral hosted runner. It restores a separate
+`orbit-ci-compiler-v1` archive into `$RUNNER_TEMP/orbit-ci-compiler-v1`, with a
+2 GiB local LRU limit. The existing `Swatinem/rust-cache` dependency archive and
+its failure-save policy are unchanged. Compiler-object archives contain neither
+source files nor Cargo `target/`, fingerprints, test binaries or installer binaries.
+The job exports `SCCACHE_DIR` through `GITHUB_ENV` from `RUNNER_TEMP` at runtime,
+before computing the identity, restoring objects or setting up the wrapper.
+Runner context is unavailable in job-level `env`.
+
+`actions/cache/restore` has no post-job save. PR runs can modify their restored
+local copy but never upload it. The explicit `actions/cache/save` step runs only
+after the ordinary build, tests and Linux sandbox gate succeed, on a `push` to
+`refs/heads/agent-main` in `constellation-works/orbit`, with usable cache setup
+and without an exact archive hit. Failed, cancelled, fork, release-branch and PR
+runs cannot publish compiler objects. No privileged PR workflow or additional
+cache service is involved. GitHub's branch scoping allows PRs targeting
+`agent-main` to restore its caches; it does not share caches with arbitrary
+sibling branches. See the [Actions cache contract](https://github.com/actions/cache)
+and [cache scope and eviction reference](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching).
+
+The archive compatibility digest includes actual `rustc -vV`, Cargo and Clippy
+versions, machine architecture and runner image identity; root and member
+manifests (including profiles), lockfiles, toolchain files, all tracked `.cargo`
+configuration, user Cargo configuration, the workflow, all setup/build scripts
+(including installer and wrapper), and the effective Cargo/Rust/sccache cache
+environment. Hashing all scripts covers flags, feature selections and build
+commands inside helpers. Both the exact key and the sole restore prefix contain
+this digest: incompatible configurations never use a broader restore prefix.
+Only the weekly suffix may differ on a compatible restore.
+
+There is at most one immutable snapshot per compatibility digest per UTC week,
+filled by an ordinary successful build, with compatible older snapshots as
+seeds. This limits upload frequency rather than creating an archive per commit
+or PR. Each local cache is bounded to 2 GiB; GitHub evicts archives unused for
+seven days and applies the repository's cache storage quota. Different identities
+share that quota with dependency caches, so monitor eviction pressure. No cleanup
+token or cache deletion workflow is needed. A cache miss builds normally.
+
+Rust source files are deliberately absent from the archive identity: Cargo still
+decides freshness and sccache hashes compiler inputs, including source contents,
+flags and compiler identity. No source mtimes are restored and no validation is
+skipped on an archive hit. Production Clippy, all-targets Clippy, executed tests,
+doctests, documentation and native sandbox controls remain required. Clippy
+analysis itself remains unsupported by sccache. Hosted CI requires the existing
+enabled-cache namespace control to execute with real Bubblewrap namespaces;
+worker-sandbox deferral is not evidence of native correctness. Keep the four
+native delivery gates (`make ci-fast`, `make ci-lint`, `make goldens`,
+`make ci-test-affected`) and ordinary hosted required checks.
+
+Restore/save have two-minute step limits; each restore segment has a one-minute
+limit. Installation has a 60-second bound and startup/stat operations ten-second
+bounds. Setup failure disables the wrapper through `ORBIT_COMPILER_CACHE=0`;
+missing/unwritable cache uses the wrapper's ordinary rustc fallback. CI sets
+`SCCACHE_IGNORE_SERVER_IO_ERROR=1` so sccache server I/O failure can compile
+locally ([pinned sccache implementation](https://github.com/mozilla/sccache/blob/v0.17.0/src/commands.rs)).
+Restore/save service failures do not grant validation success or suppress builds.
+
+Logs retain the compatibility digest and exact/matched keys, configured capacity
+and disk size, up to 80 lines of native sccache statistics (hits, misses,
+non-cacheable/unsupported requests and errors), and whole restore, setup,
+statistics-report and save elapsed seconds. Stats are zeroed before ordinary
+compilation. Unavailable statistics and skipped saves are explicit. Restore timing
+also includes identity computation and action startup; save timing includes action
+startup, compression and upload. GitHub's complete job duration, including all
+setup, post actions and cache costs, remains the performance authority.
+
+Run the offline workflow controls with `python3 scripts/test-pr-state-workflows.py`:
+they resolve job environment contexts and execute the runtime environment handoff,
+identity/setup snippets and writer condition, exercising trusted
+pushes, PR no-upload, incompatible inputs and setup fallback. Also run the existing
+`scripts/test-compiler-cache.sh` and enabled-cache
+`scripts/test-compiler-cache-namespaces.sh`; the latter must be replayed on the
+Linux host when the worker cannot create namespaces.
+
+After merge, the landing owner must verify one **ordinary** successful trusted
+`agent-main` run publishes this namespace and retain its key, setup/restore/save
+costs and stats. A subsequent ordinary PR consumer supplies whole-job performance
+evidence separately. A pre-merge PR cannot populate the trusted namespace. Do not
+run warming loops, weaken checks, or claim this infrastructure alone meets the
+900-second job budget.
+
 ## Ownership and location
 
 | Object | Owner | Path |
