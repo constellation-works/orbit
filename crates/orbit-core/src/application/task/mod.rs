@@ -10,6 +10,8 @@ pub(crate) mod contention;
 mod context_repair;
 mod context_widening;
 mod desktop;
+mod proposed;
+pub use proposed::ProposedTaskInput;
 mod provider_hold;
 pub(crate) mod provider_limit;
 pub(crate) use desktop::HandoffPullRequest;

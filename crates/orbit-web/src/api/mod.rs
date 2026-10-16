@@ -32,6 +32,7 @@ mod run_failure;
 mod run_tasks;
 mod runs;
 mod search;
+mod task_create;
 mod tasks;
 mod workspaces;
 

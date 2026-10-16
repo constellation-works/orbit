@@ -618,6 +618,20 @@ impl DashboardState {
         }
     }
 
+    /// Writes cannot rely on the last valid registry when a newer registry is
+    /// unreadable. Reads retain their existing keep-last-valid behavior.
+    pub(crate) fn pin_for_write(&self) -> Result<Pinned, OrbitError> {
+        let pinned = self.pin();
+        if let Some(source) = self.inner.source.as_ref()
+            && !self.registry_is_current(source)
+        {
+            return Err(OrbitError::PolicyDenied(
+                "current workspace registry is unavailable; refresh before writing".into(),
+            ));
+        }
+        Ok(pinned)
+    }
+
     /// Reload the registered workspace set from the authoritative registry and
     /// reconcile the runtime cache. A no-op unless this state was built via
     /// [`DashboardState::from_registry`]. Always re-reads the file. Request

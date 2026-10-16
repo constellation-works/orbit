@@ -4,7 +4,7 @@ mod authorization;
 mod execution;
 mod review;
 mod snapshot;
-mod validation;
+pub(super) mod validation;
 mod write;
 
 pub(crate) use execution::HandoffPullRequest;

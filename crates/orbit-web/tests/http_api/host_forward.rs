@@ -245,6 +245,46 @@ fn comments(server: &Server, id: &str) -> usize {
 
 /// Browser fetch must decode the gzip that crosses both dashboard servers.
 #[test]
+fn proposed_creation_forward_preserves_frozen_owner_target_and_receipt() {
+    isolated(
+        "host_forward::proposed_creation_forward_preserves_frozen_owner_target_and_receipt",
+        || {
+            let owner = Fixture::host("hostb", "HB");
+            let owner_server = owner.server(true);
+            let local = Fixture::new();
+            write_hosts(&local, &[("hostb", &owner.machine_id(), "hostb-ssh", "HB")]);
+            let stub =
+                StubSsh::new(json!({"hostb-ssh": {"attach": port(&owner_server), "spawn": null}}));
+            let server = local.server_with_path(true, stub.bin());
+            let rows = json_ok(server.get("/api/on/hostb/workspaces"));
+            let body = json!({
+                "request_id": "forwarded-proposal", "binding": rows[0]["creation_binding"],
+                "title": "Proposal on selected host", "description": "Forward preserves JSON request identity",
+                "complexity": "medium", "acceptance_criteria": ["Only the selected owner stores one task"],
+            });
+            let path = "/api/on/hostb/tasks/create?workspace=ws_http_fixture";
+            let receipt = json_ok(server.send("POST", path, body.clone()));
+            assert!(receipt["id"].as_str().unwrap().starts_with("HB-"));
+            assert_eq!(json_ok(server.send("POST", path, body.clone())), receipt);
+            let readonly = local.server_with_path(false, stub.bin());
+            let refusal = readonly.send("POST", path, body.clone());
+            assert_eq!(refusal.status().as_u16(), 403);
+            assert!(refusal.json::<Value>().unwrap().get("id").is_none());
+            // Sending the frozen remote body to this host cannot fall back to its
+            // local workspace, even though both fixture catalogs use the same ID.
+            assert!(
+                !server
+                    .send("POST", "/api/tasks/create?workspace=ws_http_fixture", body)
+                    .status()
+                    .is_success()
+            );
+            assert!(local.runtime.list_tasks().unwrap().is_empty());
+            assert_eq!(owner.runtime.list_tasks().unwrap().len(), 1);
+        },
+    );
+}
+
+#[test]
 #[ignore = "requires ORBIT_PLAYWRIGHT_MODULE and ORBIT_COMPRESSION_BROWSER_EVIDENCE_DIR"]
 fn gzip_forward_returns_json_to_the_browser() {
     isolated(

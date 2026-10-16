@@ -733,3 +733,17 @@ main.tasks-layout {
     z-index: 5;
   }
 }
+
+/* The composer stays outside list repainting so errors never discard a draft. */
+.task-create { padding: 16px; margin-bottom: 16px; border: 1px solid var(--border); border-radius: var(--radius); overflow: auto; flex: 0 1 auto; }
+.task-create[hidden] { display: none; }
+.task-create h3 { margin: 0; }
+.task-create fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 6px; min-width: 0; }
+.task-create label { margin-top: 8px; }
+.task-create input, .task-create textarea, .task-create select { width: 100%; min-width: 0; box-sizing: border-box; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-elev); color: var(--fg); font: inherit; }
+.task-create :disabled { opacity: 0.7; }
+.task-create .action, #task-create-open { min-height: 36px; }
+.task-create textarea { resize: vertical; }
+.task-create-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.task-create [aria-invalid="true"] { border-color: var(--state-error); }
+#task-create-feedback { overflow-wrap: anywhere; }

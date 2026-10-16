@@ -27,6 +27,11 @@ use url::Url;
 ///    The header is absent for direct CLI/curl requests and some older
 ///    browsers; those requests retain the Host and Origin checks above.
 pub(crate) async fn require_localhost_origin(request: Request<Body>, next: Next) -> Response {
+    if request.headers().get_all(header::HOST).iter().count() != 1
+        || request.headers().get_all(header::ORIGIN).iter().count() > 1
+    {
+        return forbidden_cross_origin();
+    }
     let Some(host) = parse_loopback_authority(request.headers().get(header::HOST)) else {
         return forbidden_cross_origin();
     };

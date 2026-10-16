@@ -101,10 +101,22 @@ impl OrbitRuntime {
     /// which records each missing one as a durable creation grant.
     pub fn add_task_screened(
         &self,
+        params: TaskAddParams,
+        screen: &TaskWriteScreen,
+        agent: Option<String>,
+        model: Option<String>,
+    ) -> Result<ScreenedTaskWrite, OrbitError> {
+        self.add_task_screened_guarded(params, screen, agent, model, None, None)
+    }
+
+    pub(super) fn add_task_screened_guarded(
+        &self,
         mut params: TaskAddParams,
         screen: &TaskWriteScreen,
         agent: Option<String>,
         model: Option<String>,
+        action_key: Option<&str>,
+        digest: Option<&str>,
     ) -> Result<ScreenedTaskWrite, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         params.context_creation = if screen.allow_missing_context {
@@ -123,7 +135,8 @@ impl OrbitRuntime {
         let dependency_warnings = self.unreadable_dependency_warnings(&params.dependencies);
         let requested_context_files = params.context_files.clone();
 
-        let (task, mut warnings) = self.add_task_reporting(params, agent, model)?;
+        let (task, mut warnings) =
+            self.add_task_validated(params, agent, model, action_key, digest)?;
         warnings.extend(parent_warning);
         warnings.extend(dependency_warnings);
         warnings.extend(compute_task_add_warnings(

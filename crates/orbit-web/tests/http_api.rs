@@ -56,6 +56,8 @@ mod runs;
 mod support;
 #[path = "http_api/task_contracts.rs"]
 mod task_contracts;
+#[path = "http_api/task_create.rs"]
+mod task_create;
 #[path = "http_api/task_writes.rs"]
 mod task_writes;
 #[path = "http_api/workflows.rs"]
