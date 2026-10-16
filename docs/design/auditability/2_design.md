@@ -49,9 +49,10 @@ registered CLI/MCP tools. The current implementation is
 audited, and `duration_ms` is at least `1`. The CLI RAII guard covers top-level command
 execution and suppresses its duplicate after Core records a tool row; paths such as `--dry-run` still produce a guard-side row after runtime bootstrap.
 Invalid JSON and other preflight or bootstrap failures occur before the guard exists
-and do not produce that row. A successful tool result is
-not returned if audit persistence fails, although the audit seam cannot roll back a
-mutation already committed. When the tool itself fails, that domain error remains primary.
+and do not produce that row. If audit persistence fails, a successful read-only
+tool result is returned with a tracing warning; a successful mutating tool call
+returns an error, although the audit seam cannot roll back a mutation already
+committed. When the tool itself fails, that domain error remains primary.
 
 Pipeline submission has a separate best-effort audit row for `pipeline.invoke`,
 `pipeline.resume`, or `agent.invoke`. After admission and worker dispatch, a failed
