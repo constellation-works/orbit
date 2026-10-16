@@ -108,6 +108,14 @@ jobs:
     name: Check / Clippy / Test
     runs-on: ubuntu-latest
     timeout-minutes: 45 # Observed ~12 minutes; allows cold builds and slower test hosts.
+    env:
+      # Separate from rust-cache's dependency target/ archive. Each runner gets
+      # a writable local copy; only the explicit trusted save below uploads it.
+      SCCACHE_DIR: ${{ runner.temp }}/orbit-ci-compiler-v1
+      SCCACHE_CACHE_SIZE: 2G
+      SCCACHE_CLIENT_SIDE: "1"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+      ORBIT_COMPILER_CACHE_REQUIRE_NS: "1"
     steps:
       # Hosted Ubuntu 24.04 measurements: 86 GiB initially free, 112 GiB
       # after tool cleanup, 99 GiB after cache restore/build/tests. Admit
@@ -169,6 +177,90 @@ jobs:
         with:
           shared-key: rust-1.98.1
           cache-on-failure: true
+
+      - name: Identify compiler-object cache
+        id: compiler-key
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, platform, subprocess, time
+          from pathlib import Path
+
+          started = time.time()
+          files = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          # Include every command/setup script: flags and feature selections
+          # buried in helpers must invalidate the archive as well as YAML edits.
+          selected = sorted(p for p in files if p and (
+              Path(p).name in ('Cargo.toml', 'Cargo.lock', 'rust-toolchain', 'rust-toolchain.toml')
+              or '.cargo' in Path(p).parts or p.startswith('scripts/')
+              or p == '.github/workflows/ci.yml'))
+          inputs = {p: hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in selected}
+          for name in ('config', 'config.toml'):
+              path = Path(os.environ.get('CARGO_HOME', str(Path.home() / '.cargo'))) / name
+              inputs['cargo-home/' + name] = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+          identity = dict(
+              rustc=subprocess.check_output(['rustc', '-vV'], text=True),
+              cargo=subprocess.check_output(['cargo', '-V'], text=True),
+              clippy=subprocess.check_output(['clippy-driver', '-V'], text=True),
+              platform=[platform.system(), platform.machine(), os.environ.get('ImageOS'), os.environ.get('ImageVersion')],
+              inputs=inputs,
+              env={k: v for k, v in sorted(os.environ.items()) if k.startswith(('CARGO_', 'RUST', 'SCCACHE_', 'ORBIT_COMPILER_CACHE'))})
+          digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+          prefix = 'orbit-ci-compiler-v1-' + digest + '-'
+          # One immutable snapshot per compatibility identity per UTC week.
+          # Older compatible snapshots can seed it; no broad restore prefix.
+          key = prefix + str(int(started) // (7 * 24 * 60 * 60))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              print('key=' + key, 'prefix=' + prefix, sep='\n', file=out)
+          with open(os.environ['GITHUB_ENV'], 'a') as out:
+              print('COMPILER_CACHE_RESTORE_STARTED=' + str(int(started)), file=out)
+          print('compiler_cache_identity=' + digest + ' key=' + key)
+          print(identity['rustc'].strip())
+          print('compiler_cache_input_files=' + str(len(inputs)))
+          PY
+
+      - name: Restore compiler objects
+        id: compiler-restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          SEGMENT_DOWNLOAD_TIMEOUT_MINS: "1"
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: ${{ steps.compiler-key.outputs.key }}
+          restore-keys: ${{ steps.compiler-key.outputs.prefix }}
+
+      - name: Set up compiler-object cache
+        id: compiler-setup
+        env:
+          RESTORE_OUTCOME: ${{ steps.compiler-restore.outcome }}
+        run: |
+          set -euo pipefail
+          started=$(date +%s)
+          echo "compiler_cache_restore_seconds=$((started - COMPILER_CACHE_RESTORE_STARTED)) restore_outcome=$RESTORE_OUTCOME"
+          mkdir -p .orbit/tmp
+          install_log=$(mktemp .orbit/tmp/compiler-install.XXXXXX)
+          export TMPDIR="$PWD/.orbit/tmp"
+          cache_bin="$HOME/.orbit/cache/bin/sccache"
+          # The existing installer verifies the pinned archive. Neither its
+          # binary nor setup output is restored from the object archive.
+          ready=false
+          if timeout 60s scripts/compiler-cache.sh setup --install >"$install_log" 2>&1 \
+            && mkdir -p "$SCCACHE_DIR" && [ -w "$SCCACHE_DIR" ] \
+            && SCCACHE_SERVER_UDS=/tmp/orbit-sccache.sock timeout 10s "$cache_bin" --show-stats >>"$install_log" 2>&1 \
+            && SCCACHE_SERVER_UDS=/tmp/orbit-sccache.sock timeout 10s "$cache_bin" --zero-stats >>"$install_log" 2>&1; then
+            ready=true
+          else
+            echo '::warning::Compiler cache unavailable; using ordinary rustc'
+          fi
+          sed -n '1,40p' "$install_log"
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+          if [ "$ready" = false ]; then
+            echo 'ORBIT_COMPILER_CACHE=0' >> "$GITHUB_ENV"
+          fi
+          echo "ORBIT_COMPILER_CACHE_BIN=$cache_bin" >> "$GITHUB_ENV"
+          echo "compiler_cache_setup_seconds=$(($(date +%s) - started)) ready=$ready capacity=$SCCACHE_CACHE_SIZE"
 
       # Each public pinned download allows at most three attempts in one 60s
       # budget. Attempt diagnostics and backoff remain part of the complete
@@ -383,6 +475,51 @@ jobs:
         run: |
           df -Pk /
           du -sk target "${CARGO_HOME:-$HOME/.cargo}/registry" 2>/dev/null || true
+
+      - name: Report compiler-object cache and start save clock
+        if: always()
+        env:
+          CACHE_KEY: ${{ steps.compiler-key.outputs.key }}
+          MATCHED_KEY: ${{ steps.compiler-restore.outputs.cache-matched-key }}
+          CACHE_READY: ${{ steps.compiler-setup.outputs.ready }}
+        run: |
+          set -euo pipefail
+          started=$(date +%s)
+          echo "compiler_cache_key=$CACHE_KEY matched_key=$MATCHED_KEY ready=$CACHE_READY capacity=$SCCACHE_CACHE_SIZE"
+          if [ "$CACHE_READY" = true ]; then
+            # Default wrapper endpoint; namespace controls use their own /tmp.
+            if ! SCCACHE_SERVER_UDS=/tmp/orbit-sccache.sock timeout 10s "$ORBIT_COMPILER_CACHE_BIN" --show-stats 2>&1 | sed -n '1,80p'; then
+              echo 'compiler_cache_stats=unavailable (query failed or timed out)'
+            fi
+          else
+            echo 'compiler_cache_stats=unavailable (ordinary rustc fallback)'
+          fi
+          du -sk "$SCCACHE_DIR" 2>/dev/null || true
+          echo "compiler_cache_report_seconds=$(($(date +%s) - started))"
+          echo "COMPILER_CACHE_SAVE_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+
+      # Restore-only action has no implicit post-job upload. All ordinary
+      # build/test/native gates precede this explicit save; PRs never reach it.
+      - name: Save trusted compiler objects
+        id: compiler-save
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/agent-main' && github.repository == 'constellation-works/orbit' && steps.compiler-setup.outputs.ready == 'true' && steps.compiler-restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        continue-on-error: true
+        timeout-minutes: 2
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: ${{ steps.compiler-key.outputs.key }}
+
+      - name: Report compiler-object save cost
+        if: always()
+        env:
+          SAVE_OUTCOME: ${{ steps.compiler-save.outcome }}
+        run: |
+          if [ -n "${COMPILER_CACHE_SAVE_STARTED:-}" ]; then
+            echo "compiler_cache_save_seconds=$(($(date +%s) - COMPILER_CACHE_SAVE_STARTED)) outcome=$SAVE_OUTCOME"
+          else
+            echo "compiler_cache_save_seconds=unavailable outcome=$SAVE_OUTCOME"
+          fi
 
       # CI runners report bounded provenance only. The host-owned
       # `ci_failure_sweep_pipeline` queries GitHub and is the sole authority
