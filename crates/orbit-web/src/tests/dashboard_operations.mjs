@@ -1,7 +1,9 @@
 // Runs against shipped modules in Chromium via dashboard_operations_browser.mjs,
 // the required dashboard-operations-browser scenario in the QA sweep inventory.
 const { setHost, setWorkspace, setRegisteredHosts, setWindow, setMultiWorkspace, runHref, statusPill } = await import('./js/common.js');
-const { initOperations, fetchAndRenderOperations: fetchAndRenderOperationsPane, fetchAndRenderJobs, fetchAndRenderAutoDrainPane } = await import('./js/operations.js');
+const { initOperations, fetchAndRenderOperations: fetchAndRenderOperationsPane, fetchAndRenderJobs, fetchAndRenderAutoDrainPane, triggerFeedbackClear, OPERATION_FEEDBACK_CLEAR_MS } = await import('./js/operations.js');
+globalThis.triggerFeedbackClear = triggerFeedbackClear;
+globalThis.OPERATION_FEEDBACK_CLEAR_MS = OPERATION_FEEDBACK_CLEAR_MS;
 const { drainReadinessFor } = await import('./js/drain-waits.js');
 const { setActiveTab } = await import('./js/router.js');
 // The Operations tab and the Tasks dock's Drain card refresh separately in the
@@ -585,6 +587,20 @@ assert(!drainButton('Start 2h window').disabled, 'the guard is released after a 
 failReadiness = false;
 await fetchAndRenderOperations();
 
+// Confirmation lines clear about 60s after appearing, while warnings and notes stay visible.
+assert(get('auto-drain-operation-feedback').textContent.includes('Run jrun-20260923-0400-a1 submitted'), 'start confirmation present before timeout');
+assert(get('auto-drain-operation-feedback').textContent.includes('Warning: Admissions throttled'), 'warnings present before timeout');
+triggerFeedbackClear('auto-drain-operation-feedback');
+const remainingAfterClear = get('auto-drain-operation-feedback').textContent;
+assert(!remainingAfterClear.includes('submitted'), `confirmation lines cleared after timeout: ${remainingAfterClear}`);
+assert(!remainingAfterClear.includes('Auto-concurrency:'), `concurrency confirmation cleared after timeout: ${remainingAfterClear}`);
+assert(remainingAfterClear.includes('Warning: Admissions throttled: memory 95%. Running work is not touched.'), `throttling warning stays: ${remainingAfterClear}`);
+assert(remainingAfterClear.includes('Warning: FIXTURE_TOKEN is listed in execution.env.pass but not set'), `token warning stays: ${remainingAfterClear}`);
+assert(remainingAfterClear.includes('Note: no `workflow.required_validation_commands` configured'), `note stays: ${remainingAfterClear}`);
+// A second timeout trigger does nothing; warnings stay until another action.
+triggerFeedbackClear('auto-drain-operation-feedback');
+assert(get('auto-drain-operation-feedback').textContent === remainingAfterClear, 'warnings stay until another action');
+
 // Send pending results delivers recorded settlements and reports each outcome; a
 // settlement that did not reach its owner is never reported as plain success.
 stopOutcome = 'idle';
@@ -604,6 +620,9 @@ assert(settleFeedback.className.includes('error') && !settleFeedback.className.i
 stopSettlements = [{ owner: 'host:/owner', drain_run_id: 'jrun-old', task_id: 'ORB-1', leaf_run_id: 'jrun-leaf-1', outcome: 'settled' }];
 drainButton('Send pending results').click(); await tick(); await tick(); await tick();
 assert(settleFeedback.textContent.includes('1 settlement delivered') && settleFeedback.className.includes('success'), `a fully delivered pass is plain success: ${settleFeedback.textContent}`);
+// A success message without warnings clears completely after timeout.
+triggerFeedbackClear('auto-drain-operation-feedback');
+assert(settleFeedback.textContent === '', 'plain settlement success clears completely after timeout');
 stopOutcome = 'stopped';
 stopSettlements = undefined;
 
@@ -761,6 +780,8 @@ releasePost(); await tick(); await tick(); await tick();
 delayPost = false;
 assert(get('job-operation-feedback').textContent.includes('jrun-dashboard-fixture submitted'), 'submission receipt is visible');
 assert(get('jobs-body').textContent.includes('jrun-dashboard-fixture'), 'new run appears after refresh');
+triggerFeedbackClear('job-operation-feedback');
+assert(get('job-operation-feedback').textContent === '', 'job submission receipt clears after timeout');
 
 // A workspace switch clears the previous jobs view while the new workspace's
 // runs are still pending. A routines refresh must not repaint the old run list,
@@ -919,6 +940,9 @@ const link = descendants(get('auto-task-operation-feedback')).find(node => Strin
 assert(link && String(link.href).includes('workspace=one'), 'mint links to task in originating workspace');
 assert(requests.find(r => r.path.endsWith('/mint')).body.acknowledge_unconditional === true, 'mint acknowledges unconditional semantics');
 assert(!requests.some(r => r.path.includes('/ship')), 'mint never dispatches');
+assert(get('auto-task-operation-feedback').textContent.includes('Task created'), 'mint success text is present');
+triggerFeedbackClear('auto-task-operation-feedback');
+assert(get('auto-task-operation-feedback').textContent === '', 'mint success feedback clears after timeout');
 
 // Error persists through a refresh and releases the pending guard.
 delayPost = false; responseError = 'Fixture disk failure';
@@ -931,6 +955,8 @@ assert(get('auto-task-operation-feedback').textContent.includes('Fixture disk fa
 button('routines-body', 'Disable').click(); await tick(); await tick();
 assert(get('routine-operation-feedback').textContent.includes('Fixture disk failure'), 'routine error visible');
 responseError = null;
+triggerFeedbackClear('routine-operation-feedback');
+assert(get('routine-operation-feedback').textContent.includes('Fixture disk failure'), 'routine error does not time out');
 
 // A successful mint must not be reported as failed when only its GET readback fails.
 readbackError = true;
