@@ -2,7 +2,7 @@
 type: design
 summary: "Scope: a cloud delivery mode that ships a task through a Claude Code cloud session, polls GitHub for its PR, and adopts that PR's number and summary onto the task"
 tags: [cloud, dispatch, claude, routines, pr, polling]
-last_validated: 2026-10-11
+last_validated: 2026-10-17
 ---
 
 # Scope: Cloud dispatch
@@ -89,10 +89,13 @@ Why this route:
 
 Properties the design depends on:
 
-- **The CLI clones the checkout's GitHub remote at its current branch**, not the local
-  working tree. Orbit runs the command from a dedicated clean worktree detached at
-  `origin/<base_branch>`, never from the primary checkout, which would trip
-  `primary_checkout_drift`. The branch name still comes from the payload.
+- **The CLI normally clones the checkout's GitHub remote at its current branch**, not the
+  local working tree. Current CLI docs say that without a GitHub remote or the Claude GitHub
+  App, it can upload a local bundle instead; that bundle can include uncommitted tracked
+  files. Orbit therefore needs a clean worktree detached at `origin/<base_branch>` and must
+  guard against the bundle fallback when it cannot guarantee that pinned base. Never run
+  from the primary checkout, which would trip `primary_checkout_drift`. The branch name still
+  comes from the payload.
 - **A claude.ai OAuth login on the dispatching host**, the same `user:sessions:claude_code`
   scope the follow-up message needs. Its refresh grant is capped at 30 days. On the Mac the
   desktop app has repeatedly revoked the CLI's login (probe: `claude auth status` →
@@ -123,9 +126,10 @@ It has a documented JSON response and needs no login on the host. It costs:
   promotional-credit eligible.** Offers and plan terms change; verify before deployment.
 - **The fire text arrives as untrusted.** It comes wrapped in a `<routine-fire-payload>`
   block, so the routine needs a saved prompt that explicitly opts in (Appendix A).
-- **One routine per repository** in this proposal. The current API documentation limits each
-  routine to 30 fires per hour and each account to 100 fires per hour; the endpoint returns
-  `429` with `Retry-After` when a limit is reached.
+- **One routine per repository** in this proposal. The current API documentation allows up
+  to 30 fires per routine per hour, shared across API calls, the web UI's Run now button and
+  one-shot re-arms; each account can make up to 100 API fires per hour across all routines.
+  Rate-limited calls return `429` with `Retry-After`.
 - **Experimental API.** Its request and response shapes, rate limits, and token semantics
   may change. The `anthropic-beta: experimental-cc-routine-2026-04-01` header is optional;
   the endpoint accepts requests with or without it.
@@ -326,8 +330,9 @@ claude.ai connectors. These tasks are ineligible:
 - tasks whose criteria need the host, such as `orbit` CLI state, the sweep clock, `~/.orbit`,
   launchd/systemd or the LAN;
 - tasks that need Orbit MCP during the work;
-- tasks in repositories the cloud session can't reach (no GitHub App, and no `/web-setup`
-  token);
+- tasks without GitHub access through the Claude GitHub App or `/web-setup`. The CLI may
+  upload a local bundle in this case, but that does not provide the GitHub remote access the
+  PR delivery contract requires;
 - tasks with unmet task dependencies, the same check `task_pr_pipeline` applies.
 
 v1 gates this on an explicit opt-in: the workspace sets `[cloud] enabled`, and the dispatch
