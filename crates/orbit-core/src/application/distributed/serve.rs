@@ -38,7 +38,7 @@ use orbit_store::contracts::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionReceipt, AdmissionRequest,
     ClaimEvidence, ClaimFailure, ClaimInvocation, ClaimMutation, ClaimMutationResult, ClaimRun,
     ExecutionClaim, ExecutionClaimPhase, HandoffObservation, HandoffReviewObservation, JobRunQuery,
-    KnownRedObservation,
+    KnownRedObservation, KnownRedOsAcceptance,
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::task::{Task, TaskStatus};
@@ -538,6 +538,12 @@ impl crate::OrbitRuntime {
     /// that cannot be read is left to the claim journal, which refuses it.
     /// A verdict the owner's base run contradicts is also returned on its own
     /// [ORB-15566], since it ends the claim rather than refusing it.
+    ///
+    /// That comparison is scoped to the host OS recorded when the follower
+    /// was admitted [ORB-16432]. A different OS is a different validation
+    /// environment: the owner's base run is not started and cannot contradict
+    /// the report. The owner accepts the follower's reported failures for
+    /// that OS and keeps the handoff, including a pull request the leaf opened.
     fn observe_known_red(
         &self,
         handoff: &TaskHandoff,
@@ -564,7 +570,19 @@ impl crate::OrbitRuntime {
         }
         // The owner's own base, as admission captured it: never the branch a
         // handoff or its pull request names.
-        let ship = self.claim_receipt(&handoff.claim_id)?.request.ship;
+        let receipt = self.claim_receipt(&handoff.claim_id)?;
+        let follower_os = receipt.request.os;
+        let owner_os = self.host_os();
+        // Both sides known and different: the owner's run is another
+        // validation environment. An unrecorded OS stays comparable, which is
+        // how a same-host admission that predates the field is still judged.
+        let across_os = match (owner_os, follower_os) {
+            (Some(owner), Some(follower)) if owner != follower => {
+                Some(KnownRedOsAcceptance { follower, owner })
+            }
+            _ => None,
+        };
+        let ship = receipt.request.ship;
         let base_sync = if ship.mode == "pr" {
             BaseSyncMode::Remote
         } else {
@@ -581,6 +599,8 @@ impl crate::OrbitRuntime {
                     "the report names base {}",
                     report.base_sha
                 )))
+            } else if across_os.is_some() {
+                Ok(report.failures.clone())
             } else {
                 orbit_engine::verify_claimed_known_red(
                     self,
@@ -597,6 +617,7 @@ impl crate::OrbitRuntime {
                     deadline,
                 )
             };
+            let accepted_across_os = across_os.filter(|_| verdict.is_ok());
             if let Err(KnownRedUnconfirmed::Contradicted(reason)) = &verdict {
                 known_red
                     .contradicted
@@ -606,6 +627,7 @@ impl crate::OrbitRuntime {
                 command,
                 base_sha: base_sha.clone(),
                 verdict: verdict.map_err(|unconfirmed| unconfirmed.reason().to_string()),
+                accepted_across_os,
             });
         }
         Ok(known_red)

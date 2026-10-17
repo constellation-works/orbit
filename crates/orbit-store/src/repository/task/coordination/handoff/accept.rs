@@ -5,7 +5,7 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep};
-use orbit_types::workflow::{KNOWN_RED_VALIDATION_EVENT, handoff::*};
+use orbit_types::workflow::{KNOWN_RED_VALIDATION_EVENT, KnownRedValidation, handoff::*};
 
 use super::super::lifecycle::{encode, invalid, row};
 use super::review::review_refused;
@@ -171,27 +171,22 @@ impl TaskCommitBoundary {
             Some(&observation.known_red),
         )?;
         // [ORB-15427] The owner established each known-red command against
-        // its own base run; the task's history names those tests, as the
-        // owner's own delivery records them.
+        // its own base run, or accepted the follower's base evidence because
+        // the follower was admitted on another OS [ORB-16432]. The task's
+        // history names those tests, as the owner's own delivery records them.
         for known in &known_red {
+            let across_os = observation
+                .known_red
+                .iter()
+                .find(|item| item.command == known.command && item.base_sha == known.base_sha)
+                .and_then(|item| item.accepted_across_os);
             params
                 .append_history
                 .push(orbit_types::task::TaskHistoryEntry {
                     at: Utc::now(),
                     by: params.actor.clone(),
                     event: KNOWN_RED_VALIDATION_EVENT.into(),
-                    note: Some(known.text(&format!(
-                        "Required validation '{}' fails on claimed candidate {} only with tests \
-                         that also fail when this owner runs it on base {}, so the candidate \
-                         introduced none of them and the handoff was accepted; {}.",
-                        known.command,
-                        known.tested_head,
-                        known.base_sha,
-                        known
-                            .failures
-                            .describe()
-                            .unwrap_or_else(|| "no failure named".to_string())
-                    ))),
+                    note: Some(known.text(&known_red_acceptance_detail(known, across_os))),
                     from_status: None,
                     to_status: None,
                     operation_id: None,
@@ -244,5 +239,34 @@ impl TaskCommitBoundary {
             )?;
         }
         Ok(footprint)
+    }
+}
+
+/// The history detail for one accepted known-red command. A same-OS owner
+/// run names that run. A cross-OS acceptance names both operating systems
+/// and keeps the leaf's pull request with the handoff [ORB-16432].
+fn known_red_acceptance_detail(
+    known: &KnownRedValidation,
+    across_os: Option<KnownRedOsAcceptance>,
+) -> String {
+    let failures = known
+        .failures
+        .describe()
+        .unwrap_or_else(|| "no failure named".to_string());
+    match across_os {
+        Some(scope) => format!(
+            "Required validation '{}' fails on claimed candidate {} only with tests that fail on \
+             the {} follower's base {}. This owner runs {}, a different validation environment, \
+             so its own base run neither confirms nor contradicts that report. The follower's \
+             base evidence was accepted and the handoff kept, so this delivery stays, including \
+             a pull request the leaf opened; {failures}.",
+            known.command, known.tested_head, scope.follower, known.base_sha, scope.owner
+        ),
+        None => format!(
+            "Required validation '{}' fails on claimed candidate {} only with tests that also \
+             fail when this owner runs it on base {}, so the candidate introduced none of them \
+             and the handoff was accepted; {failures}.",
+            known.command, known.tested_head, known.base_sha
+        ),
     }
 }

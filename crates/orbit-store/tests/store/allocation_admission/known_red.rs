@@ -93,6 +93,7 @@ impl Delivery {
             command: RED.into(),
             base_sha: self.handoff.candidate.base.commit.clone(),
             verdict,
+            accepted_across_os: None,
         }];
     }
 
