@@ -2,7 +2,7 @@
 title: Auto-concurrency — Vision
 owner: claude
 last_updated: 2026-10-11
-last_validated: 2026-10-11
+last_validated: 2026-10-17
 status: Draft
 feature: auto-concurrency
 doc_role: vision
@@ -30,10 +30,11 @@ otherwise.
    sharp instead of averaging them into a hump. It costs a more complex
    forecast. The profiles report ([2_design.md §8](./2_design.md#8-rollout),
    step 2) shows whether minute profiles are too blurred to use.
-2. **How should the Mac be sampled?** Without cgroups, a sampler has to sum
-   CPU time and resident memory over the worker's process tree, and catch
-   short-lived rustc and test processes before they exit. Is a 5 s walk of
-   the tree accurate enough, or does it need exit-time accounting?
+2. **How much sampling accuracy does macOS need?** Without cgroups, the
+   worker samples its process tree every 5 s. CPU accounting includes reaped
+   descendants through the parent's child CPU counters and process start-time
+   checks; memory remains a point sample and can miss a peak between walks.
+   Is that memory fidelity adequate for admission?
 3. **Do profiles need the crew?** An Opus task and a Haiku task of the same
    complexity differ in length and in how often they build. Adding the crew
    to the key would sharpen profiles, but split the samples thinner.
@@ -103,8 +104,9 @@ footprint. An Orbit task's footprint has a strong shape over time: light
 while the agent reads and plans, heavy when it builds and validates. That
 shape repeats by repository and task size. Admitting on the shape, so a
 task's light phase overlaps another's heavy one, may be new for coding-agent
-orchestration. The forecasting itself is standard. Nothing here has been
-tried yet.
+orchestration. The forecasting itself is standard. The shaped-admission path
+and minute profiles are implemented; whether they increase task throughput at
+an acceptable failure rate remains unmeasured.
 
 ## 4. References
 
