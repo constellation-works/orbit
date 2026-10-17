@@ -15,9 +15,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-use tauri::{AppHandle, Manager, Url};
-
-use crate::MAIN_WINDOW;
+use url::Url;
 
 /// Printed by `orbit web serve` once its listener is bound.
 const LISTENING_PREFIX: &str = "Dashboard listening on ";
@@ -33,11 +31,28 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(12);
 const POLL: Duration = Duration::from_millis(250);
 /// Room for a burst of retry clicks; extra ones are dropped.
 const CONTROL_CAPACITY: usize = 8;
+/// Address announcements waiting for the supervisor. A server announces once
+/// per process image, so this only fills if the supervisor stalls.
+const ADDRESS_CAPACITY: usize = 4;
 /// The log is truncated on launch past this size.
 const MAX_LOG_BYTES: u64 = 8 * 1024 * 1024;
 
+/// The window and app paths the supervisor drives.
+pub trait Shell: Send + 'static {
+    /// Load `url` in the dashboard window.
+    fn navigate(&self, url: Url);
+    /// Run `script` in the dashboard window.
+    fn eval(&self, script: &str);
+    /// Where server output goes; `None` discards it.
+    fn log_path(&self) -> Option<PathBuf>;
+    /// The `orbit` executable to run as the server.
+    fn orbit(&self) -> Result<PathBuf, String> {
+        resolve_orbit()
+    }
+}
+
 /// Requests from the window and the app lifecycle to the supervisor thread.
-pub(crate) enum Control {
+pub enum Control {
     /// Start again now instead of waiting out the backoff.
     Retry,
     /// Stop the running server and start a new one.
@@ -48,7 +63,7 @@ pub(crate) enum Control {
 
 /// State shared by the supervisor thread, the IPC commands and the window's
 /// navigation policy.
-pub(crate) struct Sidecar {
+pub struct Sidecar {
     status: Mutex<Value>,
     /// Origin of the running dashboard; the only remote origin the window
     /// may navigate to.
@@ -61,7 +76,7 @@ pub(crate) struct Sidecar {
 }
 
 impl Sidecar {
-    pub(crate) fn new() -> (Arc<Self>, Receiver<Control>) {
+    pub fn new() -> (Arc<Self>, Receiver<Control>) {
         let (control, receiver) = mpsc::sync_channel(CONTROL_CAPACITY);
         let sidecar = Arc::new(Self {
             status: Mutex::new(status_value(
@@ -78,32 +93,32 @@ impl Sidecar {
         (sidecar, receiver)
     }
 
-    pub(crate) fn status(&self) -> Value {
+    pub fn status(&self) -> Value {
         lock(&self.status).clone()
     }
 
-    pub(crate) fn retry(&self) {
+    pub fn retry(&self) {
         let _ = self.control.try_send(Control::Retry);
     }
 
-    pub(crate) fn restart(&self) {
+    pub fn restart(&self) {
         let _ = self.control.try_send(Control::Restart);
     }
 
     /// Address of the running dashboard server, if one is ready.
-    pub(crate) fn dashboard(&self) -> Option<Url> {
+    pub fn dashboard(&self) -> Option<Url> {
         lock(&self.dashboard).clone()
     }
 
     /// Record which page the window is loading. The webview's own URL is
     /// unset until its first load, so it is never queried.
-    pub(crate) fn page_loading(&self, url: &Url) {
+    pub fn page_loading(&self, url: &Url) {
         self.on_status_page
             .store(is_status_page(url), Ordering::SeqCst);
     }
 
     /// Whether the main window may load `url` in place.
-    pub(crate) fn allows_navigation(&self, url: &Url) -> bool {
+    pub fn allows_navigation(&self, url: &Url) -> bool {
         url.scheme() == "about"
             || is_status_page(url)
             || lock(&self.dashboard)
@@ -113,7 +128,7 @@ impl Sidecar {
 
     /// Stop the server without waiting for it to drain. For a panicking app,
     /// which may never reach its exit handler.
-    pub(crate) fn kill_now(&self) {
+    pub fn kill_now(&self) {
         self.shutting_down.store(true, Ordering::SeqCst);
         if let Ok(mut slot) = self.child.try_lock()
             && let Some(child) = slot.as_mut()
@@ -123,7 +138,7 @@ impl Sidecar {
     }
 
     /// Stop the server and wait for it, bounded by [`STOP_TIMEOUT`].
-    pub(crate) fn shutdown(&self) {
+    pub fn shutdown(&self) {
         self.shutting_down.store(true, Ordering::SeqCst);
         let _ = self.control.try_send(Control::Shutdown);
         if let Some(mut child) = lock(&self.child).take() {
@@ -131,7 +146,7 @@ impl Sidecar {
         }
     }
 
-    pub(crate) fn is_shutting_down(&self) -> bool {
+    pub fn is_shutting_down(&self) -> bool {
         self.shutting_down.load(Ordering::SeqCst)
     }
 }
@@ -144,31 +159,32 @@ enum Outcome {
 }
 
 /// Run the dashboard server until the app exits, restarting it when it stops.
-pub(crate) fn supervise(app: AppHandle, sidecar: Arc<Sidecar>, control: Receiver<Control>) {
+pub fn supervise(shell: impl Shell, sidecar: Arc<Sidecar>, control: Receiver<Control>) {
+    let shell: &dyn Shell = &shell;
     let mut failures = 0u32;
     loop {
         if sidecar.is_shutting_down() {
             return;
         }
         set_status(
-            &app,
+            shell,
             &sidecar,
             status_value("starting", "Starting the Orbit dashboard…", None),
         );
-        let wait = match resolve_orbit() {
+        let wait = match shell.orbit() {
             Err(message) => {
                 set_status(
-                    &app,
+                    shell,
                     &sidecar,
                     status_value("error", "Orbit was not found", Some(message)),
                 );
                 None
             }
-            Ok(binary) => match run_server(&app, &sidecar, &control, &binary) {
+            Ok(binary) => match run_server(shell, &sidecar, &control, &binary) {
                 Outcome::Shutdown => return,
                 Outcome::Restart => {
                     failures = 0;
-                    show_home(&app, &sidecar);
+                    show_home(shell, &sidecar);
                     continue;
                 }
                 Outcome::Stopped { ran_for, message } => {
@@ -178,9 +194,9 @@ pub(crate) fn supervise(app: AppHandle, sidecar: Arc<Sidecar>, control: Receiver
                         failures + 1
                     };
                     let delay = backoff(failures);
-                    show_home(&app, &sidecar);
+                    show_home(shell, &sidecar);
                     set_status(
-                        &app,
+                        shell,
                         &sidecar,
                         status_value(
                             "error",
@@ -217,7 +233,7 @@ fn backoff(failures: u32) -> Duration {
 }
 
 fn run_server(
-    app: &AppHandle,
+    shell: &dyn Shell,
     sidecar: &Arc<Sidecar>,
     control: &Receiver<Control>,
     binary: &Path,
@@ -227,7 +243,7 @@ fn run_server(
         ran_for: started.elapsed(),
         message,
     };
-    let log_path = log_path(app);
+    let log_path = shell.log_path();
     let log = match open_log(log_path.as_deref()) {
         Ok(log) => log,
         Err(error) => return stopped(format!("Could not open the server log: {error}.")),
@@ -256,44 +272,41 @@ fn run_server(
         Err(error) => return stopped(format!("Could not start {}: {error}.", binary.display())),
     };
 
-    let (ready_tx, ready_rx) = mpsc::sync_channel::<Url>(1);
+    // Every image announces its address: a server that replaces itself
+    // after an update keeps its PID and stdout, but replays `--port 0` and
+    // can bind a new port.
+    let (address_tx, address_rx) = mpsc::sync_channel::<Url>(ADDRESS_CAPACITY);
     if let Some(stdout) = child.stdout.take() {
         let mut log = log;
         std::thread::spawn(move || {
-            let mut ready = Some(ready_tx);
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                 let _ = writeln!(log, "{line}");
                 if let Some(address) = line.strip_prefix(LISTENING_PREFIX)
                     && let Ok(url) = Url::parse(address.trim())
-                    && let Some(tx) = ready.take()
                 {
-                    let _ = tx.send(url);
+                    let _ = address_tx.send(url);
                 }
             }
         });
     }
     *lock(&sidecar.child) = Some(child);
 
-    // Wait for the address, then for the server to stop.
+    // Follow the server's address until it stops.
     let mut ready = false;
     loop {
-        if !ready {
-            match ready_rx.try_recv() {
-                Ok(url) => {
-                    ready = true;
-                    show_dashboard(app, sidecar, url);
-                }
-                Err(_) if started.elapsed() > READY_TIMEOUT => {
-                    if let Some(mut child) = lock(&sidecar.child).take() {
-                        stop_child(&mut child);
-                    }
-                    return stopped(format!(
-                        "The server did not report its address within {} s.{log_hint}",
-                        READY_TIMEOUT.as_secs()
-                    ));
-                }
-                Err(_) => {}
+        if let Some(url) = address_rx.try_iter().last() {
+            ready = true;
+            if lock(&sidecar.dashboard).as_ref() != Some(&url) {
+                show_dashboard(shell, sidecar, url);
             }
+        } else if !ready && started.elapsed() > READY_TIMEOUT {
+            if let Some(mut child) = lock(&sidecar.child).take() {
+                stop_child(&mut child);
+            }
+            return stopped(format!(
+                "The server did not report its address within {} s.{log_hint}",
+                READY_TIMEOUT.as_secs()
+            ));
         }
         match control.recv_timeout(POLL) {
             Ok(Control::Shutdown) | Err(RecvTimeoutError::Disconnected) => {
@@ -340,38 +353,34 @@ fn describe(status: ExitStatus) -> String {
     }
 }
 
-fn show_dashboard(app: &AppHandle, sidecar: &Sidecar, url: Url) {
+/// Authorize `url` as the dashboard origin, replacing any earlier one, and
+/// load it.
+fn show_dashboard(shell: &dyn Shell, sidecar: &Sidecar, url: Url) {
     *lock(&sidecar.dashboard) = Some(url.clone());
     set_status(
-        app,
+        shell,
         sidecar,
         status_value("ready", "Opening the dashboard…", None),
     );
-    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
-        let _ = window.navigate(url);
-    }
+    shell.navigate(url);
 }
 
-fn show_home(app: &AppHandle, sidecar: &Sidecar) {
+fn show_home(shell: &dyn Shell, sidecar: &Sidecar) {
     if sidecar.on_status_page.load(Ordering::SeqCst) {
         return;
     }
-    if let Some(window) = app.get_webview_window(MAIN_WINDOW)
-        && let Ok(url) = Url::parse(STATUS_PAGE)
-    {
-        let _ = window.navigate(url);
+    if let Ok(url) = Url::parse(STATUS_PAGE) {
+        shell.navigate(url);
     }
 }
 
 /// Record the status and push it to the status page if that is what the
 /// window shows; the page also reads it on load.
-fn set_status(app: &AppHandle, sidecar: &Sidecar, status: Value) {
+fn set_status(shell: &dyn Shell, sidecar: &Sidecar, status: Value) {
     let script = format!("window.orbitDesktop && window.orbitDesktop.render({status});");
     *lock(&sidecar.status) = status;
-    if sidecar.on_status_page.load(Ordering::SeqCst)
-        && let Some(window) = app.get_webview_window(MAIN_WINDOW)
-    {
-        let _ = window.eval(script);
+    if sidecar.on_status_page.load(Ordering::SeqCst) {
+        shell.eval(&script);
     }
 }
 
@@ -435,13 +444,6 @@ fn die_with_parent(command: &mut Command) {
     }
     #[cfg(not(target_os = "linux"))]
     let _ = command;
-}
-
-fn log_path(app: &AppHandle) -> Option<PathBuf> {
-    app.path()
-        .app_log_dir()
-        .ok()
-        .map(|dir| dir.join("dashboard-server.log"))
 }
 
 fn open_log(path: Option<&Path>) -> std::io::Result<std::fs::File> {
