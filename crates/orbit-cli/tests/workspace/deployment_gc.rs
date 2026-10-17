@@ -125,6 +125,85 @@ fn actions(report: &Value) -> Vec<(String, String, String, u64)> {
 }
 
 #[test]
+fn store_backup_sidecars_share_retention_with_their_database() {
+    let fixture = Fixture::new();
+    let root = fixture.orbit_home();
+    // A's WAL makes its set newest, although its database predates B's.
+    // Both kept sets also have sidecars older than every member of C.
+    let sets = [
+        ("orbit.db.bak-a", [30, 1, 80]),
+        ("orbit.db.bak-b", [20, 10, 90]),
+        ("orbit.db.bak-c", [40, 50, 60]),
+    ];
+    for (name, ages) in sets {
+        for (suffix, age) in ["", "-wal", "-shm"].into_iter().zip(ages) {
+            write_aged(&root.join(format!("{name}{suffix}")), b"copy", age);
+        }
+    }
+
+    let check = |report: &Value, keep: usize, removed_action: &str| {
+        let entries = actions(report);
+        assert_eq!(entries.len(), sets.len() * 3);
+        for (index, (name, _)) in sets.iter().enumerate() {
+            let (action, reason) = if index < keep {
+                ("kept", "newest")
+            } else {
+                (removed_action, "beyond_retention")
+            };
+            for suffix in ["", "-wal", "-shm"] {
+                let path = root.join(format!("{name}{suffix}"));
+                let entry = entries
+                    .iter()
+                    .find(|entry| Path::new(&entry.0) == path)
+                    .unwrap();
+                assert_eq!(
+                    entry,
+                    &(
+                        path.to_str().unwrap().to_owned(),
+                        action.into(),
+                        reason.into(),
+                        4
+                    ),
+                    "each database and its sidecars must share a retention decision"
+                );
+            }
+        }
+    };
+
+    let preview = fixture.json(&["gc", "deployments", "--keep", "2", "--json"]);
+    check(&preview, 2, "would_remove");
+    assert_eq!(preview["bytes_kept"], 24);
+    assert_eq!(preview["bytes_reclaimable"], 12);
+    for (name, _) in sets {
+        for suffix in ["", "-wal", "-shm"] {
+            assert!(root.join(format!("{name}{suffix}")).is_file());
+        }
+    }
+
+    let confirmed = fixture.json(&["gc", "deployments", "--keep", "2", "--confirm", "--json"]);
+    check(&confirmed, 2, "removed");
+    assert_eq!(confirmed["entries_removed"], 3);
+    assert_eq!(confirmed["bytes_reclaimed"], 12);
+    for (index, (name, _)) in sets.iter().enumerate() {
+        for suffix in ["", "-wal", "-shm"] {
+            assert_eq!(root.join(format!("{name}{suffix}")).exists(), index < 2);
+        }
+    }
+
+    let tighter = fixture.json(&["gc", "deployments", "--keep", "1", "--confirm", "--json"]);
+    assert_eq!(tighter["entries_removed"], 3);
+    assert_eq!(tighter["bytes_kept"], 12);
+    for suffix in ["", "-wal", "-shm"] {
+        assert_eq!(
+            fs::read(root.join(format!("orbit.db.bak-a{suffix}"))).unwrap(),
+            b"copy"
+        );
+        assert!(!root.join(format!("orbit.db.bak-b{suffix}")).exists());
+    }
+    assert!(root.join("orbit.db").is_file(), "the live store survives");
+}
+
+#[test]
 fn deployment_retention_reports_with_bytes_and_confirm_removes_only_what_it_listed() {
     let fixture = Fixture::new();
     let root = fixture.orbit_home();

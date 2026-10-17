@@ -346,6 +346,13 @@ orbit task export --all -o tasks-backup.tar.zst
 Both `VACUUM INTO` and `.backup` produce a checkpointed, sidecar-free file. If you must
 file-copy a live DB, copy `*.db`, `*.db-wal`, and `*.db-shm` together.
 
+For a store copy named `~/.orbit/orbit.db.bak-<date>`, keep the corresponding sidecars
+as `orbit.db.bak-<date>-wal` and `orbit.db.bak-<date>-shm` beside it. Deployment GC
+counts these files as one backup for `--keep`, ordered by the newest modification
+time in the set, and keeps or removes them together. It still reports each path and
+its bytes separately. Keep recovery copies outside `~/.orbit` to exclude them from
+deployment GC.
+
 Task export builds a temporary archive beside the output, finishes compression,
 and syncs the file before atomically replacing the destination. A failed export
 preserves an existing backup and removes its temporary file. Abrupt process
