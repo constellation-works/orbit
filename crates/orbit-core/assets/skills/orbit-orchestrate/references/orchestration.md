@@ -199,6 +199,15 @@ task as ready or waiting, naming unmet dependency IDs/statuses, context-lock
 holders, live child-run claims, capacity saturation, and — with `--allow-crew`
 — crew exclusion. It never creates a run, reconciles stale runs, reserves
 files, or mutates a task.
+Without `--concurrency`, the snapshot's ceiling is the live local drain's,
+including an `orbit run concurrency` retune (`capacity.limit_source`
+`run_control`, or `run_input` when the drain still has its submitted value).
+When no local drain is live, a live pull drain supplies that ceiling the same
+way (`pull_run_control` or `pull_run_input`), and text adds a `Leaf ceiling:`
+line naming the pull run. Otherwise the ceiling is 5 (`default`). An explicit
+`--concurrency` is `requested` and wins over both. `capacity.max_active_leaf_runs`
+and `capacity.free_slots` use that ceiling, so a follower pull drain submitted
+at 3 is not reported against the default of 5.
 Its answer can change immediately after the snapshot, so `eligible` means
 "would be admitted by this snapshot", never a guarantee that work will start.
 

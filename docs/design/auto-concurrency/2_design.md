@@ -695,7 +695,7 @@ Limitations:
 | `orbit run show` | Implemented: an `Admission:` line from the recorded pass, e.g. `forecast — skipped heavy candidate (cpu 94% at +6m)`, with candidate titles, shadow decisions labelled hypothetical, and a protected head named by the starvation guard; a `Stuck head:` line while that head is stuck (§5.3). After an idle pass, it names the last built forecast's timestamp, decisions and peaks, and says the current pass built none. JSON preserves `pipeline_state.drain_last_pass.admission_forecast` and retains built history in `pipeline_state.drain_last_forecast`. |
 | `orbit run readiness` | Implemented: the last pass's host forecast peaks, headroom below the current admission thresholds, each judged candidate's profile source and wait, and a stuck head (§5.3). JSON adds `capacity.admission_forecast` and `tasks[].admission_forecast` for the current pass, plus `capacity.last_admission_forecast` for retained built history. Idle passes show that history without changing eligibility; without either recorded block, output is unchanged. See [observing admission](../../CONFIG.md#machineauto_concurrency--host-forecast-admission). |
 | `orbit run profiles` | Implemented: the profiles per workspace, work class and complexity: deliveries (sparse below `min_profile_deliveries`), horizon, peak CPU and memory and when they occur, and the CPU and memory spread. Flags no-diff profiles with build-like load and names the deliveries behind each flag (§3.2). `--json` for the full series |
-| `orbit run profiles --accuracy` | Implemented (§8.1): composable forecast-time `--since`, exact `--drain` and recorded `--mode` cohorts; mature measured pairs, pending and missing counts per offset, with missing split into unsampled (no delivery live) and gap (delivery live, no host row); shadow decisions per drain. `--json` includes the effective selection and raw pairs |
+| `orbit run profiles --accuracy` | Implemented (§8.1): composable forecast-time `--since`, exact `--drain` and recorded `--mode` cohorts; mature measured pairs, pending and missing counts per offset, with missing split into unsampled (no delivery live) and gap (delivery live, no host row); shadow decisions and enforce admissions, gap-fit holds and pull holds per drain. `--json` includes the effective selection and raw pairs |
 | Per-drain mode | Implemented for local drains: CLI `--auto-concurrency off|shadow|enforce`, registered MCP `orbit.workflow.auto` start `auto_concurrency`, and dashboard HTTP start `auto_concurrency` all use Core submission. At durable admission, explicit or configured mode is captured in `input.auto_concurrency` with `input.auto_concurrency_source`, retained on resume/restart. The loop forwards it to the existing classifier; thresholds, profiles, throttle, ceilings and accuracy lineage remain host policy. Stop/resize and explicit pull overrides are refused before effects. |
 | Dashboard | Implemented: an operator launch choice of inherited host mode, off, shadow or enforce. The form reads current inherited host mode from readiness, sends the actual option, and shows the receipt's durable effective mode; the live window shows its captured mode. Forecast curves against measured load with running tasks stacked remain future work. |
 
@@ -798,7 +798,13 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   under-forecast, and the worst miss with its minute and drain.
 - **Shadow decisions**, per drain, over its `shadow` passes: the distinct
   tasks it admitted, those gap fit would have held, and those gap fit would
-  have admitted in a pass that did not. `enforce` passes are counted only.
+  have admitted in a pass that did not. Those columns stay on shadow passes.
+- **Enforce decisions**, per drain, over its local `enforce` passes: the
+  distinct tasks it admitted (`ENFORCE_ADMITTED` / `enforce_admitted`) and
+  the distinct tasks gap fit held (`GAP_HELD` / `gap_held`, from
+  `fit_skipped`). A task held on one pass and admitted on another counts in
+  both. Enforce pull requests held because no work fit are `PULL_HELD` /
+  `pull_held`. Existing shadow JSON fields are unchanged.
 - **Selection and retention.** Without filters the report reads all drains
   and recorded modes over the last 30 days. Optional `--since` selects
   forecasts at or after an RFC3339 timestamp; `--drain` matches an exact
@@ -834,8 +840,9 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   `PULL_REQUESTS` counts pull forecasts, `PULL_SENT` counts requests sent
   (including idle or failed attempts), and `PULL_WOULD_HOLD` counts shadow
   requests enforce would have held, including ones that returned no claim.
-  Pull request counts are separate from the distinct local-task
-  `WOULD_HOLD` and `WOULD_ADD` sets.
+  `PULL_HELD` counts the same `forecast_no_headroom` outcome on enforce
+  requests. Pull request counts are separate from the distinct local-task
+  `WOULD_HOLD`, `WOULD_ADD` and `GAP_HELD` sets.
 
 ## 9. Concerns & Honest Limitations
 

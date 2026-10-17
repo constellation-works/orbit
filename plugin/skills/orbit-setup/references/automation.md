@@ -110,7 +110,10 @@ two at a time. The `final_recovery` agent proposes `complete_no_diff`,
 applier acts on it. Each decision is a task comment with the run id. An
 escalation names the failed run's worktree and its changed paths when it
 still exists, since that is where unfinished work stays.
-`orbit task show` prints the last one, and `orbit doctor` lists tasks still
+Every task show prints the last one: local and routed `orbit task show` text
+(`Final Recovery:`), `orbit.task.show`, and the dashboard task detail
+(`final_recovery`, with `run_id`, `decision`, `outcome` and `at`). A task list
+does not. `orbit doctor` lists tasks still
 blocked after one in its `blocked-task-recovery` row.
 
 It leaves a block alone when someone other than Orbit's automation has

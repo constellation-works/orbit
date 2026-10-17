@@ -74,6 +74,16 @@ budgets, thresholds, profiles or persistent settings.
    to mature before judging them. Resource profiles from `orbit run profiles`
    describe a separate per-delivery population; sparse deliveries and wide
    spread remain limits on confidence, regardless of host-forecast pair count.
+6. Read the per-drain decision columns on that same selection. Shadow
+   columns count shadow passes only: `ADMITTED`, `WOULD_HOLD`, `WOULD_ADD`
+   and `PULL_WOULD_HOLD`. Enforce columns count enforce passes only.
+   `ENFORCE_ADMITTED` is the distinct tasks local enforce passes admitted.
+   `GAP_HELD` is the distinct tasks gap fit held (`fit_skipped`); a task
+   held on one pass and admitted on another counts in both. `PULL_HELD` is
+   the enforce pull requests held because no work fit
+   (`forecast_no_headroom`). JSON keeps the existing shadow fields and adds
+   `enforce_admitted` (a count), `gap_held` (the task ids) and `pull_held`
+   (a request count). `PULL_REQUESTS` and `PULL_SENT` still count both modes.
 
 History is normally pruned after 30 days by run GC. An explicit earlier
 timestamp can select surviving rows, but cannot recover pruned measurements

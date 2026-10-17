@@ -640,7 +640,17 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
     let enforce = drain("jrun-enforce");
     assert_eq!(enforce["enforce_passes"], 1);
     assert_eq!(enforce["shadow_passes"], 0);
+    assert_eq!(enforce["admitted"], 0);
     assert_eq!(enforce["would_hold"], serde_json::json!([]));
+    assert_eq!(enforce["enforce_admitted"], 1);
+    assert_eq!(enforce["gap_held"], serde_json::json!([]));
+    assert_eq!(enforce["pull_held"], 0);
+    assert_eq!(pull["pull_held"], 1);
+    assert_eq!(pull["enforce_admitted"], 0);
+    assert_eq!(pull["pull_would_hold"], 2);
+    assert_eq!(shadow["enforce_admitted"], 0);
+    assert_eq!(shadow["gap_held"], serde_json::json!([]));
+    assert_eq!(shadow["pull_held"], 0);
 
     let plain = fixture.stdout(&["run", "profiles", "--accuracy", "--format", "plain"]);
     let drain_rows: Vec<Vec<&str>> = plain
@@ -661,6 +671,9 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
                 "0",
                 "0",
                 "0",
+                "0",
+                "1",
+                "0",
                 "0"
             ],
             vec![
@@ -673,7 +686,10 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
                 "0",
                 "3",
                 "2",
-                "2"
+                "2",
+                "0",
+                "0",
+                "1"
             ],
             vec![
                 "ws_fixture",
@@ -683,6 +699,9 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
                 "2",
                 "1",
                 "1",
+                "0",
+                "0",
+                "0",
                 "0",
                 "0",
                 "0"
@@ -837,4 +856,189 @@ fn accuracy_splits_idle_minutes_from_sampling_gaps() {
     );
     assert_eq!(five_row[6], "-2.0 cores");
     assert_eq!(five_row[9], "+2.0 GiB");
+}
+
+/// Enforce cohorts report the distinct tasks local passes admitted, the
+/// distinct tasks gap fit held, and enforce pull holds, while shadow columns
+/// stay on shadow passes.
+#[test]
+fn enforce_accuracy_reports_admitted_tasks_gap_holds_and_pull_holds() {
+    if crate::isolated_test::run_in_child(
+        "run_profiles::enforce_accuracy_reports_admitted_tasks_gap_holds_and_pull_holds",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let at = (Utc::now() - chrono::Duration::hours(2))
+        .duration_trunc(chrono::Duration::minutes(1))
+        .unwrap();
+    let stamp = |minutes: i64| at + chrono::Duration::minutes(minutes);
+
+    // A shadow pass must stay out of `--mode enforce` and keep its own columns.
+    fixture.forecast(
+        "jrun-shadow",
+        "shadow",
+        stamp(0),
+        &[(5, 1.0, 1)],
+        &["ORB-S"],
+        &[],
+        &["ORB-S"],
+    );
+    // Two local enforce passes. ORB-2 is admitted twice and ORB-3 is held
+    // twice; each counts once. ORB-4 is held only.
+    fixture.forecast(
+        "jrun-local",
+        "enforce",
+        stamp(1),
+        &[(5, 2.0, 1)],
+        &["ORB-1", "ORB-2"],
+        &["ORB-1", "ORB-2"],
+        &["ORB-3"],
+    );
+    fixture.forecast(
+        "jrun-local",
+        "enforce",
+        stamp(2),
+        &[(5, 2.0, 1)],
+        &["ORB-2"],
+        &["ORB-2"],
+        &["ORB-3", "ORB-4"],
+    );
+    // Pull enforce: one sent with room, one held and not sent, one sent and held.
+    for (minute, sent, held) in [(3i64, true, false), (4, false, true), (5, true, true)] {
+        fixture.forecast(
+            "jrun-pull",
+            "enforce",
+            stamp(minute),
+            &[(5, 3.0, 1)],
+            &[],
+            &[],
+            &[],
+        );
+        fixture
+            .db()
+            .execute(
+                "UPDATE admission_forecasts SET pull_decision_json = ?1 \
+                 WHERE run_id = 'jrun-pull' AND forecast_at = ?2",
+                params![
+                    serde_json::json!({"sent": sent, "forecast_no_headroom": held}).to_string(),
+                    stamp(minute).to_rfc3339_opts(SecondsFormat::Micros, true),
+                ],
+            )
+            .unwrap();
+    }
+
+    let doc: Value = serde_json::from_str(&fixture.stdout(&[
+        "run",
+        "profiles",
+        "--accuracy",
+        "--mode",
+        "enforce",
+        "--json",
+    ]))
+    .unwrap();
+    assert_eq!(doc["selection"]["mode"], "enforce");
+    assert_eq!(doc["forecasts"], 5, "{doc:#}");
+    let drains = doc["drains"].as_array().unwrap();
+    assert_eq!(drains.len(), 2, "{doc:#}");
+    let drain = |run_id: &str| {
+        drains
+            .iter()
+            .find(|drain| drain["run_id"] == run_id)
+            .unwrap_or_else(|| panic!("missing {run_id}: {doc:#}"))
+    };
+    let local = drain("jrun-local");
+    assert_eq!(local["shadow_passes"], 0);
+    assert_eq!(local["enforce_passes"], 2);
+    assert_eq!(local["admitted"], 0);
+    assert_eq!(local["would_hold"], serde_json::json!([]));
+    assert_eq!(local["would_add"], serde_json::json!([]));
+    assert_eq!(local["enforce_admitted"], 2);
+    assert_eq!(local["gap_held"], serde_json::json!(["ORB-3", "ORB-4"]));
+    assert_eq!(local["pull_requests"], 0);
+    assert_eq!(local["pull_sent"], 0);
+    assert_eq!(local["pull_would_hold"], 0);
+    assert_eq!(local["pull_held"], 0);
+    let pull = drain("jrun-pull");
+    assert_eq!(pull["enforce_passes"], 3);
+    assert_eq!(pull["shadow_passes"], 0);
+    assert_eq!(pull["admitted"], 0);
+    assert_eq!(pull["enforce_admitted"], 0);
+    assert_eq!(pull["gap_held"], serde_json::json!([]));
+    assert_eq!(pull["pull_requests"], 3);
+    assert_eq!(pull["pull_sent"], 2);
+    assert_eq!(pull["pull_would_hold"], 0);
+    assert_eq!(pull["pull_held"], 2);
+
+    let plain = fixture.stdout(&[
+        "run",
+        "profiles",
+        "--accuracy",
+        "--mode",
+        "enforce",
+        "--format",
+        "plain",
+    ]);
+    let drain_rows: Vec<Vec<&str>> = plain
+        .lines()
+        .filter(|line| line.starts_with("ws_fixture\t"))
+        .map(|line| line.split('\t').collect())
+        .collect();
+    assert_eq!(
+        drain_rows,
+        vec![
+            vec![
+                "ws_fixture",
+                "jrun-local",
+                "0",
+                "2",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "2",
+                "2",
+                "0"
+            ],
+            vec![
+                "ws_fixture",
+                "jrun-pull",
+                "0",
+                "3",
+                "0",
+                "0",
+                "0",
+                "3",
+                "2",
+                "0",
+                "0",
+                "0",
+                "2"
+            ],
+        ],
+        "{plain}"
+    );
+
+    let shadow: Value = serde_json::from_str(&fixture.stdout(&[
+        "run",
+        "profiles",
+        "--accuracy",
+        "--mode",
+        "shadow",
+        "--json",
+    ]))
+    .unwrap();
+    let shadow_drains = shadow["drains"].as_array().unwrap();
+    assert_eq!(shadow_drains.len(), 1, "{shadow:#}");
+    assert_eq!(shadow_drains[0]["run_id"], "jrun-shadow");
+    assert_eq!(shadow_drains[0]["admitted"], 1);
+    assert_eq!(shadow_drains[0]["would_hold"], serde_json::json!(["ORB-S"]));
+    assert_eq!(shadow_drains[0]["would_add"], serde_json::json!([]));
+    assert_eq!(shadow_drains[0]["enforce_passes"], 0);
+    assert_eq!(shadow_drains[0]["enforce_admitted"], 0);
+    assert_eq!(shadow_drains[0]["gap_held"], serde_json::json!([]));
+    assert_eq!(shadow_drains[0]["pull_would_hold"], 0);
+    assert_eq!(shadow_drains[0]["pull_held"], 0);
 }

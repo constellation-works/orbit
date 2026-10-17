@@ -51,10 +51,14 @@ delivery run was live but wrote no host row. PENDING plus MISSING is the compati
 count. Only ended measured minutes form error pairs. \
 Below, per drain, its shadow passes against what it admitted: WOULD_HOLD counts the \
 tasks it admitted that gap fit would have held, WOULD_ADD those gap fit would have admitted \
-that it did not. Pull drains record one forecast per request, counting a returned claim. \
-PULL_REQUESTS counts these forecasts, PULL_SENT the requests sent to the owner, and \
-PULL_WOULD_HOLD the shadow requests enforce would have held because no work fit. \
-`--json` adds every forecast point paired with its measured minute.\n\n\
+that it did not. ENFORCE_ADMITTED counts the distinct tasks local enforce passes admitted \
+and GAP_HELD the distinct tasks gap fit held; both stay on enforce passes only. \
+Pull drains record one forecast per request, counting a returned claim. \
+PULL_REQUESTS counts these forecasts, PULL_SENT the requests sent to the owner, \
+PULL_WOULD_HOLD the shadow requests enforce would have held because no work fit, and \
+PULL_HELD the enforce requests held for the same reason. \
+`--json` adds every forecast point paired with its measured minute, and names the \
+gap-fit-held task ids.\n\n\
 Accuracy selectors compose: `--since` is an inclusive RFC3339 forecast timestamp (default: \
 30 days ago), `--drain` matches an exact drain run id, and `--mode shadow|enforce` matches the \
 recorded mode. Forecast timestamps are bounded by one report-time snapshot. Text and JSON echo the effective \
@@ -203,7 +207,7 @@ fn build_flags(profiles: &[std::sync::Arc<ResourceProfile>]) -> Option<String> {
     Some(text)
 }
 
-/// `--accuracy`: per-offset forecast error, then per-drain shadow decisions.
+/// `--accuracy`: per-offset forecast error, then per-drain shadow and enforce decisions.
 fn accuracy(
     runtime: &OrbitRuntime,
     selection: AccuracySelection,
@@ -261,7 +265,10 @@ fn accuracy(
         Column::new("WOULD_ADD").fixed(),
         Column::new("PULL_REQUESTS").fixed(),
         Column::new("PULL_SENT").fixed(),
-        Column::new("PULL_WOULD_HOLD"),
+        Column::new("PULL_WOULD_HOLD").fixed(),
+        Column::new("ENFORCE_ADMITTED").fixed(),
+        Column::new("GAP_HELD").fixed(),
+        Column::new("PULL_HELD"),
     ])
     .empty_message("no admission forecasts recorded on this host");
     for drain in &report.drains {
@@ -276,6 +283,9 @@ fn accuracy(
             Cell::new(drain.pull_requests),
             Cell::new(drain.pull_sent),
             Cell::new(drain.pull_would_hold),
+            Cell::new(drain.enforce_admitted),
+            Cell::new(drain.gap_held.len()),
+            Cell::new(drain.pull_held),
         ]);
     }
     Ok(Payload::blocks(

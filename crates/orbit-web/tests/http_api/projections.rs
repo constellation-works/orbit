@@ -1,9 +1,15 @@
 use std::fs;
 
+use std::path::Path;
+
 use chrono::{DateTime, Duration, Timelike, Utc};
 use orbit_common::storage::blob_store::BlobStore;
 use orbit_core::AutoTaskAddParams;
 use orbit_core::V2AuditEventInsertParams;
+use orbit_core::application::task::{
+    FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, TaskAddParams,
+};
+use orbit_engine::{RuntimeHost, TaskAutomationUpdate, blocked_workflow_failure_update};
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 use serde_json::{Value, json};
@@ -975,6 +981,167 @@ fn task_detail_and_list_rows_serve_the_shared_task_projection() {
                     .is_some_and(|reason| !reason.is_empty()),
                 "the detail names why the crew is unresolved: {detail}"
             );
+        },
+    );
+}
+
+/// A run-blocked task with a recorded final-recovery decision. `next_step`
+/// stays the workflow-failure block: the decision does not move the task.
+fn block_with_final_recovery(
+    runtime: &orbit_core::OrbitRuntime,
+    repo: &Path,
+    id: &str,
+    run_id: &str,
+) {
+    runtime
+        .apply_task_automation_update(
+            id,
+            TaskAutomationUpdate {
+                job_run_id: Some(run_id.into()),
+                ..blocked_workflow_failure_update(
+                    "task_pr_pipeline",
+                    run_id,
+                    Some("STEP_FAILED"),
+                    Some("step `implement` completed with success=false"),
+                )
+            },
+        )
+        .unwrap();
+    let task = runtime.get_task(id).unwrap();
+    let observed = runtime.final_recovery_revision(&task).unwrap();
+    let outcome = runtime
+        .apply_final_recovery(
+            &FinalRecoveryRequest {
+                task_id: id.to_string(),
+                run_id: run_id.to_string(),
+                observed,
+                repo_root: repo.to_path_buf(),
+                base_ref: "main".into(),
+                completion: FinalRecoveryCompletion::Review,
+                requeue_bound: Default::default(),
+            },
+            Some(&json!({
+                "decision": "escalate",
+                "diagnosis": "the failure needs an operator",
+                "human_action": "move the task back to backlog after fixing the cause",
+            })),
+        )
+        .unwrap();
+    assert_eq!(outcome, FinalRecoveryOutcome::Escalated { reason: None });
+}
+
+/// `GET /api/tasks/:id` serves the shared show record plus the dashboard extras.
+/// A blocked task's `next_step` and `final_recovery` match `orbit.task.show`.
+/// List rows and a mutation response omit both keys.
+#[test]
+fn task_detail_includes_blocked_guidance_and_list_rows_omit_it() {
+    isolated(
+        "projections::task_detail_includes_blocked_guidance_and_list_rows_omit_it",
+        || {
+            let fixture = Fixture::new();
+            let blocked = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Blocked guidance".into(),
+                    acceptance_criteria: vec!["Show the next step".into()],
+                    ..Default::default()
+                })
+                .unwrap()
+                .id;
+            let plain = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Plain detail".into(),
+                    acceptance_criteria: vec!["Stay quiet".into()],
+                    ..Default::default()
+                })
+                .unwrap()
+                .id;
+            let run_id = "jrun-http-guidance";
+            block_with_final_recovery(&fixture.runtime, &fixture.path("repo"), &blocked, run_id);
+
+            let server = fixture.server(true);
+            let raw =
+                json_ok(server.get(&format!("/api/tasks/{blocked}?workspace=ws_http_fixture")));
+            assert!(raw.get("status_transitions").is_some());
+            assert!(raw.get("job_run_navigable").is_some());
+            assert_eq!(
+                raw["next_step"],
+                json!({
+                    "run_id": run_id,
+                    "resume_command": null,
+                    "requeue_command": format!("orbit task update {blocked} --status backlog"),
+                })
+            );
+            assert_eq!(raw["final_recovery"]["run_id"], run_id);
+            assert_eq!(raw["final_recovery"]["decision"], "escalate");
+            assert_eq!(raw["final_recovery"]["outcome"], "escalated");
+            assert!(raw["final_recovery"]["at"].as_str().unwrap().contains('T'));
+
+            let mut detail = raw.clone();
+            let stripped = detail.as_object_mut().unwrap();
+            for key in ["status_transitions", "job_run_navigable"] {
+                assert!(stripped.remove(key).is_some(), "dashboard extra `{key}`");
+            }
+            if let Some(readiness) = stripped.get_mut("readiness").and_then(Value::as_object_mut) {
+                readiness.remove("preparing");
+            }
+            let shown = fixture
+                .runtime
+                .run_tool("orbit.task.show", json!({"id": blocked}))
+                .unwrap();
+            assert_eq!(detail, shown, "the detail is the shared show record");
+            for extra in ["status_transitions", "job_run_navigable"] {
+                assert!(
+                    shown.get(extra).is_none(),
+                    "the tool show does not add dashboard extra `{extra}`"
+                );
+            }
+
+            let page = json_ok(server.get("/api/tasks?workspace=ws_http_fixture"));
+            let rows = page["items"]
+                .as_array()
+                .or_else(|| page.as_array())
+                .unwrap();
+            for id in [&blocked, &plain] {
+                let row = rows.iter().find(|row| row["id"] == id.as_str()).unwrap();
+                assert!(
+                    row.get("next_step").is_none() && row.get("final_recovery").is_none(),
+                    "a list row omits show guidance: {row}"
+                );
+            }
+            let listed = fixture
+                .runtime
+                .run_tool("orbit.task.list", json!({}))
+                .unwrap();
+            let tool_row = listed["tasks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["id"] == blocked.as_str())
+                .unwrap();
+            assert!(
+                tool_row.get("next_step").is_none() && tool_row.get("final_recovery").is_none(),
+                "orbit.task.list omits show guidance: {tool_row}"
+            );
+
+            let updated = json_ok(server.send(
+                "PATCH",
+                &format!("/api/tasks/{blocked}?workspace=ws_http_fixture"),
+                json!({"comment": "operator looked at the block"}),
+            ));
+            assert!(updated.get("status_transitions").is_some());
+            assert!(
+                updated.get("next_step").is_none() && updated.get("final_recovery").is_none(),
+                "a mutation response omits show guidance: {updated}"
+            );
+            let again =
+                json_ok(server.get(&format!("/api/tasks/{blocked}?workspace=ws_http_fixture")));
+            assert!(again.get("next_step").is_some() && again.get("final_recovery").is_some());
+
+            let quiet =
+                json_ok(server.get(&format!("/api/tasks/{plain}?workspace=ws_http_fixture")));
+            assert!(quiet.get("next_step").is_none() && quiet.get("final_recovery").is_none());
         },
     );
 }

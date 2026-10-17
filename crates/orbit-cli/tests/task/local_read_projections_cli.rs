@@ -2,6 +2,15 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::fs;
+use std::path::Path;
+
+use chrono::{DateTime, SecondsFormat, Utc};
+use orbit_core::application::task::{
+    FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest,
+};
+use orbit_core::{ActorIdentity, OrbitRuntime};
+use orbit_engine::{RuntimeHost, TaskAutomationUpdate, blocked_workflow_failure_update};
+use serde_json::{Value, json};
 
 use crate::isolated_cli_fixture;
 use isolated_cli_fixture::Fixture;
@@ -294,6 +303,194 @@ fn task_show_and_list_json_match_the_tool_host_projection() {
     }
 }
 
+/// A run-blocked task with a recorded final-recovery decision. `next_step`
+/// stays the workflow-failure block: the decision does not move the task.
+fn block_with_final_recovery(runtime: &OrbitRuntime, repo: &Path, id: &str, run_id: &str) {
+    runtime
+        .apply_task_automation_update(
+            id,
+            TaskAutomationUpdate {
+                job_run_id: Some(run_id.into()),
+                ..blocked_workflow_failure_update(
+                    "task_pr_pipeline",
+                    run_id,
+                    Some("STEP_FAILED"),
+                    Some("step `implement` completed with success=false"),
+                )
+            },
+        )
+        .unwrap();
+    let task = runtime.get_task(id).unwrap();
+    let observed = runtime.final_recovery_revision(&task).unwrap();
+    let outcome = runtime
+        .apply_final_recovery(
+            &FinalRecoveryRequest {
+                task_id: id.to_string(),
+                run_id: run_id.to_string(),
+                observed,
+                repo_root: repo.to_path_buf(),
+                base_ref: "main".into(),
+                completion: FinalRecoveryCompletion::Review,
+                requeue_bound: Default::default(),
+            },
+            Some(&json!({
+                "decision": "escalate",
+                "diagnosis": "the failure needs an operator",
+                "human_action": "move the task back to backlog after fixing the cause",
+            })),
+        )
+        .unwrap();
+    assert_eq!(outcome, FinalRecoveryOutcome::Escalated { reason: None });
+}
+
+fn guidance_lines(id: &str, run_id: &str, at: &str) -> (String, String) {
+    let formatted = DateTime::parse_from_rfc3339(at)
+        .unwrap()
+        .with_timezone(&Utc)
+        .to_rfc3339_opts(SecondsFormat::Secs, true);
+    (
+        format!(
+            "Next: run {run_id} cannot be resumed; move the task back to backlog with `orbit task update {id} --status backlog` to run it again"
+        ),
+        format!("Final Recovery: escalate (escalated) by run {run_id} at {formatted}"),
+    )
+}
+
+/// Local `orbit task show` text, its `--json`, and `orbit.task.show` carry the
+/// same blocked guidance. List rows omit it. A task with neither key prints
+/// neither line.
+fn task_show_prints_blocked_guidance_on_cli_and_tool() {
+    let fixture = Fixture::new();
+    let blocked = fixture.json(&["task", "list", "--json"])[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let plain = fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        "Plain show",
+        "--complexity",
+        "low",
+        "--acceptance-criteria",
+        "Stay quiet",
+        "--json",
+    ])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    let run_id = "jrun-show-guidance";
+    // A managed run exports worker authority. The fixture runtime must not
+    // inherit it: the marker fails construction when this temp root has no
+    // binding, and the other variables would point the write at the live store.
+    {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+            .unwrap()
+            .with_actor(ActorIdentity::human("show-guidance-fixture"));
+        block_with_final_recovery(&runtime, &fixture.repo, &blocked, run_id);
+    }
+
+    let without_workspace = |mut doc: Value| {
+        doc.as_object_mut().unwrap().remove("workspace");
+        doc
+    };
+    let cli = without_workspace(fixture.json(&["task", "show", &blocked, "--json"]));
+    let input = json!({"id": blocked}).to_string();
+    let tool = without_workspace(fixture.json(&[
+        "tool",
+        "run",
+        "orbit.task.show",
+        "--full",
+        "--input",
+        &input,
+    ]));
+    assert_eq!(cli, tool, "CLI and tool host serve one show record");
+    assert_eq!(
+        cli["next_step"],
+        json!({
+            "run_id": run_id,
+            "resume_command": null,
+            "requeue_command": format!("orbit task update {blocked} --status backlog"),
+        })
+    );
+    assert_eq!(cli["final_recovery"]["run_id"], run_id);
+    assert_eq!(cli["final_recovery"]["decision"], "escalate");
+    assert_eq!(cli["final_recovery"]["outcome"], "escalated");
+    assert!(cli["final_recovery"]["at"].as_str().unwrap().contains('T'));
+    for extra in ["status_transitions", "job_run_navigable"] {
+        assert!(
+            cli.get(extra).is_none(),
+            "the tool show does not add dashboard extra `{extra}`"
+        );
+    }
+
+    let human = fixture
+        .command(&["task", "show", &blocked])
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8(human).unwrap();
+    let (next_line, recovery_line) = guidance_lines(
+        &blocked,
+        run_id,
+        cli["final_recovery"]["at"].as_str().unwrap(),
+    );
+    assert!(
+        human.lines().any(|line| line == next_line),
+        "local show Next: line:\n{human}"
+    );
+    assert!(
+        human.lines().any(|line| line == recovery_line),
+        "local show Final Recovery: line:\n{human}"
+    );
+
+    let quiet = fixture
+        .command(&["task", "show", &plain])
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let quiet = String::from_utf8(quiet).unwrap();
+    assert!(
+        !quiet.lines().any(|line| line.starts_with("Next:")),
+        "an unblocked task prints no Next: line:\n{quiet}"
+    );
+    assert!(
+        !quiet
+            .lines()
+            .any(|line| line.starts_with("Final Recovery:")),
+        "a task with no decision prints no Final Recovery: line:\n{quiet}"
+    );
+    let quiet_json = fixture.json(&["task", "show", &plain, "--json"]);
+    assert!(quiet_json.get("next_step").is_none());
+    assert!(quiet_json.get("final_recovery").is_none());
+
+    let listed = fixture.json(&["task", "list", "--json"]);
+    let tool_listed = fixture.json(&["tool", "run", "orbit.task.list", "--full", "--input", "{}"]);
+    for rows in [
+        listed.as_array().unwrap(),
+        tool_listed["tasks"].as_array().unwrap(),
+    ] {
+        let row = rows.iter().find(|row| row["id"] == blocked).unwrap();
+        assert!(
+            row.get("next_step").is_none() && row.get("final_recovery").is_none(),
+            "a list row omits show guidance: {row}"
+        );
+    }
+}
+
 #[test]
 fn local_read_projection_contracts() {
     for (name, check) in [
@@ -309,6 +506,10 @@ fn local_read_projection_contracts() {
         (
             "task_show_and_list_json_match_the_tool_host_projection",
             task_show_and_list_json_match_the_tool_host_projection as fn(),
+        ),
+        (
+            "task_show_prints_blocked_guidance_on_cli_and_tool",
+            task_show_prints_blocked_guidance_on_cli_and_tool as fn(),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");

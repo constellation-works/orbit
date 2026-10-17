@@ -153,7 +153,7 @@ impl OrbitRuntime {
 
     /// How the admission forecasts recorded on this host over the last
     /// 30 days compare with its measured minutes, and how
-    /// each drain's shadow decisions compare with what it admitted.
+    /// each drain's shadow and enforce decisions compare with what it admitted.
     pub fn forecast_accuracy(&self) -> Result<ForecastAccuracy, OrbitError> {
         let report_at = Utc::now();
         self.forecast_accuracy_selected(AccuracySelection::last_30_days(report_at), report_at)

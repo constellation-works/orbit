@@ -227,10 +227,13 @@ task to `backlog`, while a forge hold keeps it `in-progress` as described below.
 cancellation returns its task to `backlog` with the cancellation reason, preserving the candidate
 for a later resume. Pass `--block` to `orbit run cancel` when the existing manual recovery flow is
 preferred; the dashboard cancel uses the backlog default. `orbit task show
-<task-id>` prints a `Next:` line for a blocked task: the exact `orbit job resume <run-id>` when
-that run is resumable (`failed`, `timeout`, `interrupted`), or the `orbit task update <task-id>
---status backlog` command for other blocks. `--json` carries the same in `next_step`; it is
-absent for a task that is not blocked by a run.
+<task-id>`, local or routed to the host the id names, prints a `Next:` line for a blocked task:
+the exact `orbit job resume <run-id>` when that run is resumable (`failed`, `timeout`,
+`interrupted`), or the `orbit task update <task-id> --status backlog` command for other blocks.
+`--json`, `orbit.task.show` and `GET /api/tasks/:id` carry the same object in `next_step`; it is
+absent for a task that is not blocked by a run. The same show prints `Final Recovery:` when a
+final-recovery decision is recorded, and those JSON surfaces carry `final_recovery` with
+`run_id`, `decision`, `outcome` and `at`. A task list does not include either field.
 
 ## Cancel a conclusively stuck run
 
