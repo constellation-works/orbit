@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Glossary: Federated MCP"
-last_validated: 2026-10-11
+last_validated: 2026-10-17
 title: Glossary — Federated MCP
 owner: grok
 status: Draft
@@ -13,7 +13,7 @@ related_artifacts: [ORB-11044, ORB-11023, ORB-11010, ORB-11009, ORB-11008]
 
 # Glossary: Federated MCP
 
-Vocabulary for the proposed federated MCP mux. Standard industry terms (proxy, mux, TTL) are included only when this feature gives them a specific meaning. Host-registry catalog terms (`machine_id`, owner checkout, replica checkout, checkout health) keep their v1 meanings; this table maps them into the federated surface rather than redefining them.
+Vocabulary for the federated MCP mux. Standard industry terms (proxy, mux, TTL) are included only when this feature gives them a specific meaning. Host-registry catalog terms (`machine_id`, owner checkout, replica checkout, checkout health) keep their v1 meanings; this table maps them into the federated surface rather than redefining them.
 
 | Term | Meaning |
 |------|---------|
