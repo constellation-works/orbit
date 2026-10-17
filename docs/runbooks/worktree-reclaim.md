@@ -144,10 +144,16 @@ which every acquisition and release updates. `detail` names the type and source
 checkout. A target that no run record, cache lock or lease derives, including a
 scratch target built before its record existed, is retained as
 `skipped:unattributed_host_target`; `--estimate-bytes` reports its
-`retained_bytes`. Only a primary checkout's own targets directory is
-inventoried. Admission's prefilter also selects terminal runs with an
-attributed host target, so admission reclaims them oldest first. Sources,
-branches, refs, task artifacts, logs and other caches are never touched.
+`retained_bytes`. GC inventories the targets directory its runs build into:
+that of the primary checkout owning the workspace's Git common directory. For
+a workspace that is itself a linked worktree, such as a replica checkout added
+with `git worktree add`, this is the primary clone's directory, not the
+workspace's own. An unscoped sweep reports a row for every target there; one
+this workspace's records do not derive, including another workspace's, stays
+`skipped:unattributed_host_target`. A `--run` sweep reports only that run's
+targets. Admission's prefilter also selects terminal runs with an attributed
+host target, so admission reclaims them oldest first. Sources, branches, refs,
+task artifacts, logs and other caches are never touched.
 `detail` names the checkout each attributed target was built for.
 
 The existing `worktree_gc_pipeline` and worktree-GC routine use this collector;

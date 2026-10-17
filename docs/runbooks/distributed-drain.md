@@ -1741,6 +1741,22 @@ Each kept worktree's declared build output is reclaimed on every sweep, and
 `orbit run show <gc-run>` lists every kept worktree with its reason and
 `retained_bytes`.
 
+A claimed leaf's required validation builds its host validation output outside
+the leaf's worktree, under the primary checkout that owns the replica's Git
+common directory. When the replica checkout is itself a linked worktree, that
+is the primary clone it was added from
+([worktree-reclaim.md](worktree-reclaim.md#host-validation-output)). The
+replica's GC attributes each such target to the leaf run whose worktree path
+hashes to its name, from the follower's own run records. Once that run is
+terminal with no live worker, the target goes with the leaf's worktree: in the
+sweep that reaps it, or in a later one after the worktree is gone. After a
+settled claim, the drain's next pass also gives it back with the leaf's
+`target/`, unless `worktree.reclaim` is empty and the worktree remains. A
+running leaf keeps it as `skipped:run_not_terminal` and a held lease keeps
+it as `skipped:host_target_in_use`. A target no follower record derives stays
+as `skipped:unattributed_host_target`. An unscoped `orbit gc worktrees`
+reports a row for every target it examines.
+
 ## Replica store GC
 
 The follower's host store is not the owner's. Command audit, resource history,

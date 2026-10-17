@@ -16,7 +16,9 @@
 //! `skipped:unattributed_host_target`.
 
 use super::super::super::baseline::recorded_base_runs;
-use super::super::super::build_output::{HOST_VALIDATION_TARGETS_DIR, host_validation_target_key};
+use super::super::super::build_output::{
+    HOST_VALIDATION_TARGETS_DIR, host_validation_source, host_validation_target_key,
+};
 use super::super::super::scratch_target::{LEASE_LABEL, leased_target};
 use super::held::{HeldDirectory, Identity, entry_name};
 use super::leftovers::worker_may_be_alive;
@@ -58,8 +60,8 @@ struct ScratchOwner {
     record: Option<PathBuf>,
 }
 
-/// The host validation targets directory of `repo_root`, held open, when it
-/// is a primary checkout and the directory exists.
+/// The host validation targets directory `repo_root`'s runs build into, held
+/// open, when it exists.
 struct TargetsRoot {
     primary: PathBuf,
     path: PathBuf,
@@ -76,14 +78,9 @@ struct Target {
 /// component: a redirect anywhere is refused rather than followed, and every
 /// later check and change goes through the descriptor, not the path.
 fn targets_root(repo_root: &Path) -> Result<Option<TargetsRoot>, OrbitError> {
-    let Ok(primary) = fs::canonicalize(repo_root) else {
+    let Some(primary) = targets_primary(repo_root) else {
         return Ok(None);
     };
-    // Targets live under the primary checkout that owns the Git common
-    // directory; a linked-worktree workspace's runs build under another root.
-    if !fs::symlink_metadata(primary.join(".git")).is_ok_and(|meta| meta.is_dir()) {
-        return Ok(None);
-    }
     let mut held = HeldDirectory::open(&primary)?;
     let mut path = primary.clone();
     for component in HOST_VALIDATION_TARGETS_DIR {
@@ -105,6 +102,21 @@ fn targets_root(repo_root: &Path) -> Result<Option<TargetsRoot>, OrbitError> {
         path,
         held,
     }))
+}
+
+/// The canonical primary checkout whose targets directory holds the output of
+/// `repo_root`'s runs. The builder places a checkout's target under the
+/// primary that owns its Git common directory
+/// (`build_output::host_validation_source`), so a workspace that is itself a
+/// linked worktree, as a replica checkout can be, has its runs' targets under
+/// that primary rather than its own root [ORB-16398].
+fn targets_primary(repo_root: &Path) -> Option<PathBuf> {
+    let checkout = fs::canonicalize(repo_root).ok()?;
+    if fs::symlink_metadata(checkout.join(".git")).is_ok_and(|meta| meta.is_dir()) {
+        return Some(checkout);
+    }
+    let (primary, _) = host_validation_source(&checkout).ok()?;
+    fs::canonicalize(primary).ok()
 }
 
 /// The size of a retained target, measured through the held root.
