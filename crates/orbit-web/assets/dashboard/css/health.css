@@ -79,7 +79,7 @@ td .rel-rate { font-size: 12px; }
   display: flex; justify-content: space-between;
 }
 .rel-table { width: 100%; }
-.rel-card .card-body { padding: 0; }
+.rel-card .card-body { padding: 0; overflow-x: auto; }
 .rel-role {
   font-family: var(--font-mono); font-size: 10px;
   padding: 1px 6px; border-radius: 3px; border: 1px solid var(--border);
