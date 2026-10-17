@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 const PRESERVED: &str = "published_owner_requeued";
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct PreservedPublication {
     schema_version: u32,
@@ -33,6 +33,11 @@ fn preserved_entry(record: &PreservedPublication) -> Result<TaskHistoryEntry, Or
         operation_id: None,
         decision: None,
     })
+}
+
+fn parse_preserved(entry: &TaskHistoryEntry) -> Result<PreservedPublication, OrbitError> {
+    serde_json::from_str(entry.note.as_deref().unwrap_or_default())
+        .map_err(|e| refuse(e.to_string()))
 }
 
 impl OrbitRuntime {
@@ -129,6 +134,39 @@ impl OrbitRuntime {
         Ok((preserved_entry(&record)?, binding))
     }
 
+    /// The preservation record an operator requeue appends for `entry`, given
+    /// the records `task` already holds. Admission takes exactly one record
+    /// per source run, so the same record already on record binds the
+    /// publication and nothing is appended (`None`). A different record for
+    /// that run would be a second one, which admission refuses, so it is
+    /// refused here before anything is written.
+    pub(crate) fn preservation_to_append(
+        &self,
+        task: &Task,
+        entry: TaskHistoryEntry,
+    ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
+        let record = parse_preserved(&entry)?;
+        for existing in self
+            .get_task_history(&task.id)?
+            .iter()
+            .filter(|e| e.event == PRESERVED)
+        {
+            let existing = parse_preserved(existing)?;
+            if existing.source_run_id != record.source_run_id {
+                continue;
+            }
+            return if existing == record {
+                Ok(None)
+            } else {
+                Err(refuse(format!(
+                    "a different publication of run `{}` is already preserved on the task",
+                    record.source_run_id
+                )))
+            };
+        }
+        Ok(Some(entry))
+    }
+
     /// Whether `task`, last delivered by an owner PR run, has a pull request
     /// or a publication-preservation record on record. With no
     /// failure-handoff receipt binding them, the next admission refuses such
@@ -220,8 +258,7 @@ impl OrbitRuntime {
                 if e.by != "system" {
                     return Err(refuse("untrusted publication preservation"));
                 }
-                serde_json::from_str::<PreservedPublication>(e.note.as_deref().unwrap_or_default())
-                    .map_err(|e| refuse(e.to_string()))
+                parse_preserved(e)
             })
             .collect::<Result<Vec<_>, _>>()?;
         let predecessor = || -> Result<String, OrbitError> {
