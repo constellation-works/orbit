@@ -121,6 +121,12 @@ guaranteed to start.
   orbit run readiness "$TASK_ID" --json
   ```
 
+  With no `--concurrency`, the ceiling is the live local drain's, including a
+  later `orbit run concurrency --set`, otherwise a live pull drain's, otherwise
+  5. `--json` names that choice as `capacity.limit_source` (`run_input`,
+  `run_control`, `pull_run_input`, `pull_run_control`, or `default`). Text adds
+  a `Leaf ceiling:` line only when the pull drain supplies the ceiling.
+
 Common reasons a backlog task waits:
 
 - **Unsatisfied dependencies.**
