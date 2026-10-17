@@ -81,6 +81,136 @@ function meterFill(percent) {
   return fill;
 }
 
+// Provider usage chips: the selected host's readings, one per provider and
+// window, in the resource chips' visual language. They ride the host resource
+// poll (`provider_limits` in its payload), so they follow the selected host and
+// pause with it in a hidden tab.
+
+// Beyond this many windows the rest fold into one `+N` chip, so the bar cannot
+// grow without bound; the summary chip's title still lists every reading.
+const MAX_CHIPS = 3;
+// A reading within this many points of its limit reads as near it.
+const NEAR_POINTS = 10;
+
+const WINDOW_LABELS = { five_hour: '5h', seven_day: '7d', primary: '' };
+
+function windowLabel(window) {
+  if (window == null || window === '') return '';
+  return window in WINDOW_LABELS ? WINDOW_LABELS[window] : String(window).replace(/_/g, ' ');
+}
+
+/// A reading observed on an earlier UTC date is stale. The payload's `stale`
+/// wins; an older payload with only `observed_at` uses that UTC date, so a
+/// same-day reading still reads as today. `label` is `today` or `Nm|h|d old`.
+export function providerReadingAge(reading, now = Date.now()) {
+  const observed = reading?.observed_at ? new Date(reading.observed_at) : null;
+  const valid = observed && !Number.isNaN(observed.getTime());
+  let stale = reading?.stale === true;
+  if (reading?.stale !== true && reading?.stale !== false && valid) {
+    stale = observed.toISOString().slice(0, 10) < new Date(now).toISOString().slice(0, 10);
+  }
+  if (!stale) return { label: 'today', stale: false };
+  const seconds = Number.isFinite(Number(reading?.age_seconds))
+    ? Math.max(0, Math.floor(Number(reading.age_seconds)))
+    : valid ? Math.max(0, Math.floor((now - observed.getTime()) / 1000)) : 0;
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(seconds / 3600);
+  const amount = minutes < 60 ? `${seconds > 0 && minutes === 0 ? 1 : minutes}m`
+    : hours < 48 ? `${hours}h`
+    : `${Math.floor(hours / 24)}d`;
+  return { label: `${amount} old`, stale: true };
+}
+
+function shortTime(iso) {
+  const at = iso ? new Date(iso) : null;
+  return at && !Number.isNaN(at.getTime()) ? `${at.toISOString().slice(0, 16).replace('T', ' ')}Z` : 'an unknown time';
+}
+
+/// How one reading reads in its chip and title. `severity` is `critical` at or
+/// over the limit (or exhausted or gated), `elevated` within ten points of it,
+/// `ok` below that and `unknown` when the provider reported no usage. A
+/// provider whose gate is off has no limit to compare to, so 100% is its
+/// limit; it stays marked `gatingOff` because nothing is held back on it.
+export function describeProviderReading(reading, now = Date.now()) {
+  const scope = reading.scope ? ` [${reading.scope}]` : '';
+  const age = providerReadingAge(reading, now);
+  const gatingOff = reading.threshold === 'off';
+  const limit = typeof reading.threshold === 'number' ? reading.threshold : 100;
+  const used = Number.isFinite(reading.used_percent) ? reading.used_percent : null;
+  const exhausted = reading.exhausted === true;
+  const gated = reading.gated === true;
+  const severity = gated || exhausted || (used != null && used >= limit) ? 'critical'
+    : used == null ? 'unknown'
+    : used >= limit - NEAR_POINTS ? 'elevated'
+    : 'ok';
+  const short = windowLabel(reading.window);
+  const key = `${reading.provider}${reading.scope ? ` ${reading.scope}` : ''}${short ? ` ${short}` : ''}`;
+  const value = used != null ? `${Math.round(used)}%` : exhausted ? 'full' : '-';
+  const crews = Array.isArray(reading.crews) && reading.crews.length ? `: ${reading.crews.join(', ')} skipped` : '';
+  const state = gatingOff ? 'gating off'
+    : gated ? `gated${used != null ? ` at ${used}% ≥ ${limit}%` : ''} until ${shortTime(reading.until)}${crews}`
+    : reading.gating === false ? 'overage window; never gates'
+    : `limit ${limit}%`;
+  const detail = `${reading.provider}${scope} ${reading.window || 'usage window'} ${used != null ? `${used}%` : 'usage not reported'}`
+    + `${reading.partial === true ? ' (partial: some invocations report no cost)' : ''}`
+    + ` · observed ${reading.observed_at || 'at an unknown time'} (${age.label}${age.stale ? ' · stale' : ''}) · ${state}`;
+  const flag = age.stale ? 'old' : gatingOff ? 'off' : '';
+  return { key, value, severity, stale: age.stale, gatingOff, flag, detail };
+}
+
+const RANK = { critical: 3, elevated: 2, ok: 1, unknown: 0 };
+
+function chip(className, title, children) {
+  return el('span', { class: className, title, role: 'group', 'aria-label': title }, children);
+}
+
+const states = item => `${item.stale ? ' stale' : ''}${item.gatingOff ? ' gating-off' : ''}`;
+const flagNodes = item => item.flag ? [el('span', { class: 'provider-usage-flag', text: item.flag })] : [];
+
+/// The chips for `payload.provider_limits`: one per provider and window, worst
+/// first, plus a summary chip (the worst reading, every reading in its title)
+/// that CSS shows in place of the list on narrow bars. A stale or gating-off
+/// reading keeps its chip and says so in a flag, a class and the title. A
+/// payload without readings (an older host, a failed poll) keeps one
+/// placeholder chip, so the bar never loses the group. Chips have a minimum
+/// width, so a new reading does not move the rest of the bar.
+export function renderProviderUsage(payload, host = document.getElementById('provider-usage-chips')) {
+  if (!host) return;
+  const readings = Array.isArray(payload?.provider_limits)
+    ? payload.provider_limits.filter(reading => reading && reading.provider) : null;
+  if (!readings || readings.length === 0) {
+    const title = !payload ? 'Provider usage unavailable: the host resource API did not answer'
+      : readings ? 'No provider usage readings on this host'
+      : 'Provider usage is not reported by this host';
+    host.replaceChildren(chip('host-resource provider-usage unknown', title, [
+      el('span', { class: 'k', text: 'usage' }),
+      el('span', { class: 'v', text: '-' }),
+    ]));
+    return;
+  }
+  const now = Date.now();
+  const described = readings.map(reading => describeProviderReading(reading, now))
+    .sort((a, b) => RANK[b.severity] - RANK[a.severity]);
+  const all = described.map(item => item.detail).join('\n');
+  const chips = described.slice(0, MAX_CHIPS).map(item =>
+    chip(`host-resource provider-usage provider-usage-item ${item.severity}${states(item)}`, item.detail, [
+      el('span', { class: 'k', text: item.key }),
+      el('span', { class: 'v', text: item.value }),
+      ...flagNodes(item),
+    ]));
+  if (described.length > MAX_CHIPS) {
+    chips.push(chip('host-resource provider-usage provider-usage-item provider-usage-more unknown', all, [
+      el('span', { class: 'k', text: `+${described.length - MAX_CHIPS} more` }),
+    ]));
+  }
+  const worst = described[0];
+  const summary = chip(`host-resource provider-usage provider-usage-summary ${worst.severity}${states(worst)}`, all, [
+    el('span', { class: 'k', text: 'usage' }),
+    el('span', { class: 'v', text: worst.value }),
+  ]);
+  host.replaceChildren(summary, ...chips);
+}
+
 const listeners = new Set();
 /// Called with each fresh payload (or null when the poll failed).
 export function onHostResources(listener) {
@@ -134,12 +264,14 @@ export async function fetchAndRenderHostResources() {
       lastPayload = payload;
       receivedAt = Date.now();
       renderHostResources(payload);
+      renderProviderUsage(payload);
       for (const listener of listeners) listener(payload);
     }
   } catch (error) {
     if (current === sequence) {
       lastPayload = null;
       renderHostResources(null);
+      renderProviderUsage(null);
       for (const listener of listeners) listener(null);
     }
     throw error;
@@ -153,6 +285,7 @@ export function resetHostResources() {
   sequence += 1;
   lastPayload = null;
   renderHostResources(null);
+  renderProviderUsage(null);
   for (const listener of listeners) listener(null);
 }
 

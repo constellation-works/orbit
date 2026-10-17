@@ -2323,49 +2323,6 @@ function autoDrainProviderLimitNote(readings) {
   return note;
 }
 
-// Every live reading, gated or not. A reading observed on an earlier UTC
-// date is stale; one from today reads "today" and carries no stale marker.
-// `stale` from the payload wins. An older payload with only `observed_at`
-// uses that UTC date, so a same-day reading still reads as today.
-function autoDrainReadingAge(reading) {
-  const observed = reading?.observed_at ? new Date(reading.observed_at) : null;
-  const valid = observed && !Number.isNaN(observed.getTime());
-  let stale = reading?.stale === true;
-  if (reading?.stale !== true && reading?.stale !== false && valid) {
-    stale = observed.toISOString().slice(0, 10) < new Date().toISOString().slice(0, 10);
-  }
-  if (!stale) return { label: "today", stale: false };
-  const seconds = Number.isFinite(Number(reading?.age_seconds))
-    ? Math.max(0, Math.floor(Number(reading.age_seconds)))
-    : valid ? Math.max(0, Math.floor((Date.now() - observed.getTime()) / 1000)) : 0;
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(seconds / 3600);
-  const amount = minutes < 60 ? `${seconds > 0 && minutes === 0 ? 1 : minutes}m`
-    : hours < 48 ? `${hours}h`
-    : `${Math.floor(hours / 24)}d`;
-  return { label: `${amount} old`, stale: true };
-}
-
-function autoDrainProviderReadings(readings) {
-  const items = Array.isArray(readings) ? readings.filter(reading => reading && reading.provider) : [];
-  if (items.length === 0) return null;
-  const list = el("ul", { class: "drain-provider-readings" });
-  list.setAttribute("aria-label", "Provider usage readings");
-  for (const reading of items) {
-    const scope = reading.scope ? ` [${reading.scope}]` : "";
-    const used = reading.used_percent == null ? "usage not reported" : `${reading.used_percent}%`;
-    const age = autoDrainReadingAge(reading);
-    const gating = reading.threshold === "off" ? " · gating off" : "";
-    const row = el("li", {
-      class: `drain-provider-reading${age.stale ? " stale" : ""}`,
-      title: reading.observed_at ? `Observed ${reading.observed_at}` : "Observed time unknown",
-      text: `${reading.provider}${scope} ${reading.window || "usage window"} ${used} · ${age.label}${age.stale ? " · stale" : ""}${gating}`,
-    });
-    list.append(row);
-  }
-  return list;
-}
-
 // One row per host and provider whose login is still failing. A later
 // successful run of that provider on that host drops the row from the payload.
 function autoDrainProviderAuth(failures) {
@@ -2593,7 +2550,6 @@ function renderAutoDrain(payload) {
   const holds = [
     autoDrainThrottleNote(payload.capacity),
     autoDrainProviderLimitNote(payload.provider_limits),
-    autoDrainProviderReadings(payload.provider_limits),
     autoDrainProviderAuth(payload.provider_auth_failures),
     drainCrewNote(payload),
   ].filter(Boolean);

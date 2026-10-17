@@ -216,14 +216,7 @@ assert(note.textContent.startsWith('Provider limits: codex seven_day 92%'), `gat
 assert(!note.textContent.includes('claude'), `a reading below its threshold stays out of the gated note: ${note.textContent}`);
 assert(!note.textContent.includes('stale') && !note.textContent.includes('today'), `the gated note does not carry age: ${note.textContent}`);
 
-const rendered = [...drain().querySelectorAll('.drain-provider-reading')];
-assert.equal(rendered.length, 2, `every reading is listed: ${rendered.map(node => node.textContent)}`);
-const stale = rendered.find(node => node.textContent.includes('codex'));
-assert(stale.classList.contains('stale'), 'a stale reading carries the stale class');
-assert(stale.textContent.includes('92%') && stale.textContent.includes('3d old') && stale.textContent.includes('stale'), `stale age: ${stale.textContent}`);
-assert(stale.title.includes('2026-10-14'), `the row names when it was observed: ${stale.title}`);
-const fresh = rendered.find(node => node.textContent.includes('claude'));
-assert(fresh.textContent.includes('today') && !fresh.textContent.includes('stale') && !fresh.classList.contains('stale'), `a fresh reading renders as today: ${fresh.textContent}`);
+assert.equal(drain().querySelector('.drain-provider-reading'), null, 'the readings moved to the top bar; the Drain card lists none');
 
 const item = drain().querySelector('.drain-provider-auth-item');
 assert(item, 'an authentication failure is listed');
@@ -236,4 +229,4 @@ assert(fix && fix.textContent.includes('claude auth login'), `the fix command is
 readiness = payload([]);
 await fetchAndRenderAutoDrainPane();
 assert.equal(drain().querySelector('.drain-provider-auth-item'), null, 'a cleared payload removes the auth item');
-assert([...drain().querySelectorAll('.drain-provider-reading')].some(node => node.textContent.includes('today')), 'fresh readings still render as today after the failure clears');
+assert(drain().querySelector('.drain-provider-limit-note'), 'the gated note stays after the failure clears');

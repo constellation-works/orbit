@@ -11,14 +11,25 @@ use super::blocking;
 use super::routines::{action_capability, authorization_denied, authorized_caller};
 use crate::state::DashboardState;
 
-/// Always reports the serving host, without a workspace extractor or remote routing.
+/// Always reports the serving host, without a workspace extractor or remote
+/// routing. Beside the resource sample it carries `provider_limits`: the host's
+/// live provider usage readings (readiness's shape), or `null` when they cannot
+/// be read, so the top bar polls both in one request.
 pub(super) async fn resources(State(state): State<DashboardState>) -> Response {
     match blocking("host resource sampling", move || {
-        state.host_resource_status()
+        let status = state.host_resource_status()?;
+        let mut body = to_json(&status)?;
+        if let Some(object) = body.as_object_mut() {
+            object.insert(
+                "provider_limits".into(),
+                state.host_provider_limits().unwrap_or(Value::Null),
+            );
+        }
+        Ok(body)
     })
     .await
     {
-        Ok(status) => Json(status).into_response(),
+        Ok(body) => Json(body).into_response(),
         Err(response) => *response,
     }
 }

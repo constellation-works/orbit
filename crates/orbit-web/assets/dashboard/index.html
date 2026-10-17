@@ -24,7 +24,7 @@
           </div>
           <h1 class="crumb visually-hidden" id="topbar-crumb">Tasks</h1>
           <!-- Live readings for the selected host: load relative to cores, memory
-               and disk. The group names that host. Each chip is sized for its
+               and disk, then its provider usage. The group names that host. Each chip is sized for its
                widest usual reading, so a new reading or a throttle verdict does
                not move the bar. The counts sit on the rail (live runs
                on Jobs, denials on Health). -->
@@ -34,6 +34,12 @@
               <span class="host-resource unknown" data-resource="cpu" role="group" aria-label="cpu unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">load</span><span class="v">-</span></span>
               <span class="host-resource unknown" data-resource="memory" role="group" aria-label="memory unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">mem</span><span class="v">-</span></span>
               <span class="host-resource unknown" data-resource="disk" role="group" aria-label="disk unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">disk</span><span class="v">-</span></span>
+            </div>
+            <!-- The same host's provider usage, one chip per provider and
+                 window (a single summary chip on narrow bars); it follows the
+                 host chips' poll. -->
+            <div class="host-resource-chips provider-usage-chips" id="provider-usage-chips" role="group" aria-label="Provider usage of the selected host">
+              <span class="host-resource provider-usage unknown" role="group" aria-label="Provider usage unavailable" title="Provider usage unavailable"><span class="k">usage</span><span class="v">-</span></span>
             </div>
           </div>
           <span class="topbar-spacer"></span>
