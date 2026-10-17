@@ -39,6 +39,134 @@ fn artifact<T: serde::de::DeserializeOwned>(fixture: &Fixture, path: &str) -> T 
     .unwrap()
 }
 
+#[test]
+fn evidence_arriving_after_a_checkpoint_resume_requeues_the_original_owners_task() {
+    if !super::dispatch_admission::isolated(
+        "review_held_resume::evidence_arriving_after_a_checkpoint_resume_requeues_the_original_owners_task",
+    ) {
+        return;
+    }
+    let mut fixture = Fixture::new();
+    let owner = fixture.input["job_run_id"].as_str().unwrap().to_string();
+    let record = fixture.runtime.get_job_run(&owner).unwrap().unwrap();
+    fixture
+        .runtime
+        .mark_job_run_running(&owner, Utc::now(), std::process::id())
+        .unwrap();
+    fixture
+        .runtime
+        .finalize_job_run(&owner, JobRunState::Interrupted, Utc::now(), None)
+        .unwrap();
+    // Resume admission restores in-progress without changing the reused
+    // worktree's checkpoint-owner binding.
+    fixture
+        .runtime
+        .update_task_with_identity(
+            &fixture.task_id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::InProgress),
+                ..Default::default()
+            },
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+    let resumed = fixture
+        .runtime
+        .insert_job_run(
+            &record.job_id,
+            2,
+            Utc::now(),
+            record.input.clone(),
+            Some(owner.clone()),
+        )
+        .unwrap()
+        .run_id;
+    fixture.input["run_id"] = json!(resumed);
+    fixture.admit();
+    let mut report = interrupted_report(&fixture);
+    report["external_evidence"] = json!([{
+        "kind": "native_os", "name": "Native check", "command": "native check",
+        "artifact": "evidence/native.json",
+    }]);
+    report["validation"].as_array_mut().unwrap().push(json!({
+        "id": "V2", "command": "native check", "outcome": "not_run", "role": "required",
+    }));
+    fixture.put_report(&report);
+    assert!(
+        fixture.settle().is_err(),
+        "unavailable evidence holds delivery"
+    );
+    let hold: ReviewEvidenceHold = artifact(&fixture, REVIEW_EVIDENCE_HOLD_ARTIFACT);
+    assert_eq!(hold.run_id, resumed, "the hold names the settling run");
+    let task = fixture.runtime.get_task(&fixture.task_id).unwrap();
+    assert_eq!(task.status, TaskStatus::InProgress);
+    assert_eq!(task.job_run_id.as_deref(), Some(owner.as_str()));
+
+    // A later unrelated delivery cannot be requeued by this hold, even if
+    // it uses the same job and the original evidence subsequently arrives.
+    let unrelated = fixture
+        .runtime
+        .insert_job_run(&record.job_id, 1, Utc::now(), record.input, None)
+        .unwrap()
+        .run_id;
+    let bind = |run: &str| {
+        fixture
+            .runtime
+            .update_task_with_identity(
+                &fixture.task_id,
+                TaskUpdateParams {
+                    job_run_id: Some(Some(run.into())),
+                    ..Default::default()
+                },
+                Some("codex".into()),
+                None,
+            )
+            .unwrap();
+    };
+    bind(&unrelated);
+    attach_as_operator(
+        &fixture,
+        "evidence/native.json",
+        &json!({
+            "schema_version": 1, "attempt_id": hold.attempt_id, "candidate": hold.candidate,
+            "kind": "native_os", "name": "Native check", "command": "native check",
+            "outcome": "passed", "log_artifact": "evidence/native-log.json",
+        }),
+    );
+    let log = json!({"output": "passed"});
+    attach_as_operator(&fixture, "evidence/native-log.json", &log);
+    assert_eq!(
+        fixture.runtime.get_task(&fixture.task_id).unwrap().status,
+        TaskStatus::InProgress,
+        "a hold cannot release an unrelated delivery"
+    );
+
+    bind(&owner);
+    attach_as_operator(&fixture, "evidence/native-log.json", &log);
+    let task = fixture.runtime.get_task(&fixture.task_id).unwrap();
+    assert_eq!(
+        task.status,
+        TaskStatus::Backlog,
+        "ORB-16407: evidence from a resumed review must requeue its checkpoint owner's task"
+    );
+    assert_eq!(task.job_run_id.as_deref(), Some(owner.as_str()));
+    let history = fixture.runtime.get_task_history(&fixture.task_id).unwrap();
+    assert_eq!(history.last().unwrap().event, "review_evidence_received");
+    attach_as_operator(&fixture, "evidence/native-log.json", &log);
+    assert_eq!(
+        fixture
+            .runtime
+            .get_task_history(&fixture.task_id)
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.event == "review_evidence_received")
+            .count(),
+        1,
+        "repeated evidence does not requeue the task again"
+    );
+}
+
 /// Hold the fixture's candidate on one native check, then attach a passing
 /// result and its log so the receipt requeues the task. Returns the hold and
 /// the reviewer's report, to repeat under the next attempt.

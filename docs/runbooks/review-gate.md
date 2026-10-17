@@ -266,6 +266,12 @@ the kind, exact command and candidate tree. Attempt, commit, display name and
 artifact path changes do not expire a result on the same tree. Unrelated,
 different-tree, failed or incomplete evidence leaves the hold in place.
 
+After a checkpoint resume, the hold names the resumed run that settled the
+review, while the task keeps its original checkpoint-owner binding. Evidence
+receipt accepts that binding only through the same-job resume chain; an
+unrelated run binding makes the hold stale. Passing evidence requeues the
+task and records `review_evidence_received` without rebinding its owner.
+
 The native attachment command preserves the already authenticated local
 operator context through the screened task write. Both the result and log
 must have `writer: operator` in the artifact manifest; `created_by: human:…`
