@@ -6,7 +6,7 @@
 //! evidence and the proposed task's generated identity.
 
 use orbit_engine::DispatchError;
-use orbit_types::task::{NO_AUTO_APPROVE_TAG, Task, TaskStatus};
+use orbit_types::task::{CI_FAILURE_KEY_TAG_PREFIX, NO_AUTO_APPROVE_TAG, Task, TaskStatus};
 use serde_json::{Value, json};
 
 use crate::application::task::pilot::input::{required_string, required_string_array};
@@ -15,8 +15,7 @@ use crate::application::task::pilot::{
 };
 use crate::application::task::{PILOT_VERIFIED_NO_DIFF, VerifiedNoDiff};
 
-const CI_FAILURE_TAG: &str = "ci-failure-sweep";
-use orbit_types::task::CI_FAILURE_KEY_TAG_PREFIX;
+use super::filing::CI_FAILURE_TAG;
 
 pub(crate) enum AdmissionOutcome {
     Decision(Value),
