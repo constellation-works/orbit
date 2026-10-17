@@ -1,8 +1,9 @@
-//! The `*_to_json` projections the dashboard API serves. A task builds on the
-//! base projection and full record every read surface shares
-//! (`orbit_types::task::task_base_json`,
-//! `orbit_core::application::task::task_record_json`) and adds only the
-//! dashboard's own extras; the other projections are dashboard-local.
+//! The `*_to_json` projections the dashboard API serves. A task detail builds
+//! on the show record every read surface shares
+//! (`orbit_core::application::task::task_show_json`) and adds only the
+//! dashboard's own extras. A mutation response builds on `task_record_json`
+//! instead, so it does not carry show-only guidance. The other projections
+//! are dashboard-local.
 
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -10,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbit_common::fs::overlap_index::OverlapIndex;
 use orbit_core::application::job::JobCatalogEntry;
 use orbit_core::application::task::{
-    PullRequestLinks, TaskRow, declared_context_files, task_record_json,
+    PullRequestLinks, TaskRow, declared_context_files, task_record_json, task_show_json,
     task_status_transition_allowed, task_status_transition_required_field,
 };
 use orbit_core::runtime::engine::ConfiguredCrewRegistryProjection;
@@ -194,19 +195,40 @@ pub(crate) fn task_to_json_with_sidecars(
     task_row_to_json(runtime, &row, status_by_id)
 }
 
-/// The full task projection: the shared task record (every body, the
-/// sidecars, the review gate and the run-aware crew), plus the dashboard's
-/// extras — linked pull requests, the lifecycle transitions with their evidence
-/// requirements, run navigability and `readiness.preparing`. Served by
-/// `GET /api/tasks/:id` and every mutation response; the list endpoints serve
-/// [`TaskListProjection`] instead.
+/// A mutation response: [`task_record_json`] plus the dashboard extras. It does
+/// not carry the show-only `next_step` and `final_recovery` guidance.
+/// `GET /api/tasks/:id` serves [`task_detail_json`] instead. List endpoints
+/// serve [`TaskListProjection`].
 pub(crate) fn task_row_to_json(
     runtime: &OrbitRuntime,
     row: &TaskRow,
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Result<Value, OrbitError> {
+    let object = task_record_json(runtime, row, status_by_id)?;
+    with_dashboard_extras(runtime, row, object)
+}
+
+/// `GET /api/tasks/:id`: [`task_show_json`] plus the dashboard extras — linked
+/// pull requests, the lifecycle transitions with their evidence requirements,
+/// run navigability and `readiness.preparing`.
+pub(crate) fn task_detail_json(
+    runtime: &OrbitRuntime,
+    row: &TaskRow,
+    status_by_id: &BTreeMap<String, TaskStatus>,
+) -> Result<Value, OrbitError> {
+    let object = task_show_json(runtime, row, status_by_id)?;
+    with_dashboard_extras(runtime, row, object)
+}
+
+/// Linked pull requests, lifecycle transitions, run navigability and
+/// `readiness.preparing`. These are dashboard controls, not part of the shared
+/// task record.
+fn with_dashboard_extras(
+    runtime: &OrbitRuntime,
+    row: &TaskRow,
+    mut object: Map<String, Value>,
+) -> Result<Value, OrbitError> {
     let task = &row.task;
-    let mut object = task_record_json(runtime, row, status_by_id)?;
     link_pull_requests(&mut object, task, &PullRequestLinks::new(runtime));
     object.insert(
         "status_transitions".to_string(),

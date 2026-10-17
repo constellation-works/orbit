@@ -542,6 +542,7 @@ fn render(name: &str, render: Render, value: Value, holder: &HostEntry) -> Comma
 
 /// The human view of a routed `task show`: the task's own fields and where
 /// they were read, without the local-only sidecars a remote answer lacks.
+/// `Next:` and `Final Recovery:` use the same words as the local show.
 fn task_summary(task: &Value, holder: &HostEntry) -> String {
     let text = |key: &str| task.get(key).and_then(Value::as_str).unwrap_or_default();
     let mut lines = vec![
@@ -589,6 +590,15 @@ fn task_summary(task: &Value, holder: &HostEntry) -> String {
     let tags = list("tags");
     if !tags.is_empty() {
         lines.push(format!("Tags: {}", tags.join(", ")));
+    }
+    if let Some(next) = task.get("next_step") {
+        lines.push(format!("Next: {}", super::task::next_step_text(next)));
+    }
+    if let Some(record) = task.get("final_recovery") {
+        lines.push(format!(
+            "Final Recovery: {}",
+            super::task::final_recovery_text(record)
+        ));
     }
     lines.join("\n")
 }
