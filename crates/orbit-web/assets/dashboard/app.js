@@ -1922,9 +1922,10 @@ workspacesWanted = true;
 await ensureHostScope();
 persistScopeToUrl();
 syncWindowSelectors();
-// Warm the fleet snapshot before the router's first poll. That poll paints
-// the indicator from the snapshot and does not ask every host again.
-await startFleetIndicatorRefresh();
+// Warm the shared fleet snapshot alongside the router's first poll so a slow
+// host cannot delay the selected view. Both reuse the same in-flight read;
+// warmup paints the indicator when the snapshot arrives.
+void startFleetIndicatorRefresh().catch(error => console.error(error));
 iT();
 
 initLogTail();

@@ -14,6 +14,9 @@ const initializer = `
   globalThis.EventSource = class { close() {} };
   globalThis.fleetRequests = [];
   const budget = new URLSearchParams(location.search).get('budget') === '1';
+  const holdFleet = new URLSearchParams(location.search).get('holdFleet') === '1';
+  globalThis.remoteFleetPending = false;
+  const remoteFleetReady = new Promise(resolve => { globalThis.releaseRemoteFleet = resolve; });
   const workspaces = [
     { id: 'idle', name: 'Idle workspace with ready work', status: 'active', is_default: true },
     { id: 'busy', name: 'BusyWorkspaceWithAVeryLongUnbrokenNameForMobileLayout', status: 'active' },
@@ -38,6 +41,11 @@ const initializer = `
     if (api.endsWith('/connection')) return json({ reachable: true, forward_writes: { authorized: false } });
     if (api === '/api/fleet/drains') {
       if (host.startsWith('Unreachable')) return json({ error: 'Host unreachable' }, 502);
+      if (holdFleet && host === 'remote') {
+        globalThis.remoteFleetPending = true;
+        await remoteFleetReady;
+        globalThis.remoteFleetPending = false;
+      }
       return json({ items: host === 'remote' ? [row('busy', 'draining', 0)] : [row('idle', 'idle', 4), row('busy', 'idle', 0)] });
     }
     if (api === '/api/workspaces') return json(workspaces);
@@ -45,6 +53,15 @@ const initializer = `
     if (api === '/api/routines') return json({ routines: [], clock: {} });
     if (api === '/api/tasks/locks') return json({ by_task: [], total_locked: 0, total_tasks: 0 });
     if (api === '/api/crews') return json({ crews: [] });
+    if (holdFleet && api === '/api/tasks') return json({ items: [
+      { id: 'TASK-FIXTURE', title: 'Local task rendered during fleet warmup', status: 'backlog', priority: 'medium', type: 'bug' },
+    ], total: 1 });
+    if (holdFleet && api === '/api/runs/jrun-fixture') return json({
+      run: { run_id: 'jrun-fixture', job_id: 'local-job-during-fleet-warmup', state: 'success',
+        started_at: '2026-10-17T00:00:00Z', finished_at: '2026-10-17T00:01:00Z' }, steps: [],
+    });
+    if (holdFleet && api === '/api/runs/jrun-fixture/events') return json(url.searchParams.has('kind') ? [] : { events: [], total: 0, offset: 0 });
+    if (holdFleet && api === '/api/runs/jrun-fixture/logs') return json([]);
     return json({ items: [], total: 0 });
   };
   await import('/app.js');
@@ -68,6 +85,60 @@ async function settleDashboard(page) {
     const text = document.getElementById('meta-text')?.textContent || '';
     return text.length > 0 && !text.startsWith('fetching');
   });
+}
+
+async function assertIndependentWarmup(browser, port) {
+  const results = [];
+  for (const [label, route, selector, content, endpoint] of [
+    ['tasks', 'tasks', '#tasks-body .title', 'Local task rendered during fleet warmup', '/api/tasks'],
+    ['run detail', 'runs/jrun-fixture', '#run-detail-meta .value', 'local-job-during-fleet-warmup', '/api/runs/jrun-fixture'],
+  ]) {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    const snapshot = () => page.evaluate(() => ({
+      pending: globalThis.remoteFleetPending, initialized: Boolean(globalThis.fleetReady),
+      requests: globalThis.fleetRequests, url: location.href,
+      indicator: document.querySelector('.global-drain-label')?.textContent,
+    }));
+    try {
+      await page.goto(`http://127.0.0.1:${port}/?budget=1&holdFleet=1&workspace=idle#${route}`);
+      await page.waitForFunction(() => globalThis.remoteFleetPending);
+      // The response remains held until after a real local row/detail is visible.
+      await page.locator(selector).filter({ hasText: content }).waitFor({ state: 'visible', timeout: 5000 });
+      await page.waitForFunction(() => globalThis.fleetReady);
+      const before = await snapshot();
+      assert.equal(before.pending, true, `${label} renders while the remote fleet response is held`);
+      const localReads = before.requests.filter(value => {
+        const url = new URL(value, 'http://fixture');
+        return url.pathname === endpoint && url.searchParams.get('workspace') === 'idle';
+      });
+      assert.equal(localReads.length, 1, `${label} requests the selected local workspace once before release`);
+      const fleetReads = before.requests.filter(value => value.includes('/fleet/drains'));
+      assert.deepEqual(fleetReads.map(value => new URL(value, 'http://fixture').pathname),
+        ['/api/on/owner/fleet/drains', '/api/on/remote/fleet/drains'],
+        `${label} warmup and initial view share one in-flight request per host`);
+      await page.screenshot({ path: path.join(evidence, `warmup-${route.split('/')[0]}-held.png`), fullPage: true });
+      await page.evaluate(() => globalThis.releaseRemoteFleet());
+      await page.waitForFunction(() => document.querySelector('.global-drain-label')?.textContent.includes('Draining · 1 of 3'));
+      await settleDashboard(page);
+      const after = await snapshot();
+      assert.equal(after.pending, false);
+      assert.equal(after.url, before.url, `${label} late fleet completion preserves the route and workspace`);
+      assert.equal(await page.locator(selector).filter({ hasText: content }).isVisible(), true,
+        `${label} stays visible after late fleet completion`);
+      assert.deepEqual(after.requests.filter(value => value.includes('/fleet/drains')), fleetReads,
+        `${label} late completion does not refetch the fleet`);
+      assert.deepEqual(errors, []);
+      results.push({ view: label, before, after, errors });
+    } catch (error) {
+      fs.writeFileSync(path.join(evidence, 'warmup-failure.json'), JSON.stringify({ view: label, ...await snapshot(), errors }, null, 2));
+      throw error;
+    } finally {
+      await page.close();
+    }
+  }
+  return results;
 }
 
 // One refreshDashboard cycle. Host-resource reads stay out of the count: the
@@ -156,6 +227,7 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 let browser;
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined });
+  const warmup = await assertIndependentWarmup(browser, server.address().port);
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -211,9 +283,9 @@ try {
   await page.waitForFunction(() => document.querySelector('#workspace-select')?.value === 'idle');
   assert.deepEqual(errors, []);
   const polls = await assertPollBudget(browser, server.address().port);
-  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ status: 'passed', measurements, polls,
-    guarantees: ['idle workspace fleet indicator', 'host failures retained', '375px no horizontal page scroll', 'keyboard remote scope selection', 'row click local scope selection', 'two-host poll stays within 10 requests', 'panel poll does not read fleet drains'], errors }, null, 2));
-  console.log('fleet browser scope, mobile, and poll-budget checks passed');
+  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ status: 'passed', measurements, polls, warmup,
+    guarantees: ['initial Tasks and Run detail render during held remote fleet warmup', 'warmup and first refresh share in-flight fleet reads', 'late fleet completion updates the indicator and preserves the selected view', 'idle workspace fleet indicator', 'host failures retained', '375px no horizontal page scroll', 'keyboard remote scope selection', 'row click local scope selection', 'two-host poll stays within 10 requests', 'panel poll does not read fleet drains'], errors }, null, 2));
+  console.log('fleet browser startup, scope, mobile, and poll-budget checks passed');
 } finally {
   if (browser) await browser.close();
   await new Promise(resolve => server.close(resolve));
