@@ -29,6 +29,23 @@ use input::{ApplyInput, AuthorityInput, ExcludedTask, PreparedPartition, Record}
 use partition::{Partition, settle_partition};
 use report::Report;
 
+/// A task outcome that needs no further apply work: applied, already applied,
+/// or superseded. Partition decisions and the run report share this test.
+fn settled(outcome: &Value) -> bool {
+    matches!(
+        outcome["outcome"].as_str(),
+        Some("applied" | "already_applied" | "superseded")
+    )
+}
+
+/// Error text of an unsettled task, falling back to its detail.
+fn detail(outcome: &Value) -> Option<&str> {
+    outcome
+        .get("error")
+        .and_then(Value::as_str)
+        .or_else(|| outcome.get("detail").and_then(Value::as_str))
+}
+
 /// What every task of one apply is checked and written against.
 struct ApplyContext<'a> {
     runtime: &'a OrbitRuntime,

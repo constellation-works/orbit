@@ -15,23 +15,15 @@ impl OrbitRuntime {
         task_id: &str,
         fingerprint: &str,
     ) -> Result<Option<bool>, OrbitError> {
-        for comment in self.get_task_comments(task_id)?.iter().rev() {
-            if comment.by != "task-pilot" {
-                continue;
-            }
-            let Some(receipt) = comment.receipt() else {
-                continue;
-            };
-            if receipt.operation_id.len() != 64
-                || !receipt
-                    .operation_id
-                    .bytes()
-                    .all(|byte| byte.is_ascii_hexdigit())
-            {
+        let comments = self.get_task_comments(task_id)?;
+        for (_, receipt) in super::pilot_receipts(&comments) {
+            if !super::is_operation_id(receipt.operation_id) {
                 continue;
             }
             // Only the latest accepted receipt is relevant. In particular,
             // never fall back to an older ready verdict after a new finding.
+            // An unreadable body fails closed rather than skipping to an
+            // older receipt, unlike blocker warnings.
             let Ok(audit) = serde_json::from_str::<Value>(receipt.body) else {
                 return Ok(None);
             };
