@@ -3,8 +3,8 @@ use serde_json::Value;
 
 use super::ci::{ci_commit_jobs, ci_job_log, ci_rerun_failed};
 use super::pr::{
-    pr_close, pr_create, pr_list, pr_merge, pr_merge_capabilities, pr_required_checks, pr_status,
-    pr_update_branch, pr_view,
+    pr_close, pr_create, pr_list, pr_list_open, pr_merge, pr_merge_capabilities,
+    pr_required_checks, pr_status, pr_update_branch, pr_view,
 };
 use super::push_retry::{push, push_candidate_ref};
 use super::{
@@ -27,6 +27,7 @@ pub(crate) fn run(operation: &str, input: &Value) -> Result<Value, OrbitError> {
         PUSH => push(input),
         CANDIDATE_REF_PUSH => push_candidate_ref(input),
         PR_LIST => pr_list(input),
+        super::PR_LIST_OPEN => pr_list_open(input),
         PR_CREATE => pr_create(input),
         PR_VIEW => pr_view(input),
         PR_MERGE => pr_merge(input),

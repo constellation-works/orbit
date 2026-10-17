@@ -4,7 +4,10 @@
 //! request under the run's retry lineage. A run is left alone when the drain
 //! lacks the authority it was started with (until a drain holding it passes),
 //! and for good when its pull request is no longer open, its task moved on or
-//! it never opened one.
+//! was deleted, it never opened one, or it is itself a resumed attempt. One
+//! run's store error, an unreachable forge (read once per pass) and an
+//! unloadable activity catalog defer instead of deciding, and nothing is
+//! adopted under host resource pressure.
 //!
 //! The pass runs as the drain's own `adopt_orphaned_deliveries` step through
 //! the runtime's deterministic dispatch, against a fake forge. Resumed runs
@@ -27,13 +30,21 @@ use orbit_types::workflow::{JobRunState, JobTargetType, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-/// The forge's open pull requests; adoption only reads them.
+/// The forge's open pull requests; adoption only reads them, one at a time.
+#[derive(Default)]
+struct ForgeState {
+    open: Vec<ForgePullRequest>,
+    /// Every read answers with an error, as an unreachable GitHub does.
+    unreachable: bool,
+    reads: usize,
+}
+
 #[derive(Default, Clone)]
-struct FakeForge(Arc<Mutex<Vec<ForgePullRequest>>>);
+struct FakeForge(Arc<Mutex<ForgeState>>);
 
 impl FakeForge {
     fn open(&self, number: u64, head_branch: &str) {
-        self.0.lock().unwrap().push(ForgePullRequest {
+        self.0.lock().unwrap().open.push(ForgePullRequest {
             number,
             head_branch: head_branch.to_string(),
             body: String::new(),
@@ -44,7 +55,24 @@ impl FakeForge {
 
 impl TaskPrForge for FakeForge {
     fn open_pull_requests(&self, _repo_root: &Path) -> Result<Vec<ForgePullRequest>, OrbitError> {
-        Ok(self.0.lock().unwrap().clone())
+        Ok(self.0.lock().unwrap().open.clone())
+    }
+
+    fn open_pull_request(
+        &self,
+        _repo_root: &Path,
+        number: u64,
+    ) -> Result<Option<ForgePullRequest>, OrbitError> {
+        let mut state = self.0.lock().unwrap();
+        state.reads += 1;
+        if state.unreachable {
+            return Err(OrbitError::Execution("gh pr view failed: timed out".into()));
+        }
+        Ok(state
+            .open
+            .iter()
+            .find(|pull| pull.number == number)
+            .cloned())
     }
 
     fn authenticated_login(&self, _repo_root: &Path) -> Result<String, OrbitError> {
@@ -62,9 +90,11 @@ const LEAF_YAML: &str = "schemaVersion: 2\nkind: Job\nmetadata:\n  name: task_pr
 
 struct Fixture {
     _root: TempDir,
+    activities: std::path::PathBuf,
     runtime: OrbitRuntime,
     jobs: Arc<dyn JobRunStoreBackend>,
     forge: FakeForge,
+    probe: Arc<super::dispatch_admission::PressureProbe>,
 }
 
 impl Fixture {
@@ -88,18 +118,22 @@ impl Fixture {
             .unwrap();
         }
         let forge = FakeForge::default();
+        let probe = super::dispatch_admission::PressureProbe::calm();
         let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
             .unwrap()
-            .with_task_pr_forge(Arc::new(forge.clone()));
+            .with_task_pr_forge(Arc::new(forge.clone()))
+            .with_host_resource_probe(probe.clone());
         let jobs = orbit_store::compose::workspace_job_run_store(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );
         Self {
             _root: root,
+            activities,
             runtime,
             jobs,
             forge,
+            probe,
         }
     }
 
@@ -123,9 +157,35 @@ impl Fixture {
         let input = json!({"task_ids": [task], "completion": "done", "auto_fix": true});
         let run = self
             .jobs
-            .insert_job_run("task_pr_pipeline", 1, Utc::now(), Some(input.clone()), None)
+            .insert_job_run("task_pr_pipeline", 1, Utc::now(), Some(input), None)
             .unwrap();
-        let mut state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), input);
+        self.die(&run.run_id, &head, number);
+        self.runtime
+            .apply_task_automation_update(
+                &task,
+                TaskAutomationUpdate {
+                    status: Some(TaskStatus::Review),
+                    job_run_id: Some(run.run_id.clone()),
+                    external_refs: number
+                        .map(|number| ExternalRef::github_pr(number.to_string()).unwrap())
+                        .into_iter()
+                        .collect(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        (task, run.run_id, head)
+    }
+
+    /// `run` pushed `head`, opened pull request `number` (when given) and
+    /// then lost its worker, as the orphan reconciler finds it.
+    fn die(&self, run_id: &str, head: &str, number: Option<u64>) {
+        let run = self.jobs.get_job_run(run_id).unwrap().unwrap();
+        let mut state = PipelineState::new(
+            run.run_id.clone(),
+            run.job_id.clone(),
+            run.input.clone().unwrap(),
+        );
         let mut steps = vec![(
             "push",
             json!({"phase": "push", "local_sha": "0123456789abcdef0123456789abcdef01234567", "branch": head}),
@@ -144,40 +204,24 @@ impl Fixture {
                 None,
             );
             state.record_pipeline_output(id, output.clone());
-            self.step(&run.run_id, index, id, JobRunState::Success, None);
+            self.step(run_id, index, id, JobRunState::Success, None);
         }
-        self.jobs.write_run_state(&run.run_id, &state).unwrap();
-        // Its worker is gone, as the orphan reconciler found it.
+        self.jobs.write_run_state(run_id, &state).unwrap();
         let mut worker = std::process::Command::new("true").spawn().unwrap();
         worker.wait().unwrap();
         self.jobs
-            .mark_job_run_running(&run.run_id, Utc::now(), worker.id())
+            .mark_job_run_running(run_id, Utc::now(), worker.id())
             .unwrap();
         self.step(
-            &run.run_id,
+            run_id,
             steps.len(),
             "complete_pr",
             JobRunState::Interrupted,
             Some("worker_terminated"),
         );
         self.jobs
-            .finalize_job_run(&run.run_id, JobRunState::Interrupted, Utc::now(), None)
+            .finalize_job_run(run_id, JobRunState::Interrupted, Utc::now(), None)
             .unwrap();
-        self.runtime
-            .apply_task_automation_update(
-                &task,
-                TaskAutomationUpdate {
-                    status: Some(TaskStatus::Review),
-                    job_run_id: Some(run.run_id.clone()),
-                    external_refs: number
-                        .map(|number| ExternalRef::github_pr(number.to_string()).unwrap())
-                        .into_iter()
-                        .collect(),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        (task, run.run_id, head)
     }
 
     fn step(&self, run: &str, index: usize, id: &str, state: JobRunState, code: Option<&str>) {
@@ -354,8 +398,151 @@ fn runs_that_no_longer_own_an_open_pull_request_are_left_alone() {
     assert!(fx.retries(&closed).is_empty());
 }
 
+fn a_leaf_that_dies_again_after_its_adoption_is_left_to_an_operator() {
+    let fx = Fixture::new();
+    let (_, run, head) = fx.dead_leaf(Some(31));
+    fx.forge.open(31, &head);
+    let drain = fx.drain();
+    let first = fx.pass(&drain, "done", true);
+    assert_eq!(first["adopted"].as_array().unwrap().len(), 1, "{first}");
+    let resumed = fx.retries(&run)[0].run_id.clone();
+
+    // The resumed leaf's worker dies too, past the same pull request.
+    fx.die(&resumed, &head, Some(31));
+    let again = fx.pass(&drain, "done", true);
+    assert_eq!(again["adopted"], json!([]), "{again}");
+    assert_eq!(
+        skipped_reason(&again, &resumed),
+        Some(("resumed_attempt".to_string(), true)),
+        "{again}"
+    );
+    assert!(
+        fx.retries(&resumed).is_empty(),
+        "the lineage is adopted once"
+    );
+}
+
+fn store_and_task_errors_skip_one_run_and_never_fail_the_pass() {
+    let fx = Fixture::new();
+    // A rejected task can be deleted while its dead leaf is still listed.
+    let (deleted_task, deleted, deleted_head) = fx.dead_leaf(Some(41));
+    fx.forge.open(41, &deleted_head);
+    fx.runtime.delete_task(&deleted_task).unwrap();
+    // A run whose checkpoints no longer decode.
+    let (_, unreadable, unreadable_head) = fx.dead_leaf(Some(42));
+    fx.forge.open(42, &unreadable_head);
+    fx.runtime
+        .sqlite_store()
+        .unwrap()
+        .connection()
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE job_run_states SET pipeline_state_json = '{not json' WHERE run_id = ?1",
+            rusqlite::params![unreadable],
+        )
+        .unwrap();
+    let drain = fx.drain();
+
+    let pass = fx.pass(&drain, "done", true);
+    assert_eq!(pass["adopted"], json!([]), "{pass}");
+    assert_eq!(
+        skipped_reason(&pass, &deleted),
+        Some(("task_moved".to_string(), true)),
+        "{pass}"
+    );
+    assert_eq!(
+        skipped_reason(&pass, &unreadable),
+        Some(("store_unreadable".to_string(), false)),
+        "{pass}"
+    );
+    // The unreadable run is deferred, not decided: the next pass reads it
+    // again, and still answers.
+    let next = fx.pass(&drain, "done", true);
+    assert_eq!(
+        skipped_reason(&next, &unreadable),
+        Some(("store_unreadable".to_string(), false)),
+        "{next}"
+    );
+}
+
+fn an_unreachable_forge_is_read_once_per_pass_and_defers_every_run() {
+    let fx = Fixture::new();
+    let (_, first, first_head) = fx.dead_leaf(Some(51));
+    let (_, second, second_head) = fx.dead_leaf(Some(52));
+    fx.forge.open(51, &first_head);
+    fx.forge.open(52, &second_head);
+    fx.forge.0.lock().unwrap().unreachable = true;
+    let drain = fx.drain();
+
+    let pass = fx.pass(&drain, "done", true);
+    assert_eq!(pass["adopted"], json!([]), "{pass}");
+    for run in [&first, &second] {
+        assert_eq!(
+            skipped_reason(&pass, run),
+            Some(("forge_unreadable".to_string(), false)),
+            "{pass}"
+        );
+    }
+    assert_eq!(
+        fx.forge.0.lock().unwrap().reads,
+        1,
+        "a pass stops reading the forge after its first failure"
+    );
+
+    // Neither run was decided, so a pass after the forge is back adopts.
+    fx.forge.0.lock().unwrap().unreachable = false;
+    let back = fx.pass(&drain, "done", true);
+    assert_eq!(back["adopted"].as_array().unwrap().len(), 2, "{back}");
+}
+
+fn an_unloadable_activity_catalog_defers_instead_of_deciding() {
+    let fx = Fixture::new();
+    let (_, run, head) = fx.dead_leaf(Some(61));
+    fx.forge.open(61, &head);
+    // An activity file caught mid-edit.
+    let broken = fx.activities.join("half_written.yaml");
+    std::fs::write(
+        &broken,
+        "schemaVersion: 2\nkind: Activity\nmetadata: [unclosed\n",
+    )
+    .unwrap();
+    let drain = fx.drain();
+
+    let pass = fx.pass(&drain, "done", true);
+    assert_eq!(
+        skipped_reason(&pass, &run),
+        Some(("resume_unplannable".to_string(), false)),
+        "{pass}"
+    );
+    assert!(fx.retries(&run).is_empty());
+
+    std::fs::remove_file(&broken).unwrap();
+    let fixed = fx.pass(&drain, "done", true);
+    assert_eq!(fixed["adopted"].as_array().unwrap().len(), 1, "{fixed}");
+}
+
+fn host_resource_pressure_holds_adoption() {
+    let fx = Fixture::new();
+    let (_, run, head) = fx.dead_leaf(Some(71));
+    fx.forge.open(71, &head);
+    let drain = fx.drain();
+    fx.probe.sustain_memory(&fx.runtime, 95.0);
+
+    let pass = fx.pass(&drain, "done", true);
+    assert_eq!(pass["adopted"], json!([]), "{pass}");
+    assert!(pass["resource_throttle"].is_object(), "{pass}");
+    assert!(fx.retries(&run).is_empty(), "nothing starts under pressure");
+    assert_eq!(fx.forge.0.lock().unwrap().reads, 0, "{pass}");
+}
+
 crate::scenario_table!(
     orphan_adoption_scenarios,
     a_dead_leafs_open_pull_request_is_adopted_once_by_a_drain_holding_its_authority,
     runs_that_no_longer_own_an_open_pull_request_are_left_alone,
+    a_leaf_that_dies_again_after_its_adoption_is_left_to_an_operator,
+    store_and_task_errors_skip_one_run_and_never_fail_the_pass,
+    an_unreachable_forge_is_read_once_per_pass_and_defers_every_run,
+    an_unloadable_activity_catalog_defers_instead_of_deciding,
+    host_resource_pressure_holds_adoption,
 );
