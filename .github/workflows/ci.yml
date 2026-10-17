@@ -111,7 +111,7 @@ jobs:
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') }}
     name: Check / Clippy / Test
     runs-on: ubuntu-latest
-    timeout-minutes: 45 # Observed ~12 minutes; allows cold builds and slower test hosts.
+    timeout-minutes: 45 # Budget is 15 minutes (docs/design-patterns/test_strategy.md); allows cold builds and slower test hosts.
     env:
       SCCACHE_CACHE_SIZE: 2G
       SCCACHE_CLIENT_SIDE: "1"
@@ -486,11 +486,15 @@ jobs:
       # `--profile ci` matches the workspace-tests phase: more test threads
       # than the 4-vCPU default, with the same named group caps. That phase's
       # CPU sample is the cpu-util line from ci-guardrails.sh.
+      # Both legs run under the folded build's lint environment
+      # (scripts/with-test-build-lint.sh). Cargo fingerprints it, so without it
+      # each leg would recompile every workspace member.
       - name: Linux sandbox/policy enforcement gate
         run: |
           set -euo pipefail
+          lint=./scripts/with-test-build-lint.sh
           # Count matches by filter-match: test-count is the total for the target set.
-          selected=$(cargo nextest list --locked --workspace --lib --bins --tests \
+          selected=$("$lint" cargo nextest list --locked --workspace --lib --bins --tests \
             -E 'package(orbit-exec) | package(orbit-policy) | package(orbit-tools)' \
             --message-format json |
             jq '[."rust-suites"[].testcases[] | select(."filter-match".status == "matches")] | length')
@@ -498,7 +502,7 @@ jobs:
             echo "Linux sandbox/policy enforcement gate: the portable filterset selects no tests" >&2
             exit 1
           fi
-          cargo nextest run --profile ci --no-fail-fast --locked --workspace --lib --bins --tests \
+          "$lint" cargo nextest run --profile ci --no-fail-fast --locked --workspace --lib --bins --tests \
             --run-ignored only \
             -E 'package(orbit-exec) & binary(sandbox) & test(/^linux_sandbox::/)'
 

@@ -90,6 +90,11 @@ and the same flags that pass used: `-D warnings` while allowing
 `clippy::disallowed_methods`. `clippy-driver` splits `CLIPPY_ARGS` on
 `__CLIPPY_HACKERY__`, which is how `cargo clippy` joins those arguments. A
 space-separated value is one rustc argument and does not apply the flags.
+`scripts/with-test-build-lint.sh` holds that environment. The nextest
+listing, doctests and the Linux sandbox gate run through it too: Cargo
+fingerprints `RUSTC_WORKSPACE_WRAPPER` and the `CLIPPY_ARGS` value
+`clippy-driver` tracks, so under any other environment each would recompile
+every workspace member before running.
 `make ci-lint` is unchanged and still runs production Clippy and
 `cargo clippy --all-targets`, because that gate does not build the test
 binaries. Clippy analysis itself remains unsupported by sccache. Cargo invokes
