@@ -529,6 +529,16 @@ pub trait RoutineStoreBackend: Send + Sync {
         &self,
         routine_name: &str,
     ) -> Result<Option<RoutineFireRecord>, OrbitError>;
+    /// Newest unfinished (`intent` or `dispatched`) fire, if one is in flight.
+    fn routine_blocking_fire(
+        &self,
+        routine_name: &str,
+    ) -> Result<Option<RoutineFireRecord>, OrbitError>;
+    /// Newest fire whose state is not `skipped`.
+    fn routine_latest_non_skip_fire(
+        &self,
+        routine_name: &str,
+    ) -> Result<Option<RoutineFireRecord>, OrbitError>;
     fn routine_unresolved_fires(&self) -> Result<Vec<RoutineFireRecord>, OrbitError>;
     fn routine_recent_fires(
         &self,
