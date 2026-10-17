@@ -2041,6 +2041,7 @@ fn certificate(handoff: &TaskHandoff, verdict: ReviewVerdict) -> ReviewCertifica
                 control: None,
                 sources: vec![],
                 mutation_target: Vec::new(),
+                repaired_blob: Default::default(),
                 deferred: Vec::new(),
                 baseline: None,
             })

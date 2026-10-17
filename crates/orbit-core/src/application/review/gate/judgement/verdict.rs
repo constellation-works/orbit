@@ -2,9 +2,11 @@
 
 use std::collections::BTreeMap;
 
-use orbit_automation::review::{ValidationDefect, mutation_targets, validation_evidence};
+use orbit_automation::review::{
+    ValidationDefect, mutation_targets, repaired_paths, validation_evidence,
+};
 use orbit_common::OrbitError;
-use orbit_engine::review_gate::path_changed_between;
+use orbit_engine::review_gate::{path_blob_at, path_changed_between};
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
     CommitIdentity, FindingDisposition, ReviewEvidenceRequirement, ReviewExternalEvidence,
@@ -163,21 +165,53 @@ impl Judgement {
     /// no rename detection, so a target left modified, deleted or moved away
     /// is caught however the review's commit records it; a target that is not
     /// a repository-relative path cannot be compared and is refused.
+    ///
+    /// [ORB-16447] A target the review's own repair changed cannot come back
+    /// to the reviewed bytes, and the repair commit captures whatever the
+    /// control left there. Such a target is restored only to the repaired
+    /// blob its record declares, taken before the control ran: a repaired
+    /// finding must list it, `repair` must be the attempt's own repair commit
+    /// that is the final candidate, and the final candidate must carry that
+    /// blob. A target outside those conditions keeps the byte-identical
+    /// rule, and a declared blob the final candidate does not carry is
+    /// refused even on an otherwise unchanged target.
     pub(in crate::application::review::gate) fn unrestored_mutation(
         &self,
         workspace_path: &std::path::Path,
         reviewed: &str,
         final_candidate: &str,
+        repair: Option<&CommitIdentity>,
     ) -> Result<Option<ValidationDefect>, OrbitError> {
         let targets = match mutation_targets(&self.validation) {
             Ok(targets) => targets,
             Err(defect) => return Ok(Some(defect)),
         };
-        for (command, path) in targets {
-            if path_changed_between(workspace_path, reviewed, final_candidate, &path)? {
+        let repaired = repaired_paths(&self.findings);
+        let own_repair = repair.is_some_and(|repair| repair.commit == final_candidate);
+        for target in targets {
+            let changed =
+                path_changed_between(workspace_path, reviewed, final_candidate, &target.path)?;
+            if changed && !(own_repair && repaired.contains(&target.path)) {
                 return Ok(Some(ValidationDefect::MutationTargetChanged {
-                    command: command.to_string(),
-                    target: path,
+                    command: target.command.to_string(),
+                    target: target.path,
+                }));
+            }
+            if !changed && target.repaired_blob.is_none() {
+                continue;
+            }
+            let found = path_blob_at(workspace_path, final_candidate, &target.path)?;
+            let restored = target.repaired_blob.is_some_and(|declared| {
+                found
+                    .as_deref()
+                    .is_some_and(|found| found.eq_ignore_ascii_case(declared))
+            });
+            if !restored {
+                return Ok(Some(ValidationDefect::RepairedTargetChanged {
+                    command: target.command.to_string(),
+                    target: target.path,
+                    declared: target.repaired_blob.map(str::to_string),
+                    found,
                 }));
             }
         }

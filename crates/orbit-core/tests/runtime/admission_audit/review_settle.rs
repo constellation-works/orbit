@@ -6,12 +6,13 @@ use std::fs;
 use chrono::{Duration, Utc};
 use orbit_engine::DispatchError;
 use orbit_types::workflow::{
-    FindingDisposition, ReviewAttemptState, ReviewFinding, ReviewGateRefusal, ReviewVerdict,
+    FindingDisposition, REVIEW_GATE_ARTIFACT, ReviewAttemptState, ReviewFinding, ReviewGateRefusal,
+    ReviewVerdict,
 };
 use serde_json::json;
 
 use super::review_support::{
-    BEFORE_PR, counterfactual, gated_bundle_fixture, gated_fixture, report, write_report,
+    BEFORE_PR, counterfactual, gated_bundle_fixture, gated_fixture, git, report, write_report,
     write_report_bytes,
 };
 
@@ -330,11 +331,26 @@ fn an_unfixable_finding_rejects_and_preserves_both_commits() {
 /// repair commit records as a rename) is caught at its original path, and a
 /// target spelled as an absolute or out-of-repository path is refused rather
 /// than passed beside a fix.
+/// [ORB-16447] F2026-10-423's shape: a control on `src.txt`, the file the
+/// review's own repair changed, restores it to the repaired blob its record
+/// declares and settles `accept_with_fixes`. Declaring none, restoring it
+/// only partly, or declaring a blob for a residue the repair swept into a
+/// file no repaired finding lists stays refused.
 fn a_counterfactual_mutation_of_an_out_of_scope_file_settles_by_its_restoration() {
     enum Mutation {
         None,
         Modified,
         MovedAway,
+        /// The control's residue left in the repaired `src.txt`.
+        RepairResidue,
+    }
+    /// When the record's `repaired_blob` for a path was hashed.
+    enum Declared {
+        None,
+        /// After the repair, before the control mutated anything.
+        BeforeControl(&'static str),
+        /// After the control: a hash of whatever it left behind.
+        AfterControl(&'static str),
     }
     struct Case {
         name: &'static str,
@@ -344,6 +360,7 @@ fn a_counterfactual_mutation_of_an_out_of_scope_file_settles_by_its_restoration(
         /// `{repo}` reads as the fixture checkout's absolute path.
         targets: &'static [&'static str],
         mutation: Mutation,
+        declared: Declared,
         escalation: Option<&'static str>,
     }
     for case in [
@@ -353,6 +370,7 @@ fn a_counterfactual_mutation_of_an_out_of_scope_file_settles_by_its_restoration(
             sources: &["src.txt"],
             targets: &["README.md"],
             mutation: Mutation::None,
+            declared: Declared::None,
             escalation: None,
         },
         Case {
@@ -361,6 +379,7 @@ fn a_counterfactual_mutation_of_an_out_of_scope_file_settles_by_its_restoration(
             sources: &["src.txt"],
             targets: &["./README.md", "file:README.md"],
             mutation: Mutation::None,
+            declared: Declared::None,
             escalation: None,
         },
         Case {
@@ -369,6 +388,7 @@ fn a_counterfactual_mutation_of_an_out_of_scope_file_settles_by_its_restoration(
             sources: &["src.txt"],
             targets: &["README.md"],
             mutation: Mutation::Modified,
+            declared: Declared::None,
             escalation: Some("control `make test-guard` mutated `README.md`"),
         },
         Case {
@@ -377,6 +397,7 @@ fn a_counterfactual_mutation_of_an_out_of_scope_file_settles_by_its_restoration(
             sources: &["src.txt"],
             targets: &["README.md"],
             mutation: Mutation::MovedAway,
+            declared: Declared::None,
             escalation: Some("control `make test-guard` mutated `README.md`"),
         },
         Case {
@@ -385,6 +406,7 @@ fn a_counterfactual_mutation_of_an_out_of_scope_file_settles_by_its_restoration(
             sources: &["src.txt"],
             targets: &["{repo}/README.md"],
             mutation: Mutation::Modified,
+            declared: Declared::None,
             escalation: Some("README.md`, which is not a repository-relative path"),
         },
         Case {
@@ -393,6 +415,7 @@ fn a_counterfactual_mutation_of_an_out_of_scope_file_settles_by_its_restoration(
             sources: &["src.txt"],
             targets: &["../README.md"],
             mutation: Mutation::None,
+            declared: Declared::None,
             escalation: Some(
                 "names mutation_target `../README.md`, which is not a repository-relative path",
             ),
@@ -403,15 +426,73 @@ fn a_counterfactual_mutation_of_an_out_of_scope_file_settles_by_its_restoration(
             sources: &["README.md"],
             targets: &["README.md"],
             mutation: Mutation::None,
+            declared: Declared::None,
             escalation: Some("negative control `make test-guard` names `README.md`, outside"),
+        },
+        Case {
+            name: "a repaired file restored to its declared repaired blob",
+            fixed: true,
+            sources: &["src.txt"],
+            targets: &["src.txt"],
+            mutation: Mutation::None,
+            declared: Declared::BeforeControl("./src.txt"),
+            escalation: None,
+        },
+        Case {
+            name: "a repaired file restored with no declared repaired blob",
+            fixed: true,
+            sources: &["src.txt"],
+            targets: &["src.txt"],
+            mutation: Mutation::None,
+            declared: Declared::None,
+            escalation: Some(
+                "mutated `src.txt`, which this review's own repair changed, but \
+                 declares no `repaired_blob`",
+            ),
+        },
+        Case {
+            name: "a repaired file restored only partly",
+            fixed: true,
+            sources: &["src.txt"],
+            targets: &["src.txt"],
+            mutation: Mutation::RepairResidue,
+            declared: Declared::BeforeControl("src.txt"),
+            escalation: Some("not as the repaired blob"),
+        },
+        Case {
+            name: "residue swept into the repair of a file no repaired finding lists",
+            fixed: true,
+            sources: &["src.txt"],
+            targets: &["README.md"],
+            mutation: Mutation::Modified,
+            declared: Declared::AfterControl("README.md"),
+            escalation: Some(
+                "control `make test-guard` mutated `README.md`, which the final candidate does \
+                 not carry byte-identical",
+            ),
         },
     ] {
         let gated = gated_fixture(BEFORE_PR);
         let admission = gated.admit().expect("admit");
         let attempt_id = admission["attempt_id"].as_str().expect("attempt");
         let repo = &gated.fixture.repo;
+        if case.fixed {
+            gated.reviewer_edits("implementation target\nimplemented\nnote\n");
+        }
+        let hash = |path: &str| (path.to_string(), git(repo, &["hash-object", path]));
+        let mut repaired_blob = match case.declared {
+            Declared::BeforeControl(path) => Some(hash(path)),
+            Declared::None | Declared::AfterControl(_) => None,
+        };
         match case.mutation {
             Mutation::None => {}
+            Mutation::RepairResidue => {
+                fs::write(
+                    repo.join("src.txt"),
+                    "implementation target\nimplemented\nnote\nmutated\n",
+                )
+                .expect("leave the control's residue");
+            }
             Mutation::Modified => {
                 fs::write(repo.join("README.md"), "fixture\nmutated\n")
                     .expect("mutate the guarded file");
@@ -422,8 +503,8 @@ fn a_counterfactual_mutation_of_an_out_of_scope_file_settles_by_its_restoration(
                     .expect("move the guarded file away");
             }
         }
-        if case.fixed {
-            gated.reviewer_edits("implementation target\nimplemented\nnote\n");
+        if let Declared::AfterControl(path) = case.declared {
+            repaired_blob = Some(hash(path));
         }
         let verdict = if case.fixed {
             ReviewVerdict::AcceptWithFixes
@@ -437,9 +518,9 @@ fn a_counterfactual_mutation_of_an_out_of_scope_file_settles_by_its_restoration(
             .map(|target| target.replace("{repo}", &repo.display().to_string()))
             .collect::<Vec<_>>();
         let targets = targets.iter().map(String::as_str).collect::<Vec<_>>();
-        reported
-            .validation
-            .push(counterfactual(case.sources, &targets));
+        let mut control = counterfactual(case.sources, &targets);
+        control.repaired_blob.extend(repaired_blob);
+        reported.validation.push(control);
         write_report(&gated.fixture.runtime, &gated.task_id, &reported);
 
         let settled = gated.settle(&admission);
@@ -474,6 +555,53 @@ fn a_counterfactual_mutation_of_an_out_of_scope_file_settles_by_its_restoration(
                 assert!(escalation.contains(expected), "{}: {escalation}", case.name);
             }
         }
+    }
+}
+
+/// [ORB-16447] A repaired file's control is restored only on the repair this
+/// attempt's settlement records. A commit on the candidate that carries the
+/// restored file and its declared repaired blob, but names another attempt
+/// or was committed by someone other than the reviewer, is refused before
+/// any verdict, and no certificate is issued.
+fn a_repaired_target_restores_only_on_the_attempts_own_repair() {
+    for (name, trailer_attempt) in [
+        ("a repair commit of another attempt", Some("rvw-foreign-1")),
+        ("this attempt's trailer committed by someone else", None),
+    ] {
+        let gated = gated_fixture(BEFORE_PR);
+        let admission = gated.admit().expect("admit");
+        let attempt_id = admission["attempt_id"].as_str().expect("attempt");
+        let repo = &gated.fixture.repo;
+        gated.reviewer_edits("implementation target\nimplemented\nnote\n");
+        let mut control = counterfactual(&["src.txt"], &["src.txt"]);
+        control.repaired_blob.insert(
+            "src.txt".to_string(),
+            git(repo, &["hash-object", "src.txt"]),
+        );
+        let mut reported = report(attempt_id, ReviewVerdict::AcceptWithFixes, true);
+        reported.validation.push(control);
+        write_report(&gated.fixture.runtime, &gated.task_id, &reported);
+        git(repo, &["add", "-A"]);
+        let message = format!(
+            "review: reviewer repairs\n\nOrbit-Review-Attempt: {}",
+            trailer_attempt.unwrap_or(attempt_id)
+        );
+        git(repo, &["commit", "-m", &message]);
+
+        let error = gated.settle(&admission).expect_err(name).to_string();
+        assert!(
+            error.contains("candidate_changed"),
+            "{name}: the commit is no repair of this attempt: {error}"
+        );
+        assert!(
+            gated
+                .fixture
+                .runtime
+                .get_task_artifact(&gated.task_id, REVIEW_GATE_ARTIFACT)
+                .expect("read")
+                .is_none(),
+            "{name}: no certificate rests on a repair the host did not record"
+        );
     }
 }
 
@@ -548,5 +676,6 @@ crate::scenario_table!(
     fixable_findings_become_one_reviewer_commit_over_the_untouched_implementation,
     no_findings_accepts_without_a_reviewer_commit,
     an_unfixable_finding_rejects_and_preserves_both_commits,
-    a_counterfactual_mutation_of_an_out_of_scope_file_settles_by_its_restoration
+    a_counterfactual_mutation_of_an_out_of_scope_file_settles_by_its_restoration,
+    a_repaired_target_restores_only_on_the_attempts_own_repair
 );

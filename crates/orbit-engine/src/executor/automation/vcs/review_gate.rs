@@ -312,6 +312,36 @@ pub fn path_changed_between(
     Ok(raw.split('\0').any(|changed| !changed.is_empty()))
 }
 
+/// [ORB-16447] The blob id the repository-relative `path` names in `commit`,
+/// or `None` when `commit` holds no file there. `path` is a literal
+/// pathspec, never a pattern, and a directory is no file.
+pub fn path_blob_at(
+    workspace_path: &Path,
+    commit: &str,
+    path: &str,
+) -> Result<Option<String>, OrbitError> {
+    let raw = git_output_raw(
+        workspace_path,
+        &[
+            "--literal-pathspecs",
+            "ls-tree",
+            "-z",
+            "--full-tree",
+            "--end-of-options",
+            commit,
+            "--",
+            path,
+        ],
+    )?;
+    // Each entry reads `<mode> <type> <object>\t<path>`.
+    Ok(raw.split('\0').find_map(|entry| {
+        let (meta, entry_path) = entry.split_once('\t')?;
+        let mut fields = meta.split_whitespace();
+        let (_, kind, object) = (fields.next()?, fields.next()?, fields.next()?);
+        (entry_path == path && kind == "blob").then(|| object.to_string())
+    }))
+}
+
 /// What a managed landing looks like against the reviewed candidate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LandedFacts {

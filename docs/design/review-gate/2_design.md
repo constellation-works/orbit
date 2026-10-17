@@ -493,6 +493,20 @@ verdict claimed. A target that is not a repository-relative path (absolute,
 home-relative, climbing out of the repository, inside `.git`, or a `dir:` or
 `symbol:` selector) cannot be compared and is refused as
 `validation_unevidenced`, never passed for want of a match.
+A control on a file the review's own repair changed cannot come back to the
+reviewed bytes, and the repair commit captures whatever the control left
+there [ORB-16447]. The record declares that target's repaired state in
+`repaired_blob`: the target's path mapped to the `git hash-object` blob the
+reviewer took after its repair and before the control. Settlement accepts
+such a target only when a `repaired` finding lists it, the attempt's own
+repair commit (the final candidate) changed it, and the final candidate
+carries exactly the declared blob. A target with no declared blob, one no
+repaired finding lists, or one whose final blob differs from the declaration
+(a partial restore) settles `incomplete` with `validation_contradicted`. A
+declared blob the final candidate does not carry is refused even when the
+target is otherwise unchanged. A repair commit the host did not record for
+the attempt never reaches the verdict: settlement refuses a candidate whose
+head is not the attempt's own repair as `candidate_changed`.
 Coverage does not re-judge mutation targets: a certificate that passed
 settlement had them restored.
 

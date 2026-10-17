@@ -24,7 +24,9 @@
 //! from its sources [ORB-14616]: the mutated file is usually the production
 //! code a test-only change guards, outside the candidate's scope. Its sources
 //! (the checks that rejected the mutation) stay bound to the scope, and
-//! settlement confirms each mutation target came back byte-identical.
+//! settlement confirms each mutation target came back byte-identical. A
+//! target the review's own repair changed comes back to the repaired blob
+//! the record declares instead [ORB-16447].
 //!
 //! A failed check the owner trusts is never a diagnostic [ORB-14684]: a
 //! `workflow.required_validation_commands` or `review.baseline_commands`
@@ -52,10 +54,12 @@
 //! host-required command. A result from a host that executed the path, such
 //! as owner-fulfilled `host_sandbox_test` evidence, takes its place.
 
+use std::collections::BTreeSet;
+
 use orbit_common::fs::selector::overlaps;
 use orbit_types::workflow::{
-    HostKnownRed, RecordGap, RetainedObligation, RetiredValidation, ReviewValidation,
-    ValidationOutcome, ValidationRole, record_gap,
+    FindingDisposition, HostKnownRed, RecordGap, RetainedObligation, RetiredValidation,
+    ReviewFinding, ReviewValidation, ValidationOutcome, ValidationRole, record_gap,
 };
 
 /// [ORB-15083] What a command the reviewer skipped is to the owner, which
@@ -145,6 +149,17 @@ pub enum ValidationDefect {
     /// final candidate does not carry byte-identical to the reviewed
     /// candidate: the mutation was left in place.
     MutationTargetChanged { command: String, target: String },
+    /// [ORB-16447] A file a control mutated that the review's own repair
+    /// changed, or for which the record declares a repaired blob, whose
+    /// final blob is not the one the record declares (`declared`; `None`
+    /// when it declares none). `found` is the final candidate's blob, `None`
+    /// when the file is gone there.
+    RepairedTargetChanged {
+        command: String,
+        target: String,
+        declared: Option<String>,
+        found: Option<String>,
+    },
     /// [ORB-14632] A file a control says it temporarily mutated, named so
     /// that it is not a repository-relative path settlement could compare.
     MutationTargetInvalid { command: String, target: String },
@@ -278,6 +293,30 @@ impl ValidationDefect {
                 "validation_contradicted: control `{command}` mutated `{target}`, which the \
                  final candidate does not carry byte-identical to the reviewed candidate; the \
                  mutation was not restored"
+            ),
+            ValidationDefect::RepairedTargetChanged {
+                command,
+                target,
+                declared: None,
+                ..
+            } => format!(
+                "validation_contradicted: control `{command}` mutated `{target}`, which this \
+                 review's own repair changed, but declares no `repaired_blob` for it, so its \
+                 restoration to the repaired state cannot be checked; record the target's \
+                 `git hash-object` blob before a control mutates a repaired file"
+            ),
+            ValidationDefect::RepairedTargetChanged {
+                command,
+                target,
+                declared: Some(declared),
+                found,
+            } => format!(
+                "validation_contradicted: control `{command}` mutated `{target}`, which the \
+                 final candidate carries as {}, not as the repaired blob `{declared}` the \
+                 record declares; the mutation was not restored to the repaired state",
+                found
+                    .as_deref()
+                    .map_or_else(|| "no file".to_string(), |blob| format!("blob `{blob}`"))
             ),
             ValidationDefect::MutationTargetInvalid { command, target } => format!(
                 "validation_unevidenced: control `{command}` names mutation_target `{target}`, \
@@ -530,10 +569,11 @@ fn host_known_red(record: &ReviewValidation, context: &ValidationContext<'_>) ->
 /// out of the repository or another selector kind) could never be compared,
 /// so it is refused as [`ValidationDefect::MutationTargetInvalid`] rather than
 /// passed. A `file:` selector reads as its path; `dir:` and `symbol:` are no
-/// file and are refused.
+/// file and are refused. [ORB-16447] Each target carries the repaired blob
+/// its record declares under any spelling of the same path.
 pub fn mutation_targets(
     records: &[ReviewValidation],
-) -> Result<Vec<(&str, String)>, ValidationDefect> {
+) -> Result<Vec<MutationTarget<'_>>, ValidationDefect> {
     let mut targets = Vec::new();
     for record in records {
         for target in record
@@ -547,10 +587,43 @@ pub fn mutation_targets(
                     command: record.command.clone(),
                     target: target.to_string(),
                 })?;
-            targets.push((record.command.as_str(), path));
+            let repaired_blob = record
+                .repaired_blob
+                .iter()
+                .find(|(declared, _)| repository_path(declared.trim()).as_ref() == Some(&path))
+                .map(|(_, blob)| blob.trim());
+            targets.push(MutationTarget {
+                command: record.command.as_str(),
+                path,
+                repaired_blob,
+            });
         }
     }
     Ok(targets)
+}
+
+/// One file a control says it temporarily mutated ([`mutation_targets`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MutationTarget<'a> {
+    /// The command of the record that names it.
+    pub command: &'a str,
+    /// The target as a normalized repository-relative path.
+    pub path: String,
+    /// [ORB-16447] The blob id the record declares for the target's
+    /// repaired state, if any.
+    pub repaired_blob: Option<&'a str>,
+}
+
+/// [ORB-16447] Every path a `repaired` finding lists, as a normalized
+/// repository-relative path: the files the reviewer says its own repair
+/// changed. A path that names no single file is left out.
+pub fn repaired_paths(findings: &[ReviewFinding]) -> BTreeSet<String> {
+    findings
+        .iter()
+        .filter(|finding| finding.disposition == FindingDisposition::Repaired)
+        .flat_map(|finding| &finding.paths)
+        .filter_map(|path| repository_path(path.trim()))
+        .collect()
 }
 
 /// `target` as a normalized repository-relative path, or `None` when it

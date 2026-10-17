@@ -483,11 +483,13 @@ fn settle(
     )?;
     judgement.accept_on_host_evidence(repair.as_ref(), &validation_scope, !baseline_red.is_empty());
     // [ORB-14616] Every file a control mutated must come back byte-identical
-    // in the final candidate.
+    // in the final candidate. [ORB-16447] One this attempt's own repair
+    // changed comes back to the repaired blob its record declares.
     let unrestored = judgement.unrestored_mutation(
         &context.workspace_path,
         &reviewed.head.commit,
         &final_candidate.commit,
+        repair.as_ref(),
     )?;
     judgement.reconcile_verdict(repair.as_ref(), &validation_scope, unrestored.as_ref());
     let now = Utc::now();
