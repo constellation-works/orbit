@@ -399,7 +399,7 @@ define_config_settings! {
     },
     pr_delivery_authors: Vec<String> => Vec<String> {
         key: "pr.delivery_authors", value_type: "array<string>",
-        description: "Forge logins whose pull requests count as Orbit-authored for pr.close_on_terminal. Empty (default) means the login the forge CLI is authenticated as on this machine.",
+        description: "Forge logins whose pull requests count as Orbit-authored for pr.close_on_terminal and for settling a task to done from its delivery PR merged outside Orbit. Empty (default) means the login the forge CLI is authenticated as on this machine.",
         section: ConfigSection::Delivery, order: 141,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(normalize_logins(raw.unwrap_or_default())),
     },
