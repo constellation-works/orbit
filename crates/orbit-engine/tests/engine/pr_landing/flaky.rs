@@ -83,6 +83,77 @@ fn fixture(sandbox: &Path, mode: &str, count: usize) -> (Fixture, PathBuf) {
     )
 }
 
+#[test]
+fn pr_open_keeps_latest_matching_flaky_history() {
+    isolated(
+        "flaky::pr_open_keeps_latest_matching_flaky_history",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let mut expected = Vec::new();
+            let mut handed = Vec::new();
+            for mismatch in ["run", "base", "head"] {
+                let record = FlakyValidation {
+                    command: format!("check-{mismatch}"),
+                    base_sha: fx.base_sha.clone(),
+                    tested_head: fx.candidate.clone(),
+                    run_id: RUN_ID.into(),
+                    failures: BTreeSet::from([format!("test suite::{mismatch}")]),
+                    selection: json!({"failing_tests": [format!("suite::{mismatch}")]}),
+                    original_exit_code: 1,
+                    original_output: "original failure".into(),
+                    base_output: "base passed".into(),
+                    rerun_output: format!("matching replay for {mismatch}"),
+                    rerun_tests_run: 1,
+                    validation_env: json!({}),
+                };
+                assert!(record.valid());
+                let mut newer = record.clone();
+                match mismatch {
+                    "run" => newer.run_id = "another-run".into(),
+                    "base" => newer.base_sha = "another-base".into(),
+                    "head" => newer.tested_head = "another-head".into(),
+                    _ => unreachable!(),
+                }
+                newer.rerun_output = format!("unrelated replay for {mismatch}");
+                host.history
+                    .lock()
+                    .unwrap()
+                    .entry(TASK_ID.into())
+                    .or_default()
+                    .extend([&record, &newer].map(|record| TaskHistoryEntry {
+                        at: Utc::now(),
+                        by: "system".into(),
+                        event: FLAKY_VALIDATION_EVENT.into(),
+                        note: Some(record.text()),
+                        from_status: None,
+                        to_status: None,
+                        operation_id: None,
+                        decision: None,
+                    }));
+                expected.push(record);
+                handed.push(newer);
+            }
+            let mut input = fx.open_input(&fx.candidate, &fx.base_sha);
+            input["claim_validation"] = json!({"flaky": handed});
+            action(&host, "pr_open", &input).expect("publish candidate with matching evidence");
+            let body = fx.forge_state("pr-body").unwrap();
+            for record in expected {
+                assert!(
+                    body.contains(&record.rerun_output),
+                    "matching history survives newer unrelated history and handed evidence: {body}"
+                );
+            }
+            for record in handed {
+                assert!(
+                    !body.contains(&record.rerun_output),
+                    "unrelated evidence is excluded: {body}"
+                );
+            }
+        },
+    );
+}
+
 fn candidate_replay_rows(test: &str, route: &str, selected: &[&str]) {
     isolated(test, |sandbox| {
         for route in [route] {
