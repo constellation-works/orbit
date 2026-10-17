@@ -68,7 +68,8 @@ presence. Path fields live on `WorkspacePaths` in
 | `state/logs/orbit.jsonl`, `state/logs/orbit-agent.jsonl` (+ rotated archives) | Operational and separately budgeted agent relay JSONL feeds | disposable |
 | `state/task-publication/` | private Git object/work-tree caches plus pending-push reconciliation records | regenerable after a cleanly recorded success; retain during push-success/local-record recovery |
 | `embed/` | retired search downloads | removable after stopping older binaries; see upgrades |
-| `bin/` | installed Orbit binary (when installed via `install.sh`) | reinstallable |
+| `bin/` | installed Orbit binary (when installed via `install.sh`), its `orbit.previous` rollback copy, and any older copies a deploy left | reinstallable; keep `orbit.previous` until the upgrade is verified, then `orbit gc deployments` removes older copies past its retention ([upgrades](./upgrades.md#reclaim-old-deployments-and-backups)) |
+| `deployments/`, `orbit.db.bak*` | build directories and store copies left by deploys | disposable once the deploy is verified; `orbit gc deployments` keeps the newest and anything that built the installed or rollback executable |
 
 Store retention can remove old history from this database. `retention.audit_days` and
 `retention.runs_days` default to 60 days; they define eligibility but do not delete data

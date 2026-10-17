@@ -247,6 +247,10 @@ impl Commands {
                     // Tmp GC must observe pending/running/retrying rows without bootstrap
                     // reconciliation turning stale owners into terminal runs.
                     GcTarget::Tmp(args) => ("tmp", args.confirm, RuntimeNeed::ReadOnly),
+                    // Host-level leftovers outside any run; nothing to reconcile.
+                    GcTarget::Deployments(args) => {
+                        ("deployments", args.confirm, RuntimeNeed::ReadOnly)
+                    }
                     GcTarget::Audit(args) => ("audit", args.apply, RuntimeNeed::Required),
                     GcTarget::Runs(args) => ("runs", args.apply, RuntimeNeed::Required),
                 };
