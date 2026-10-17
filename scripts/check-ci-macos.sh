@@ -240,12 +240,29 @@ if not filtered_tests:
     errors.append("no filtered cargo test commands found in the macOS workflow")
 
 
+def failure_output(result: subprocess.CompletedProcess[str]) -> str:
+    # `--message-format json` moves rustc's diagnostics to stdout as
+    # `compiler-message` objects. The lint name, file and line exist only in
+    # their rendered text; stderr keeps cargo's one-line summary.
+    rendered: list[str] = []
+    for line in result.stdout.splitlines():
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(message, dict) and message.get("reason") == "compiler-message":
+            text = message.get("message", {}).get("rendered", "").strip()
+            if text:
+                rendered.append(text)
+    return "\n".join([*rendered, result.stderr.strip()]).strip()
+
+
 def run_listing(command: list[str], label: str, env: dict[str, str] | None = None) -> str | None:
     result = subprocess.run(
         command, cwd=repo_root, capture_output=True, text=True, check=False, env=env,
     )
     if result.returncode != 0:
-        errors.append(f"{label} (exit {result.returncode}): {result.stderr.strip()}")
+        errors.append(f"{label} (exit {result.returncode}): {failure_output(result)}")
         return None
     return result.stdout
 

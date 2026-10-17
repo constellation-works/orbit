@@ -787,6 +787,28 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("no test binary matching --test process", result.stderr)
 
+    def test_workspace_build_failure_names_the_rendered_lint_diagnostic(self):
+        # `--message-format json` moves rustc's diagnostics to stdout as
+        # `compiler-message` objects, and stderr keeps only cargo's summary. A
+        # failed all-targets lint must still name its lint, file and line.
+        self.prepare_ci()
+        rendered = ("error: this expression creates a reference which is immediately dereferenced\n"
+                    "  --> crates/orbit-types/tests/fixture.rs:3:13\n"
+                    "  = note: `#[deny(clippy::needless_borrow)]` on by default")
+        self.env["GUARD_TEST_RENDERED"] = rendered
+        self.write_executable(self.bin / "cargo", '''#!/usr/bin/env python3
+import json, os, sys
+if sys.argv[1] == "metadata":
+    print(open(os.environ["GUARD_TEST_METADATA"]).read())
+    raise SystemExit(0)
+print(json.dumps({"reason": "compiler-message", "message": {"rendered": os.environ["GUARD_TEST_RENDERED"]}}))
+print("error: could not compile `orbit-types` (lib test) due to 1 previous error", file=sys.stderr)
+raise SystemExit(101)
+''')
+        result = self.run_guard("check-ci-macos.sh", "--workspace-build")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn(rendered, result.stderr)
+
     def test_macos_check_rejects_unknown_flags(self):
         self.prepare_ci()
         result = self.run_guard("check-ci-macos.sh", "--fast")
