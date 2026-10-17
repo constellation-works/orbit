@@ -715,6 +715,15 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   receipt for is closed (`Refused`) and its slot returned.
 - An unreachable owner is reported in the iteration output and retried; the
   drain never fails over to its own store.
+- The owner's own drain survives the same waits. An admission pass that
+  times out on the task commit lock or the database (`lock_busy`) admits
+  nothing, records `last_pass_error_code: lock_busy` with the lock error,
+  which names the holder's pid and section, on
+  `pipeline_state.drain_last_pass`, and waits the drain's poll interval
+  before the next pass retries; `orbit run show` reads `Admission pass
+  deferred: consecutive_failures=N`. Ten deferred passes in a row fail the
+  drain with that error, and any completed pass resets the count. Other
+  admission failures still fail the drain at once.
 - An owner that times out waiting on its task commit lock or its database
   answers `lock_busy`. A leaf's owner reads retry it twice before failing, and
   a step it still fails releases the claim as `transient`. When these recur,
