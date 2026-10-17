@@ -114,12 +114,6 @@ impl McpListener {
         self
     }
 
-    /// Compatibility alias for [`Self::with_initialization_timeout`]. The
-    /// budget now covers all initialization, including the first byte.
-    pub fn with_first_byte_timeout(self, timeout: Duration) -> Self {
-        self.with_initialization_timeout(timeout)
-    }
-
     /// Replace the longest message a session may send before it is closed.
     pub fn with_max_message_bytes(mut self, limit: usize) -> Self {
         self.max_message_bytes = limit;

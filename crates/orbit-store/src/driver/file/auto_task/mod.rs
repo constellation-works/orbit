@@ -28,17 +28,6 @@ pub fn cursor_state_path(state_dir: &Path) -> PathBuf {
     state_dir.join("auto-tasks.json")
 }
 
-/// Stable sidecar lock for [`cursor_state_path`]. Matches
-/// `orbit_common::fs::io::with_exclusive_file_lock` so atomic replacement of
-/// the data file cannot drop exclusion.
-pub fn cursor_lock_path(state_path: &Path) -> PathBuf {
-    let file_name = state_path.file_name().map_or_else(
-        || "auto-tasks.json".to_string(),
-        |name| name.to_string_lossy().into_owned(),
-    );
-    state_path.with_file_name(format!(".{file_name}.lock"))
-}
-
 /// Read the current cursor state.
 ///
 /// A missing file is empty state. An existing file that cannot be read or

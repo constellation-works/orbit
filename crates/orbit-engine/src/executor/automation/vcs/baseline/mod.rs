@@ -7,7 +7,7 @@
 //! anything about the candidate. Both validation steps therefore run each
 //! required command through [`run_validation_command`], which reruns a
 //! network-inconclusive failure (curl status `000`, DNS, a TLS timeout) up to
-//! [`NETWORK_RETRIES`] times with backoff, and judge a failure that survives
+//! [`command::NETWORK_RETRIES`] times with backoff, and judge a failure that survives
 //! through [`compare_candidate_with_base`]:
 //!
 //! - the command is rerun on the candidate's synchronized base in a clean,
@@ -68,11 +68,7 @@ mod hold;
 // Preserve the existing module surface even for helpers used only by this split.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) use cache::recorded_base_runs;
-#[allow(unused_imports)]
-pub(super) use cache::{CachePaths, cache_paths};
 pub(super) use cache::{cached_base_check, in_detached_worktree};
-#[allow(unused_imports)]
-pub(super) use command::NETWORK_RETRIES;
 pub(super) use command::{
     network_inconclusive, run_validation_command, run_validation_command_until,
 };

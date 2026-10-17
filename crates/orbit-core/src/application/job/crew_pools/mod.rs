@@ -17,10 +17,4 @@ pub(crate) use draw::{
     complexity_crews_key, complexity_of_crews_key, random_crew_ticket, seeded_crew_ticket,
     weighted_draw,
 };
-// Kept on `crew_pools::` so existing paths stay valid. No in-crate caller
-// imports these three names through the parent module today.
-#[allow(unused_imports)]
-pub(crate) use draw::{INSPECTION_CREW_UNAVAILABLE, can_inspect};
-#[allow(unused_imports)]
-pub(crate) use types::CapturedCrewPool;
 pub(crate) use types::{CapturedCrewPools, CreationCrewAssignment, CrewCandidate, InspectionPool};

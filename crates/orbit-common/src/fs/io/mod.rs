@@ -28,13 +28,12 @@ pub use atomic::{
     RELAXED_DURABILITY_ENV, StagedTextFile, atomic_write_bytes, atomic_write_text,
     atomic_write_text_volatile, durability_syncs_relaxed, durability_syncs_requested,
     relaxed_durability_requested, remove_path_if_exists, sqlite_synchronous, sync_file,
-    sync_file_data, sync_parent_dir, write_new_private_text, write_presence_marker,
-    write_text_with_parent,
+    sync_file_data, sync_parent_dir, write_new_private_text, write_text_with_parent,
 };
 pub use lock::{
-    HeldFileLock, LockFileNaming, hold_exclusive_file_lock_options, with_exclusive_file_lock,
-    with_exclusive_file_lock_named, with_exclusive_file_lock_named_options,
-    with_exclusive_file_lock_options, with_shared_file_lock, with_shared_file_lock_options,
+    HeldFileLock, hold_exclusive_file_lock_options, with_exclusive_file_lock,
+    with_exclusive_file_lock_named_options, with_exclusive_file_lock_options,
+    with_shared_file_lock, with_shared_file_lock_options,
 };
 pub(crate) use lock::{classify_lock_io, classify_or_wrap_lock_io};
 #[cfg(any(unix, windows))]

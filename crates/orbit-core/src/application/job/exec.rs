@@ -182,36 +182,6 @@ impl OrbitRuntime {
         Ok((source, input))
     }
 
-    /// [ORB-10002] Resume an interrupted (or failed / timed-out) job run from
-    /// its persisted step checkpoints.
-    ///
-    /// Creates a new run linked via `retry_source_run_id`, seeds its
-    /// `PipelineState` from the source run's checkpoints, and executes the
-    /// job skipping every top-level step already recorded as `success` —
-    /// their outputs are fed back into the pipeline so later steps see them.
-    /// If the source run has no successful checkpoints this degrades to a
-    /// full replay.
-    ///
-    /// [ORB-10470] Before the first step runs, the resume reconciles the tasks
-    /// its own retry lineage owns: a task blocked by the source failure is
-    /// re-admitted, and its `job_run_id` is realigned to the batch id the
-    /// reused checkpoints carry. Tasks owned by an unrelated run are untouched.
-    ///
-    /// Test-only in-process path for legacy execution and checkpoint fixtures.
-    /// Production resume uses [`OrbitRuntime::submit_resume_run`](crate::OrbitRuntime::submit_resume_run).
-    #[cfg(test)]
-    pub fn resume_job_run(&self, source_run_id: &str) -> Result<V2JobRunResult, OrbitError> {
-        let plan = self.plan_job_run_resume(source_run_id)?;
-        let (job_path, _) = self.load_v2_job_asset_by_name(&plan.source.job_id)?;
-        self.run_job_v2_from_yaml_with_retry_source(
-            &job_path,
-            plan.input.clone(),
-            Some(plan.source.run_id.clone()),
-            plan.attempt,
-            Some(&plan),
-        )
-    }
-
     fn run_job_v2_from_yaml_with_retry_source(
         &self,
         yaml_path: &Path,

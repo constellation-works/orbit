@@ -39,7 +39,4 @@ mod sweep;
 pub use host_targets::with_host_target_removal_hook;
 pub use paths::run_worktree_paths;
 pub use reclaim::run_worktree_has_reclaim_output;
-// Keep the report type reachable at the existing GC module path.
-#[allow(unused_imports)]
-pub use sweep::WorktreeGcReport;
 pub use sweep::{WorktreeGcOptions, WorktreeGcResult, collect_worktrees};

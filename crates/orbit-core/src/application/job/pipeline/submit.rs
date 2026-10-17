@@ -277,55 +277,6 @@ impl OrbitRuntime {
         }
         self.submit_pipeline_run_with_trigger(workflow.job_id, input, None, actor, trigger)
     }
-    /// Submit one workspace drain (`workspace_auto_pipeline`).
-    ///
-    /// [ORB-10819] `for_seconds` is the drain window: the run keeps re-listing
-    /// admissible work and shipping it until the window expires. `None` (or
-    /// zero) means one tick, which is what every caller predating the window
-    /// gets. The window bounds only the *start* of new work — a child run
-    /// already in flight when the deadline passes finishes normally.
-    /// `max_active_leaf_runs` is the drain's concurrency ceiling: how many
-    /// `task_auto_pipeline` children may be live at once. Omitted, the job's
-    /// own default applies — this only forwards an explicit override, so the
-    /// default lives in one place, next to the loop that reads it.
-    ///
-    /// [ORB-11242] `allowed_crews` is the run-scoped crew restriction. Empty
-    /// means unrestricted, which is what every caller predating it gets. Names
-    /// are resolved against this host's `[crews.*]` registry *here*, before a
-    /// run record exists, so an unknown or blank name fails the submission
-    /// rather than quietly shrinking what a live drain admits; the canonical
-    /// registry names are what gets persisted and forwarded. It gates what the
-    /// drain may *start* — it does not touch workspace configuration, reassign
-    /// a task's crew, or cancel work another invocation already has in flight.
-    ///
-    /// [ORB-13016] `trigger` is the submitting surface's provenance.
-    #[allow(clippy::too_many_arguments)]
-    pub fn submit_workspace_auto_run(
-        &self,
-        for_seconds: Option<u64>,
-        max_active_leaf_runs: Option<u32>,
-        completion: crate::application::workflow::CompletionPolicy,
-        allowed_crews: &[String],
-        complexity_crews: &orbit_config::ComplexityCrewPools,
-        actor: Option<&str>,
-        claim_token: Option<&str>,
-        trigger: JobRunTrigger,
-    ) -> Result<PipelineInvokeResult, OrbitError> {
-        self.submit_workspace_auto_run_with_containment(
-            for_seconds,
-            max_active_leaf_runs,
-            completion,
-            allowed_crews,
-            complexity_crews,
-            actor,
-            claim_token,
-            trigger,
-            false,
-            false,
-            false,
-        )
-    }
-
     /// Submit a drain with a strict policy inherited by its leaf workers.
     ///
     /// [ORB-14117] `approve_proposed` lets every pass of this drain approve
@@ -370,6 +321,27 @@ impl OrbitRuntime {
     /// Submit a local drain with a run-scoped forecast mode. Omission captures
     /// the host setting; explicit modes never edit configuration. All surfaces
     /// use this submission and the existing admission controller.
+    ///
+    /// [ORB-10819] `for_seconds` is the drain window: the run keeps re-listing
+    /// admissible work and shipping it until the window expires. `None` (or
+    /// zero) means one tick, which is what every caller predating the window
+    /// gets. The window bounds only the *start* of new work — a child run
+    /// already in flight when the deadline passes finishes normally.
+    /// `max_active_leaf_runs` is the drain's concurrency ceiling: how many
+    /// `task_auto_pipeline` children may be live at once. Omitted, the job's
+    /// own default applies — this only forwards an explicit override, so the
+    /// default lives in one place, next to the loop that reads it.
+    ///
+    /// [ORB-11242] `allowed_crews` is the run-scoped crew restriction. Empty
+    /// means unrestricted, which is what every caller predating it gets. Names
+    /// are resolved against this host's `[crews.*]` registry *here*, before a
+    /// run record exists, so an unknown or blank name fails the submission
+    /// rather than quietly shrinking what a live drain admits; the canonical
+    /// registry names are what gets persisted and forwarded. It gates what the
+    /// drain may *start* — it does not touch workspace configuration, reassign
+    /// a task's crew, or cancel work another invocation already has in flight.
+    ///
+    /// [ORB-13016] `trigger` is the submitting surface's provenance.
     #[allow(clippy::too_many_arguments)]
     pub fn submit_workspace_auto_run_with_mode(
         &self,

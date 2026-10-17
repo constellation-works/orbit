@@ -144,8 +144,8 @@ pub use clock_hold::{
     record_clock_upgrade_refusal,
 };
 pub use handoff::{
-    HandoverCandidate, RESUME_CAPABILITIES, RESUME_DRAIN_ADOPT, RESUME_MCP_STDIO,
-    candidate_supports, handover_target, reexec, replaced_installation,
+    HandoverCandidate, RESUME_CAPABILITIES, RESUME_DRAIN_ADOPT, RESUME_MCP_STDIO, handover_target,
+    reexec, replaced_installation,
 };
 pub use identity::{Access, CompatibilityIdentity, FeatureFloor, LedgerCompatibility};
 pub use image::{executable_generation, process_generation};

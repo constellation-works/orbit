@@ -605,10 +605,3 @@ pub fn governed_command(command: &str, subcommand: &str) -> Option<&'static Gove
                 .is_some_and(|(head, tail)| head == command && tail == subcommand)
     })
 }
-
-/// Look up a governed dashboard operation by its stable typed action id.
-pub fn governed_dashboard(id: &str) -> Option<&'static GovernedOperation> {
-    GOVERNED_OPERATIONS
-        .iter()
-        .find(|operation| operation.surface == OperationSurface::Dashboard && operation.id == id)
-}

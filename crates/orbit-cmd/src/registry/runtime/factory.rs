@@ -103,18 +103,6 @@ pub fn workspace_runtime_binding(
     orbit_core::runtime::workspace_runtime_binding(workspace, checkout)
 }
 
-pub fn resolved_workspace_binding(
-    workspace: &Workspace,
-    checkout: &WorkspaceCheckout,
-) -> Result<ResolvedWorkspaceBinding, OrbitError> {
-    Ok(ResolvedWorkspaceBinding {
-        logical_workspace_id: workspace.id.clone(),
-        runtime: workspace_runtime_binding(workspace, checkout)?,
-        role: checkout.role,
-        owner_machine_id: workspace.owner_machine_id.clone(),
-    })
-}
-
 /// Registry-aware runtime factory. Registered checkouts carry an explicit
 /// Core workspace binding.
 pub struct RegisteredRuntimeFactory;

@@ -83,8 +83,6 @@ const TRASH_DETAIL: &str = "A timed-out worktree removal left a relocated trash 
      Removed the leftover directory.";
 
 pub(super) struct TrashDirectoryInfo {
-    #[allow(dead_code)]
-    name: String,
     pid: u32,
     nanos: u128,
 }
@@ -98,11 +96,7 @@ pub(super) fn parse_trash_directory(file_name: &str) -> Option<TrashDirectoryInf
     }
     let pid = pid_str.parse::<u32>().ok()?;
     let nanos = nanos_str.parse::<u128>().ok()?;
-    Some(TrashDirectoryInfo {
-        name: name.to_string(),
-        pid,
-        nanos,
-    })
+    Some(TrashDirectoryInfo { pid, nanos })
 }
 
 fn is_trash_expired(created_nanos: u128) -> bool {

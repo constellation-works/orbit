@@ -424,11 +424,6 @@ impl TaskReferenceIndex {
     }
 }
 
-pub fn task_dependencies_ready(task: &Task, status_by_id: &BTreeMap<OrbitId, TaskStatus>) -> bool {
-    let reference_index = TaskReferenceIndex::from_status_index(status_by_id);
-    task_dependencies_ready_with_index(task, status_by_id, &reference_index)
-}
-
 /// Check readiness using prefix knowledge derived from one status projection.
 pub fn task_dependencies_ready_with_index(
     task: &Task,
@@ -558,19 +553,6 @@ pub fn satisfy_completed_archived_dependencies<E>(
         }
     }
     Ok(())
-}
-
-pub fn validate_task_dependencies(
-    tasks: &[Task],
-    current_task_id: Option<&str>,
-    dependencies: &[OrbitId],
-) -> Result<(), TaskError> {
-    validate_task_dependencies_with(current_task_id, dependencies, |id| {
-        Ok(tasks
-            .iter()
-            .find(|task| task.id == id)
-            .map(Task::dependencies))
-    })
 }
 
 /// Cycle-check new dependency edges using an on-demand adjacency lookup.

@@ -50,9 +50,7 @@ mod signature;
 mod types;
 
 pub(crate) use classify::classify_failure;
-pub use classify::{
-    classify, has_tool_identity, is_failure_only_diagnostic_surface, is_lifecycle_diagnostic,
-};
+pub use classify::{classify, has_tool_identity, is_failure_only_diagnostic_surface};
 pub use grouping::{build_report, group_failure_incidents};
 pub use signature::{normalize_message, signature_for};
 pub use types::{
