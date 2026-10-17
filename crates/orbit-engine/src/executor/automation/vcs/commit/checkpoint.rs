@@ -10,7 +10,10 @@ use crate::context::RuntimeHost;
 
 use super::super::super::input::input_string_field;
 use super::super::git::{git_command_success, git_output};
-use super::{already_landed, no_diff, tagged_no_diff};
+use super::already_landed::{self, AlreadyLanded};
+use super::clean_tree::Verifier;
+use super::no_diff::{self, NoDiff};
+use super::tagged_no_diff;
 
 /// Accept a clean tree at the pinned HEAD only with structured evidence: a
 /// run's no-diff claim for this task and HEAD [ORB-13145], or a verified
@@ -27,9 +30,9 @@ pub(super) fn verify_clean_tree<H: RuntimeHost + ?Sized>(
 ) -> Result<Value, OrbitError> {
     let no_diff_error = match host.get_task_artifact(&task.id, no_diff::ARTIFACT) {
         Ok(None) => {
-            return already_landed::verify(host, task, workspace_path, run_id, base_sha);
+            return AlreadyLanded::verify(host, task, workspace_path, run_id, base_sha);
         }
-        Ok(Some(_)) => match no_diff::verify(host, task, workspace_path, run_id, base_sha) {
+        Ok(Some(_)) => match NoDiff::verify(host, task, workspace_path, run_id, base_sha) {
             Ok(checkpoint) => return Ok(checkpoint),
             Err(error @ (OrbitError::Execution(_) | OrbitError::InvalidInput(_))) => error,
             Err(error) => return Err(error),
@@ -41,7 +44,7 @@ pub(super) fn verify_clean_tree<H: RuntimeHost + ?Sized>(
     };
     match host.get_task_artifact(&task.id, already_landed::ARTIFACT) {
         Ok(None) => Err(no_diff_error),
-        Ok(Some(_)) => already_landed::verify(host, task, workspace_path, run_id, base_sha)
+        Ok(Some(_)) => AlreadyLanded::verify(host, task, workspace_path, run_id, base_sha)
             .map_err(|error| OrbitError::Execution(format!("{no_diff_error}; {error}"))),
         Err(error @ OrbitError::InvalidInput(_)) => {
             Err(OrbitError::Execution(format!("{no_diff_error}; {error}")))
@@ -73,7 +76,7 @@ pub(in crate::executor::automation::vcs) fn verify_clean_tree_handoff<H: Runtime
 ) -> Result<(), OrbitError> {
     match checkpoint.get("decision").and_then(Value::as_str) {
         Some(no_diff::DECISION) => {
-            no_diff::verify_handoff(host, tasks, workspace_path, run_id, checkpoint)
+            NoDiff::verify_handoff(host, tasks, workspace_path, run_id, checkpoint)
         }
         Some(tagged_no_diff::DECISION) => match tasks {
             [task] => tagged_no_diff::verify_handoff(task, workspace_path, checkpoint),
@@ -81,7 +84,7 @@ pub(in crate::executor::automation::vcs) fn verify_clean_tree_handoff<H: Runtime
                 "a no-diff-expected checkpoint covers exactly one task".into(),
             )),
         },
-        _ => already_landed::verify_handoff(host, tasks, workspace_path, run_id, checkpoint),
+        _ => AlreadyLanded::verify_handoff(host, tasks, workspace_path, run_id, checkpoint),
     }
 }
 
@@ -113,10 +116,10 @@ pub(in crate::executor::automation::vcs) fn verify_clean_tree_handoff_at_revisio
 ) -> Result<(), OrbitError> {
     match checkpoint["decision"].as_str() {
         Some(no_diff::DECISION) => {
-            no_diff::verify_handoff_at_revision(host, task, workspace, run_id, checkpoint)
+            NoDiff::verify_handoff_at_revision(host, task, workspace, run_id, checkpoint)
         }
         Some(already_landed::DECISION) => {
-            already_landed::verify_handoff_at_revision(host, task, workspace, run_id, checkpoint)
+            AlreadyLanded::verify_handoff_at_revision(host, task, workspace, run_id, checkpoint)
         }
         Some(tagged_no_diff::DECISION) => {
             tagged_no_diff::verify_handoff_at_revision(task, checkpoint)

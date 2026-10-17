@@ -110,9 +110,6 @@ pub enum RunSubcommand {
     Auto(auto::AutoCommand),
     /// Ship backlog or explicitly selected tasks through the gated task pipeline
     Ship(ship::ShipCommand),
-    /// Deprecated alias for `orbit run ship --mode local`
-    #[command(name = "ship-local", hide = true)]
-    ShipLocal(ship::LegacyShipLocalCommand),
     /// Dispatch ship runs in every registered workspace with ready backlog tasks
     #[command(name = "ship-sweep")]
     ShipSweep(sweep::ShipSweepCommand),
@@ -152,7 +149,6 @@ impl Execute for RunSubcommand {
         match self {
             RunSubcommand::Auto(command) => command.execute(runtime),
             RunSubcommand::Ship(command) => command.execute(runtime),
-            RunSubcommand::ShipLocal(command) => command.execute(runtime),
             // Normally dispatched before runtime init (see main.rs); the
             // registry-driven sweep never uses the cwd-derived runtime.
             RunSubcommand::ShipSweep(command) => command.execute_without_runtime(None),

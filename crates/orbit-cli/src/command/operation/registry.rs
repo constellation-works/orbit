@@ -142,12 +142,6 @@ impl Commands {
                         Some("ship"),
                         RuntimeNeed::Required,
                     ),
-                    RunSubcommand::ShipLocal(_) => (
-                        "ship-local",
-                        Some("workflow"),
-                        Some("ship-local"),
-                        RuntimeNeed::Required,
-                    ),
                     RunSubcommand::ShipSweep(_) => (
                         "ship-sweep",
                         Some("workflow"),
