@@ -447,6 +447,33 @@ try {
     await drainCheck(`state-${phase}`, 336);
   }
 
+  // Operation feedback timeout in real Chromium browser: start a window,
+  // observe confirmation and warnings, trigger clear, verify confirmation
+  // cleared while warning lines stay.
+  await page.evaluate(() => {
+    const start = document.querySelector('#auto-drain-start-body .drain-start');
+    if (start) start.click();
+  });
+  await page.waitForFunction(() => {
+    const node = document.getElementById('auto-drain-operation-feedback');
+    return node && node.textContent.includes('submitted') && node.textContent.includes('Warning:');
+  });
+  const beforeFeedbackTimeout = await page.evaluate(() => document.getElementById('auto-drain-operation-feedback').textContent);
+  if (!beforeFeedbackTimeout.includes('submitted') || !beforeFeedbackTimeout.includes('Warning: Admissions throttled')) {
+    throw new Error(`Auto-drain start feedback missing confirmation or warnings: ${beforeFeedbackTimeout}`);
+  }
+  await page.evaluate(() => {
+    globalThis.triggerFeedbackClear('auto-drain-operation-feedback');
+  });
+  const afterFeedbackTimeout = await page.evaluate(() => document.getElementById('auto-drain-operation-feedback').textContent);
+  if (afterFeedbackTimeout.includes('submitted') || afterFeedbackTimeout.includes('Auto-concurrency:')) {
+    throw new Error(`Confirmation lines not cleared after feedback timeout: ${afterFeedbackTimeout}`);
+  }
+  if (!afterFeedbackTimeout.includes('Warning: Admissions throttled') || !afterFeedbackTimeout.includes('FIXTURE_TOKEN') || !afterFeedbackTimeout.includes('Note: no')) {
+    throw new Error(`Warning or note lines missing after feedback timeout: ${afterFeedbackTimeout}`);
+  }
+  await page.screenshot({ path: path.join(evidence, 'drain-feedback-warnings-retained.png') });
+
   // The scoped dock still identifies pull drains and stopped admissions;
   // the chrome keeps the fleet visible when this workspace becomes idle.
   const pullIndicator = () => page.evaluate(() => ({

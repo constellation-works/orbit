@@ -39,9 +39,54 @@ let pendingCadenceSeconds = null;
 // to find or delete the file the reason names.
 let showInactivePlugins = false;
 
+export const OPERATION_FEEDBACK_CLEAR_MS = 60000;
+const feedbackClearTimers = new Map();
+
+function clearFeedbackTimer(id) {
+  const timer = feedbackClearTimers.get(id);
+  if (timer) {
+    clearTimeout(timer);
+    feedbackClearTimers.delete(id);
+  }
+}
+
+function clearAllFeedbackTimers() {
+  for (const timer of feedbackClearTimers.values()) {
+    clearTimeout(timer);
+  }
+  feedbackClearTimers.clear();
+}
+
+function isWarningLine(line) {
+  return /^\s*(?:warning|note):/i.test(line);
+}
+
+function expireFeedback(id) {
+  feedbackClearTimers.delete(id);
+  const node = $(id);
+  if (!node) return;
+  const currentText = node.textContent || "";
+  const lines = currentText.split("\n");
+  const warningLines = lines.filter(isWarningLine);
+  if (warningLines.length > 0) {
+    node.textContent = warningLines.join("\n");
+  } else {
+    feedback(id, "", "");
+  }
+}
+
+export function triggerFeedbackClear(id) {
+  const timer = feedbackClearTimers.get(id);
+  if (timer) {
+    clearTimeout(timer);
+    expireFeedback(id);
+  }
+}
+
 export function initOperations(nextContext) {
   context = nextContext;
   unsubscribeWorkspace?.();
+  clearAllFeedbackTimers();
   unsubscribeWorkspace = onWorkspaceChange(() => {
     lastOperations = lastAutoTasks = lastAutoDrain = lastJobs = null;
     updateRoutineFailureBadge([]);
@@ -77,10 +122,18 @@ function workspaceReadOnlyReason() {
 }
 
 function feedback(id, kind, message) {
+  clearFeedbackTimer(id);
   const node = $(id);
   if (!node) return;
-  node.className = `operation-feedback ${kind || ""}`;
+  node.className = `operation-feedback ${kind || ""}`.trim();
   node.textContent = message || "";
+
+  if (kind === "success") {
+    const timer = setTimeout(() => {
+      expireFeedback(id);
+    }, OPERATION_FEEDBACK_CLEAR_MS);
+    feedbackClearTimers.set(id, timer);
+  }
 }
 
 function looksLikeDuration(value) {
