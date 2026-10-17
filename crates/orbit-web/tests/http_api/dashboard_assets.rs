@@ -163,6 +163,24 @@ fn tasks_rail_count_reports_matching_total_across_pages_and_aggregate_view() {
 }
 
 #[test]
+fn dashboard_renders_provider_reading_age_and_auth_failures() {
+    let result = std::process::Command::new("node")
+        .args([
+            "--experimental-vm-modules",
+            "tests/http_api/dashboard_provider_auth.mjs",
+        ])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("node is required to execute the dashboard provider auth fixture");
+    assert!(
+        result.status.success(),
+        "dashboard provider reading age and auth failures failed:\n{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[test]
 fn hidden_dashboard_polls_lightly_prefixes_failures_and_notifies_only_after_opt_in() {
     let result = std::process::Command::new("node")
         .args([

@@ -57,6 +57,8 @@ let nullCapacity = false;
 let resourceThrottle = null;
 let drainCapacityOverride = {};
 let drainTasksOverride = null;
+let providerLimitsFixture = null;
+let providerAuthFixture = null;
 const drainDeadline = window.__drainDeadline || new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
 let submittedJob = null;
 const memberDiagnostic = {
@@ -183,6 +185,8 @@ globalThis.fetch = async (path, options = {}) => {
       ...drainCapacityOverride,
     },
     tasks: drainTasksOverride || readinessTasks,
+    ...(providerLimitsFixture ? { provider_limits: providerLimitsFixture } : {}),
+    ...(providerAuthFixture ? { provider_auth_failures: providerAuthFixture } : {}),
   });
   return response({});
 };
@@ -1093,4 +1097,38 @@ rebuilt.querySelector('button').click(); await tick(); await tick();
 assert(rebuilt.textContent.includes('full-input'), 'full state can be retried after an error');
 // Leave the harness on the normal routines view for the layout scenarios.
 rebuilt.open = false; await tick();
+
+// Provider readings list every window with its age. A stale one carries the
+// marker; a fresh one reads "today". The gated sentence stays the admission
+// note. An auth row names the host, provider, runs and fix command, and a
+// later payload that no longer lists it removes the row.
+setWorkspace('one');
+const readingUntil = '2026-10-17T18:00:00Z';
+providerLimitsFixture = [
+  { provider: 'codex', scope: null, window: 'seven_day', used_percent: 92, threshold: 90, gated: true, until: readingUntil, crews: ['sol'], observed_at: '2026-10-14T12:00:00Z', stale: true, age_seconds: 3 * 86400 },
+  { provider: 'claude', scope: null, window: 'five_hour', used_percent: 40, threshold: 90, gated: false, until: readingUntil, crews: ['opus'], observed_at: new Date().toISOString(), stale: false, age_seconds: 90 },
+];
+providerAuthFixture = [{
+  host: 'dk-server-2', provider: 'claude',
+  runs: [{ run_id: 'jrun-auth-early', at: '2026-10-17T01:38:00Z' }, { run_id: 'jrun-auth-late', at: '2026-10-17T01:39:00Z' }],
+  fix_command: 'Run `claude auth login`.',
+}];
+await fetchAndRenderAutoDrainPane();
+const providerNote = get('auto-drain-body').querySelector('.drain-provider-limit-note');
+assert(providerNote && providerNote.textContent.startsWith('Provider limits: codex seven_day 92%') && !providerNote.textContent.includes('claude') && !providerNote.textContent.includes('stale'), `the gated note is unchanged: ${providerNote?.textContent}`);
+const providerReadings = [...get('auto-drain-body').querySelectorAll('.drain-provider-reading')];
+const staleReading = providerReadings.find(node => node.textContent.includes('codex'));
+const freshReading = providerReadings.find(node => node.textContent.includes('claude'));
+assert(staleReading && staleReading.classList.contains('stale') && staleReading.textContent.includes('3d old') && staleReading.textContent.includes('stale'), `stale reading: ${staleReading?.textContent}`);
+assert(freshReading && freshReading.textContent.includes('today') && !freshReading.textContent.includes('stale'), `fresh reading: ${freshReading?.textContent}`);
+const authItem = get('auto-drain-body').querySelector('.drain-provider-auth-item');
+assert(authItem && authItem.textContent.includes('dk-server-2') && authItem.textContent.includes('claude') && authItem.textContent.includes('claude auth login'), `auth item: ${authItem?.textContent}`);
+assert(authItem.querySelector('a[href*="jrun-auth-early"]') && authItem.querySelector('a[href*="jrun-auth-late"]'), `auth runs: ${authItem.textContent}`);
+providerAuthFixture = [];
+await fetchAndRenderAutoDrainPane();
+assert(!get('auto-drain-body').querySelector('.drain-provider-auth-item'), 'a later success drops the auth item from the card');
+assert([...get('auto-drain-body').querySelectorAll('.drain-provider-reading')].some(node => node.textContent.includes('today')), 'fresh readings still render as today');
+providerLimitsFixture = null;
+providerAuthFixture = null;
+await fetchAndRenderAutoDrainPane();
 globalThis.operationsTestsPassed = true;
