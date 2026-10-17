@@ -7,7 +7,9 @@
 //! plus reaped-children CPU, so short-lived descendants count through the
 //! parent that waited for them. The last observed total of a process that
 //! exited is owed by the member that will reap it, so a sampled child is not
-//! counted again when reaped; one reparented away owes nothing. The first
+//! counted again when reaped; one reparented away owes nothing. A debt that
+//! the owner's next sighting does not settle lapses, so a descendant reaped
+//! outside the tree hides at most one window of the owner's reaped growth. The first
 //! successful read is a baseline and charges nothing. An unreadable tree
 //! leaves that baseline where it was, so the next success still has a
 //! previous sample to diff.

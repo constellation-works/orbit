@@ -462,7 +462,13 @@ fn profiles_report_tabulates_profiles_emits_series_and_flags_building_no_diff_wo
     assert_eq!(series.len(), 3);
     for point in series {
         assert_eq!(point["alive"], 1.0);
-        assert_eq!(point["cpu_cores"], 2.0);
+        // Mean and spread over the alive deliveries: 9-core minutes would
+        // lift the mean to 4.33 and the spread above zero.
+        assert_eq!(
+            (&point["cpu_cores"], &point["cpu_stddev"]),
+            (&Value::from(2.0), &Value::from(0.0)),
+            "the own-only delivery's 9-core minutes stay out of the series: {change:#}"
+        );
         assert_eq!(point["memory_bytes"], GIB);
     }
     assert!(change["build_like"].as_array().unwrap().is_empty());

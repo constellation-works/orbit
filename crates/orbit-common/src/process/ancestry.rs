@@ -170,11 +170,23 @@ pub struct ProcessTreeProcess {
 ///   stays charged, and nothing in the tree will reap it, so it creates no
 ///   debt. Debt it was owed is dropped with it.
 ///
-/// Debt is held per owner and only for a process that exited inside the
-/// tree, so a process reparented away never offsets unrelated work. A
-/// descendant that is reparented and exits within one sample interval reads
-/// as exited, and its last observed total stays owed by an ancestor that will
-/// never reap it. That undercounts by at most that one total.
+/// An exited process that has not been waited for stays listed and readable
+/// as a zombie, so one that left the walk had already been reaped before
+/// the walk reached it. When its owner reaped it, the reap shows in the
+/// owner's reaped total in that snapshot or, if the walk read the owner
+/// first, at the owner's next sighting. A debt therefore settles only at the
+/// owner's sighting in the snapshot it climbed in and at the owner's next
+/// sighting; what is left after that is dropped. Each climb restarts that
+/// window, so a reap that lands one level up a sample later is still matched.
+///
+/// Some debts are never paid. A descendant reaped outside the tree never
+/// shows in a member's reaped total: one whose parent exited without waiting
+/// for it (a build killed under a shell that the agent then reaps, or a
+/// dropped child handle whose parent exits after it), one whose parent sets
+/// `SA_NOCLDWAIT`, or one reparented and exited within one sample interval.
+/// Until the window closes, its debt absorbs the owner's unrelated reaped
+/// growth, so the tree undercounts by at most the owner's reaped growth over
+/// those two sightings, and never by more than the debt itself.
 #[derive(Debug, Default)]
 pub struct TreeCpuAccount {
     tracked: HashMap<ProcessStartKey, Tracked>,
@@ -188,7 +200,8 @@ struct Tracked {
     total_ns: u64,
     reaped_ns: u64,
     /// Last observed totals of descendants that exited under this process
-    /// and that its reaped total has not absorbed yet.
+    /// and that its reaped total has not absorbed yet. Whatever its next
+    /// sighting does not settle is dropped.
     owed_ns: u64,
 }
 
@@ -245,6 +258,9 @@ impl TreeCpuAccount {
                 }
             }
         }
+        // Debt that climbs in this snapshot, kept apart from older debt
+        // because it may still settle at the owner's next sighting.
+        let mut climbed: HashMap<ProcessStartKey, u64> = HashMap::new();
         for tracked in exited.values() {
             let owed = tracked.total_ns.saturating_add(tracked.owed_ns);
             let mut parent = tracked.parent;
@@ -252,8 +268,9 @@ impl TreeCpuAccount {
             // against a malformed parent chain.
             for _ in 0..=exited.len() {
                 let Some(key) = parent else { break };
-                if let Some(owner) = next.get_mut(&key) {
-                    owner.owed_ns = owner.owed_ns.saturating_add(owed);
+                if next.contains_key(&key) {
+                    let debt = climbed.entry(key).or_default();
+                    *debt = debt.saturating_add(owed);
                     break;
                 }
                 parent = exited.get(&key).and_then(|ancestor| ancestor.parent);
@@ -272,9 +289,20 @@ impl TreeCpuAccount {
                 ),
                 None => (now.total_ns, now.reaped_ns),
             };
-            let settled = now.owed_ns.min(reaped);
-            now.owed_ns -= settled;
+            // Older debt settles first, and this was its last chance: its
+            // remainder is dropped. New debt waits one more sighting.
+            let due = now.owed_ns;
+            let fresh = climbed.remove(&process.key).unwrap_or(0);
+            let settled = due.saturating_add(fresh).min(reaped);
+            now.owed_ns = fresh.saturating_sub(settled.saturating_sub(due));
             charged = charged.saturating_add(grown.saturating_sub(settled));
+        }
+        // A member the walk missed was not read, so debt that climbed to it
+        // waits for its next sighting.
+        for (key, owed) in climbed {
+            if let Some(owner) = next.get_mut(&key) {
+                owner.owed_ns = owner.owed_ns.saturating_add(owed);
+            }
         }
         self.tracked = next;
         if !self.baseline {

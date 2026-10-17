@@ -204,9 +204,20 @@ class in `worker/delivery_class.rs`, the host reads in
   children) is still matched. If it is alive under the same parent, the walk
   missed it and it stays tracked. If it is alive under another parent, it
   was reparented away: what it ran in the tree stays charged and it owes
-  nothing, so it never offsets unrelated work. A descendant reparented and
-  exited within one interval reads as exited, and its last total stays owed
-  by an ancestor that never reaps it, undercounting by that one total.
+  nothing. An exited process nobody has waited for stays listed and
+  readable as a zombie, so one that left the walk was reaped before the walk
+  reached it, and a reap by its owner shows in the owner's reaped total in
+  that sample or at the owner's next sighting. A debt settles only at those
+  two sightings, and whatever is left is dropped. Each climb restarts the
+  window, so a nested reap that lands a sample later one level up is still
+  matched. Some debts are never paid, because the descendant was reaped
+  outside the tree: its parent exited without waiting for it (a tool timeout
+  kills a build, the shell under the agent dies and the agent reaps it, and
+  `launchd` reaps the build; or a dropped child handle whose parent exits
+  after it), its parent sets `SA_NOCLDWAIT`, or it was reparented and exited
+  within one interval. Until the window closes, such a debt absorbs the
+  owner's unrelated reaped growth, so the tree undercounts by at most that
+  growth over two sightings, and never by more than the debt.
   The first sample is a baseline, so a worker's lifetime before that does
   not land in the first minute. Each process is charged only
   when its start time and parent read the same before and after its usage
@@ -319,7 +330,11 @@ An unavailable/zero timebase or a result beyond `u64` invalidates the
 sample, preserving the unreadable-tree behavior. Mac minutes stamped
 `macos-mach-ns-v1` counted only the own CPU of processes alive at a sample
 and missed reaped descendants, under-measuring a building delivery several
-times over, so profiles exclude their deliveries on every platform.
+times over, so profiles exclude their deliveries on every platform. Every
+Mac delivery recorded before this change carries `macos-mach-ns-v1` or no
+provenance, so the exclusion empties every Mac profile at upgrade: Mac
+admission starts cold, as on a host without profiles (§5.4), and profiles
+return only as `macos-mach-ns-v2` deliveries accumulate.
 Apple's [fill_task_rusage implementation](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/bsd_kern.c)
 copies task power totals into these counters; their units must not be assumed
 to be nanoseconds. For example, a 125/3 host needs its actual ratio.

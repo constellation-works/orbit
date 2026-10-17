@@ -1,6 +1,7 @@
 //! Process-tree sampling: interval CPU stays non-negative when a child
-//! leaves, a reaped descendant is charged once, an unreadable tree writes
-//! nothing, and a real macOS tree is what the minute row records.
+//! leaves, a reaped descendant is charged once, a descendant reaped outside
+//! the tree does not hide later work, an unreadable tree writes nothing, and
+//! a real macOS tree is what the minute row records.
 
 use std::collections::VecDeque;
 #[cfg(target_os = "macos")]
@@ -237,6 +238,36 @@ fn tree_intervals_charge_deltas_and_new_processes_only() {
         (cores_of(&nested) - 0.25).abs() < 1e-9,
         "nested reaps across samples charge only the root's 5 s of new work: {nested:#?}"
     );
+
+    // A killed build: the shell under the root dies and the root reaps it,
+    // but the build the shell never waited for is reaped outside the tree.
+    // Its debt climbs through the shell to the root and lapses after the
+    // root's next sighting, whether the shell's reap lands in the snapshot
+    // it left or the next one. The root's later short-lived commands are
+    // charged in full instead of paying a debt nothing will absorb.
+    let shell = |cpu_ns| under(process(2, 20, cpu_ns, 10), &parent(0, 0));
+    let build = |cpu_ns| under(process(3, 30, cpu_ns, 10), &shell(0));
+    for shell_reap_seen_late in [false, true] {
+        let shell_reap_seen = if shell_reap_seen_late { 0 } else { 500_000_000 };
+        let killed = recorded(
+            vec![
+                Some(vec![
+                    parent(0, 100),
+                    shell(500_000_000),
+                    build(100_000_000_000),
+                ]),
+                Some(vec![reaped(parent(0, 100), shell_reap_seen)]),
+                Some(vec![reaped(parent(0, 100), 500_000_000)]),
+                Some(vec![reaped(parent(0, 100), 3_000_000_000)]),
+                Some(vec![reaped(parent(0, 100), 5_500_000_000)]),
+            ],
+            &[0, 5, 10, 15, 20],
+        );
+        assert!(
+            (cores_of(&killed) - 0.25).abs() < 1e-9,
+            "an orphaned build's debt must not absorb the root's later 5 s of reaped commands (shell reap late: {shell_reap_seen_late}): {killed:#?}"
+        );
+    }
 
     // A child that is reparented away was charged while it ran here and
     // will be reaped elsewhere, so it must not offset the parent's growth.
