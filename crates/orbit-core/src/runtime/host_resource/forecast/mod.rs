@@ -8,6 +8,9 @@
 //!          + Σ reservations r: P_r(t) · alive_r(t)
 //! ```
 //!
+//! For memory the sum over profiled deliveries is not a sum of their 90th
+//! percentiles but a high quantile of their summed memory (`memory.rs`).
+//!
 //! - **Running deliveries** are every workspace's live delivery runs, grouped
 //!   per task. `a_i` is the whole minutes since the delivery was admitted. A
 //!   delivery older than its profile's last minute, or with no profile,
@@ -46,11 +49,13 @@ use super::profile::{ProfileKey, ProfileLookup, ProfilePeak, ProfileSet, Profile
 mod build;
 mod fit;
 mod host_load;
+mod memory;
 mod record;
 
 pub(crate) use build::build_forecast;
 pub use fit::{ForecastGap, GapMiss, GapResource, IdleHostAdmission};
 pub(crate) use host_load::HostLoadProbe;
+pub(crate) use memory::MemoryTerms;
 pub use record::{ACCURACY_OFFSETS, ForecastPoints};
 
 /// Minutes after which a reservation whose run never appeared leaves the
@@ -132,6 +137,9 @@ pub struct HostLoadForecast {
     pub reservations: Vec<ReservedAdmission>,
     pub cpu: ForecastSeries,
     pub memory: ForecastSeries,
+    /// What `memory` sums at each minute, for adding candidates to it.
+    #[serde(skip)]
+    pub(crate) memory_terms: Vec<MemoryTerms>,
     /// The profiles the forecast used, for the caller's candidate lookups.
     #[serde(skip)]
     pub profiles: Arc<ProfileSet>,
