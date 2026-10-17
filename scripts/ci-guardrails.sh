@@ -53,6 +53,54 @@ run_phase() {
   return "$status"
 }
 
+# Same Cargo job count as scripts/build-budget.py: ORBIT_CARGO_JOBS, else
+# CARGO_BUILD_JOBS, else <budget-dir>/cargo-jobs, else 4. The guard pool uses
+# that width so it cannot outrun the build budget it shares the machine with.
+resolve_guard_pool_width() {
+  python3 - <<'PY'
+import os
+from pathlib import Path
+import sys
+
+maximum = 1024
+default = 4
+
+def fail(message):
+    print(f"ci-guardrails: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+def positive_integer(name, value):
+    if not value.isascii() or not value.isdecimal() or value.startswith("0"):
+        fail(f"{name} must be a decimal integer from 1 through {maximum}; got {value!r}")
+    parsed = int(value)
+    if parsed > maximum:
+        fail(f"{name} must be a decimal integer from 1 through {maximum}; got {value!r}")
+    return parsed
+
+configured = os.environ.get("ORBIT_BUILD_BUDGET_DIR")
+directory = Path(configured).expanduser() if configured else Path.home() / ".orbit" / "cache" / "build-budget"
+if directory.is_symlink():
+    fail(f"lock directory must not be a symbolic link: {directory}")
+
+if "ORBIT_CARGO_JOBS" in os.environ:
+    jobs = positive_integer("ORBIT_CARGO_JOBS", os.environ["ORBIT_CARGO_JOBS"])
+elif "CARGO_BUILD_JOBS" in os.environ:
+    jobs = positive_integer("CARGO_BUILD_JOBS", os.environ["CARGO_BUILD_JOBS"])
+else:
+    path = directory / "cargo-jobs"
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        jobs = default
+    except (OSError, UnicodeError) as error:
+        fail(f"cannot read ORBIT_CARGO_JOBS/CARGO_BUILD_JOBS from {path}: {error}")
+    else:
+        jobs = positive_integer("ORBIT_CARGO_JOBS/CARGO_BUILD_JOBS", value)
+
+print(jobs)
+PY
+}
+
 export GIT_OPTIONAL_LOCKS=0
 
 run_self_tests=true
@@ -95,6 +143,52 @@ if [[ "$run_self_tests" == true ]]; then
   "$repo_root/scripts/require-python.sh" --yaml
 fi
 
+guard_pool_width="$(resolve_guard_pool_width)"
+
+# Doctests, rustdoc and cargo-deny share no inputs with the guard pool.
+# They run beside it in full CI. A failure still skips later Cargo steps,
+# matching the previous sequential short-circuit. Phase lines are files
+# because this function runs in a subshell.
+doc_chain() {
+  local started status
+  started=$SECONDS
+  status=0
+  cargo test --no-fail-fast --workspace --doc || status=$?
+  printf 'doctests wall_seconds=%s exit=%s\n' "$((SECONDS - started))" "$status" >"$guard_logs/phase-doctests"
+  if [[ "$status" -ne 0 ]]; then
+    return "$status"
+  fi
+  started=$SECONDS
+  status=0
+  RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace || status=$?
+  printf 'documentation wall_seconds=%s exit=%s\n' "$((SECONDS - started))" "$status" >"$guard_logs/phase-documentation"
+  if [[ "$status" -ne 0 ]]; then
+    return "$status"
+  fi
+  # Supply-chain gate: dependency advisories + license allow-list (deny.toml).
+  # [ORB-00416] [ORB-11983] Soft-presence like nextest above — CI installs a pinned version;
+  # local runs without the tool warn instead of hard-failing.
+  if command -v cargo-deny >/dev/null 2>&1; then
+    started=$SECONDS
+    status=0
+    "$repo_root/scripts/cargo-deny.sh" check || status=$?
+    printf 'supply-chain wall_seconds=%s exit=%s\n' "$((SECONDS - started))" "$status" >"$guard_logs/phase-supply-chain"
+    return "$status"
+  fi
+  echo "cargo-deny not found; skipping supply-chain gate (install: cargo install cargo-deny --locked)" >&2
+  return 0
+}
+
+absorb_doc_phases() {
+  local name file
+  for name in doctests documentation supply-chain; do
+    file="$guard_logs/phase-$name"
+    if [[ -f "$file" ]]; then
+      phase_records+=("$(<"$file")")
+    fi
+  done
+}
+
 # --fast runs formatting and script guardrails, never the Rust test suite.
 # `make ci-test-affected` supplies the separate pre-handoff test gate.
 run_phase fmt cargo fmt --all -- --check
@@ -117,64 +211,100 @@ if [[ "$fast" == false ]]; then
     echo "cargo-nextest not found; falling back to cargo test" >&2
     run_phase workspace-tests cargo test --no-fail-fast --workspace --lib --bins --tests
   fi
-  run_phase doctests cargo test --no-fail-fast --workspace --doc
-  RUSTDOCFLAGS="-D warnings" run_phase documentation cargo doc --no-deps --workspace
-  # Supply-chain gate: dependency advisories + license allow-list (deny.toml).
-  # [ORB-00416] [ORB-11983] Soft-presence like nextest above — CI installs a pinned version;
-  # local runs without the tool warn instead of hard-failing.
-  if command -v cargo-deny >/dev/null 2>&1; then
-    run_phase supply-chain "$repo_root/scripts/cargo-deny.sh" check
-  else
-    echo "cargo-deny not found; skipping supply-chain gate (install: cargo install cargo-deny --locked)" >&2
-  fi
 fi
 
 # Keep all runtime output within the checkout, including on macOS. Separate
 # streams prevent interleaved diagnostics while guards execute concurrently.
+# bash 3.2 has no wait -n, so each child publishes a completion file and the
+# parent polls it. That also works on macOS, where a fifo opened read-write
+# is not portable.
 guards_started=$SECONDS
+echo "ci-guardrails: guard pool width=$guard_pool_width (build-budget cargo jobs)" >&2
 
 pids=()
 names=()
 slots=()
+starts=()
 next_slot=0
+started_counter=0
 pending=0
 failed=0
-finish_guards() {
-  local index status
+first_failed_start=""
+
+reap_slot() {
+  local found="$1" index pid name start_index status slot
+  local new_pids=() new_names=() new_slots=() new_starts=()
+  pid="${pids[$found]}"
+  name="${names[$found]}"
+  start_index="${starts[$found]}"
+  slot="${slots[$found]}"
   for ((index=0; index<pending; index++)); do
-    status=0
-    wait "${pids[$index]}" || status=$?
-    cat "$guard_logs/${slots[$index]}.out"
-    cat "$guard_logs/${slots[$index]}.err" >&2
-    if [[ "$status" -ne 0 ]]; then
-      echo "ci-guardrails: FAILED ${names[$index]} (exit $status)" >&2
-      # Preserve the first failure's exit status for existing callers.
-      if [[ "$failed" -eq 0 ]]; then failed="$status"; fi
+    if [[ "$index" -eq "$found" ]]; then
+      continue
     fi
+    new_pids+=("${pids[$index]}")
+    new_names+=("${names[$index]}")
+    new_slots+=("${slots[$index]}")
+    new_starts+=("${starts[$index]}")
   done
-  pids=()
-  names=()
-  slots=()
-  pending=0
+  if ((${#new_pids[@]})); then
+    pids=("${new_pids[@]}")
+    names=("${new_names[@]}")
+    slots=("${new_slots[@]}")
+    starts=("${new_starts[@]}")
+  else
+    pids=()
+    names=()
+    slots=()
+    starts=()
+  fi
+  pending=$((pending - 1))
+  status=0
+  wait "$pid" || status=$?
+  cat "$guard_logs/$slot.out"
+  cat "$guard_logs/$slot.err" >&2
+  if [[ "$status" -ne 0 ]]; then
+    echo "ci-guardrails: FAILED $name (exit $status)" >&2
+    # The earliest started failure wins, even if a later guard exits first.
+    if [[ -z "$first_failed_start" || "$start_index" -lt "$first_failed_start" ]]; then
+      first_failed_start=$start_index
+      failed=$status
+    fi
+  fi
+}
+
+reap_one() {
+  local index
+  while true; do
+    for ((index=0; index<pending; index++)); do
+      if [[ -f "$guard_logs/${slots[$index]}.done" ]]; then
+        reap_slot "$index"
+        return 0
+      fi
+    done
+    sleep 0.05
+  done
+}
+
+finish_pool() {
+  while [[ "$pending" -gt 0 ]]; do
+    reap_one
+  done
 }
 
 run_guard() {
-  local name pid
+  local name pid slot
   name="${1##*/}"
   # The QA sweep's --check is also a live CLI/MCP/web inventory check; it
   # must still run for crates-only changes, unlike fixture-only self-tests.
-  if [[ "$name" == test-* && "$name" != test-qa-full-sweep.py ]]; then
-    if [[ "$run_self_tests" == false ]]; then
-      echo "ci-guardrails: SKIPPED $name (self-test inputs unchanged)"
-      return
-    fi
-    # Self-tests may compile miniature fixtures or test build admission.
-    # Run them one at a time, after the independent repository checks.
-    finish_guards
+  if [[ "$name" == test-* && "$name" != test-qa-full-sweep.py && "$run_self_tests" == false ]]; then
+    echo "ci-guardrails: SKIPPED $name (self-test inputs unchanged)"
+    return 0
   fi
-  # bash's time keyword supplies fractional wall time on Linux and bash 3.2.
-  # Give each invocation its own output paths, including between batches.
-  local slot="$next_slot"
+  while [[ "$pending" -ge "$pool_width" ]]; do
+    reap_one
+  done
+  slot=$next_slot
   next_slot=$((next_slot + 1))
   (
     # bash 3.2 drops TIMEFORMAT when errexit aborts a failing timed command,
@@ -184,19 +314,27 @@ run_guard() {
     set +e
     time { "$@"; }
     status=$?
+    printf '%s\n' "$status" >"$guard_logs/$slot.done"
     exit "$status"
   ) >"$guard_logs/$slot.out" 2>"$guard_logs/$slot.err" &
   pid=$!
   pids+=("$pid")
   names+=("$name")
   slots+=("$slot")
+  starts+=("$started_counter")
+  started_counter=$((started_counter + 1))
   pending=$((pending + 1))
-  if [[ "$pending" -ge 8 || "$name" == test-* && "$name" != test-qa-full-sweep.py ]]; then
-    finish_guards
-  fi
 }
 
-# Start the longer repository scans together, then drain shorter batches.
+# Repository checks and fake-cargo self-tests share one pool. Nothing here
+# builds into the real target directory.
+pool_width=$guard_pool_width
+doc_pid=""
+if [[ "$fast" == false ]]; then
+  doc_chain &
+  doc_pid=$!
+fi
+
 run_guard "$repo_root/scripts/check-orphan-modules.sh"
 run_guard "$repo_root/scripts/check-workflow-action-pins.sh"
 run_guard "$repo_root/scripts/test-qa-full-sweep.py" --check
@@ -228,9 +366,12 @@ run_guard "$repo_root/scripts/check-desktop-ui.sh"
 run_guard "$repo_root/scripts/check-dashboard-vendor.py"
 run_guard "$repo_root/scripts/sync-plugin-skills.sh" --check
 run_guard "$repo_root/scripts/smoke-plugin-install.sh"
-finish_guards
 
 # Fixture self-tests: full CI always runs these, fast mode selects by inputs.
+# Suites that only shim Cargo join the pool. test-ci-test-affected.py stays
+# exclusive below: its NextestOutputTransportTests class runs real Cargo with
+# its own target directory, and unittest has no exclusion filter that still
+# runs every other class, including classes added later.
 run_guard "$repo_root/scripts/test-installer-security.sh"
 run_guard "$repo_root/scripts/test-mcp-registry-publish-workflow.sh"
 run_guard "$repo_root/scripts/test-check-unused-dependencies.py"
@@ -243,18 +384,36 @@ run_guard "$repo_root/scripts/test-ci-fast-guards.py"
 run_guard "$repo_root/scripts/test-windows-portability.py"
 run_guard "$repo_root/scripts/test-refresh-dashboard-vendor.py"
 run_guard "$repo_root/scripts/test-unit-test-inventory.py"
-run_guard "$repo_root/scripts/test-ci-test-affected.py"
 run_guard "$repo_root/scripts/test-codeql-extension-schema.py"
 run_guard "$repo_root/scripts/test-codeql-rust-local.py"
 run_guard "$repo_root/scripts/test-codeql-production-paths.py"
 run_guard "$repo_root/scripts/test-doc-duty-rotation.py"
 run_guard "$repo_root/scripts/test-validate-codex-plugin.sh"
 run_guard "$repo_root/scripts/test-validate-agent-plugin.sh"
-run_guard "$repo_root/scripts/test-build-budget.sh"
 run_guard "$repo_root/scripts/test-make-install.py"
-run_guard "$repo_root/scripts/test-compiler-cache.sh"
-run_guard "$repo_root/scripts/test-compiler-cache-namespaces.sh"
 run_guard "$repo_root/scripts/test-cross-revision-check.sh"
-finish_guards
+finish_pool
+
+doc_status=0
+if [[ -n "$doc_pid" ]]; then
+  wait "$doc_pid" || doc_status=$?
+  absorb_doc_phases
+fi
+
+# Build-admission and real-target suites never overlap each other or a Cargo
+# build. They start only after fmt, Clippy, nextest, doctests, rustdoc and
+# cargo-deny have exited, and the width of one keeps them serial.
+if [[ "$doc_status" -eq 0 ]]; then
+  pool_width=1
+  run_guard "$repo_root/scripts/test-ci-test-affected.py"
+  run_guard "$repo_root/scripts/test-build-budget.sh"
+  run_guard "$repo_root/scripts/test-compiler-cache.sh"
+  run_guard "$repo_root/scripts/test-compiler-cache-namespaces.sh"
+  finish_pool
+fi
+
 phase_records+=("repository-guards wall_seconds=$((SECONDS - guards_started)) exit=$failed")
+if [[ "$doc_status" -ne 0 ]]; then
+  exit "$doc_status"
+fi
 exit "$failed"
