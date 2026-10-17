@@ -249,19 +249,15 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
     // A run failure leaves the task `blocked`, which automation skips: say
     // what an operator does about it.
     if let Some(next) = task.get("next_step") {
-        let _ = writeln!(out, "{} {}", bold("Next:"), next_step_line(next));
+        let _ = writeln!(out, "{} {}", bold("Next:"), next_step_text(next));
     }
     // The last automated final-recovery decision.
     if let Some(record) = task.get("final_recovery") {
-        let part = |key: &str| record.get(key).and_then(Value::as_str).unwrap_or_default();
         let _ = writeln!(
             out,
-            "{} {} ({}) by run {} at {}",
+            "{} {}",
             bold("Final Recovery:"),
-            part("decision"),
-            part("outcome"),
-            part("run_id"),
-            timestamp(part("at"))
+            final_recovery_text(record)
         );
     }
     if let Some(pr_status) = field("pr_status") {
@@ -432,7 +428,8 @@ fn history_line(entry: &TaskHistoryEntry) -> String {
     }
 }
 
-fn next_step_line(next: &Value) -> String {
+/// The words after `Next:` on a task show. Local and routed text both use this.
+pub(crate) fn next_step_text(next: &Value) -> String {
     let part = |key: &str| next.get(key).and_then(Value::as_str).unwrap_or_default();
     match next.get("resume_command").and_then(Value::as_str) {
         Some(resume) => format!(
@@ -445,6 +442,19 @@ fn next_step_line(next: &Value) -> String {
             part("requeue_command")
         ),
     }
+}
+
+/// The words after `Final Recovery:` on a task show. Local and routed text
+/// both use this.
+pub(crate) fn final_recovery_text(record: &Value) -> String {
+    let part = |key: &str| record.get(key).and_then(Value::as_str).unwrap_or_default();
+    format!(
+        "{} ({}) by run {} at {}",
+        part("decision"),
+        part("outcome"),
+        part("run_id"),
+        timestamp(part("at"))
+    )
 }
 
 /// A sidecar the tool serialized from its typed records.

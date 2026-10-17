@@ -38,7 +38,8 @@ delivery used more than 1 core for 2 minutes in a row: work that should make no 
 building. The deliveries behind each flag are named below the table. Templates that build by \
 design, such as qa-sweep, are never flagged.\n\n\
 `--json` emits every profile with its full per-minute series (alive, cpu_cores, cpu_stddev, \
-memory_bytes, memory_stddev_bytes), its deliveries and its flagged deliveries.\n\n\
+memory_bytes, memory_mean_bytes, memory_stddev_bytes), its deliveries and its flagged \
+deliveries.\n\n\
 `--accuracy` reports instead how well the host load forecast held up, from what drains in \
 effective auto-concurrency mode `shadow` or `enforce` recorded each admission pass over the last \
 30 days by default: the forecast 5, 10, 20 and 30 minutes ahead, counting what the pass admitted, against \
@@ -49,10 +50,14 @@ report time, even if partly measured; MISSING counts ended minutes without measu
 Their sum is the compatible unmeasured count. Only ended measured minutes form error pairs. \
 Below, per drain, its shadow passes against what it admitted: WOULD_HOLD counts the \
 tasks it admitted that gap fit would have held, WOULD_ADD those gap fit would have admitted \
-that it did not. Pull drains record one forecast per request, counting a returned claim. \
-PULL_REQUESTS counts these forecasts, PULL_SENT the requests sent to the owner, and \
-PULL_WOULD_HOLD the shadow requests enforce would have held because no work fit. \
-`--json` adds every forecast point paired with its measured minute.\n\n\
+that it did not. ENFORCE_ADMITTED counts the distinct tasks local enforce passes admitted \
+and GAP_HELD the distinct tasks gap fit held; both stay on enforce passes only. \
+Pull drains record one forecast per request, counting a returned claim. \
+PULL_REQUESTS counts these forecasts, PULL_SENT the requests sent to the owner, \
+PULL_WOULD_HOLD the shadow requests enforce would have held because no work fit, and \
+PULL_HELD the enforce requests held for the same reason. \
+`--json` adds every forecast point paired with its measured minute, and names the \
+gap-fit-held task ids.\n\n\
 Accuracy selectors compose: `--since` is an inclusive RFC3339 forecast timestamp (default: \
 30 days ago), `--drain` matches an exact drain run id, and `--mode shadow|enforce` matches the \
 recorded mode. Forecast timestamps are bounded by one report-time snapshot. Text and JSON echo the effective \
@@ -201,7 +206,7 @@ fn build_flags(profiles: &[std::sync::Arc<ResourceProfile>]) -> Option<String> {
     Some(text)
 }
 
-/// `--accuracy`: per-offset forecast error, then per-drain shadow decisions.
+/// `--accuracy`: per-offset forecast error, then per-drain shadow and enforce decisions.
 fn accuracy(
     runtime: &OrbitRuntime,
     selection: AccuracySelection,
@@ -255,7 +260,10 @@ fn accuracy(
         Column::new("WOULD_ADD").fixed(),
         Column::new("PULL_REQUESTS").fixed(),
         Column::new("PULL_SENT").fixed(),
-        Column::new("PULL_WOULD_HOLD"),
+        Column::new("PULL_WOULD_HOLD").fixed(),
+        Column::new("ENFORCE_ADMITTED").fixed(),
+        Column::new("GAP_HELD").fixed(),
+        Column::new("PULL_HELD"),
     ])
     .empty_message("no admission forecasts recorded on this host");
     for drain in &report.drains {
@@ -270,6 +278,9 @@ fn accuracy(
             Cell::new(drain.pull_requests),
             Cell::new(drain.pull_sent),
             Cell::new(drain.pull_would_hold),
+            Cell::new(drain.enforce_admitted),
+            Cell::new(drain.gap_held.len()),
+            Cell::new(drain.pull_held),
         ]);
     }
     Ok(Payload::blocks(

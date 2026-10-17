@@ -384,7 +384,9 @@ sqlite3 ~/.orbit/orbit.db 'VACUUM;'
 
 `orbit doctor` reports what is reclaimable now (`store-retention`). To run both
 sweeps daily, enable the seeded `store-gc` routine ([automation.md](automation.md)).
-On a replica checkout it is owner-only and never fires.
+On a replica checkout the same cron routine runs against that host's own store
+and does not call the owner. Enable it there when this machine is the only
+place those rows live. A delivery- or state-triggered copy stays owner-only.
 
 ## Logs
 

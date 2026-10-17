@@ -1246,6 +1246,86 @@ fn a_failed_or_blocked_check_never_merges_and_the_task_stays_in_review() {
     );
 }
 
+/// [ORB-16339] Completion without auto-fix reads a freshly pushed head as
+/// BLOCKED before the provider has queued any check. While current branch
+/// policy names the required `test` check and the head has not reported it,
+/// completion waits within its budget and merges the candidate once `test`
+/// passes. A check that never appears times out at the budget and is named;
+/// unreadable policy earns only the bounded unsettled-poll grace before the
+/// ordinary BLOCKED refusal. None of them requests a merge early.
+fn required_checks_the_head_has_not_reported_are_awaited_before_completion() {
+    isolated(
+        "required_checks_the_head_has_not_reported_are_awaited_before_completion",
+        |sandbox| {
+            for (case, checks, policy, max_wait, reads, refusal) in [
+                (
+                    "appears",
+                    &["unreported", "unreported", "success"][..],
+                    true,
+                    30,
+                    4,
+                    None,
+                ),
+                (
+                    "never",
+                    &["unreported"][..],
+                    true,
+                    10,
+                    2,
+                    Some("timed out after 10s"),
+                ),
+                (
+                    "unreadable",
+                    &["unreported"][..],
+                    false,
+                    60,
+                    5,
+                    Some("required reviews or checks are not satisfied"),
+                ),
+            ] {
+                let fx = Fixture::new(sandbox);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                open_for_completion(&fx, &host);
+                fx.script_checks(checks);
+                if policy {
+                    fs::write(fx.forge.join("gates"), "test").unwrap();
+                }
+                let mut input = fx.complete_input();
+                input["max_wait_seconds"] = json!(max_wait);
+
+                let result = action(&host, "pr_complete", &input);
+
+                assert_eq!(fx.status_reads(), reads, "{case}: {result:?}");
+                match refusal {
+                    None => {
+                        let completed = result.unwrap_or_else(|error| panic!("{case}: {error}"));
+                        assert_eq!(completed["merge"]["waited_seconds"], 10, "{case}");
+                        assert_eq!(
+                            fx.merge_requests(),
+                            [format!("sha={} merge_method=squash", fx.candidate)],
+                            "{case}: one merge, once the required check passed"
+                        );
+                        assert_eq!(host.status(TASK_ID), TaskStatus::Done, "{case}");
+                    }
+                    Some(refusal) => {
+                        let error = result.expect_err(case).to_string();
+                        assert!(error.contains(refusal), "{case}: {error}");
+                        if case == "never" {
+                            assert!(
+                                error.contains("required checks the head has not reported: test"),
+                                "{case}: the stop names the missing check: {error}"
+                            );
+                        }
+                        assert!(fx.merge_requests().is_empty(), "{case}: no merge");
+                        assert_eq!(fx.remote_tip(BASE), fx.base_sha, "{case}");
+                        assert_eq!(host.status(TASK_ID), TaskStatus::Review, "{case}");
+                    }
+                }
+            }
+        },
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Batch merge of the checked head [ORB-15701]
 // ---------------------------------------------------------------------------
@@ -8033,6 +8113,8 @@ status() {
                 esac
             fi ;;
         review_required) merge_state=BLOCKED; review=REVIEW_REQUIRED; rollup=$(check success) ;;
+        # A freshly pushed head before the provider has queued any check.
+        unreported) merge_state=BLOCKED; rollup='' ;;
         dirty) merge_state=DIRTY; rollup=$(check success) ;;
         closed) state=CLOSED; merge_state=CLEAN; rollup=$(check success) ;;
         contradictory) merged_at='"2026-10-05T12:47:15Z"'; merge_state=CLEAN; rollup=$(check success) ;;
@@ -8294,6 +8376,39 @@ if [ -f "$forge/infrastructure" ]; then
                 *'/commits/'*'/check-runs?'*) cat "$forge/infra-checks-$phase"; exit ;;
                 *'/actions/runs?head_sha='*) cat "$forge/infra-runs-$phase"; exit ;;
                 *'/contents/'*) cat "$forge/infra-contents"; exit ;;
+            esac ;;
+    esac
+fi
+
+# Current branch policy requires `test` [ORB-16339]. The head reports it
+# unless the latest status read scripted `unreported`.
+if [ -f "$forge/gates" ]; then
+    observed=$(sed -n "$(cat "$forge/reads")p" "$forge/checks")
+    [ -n "$observed" ] || observed=$(tail -n 1 "$forge/checks")
+    head=$(head_sha)
+    pr_base=$(cat "$forge/pr-base")
+    repo='{"id":500,"full_name":"orbit/test","url":"https://api.github.com/repos/orbit/test"}'
+    case "$1 ${2:-}" in
+        "api repos/{owner}/{repo}") printf '%s\n' "$repo"; exit ;;
+        "api repos/{owner}/{repo}/pulls/42")
+            printf '{"number":42,"state":"open","merged":false,"head":{"sha":"%s","ref":"%s","repo":%s},"base":{"sha":"%s","ref":"%s","repo":%s}}\n' \
+                "$head" "$(cat "$forge/pr-head")" "$repo" "$(git --git-dir="$remote" rev-parse "refs/heads/$pr_base")" "$pr_base" "$repo"
+            exit ;;
+        "api graphql")
+            case "$*" in
+                *requiredStatusChecks*)
+                    printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","baseRefName":"%s","reviewDecision":null,"baseRef":{"branchProtectionRule":{"id":"RULE-1","requiredStatusChecks":[{"context":"test","app":null}]}}}}}}\n' "$head" "$pr_base"
+                    exit ;;
+            esac ;;
+        "api "*)
+            case "$2" in
+                *'/rules/branches/'*) echo '[]'; exit ;;
+                *'/check-runs?'*)
+                    if [ "$observed" = unreported ]; then echo '{"total_count":0,"check_runs":[]}'; exit; fi
+                    printf '{"total_count":1,"check_runs":[{"id":1,"name":"test","head_sha":"%s","app":{"id":900},"status":"completed","conclusion":"success"}]}\n' "$head"
+                    exit ;;
+                *'/status?'*) printf '{"sha":"%s","repository":%s,"total_count":0,"statuses":[]}\n' "$head" "$repo"; exit ;;
+                *'/actions/runs?'*) echo '{"total_count":0,"workflow_runs":[]}'; exit ;;
             esac ;;
     esac
 fi
@@ -8734,6 +8849,7 @@ fn review_checks_and_delivery() {
     isolated("review_checks_and_delivery", |_| {
         a_failed_or_blocked_check_never_merges_and_the_task_stays_in_review();
         passing_checks_merge_the_reviewed_candidate_and_record_its_delivery();
+        required_checks_the_head_has_not_reported_are_awaited_before_completion();
     });
 }
 

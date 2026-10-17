@@ -121,6 +121,12 @@ guaranteed to start.
   orbit run readiness "$TASK_ID" --json
   ```
 
+  With no `--concurrency`, the ceiling is the live local drain's, including a
+  later `orbit run concurrency --set`, otherwise a live pull drain's, otherwise
+  5. `--json` names that choice as `capacity.limit_source` (`run_input`,
+  `run_control`, `pull_run_input`, `pull_run_control`, or `default`). Text adds
+  a `Leaf ceiling:` line only when the pull drain supplies the ceiling.
+
 Common reasons a backlog task waits:
 
 - **Unsatisfied dependencies.**
@@ -372,7 +378,9 @@ review, or dependency problem first; do not rerun blindly.
      (`orbit task update "$TASK_ID" --status backlog`) so a later window runs
      it again, resuming any saved candidate.
 
-   `orbit task show "$TASK_ID"` prints the exact command on its `Next:` line.
+   `orbit task show "$TASK_ID"` prints the exact command on its `Next:` line. A
+   show routed to another host prints the same line, and the dashboard task
+   detail carries the same `next_step`.
 
 A cancelled task leaf is already back in `backlog` by default, with its
 candidate resumable on the next delivery. If you cancelled with `--block`,

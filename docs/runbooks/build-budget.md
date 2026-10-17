@@ -68,7 +68,9 @@ default of 2. An explicit environment setting overrides the host file.
 The optional `cargo-jobs` file sets Cargo parallelism, using a decimal integer from 1
 through 1024. Precedence is `ORBIT_CARGO_JOBS`, `CARGO_BUILD_JOBS`, `cargo-jobs`, then the
 default of 4. These environment and file settings are deliberate capacity decisions and
-may exceed the defaults. `ORBIT_BUILD_BUDGET` must be `0` or `1`; invalid values exit with
+may exceed the defaults. `scripts/build-budget.py --cargo-jobs` prints the resolved value
+without taking a slot; `ci-guardrails.sh` sizes its repository-guard pool from it, so guard
+fan-out stays within the same Cargo job count. `ORBIT_BUILD_BUDGET` must be `0` or `1`; invalid values exit with
 status 64 before running the command. `ORBIT_BUILD_BUDGET=0` bypasses only slot admission
 and still applies the resolved Cargo job count and the child priority policy.
 

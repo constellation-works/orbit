@@ -201,6 +201,12 @@ these forecasts, including requests enforce held; `PULL_SENT` counts requests
 sent to the owner, including idle responses and failed attempts.
 `PULL_WOULD_HOLD` counts shadow requests enforce would have held because no
 kind of work fit (`forecast_no_headroom`), even if no claim returned.
+`ENFORCE_ADMITTED` counts the distinct tasks local enforce passes admitted,
+`GAP_HELD` the distinct tasks gap fit held (`fit_skipped`), and `PULL_HELD`
+the enforce requests held because no work fit. Those three stay on enforce
+passes; the shadow columns stay on shadow passes. JSON adds
+`enforce_admitted`, `gap_held` (the task ids) and `pull_held` without
+changing the existing shadow fields.
 `--since <RFC3339>`, `--drain <RUN>` and `--mode shadow|enforce` intersect to
 select a cohort; without filters the report uses all drains and modes from
 the last 30 days. Both output formats identify that selection and report
@@ -882,10 +888,10 @@ A redrawn task's `crew_selection.source` names the limit. A task left with no un
 
 **Surfaces** all share admission's view of live readings (liveness, threshold, crew rules), so none shows a crew runnable while admission skips it.
 
-- `orbit run readiness`: a `Provider limits:` line per gated reading (`claude five_hour 93% >= 90% until 15:00Z: opus, sonnet skipped`; a reset on another UTC day includes its date) and each waiting task's detail. `--json` has a top-level `provider_limits` array of every live reading: `provider`, `scope` (the model a reading names, else `null`), `window`, `used_percent`, `exhausted`, `resets_at`, `source`, `observed_at`, `gating`, `partial`, `threshold`, `gated`, `until` and `crews` (enabled crews covered).
+- `orbit run readiness`: a `Provider limits:` line per gated reading (`claude five_hour 93% >= 90% until 15:00Z: opus, sonnet skipped`; a reset on another UTC day includes its date) and each waiting task's detail. `--json` has a top-level `provider_limits` array of every live reading: `provider`, `scope` (the model a reading names, else `null`), `window`, `used_percent`, `exhausted`, `resets_at`, `source`, `observed_at`, `age_seconds` (never negative), `stale` (true when `observed_at` is an earlier UTC date than the snapshot), `gating`, `partial`, `threshold`, `gated`, `until` and `crews` (enabled crews covered). `provider_auth_failures` lists each host and provider with a `provider_unavailable` authentication failure in the last 7 days (at most 200 recent failures and 200 recent successes) that a later successful run of that provider on that host has not cleared. Each item is `host`, `provider`, `runs` (`run_id`, `at`, oldest first) and `fix_command` (the executor's auth-probe hint, else the provider's re-login command). A failure or success outside that window is not part of the projection.
 - `orbit run show <pull-drain>`: `excluded <crew> (provider_limit until <time>): <reading>; reading from host <machine-id>` (`unregistered` when the runtime has no machine identity).
 - `orbit doctor`: one `provider-limits:<provider>` row per provider an enabled crew uses (a provider with no usage windows and no budget, which is every provider but Codex and Claude, shows `info`; a budgeted one shows its `ledger` reading, such as `grok 5h budget 67%`), plus a `provider-limits:operation.review_crew` warning when that ungated lane uses a gated provider. Row semantics: [health checks](runbooks/health-checks.md#run-orbit-doctor). `orbit doctor providers` shows the same per executor (`LIMITS` column, `provider_limits` in `--json`).
-- Dashboard: the Settings › Crews Limit column (tightest window, used percent, reset, `gated` badge); the Drain card names gated readings and lists tasks waiting with `provider_limit`.
+- Dashboard: the Settings › Crews Limit column (tightest window, used percent, reset, `gated` badge); the Drain card names gated readings, lists every live reading with its age (`today` on the observation's UTC date, otherwise how long ago) and a stale marker when `stale` is set, lists each standing `provider_auth_failures` item with its host, provider, run links and fix command, and lists tasks waiting with `provider_limit`.
 
 #### Budgets for providers that report no usage
 
@@ -954,7 +960,9 @@ existing recovery activities, final validation and push do the repair:
 - On an open blocked PR, the watcher reads authenticated required-check policy
   for the pinned current head. Queued or running required checks keep waiting
   within the original completion deadline, even beside an unrelated optional
-  failure. An unclassified or optional pending check grants no wait, and a
+  failure. So does a required check that current branch policy names and a
+  freshly pushed head has not reported yet; it is never treated as passed. An
+  unclassified or optional pending check grants no wait, and a
   required failure still takes precedence over pending checks. Review gates and
   unreadable or stale evidence still stop the watcher. A failed required check
   whose job log shows a code failure is repaired, with that head's failed step,

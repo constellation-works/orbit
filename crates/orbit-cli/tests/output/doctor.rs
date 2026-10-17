@@ -44,6 +44,117 @@ fn row<'a>(rows: &'a [Value], name: &str) -> &'a Value {
         .expect("diagnostic row")
 }
 
+/// ORB-16351: a unit file that names this binary is not `clock-unit: ok` while
+/// the systemd timer is disabled or inactive. A substitute `systemctl` reports
+/// each state; enabled and active stays ok.
+#[cfg(target_os = "linux")]
+#[test]
+fn doctor_clock_unit_requires_an_enabled_active_systemd_timer() {
+    if crate::isolated_test::run_in_child(
+        "doctor::doctor_clock_unit_requires_an_enabled_active_systemd_timer",
+    ) {
+        return;
+    }
+    for mode in ["disabled", "inactive", "enabled"] {
+        let fixture = WorkCheckout::new();
+        install_matching_sweep_unit(&fixture.home);
+        let bin = write_substitute_systemctl(fixture.temp.path());
+        let output = command(&fixture)
+            .env("PATH", prepend_path(&bin))
+            .env("ORBIT_TEST_CLOCK_MANAGER", mode)
+            .args(["doctor", "--json"])
+            .output()
+            .expect("doctor report");
+        let parsed = rows(&output);
+        let clock = row(&parsed, "clock-unit");
+        let rendered = format!("{clock}");
+        if mode == "enabled" {
+            assert_eq!(clock["status"], "ok", "{mode}: {rendered}");
+        } else {
+            assert_ne!(clock["status"], "ok", "{mode}: {rendered}");
+            assert!(
+                rendered.contains("orbit clock enable"),
+                "{mode}: {rendered}"
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn install_matching_sweep_unit(home: &std::path::Path) {
+    let unit_dir = home.join(".config/systemd/user");
+    fs::create_dir_all(&unit_dir).expect("systemd user unit dir");
+    let program = env!("CARGO_BIN_EXE_orbit")
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    fs::write(
+        unit_dir.join("orbit-sweep.service"),
+        format!(
+            "[Service]\nType=oneshot\nTimeoutStartSec=10min\nKillMode=mixed\nExecStart=\"{program}\" clock tick\n"
+        ),
+    )
+    .expect("sweep unit");
+}
+
+#[cfg(target_os = "linux")]
+fn write_substitute_systemctl(root: &std::path::Path) -> std::path::PathBuf {
+    let bin = root.join("bin");
+    fs::create_dir_all(&bin).expect("substitute bin");
+    let path = bin.join("systemctl");
+    fs::write(
+        &path,
+        r#"#!/bin/sh
+mode=${ORBIT_TEST_CLOCK_MANAGER:-enabled}
+case " $* " in
+  *" is-enabled "*)
+    if [ "$mode" = "disabled" ]; then
+      echo disabled
+      exit 1
+    fi
+    echo enabled
+    exit 0
+    ;;
+esac
+for arg in "$@"; do
+  case "$arg" in
+    orbit-sweep.timer)
+      if [ "$mode" = "disabled" ] || [ "$mode" = "inactive" ]; then
+        printf '%s\n' LoadState=loaded ActiveState=inactive
+      else
+        printf '%s\n' LoadState=loaded ActiveState=active \
+          'NextElapseUSecRealtime=Mon 2026-10-19 12:00:00 UTC' \
+          NextElapseUSecMonotonic=1000000
+      fi
+      exit 0
+      ;;
+    orbit-sweep.service)
+      printf '%s\n' ActiveState=inactive Result=success TimeoutStartUSec=10min KillMode=mixed
+      exit 0
+      ;;
+  esac
+done
+exit 0
+"#,
+    )
+    .expect("substitute systemctl");
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = fs::metadata(&path)
+        .expect("systemctl metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&path, permissions).expect("systemctl mode");
+    bin
+}
+
+#[cfg(target_os = "linux")]
+fn prepend_path(dir: &std::path::Path) -> std::ffi::OsString {
+    let mut entries = vec![dir.to_path_buf()];
+    if let Some(path) = std::env::var_os("PATH") {
+        entries.extend(std::env::split_paths(&path));
+    }
+    std::env::join_paths(entries).expect("join PATH")
+}
+
 #[cfg(unix)]
 #[test]
 fn doctor_warns_about_selected_root_skill_links_without_changing_discovery_entries() {

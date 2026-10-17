@@ -36,6 +36,8 @@ class GuardrailTests(unittest.TestCase):
                         GUARD_TEST_LOG=str(self.log), GUARD_TEST_METADATA=str(self.metadata),
                         GUARD_TEST_BIN=str(self.bin / "fixture-test-bin"),
                         GUARD_TEST_CALLS=str(self.guard_calls))
+        # Pin the guard pool's width and ignore any host build-budget file.
+        self.env.update(ORBIT_CARGO_JOBS="4", ORBIT_BUILD_BUDGET_DIR=str(self.root / "budget"))
         self.targets = self.root / "targets.json"
         self.env["GUARD_TEST_TARGETS"] = str(self.targets)
         # A miniature libtest. Without a targets file every listing reports one
@@ -159,6 +161,11 @@ else:
                                   f'#!/bin/bash\nprintf "%s\\n" "$@" > "$GUARD_TEST_CALLS/{name}"\n')
         shutil.copy2(SCRIPTS / "ci-guardrails.sh", self.scripts / "ci-guardrails.sh")
         shutil.copy2(SCRIPTS / "check-ci-macos.sh", self.scripts / "check-ci-macos.sh")
+        # The pool sizes itself from the real budget query, so keep the real script.
+        shutil.copy2(SCRIPTS / "build-budget.py", self.scripts / "build-budget.py")
+        # The full run wraps nextest in the real sampler. A stub would swallow
+        # the cargo invocation the assertions below observe.
+        shutil.copy2(SCRIPTS / "cpu-utilisation.sh", self.scripts / "cpu-utilisation.sh")
         workflows = self.root / ".github/workflows"
         workflows.mkdir(parents=True, exist_ok=True)
         (self.root / "Cargo.toml").touch()
@@ -339,6 +346,17 @@ exec {shlex.quote(sys.executable)} "$@"
         self.assertIn(("clippy-production", "0"), phases)
         self.assertIn(("workspace-tests", "0"), phases)
         self.assertIn(("repository-guards", "0"), phases)
+        self.assertRegex(
+            result.stderr,
+            r"cpu-util: label=nextest (busy_pct=\d+\.\d+ idle_pct=\d+\.\d+ "
+            r"iowait_pct=\d+\.\d+|unavailable=(unchanged|decreased|proc_stat))",
+        )
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertIn(
+            ["nextest", "run", "--profile", "ci", "--no-fail-fast",
+             "--success-output", "immediate", "--workspace", "--lib", "--bins", "--tests"],
+            calls,
+        )
         # A real command failure must keep its status and timing in the final
         # diagnostic tail, and must not be followed by tests.
         original = (self.bin / "cargo").read_text()
@@ -368,13 +386,100 @@ assert select.select([incoming], [], [], 10)[0], "guards did not overlap"
 assert os.read(incoming, 5) == b"ready"
 raise SystemExit({17+index})
 ''')
-        result = self.run_guard("ci-guardrails.sh", "--fast")
+        # The two rendezvous guards are six launches apart, so both stay in flight only
+        # when the pool holds at least six at once; eight keeps the batch the test always had.
+        result = self.run_guard("ci-guardrails.sh", "--fast", env_overrides={"ORBIT_CARGO_JOBS": "8"})
         self.assertEqual(result.returncode, 17, result.stderr)
         for name in ("check-orphan-modules.sh", "check-doc-links.py"):
             self.assertIn(f"FAILED {name}", result.stderr)
             self.assertRegex(result.stderr, rf"ci-guardrails: {re.escape(name)} [0-9.]+ s")
         self.assertTrue((self.guard_calls / "test-cross-revision-check.sh").exists(),
                         "a failing guard must not leave remaining children unjoined")
+
+    def write_overlapping_member(self, name, events, outgoing, incoming, hold=0):
+        # A pool member announces itself on its outgoing pipe and blocks until its
+        # partner does the same, so the pair can finish only while both are running.
+        self.write_executable(self.scripts / name, f'''#!/usr/bin/env python3
+import os, select, time
+def log(event):
+    with open({str(events)!r}, "a") as stream:
+        stream.write(event + "\\n")
+log("start {name}")
+incoming_fd = os.open({str(incoming)!r}, os.O_RDWR | os.O_NONBLOCK)
+outgoing_fd = os.open({str(outgoing)!r}, os.O_RDWR | os.O_NONBLOCK)
+os.write(outgoing_fd, b"ready")
+assert select.select([incoming_fd], [], [], 10)[0], "pool members did not overlap"
+assert os.read(incoming_fd, 5) == b"ready"
+time.sleep({hold})
+log("end {name}")
+''')
+
+    def write_event_stub(self, name, events, hold=0):
+        self.write_executable(self.scripts / name,
+                              f'#!/bin/sh\nprintf "start {name}\\n" >> "{events}"\n'
+                              f'sleep {hold}\n'
+                              f'printf "end {name}\\n" >> "{events}"\n')
+
+    def test_pool_and_exclusive_self_test_failures_are_named_and_fail_the_job(self):
+        self.prepare_ci()
+        self.write_executable(self.scripts / "test-release-workflow.py", "#!/bin/sh\nexit 19\n")
+        self.write_executable(self.scripts / "test-build-budget.sh", "#!/bin/sh\nexit 21\n")
+        result = self.run_guard("ci-guardrails.sh", "--fast",
+                                env_overrides={"CI_TEST_BASE": "missing-delivery-base"})
+        # The pool joins before the exclusive suites, so its failure is the job's exit status.
+        self.assertEqual(result.returncode, 19, result.stderr)
+        self.assertIn("ci-guardrails: FAILED test-release-workflow.py (exit 19)", result.stderr)
+        self.assertIn("ci-guardrails: FAILED test-build-budget.sh (exit 21)", result.stderr)
+        self.assertRegex(result.stderr, r"ci-guardrails: test-build-budget\.sh [0-9.]+ s")
+
+    def test_exclusive_self_tests_run_alone_after_the_pool_joins(self):
+        self.prepare_ci()
+        events = self.root / "events"
+        left, right = self.root / "left.fifo", self.root / "right.fifo"
+        os.mkfifo(left)
+        os.mkfifo(right)
+        installer, mcp = "test-installer-security.sh", "test-mcp-registry-publish-workflow.sh"
+        # Members hold briefly after rendezvous, so a suite launched beside them would show
+        # its start before their end; the correct order never does.
+        self.write_overlapping_member(installer, events, outgoing=left, incoming=right, hold=0.5)
+        self.write_overlapping_member(mcp, events, outgoing=right, incoming=left, hold=0.5)
+        # The last pool member holds, so a suite started beside the pool shows its start
+        # before this member's end; the correct order never does.
+        cross = "test-cross-revision-check.sh"
+        self.write_event_stub(cross, events, hold=0.5)
+        for name in ("test-build-budget.sh", "test-compiler-cache.sh"):
+            self.write_event_stub(name, events)
+        result = self.run_guard("ci-guardrails.sh", "--fast",
+                                env_overrides={"CI_TEST_BASE": "missing-delivery-base"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = events.read_text().splitlines()
+        # Both pool members start before either ends, and every exclusive suite runs
+        # after the whole pool has finished, one at a time.
+        self.assertLess(max(log.index(f"start {installer}"), log.index(f"start {mcp}")),
+                        min(log.index(f"end {installer}"), log.index(f"end {mcp}")), log)
+        self.assertLess(log.index(f"end {cross}"), log.index("start test-build-budget.sh"), log)
+        self.assertEqual(log[-4:], ["start test-build-budget.sh", "end test-build-budget.sh",
+                                    "start test-compiler-cache.sh", "end test-compiler-cache.sh"], log)
+
+    def test_pool_width_is_the_build_budget_cargo_jobs(self):
+        self.prepare_ci()
+        events = self.root / "events"
+        left, right = self.root / "left.fifo", self.root / "right.fifo"
+        os.mkfifo(left)
+        os.mkfifo(right)
+        installer, mcp = "test-installer-security.sh", "test-mcp-registry-publish-workflow.sh"
+        third = "test-check-unused-dependencies.py"
+        # Two cargo jobs admit two members at once: the first pair rendezvous and hold,
+        # so the third starts only after the oldest of them has ended.
+        self.write_overlapping_member(installer, events, outgoing=left, incoming=right, hold=0.5)
+        self.write_overlapping_member(mcp, events, outgoing=right, incoming=left, hold=0.5)
+        self.write_event_stub(third, events)
+        result = self.run_guard("ci-guardrails.sh", "--fast",
+                                env_overrides={"CI_TEST_BASE": "missing-delivery-base",
+                                               "ORBIT_CARGO_JOBS": "2"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = events.read_text().splitlines()
+        self.assertLess(log.index(f"end {installer}"), log.index(f"start {third}"), log)
 
     def test_make_ci_fast_reports_failing_guard_name(self):
         self.prepare_ci()

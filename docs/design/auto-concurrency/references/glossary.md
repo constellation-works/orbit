@@ -20,5 +20,5 @@ repeated here.
 | **Horizon** | A candidate's 90th-percentile duration from its profile, capped at 120 minutes; the span gap fit checks. [2_design.md §3](../2_design.md#3-profiles) |
 | **Load forecast** | Expected host CPU and memory for each coming minute: running deliveries' profiles at their ages, reservations and the baseline. [2_design.md §4](../2_design.md#4-the-load-forecast) |
 | **Reservation** | An admission decided but not yet running, counted in the forecast so two drains cannot fill one gap. [2_design.md §5.2](../2_design.md#52-serializing-drains-on-one-host) |
-| **Resource profile** | Per minute since admission: the chance a delivery is still running, mean CPU and 90th-percentile memory, for one host, workspace, work class and complexity. [2_design.md §3.3](../2_design.md#33-the-profile) |
+| **Resource profile** | Per minute since admission: the chance a delivery is still running, mean CPU and 90th-percentile and mean memory, for one host, workspace, work class and complexity. [2_design.md §3.3](../2_design.md#33-the-profile) |
 | **Work class** | The kind of work a task does, read from its tags at admission: an `auto-task:` template, `no-diff` (`no-diff-expected`, which must never compile or test), or `change`. [2_design.md §3.1](../2_design.md#31-work-class) |

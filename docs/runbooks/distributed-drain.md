@@ -1006,7 +1006,15 @@ request is audited on the run (`pipeline.run.window_extend.completed`, with
 idle one waiting at least `poll_sleep_seconds`) still bounds a drain extended
 over days; past it the drain ends and a new one carries its admissions. The drain's `--concurrency`, as last
 retuned, is the only ceiling on its leaves: the claimed leaf jobs declare no
-active-run limit of their own. A leaf in its before-landing review (the owner's
+active-run limit of their own. On the follower, `orbit run readiness` with no
+`--concurrency` and no local drain reports that ceiling. Text prints
+`Active leaf runs: <occupied>/<ceiling>` and the free slots left under it, plus
+a `Leaf ceiling:` line. `--json` sets `capacity.max_active_leaf_runs`,
+`capacity.free_slots`, and `capacity.limit_source` to `pull_run_input` for the
+submitted value or `pull_run_control` after `orbit run concurrency --set` (or
+`orbit run extend --concurrency`). A live local drain still supplies the
+ceiling instead (`run_input` or `run_control`), and with neither drain live
+the report stays at 5 (`default`). A leaf in its before-landing review (the owner's
 `review.before_landing`) runs no implementer but keeps its claim until it
 settles. Admission counts `occupied - min(reviewing, --concurrency)` against
 `--concurrency` before each claim. Reviewing starts after the persisted
@@ -1619,13 +1627,15 @@ enable a dark routine to "turn on" distributed drain.
 On the owner, delivery removes a task worktree once the run lands, and the
 owner's `worktree-gc-<workspace>` routine is the hourly backstop. A follower's
 claimed-leaf worktrees live in its replica checkout, which no owner process
-touches, so the replica schedules its own GC on its host clock. That routine is
-the only one a replica fires. Its ship sweep, task pilot, CI and Dependabot
-sweeps and its auto-tasks stay owner work: `orbit routine list` shows them as
-`owner-only` with the owner machine named, a toggle or pause is refused, and
-the sweep reports them `skipped` with an `owner_only_in_replica:` reason. The
-auto-task panel marks toggle and manual mint unavailable and names the owner;
-replica task minting remains refused.
+touches, so the replica schedules its own GC on its host clock. That routine
+and the replica's store-gc routine are the only ones a replica fires. Its ship
+sweep, task pilot, CI and Dependabot sweeps and its auto-tasks stay owner
+work: `orbit routine list` shows them as `owner-only` with the owner machine
+named, a toggle or pause is refused, and the sweep reports them `skipped` with
+an `owner_only_in_replica:` reason. The auto-task panel marks toggle and
+manual mint unavailable and names the owner; replica task minting remains
+refused. A delivery- or state-triggered routine stays owner work even when it
+targets one of those two jobs.
 
 Enable the replica's GC on the follower as an operator, with
 `orbit_routine_control` (`action: toggle`) or the dashboard's Operations
@@ -1657,6 +1667,45 @@ ref so an unpublished HEAD survives branch deletion
 Each kept worktree's declared build output is reclaimed on every sweep, and
 `orbit run show <gc-run>` lists every kept worktree with its reason and
 `retained_bytes`.
+
+## Replica store GC
+
+The follower's host store is not the owner's. Command audit, resource history,
+and the run audit and terminal run state of the workspaces it replicates live
+in the follower's own `~/.orbit/orbit.db`. The owner's `store-gc-<workspace>`
+routine never opens that file. On a follower-only host every checkout is a
+replica, so the store stays untrimmed until a replica schedules
+`store_gc_pipeline` for itself.
+
+That routine is seeded disabled, the same as on an owner checkout. Review the
+plans, then enable it on the follower:
+
+```bash
+orbit gc audit --json --workspace <replica-workspace>
+orbit gc runs --json --workspace <replica-workspace>
+```
+
+Enable it with `orbit_routine_control` (`action: toggle`) or the dashboard's
+Operations routines panel, or set `enabled: true` in the replica checkout's
+`.orbit/routines/store_gc.yaml`. Then confirm it is armed:
+
+```bash
+orbit routine list --workspace <replica-workspace>
+```
+
+The run applies both plans against the local store. It deletes command-audit
+rows and per-minute resource history past their windows (those tables are
+host-wide on this machine), and this workspace's run-audit rows, the audit
+blobs nothing still names, and the pipeline state of terminal runs older than
+`retention.runs_days`. Run rows and steps stay, and nothing is vacuumed. The
+activity does not call the owner and does not write the owner's coordination
+store. Enabling it on the owner is unchanged: that routine still prunes only
+the owner's store.
+
+One enabled replica routine is enough for the host-wide tables. Each
+replicated workspace still needs its own routine, or a pass from that
+workspace, before its run audit and run state are pruned. A delivery- or
+state-triggered copy of the job stays owner work and is listed `owner-only`.
 
 ## Scheduled host shutdown or reboot
 

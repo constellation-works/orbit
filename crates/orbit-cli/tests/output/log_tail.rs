@@ -469,3 +469,30 @@ fn one_shot_tail_renders_supervisor_agent_output_with_provider_source() {
         "agent output must render as `provider  INF  [stream] line`: {stdout}"
     );
 }
+
+#[test]
+fn one_shot_tail_labels_a_double_colon_target_by_its_last_segment() {
+    let fixture = crate::git_repo::WorkCheckout::new();
+    let path = fixture.work.join("orbit.jsonl");
+    let record = event(
+        "qualified",
+        "INFO",
+        "orbit_engine::activity_job::step_runner",
+    );
+    fs::write(&path, format!("{record}\n")).unwrap();
+    let output = tail_command(&fixture, &path)
+        .output()
+        .expect("log tail output");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let words: Vec<&str> = stdout.split_whitespace().collect();
+    assert_eq!(
+        &words[1..],
+        ["step_runner", "INF", "qualified"],
+        "a `::` target must show the same source label as the dashboard: {stdout}"
+    );
+}

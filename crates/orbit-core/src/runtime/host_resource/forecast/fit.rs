@@ -1,6 +1,6 @@
 //! Gap fit: whether a candidate's profile fits under the forecast.
 
-use super::HostLoadForecast;
+use super::{HostLoadForecast, MemoryTerms};
 use crate::runtime::host_resource::profile::ResourceProfile;
 
 /// The resource a candidate would push past its threshold.
@@ -47,7 +47,7 @@ impl GapMiss {
 #[derive(Debug, Clone)]
 pub struct ForecastGap {
     cpu: Vec<f64>,
-    memory: Vec<f64>,
+    memory: Vec<MemoryTerms>,
     cpu_total: f64,
     memory_total: f64,
     cpu_limit: f64,
@@ -98,7 +98,7 @@ impl HostLoadForecast {
         }
         Some(ForecastGap {
             cpu: self.cpu.minutes.clone(),
-            memory: self.memory.minutes.clone(),
+            memory: self.memory_terms.clone(),
             cpu_total,
             memory_total,
             cpu_limit: cpu_total * f64::from(admit_cpu_percent) / 100.0,
@@ -110,9 +110,10 @@ impl HostLoadForecast {
 
 impl ForecastGap {
     /// Whether, for every `t` in `0 ..= H` of `profile`'s horizon,
-    /// `F(t) + P.cpu(t) · alive(t)` and the matching memory sum stay at or
-    /// under their thresholds; otherwise the first minute that does not,
-    /// CPU before memory.
+    /// `F(t) + P.cpu(t) · alive(t)` and the memory forecast with the
+    /// candidate counted in its summed quantile stay at or under their
+    /// thresholds; otherwise the first minute that does not, CPU before
+    /// memory.
     ///
     /// A candidate that does not fit is still admitted while the gap is
     /// idle: no running delivery or reservation would make room for it by
@@ -141,16 +142,11 @@ impl ForecastGap {
         let last = usize::try_from(profile.horizon_minutes)
             .unwrap_or(usize::MAX)
             .min(self.cpu.len().saturating_sub(1));
-        let forecast = |series: &[f64], t: usize| if over_forecast { series[t] } else { 0.0 };
         for t in 0..=last {
-            let (cpu, memory) = profile.series.get(t).map_or((0.0, 0.0), |minute| {
-                (
-                    minute.cpu_cores * minute.alive,
-                    minute.memory_bytes as f64 * minute.alive,
-                )
-            });
+            let own = profile.series.get(t);
             let minute = u32::try_from(t).unwrap_or(u32::MAX);
-            let cpu = forecast(&self.cpu, t) + cpu;
+            let cpu = if over_forecast { self.cpu[t] } else { 0.0 }
+                + own.map_or(0.0, |own| own.cpu_cores * own.alive);
             if cpu > self.cpu_limit {
                 return Some(GapMiss {
                     resource: GapResource::Cpu,
@@ -158,7 +154,14 @@ impl ForecastGap {
                     percent: cpu / self.cpu_total * 100.0,
                 });
             }
-            let memory = forecast(&self.memory, t) + memory;
+            let forecast = if over_forecast {
+                self.memory[t]
+            } else {
+                MemoryTerms::default()
+            };
+            let memory = own
+                .map_or(forecast, |own| forecast.with_profiled(own, own.alive))
+                .bytes();
             if memory > self.memory_limit {
                 return Some(GapMiss {
                     resource: GapResource::Memory,
@@ -182,7 +185,7 @@ impl ForecastGap {
             .enumerate()
         {
             self.cpu[t] += minute.cpu_cores * minute.alive;
-            self.memory[t] += minute.memory_bytes as f64 * minute.alive;
+            self.memory[t].add_profiled(minute, minute.alive);
         }
     }
 

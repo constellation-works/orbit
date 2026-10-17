@@ -119,9 +119,10 @@ case "$1 ${2:-}" in
                 fi
                 if [ -f "$forge/policy-after" ] && [ -f "$forge/base-applied" ]; then echo '[{"type":"required_status_checks","ruleset_id":56,"ruleset_source":"orbit/test","ruleset_source_type":"Repository","parameters":{"required_status_checks":[{"context":"Protected (rust)","integration_id":900}]}}]'; exit; fi
                 if [ -f "$forge/foreign_app" ]; then echo '[{"type":"required_status_checks","ruleset_id":55,"ruleset_source":"orbit/test","ruleset_source_type":"Repository","parameters":{"required_status_checks":[{"context":"Protected (rust)","integration_id":901}]}}]'; exit; fi
-                if [ -f "$forge/changed_policy" ]; then
-                    count=$(cat "$forge/policy-reads" 2>/dev/null || echo 0); count=$((count + 1)); echo "$count" > "$forge/policy-reads"
-                    if [ "$count" -gt 1 ]; then echo '[{"type":"required_status_checks","ruleset_id":56,"ruleset_source":"orbit/test","ruleset_source_type":"Repository","parameters":{"required_status_checks":[{"context":"Protected (rust)","integration_id":900}]}}]'; exit; fi
+                # Policy changes once the update is durably reserved, however
+                # many current-gates reads preceded the emission evidence.
+                if [ -f "$forge/changed_policy" ] && [ -f "$forge/base-reserved" ]; then
+                    echo '[{"type":"required_status_checks","ruleset_id":56,"ruleset_source":"orbit/test","ruleset_source_type":"Repository","parameters":{"required_status_checks":[{"context":"Protected (rust)","integration_id":900}]}}]'; exit
                 fi
                 echo '[{"type":"required_status_checks","ruleset_id":55,"ruleset_source":"'"$slug"'","ruleset_source_type":"Repository","parameters":{"required_status_checks":[{"context":"Protected (rust)","integration_id":900}]}}]' ;;
             *'/check-runs?'*)

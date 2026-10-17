@@ -20,8 +20,9 @@ use crate::command::{Block, CommandOut, Payload};
 #[command(
     about = "Evaluate due routines and auto-tasks on this host",
     after_help = "Loads routines and auto-task definitions from every registered, active owner\n\
-                  checkout on this host. Due routines dispatch normal runs; due auto-tasks\n\
-                  mint tasks in-process. The OS clock invokes this pass, for example:\n  orbit clock tick --json\n\n\
+                  checkout on this host, and a replica's host-local worktree GC and store GC.\n\
+                  Due routines dispatch normal runs; due auto-tasks mint tasks in-process. The\n\
+                  OS clock invokes this pass, for example:\n  orbit clock tick --json\n\n\
                   By default only noteworthy rows print. Use --verbose for every row.\n\n\
                   Pass the global `--workspace <selector>` to evaluate only that workspace."
 )]
