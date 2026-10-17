@@ -224,7 +224,7 @@ assert(pools(['ORB-1', 'ORB-14334', 'ORB-4', 'ORB-5', 'ORB-2', 'ORB-6', 'ORB-7',
 assert(drainReadinessFor('ORB-14334').title.includes('ORB-14489') && !drainReadinessFor('ORB-14334').title.includes('file:') && drainReadinessFor('ORB-14334').title.includes('ORB-14488') && drainReadinessFor('ORB-4').title.includes('jrun-claimed-child'), 'a lock wait names its holder for the task row');
 const capacityBar = () => drainBody.querySelector('.drain-capacity-bar');
 assert(capacityBar().getAttribute('aria-label') === 'Workspace: 4 of 4 leaf slots in use' && capacityBar().querySelectorAll('.drain-capacity-seg.used').length === 4, `capacity shows workspace slot occupancy: ${capacityBar().getAttribute('aria-label')}`);
-assert(drainBody.querySelector('.drain-capacity-free').classList.contains('full'), 'no free slot is flagged');
+assert(drainBody.querySelector('.drain-capacity-count').classList.contains('full') && drainBody.querySelector('.drain-capacity-count').textContent === '4/4 slots', 'no free slot is flagged beside the count');
 assert(drainBody.querySelector('.drain-slots').textContent.includes('1 occupied slot'), 'a saturated workspace says how many slots must clear');
 assert(!drainBody.querySelector('.drain-stat, .drain-blocked, .drain-blocked-row'), 'the card lists no pool tiles or waiting tasks');
 for (const gone of ['Task readiness', 'Waiting on deps', 'slots busy', 'Snapshot only']) {
@@ -393,7 +393,7 @@ typeConcurrency('2');
 // is 0, which printed "0 free slots" and a placeholder of "null".
 nullCapacity = true;
 await fetchAndRenderOperations();
-assert(/capacity unknown/i.test(drainText()) && !drainBody.querySelector('.drain-capacity-free') && !drainText().includes('NaN'), `missing figures read as unknown: ${drainText()}`);
+assert(/capacity unknown/i.test(drainText()) && !drainBody.querySelector('.drain-capacity-count.full') && !drainText().includes('NaN'), `missing figures read as unknown: ${drainText()}`);
 assert(concurrencyInput().placeholder === 'auto', `no limit means no numeric placeholder: ${concurrencyInput().placeholder}`);
 nullCapacity = false;
 await fetchAndRenderOperations();
@@ -545,21 +545,21 @@ assert(drainButton('Send pending results').disabled && drainText().includes('req
 controlsAuthorized = true;
 await fetchAndRenderOperations();
 
-// A live window: header link in short form, time left for a window this
-// browser started, and Stop enabled.
+// A live window: footer link in short form, time left in the header for a
+// window this browser started, and Stop enabled.
 drainRunId = 'jrun-20260923-0400-a1';
 drainPhase = 'draining';
 await fetchAndRenderOperations();
-const liveLink = descendants(get('auto-drain-live')).find(node => String(node.getAttribute?.('href') || '').includes('#runs?run_id='));
-assert(liveLink?.textContent === 'jrun-…0400-a1' && String(liveLink.title).includes('jrun-20260923-0400-a1'), 'header links the live run by its short id');
-assert(/(1h 59m|2h 00m) left/.test(get('auto-drain-live').textContent), `header shows server time left: ${get('auto-drain-live').textContent}`);
+const liveLink = descendants(get('auto-drain-run')).find(node => String(node.getAttribute?.('href') || '').includes('#runs?run_id='));
+assert(liveLink?.textContent === 'jrun-…0400-a1' && String(liveLink.title).includes('jrun-20260923-0400-a1'), 'the footer links the live run by its short id');
+assert(/^(1h 59m|2h 00m) left$/.test(get('auto-drain-when').textContent), `header shows server time left: ${get('auto-drain-when').textContent}`);
 const windowStat = key => get('auto-drain-live').querySelector(`[data-stat="${key}"] dd`);
 assert(windowStat('admitted').textContent === '3' && windowStat('running').textContent === '1', 'live counts show this window apart from workspace slots');
 assert(!windowStat('approved'), 'a window started without approve-proposed says nothing about it');
 approvalsFixture = { enabled: true, drain_run_id: drainRunId, approved_total: 3, approved: ['ORB-1'], awaiting_pilot: 1, held_total: 2, held_by_reason: { missing_complexity: 1, pilot_held: 1 }, held: [{ task_id: 'ORB-8', reason: 'missing_complexity' }, { task_id: 'ORB-9', reason: 'pilot_held' }] };
 await fetchAndRenderOperations();
 const approvalsNode = get('auto-drain-live').querySelector('[data-stat="approved"]');
-assert(windowStat('approved')?.firstChild.textContent === '3' && windowStat('approved').querySelector('.drain-window-stat-detail').textContent === '2 held', `the live window shows approve-proposed with counts: ${approvalsNode?.textContent}`);
+assert(windowStat('approved')?.textContent === '3' && approvalsNode.querySelector('.drain-window-stat-detail').textContent === '2 held', `the live window shows approve-proposed with counts: ${approvalsNode?.textContent}`);
 assert(String(approvalsNode.title).includes('1 × missing complexity') && String(approvalsNode.title).includes('ORB-9: pilot held'), `hold reasons are in the tooltip: ${approvalsNode.title}`);
 approvalsFixture = { enabled: true, drain_run_id: drainRunId };
 await fetchAndRenderOperations();
@@ -572,7 +572,7 @@ setHost('hostb');
 setWindow('7d');
 await fetchAndRenderOperations();
 for (const [surface, runId] of [
-  ['auto-drain-live', 'jrun-20260923-0400-a1'],
+  ['auto-drain-run', 'jrun-20260923-0400-a1'],
   ['jobs-live-body', 'jrun-fixture-running'],
   ['routines-body', 'jrun-fixture-done'],
 ]) {
@@ -621,7 +621,7 @@ drainPhase = 'idle';
 pullDrainRunId = 'jrun-pull-drain-0001';
 await fetchAndRenderOperations();
 assert(drainButton('Stop') && !drainButton('Send pending results') && !drainButton('Stop').disabled, 'a live pull drain alone offers Stop, not Send pending results');
-assert(get('auto-drain-live').textContent.includes('Pull drain') && descendants(get('auto-drain-live')).some(node => String(node.title || '').includes('jrun-pull-drain-0001')), `header shows the pull drain: ${get('auto-drain-live').textContent}`);
+assert(get('auto-drain-phase-label').textContent === 'Pull drain' && !get('auto-drain-live') && !get('auto-drain-when').textContent && descendants(get('auto-drain-run')).some(node => String(node.title || '').includes('jrun-pull-drain-0001')), `the pill names the pull drain and the footer links it: ${get('auto-drain-run').textContent}`);
 drainButton('Stop').click(); await tick(); await tick(); await tick();
 assert(requests.some(r => r.path === '/api/workflows/auto/stop' && r.workspace === 'one'), 'stopping a pull drain posts to the stop endpoint');
 assert(confirmations.at(-1).includes('pull drain') && confirmations.at(-1).includes('jrun-pull-drain-0001') && !confirmations.at(-1).includes('No auto-delivery window'), `confirm names the pull drain: ${confirmations.at(-1)}`);
