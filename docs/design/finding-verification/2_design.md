@@ -2,7 +2,7 @@
 title: Finding Verification — Design
 owner: claude
 last_updated: 2026-10-12
-last_validated: 2026-10-11
+last_validated: 2026-10-17
 status: Accepted
 feature: finding-verification
 doc_role: design
@@ -169,9 +169,9 @@ seeded `finding_verification.yaml` routine. It also mentions a prior REJECTED
 verdict.
 These surfaces enforce it:
 
-- `orbit task approve`, an update to `backlog` or `in_progress` from
-  `proposed` or `someday`, and `orbit task start` from those statuses. All
-  of them refuse with the hold detail. The update check applies the update's
+- `orbit task update <id> --approve` (`proposed` → `backlog`), and an update
+  to `in_progress` from `proposed` or `someday` (the start path). Both refuse
+  with the hold detail. The update check applies the update's
   own `tags` and `type` first, so retyping or retagging in the same update
   is honoured.
 - Workflow entry and pull admission, through `pilot_admission_hold_in`. The
