@@ -717,7 +717,8 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   drain never fails over to its own store.
 - The owner's own drain survives the same waits. An admission pass that
   times out on the task commit lock or the database (`lock_busy`) admits
-  nothing, records `last_pass_error_code: lock_busy` with the lock error,
+  nothing, releases any `enforce` gap-fit reservations it wrote for its
+  wave, records `last_pass_error_code: lock_busy` with the lock error,
   which names the holder's pid and section, on
   `pipeline_state.drain_last_pass`, and waits the drain's poll interval
   before the next pass retries; `orbit run show` reads `Admission pass

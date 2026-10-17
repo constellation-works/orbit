@@ -546,7 +546,9 @@ pub struct DrainAdmissionPass {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_pass_error: Option<String>,
     /// Consecutive failed pull passes, independent of failed claimed leaves,
-    /// or consecutive deferred local passes; a local drain fails at ten.
+    /// or consecutive deferred local passes; a local drain fails when this
+    /// reaches `TRANSIENT_PASS_FAILURE_LIMIT` (orbit-core's
+    /// `application::workspace_auto::classify`).
     #[serde(default)]
     pub consecutive_pass_failures: u32,
     /// Sticky warning state: new admissions stop, but settlements keep flowing.
