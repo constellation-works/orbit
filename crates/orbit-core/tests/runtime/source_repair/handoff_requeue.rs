@@ -3,14 +3,98 @@
 //! requeue of a transient infrastructure block — and its next run adopts the
 //! same branch, head and pull request without re-implementing. The
 //! publication's authentication refusals still refuse, and a changed task
-//! specification is refused with an explicit discard-and-rerun exit.
-use super::failed_publication::escalated_handoff_fixture;
+//! specification is refused with an explicit discard-and-rerun exit. Nothing
+//! is requeued while the run that published is still live, and a human's
+//! word on a transient block stands over the automatic requeue.
+use super::failed_publication::{escalated_handoff_fixture, escalated_handoff_fixture_with};
 use super::published_owner::{checkpoint, next, save_run};
 use super::*;
+use orbit_core::application::routines::loader::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
+use orbit_core::application::routines::{
+    RoutineMachineIdentity, SweepOptions, run_sweep_at_with_providers,
+};
+use orbit_core::runtime::task_pr_forge::{ForgePullRequest, TaskPrForge};
 use orbit_types::task::TaskHistoryEntry;
 use orbit_types::workflow::{
     TRANSIENT_INFRA_REQUEUED_EVENT, TransientInfraRequeue, TransientInfrastructure,
 };
+use orbit_types::workspace::{Workspace, WorkspaceStatus};
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+/// One open delivery PR; records every close.
+#[derive(Clone)]
+struct Forge {
+    open: ForgePullRequest,
+    closed: Arc<Mutex<Vec<(u64, String)>>>,
+}
+
+impl TaskPrForge for Forge {
+    fn open_pull_requests(
+        &self,
+        _: &Path,
+    ) -> Result<Vec<ForgePullRequest>, orbit_core::OrbitError> {
+        let closed = self.closed.lock().unwrap();
+        Ok(
+            (!closed.iter().any(|(number, _)| *number == self.open.number))
+                .then(|| self.open.clone())
+                .into_iter()
+                .collect(),
+        )
+    }
+    fn authenticated_login(&self, _: &Path) -> Result<String, orbit_core::OrbitError> {
+        Ok(self.open.author.clone())
+    }
+    fn close_pull_request(
+        &self,
+        _: &Path,
+        number: u64,
+        comment: &str,
+    ) -> Result<(), orbit_core::OrbitError> {
+        self.closed.lock().unwrap().push((number, comment.into()));
+        Ok(())
+    }
+}
+
+struct SingleWorkspace(orbit_core::OrbitRuntime);
+
+impl RoutineWorkspaceProvider for SingleWorkspace {
+    fn discover_workspaces(
+        &self,
+        _: &Path,
+    ) -> Result<DiscoveredWorkspaces, orbit_core::OrbitError> {
+        let workspace = Workspace {
+            id: self.0.workspace_id()?,
+            name: "fixture".into(),
+            owner_machine_id: None,
+            git_remote: None,
+            ship_mode: None,
+            base_branch: "main".into(),
+            status: WorkspaceStatus::Active,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        Ok(DiscoveredWorkspaces {
+            entries: vec![(workspace, self.0.clone())],
+            ..DiscoveredWorkspaces::default()
+        })
+    }
+}
+
+/// One owner clock tick over the fixture's workspace.
+fn tick(f: &Fixture) {
+    let sweep = run_sweep_at_with_providers(
+        &f._root.path().join("global"),
+        SweepOptions::default(),
+        RoutineMachineIdentity {
+            machine_id: "hm_fixture".into(),
+            machine_name: "fixture".into(),
+        },
+        &SingleWorkspace(f.runtime.clone()),
+    )
+    .unwrap();
+    assert!(!sweep.lock_busy);
+}
 
 fn requeue(f: &Fixture, discard: bool) -> Result<Value, orbit_core::OrbitError> {
     f.runtime.run_tool_as_human(
@@ -209,7 +293,7 @@ fn requeue_keeps_the_published_owner_refusals() {
 /// A discarded candidate is never resumed, and a changed specification is
 /// reported with discard-and-rerun as its exit, which then implements fresh.
 fn changed_or_discarded_candidates_are_refused_with_a_discard_exit() {
-    let (f, _) = escalated_handoff_fixture(None, None);
+    let (mut f, _) = escalated_handoff_fixture(None, None);
     f.runtime
         .update_task_as_human(
             &f.task,
@@ -236,9 +320,29 @@ fn changed_or_discarded_candidates_are_refused_with_a_discard_exit() {
         error.contains("--discard-candidate"),
         "the mismatch offers its exit: {error}"
     );
+    let forge = Forge {
+        open: ForgePullRequest {
+            number: 17,
+            head_branch: f.branch.clone(),
+            body: format!("Delivers {}.", f.task),
+            author: "orbit-bot".into(),
+        },
+        closed: Arc::default(),
+    };
+    f.runtime = f
+        .runtime
+        .clone()
+        .with_task_pr_forge(Arc::new(forge.clone()));
     let answer = requeue(&f, true).unwrap();
     assert_eq!(answer["status"], "backlog");
     assert_eq!(answer["candidate_discarded"], true);
+    assert_eq!(answer["discard_closure"], "settled", "{answer}");
+    let closed = forge.closed.lock().unwrap().clone();
+    assert_eq!(
+        closed.iter().map(|(number, _)| *number).collect::<Vec<_>>(),
+        [17],
+        "the discarded candidate's [BLOCKED] pull request is closed"
+    );
     let (run, setup) = next(&f);
     let resumed = f.action(
         "candidate_resume",
@@ -329,11 +433,83 @@ fn transient_requeues_are_bounded_per_publication() {
     assert_eq!(requeue(&f, false).unwrap()["resumes"]["pull_request"], "17");
 }
 
+/// The race: final recovery blocks the task while its run is still live and
+/// before its failure handoff publishes. Neither the clock nor an operator
+/// requeues it then; once the run stops with its publication, the clock
+/// requeues it onto that candidate.
+fn nothing_is_requeued_until_the_publishing_run_stops() {
+    let (f, _) =
+        escalated_handoff_fixture_with(None, Some(TransientInfrastructure::StoreLocked), &|f| {
+            assert_eq!(status(f), TaskStatus::Blocked, "blocked before the handoff");
+            let blocked = f.runtime.transient_infra_blocked_tasks().unwrap();
+            assert_eq!(blocked.len(), 1, "{blocked:?}");
+            assert_eq!(blocked[0].pull_request, None, "nothing published yet");
+            assert!(
+                blocked[0]
+                    .held
+                    .as_deref()
+                    .is_some_and(|held| held.contains("not conclusively stopped")),
+                "{blocked:?}"
+            );
+            assert!(
+                f.runtime
+                    .requeue_cleared_transient_infra_blocks()
+                    .unwrap()
+                    .is_empty()
+            );
+            tick(f);
+            assert_eq!(
+                status(f),
+                TaskStatus::Blocked,
+                "the clock waits for the run"
+            );
+            let error = refused(f, false, "live run, unpublished");
+            assert!(error.contains("not conclusively stopped"), "{error}");
+        });
+    tick(&f);
+    assert_eq!(
+        status(&f),
+        TaskStatus::Backlog,
+        "the clock requeues it once the run stopped with its publication"
+    );
+    assert_next_run_resumes_the_published_candidate(&f);
+}
+
+/// A human's comment after the block stands over the automatic requeue; the
+/// operator requeue remains theirs to run.
+fn a_human_word_on_a_transient_block_stands() {
+    let (f, _) = escalated_handoff_fixture(None, Some(TransientInfrastructure::LockBusy));
+    f.runtime
+        .update_task_as_human(
+            &f.task,
+            orbit_core::application::task::TaskUpdateParams {
+                comment: Some("Holding this one: the lock holder is under investigation.".into()),
+                ..Default::default()
+            },
+            "human".into(),
+        )
+        .unwrap();
+    let blocked = f.runtime.transient_infra_blocked_tasks().unwrap();
+    assert_eq!(blocked.len(), 1);
+    assert!(
+        blocked[0]
+            .held
+            .as_deref()
+            .is_some_and(|held| held.starts_with("human ")),
+        "{blocked:?}"
+    );
+    tick(&f);
+    assert_eq!(status(&f), TaskStatus::Blocked, "the human's call stands");
+    assert_eq!(requeue(&f, false).unwrap()["resumes"]["pull_request"], "17");
+}
+
 crate::scenario_table!(
     handoff_requeue_scenarios,
     operator_requeue_resumes_the_failure_handoff_candidate_and_pull_request,
     requeue_keeps_the_published_owner_refusals,
     changed_or_discarded_candidates_are_refused_with_a_discard_exit,
     a_transient_infra_block_is_requeued_onto_its_candidate_after_the_probe,
-    transient_requeues_are_bounded_per_publication
+    transient_requeues_are_bounded_per_publication,
+    nothing_is_requeued_until_the_publishing_run_stops,
+    a_human_word_on_a_transient_block_stands
 );

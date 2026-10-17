@@ -594,11 +594,11 @@ Identify the failed step from `orbit run show`, then act:
 - **A `[BLOCKED]` pull request whose candidate is sound** (the failure was
   the environment or infrastructure, not the work): resume it rather than
   re-implement it with
-  `orbit task requeue <task-id> --reason '<why it can continue>'`. The next
-  run adopts the same branch, head and pull request, then validates, reviews
-  and lands it afresh. A changed task specification is refused with
-  `--discard-candidate` as the exit, which closes that pull request and
-  reruns from scratch. See
+  `orbit task requeue <task-id> --reason '<why it can continue>'` once the
+  task's run has stopped. The next run adopts the same branch, head and pull
+  request, then validates, reviews and lands it afresh. A changed task
+  specification is refused with `--discard-candidate` as the exit, which
+  closes the task's undelivered Orbit pull requests and reruns from scratch. See
   [stuck job runs](./stuck-job-runs.md#requeue-a-failure-handoff-task-onto-its-published-candidate).
 - **`review_gate_admit` refused with `review_budget_exhausted`**: the
   candidate already had its one review (`review_candidate_reviewed`) or its

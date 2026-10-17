@@ -23,11 +23,6 @@
 //! earlier pull request. That `pr_open` closes every other open delivery PR
 //! of the task once its own is open, so a re-admitted task ends with one.
 //!
-//! An operator requeue that discards the published candidate (`orbit task
-//! requeue --discard-candidate`) also closes exactly that candidate's PR
-//! through [`OrbitRuntime::close_discarded_candidate_pr`], since its
-//! `[BLOCKED]` PR will never be resumed.
-//!
 //! A PR qualifies only when all of these hold:
 //! - its head branch is `orbit/<TASK-ID>-…`;
 //! - its body names the task;
@@ -212,56 +207,6 @@ impl OrbitRuntime {
         settled
     }
 
-    /// Close the pull request whose candidate an operator discarded when
-    /// requeuing `task` to implement fresh. Only `number` is closed, and only
-    /// while it is open and qualifies exactly as a terminal decision's
-    /// closure would. Best effort like that pass: `Ok(false)` when nothing
-    /// qualified, `Err` when the forge could not be asked or refused.
-    pub(crate) fn close_discarded_candidate_pr(
-        &self,
-        task: &Task,
-        number: u64,
-        reason: &str,
-    ) -> Result<bool, OrbitError> {
-        let repo_root = self.context.paths().repo_root.clone();
-        let forge = self.task_pr_forge();
-        let Some(pr) = forge
-            .open_pull_requests(&repo_root)?
-            .into_iter()
-            .find(|pr| {
-                pr.number == number
-                    && names_task_delivery_pull_request(&pr.head_branch, &pr.body, &task.id)
-            })
-        else {
-            return Ok(false);
-        };
-        let settings = self.context.settings().pr_settings();
-        let authors = if settings.delivery_authors.is_empty() {
-            vec![forge.authenticated_login(&repo_root)?.to_ascii_lowercase()]
-        } else {
-            settings.delivery_authors.clone()
-        };
-        if !authors.contains(&pr.author.to_ascii_lowercase())
-            && !self
-                .accepted_handoff_pull_requests(&task.id)
-                .contains(&number)
-        {
-            return Ok(false);
-        }
-        let comment = format!(
-            "Closed by Orbit: an operator discarded this candidate and requeued {} to implement \
-             fresh.\n\nReason: {}",
-            task.id,
-            reason.trim()
-        );
-        forge.close_pull_request(&repo_root, number, &comment)?;
-        self.record_session_event(OrbitEvent::TaskPullRequestClosed {
-            task_id: task.id.clone(),
-            pr_number: number,
-        });
-        Ok(true)
-    }
-
     /// Whether a run or an unsettled claim of `task` may still be delivering
     /// one of its pull requests. An unreadable answer counts as live, so
     /// nothing is closed on a guess.
@@ -282,12 +227,17 @@ impl OrbitRuntime {
     }
 
     /// Whether `task` entered `previous` through a final-recovery requeue
-    /// that no discard has since overridden. Its next run resumes the
-    /// published candidate through the same pull request.
+    /// that no discard has since overridden, or its current run's recorded
+    /// decision is a requeue that preserved its candidate (an operator or
+    /// cleared-infra requeue). Its next run resumes the published candidate
+    /// through the same pull request.
     fn requeued_by_final_recovery(&self, task: &Task, previous: TaskStatus) -> bool {
         let Ok(history) = self.get_task_history(&task.id) else {
             return true;
         };
+        if super::requeue::current_run_requeue_stands(task, &history) {
+            return true;
+        }
         history
             .iter()
             .rev()

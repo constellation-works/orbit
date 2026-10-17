@@ -159,6 +159,17 @@ pub(super) fn escalated_handoff_fixture(
     reviewer: Option<bool>,
     infra: Option<orbit_types::workflow::TransientInfrastructure>,
 ) -> (Fixture, String) {
+    escalated_handoff_fixture_with(reviewer, infra, &|_| {})
+}
+
+/// [`escalated_handoff_fixture`], calling `mid_handoff` once final recovery
+/// has blocked the task and before the still-live run's failure handoff
+/// publishes its candidate.
+pub(super) fn escalated_handoff_fixture_with(
+    reviewer: Option<bool>,
+    infra: Option<orbit_types::workflow::TransientInfrastructure>,
+    mid_handoff: &dyn Fn(&Fixture),
+) -> (Fixture, String) {
     let mut f = if reviewer.is_some() {
         Fixture::with_policy("before-pr")
     } else {
@@ -303,6 +314,7 @@ pub(super) fn escalated_handoff_fixture(
             state = f.runtime.read_run_state(&run.run_id).unwrap().unwrap();
         }
     }
+    mid_handoff(&f);
     if reviewer != Some(false) {
         std::fs::write(
             checkout.join("qa-fixed.txt"),

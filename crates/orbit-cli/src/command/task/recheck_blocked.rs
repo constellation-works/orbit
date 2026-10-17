@@ -10,7 +10,7 @@ use crate::command::{CommandOut, Execute, Payload};
 /// launcher or by transient infrastructure, and requeue the cleared ones.
 #[derive(Args)]
 #[command(
-    after_help = "Only blocks caused by a missing provider launcher or by transient infrastructure (a busy lock, a locked task store) are re-checked; a task blocked by its own failure stays blocked.\nThe launcher is resolved with dispatch's lookup from this shell's PATH and HOME. A transient block is cleared when the task store takes a write transaction and the task's lock is free; its next run resumes the candidate its failure handoff published. Each published candidate is requeued this way at most twice; after that use `orbit task requeue`.\n\nExamples:\n  orbit task recheck-blocked            # list infra-blocked tasks and whether each still reproduces\n  orbit task recheck-blocked --confirm  # return the cleared ones to backlog, with a history note"
+    after_help = "Only blocks caused by a missing provider launcher or by transient infrastructure (a busy lock, a locked task store) are re-checked; a task blocked by its own failure stays blocked.\nThe launcher is resolved with dispatch's lookup from this shell's PATH and HOME. A transient block is requeued once its run has stopped, when the task store takes a write transaction and the task's own lock is free (the probe cannot take the lock that timed out); its next run resumes the candidate its failure handoff published. A human's comment or write after the block, or a publication that did not authenticate, leaves it for `orbit task requeue`. Each published candidate is requeued this way at most twice; after that use `orbit task requeue`.\n\nExamples:\n  orbit task recheck-blocked            # list infra-blocked tasks and whether each still reproduces\n  orbit task recheck-blocked --confirm  # return the cleared ones to backlog, with a history note"
 )]
 pub struct TaskRecheckBlockedArgs {
     /// Return the cleared tasks to backlog. Without it, only report.
@@ -68,6 +68,7 @@ impl Execute for TaskRecheckBlockedArgs {
                     "cleared": blocked.cleared,
                     "requeues": blocked.requeues,
                     "exhausted": blocked.exhausted,
+                    "held": blocked.held,
                     "requeued": is_transient_requeued(blocked),
                 })
             })
@@ -109,10 +110,12 @@ impl Execute for TaskRecheckBlockedArgs {
                     "left blocked; requeued {} time(s) already — `orbit task requeue` decides now",
                     blocked.requeues
                 )
+            } else if let Some(held) = &blocked.held {
+                format!("left blocked; {held}")
             } else if !blocked.cleared {
                 "still reproduces".to_string()
             } else if self.confirm {
-                "left blocked; the task changed, its lock is held, or its publication no longer authenticates".to_string()
+                "left blocked; the task changed, its lock is held, or its publication did not authenticate".to_string()
             } else {
                 "cleared".to_string()
             };

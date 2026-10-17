@@ -434,13 +434,16 @@ pub(crate) fn requeue_text(value: &Value) -> String {
             field("head_sha")
         ));
     }
-    if let Some(closed) = value.get("closed_pull_request").and_then(Value::as_str) {
-        lines.push(format!("Closed the discarded pull request #{closed}."));
-    }
-    if let Some(error) = value.get("close_error").and_then(Value::as_str) {
-        lines.push(format!(
-            "Could not close the discarded pull request: {error}"
-        ));
+    match value.get("discard_closure").and_then(Value::as_str) {
+        Some("settled") => lines.push(
+            "Closed the task's undelivered Orbit pull requests; their branches are kept.".into(),
+        ),
+        Some(_) => lines.push(
+            "Could not close every undelivered Orbit pull request of the task; close the rest by \
+             hand."
+                .into(),
+        ),
+        None => {}
     }
     if let Some(next) = value.get("next_step").and_then(Value::as_str) {
         lines.push(next.to_string());

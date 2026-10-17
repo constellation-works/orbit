@@ -243,12 +243,15 @@ pub(super) fn attempt_final_recovery(
         None => None,
     };
 
-    // A deterministic step that lost only to a lock or a locked store judged
-    // nothing about the candidate, and no agent can make the holder let go.
-    // The host blocks the task on that condition; a passing probe requeues it
-    // onto the same candidate (`orbit task recheck-blocked --confirm` and the
-    // owner's clock tick).
+    // A deterministic delivery step that lost only to a lock or a locked
+    // store judged nothing about the candidate, and no agent can make the
+    // holder let go. The host blocks the task on that condition; once the run
+    // has stopped, a passing probe requeues it onto the same candidate
+    // (`orbit task recheck-blocked --confirm` and the owner's clock tick).
+    // A claimed leaf is left to its agent: its task is the owner's, which
+    // settles the claim through its own recovery and never sees this class.
     if let DispatchError::DeterministicActionFailed { action, message } = error
+        && ctx.input.get("claimed").and_then(Value::as_bool) != Some(true)
         && let Some(class) =
             orbit_types::workflow::TransientInfrastructure::of_action_failure(action, message)
     {
@@ -264,9 +267,11 @@ pub(super) fn attempt_final_recovery(
                     class.describe(),
                     bounded_recovery_text("error", &ctx.run_id, error_message, 4 * 1024),
                 ),
-                human_action: "Nothing, unless it recurs: once the condition clears, `orbit task \
-                               recheck-blocked --confirm` (and the clock tick) requeue the task \
-                               onto this candidate. `orbit task requeue` does it now."
+                human_action: "Nothing, unless it recurs: once this run has stopped and the \
+                               condition clears, `orbit task recheck-blocked --confirm` (and the \
+                               clock tick) requeue the task onto the candidate its failure handoff \
+                               published. After the run stops, `orbit task requeue` does it at \
+                               once."
                     .into(),
             },
             resume_step_index: None,

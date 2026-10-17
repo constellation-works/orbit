@@ -7,7 +7,7 @@ last_validated: 2026-10-12
 
 # MCP behavioral evidence
 
-This matrix covers the exact 28 modern advertised names in `crates/orbit-cli/tests/snapshots/mcp_tools_list.json` after removal of the five deterministic drain operations and the consolidation of narrow tools into the tools that now carry their modes (friction listing into `orbit_search`, friction moves into `orbit_friction_update`, auto-task enable/disable into `orbit_auto_task_update`, drain resizing into `orbit_workflow_auto`, delivery evidence into `orbit_task_show`, crew discovery into `orbit_workspace_list`). It is a map of demonstrated behavior, not a claim that every argument, state, provider, or remote deployment was exercised. Retired desktop tool aliases are neither advertised nor callable. Clients and destinations must use the current domain contracts; no older-client translation is performed.
+This matrix covers the exact 30 modern advertised names in `crates/orbit-cli/tests/snapshots/mcp_tools_list.json` after removal of the five deterministic drain operations and the consolidation of narrow tools into the tools that now carry their modes (friction listing into `orbit_search`, friction moves into `orbit_friction_update`, auto-task enable/disable into `orbit_auto_task_update`, drain resizing into `orbit_workflow_auto`, delivery evidence into `orbit_task_show`, crew discovery into `orbit_workspace_list`). It is a map of demonstrated behavior, not a claim that every argument, state, provider, or remote deployment was exercised. Retired desktop tool aliases are neither advertised nor callable. Clients and destinations must use the current domain contracts; no older-client translation is performed.
 
 `S` means the production Orbit binary over real stdio and disposable stores. `W` means the MCP transport kernel over an in-memory wire or loopback fixture. `I` means registered runtime tools or application integration with temporary stores. Application-only evidence is labeled explicitly. A dash means this review has no named evidence for that dimension; it does not mean that behavior is unsupported. Persistence means an asserted durable readback or byte-preserving refusal, not merely a successful response.
 
@@ -82,7 +82,7 @@ refuses their canonical and advertised spellings before admission or mutation.
 They have no public compatibility aliases.
 
 `internal_drain::public_drain_calls_and_spoofed_initialize_are_refused_and_audited`
-uses production stdio and checks the 28-tool count, both retired spellings,
+uses production stdio and checks the 30-tool count, both retired spellings,
 operator and managed-agent discovery, spoofed client/initialize claims, denied
 custom RPC and durable refusal audit rows without changing task state.
 

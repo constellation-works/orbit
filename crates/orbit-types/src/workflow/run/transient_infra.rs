@@ -9,9 +9,13 @@
 //! recovery already skips it and its claim is released.
 //!
 //! Classification reads the action's own error, never text an agent or a
-//! validation command produced: only a deterministic action's failure counts,
-//! and the error has to *start* with one of the typed displays below, so a
-//! test log that merely quotes "database is locked" is not a lock failure.
+//! validation command produced: only a deterministic delivery action listed
+//! in `DELIVERY_ACTIONS` counts (no validation action is listed, since its
+//! failure embeds command output), and the error has to *start* with one of
+//! the typed displays below, so a test log that merely quotes "database is
+//! locked" is not a lock failure. A claimed leaf is never classified: its
+//! task belongs to its owner, which settles the claim through its own
+//! recovery.
 
 use serde::{Deserialize, Serialize};
 
@@ -25,14 +29,39 @@ pub const TRANSIENT_INFRA_BLOCKED_EVENT: &str = "transient_infra_blocked";
 /// [`TransientInfraRequeue`]; the count per publication bounds the repeats.
 pub const TRANSIENT_INFRA_REQUEUED_EVENT: &str = "transient_infra_requeued";
 
+/// History event recorded, by `system`, when the cleared-infra requeue could
+/// not authenticate a blocked task's publication. The block then waits for an
+/// operator instead of being re-authenticated on every clock tick. Its note
+/// says why.
+pub const TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT: &str = "transient_infra_requeue_refused";
+
 /// Automatic requeues one candidate publication (or, unpublished, one task)
 /// may take for transient infrastructure before it stays blocked for an
 /// operator.
 pub const MAX_TRANSIENT_INFRA_REQUEUES: usize = 2;
 
-/// Deterministic actions whose failure text embeds validation command output.
-/// They never classify, whatever that output says.
-const VALIDATION_ACTIONS: &[&str] = &["candidate_validate"];
+/// Deterministic delivery actions whose own failure may be classified. They
+/// move or record the candidate (worktree, commit, branch, push, pull
+/// request, review gate, completion) and judge nothing about it, so a lock
+/// they lost is Orbit's. Validation actions are deliberately absent: their
+/// failure embeds command output, whatever that output says.
+const DELIVERY_ACTIONS: &[&str] = &[
+    "worktree_setup",
+    "reserve_locks",
+    "candidate_resume",
+    "git_commit",
+    "pr_prepare",
+    "git_rebase",
+    "git_push",
+    "pr_open",
+    "pr_promote",
+    "review_gate_admit",
+    "review_gate_settle",
+    "pr_complete",
+    "git_merge",
+    "task_complete",
+    "release_locks",
+];
 
 /// Which infrastructure condition failed a step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,7 +94,7 @@ impl TransientInfrastructure {
     /// when that failure is transient infrastructure.
     #[must_use]
     pub fn of_action_failure(action: &str, message: &str) -> Option<Self> {
-        if VALIDATION_ACTIONS.contains(&action) {
+        if !DELIVERY_ACTIONS.contains(&action) {
             return None;
         }
         let message = message.trim_start();

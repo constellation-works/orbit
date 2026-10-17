@@ -248,7 +248,7 @@ pub(super) const REQUEUE: TaskOperation = TaskOperation {
     verb: TaskVerb::Requeue,
     cli_path: &["requeue"],
     tool_name: "orbit.task.requeue",
-    tool_description: "Return a blocked task to the backlog so its next run resumes the candidate and pull request its stopped run published, re-authenticating that publication exactly as automatic adoption does. Requires trusted operator authority; unavailable to managed runs. A changed task specification is refused with the option to set discard_candidate, which closes the published pull request and lets the next run implement fresh.",
+    tool_description: "Return a blocked task to the backlog so its next run resumes the candidate and pull request its stopped run published, re-authenticating that publication exactly as automatic adoption does. Requires trusted operator authority; unavailable to managed runs. A task whose run has not stopped is refused. A changed task specification is refused with the option to set discard_candidate, which closes the task's undelivered Orbit pull requests and lets the next run implement fresh.",
     cli_about: "Requeue a blocked task onto its published candidate",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
@@ -272,7 +272,7 @@ pub(super) const REQUEUE: TaskOperation = TaskOperation {
         both(
             "discard_candidate",
             ParamType::Switch,
-            "Discard the published candidate, close its pull request and let the next run implement fresh",
+            "Discard the published candidate, close the task's undelivered Orbit pull requests and let the next run implement fresh",
             CliArgKind::flag("discard-candidate"),
             "Discard the published candidate and rerun from scratch",
         ),

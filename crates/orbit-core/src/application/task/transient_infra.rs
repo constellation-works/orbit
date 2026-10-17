@@ -8,13 +8,27 @@
 //! run's escalation is still its latest final-recovery decision, and nobody
 //! but Orbit's own automation changed its status since.
 //!
-//! Once a probe shows the condition cleared — an immediate write transaction
-//! on the task store, then the task's own write lock — the cleared-infra
-//! requeue (`orbit task recheck-blocked --confirm`, and the owner's clock
-//! tick) returns the task to the backlog through the same records an
-//! operator requeue writes, so the next run resumes the candidate its failure
-//! handoff published. A publication that no longer authenticates leaves the
-//! task blocked for an operator.
+//! The cleared-infra requeue (`orbit task recheck-blocked --confirm`, and
+//! the owner's clock tick) returns such a task to the backlog through the
+//! same records an operator requeue writes, so the next run resumes the
+//! candidate its failure handoff published. It acts only when:
+//!
+//! - the task's run has conclusively stopped, so its failure handoff has
+//!   settled (final recovery blocks the task before the handoff publishes);
+//! - nobody but Orbit's automation commented on or wrote to the task since
+//!   the block: a human's attributed call stands;
+//! - no earlier attempt on this block failed to authenticate the publication
+//!   ([`TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT`]), so a publication that no
+//!   longer authenticates costs one forge round trip, not one per tick;
+//! - the probe passes: the task store takes an immediate write transaction
+//!   now, and the task's own write lock is then free. The probe cannot take
+//!   the lock that actually timed out, which may have been another file
+//!   lock or a remote owner's; it shows only that the task's own
+//!   coordination is usable again.
+//!
+//! The publication is authenticated before the task write lock is taken,
+//! since that asks the remote and the forge; under the lock only the block's
+//! identity and the task's last write are re-checked.
 //!
 //! Each publication (or, unpublished, each task) takes at most
 //! [`MAX_TRANSIENT_INFRA_REQUEUES`] such requeues; after that the block stays
@@ -22,14 +36,17 @@
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_types::task::{TaskDecision, TaskHistoryEntry, TaskStatus};
+use orbit_types::record::OrbitEvent;
+use orbit_types::task::{Task, TaskDecision, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
-    MAX_TRANSIENT_INFRA_REQUEUES, TRANSIENT_INFRA_BLOCKED_EVENT, TRANSIENT_INFRA_REQUEUED_EVENT,
-    TransientInfraBlock, TransientInfraRequeue, TransientInfrastructure,
+    MAX_TRANSIENT_INFRA_REQUEUES, TRANSIENT_INFRA_BLOCKED_EVENT,
+    TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT, TRANSIENT_INFRA_REQUEUED_EVENT, TransientInfraBlock,
+    TransientInfraRequeue, TransientInfrastructure,
 };
 use rusqlite::TransactionBehavior;
 
-use super::helpers::SYSTEM_ACTOR_LABEL;
+use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
+use super::helpers::{SYSTEM_ACTOR_LABEL, is_automation_actor};
 use super::requeue::CandidateRequeue;
 use super::transitions::INFRA_BLOCK_CLEARED_EVENT;
 use crate::OrbitRuntime;
@@ -53,6 +70,10 @@ pub struct TransientInfraBlockedTask {
     pub exhausted: bool,
     /// Whether the probe passed when the task was classified.
     pub cleared: bool,
+    /// Why the cleared-infra requeue leaves this block alone even once the
+    /// probe passes: the run has not stopped, a human acted after the block,
+    /// or an earlier attempt could not authenticate the publication.
+    pub held: Option<String>,
 }
 
 impl OrbitRuntime {
@@ -98,6 +119,10 @@ impl OrbitRuntime {
         {
             return Ok(None);
         }
+        let held = match self.unsettled_run(&task)? {
+            Some(reason) => Some(reason),
+            None => self.block_hold(&task, entry.at, &history[index + 1..])?,
+        };
         let pull_request = self
             .handoff_receipt(&task)?
             .map(|receipt| receipt.pull_request);
@@ -118,7 +143,39 @@ impl OrbitRuntime {
             requeues,
             exhausted: requeues >= MAX_TRANSIENT_INFRA_REQUEUES,
             cleared: self.transient_infrastructure_clear(),
+            held,
         }))
+    }
+
+    /// Why a human's or an earlier attempt's word stands over this block:
+    /// a write or comment after it by someone other than Orbit's automation,
+    /// or a recorded refusal to authenticate its publication.
+    fn block_hold(
+        &self,
+        task: &Task,
+        blocked_at: DateTime<Utc>,
+        after: &[TaskHistoryEntry],
+    ) -> Result<Option<String>, OrbitError> {
+        if let Some(refused) = after.iter().rev().find(|entry| {
+            entry.event == TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT && entry.by == SYSTEM_ACTOR_LABEL
+        }) {
+            return Ok(Some(format!(
+                "an automatic requeue could not authenticate the publication: {}",
+                refused.note.as_deref().unwrap_or("no reason recorded")
+            )));
+        }
+        let comments = self.get_task_comments(&task.id)?;
+        let human = after
+            .iter()
+            .map(|entry| entry.by.as_str())
+            .chain(
+                comments
+                    .iter()
+                    .filter(|comment| comment.at > blocked_at)
+                    .map(|comment| comment.by.as_str()),
+            )
+            .find(|by| !is_automation_actor(by));
+        Ok(human.map(|by| format!("{by} acted on the task after the block; their call stands")))
     }
 
     /// The probe: the task store takes an immediate write transaction now.
@@ -131,10 +188,11 @@ impl OrbitRuntime {
             .is_ok()
     }
 
-    /// Return every transient-infra blocked task whose probe passes and whose
-    /// bound is not spent to the backlog, onto its published candidate. A
-    /// task whose lock is still held, whose publication no longer
-    /// authenticates, or that changed since the scan is left blocked.
+    /// Return every transient-infra blocked task whose probe passes, whose
+    /// bound is not spent and that nothing holds to the backlog, onto its
+    /// published candidate. A task whose lock is still held, or that changed
+    /// since the scan, is left blocked; one whose publication no longer
+    /// authenticates is left blocked with that refusal recorded.
     ///
     /// Stands down off the coordination owner, like every task write.
     pub fn requeue_cleared_transient_infra_blocks(
@@ -143,86 +201,166 @@ impl OrbitRuntime {
         self.ensure_coordination_task_write_permitted()?;
         let mut requeued = Vec::new();
         for scanned in self.transient_infra_blocked_tasks()? {
-            if !scanned.cleared || scanned.exhausted {
+            if !scanned.cleared || scanned.exhausted || scanned.held.is_some() {
                 continue;
             }
-            let mut cleared = None;
-            let attempt = self
-                .stores()
-                .tasks()
-                .with_task_write_lock(&scanned.task_id, &mut || {
-                    let Some(current) = self.transient_infra_block_of(&scanned.task_id)? else {
-                        return Ok(());
-                    };
-                    if current.blocked_at != scanned.blocked_at
-                        || !current.cleared
-                        || current.exhausted
-                    {
-                        return Ok(());
-                    }
-                    let task = self.get_task(&current.task_id)?;
-                    let preserved = match &current.pull_request {
-                        Some(_) => Some(self.failure_handoff_requeue_record(&task)?.0),
-                        // A publication without a handoff receipt has nothing
-                        // a requeue can authenticate; the operator decides.
-                        None if self.run_published_through_pipeline(&current.run_id)? => {
-                            return Ok(());
-                        }
-                        None => None,
-                    };
-                    let note = TransientInfraRequeue {
-                        schema_version: 1,
-                        run_id: current.run_id.clone(),
-                        class: current.class,
-                        pull_request: current.pull_request.clone(),
-                    };
-                    let note = serde_json::to_string(&note).map_err(|error| {
-                        OrbitError::Execution(format!("encode infra requeue: {error}"))
-                    })?;
-                    self.write_candidate_requeue(
-                        &task,
-                        CandidateRequeue {
+            match self.requeue_transient_infra_block(&scanned) {
+                Ok(cleared) => requeued.extend(cleared),
+                Err(error) => tracing::warn!(
+                    target: "orbit.core.transient_infra",
+                    task_id = %scanned.task_id,
+                    error = %error,
+                    "left a transient-infrastructure block in place"
+                ),
+            }
+        }
+        Ok(requeued)
+    }
+
+    fn requeue_transient_infra_block(
+        &self,
+        scanned: &TransientInfraBlockedTask,
+    ) -> Result<Option<TransientInfraBlockedTask>, OrbitError> {
+        let task = self.get_task(&scanned.task_id)?;
+        // Authenticate first, outside the lock: it asks the remote and forge.
+        let preserved = match &scanned.pull_request {
+            Some(_) => match self.failure_handoff_requeue_record(&task) {
+                Ok((entry, _)) => Some(entry),
+                Err(error) => {
+                    self.refuse_transient_infra_requeue(scanned, &error.to_string())?;
+                    return Ok(None);
+                }
+            },
+            None if self.run_published_through_pipeline(&scanned.run_id)? => {
+                self.refuse_transient_infra_requeue(
+                    scanned,
+                    "the run published through its own pipeline steps with no failure-handoff \
+                     receipt to authenticate",
+                )?;
+                return Ok(None);
+            }
+            None if self.unbound_publication_on_record(&task)? => {
+                self.refuse_transient_infra_requeue(
+                    scanned,
+                    "a pull request or preserved candidate is on record that no failure-handoff \
+                     receipt binds",
+                )?;
+                return Ok(None);
+            }
+            None => None,
+        };
+        let mut cleared = None;
+        self.stores()
+            .tasks()
+            .with_task_write_lock(&scanned.task_id, &mut || {
+                let Some(current) = self.transient_infra_block_of(&scanned.task_id)? else {
+                    return Ok(());
+                };
+                if current.blocked_at != scanned.blocked_at
+                    || current.pull_request != scanned.pull_request
+                    || !current.cleared
+                    || current.exhausted
+                    || current.held.is_some()
+                    || self.get_task(&current.task_id)?.updated_at != task.updated_at
+                {
+                    return Ok(());
+                }
+                let note = TransientInfraRequeue {
+                    schema_version: 1,
+                    run_id: current.run_id.clone(),
+                    class: current.class,
+                    pull_request: current.pull_request.clone(),
+                };
+                let note = serde_json::to_string(&note).map_err(|error| {
+                    OrbitError::Execution(format!("encode infra requeue: {error}"))
+                })?;
+                self.write_candidate_requeue(
+                    &task,
+                    CandidateRequeue {
+                        actor: SYSTEM_ACTOR_LABEL.to_string(),
+                        status_event: INFRA_BLOCK_CLEARED_EVENT,
+                        status_note: format!(
+                            "transient infrastructure ({}) cleared: the probe passed, so the \
+                             block recorded at {} (run_id={}) no longer reproduces; requeue {} \
+                             of {}",
+                            current.class.as_str(),
+                            current.blocked_at.to_rfc3339(),
+                            current.run_id,
+                            current.requeues + 1,
+                            MAX_TRANSIENT_INFRA_REQUEUES,
+                        ),
+                        decision: "infra_requeue",
+                        comment: None,
+                        preserved: preserved.clone(),
+                        history: vec![TaskHistoryEntry {
+                            at: Utc::now(),
+                            by: SYSTEM_ACTOR_LABEL.to_string(),
+                            event: TRANSIENT_INFRA_REQUEUED_EVENT.to_string(),
+                            note: Some(note),
+                            from_status: None,
+                            to_status: None,
+                            operation_id: None,
+                            decision: None,
+                        }],
+                    },
+                )?;
+                cleared = Some(current);
+                Ok(())
+            })?;
+        Ok(cleared)
+    }
+
+    /// Record, once, that the cleared-infra requeue could not authenticate
+    /// `scanned`'s publication, so later ticks leave it to an operator.
+    fn refuse_transient_infra_requeue(
+        &self,
+        scanned: &TransientInfraBlockedTask,
+        reason: &str,
+    ) -> Result<(), OrbitError> {
+        tracing::warn!(
+            target: "orbit.core.transient_infra",
+            task_id = %scanned.task_id,
+            reason,
+            "a transient-infrastructure block's publication did not authenticate; it waits for \
+             an operator"
+        );
+        self.stores()
+            .tasks()
+            .with_task_write_lock(&scanned.task_id, &mut || {
+                let Some(current) = self.transient_infra_block_of(&scanned.task_id)? else {
+                    return Ok(());
+                };
+                if current.blocked_at != scanned.blocked_at || current.held.is_some() {
+                    return Ok(());
+                }
+                self.with_mutation(|| {
+                    let updated = self.stores().task_records().update(
+                        &scanned.task_id,
+                        StoreTaskUpdateParams {
                             actor: SYSTEM_ACTOR_LABEL.to_string(),
-                            status_event: INFRA_BLOCK_CLEARED_EVENT,
-                            status_note: format!(
-                                "transient infrastructure ({}) cleared: the probe passed, so the \
-                                 block recorded at {} (run_id={}) no longer reproduces; requeue {} \
-                                 of {}",
-                                current.class.as_str(),
-                                current.blocked_at.to_rfc3339(),
-                                current.run_id,
-                                current.requeues + 1,
-                                MAX_TRANSIENT_INFRA_REQUEUES,
-                            ),
-                            decision: "infra_requeue",
-                            comment: None,
-                            preserved,
-                            history: vec![TaskHistoryEntry {
+                            append_history: vec![TaskHistoryEntry {
                                 at: Utc::now(),
                                 by: SYSTEM_ACTOR_LABEL.to_string(),
-                                event: TRANSIENT_INFRA_REQUEUED_EVENT.to_string(),
-                                note: Some(note),
+                                event: TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT.to_string(),
+                                note: Some(format!("run_id={}: {reason}", scanned.run_id)),
                                 from_status: None,
                                 to_status: None,
                                 operation_id: None,
                                 decision: None,
                             }],
+                            expected_status: Some(vec![TaskStatus::Blocked]),
+                            ..Default::default()
                         },
                     )?;
-                    cleared = Some(current);
-                    Ok(())
-                });
-            if let Err(error) = attempt {
-                tracing::warn!(
-                    target: "orbit.core.transient_infra",
-                    task_id = %scanned.task_id,
-                    error = %error,
-                    "left a transient-infrastructure block in place"
-                );
-            }
-            requeued.extend(cleared);
-        }
-        Ok(requeued)
+                    Ok((
+                        updated,
+                        OrbitEvent::TaskUpdated {
+                            id: scanned.task_id.clone(),
+                        },
+                    ))
+                })?;
+                Ok(())
+            })
     }
 }
 

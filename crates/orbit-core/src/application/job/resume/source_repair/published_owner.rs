@@ -68,8 +68,9 @@ impl OrbitRuntime {
     /// Authenticate the `[BLOCKED]` PR the failure handoff of `task`'s
     /// current run published, exactly as the next run's adoption will, and
     /// return the preservation record that lets that run resume it, with the
-    /// binding it resumes. Called under the task write lock by a requeue of
-    /// the blocked task; nothing is written here.
+    /// binding it resumes. Called by a requeue of the blocked task before it
+    /// takes the task write lock, since authenticating asks the remote and
+    /// the forge; nothing is written here.
     pub(crate) fn failure_handoff_requeue_record(
         &self,
         task: &Task,
@@ -126,6 +127,18 @@ impl OrbitRuntime {
             failure_handoff: true,
         };
         Ok((preserved_entry(&record)?, binding))
+    }
+
+    /// Whether `task` has a pull request or a publication-preservation record
+    /// on record. With no failure-handoff receipt binding them, the next
+    /// admission refuses such a task (`owner_published_candidate`), so a
+    /// requeue without a discard would only strand it.
+    pub(crate) fn unbound_publication_on_record(&self, task: &Task) -> Result<bool, OrbitError> {
+        Ok(task.github_pr_number().is_some()
+            || self
+                .get_task_history(&task.id)?
+                .iter()
+                .any(|entry| entry.event == PRESERVED))
     }
 
     pub(super) fn owner_source_identity(
