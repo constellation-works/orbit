@@ -710,7 +710,7 @@ impl OrbitRuntime {
         self.reject_task_with_identity(id, note, comment, None, None)
     }
 
-    pub fn reject_task_with_identity(
+    pub(crate) fn reject_task_with_identity(
         &self,
         id: &str,
         note: String,
@@ -744,95 +744,46 @@ impl OrbitRuntime {
             #[cfg(test)]
             self.apply_transition_read_hook(id)?;
             previous_status = Some(task.status);
-            result = Some(match task.status {
-                TaskStatus::Proposed => self.with_mutation(|| {
+            // Persisted status event and emitted event per rejectable status.
+            // `review_rejected` selects `TaskReviewRejected`; the others emit
+            // `TaskProposalRejected`.
+            let (status_event, review_rejected) = match task.status {
+                TaskStatus::Proposed => ("proposal_rejected", false),
+                TaskStatus::Review => ("review_rejected", true),
+                TaskStatus::Backlog => ("backlog_rejected", false),
+                TaskStatus::InProgress => ("in_progress_rejected", false),
+                other => {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "task '{id}' is in status '{other}'; reject requires 'proposed', 'review', 'backlog', or 'in-progress'"
+                    )));
+                }
+            };
+            result = Some(self.with_mutation(|| {
                 let task = self.stores().task_records().update(
                     id,
                     StoreTaskUpdateParams {
                         actor: effective_label.clone(),
                         status: Some(TaskStatus::Rejected),
-                        status_event: Some("proposal_rejected".to_string()),
+                        status_event: Some(status_event.to_string()),
                         status_note: Some(reason.clone()),
                         append_comments: append_comments.clone(),
                         expected_status: Some(vec![task.status]),
                         ..Default::default()
                     },
                 )?;
-                Ok((
-                    task.clone(),
-                    OrbitEvent::TaskProposalRejected {
-                        id: id.to_string(),
-                        rejected_by: effective_label.clone(),
-                    },
-                ))
-                }),
-                TaskStatus::Review => self.with_mutation(|| {
-                let task = self.stores().task_records().update(
-                    id,
-                    StoreTaskUpdateParams {
-                        actor: effective_label.clone(),
-                        status: Some(TaskStatus::Rejected),
-                        status_event: Some("review_rejected".to_string()),
-                        status_note: Some(reason.clone()),
-                        append_comments: append_comments.clone(),
-                        expected_status: Some(vec![task.status]),
-                        ..Default::default()
-                    },
-                )?;
-                Ok((
-                    task.clone(),
+                let event = if review_rejected {
                     OrbitEvent::TaskReviewRejected {
                         id: id.to_string(),
                         rejected_by: effective_label.clone(),
-                    },
-                ))
-                }),
-                TaskStatus::Backlog => self.with_mutation(|| {
-                let task = self.stores().task_records().update(
-                    id,
-                    StoreTaskUpdateParams {
-                        actor: effective_label.clone(),
-                        status: Some(TaskStatus::Rejected),
-                        status_event: Some("backlog_rejected".to_string()),
-                        status_note: Some(reason.clone()),
-                        append_comments: append_comments.clone(),
-                        expected_status: Some(vec![task.status]),
-                        ..Default::default()
-                    },
-                )?;
-                Ok((
-                    task.clone(),
+                    }
+                } else {
                     OrbitEvent::TaskProposalRejected {
                         id: id.to_string(),
                         rejected_by: effective_label.clone(),
-                    },
-                ))
-                }),
-                TaskStatus::InProgress => self.with_mutation(|| {
-                let task = self.stores().task_records().update(
-                    id,
-                    StoreTaskUpdateParams {
-                        actor: effective_label.clone(),
-                        status: Some(TaskStatus::Rejected),
-                        status_event: Some("in_progress_rejected".to_string()),
-                        status_note: Some(reason.clone()),
-                        append_comments: append_comments.clone(),
-                        expected_status: Some(vec![task.status]),
-                        ..Default::default()
-                    },
-                )?;
-                Ok((
-                    task.clone(),
-                    OrbitEvent::TaskProposalRejected {
-                        id: id.to_string(),
-                        rejected_by: effective_label.clone(),
-                    },
-                ))
-                }),
-                other => Err(OrbitError::InvalidInput(format!(
-                    "task '{id}' is in status '{other}'; reject requires 'proposed', 'review', 'backlog', or 'in-progress'"
-                ))),
-            }?);
+                    }
+                };
+                Ok((task.clone(), event))
+            })?);
             Ok(())
         })?;
         let result = result.ok_or_else(|| {
