@@ -128,7 +128,10 @@ Their [scenario mapping](../crates/orbit-engine/tests/engine/SCENARIOS.md) lists
 retired nextest names and their surviving rows. PR landing fixtures use the
 engine's dev-only `with_vcs_retry_wait` hook for fixed delays: poll counts, logical
 wait budgets and remote mutations still run, while subprocess deadlines and
-cleanup remain real. Build-slot fixtures use the existing CLI supervision clock
+cleanup remain real. Completion's waited-seconds elapsed term reads the same
+prerequisite clock as the completion deadline. A fixture that advances that
+clock by each logical wait does not pick up wall-clock seconds between samples.
+Build-slot fixtures use the existing CLI supervision clock
 only after a real wrapper heartbeat proves the queue interval. This removes
 host-speed assumptions without extending timeout or cleanup budgets.
 
