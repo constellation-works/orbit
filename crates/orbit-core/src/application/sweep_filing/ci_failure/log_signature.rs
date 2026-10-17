@@ -87,9 +87,9 @@ pub(super) fn specific_command_from_log(log: &str) -> Option<String> {
     for (kind, line) in classify_log_lines(log) {
         let payload = log_payload(line);
         let raw = if kind == LineKind::RunCommand {
-            run_command_body(payload)
+            prefixed_body(payload, "##[group]run ")
         } else {
-            bracket_command_body(payload)
+            prefixed_body(payload, "[command]")
         };
         let Some(raw) = raw else {
             continue;
@@ -101,23 +101,14 @@ pub(super) fn specific_command_from_log(log: &str) -> Option<String> {
     best
 }
 
-fn run_command_body(payload: &str) -> Option<&str> {
+/// The command text after a lowercase `prefix`, matched case-insensitively and
+/// sliced from the original payload.
+fn prefixed_body<'a>(payload: &'a str, prefix: &str) -> Option<&'a str> {
     let trimmed = payload.trim();
     let lower = trimmed.to_ascii_lowercase();
-    const PREFIX: &str = "##[group]run ";
     lower
-        .starts_with(PREFIX)
-        .then(|| trimmed.get(PREFIX.len()..).unwrap_or_default().trim())
-        .filter(|body| !body.is_empty())
-}
-
-fn bracket_command_body(payload: &str) -> Option<&str> {
-    let trimmed = payload.trim();
-    let lower = trimmed.to_ascii_lowercase();
-    const PREFIX: &str = "[command]";
-    lower
-        .starts_with(PREFIX)
-        .then(|| trimmed.get(PREFIX.len()..).unwrap_or_default().trim())
+        .starts_with(prefix)
+        .then(|| trimmed.get(prefix.len()..).unwrap_or_default().trim())
         .filter(|body| !body.is_empty())
 }
 

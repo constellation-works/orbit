@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbit_common::OrbitError;
 use orbit_engine::ci_run_event::is_branch_event;
 use orbit_tools::github_cli::strip_ansi_sequences;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use super::fields::{run_order, value_string};
 use super::log_signature::error_signature;
@@ -477,6 +477,27 @@ pub(super) fn retryable_pipeline_error(
             "errors": errors,
         })
     ))
+}
+
+/// The one error entry a single failed lookup contributes to
+/// `retryable_pipeline_error`. `extra` holds that site's identifying keys and
+/// is emitted between `operation` and `retryable`.
+pub(super) fn single_retryable_error(
+    stage: &str,
+    operation: &str,
+    extra: Value,
+    message: &str,
+) -> Value {
+    let mut error = Map::from_iter([
+        ("stage".to_string(), json!(stage)),
+        ("operation".to_string(), json!(operation)),
+    ]);
+    if let Value::Object(extra) = extra {
+        error.extend(extra);
+    }
+    error.insert("retryable".to_string(), json!(true));
+    error.insert("message".to_string(), json!(message));
+    Value::Object(error)
 }
 
 pub(super) fn normalize_retryable_error(error: Value) -> Value {

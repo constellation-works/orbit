@@ -56,7 +56,8 @@ use super::cluster::FailureCluster;
 use super::evidence::{
     audit_summary, deferral_audit, deferral_is_bounded, deferred_errors, exclude_already_repaired,
     filing_audit, normalize_retryable_error, partition_retryable_errors, pending_audit,
-    repaired_audit, retryable_pipeline_error, run_id_key, split_deferred_failures,
+    repaired_audit, retryable_pipeline_error, run_id_key, single_retryable_error,
+    split_deferred_failures,
 };
 use super::fields::value_string;
 use super::grouping::cluster_failures;
@@ -79,7 +80,7 @@ const OUTCOME_DEFERRED: &str = "deferred";
 const SUPPORTED_SCHEMA_VERSION: u64 = 2;
 
 /// Provenance tag: every task this step files carries it.
-pub(crate) const CI_FAILURE_TAG: &str = "ci-failure-sweep";
+pub(super) const CI_FAILURE_TAG: &str = "ci-failure-sweep";
 /// Prefix of the dedupe tag, completed by the failure key.
 pub(crate) use orbit_types::task::CI_FAILURE_KEY_TAG_PREFIX;
 /// Title prefix on every task this step files, so a sweep-filed task is
@@ -352,12 +353,12 @@ where
         return Err(retryable_pipeline_error(
             "registration",
             &audit,
-            vec![json!({
-                "stage": "registration",
-                "operation": "cluster_failures",
-                "retryable": true,
-                "message": "current failures were discovered but none could be registered for task filing",
-            })],
+            vec![single_retryable_error(
+                "registration",
+                "cluster_failures",
+                json!({}),
+                "current failures were discovered but none could be registered for task filing",
+            )],
         ));
     }
 
@@ -462,13 +463,12 @@ where
                 retryable_pipeline_error(
                     "dedupe_lookup",
                     &audit,
-                    vec![json!({
-                        "stage": "registration",
-                        "operation": "find_covering_task",
-                        "failure_key": cluster.failure_key,
-                        "retryable": true,
-                        "message": bounded_error(&error.to_string()),
-                    })],
+                    vec![single_retryable_error(
+                        "registration",
+                        "find_covering_task",
+                        json!({"failure_key": cluster.failure_key}),
+                        &bounded_error(&error.to_string()),
+                    )],
                 )
             })?;
             // Only the disproven cover (or its owner) loses coverage. A
@@ -511,13 +511,12 @@ where
                 retryable_pipeline_error(
                     "dedupe_lookup",
                     &audit,
-                    vec![json!({
-                        "stage": "registration",
-                        "operation": "find_landed_repair",
-                        "failure_key": cluster.failure_key,
-                        "retryable": true,
-                        "message": bounded_error(&error.to_string()),
-                    })],
+                    vec![single_retryable_error(
+                        "registration",
+                        "find_landed_repair",
+                        json!({"failure_key": cluster.failure_key}),
+                        &bounded_error(&error.to_string()),
+                    )],
                 )
             })
         })
@@ -532,13 +531,12 @@ where
                         retryable_pipeline_error(
                             "pilot_candidate_lookup",
                             &audit,
-                            vec![json!({
-                                "stage": "registration",
-                                "operation": "reload_duplicate_task",
-                                "task_id": matched.task_id,
-                                "retryable": true,
-                                "message": bounded_error(&error.to_string()),
-                            })],
+                            vec![single_retryable_error(
+                                "registration",
+                                "reload_duplicate_task",
+                                json!({"task_id": matched.task_id}),
+                                &bounded_error(&error.to_string()),
+                            )],
                         )
                     })
                 })
@@ -683,14 +681,15 @@ where
             retryable_pipeline_error(
                 "task_creation",
                 &audit,
-                vec![json!({
-                    "stage": "task_creation",
-                    "operation": "orbit.task.add",
-                    "failure_key": cluster.failure_key,
-                    "run_ids": cluster.run_ids(),
-                    "retryable": true,
-                    "message": bounded_error(&error.to_string()),
-                })],
+                vec![single_retryable_error(
+                    "task_creation",
+                    "orbit.task.add",
+                    json!({
+                        "failure_key": cluster.failure_key,
+                        "run_ids": cluster.run_ids(),
+                    }),
+                    &bounded_error(&error.to_string()),
+                )],
             )
         })?;
         filed_keys.insert(cluster.failure_key.clone());
