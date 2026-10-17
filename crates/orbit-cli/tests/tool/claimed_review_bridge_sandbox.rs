@@ -1408,6 +1408,9 @@ impl OwnerRuntimeLock {
             .read(true)
             .write(true)
             .create(true)
+            // Flock token shared with the stand-in wrapper. Keep the inode;
+            // truncating is not part of taking the lock.
+            .truncate(false)
             .mode(0o600)
             .open(&path)
             .unwrap_or_else(|error| panic!("open {}: {error}", path.display()));
