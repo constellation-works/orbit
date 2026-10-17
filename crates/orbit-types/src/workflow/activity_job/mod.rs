@@ -27,6 +27,7 @@ macro_rules! deterministic_action_catalog {
     ($declare:ident) => {
         $declare! {
             core {
+                AdoptOrphanedDeliveries => "adopt_orphaned_deliveries",
                 ApplyBlockedTaskRecovery => "apply_blocked_task_recovery",
                 ApplyFindingVerification => "apply_finding_verification",
                 ApplyTaskPilotResults => "apply_task_pilot_results",

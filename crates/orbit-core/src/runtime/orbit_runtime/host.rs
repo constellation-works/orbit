@@ -17,8 +17,8 @@ use crate::runtime::host_resource::accuracy::{
 };
 use crate::runtime::host_resource::delivery::delivery_jobs;
 use crate::runtime::host_resource::forecast::{
-    AdmissionReservationRequest, ForecastDecision, HostLoadForecast, HostLoadProbe,
-    RESERVATION_TTL_MINUTES, build_forecast,
+    AdmissionReservationRequest, BASELINE_HISTORY_MINUTES, ForecastDecision, HostLoadForecast,
+    HostLoadProbe, RESERVATION_TTL_MINUTES, build_forecast,
 };
 use crate::runtime::host_resource::profile::{
     ProfileBounds, ProfileLookup, ProfileMatch, ProfileSet,
@@ -279,6 +279,7 @@ impl OrbitRuntime {
             now,
             delivery_jobs: &jobs,
             reservations_expire_before: now - Duration::minutes(RESERVATION_TTL_MINUTES),
+            resource_minutes_since: Some(now - Duration::minutes(BASELINE_HISTORY_MINUTES)),
         };
         let mut decide = Some(decide);
         let mut outcome = None;
@@ -289,7 +290,7 @@ impl OrbitRuntime {
             let forecast = build_forecast(
                 load,
                 Arc::clone(&profiles),
-                self.host_load.measure(),
+                self.host_load.measure(now),
                 horizon,
                 now,
             );
@@ -311,6 +312,7 @@ impl OrbitRuntime {
                 now,
                 delivery_jobs: &[],
                 reservations_expire_before: now - Duration::minutes(RESERVATION_TTL_MINUTES),
+                resource_minutes_since: None,
             },
             remove,
             &mut |_| Ok(Vec::new()),

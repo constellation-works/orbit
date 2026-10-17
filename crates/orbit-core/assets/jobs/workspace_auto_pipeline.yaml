@@ -168,6 +168,17 @@ spec:
                 promotion_authorized: true
                 drain_promotion: "{{ steps.approvals.output.drain_promotion }}"
 
+          # Before admission, so an adopted leaf holds its slot in this pass.
+          # Resumes an owner-local delivery leaf that died after `pr_open`,
+          # so its pull request is watched and repaired again; see the
+          # activity for what qualifies.
+          - id: adopt_orphans
+            target: activity:adopt_orphaned_deliveries
+            default_input:
+              max_active_leaf_runs: "{{ input.max_active_leaf_runs }}"
+              completion: "{{ input.completion }}"
+              auto_fix: "{{ input.auto_fix }}"
+
           - id: admissible
             target: activity:classify_workspace_auto_tasks
             default_input:

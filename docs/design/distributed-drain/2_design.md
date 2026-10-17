@@ -655,7 +655,14 @@ owns delivery:
   executor's default. `environment` and `owner_route`
   are the host's own failures: they suppress the host for the window (`crews.host_suppressed`),
   so the drain requests nothing more whatever crew a task names, and the owner holds every task
-  from that drain run. For any excluding class the owner's admission also holds the released
+  from that drain run. A busy owner is not: a leaf whose owner call lost to the owner's own
+  lock-wait deadline — an owner `lock_busy` answer, or an owner `orbit` that exited on its locked
+  store before it answered the session — releases as `transient` with `failure.owner_busy`. That
+  release excludes no crew, holds neither the task nor the host on the owner, and is outside the
+  release budget; the follower backs its requests off for 5 minutes from when the leaf ended
+  (`crews.owner_busy_backoff`, refusal `owner_busy_backoff`). Releases within 5 minutes of the
+  previous one are one episode, and a third episode in one window suppresses the host with a
+  reason naming the episode and release counts. For any excluding class the owner's admission also holds the released
   task itself from that drain run (`crew_unavailable`), so a release that reaches the owner after
   the follower built its next request is not pulled straight back. `baseline_red` releases with
   its hold, and the owner's admission withholds the task until the base moves to a commit where

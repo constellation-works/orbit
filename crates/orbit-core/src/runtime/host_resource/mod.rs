@@ -25,7 +25,7 @@ pub use pressure::{ResourceAdmission, ResourcePressureEvaluator};
 pub use probe::{
     CachedHostResourceProbe, default_host_resource_probe, host_resource_probe_with_clock,
 };
-pub(crate) use usage::{HostUsageReading, read_host_usage};
+pub(crate) use usage::{HostUsageReading, RESOURCE_SAMPLE_INTERVAL, read_host_usage};
 
 /// Native samples are reused for this interval, including failed observations.
 pub const RESOURCE_CACHE_TTL: Duration = Duration::from_secs(2);

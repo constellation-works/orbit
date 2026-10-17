@@ -32,6 +32,8 @@ pub(in crate::executor::automation::vcs) use delivery::{
 };
 pub(in crate::executor::automation) use merge::git_merge;
 pub(in crate::executor::automation::vcs) use merge::resolve_permitted_merge;
-pub(in crate::executor::automation::vcs) use open::open_or_reuse_unchecked;
 pub(in crate::executor::automation) use open::pr_open;
+pub(in crate::executor::automation::vcs) use open::{
+    close_earlier_task_pull_requests, open_or_reuse_unchecked,
+};
 pub(in crate::executor::automation) use promote::pr_promote;

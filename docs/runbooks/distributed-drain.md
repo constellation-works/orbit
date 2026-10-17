@@ -725,8 +725,25 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   drain with that error, and any completed pass resets the count. Other
   admission failures still fail the drain at once.
 - An owner that times out waiting on its task commit lock or its database
-  answers `lock_busy`. A leaf's owner reads retry it twice before failing, and
-  a step it still fails releases the claim as `transient`. When these recur,
+  answers `lock_busy`. So does an owner whose `orbit` exits on its locked store
+  before it answers the follower's SSH session (`session ended before answering
+  'initialize'; ssh stderr: ... database is locked`): the follower reads the
+  owner's own diagnostic and does not report that host as unreachable. A
+  leaf's owner reads retry it twice before failing, and a step it still fails
+  releases the claim as `transient` and marks it `owner_busy`. The owner was
+  reached and decided nothing, so the release blames neither the follower's
+  host nor its crew, and it does not count against the task's release budget.
+  The drain backs its claims off instead: for 5 minutes from when the leaf
+  ended it requests nothing (`owner_busy_backoff:` refusal,
+  `crews.owner_busy_backoff` with `until`, `episodes` and `releases`), then
+  requests again in the same window, and the owner may hand the same task
+  straight back. Releases that end within 5 minutes of the previous one, such
+  as several leaves that were running when the store locked, are one episode.
+  A third episode in one window suppresses the host for the rest of the window
+  (`host_suppressed:`, whose reason names the episode and release counts),
+  because an owner that stays busy across backoffs needs an operator. An owner
+  older than this release records the mark without honouring it, and holds the
+  task from that drain as for any other `transient` release. When these recur,
   read the owner's `orbit.jsonl`: the `still waiting for advisory file lock`
   warning names each holder of the lock by pid, section and call site, and
   `advisory file lock held past its threshold` names a section that held it
@@ -809,8 +826,11 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   it as `deferred`.
   After `environment` or `owner_route` — failures of the host itself — it requests
   no more work at all for its window (`host_suppressed:` refusal,
-  `crews.host_suppressed`); fix the host and start a new drain. In either
-  case (forge releases aside) the owner does not hand the released task back
+  `crews.host_suppressed`); fix the host and start a new drain. An owner whose
+  store stayed locked is not one of these: its `transient` release backs the
+  drain off briefly instead (`owner_busy_backoff`, above), and only repeated
+  episodes suppress the host. In either
+  case (forge and busy-owner releases aside) the owner does not hand the released task back
   to that drain, so it is not pulled straight back; another drain may still
   take it. When the leaf had
   committed a candidate, the release or block names it, and the task's next
@@ -853,8 +873,12 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   `superseded_pull_request` in that step's output (`orbit run show
   <leaf-run> --json`): `close_failed` means the earlier pull request is
   still open, so close it by hand. To start over instead, add
-  `--discard-candidate`; the earlier pull request then stays open until the
-  task reaches done, rejected or archived, which closes it.
+  `--discard-candidate`; that move closes the earlier pull request with a
+  comment once no run or claim of the task is live. Either way, whichever
+  run publishes the task's next pull request closes any other open Orbit
+  pull request of the task (`closed_stale_pull_requests` in its `pr_open`
+  output), so a re-admitted task keeps one open pull request
+  ([`[pr]` rules](../CONFIG.md#pr--pull-requests)).
 
   A leaf can also commit past the head it pushed and then fail: a
   before-landing reviewer's fix is committed in the leaf's worktree before
@@ -1140,6 +1164,27 @@ Deliberate recovery is operator-driven:
 Owner-local landing of an already-authorized handoff does not need a drain or
 ship-sweep. Followers never merge. Review-only work stays in `review` until
 explicit completion authority is recorded.
+
+### Dead leaves and their pull requests
+
+A delivery leaf can die after it opened its pull request. The recovery path
+depends on where it ran:
+
+- **Claimed leaf (follower).** Its claim's release keeps the candidate and the
+  pull request, and the task's next claim continues them on the same branch.
+  Generic resume is refused, as above, and no drain adopts the run.
+- **Owner-local leaf.** The owner drain's next pass adopts it when it holds
+  the leaf's `--complete` and `--auto-fix` grants. The pass resumes the
+  interrupted run from its checkpoints, so completion and auto-fix continue
+  on the same pull request and head. Every rule and every refusal is listed in
+  [stuck job runs](stuck-job-runs.md#a-delivery-leaf-that-died-after-opening-its-pull-request).
+
+When the task cannot be resumed, requeue it. An operator's move to `backlog`,
+or a `--discard-candidate` requeue out of `blocked`, closes the task's pull
+requests that no live run or claim is delivering. Whichever run publishes the
+task's next pull request closes any other open Orbit pull request of the task.
+Either way, the task keeps one open pull request
+([`[pr]` rules](../CONFIG.md#pr--pull-requests)).
 
 ### Requeue or salvage an interrupted review
 
@@ -1848,7 +1893,9 @@ long-lived processes.
 its window was open: the `Requests held:` line, from `admission_refusal` under
 `pipeline_state.drain_last_pass`. Its values are `circuit_open` (the failure breaker is open),
 `circuit_half_open` (it waits for the drain's claims to settle before one probe claim),
-`settlement_refused`, `no_runnable_crew`, `host_suppressed`,
+`settlement_refused`, `no_runnable_crew`, `host_suppressed`, `owner_busy_backoff`
+(a claimed leaf was released because the owner's store stayed locked; requests resume by
+themselves at the time it names),
 `host_shutdown_scheduled` (a shutdown or reboot inside
 `machine.host_shutdown_hold_minutes`), or the owner probe's refusal.
 The value is set afresh each pass. This host's resource throttle has its own `Throttled:` line,

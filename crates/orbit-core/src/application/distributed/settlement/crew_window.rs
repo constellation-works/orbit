@@ -47,6 +47,12 @@ pub struct PullCrewWindow {
     /// itself, whatever its crew [ORB-14257]. `None` while the host runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host_suppressed: Option<String>,
+    /// While set, this drain requests no claim until `until`: a claimed leaf
+    /// was released because the owner's store stayed locked, which blames
+    /// neither this host nor its crew. It lifts by itself in the same window;
+    /// repeated episodes suppress the host instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_busy_backoff: Option<OwnerBusyBackoff>,
     /// Crews the window can run once its timed exclusions lift, before
     /// `allowed` narrows them. The owner's reviewer runs as one of these:
     /// the restriction selects the implementation crews a claim may carry,
@@ -96,11 +102,13 @@ impl PullCrewWindow {
     }
 
     /// Whether the window can run nothing at all: the host is suppressed,
-    /// or every configured crew is excluded, so requesting work would only
-    /// collect idle receipts.
+    /// the drain is backing off a busy owner, or every configured crew is
+    /// excluded, so requesting work would only collect idle receipts.
     #[must_use]
     pub fn runs_nothing(&self) -> bool {
-        self.host_suppressed.is_some() || self.runnable.as_ref().is_some_and(Vec::is_empty)
+        self.host_suppressed.is_some()
+            || self.owner_busy_backoff.is_some()
+            || self.runnable.as_ref().is_some_and(Vec::is_empty)
     }
 
     /// Whether every crew this drain could otherwise run — the
@@ -146,6 +154,14 @@ impl PullCrewWindow {
         if let Some(reason) = &self.host_suppressed {
             lines.push(format!("host suppressed: {reason}"));
         }
+        if let Some(backoff) = &self.owner_busy_backoff {
+            lines.push(format!(
+                "owner busy: backed off until {} ({} of {OWNER_BUSY_EPISODE_LIMIT} episodes): {}",
+                backoff.until.to_rfc3339(),
+                backoff.episodes,
+                backoff.reason
+            ));
+        }
         if let Some(allowed) = &self.allowed {
             lines.push(format!("allowed (--allow-crew): {}", allowed.join(", ")));
         }
@@ -178,6 +194,82 @@ impl PullCrewWindow {
         }));
         lines.extend(self.auth_exclusions.iter().map(PullAuthExclusion::describe));
         lines
+    }
+}
+
+/// How long a drain requests no claim after a claimed leaf was released for
+/// the owner's busy store. Long enough for the owner's lock holder to finish,
+/// short against a drain's window.
+const OWNER_BUSY_BACKOFF_MINUTES: i64 = 5;
+
+/// How many separate busy-owner episodes in one window a drain backs off
+/// before it suppresses its host for the rest of the window. Releases that
+/// end within [`OWNER_BUSY_BACKOFF_MINUTES`] of the previous one belong to the
+/// same episode — leaves already running when the owner's store locked, which
+/// one backoff covers — so only an owner that stays busy across backoffs
+/// reaches the bound.
+pub(crate) const OWNER_BUSY_EPISODE_LIMIT: u32 = 3;
+
+/// A drain's bounded backoff from an owner whose store stayed locked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OwnerBusyBackoff {
+    /// When requests resume by themselves.
+    pub until: DateTime<Utc>,
+    /// Busy-owner episodes in this window so far, this one included.
+    pub episodes: u32,
+    /// Releases for the owner's busy store in this window so far.
+    pub releases: u32,
+    /// The latest such release.
+    pub reason: String,
+}
+
+/// Whether a drain's busy-owner releases hold it briefly or suppress its
+/// host for the rest of the window.
+pub(super) enum OwnerBusyVerdict {
+    Backoff(OwnerBusyBackoff),
+    Suppress(String),
+}
+
+/// The releases for the owner's busy store that one pull drain's claimed
+/// leaves met in its window.
+#[derive(Debug, Default)]
+pub(super) struct OwnerBusyReleases {
+    releases: Vec<(DateTime<Utc>, String)>,
+}
+
+impl OwnerBusyReleases {
+    pub(super) fn record(&mut self, at: DateTime<Utc>, reason: String) {
+        self.releases.push((at, reason));
+    }
+
+    /// The backoff from the latest release, or the host's suppression once
+    /// the releases span [`OWNER_BUSY_EPISODE_LIMIT`] episodes; `None`
+    /// without a release.
+    pub(super) fn verdict(mut self) -> Option<OwnerBusyVerdict> {
+        self.releases.sort_by_key(|(at, _)| *at);
+        let backoff = Duration::minutes(OWNER_BUSY_BACKOFF_MINUTES);
+        let mut episodes = 0_u32;
+        let mut previous: Option<DateTime<Utc>> = None;
+        for (at, _) in &self.releases {
+            if previous.is_none_or(|previous| *at >= previous + backoff) {
+                episodes += 1;
+            }
+            previous = Some(*at);
+        }
+        let releases = u32::try_from(self.releases.len()).unwrap_or(u32::MAX);
+        let (at, reason) = self.releases.pop()?;
+        if episodes >= OWNER_BUSY_EPISODE_LIMIT {
+            return Some(OwnerBusyVerdict::Suppress(format!(
+                "the owner's store stayed locked across {episodes} backoffs in this window \
+                 ({releases} releases; the bound is {OWNER_BUSY_EPISODE_LIMIT}); latest: {reason}"
+            )));
+        }
+        Some(OwnerBusyVerdict::Backoff(OwnerBusyBackoff {
+            until: at + backoff,
+            episodes,
+            releases,
+            reason,
+        }))
     }
 }
 
