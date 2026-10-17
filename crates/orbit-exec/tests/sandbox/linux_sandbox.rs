@@ -206,6 +206,146 @@ fn bwrap_child_cannot_read_credential_locations_but_writes_its_worktree() {
     );
 }
 
+/// Default Linux browser profile roots are masked, while a file outside those
+/// roots stays readable through the broad host read. The synthetic home lives
+/// under the crate directory because Bubblewrap replaces `/tmp`.
+///
+/// Chrome, Chromium and Brave defaults are under `~/.config`. Firefox's
+/// default is `~/.mozilla/firefox`. `XDG_CONFIG_HOME`, snap and flatpak copies
+/// are outside this deny and are not what this fixture creates.
+#[test]
+fn bwrap_child_cannot_read_linux_browser_profiles_but_reads_a_workspace_file() {
+    if run_in_isolated_environment(
+        "linux_sandbox::bwrap_child_cannot_read_linux_browser_profiles_but_reads_a_workspace_file",
+        &[],
+    ) {
+        return;
+    }
+    // Probe before creating the fixture. This lane bind-mounts the checkout at
+    // a second path, and a credential directory created inside it is refused
+    // as an alias before Bubblewrap starts. The owning host has no such alias.
+    let probe = probe_bwrap();
+    if !probe.available {
+        orbit_exec::report_bwrap_deferral(
+            "bwrap_child_cannot_read_linux_browser_profiles_but_reads_a_workspace_file",
+            &probe.detail,
+        );
+        return;
+    }
+
+    let home = std::path::PathBuf::from(std::env::var_os("HOME").expect("isolated home"))
+        .canonicalize()
+        .expect("canonical home");
+    let profiles = [
+        (
+            ".config/google-chrome",
+            "Default/Cookies",
+            "CHROME-COOKIE-MARKER",
+        ),
+        (
+            ".config/chromium",
+            "Default/Cookies",
+            "CHROMIUM-COOKIE-MARKER",
+        ),
+        (
+            ".config/BraveSoftware/Brave-Browser",
+            "Default/Cookies",
+            "BRAVE-COOKIE-MARKER",
+        ),
+        (
+            ".mozilla/firefox",
+            "review.default/cookies.sqlite",
+            "FIREFOX-COOKIE-MARKER",
+        ),
+    ];
+    let mut marker_paths = Vec::new();
+    for (root, relative, marker) in profiles {
+        let path = home.join(root).join(relative);
+        std::fs::create_dir_all(path.parent().expect("profile parent")).expect("browser profile");
+        std::fs::write(&path, marker).expect("browser marker");
+        marker_paths.push(path);
+    }
+
+    // Outside `/tmp` and outside the masked home, so the read-only bind of `/`
+    // is what keeps this file visible. No write grant is required.
+    let workspace_dir =
+        tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("workspace tempdir");
+    let workspace = workspace_dir
+        .path()
+        .canonicalize()
+        .expect("canonical workspace");
+    let readable = workspace.join("readable.txt");
+    std::fs::write(&readable, b"WORKSPACE-READABLE\n").expect("workspace file");
+    let resolved = profile(vec![]);
+
+    let script = format!(
+        "cat {markers} '{readable}' 2>/dev/null; echo \"chrome-listing:$(ls -A '{chrome}')\"",
+        markers = marker_paths
+            .iter()
+            .map(|path| format!("'{}'", path.display()))
+            .collect::<Vec<_>>()
+            .join(" "),
+        readable = readable.display(),
+        chrome = home.join(".config/google-chrome").display(),
+    );
+    let plan = compile_linux_bwrap_argv(
+        &resolved,
+        "/bin/sh",
+        &["-c".to_string(), script],
+        Some(&workspace),
+        false,
+    )
+    .expect("compile");
+    for root in [
+        ".config/google-chrome",
+        ".config/chromium",
+        ".config/BraveSoftware/Brave-Browser",
+        ".mozilla/firefox",
+    ] {
+        let masked = home.join(root).display().to_string();
+        assert!(
+            plan.args
+                .windows(2)
+                .any(|pair| pair[0] == "--tmpfs" && pair[1] == masked),
+            "the Linux browser root must be masked with --tmpfs: {masked} {:?}",
+            plan.args
+        );
+    }
+
+    let env = [("PATH".to_string(), "/usr/bin:/bin".to_string())];
+    let child = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
+        plan: &plan,
+        env: &env,
+        cwd: Some(&workspace),
+        stdin: Stdio::null(),
+        stdout: Stdio::piped(),
+        stderr: Stdio::piped(),
+    })
+    .expect("spawn");
+    let output = child.wait_with_output().expect("wait");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    for marker in [
+        "CHROME-COOKIE-MARKER",
+        "CHROMIUM-COOKIE-MARKER",
+        "BRAVE-COOKIE-MARKER",
+        "FIREFOX-COOKIE-MARKER",
+    ] {
+        assert!(
+            !stdout.contains(marker),
+            "browser profile contents must not reach a confined child ({marker}): {stdout}"
+        );
+    }
+    assert!(
+        stdout.contains("WORKSPACE-READABLE"),
+        "a workspace file outside the browser roots must stay readable: {stdout}"
+    );
+    assert!(
+        stdout.lines().any(|line| line == "chrome-listing:"),
+        "the masked Chrome profile root must list as empty: {stdout}"
+    );
+}
+
 /// A masked file (the clock credentials file) reads as empty from a confined
 /// child while its siblings in the same directory stay readable, and a masked
 /// file that does not exist yet is skipped rather than refusing the plan. The

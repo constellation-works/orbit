@@ -85,3 +85,65 @@ fn a_grant_inside_a_credential_dir_refuses_the_plan_instead_of_hiding_it() {
         "the refusal names the granted path: {error}"
     );
 }
+
+/// The shared deny list masks the default Linux browser profile roots and
+/// leaves a sibling file outside them unmasked. The fixture home is a private
+/// temp directory, so this does not depend on a user namespace.
+#[test]
+fn linux_browser_profile_roots_are_masked_beside_a_readable_file() {
+    if super::audit_support::run_isolated(
+        "linux_credentials::linux_browser_profile_roots_are_masked_beside_a_readable_file",
+    ) {
+        return;
+    }
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().canonicalize().expect("canonical root");
+    let home = root.join("home");
+    let readable = root.join("workspace/readable.txt");
+    fs::create_dir_all(readable.parent().expect("workspace parent")).expect("workspace");
+    fs::write(&readable, b"WORKSPACE-READABLE").expect("workspace file");
+    for relative in [
+        ".config/google-chrome/Default/Cookies",
+        ".config/chromium/Default/Cookies",
+        ".config/BraveSoftware/Brave-Browser/Default/Cookies",
+        ".mozilla/firefox/review.default/cookies.sqlite",
+    ] {
+        let path = home.join(relative);
+        fs::create_dir_all(path.parent().expect("profile parent")).expect("browser profile");
+        fs::write(&path, b"browser-marker").expect("browser marker");
+    }
+    let _environment =
+        orbit_common::test_env::scoped([("HOME", home.to_str()), ("CARGO_HOME", None)]);
+
+    let denies = orbit_exec::default_credential_read_denies();
+    let plan = compile_linux_bwrap_argv(
+        &profile(vec![]),
+        "/bin/cat",
+        &[readable.display().to_string()],
+        None,
+        false,
+    )
+    .expect("browser roots must compile into masks");
+    for browser in [
+        ".config/google-chrome",
+        ".config/chromium",
+        ".config/BraveSoftware/Brave-Browser",
+        ".mozilla/firefox",
+    ] {
+        let masked = home.join(browser);
+        assert!(
+            denies.iter().any(|deny| deny == &masked),
+            "the shared deny list must name {masked:?}: {denies:?}"
+        );
+        assert!(
+            has_pair(&plan.args, "--tmpfs", &masked),
+            "the compiled plan must mask {masked:?}: {:?}",
+            plan.args
+        );
+    }
+    assert!(
+        !has_pair(&plan.args, "--tmpfs", readable.parent().expect("workspace")),
+        "a workspace directory beside the browser roots must stay unmasked: {:?}",
+        plan.args
+    );
+}

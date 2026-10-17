@@ -5,8 +5,21 @@
 //! Bubblewrap plan hides each existing entry behind a mask mount, and a
 //! brokered plugin backend carries the same paths as read exclusions
 //! ([`default_credential_read_denies`]). Entries that only exist on one
-//! platform (`~/Library/Keychains`) are harmless on the other: a path that is
-//! absent is denied by SBPL and skipped by Bubblewrap.
+//! platform (`~/Library/Keychains`, `~/.mozilla/firefox`) are harmless on the
+//! other: a path that is absent is denied by SBPL and skipped by Bubblewrap.
+//!
+//! Linux browser entries are the defaults under `$HOME`:
+//! `~/.config/google-chrome`, `~/.config/chromium`,
+//! `~/.config/BraveSoftware/Brave-Browser` and `~/.mozilla/firefox`. Chrome,
+//! Chromium and Brave replace `~/.config` when `XDG_CONFIG_HOME` names another
+//! directory; that relocated tree is not on this list. Firefox does not follow
+//! `XDG_CONFIG_HOME`. A profile outside `~/.mozilla/firefox`, including the
+//! snap tree `~/snap/firefox/common/.mozilla/firefox` and the flatpak tree
+//! `~/.var/app/org.mozilla.firefox/.mozilla/firefox`, is not denied. Channel
+//! directories (`google-chrome-beta`, `google-chrome-unstable`), snap copies
+//! of Chrome or Chromium, other browsers, and an explicit user-data directory
+//! are outside this list. `~/.local/chromium-deps` is not a profile root and
+//! stays readable.
 //!
 //! Delivery (commit, push, PR) and owner-task transport run in the unsandboxed
 //! coordinator, never inside a confined worker, so denying these paths breaks
@@ -30,6 +43,12 @@ const HOME_CREDENTIAL_SUBPATHS: &[&str] = &[
     "Library/Application Support/Chromium",
     "Library/Application Support/BraveSoftware/Brave-Browser",
     "Library/Application Support/Firefox",
+    // Default Linux profile roots. Config-home, snap, flatpak and channel
+    // overrides are not entries; see the module docs.
+    ".config/google-chrome",
+    ".config/chromium",
+    ".config/BraveSoftware/Brave-Browser",
+    ".mozilla/firefox",
 ];
 
 /// System-wide keychain trees (macOS).
