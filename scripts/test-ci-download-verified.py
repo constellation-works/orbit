@@ -108,7 +108,8 @@ sys.exit(row.get("exit", 0))
 # This test-only python3 launcher executes the public helper's stdin unchanged.
 # The helper's fake clock, not this launcher, decides backoff and the watchdog.
 # Readiness is still an explicit fixture stage so cancellation barriers record
-# the same ordering. Ordinary regressions do not install this launcher.
+# the same ordering. Cases that need no backoff or deadline keep the real python3
+# and never install this launcher.
 DEADLINE_PYTHON = r'''
 import builtins, json, os, subprocess, sys, time
 from pathlib import Path
@@ -236,14 +237,20 @@ class VerifiedDownloadTests(unittest.TestCase):
                                str(self.destination), "--budget-seconds", str(budget)],
                               env=env, text=True, capture_output=True, timeout=8)
 
-    def deadline_events(self):
+    def deadline_events(self, *, active_limit=2):
         events = json.loads((self.root / "deadline-events.json").read_text())
         summary = json.loads((self.root / "deadline-summary.json").read_text())
-        self.assertLess(summary["active_seconds"], 2, summary)
+        self.assertLess(summary["active_seconds"], active_limit, summary)
         for event in events:
             if "pid" in event:
                 self.assertTrue(event["reaped"], event)
         return events
+
+    def backoffs(self, *, active_limit=2):
+        # Backoff sleeps run on the virtual clock, so the delays are recorded
+        # rather than waited out.
+        return [event["backoff"] for event in self.deadline_events(active_limit=active_limit)
+                if "backoff" in event]
 
     def assert_clean(self):
         self.assertEqual(list(self.root.glob(".ci-download-*")), [], "attempt bytes must be cleaned")
@@ -254,11 +261,12 @@ class VerifiedDownloadTests(unittest.TestCase):
         for code, status in rows:
             with self.subTest(curl_exit=code, http=status):
                 self.configure([response(code, status, body=b"partial old bytes"), response()])
-                result = self.invoke()
+                result = self.invoke(deadline=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(self.destination.read_bytes(), BODY)
                 calls = self.calls()
                 self.assertEqual(len(calls), 2)
+                self.assertEqual(self.backoffs(), [1])
                 self.assertNotEqual(calls[0][calls[0].index("--output") + 1],
                                     calls[1][calls[1].index("--output") + 1])
                 self.assertIn(f"curl_exit={code}", result.stderr)
@@ -289,7 +297,7 @@ class VerifiedDownloadTests(unittest.TestCase):
                      [response(6, "000"), response(body=None)]):
             with self.subTest(rows=rows):
                 self.configure(rows)
-                result = self.invoke()
+                result = self.invoke(deadline=True)
                 self.assertNotEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(len(self.calls()), len(rows))
                 self.assertFalse(self.destination.exists())
@@ -312,9 +320,10 @@ class VerifiedDownloadTests(unittest.TestCase):
 
     def test_attempt_and_wall_bounds_stop_and_reap_transport(self):
         self.configure([response(6, "000")])
-        result = self.invoke()
+        result = self.invoke(deadline=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(len(self.calls()), 3)
+        self.assertEqual(self.backoffs(active_limit=4), [1, 2])
         self.assertIn("attempt limit exhausted", result.stderr)
         self.assertFalse(self.destination.exists())
         self.assert_clean()
@@ -489,7 +498,8 @@ class VerifiedDownloadTests(unittest.TestCase):
         steps = {step.get("name"): step for step in workflow["jobs"]["ci"]["steps"]}
         tools = [("cargo-nextest", "NEXTEST", "cargo-nextest"),
                  ("cargo-deny", "CARGO_DENY", "cargo-deny-1.2.3-x86_64-unknown-linux-musl/cargo-deny"),
-                 ("uv", "UV", "uv-x86_64-unknown-linux-gnu/uv")]
+                 ("uv", "UV", "uv-x86_64-unknown-linux-gnu/uv"),
+                 ("ripgrep", "RIPGREP", "ripgrep-1.2.3-x86_64-unknown-linux-musl/rg")]
         # Execute workflow source in an isolated checkout; public helper is real.
         cargo = self.bin / "cargo"
         cargo.write_text('#!/usr/bin/env bash\nsub="$1"; shift\nexec "$CARGO_HOME/bin/cargo-$sub" "$@"\n')
@@ -521,7 +531,8 @@ class VerifiedDownloadTests(unittest.TestCase):
                                                 cwd=case_root, env=env, capture_output=True, text=True, timeout=5)
                         self.assertEqual(result.returncode == 0, mode == "valid", result.stderr)
                         self.assertEqual(len(self.calls()), 1, "never retry extraction, digest or version failures")
-                        installed = cargo_home / "bin" / tool
+                        # Archive member basename is the installed binary (rg for ripgrep).
+                        installed = cargo_home / "bin" / Path(member).name
                         if mode in ("digest", "archive"):
                             self.assertFalse(installed.exists(), "unverified bytes must never be installed")
                         tmp_dir = case_root / ".orbit/tmp"
