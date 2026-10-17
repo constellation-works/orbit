@@ -386,15 +386,20 @@ orbit gc runs --apply                 # drop that state; the run, its steps and 
 orbit gc audit --older-than-days 30   # one-off window instead of the configured one
 ```
 
-`retention.audit_days` and `retention.runs_days` default to 60 days. `gc audit`
-prunes the host-wide command audit and this workspace's run audit, then removes
-blobs that no remaining audit row, run step or pipeline state names. A blob
+`retention.audit_days` and `retention.runs_days` default to 60 days. On a large
+store, set `retention.runs_days` to 14 before enabling the sweep: that window
+reclaims much more terminal run state than 60 days (about 1.8 GiB versus about
+0.4 GiB on a store of about 6 GiB). Leave audit retention at 60 unless you
+have a reason to shorten it. `gc audit` prunes the host-wide command audit,
+this workspace's run audit, and run audit whose workspace id is no longer
+registered, then removes blobs that no remaining audit row, run step or
+pipeline state names. Another registered workspace keeps its own window. A blob
 written in the last 24 hours, or one a write in progress has marked as pending,
 is always kept. `gc runs` never touches a held run or one still in flight, so
-`orbit run show`, run history and the Cost page keep working. The same pass
-prunes the host's per-minute run and host resource history
-(`run_resource_minutes`, `host_resource_minutes`) older than 30 days, whatever
-the run window.
+`orbit run show`, run history and the Cost page keep working, and it reaches
+the same unregistered workspace ids. The same pass prunes the host's
+per-minute run and host resource history (`run_resource_minutes`,
+`host_resource_minutes`) older than 30 days, whatever the run window.
 
 Deletes run in batches of 1,000 rows, each its own short write transaction, so
 running workers are not starved. Freed pages stay inside the database file; each
@@ -405,7 +410,9 @@ report shows the freelist, and `VACUUM` returns it to the filesystem. Run
 sqlite3 ~/.orbit/orbit.db 'VACUUM;'
 ```
 
-`orbit doctor` reports what is reclaimable now (`store-retention`). To run both
+`orbit doctor` reports what is reclaimable now (`store-retention`). It warns
+when the store file is larger than `retention.store_warn_bytes` (default 1 GiB)
+and no store-gc routine is enabled, and it names the enable command. To run both
 sweeps daily, enable the seeded `store-gc` routine ([automation.md](automation.md)).
 On a replica checkout the same cron routine runs against that host's own store
 and does not call the owner. Enable it there when this machine is the only

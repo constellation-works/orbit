@@ -1784,17 +1784,20 @@ orbit routine list --workspace <replica-workspace>
 
 The run applies both plans against the local store. It deletes command-audit
 rows and per-minute resource history past their windows (those tables are
-host-wide on this machine), and this workspace's run-audit rows, the audit
+host-wide on this machine), this workspace's run-audit rows, run-audit rows
+and terminal run state whose workspace id is no longer registered, the audit
 blobs nothing still names, and the pipeline state of terminal runs older than
-`retention.runs_days`. Run rows and steps stay, and nothing is vacuumed. The
-activity does not call the owner and does not write the owner's coordination
-store. Enabling it on the owner is unchanged: that routine still prunes only
-the owner's store.
+`retention.runs_days`. Another registered workspace keeps its own window. Run
+rows and steps stay, and nothing is vacuumed. The activity does not call the
+owner and does not write the owner's coordination store. Enabling it on the
+owner is unchanged: that routine still prunes only the owner's store, plus
+unregistered ids in that same file.
 
-One enabled replica routine is enough for the host-wide tables. Each
-replicated workspace still needs its own routine, or a pass from that
-workspace, before its run audit and run state are pruned. A delivery- or
-state-triggered copy of the job stays owner work and is listed `owner-only`.
+One enabled replica routine is enough for the host-wide tables and for
+unregistered workspace ids. Each replicated workspace still needs its own
+routine, or a pass from that workspace, before its run audit and run state
+are pruned. A delivery- or state-triggered copy of the job stays owner work
+and is listed `owner-only`.
 
 ## Scheduled host shutdown or reboot
 

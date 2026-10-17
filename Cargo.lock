@@ -1919,6 +1919,7 @@ dependencies = [
  "orbit-engine",
  "orbit-exec",
  "orbit-policy",
+ "orbit-registry",
  "orbit-search",
  "orbit-store",
  "orbit-tools",

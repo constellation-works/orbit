@@ -73,13 +73,19 @@ presence. Path fields live on `WorkspacePaths` in
 
 Store retention can remove old history from this database. `retention.audit_days` and
 `retention.runs_days` default to 60 days; they define eligibility but do not delete data
-by themselves. `orbit gc audit --apply` prunes old command-audit rows, this workspace's
-run-audit rows, and audit blobs no remaining row or pending write references.
-`orbit gc runs --apply` drops pipeline state for terminal runs past the run window while
+by themselves. On a large store, set `retention.runs_days` to 14: that window reclaims
+much more terminal run state than 60 days (about 1.8 GiB versus about 0.4 GiB on a store
+of about 6 GiB). Audit retention can stay at 60. `orbit gc audit --apply` prunes old
+command-audit rows, this workspace's run-audit rows, run-audit rows whose workspace id is
+no longer registered, and audit blobs no remaining row or pending write references.
+Another registered workspace keeps its own window. `orbit gc runs --apply` drops pipeline
+state for terminal runs past the run window, including those unregistered ids, while
 keeping their run and step rows, and prunes the per-minute run and host resource history
 (`run_resource_minutes`, `host_resource_minutes`) and the admission forecasts checked
 against it (`admission_forecasts`) older than 30 days. The seeded `store_gc` routine is disabled by default,
 so cleanup happens only after an operator applies a GC command or enables that routine.
+`orbit doctor` warns when the store file exceeds `retention.store_warn_bytes` (default
+1 GiB) and that routine is not enabled. Freed pages stay in the file until `VACUUM`.
 See [runtime configuration](../CONFIG.md) for the retention settings.
 
 Policy definitions under global or workspace `resources/policies/` may use

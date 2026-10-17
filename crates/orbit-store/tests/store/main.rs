@@ -66,6 +66,7 @@ use orbit_store::contracts::KnownRedObservation;
 use orbit_store::contracts::MigrationCompatibility;
 use orbit_store::contracts::PullDestination;
 use orbit_store::contracts::RetentionSelection;
+use orbit_store::contracts::RetentionWorkspaceScope;
 use orbit_store::contracts::ReviewInvocationRecord;
 use orbit_store::contracts::ReviewRelease;
 use orbit_store::contracts::ReviewReserveRequest;

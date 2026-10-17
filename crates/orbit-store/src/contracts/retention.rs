@@ -35,6 +35,31 @@ pub struct RetentionSelection {
     pub bytes: u64,
 }
 
+/// Which workspace partitions one retention pass may touch.
+///
+/// `legacy_ids` is resolved once by the caller. `None` keeps the pass on
+/// `workspace_id` alone, which is what a caller uses when it cannot confirm
+/// the set of registered workspaces. `Some` also selects those ids. Other
+/// partitions are never implied: a registered workspace keeps its own window,
+/// including rows older than the cutoff.
+#[derive(Debug, Clone, Copy)]
+pub struct RetentionWorkspaceScope<'a> {
+    /// The workspace this command is running for. Always selected.
+    pub workspace_id: &'a str,
+    /// Extra partitions this pass may select, already limited to ids the
+    /// caller has decided are not registered.
+    pub legacy_ids: Option<&'a [String]>,
+}
+
+/// Tables whose leading `workspace_id` column a retention pass enumerates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetentionIdSource {
+    /// `v2_audit_events`.
+    RunAudit,
+    /// `job_runs`.
+    JobRuns,
+}
+
 /// The database file's page accounting.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StoreSpace {
@@ -46,53 +71,57 @@ pub struct StoreSpace {
 }
 
 pub trait StoreRetentionBackend: Send + Sync {
-    /// Rows of `table` older than `cutoff`. A run-audit selection is scoped to
-    /// `workspace_id`; the command audit is host-wide.
+    /// Distinct `workspace_id` values in `source`, read from the index that
+    /// leads with that column. The caller decides which of them are in scope.
+    fn distinct_workspace_ids(&self, source: RetentionIdSource) -> Result<Vec<String>, OrbitError>;
+
+    /// Rows of `table` older than `cutoff`. A run-audit selection covers
+    /// `scope`; the command audit is host-wide and ignores `scope`.
     fn audit_retention_selection(
         &self,
         table: AuditRetentionTable,
-        workspace_id: &str,
+        scope: RetentionWorkspaceScope<'_>,
         cutoff: DateTime<Utc>,
     ) -> Result<RetentionSelection, OrbitError>;
 
     /// Delete at most `limit` of the rows [`Self::audit_retention_selection`]
-    /// selects, in one statement. Returns how many went.
+    /// selects, in one transaction. Returns how many went.
     fn prune_audit_retention_batch(
         &self,
         table: AuditRetentionTable,
-        workspace_id: &str,
+        scope: RetentionWorkspaceScope<'_>,
         cutoff: DateTime<Utc>,
         limit: usize,
     ) -> Result<usize, OrbitError>;
 
-    /// The pipeline state kept by this workspace's terminal runs that
-    /// finished before `cutoff`. A held run still awaits review evidence that
-    /// resumes it, so it is never selected; neither is a run that is not
-    /// terminal.
+    /// Pipeline state of terminal runs in `scope` that finished before
+    /// `cutoff`. A held run still awaits review evidence that resumes it, so
+    /// it is never selected; neither is a run that is not terminal.
     fn run_state_retention_selection(
         &self,
-        workspace_id: &str,
+        scope: RetentionWorkspaceScope<'_>,
         cutoff: DateTime<Utc>,
     ) -> Result<RetentionSelection, OrbitError>;
 
     /// Drop the pipeline state of at most `limit` selected runs and stamp
     /// their `archived_at`, in one transaction. The run row and its steps stay.
+    /// Each row is deleted under its own `workspace_id`.
     fn archive_run_states_batch(
         &self,
-        workspace_id: &str,
+        scope: RetentionWorkspaceScope<'_>,
         cutoff: DateTime<Utc>,
         archived_at: DateTime<Utc>,
         limit: usize,
     ) -> Result<usize, OrbitError>;
 
     /// Call `visit` with every stored text that can name an audit blob: run
-    /// audit payloads, step responses and errors, and pipeline state. Rows of
-    /// `excluding` (a workspace and a cutoff) older than the cutoff are
-    /// skipped, so a plan sees the references a prune would leave. Reads in
-    /// short chunks, never one long read transaction.
+    /// audit payloads, step responses and errors, and pipeline state. Run-audit
+    /// rows of `excluding` older than the cutoff are skipped, so a plan sees
+    /// the references a prune would leave. Reads in short chunks, never one
+    /// long read transaction.
     fn visit_blob_reference_text(
         &self,
-        excluding: Option<(&str, DateTime<Utc>)>,
+        excluding: Option<(RetentionWorkspaceScope<'_>, DateTime<Utc>)>,
         visit: &mut dyn FnMut(&str),
     ) -> Result<(), OrbitError>;
 

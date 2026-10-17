@@ -26,6 +26,13 @@ fn store_retention_isolated(test: &str, timeout: Duration) -> Option<std::path::
     None
 }
 
+fn workspace_only(id: &str) -> RetentionWorkspaceScope<'_> {
+    RetentionWorkspaceScope {
+        workspace_id: id,
+        legacy_ids: None,
+    }
+}
+
 fn count(store: &Store, sql: &str) -> i64 {
     store
         .connection()
@@ -131,12 +138,12 @@ fn audit_retention_removes_only_rows_past_the_cutoff() {
     insert_run_audit(&store, "ws_b", cutoff - TimeDelta::days(30), 40);
 
     let command = store
-        .audit_retention_selection(AuditRetentionTable::Command, "ws_a", cutoff)
+        .audit_retention_selection(AuditRetentionTable::Command, workspace_only("ws_a"), cutoff)
         .unwrap();
     assert_eq!(command.rows, 4);
     assert!(command.bytes > 0);
     let run = store
-        .audit_retention_selection(AuditRetentionTable::Run, "ws_a", cutoff)
+        .audit_retention_selection(AuditRetentionTable::Run, workspace_only("ws_a"), cutoff)
         .unwrap();
     assert_eq!(
         run.rows, 250,
@@ -150,13 +157,13 @@ fn audit_retention_removes_only_rows_past_the_cutoff() {
 
     let (removed, _) = drain(|| {
         store
-            .prune_audit_retention_batch(AuditRetentionTable::Command, "ws_a", cutoff, 3)
+            .prune_audit_retention_batch(AuditRetentionTable::Command, workspace_only("ws_a"), cutoff, 3)
             .unwrap()
     });
     assert_eq!(removed, 4);
     let (removed, _) = drain(|| {
         store
-            .prune_audit_retention_batch(AuditRetentionTable::Run, "ws_a", cutoff, 64)
+            .prune_audit_retention_batch(AuditRetentionTable::Run, workspace_only("ws_a"), cutoff, 64)
             .unwrap()
     });
     assert_eq!(removed, 250);
@@ -197,7 +204,7 @@ fn audit_retention_removes_only_rows_past_the_cutoff() {
     for table in [AuditRetentionTable::Command, AuditRetentionTable::Run] {
         assert_eq!(
             store
-                .audit_retention_selection(table, "ws_a", cutoff)
+                .audit_retention_selection(table, workspace_only("ws_a"), cutoff)
                 .unwrap(),
             RetentionSelection::default()
         );
@@ -281,7 +288,7 @@ fn run_retention_drops_terminal_state_and_keeps_runs_and_steps() {
         .finalize_job_run(&foreign.run_id, JobRunState::Success, old, Some(1))
         .unwrap();
 
-    let plan = store.run_state_retention_selection("ws_a", cutoff).unwrap();
+    let plan = store.run_state_retention_selection(workspace_only("ws_a"), cutoff).unwrap();
     assert_eq!(plan.rows, 2, "old success and old failed only");
     assert!(plan.bytes >= 2 * 4096);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM job_run_states"), 6);
@@ -289,7 +296,7 @@ fn run_retention_drops_terminal_state_and_keeps_runs_and_steps() {
     let archived_at = Utc::now();
     let (archived, _) = drain(|| {
         store
-            .archive_run_states_batch("ws_a", cutoff, archived_at, 1)
+            .archive_run_states_batch(workspace_only("ws_a"), cutoff, archived_at, 1)
             .unwrap()
     });
     assert_eq!(archived, 2);
@@ -314,7 +321,7 @@ fn run_retention_drops_terminal_state_and_keeps_runs_and_steps() {
     }
     assert!(other.read_run_state(&foreign.run_id).unwrap().is_some());
     assert_eq!(
-        store.run_state_retention_selection("ws_a", cutoff).unwrap(),
+        store.run_state_retention_selection(workspace_only("ws_a"), cutoff).unwrap(),
         RetentionSelection::default()
     );
 }
@@ -344,7 +351,12 @@ fn million_row_run_audit_prunes_in_sub_second_batches() {
 
     let (removed, slowest) = drain(|| {
         store
-            .prune_audit_retention_batch(AuditRetentionTable::Run, "ws_a", cutoff, BATCH_ROWS)
+            .prune_audit_retention_batch(
+            AuditRetentionTable::Run,
+            workspace_only("ws_a"),
+            cutoff,
+            BATCH_ROWS,
+        )
             .unwrap()
     });
     assert_eq!(removed, 500_000);

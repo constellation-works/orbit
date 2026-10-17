@@ -13,14 +13,14 @@ use super::super::{
     ConfigSection, DEFAULT_WORKFLOW_BASE_BRANCH, SECURITY_ALERT_SEVERITIES,
 };
 use super::resolve::{
-    DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES, DEFAULT_WORKER_MEMORY_HIGH, DEFAULT_WORKER_MEMORY_MAX,
-    default_log_rotation, default_pass_list, normalize_logins, normalize_pass_list, read_optional,
-    resolve_bounded_minutes, resolve_build_output_env, resolve_choice, resolve_cpu_light_leaves,
-    resolve_distributed_completion, resolve_host_shutdown_hold_minutes, resolve_machine_id,
-    resolve_machine_name, resolve_material_fields, resolve_memory_limit, resolve_non_empty,
-    resolve_optional_choice, resolve_optional_non_empty, resolve_percent, resolve_reclaim,
-    resolve_retention_days, resolve_task_prefix, resolve_validation_path_mode,
-    resolve_worker_tasks_max,
+    DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES, DEFAULT_STORE_WARN_BYTES, DEFAULT_WORKER_MEMORY_HIGH,
+    DEFAULT_WORKER_MEMORY_MAX, default_log_rotation, default_pass_list, normalize_logins,
+    normalize_pass_list, read_optional, resolve_bounded_minutes, resolve_build_output_env,
+    resolve_choice, resolve_cpu_light_leaves, resolve_distributed_completion,
+    resolve_host_shutdown_hold_minutes, resolve_machine_id, resolve_machine_name,
+    resolve_material_fields, resolve_memory_limit, resolve_non_empty, resolve_optional_choice,
+    resolve_optional_non_empty, resolve_percent, resolve_reclaim, resolve_retention_days,
+    resolve_task_prefix, resolve_validation_path_mode, resolve_worker_tasks_max,
 };
 use crate::memory_limit::MemoryLimit;
 use crate::operation;
@@ -446,9 +446,15 @@ define_config_settings! {
     },
     retention_runs_days: u32 => u32 {
         key: "retention.runs_days", value_type: "integer",
-        description: "Days after a terminal job run finishes before `orbit gc runs` may drop its pipeline state; the run row and its steps stay (1..=36500; default 60).",
+        description: "Days after a terminal job run finishes before `orbit gc runs` may drop its pipeline state; the run row and its steps stay (1..=36500; default 60). On a large store, 14 reclaims much more run state than 60.",
         section: ConfigSection::Housekeeping, order: 110,
         resolve: |raw: Option<u32>| resolve_retention_days(raw, "retention.runs_days"),
+    },
+    retention_store_warn_bytes: u64 => u64 {
+        key: "retention.store_warn_bytes", value_type: "integer",
+        description: "Warn from `orbit doctor` when the host store file is larger than this many bytes and this workspace has no enabled store-gc routine (default 1073741824, 1 GiB). Zero warns for any non-empty file. The check stays quiet under the threshold or while a store-gc routine is enabled.",
+        section: ConfigSection::Housekeeping, order: 115,
+        resolve: |raw: Option<u64>| Ok::<_, OrbitError>(raw.unwrap_or(DEFAULT_STORE_WARN_BYTES)),
     },
     worktree_reclaim: Vec<String> => Vec<String> {
         key: "worktree.reclaim", value_type: "array<string>",

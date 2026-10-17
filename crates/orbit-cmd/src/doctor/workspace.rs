@@ -1,3 +1,8 @@
+use std::fs;
+
+use orbit_common::protocol::yaml::parse_routine_yaml;
+use orbit_config::{ConfigRoots, ResolvedConfig};
+
 use super::system::human_bytes;
 use super::*;
 
@@ -404,6 +409,9 @@ pub(super) fn doctor_check_task_reservations(runtime: &OrbitRuntime) -> Workspac
 /// What store retention could reclaim now under `retention.audit_days` and
 /// `retention.runs_days`. Measured without the blob reference scan, so the
 /// blob figure is an upper bound; `orbit gc audit` reports the exact one.
+///
+/// Warns when the store file is larger than `retention.store_warn_bytes` and
+/// this workspace has no enabled routine targeting `store_gc_pipeline`.
 pub(super) fn doctor_check_store_retention(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     const CHECK: &str = "store-retention";
     let overview = match runtime.store_retention_overview() {
@@ -416,23 +424,129 @@ pub(super) fn doctor_check_store_retention(runtime: &OrbitRuntime) -> WorkspaceD
             );
         }
     };
-    check(
-        CHECK,
-        WorkspaceDoctorStatus::Ok,
-        format!(
-            "reclaimable: audit {} rows ({}) older than {} days; run state of {} terminal runs \
-             ({}) older than {} days; up to {} of {} audit blobs; store file {} with {} free. \
-             Plan with `orbit gc audit` and `orbit gc runs`, apply with `--apply`",
-            overview.audit_rows,
-            human_bytes(overview.audit_bytes),
-            overview.audit_days,
-            overview.run_states,
-            human_bytes(overview.run_state_bytes),
-            overview.runs_days,
-            human_bytes(overview.blob_bytes_past_cutoff),
-            human_bytes(overview.blob_bytes),
-            human_bytes(overview.store.file_bytes),
-            human_bytes(overview.store.freelist_bytes),
-        ),
+    let message = format!(
+        "reclaimable: audit {} rows ({}) older than {} days; run state of {} terminal runs \
+         ({}) older than {} days; up to {} of {} audit blobs; store file {} with {} free. \
+         Plan with `orbit gc audit` and `orbit gc runs`, apply with `--apply`",
+        overview.audit_rows,
+        human_bytes(overview.audit_bytes),
+        overview.audit_days,
+        overview.run_states,
+        human_bytes(overview.run_state_bytes),
+        overview.runs_days,
+        human_bytes(overview.blob_bytes_past_cutoff),
+        human_bytes(overview.blob_bytes),
+        human_bytes(overview.store.file_bytes),
+        human_bytes(overview.store.freelist_bytes),
+    );
+    let threshold = match store_warn_bytes(runtime) {
+        Ok(threshold) => threshold,
+        Err(error) => {
+            return check(
+                CHECK,
+                WorkspaceDoctorStatus::Warning,
+                format!("cannot read retention.store_warn_bytes: {error}"),
+            );
+        }
+    };
+    let routine = match store_gc_routine(runtime) {
+        Ok(routine) => routine,
+        Err(error) => {
+            return check(
+                CHECK,
+                WorkspaceDoctorStatus::Warning,
+                format!("cannot tell whether store GC is enabled: {error}"),
+            );
+        }
+    };
+    if overview.store.file_bytes > threshold && !routine.enabled {
+        return actionable_check(
+            CHECK,
+            WorkspaceDoctorStatus::Warning,
+            format!(
+                "store file {} exceeds retention.store_warn_bytes ({}). No store-gc routine is \
+                 enabled. {message} On a large store, set retention.runs_days to 14 to reclaim \
+                 more terminal run state than the 60-day default. VACUUM returns freed pages.",
+                human_bytes(overview.store.file_bytes),
+                human_bytes(threshold),
+            ),
+            store_gc_remediation(runtime, routine.name.as_deref()),
+        );
+    }
+    check(CHECK, WorkspaceDoctorStatus::Ok, message)
+}
+
+fn store_warn_bytes(runtime: &OrbitRuntime) -> Result<u64, OrbitError> {
+    let config = ResolvedConfig::load(&ConfigRoots::new(
+        runtime.global_root(),
+        runtime.shared_root(),
+    ))?;
+    Ok(config.snapshot.retention_store_warn_bytes)
+}
+
+struct StoreGcRoutine {
+    enabled: bool,
+    name: Option<String>,
+}
+
+/// An enabled routine is one whose definition says `enabled: true`. A pause
+/// is temporary and does not count as disabled.
+fn store_gc_routine(runtime: &OrbitRuntime) -> Result<StoreGcRoutine, OrbitError> {
+    let dir = runtime.paths().orbit_dir.join("routines");
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(StoreGcRoutine {
+                enabled: false,
+                name: None,
+            });
+        }
+        Err(error) => return Err(OrbitError::Io(error.to_string())),
+    };
+    let mut found = StoreGcRoutine {
+        enabled: false,
+        name: None,
+    };
+    for entry in entries {
+        let path = entry
+            .map_err(|error| OrbitError::Io(error.to_string()))?
+            .path();
+        let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else {
+            continue;
+        };
+        if extension != "yaml" && extension != "yml" {
+            continue;
+        }
+        let raw = fs::read_to_string(&path).map_err(|error| OrbitError::Io(error.to_string()))?;
+        let Ok(definition) = parse_routine_yaml(&raw) else {
+            continue;
+        };
+        if definition.target.job_name() != "store_gc_pipeline" {
+            continue;
+        }
+        if definition.enabled {
+            found.enabled = true;
+            found.name = Some(definition.name);
+        } else if found.name.is_none() {
+            found.name = Some(definition.name);
+        }
+    }
+    Ok(found)
+}
+
+fn store_gc_remediation(runtime: &OrbitRuntime, name: Option<&str>) -> String {
+    let name = name.unwrap_or("store-gc");
+    let input = serde_json::json!({
+        "workspace": runtime.paths().repo_root.display().to_string(),
+        "action": "toggle",
+        "name": name,
+        "expected_enabled": false,
+        "enabled": true,
+        "target": "job:store_gc_pipeline",
+    });
+    format!(
+        "Review `orbit gc audit` and `orbit gc runs`, then set `enabled: true` in \
+         `.orbit/routines/store_gc.yaml` (`{name}`), or run \
+         `orbit tool run orbit.routine.control --input '{input}'`."
     )
 }
