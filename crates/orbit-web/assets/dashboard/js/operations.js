@@ -2629,10 +2629,12 @@ function fetchAndRenderAutoDrain() {
   const scope = "/api/workflows/auto/readiness";
   const path = `${scope}${query}`;
   const visit = captureWorkspaceVisit();
-  return Promise.all([
-    requestPanel("auto-drain-body", scope, () => fetchJson(path), renderAutoDrain, "auto-drain-phase-label"),
-    fetchFleetDrains(),
-  ]).then(([, payload]) => { if (visit.isCurrent()) renderFleetIndicator(payload); });
+  const readiness = requestPanel("auto-drain-body", scope, () => fetchJson(path), renderAutoDrain, "auto-drain-phase-label");
+  const fleet = fetchFleetDrains().then(payload => {
+    if (visit.isCurrent()) renderFleetIndicator(payload);
+    return payload;
+  });
+  return Promise.all([readiness, fleet]).then(() => {});
 }
 
 // The chrome always names the fleet, including when an idle default workspace
