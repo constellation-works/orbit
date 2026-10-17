@@ -272,7 +272,7 @@ fn repair_task_params(
         }],
         tags: vec![BASELINE_RED_REPAIR_TAG.to_string()],
         priority: TaskPriority::High,
-        complexity: TaskComplexity::Unassessed,
+        complexity: TaskComplexity::Medium,
         task_type: Some(TaskType::Bug),
         status: Some(TaskStatus::Backlog),
         system_created: true,
