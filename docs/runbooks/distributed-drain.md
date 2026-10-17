@@ -1197,8 +1197,14 @@ one. From then on:
     or the landing branch has moved past that base and the same job passes
     on its tip. The landing updates the pull request's branch from the
     landing branch once and waits for the checks on the new head. No agent
-    runs. The owner merges that head only when it is a clean merge of the
-    accepted candidate with a commit already on the landing branch.
+    runs. If the same check still fails on that new head and the same job
+    passes on the base tip, the failure is the candidate's: the landing
+    stops for the one automatic repair, and the stop evidence carries the
+    failed job, its signature and a log excerpt. A repair that is already
+    spent stops in `review` instead. A base that has not moved, and is still
+    red, stops in `review` without a repair. The owner merges that head only
+    when it is a clean merge of the accepted candidate with a commit already
+    on the landing branch.
     When the owner checkout has `origin`, adopting a newly observed updated
     head requires a successful fresh fetch of the landing branch, even if
     the initial fetch failed and the head and base are cached. A failed
