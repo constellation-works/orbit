@@ -45,8 +45,8 @@ use orbit_types::workflow::activity_job::{
     ActivityV2, ActivityV2Spec, AgentLoopSpec, JobV2, OnDenial, Provider,
 };
 use orbit_types::workflow::{
-    JobRunState, JobTargetType, PROVIDER_FAILURE_HOLD_EVENT, PipelineState, ProviderFailureClass,
-    ProviderFailureHold, provider_failure_text,
+    JobRunState, JobTargetType, PROVIDER_FAILURE_HOLD_EVENT, PROVIDER_FAILURE_HOLD_MARKER,
+    PipelineState, ProviderFailureClass, ProviderFailureHold, provider_failure_text,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -89,6 +89,24 @@ model = "luna-model"
 /// crew resolves none.
 const NO_CREWS: &str = "[workflow]\n\n[crews]\n";
 
+/// One Codex crew and a Claude default, so a host exclusion of `sol` leaves
+/// the pool with nothing and must not fall through to `opus`.
+const SOLE_SOL: &str = r#"[workflow]
+default_crew = "opus"
+medium_complexity_crews = ["sol"]
+
+[crews.sol]
+provider = "codex"
+model = "sol-model"
+
+[crews.opus]
+provider = "claude"
+model = "opus-model"
+"#;
+
+/// The host whose login the burst below treats as expired.
+const FAILED_HOST: &str = "hm_failed_host";
+
 /// What Codex wrote when its content filter ended a review of sandbox code
 /// (run jrun-20261006-0104-c24).
 const CONTENT_FILTER: &str = "This content was flagged for possible cybersecurity risk. If this \
@@ -103,13 +121,20 @@ pub(super) struct Fixture {
 }
 
 pub(super) fn fixture(config: &str) -> Fixture {
+    fixture_on(config, None)
+}
+
+/// [`fixture`] whose runtime records `machine` as the host it executes on.
+fn fixture_on(config: &str, machine: Option<&str>) -> Fixture {
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let repo = root.path().join("repo");
     std::fs::create_dir_all(&global).unwrap();
     std::fs::create_dir_all(repo.join(".orbit")).unwrap();
     std::fs::write(repo.join(".orbit/config.toml"), config).unwrap();
-    let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
+        .unwrap()
+        .with_automation_machine_identity(machine.map(str::to_string));
     let jobs = orbit_store::compose::workspace_job_run_store(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
@@ -304,6 +329,10 @@ fn capacity_and_unavailability_hold_the_task_with_the_run_crew_excluded() {
             "only the run's crew: {hold:?}"
         );
         assert_eq!(hold.run_id, run);
+        assert_eq!(
+            hold.machine, None,
+            "no machine identity leaves the hold global: {hold:?}"
+        );
         assert!(
             hold.not_before > before + Duration::minutes(10),
             "a not-before backoff: {hold:?}"
@@ -331,6 +360,7 @@ fn capacity_and_unavailability_hold_the_task_with_the_run_crew_excluded() {
         fx.fail(&second, &step_failure(class, detail));
         let narrowed = fx.last_hold(&task);
         assert_eq!(narrowed.excluded_crews, ["luna", "sol"], "{narrowed:?}");
+        assert_eq!(narrowed.machine, None, "{narrowed:?}");
         assert!(narrowed.not_before > hold.not_before, "{narrowed:?}");
         assert!(fx.admitted(&task, &["opus"]));
         assert_eq!(fx.exclusion(&task, &["sol", "luna"])["crew"], "opus");
@@ -706,10 +736,152 @@ pub(super) fn implementation_job(provider: Provider) -> JobV2 {
     job
 }
 
+/// [ORB-16323] One unavailable failure on this host stops the drain admitting
+/// that crew again. A sibling whose pool has another crew is drawn onto it;
+/// a sibling whose pool does not waits, and does not fall through to the
+/// default. Capacity and refusal on the same host stay on the failed task.
+/// A stored unavailable hold with no machine still applies to that task only.
+fn an_unavailable_hold_on_this_host_stops_the_drain_admitting_that_crew() {
+    let fx = fixture_on(MIXED_CREWS, Some(FAILED_HOST));
+    let failed = fx.task("sol");
+    let run = fx.admit(&failed, "sol");
+    fx.fail(
+        &run,
+        &step_failure(
+            ProviderFailureClass::Unavailable,
+            "codex provider authentication failure (HTTP 401): token expired",
+        ),
+    );
+    let hold = fx.last_hold(&failed);
+    assert_eq!(hold.machine.as_deref(), Some(FAILED_HOST), "{hold:?}");
+    assert_eq!(hold.excluded_crews, ["sol"]);
+    assert!(
+        fx.admitted(&failed, &["luna"]),
+        "the task that owns the hold still draws the other pool member"
+    );
+
+    let sibling = fx.task("sol");
+    assert!(
+        fx.admitted(&sibling, &["luna"]),
+        "a later task draws the other pooled crew"
+    );
+    let excluded = fx.exclusion(&sibling, &["sol"]);
+    assert_eq!(excluded["reason"], "crew_not_allowed", "{excluded}");
+    assert_eq!(excluded["crew"], "luna", "the held draw: {excluded}");
+
+    let waiting = fixture_on(SOLE_SOL, Some(FAILED_HOST));
+    let failed = waiting.task("sol");
+    let run = waiting.admit(&failed, "sol");
+    waiting.fail(
+        &run,
+        &step_failure(
+            ProviderFailureClass::Unavailable,
+            "codex provider authentication failure (HTTP 401): token expired",
+        ),
+    );
+    assert!(
+        waiting.admitted(&failed, &["opus"]),
+        "the owning task still falls back to the workspace default"
+    );
+    let sibling = waiting.task("sol");
+    assert!(
+        !waiting.admitted(&sibling, &[]),
+        "a pool with no other crew waits"
+    );
+    assert!(
+        !waiting.admitted(&sibling, &["opus"]),
+        "the host exclusion does not fall through to the default"
+    );
+    let deferred = waiting.exclusion(&sibling, &[]);
+    assert_eq!(deferred["reason"], "provider_backoff", "{deferred}");
+    let detail = deferred["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("on this host")
+            && detail.contains(&run)
+            && detail.contains("sol")
+            && detail.contains("provider_unavailable"),
+        "the deferral names the host, the run and the crew: {detail}"
+    );
+
+    // Capacity and refusal stay on the task that failed. A later task of the
+    // same crew is still admitted on this host.
+    let capacity =
+        "cli subprocess exited with code 1: codex provider reported the selected model at \
+         capacity: Selected model is at capacity. Please try a different model."
+            .to_string();
+    let refusal = format!(
+        "cli subprocess exited with code 1: codex provider refused the request: {CONTENT_FILTER}"
+    );
+    for (class, detail) in [
+        (ProviderFailureClass::Capacity, capacity),
+        (ProviderFailureClass::Refusal, refusal),
+    ] {
+        let fx = fixture_on(MIXED_CREWS, Some(FAILED_HOST));
+        let failed = fx.task("sol");
+        let run = fx.admit(&failed, "sol");
+        fx.fail(&run, &step_failure(class, &detail));
+        let hold = fx.last_hold(&failed);
+        assert_eq!(hold.class, class);
+        assert_eq!(hold.machine, None, "{class:?} is not host-scoped: {hold:?}");
+        let sibling = fx.task("sol");
+        assert!(
+            fx.admitted(&sibling, &["sol"]),
+            "{class:?} does not stop the drain admitting that crew to another task"
+        );
+    }
+
+    // A hold stored before `machine` existed still excludes its own task and
+    // does not spread to the rest of the backlog.
+    let stored = fixture_on(MIXED_CREWS, Some(FAILED_HOST));
+    let task = stored.task("sol");
+    let not_before = Utc::now() + Duration::minutes(30);
+    let note = format!(
+        "{PROVIDER_FAILURE_HOLD_MARKER} {}",
+        json!({
+            "class": "unavailable",
+            "provider": "codex",
+            "excluded_crews": ["sol"],
+            "not_before": not_before.to_rfc3339(),
+            "run_id": "jrun-stored-without-machine",
+        })
+    );
+    for (status, event, note) in [
+        (TaskStatus::InProgress, None, None),
+        (
+            TaskStatus::Backlog,
+            Some(PROVIDER_FAILURE_HOLD_EVENT.to_string()),
+            Some(note),
+        ),
+    ] {
+        stored
+            .runtime
+            .apply_task_automation_update(
+                &task,
+                TaskAutomationUpdate {
+                    status: Some(status),
+                    status_event: event,
+                    status_note: note,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    let hold = stored.last_hold(&task);
+    assert_eq!(hold.machine, None, "{hold:?}");
+    assert!(stored.admitted(&task, &["luna"]));
+    assert_eq!(stored.exclusion(&task, &["sol"])["crew"], "luna");
+    let sibling = stored.task("sol");
+    assert!(
+        stored.admitted(&sibling, &["sol"]),
+        "a hold with no machine stays on its own task"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     capacity_and_unavailability_hold_the_task_with_the_run_crew_excluded_scenarios,
     capacity_and_unavailability_hold_the_task_with_the_run_crew_excluded,
     a_hold_that_excludes_every_crew_defers_the_task_until_not_before,
-    a_providerless_failure_with_no_crew_to_exclude_defers_until_not_before
+    a_providerless_failure_with_no_crew_to_exclude_defers_until_not_before,
+    an_unavailable_hold_on_this_host_stops_the_drain_admitting_that_crew
 );

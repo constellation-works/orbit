@@ -65,6 +65,10 @@ pub(super) fn backlog_snapshot_in_mode(
     pools: &CapturedCrewPools,
     mode: ShipMode,
 ) -> Result<BacklogSnapshot, DispatchError> {
+    // One read of this host's unavailable holds for every task below. Later
+    // draws on this machine skip a crew whose login just failed; another
+    // machine's admission does not consult this cache.
+    let _host_unavailable = runtime.enter_host_unavailable_scope();
     // The population is materialized once, by moving the selection into the
     // lookup. Everything below borrows from it: the backlog is a vector of
     // references and the snapshot hands back IDs.

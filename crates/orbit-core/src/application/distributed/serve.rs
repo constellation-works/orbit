@@ -676,7 +676,8 @@ impl crate::OrbitRuntime {
         // A native-host finding holds only an executor whose OS or machine
         // cannot produce the evidence, so it is judged against the requesting
         // executor.
-        let machine_id = Some(identity.location().machine_id.as_str());
+        let machine = identity.location().machine_id.as_str();
+        let machine_id = Some(machine);
         for task in &backlog {
             let comments = self.get_task_comments(&task.id)?;
             match self
@@ -712,7 +713,9 @@ impl crate::OrbitRuntime {
             // executor that would run it as an excluded crew: its own, or the
             // executor's default for a task naming none. Another executor, or
             // this owner's own draw, takes it on a crew the hold leaves.
-            if let Some(why) = self.pull_provider_hold(task, request) {
+            // [ORB-16323] An unavailable hold that names a machine applies
+            // only when this executor is that machine.
+            if let Some(why) = self.pull_provider_hold(task, request, machine) {
                 admission_holds.entry(task.id.clone()).or_insert(why);
             }
         }
@@ -764,8 +767,20 @@ impl crate::OrbitRuntime {
 
     /// Why a standing provider hold keeps `task` from the executor `request`
     /// comes from, or `None` when the crew it would run as is not excluded.
-    fn pull_provider_hold(&self, task: &Task, request: &AdmissionRequest) -> Option<String> {
+    ///
+    /// An unavailable hold that names a machine applies only when
+    /// `machine_id` is that machine. Every other hold applies on every
+    /// executor, including an unavailable hold stored with no machine.
+    fn pull_provider_hold(
+        &self,
+        task: &Task,
+        request: &AdmissionRequest,
+        machine_id: &str,
+    ) -> Option<String> {
         let hold = self.admission_provider_hold(task)?;
+        if !hold.applies_on(Some(machine_id)) {
+            return None;
+        }
         let crew = task
             .crew
             .as_deref()

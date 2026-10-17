@@ -71,6 +71,17 @@ waiting or the host is throttled, and 60 s otherwise. A pull drain instead
 requests one claim per free slot from the owner, and the owner chooses the
 task (`pull_drain/refill/mod.rs`, `pull_drain/drain/refill_pass.rs`).
 
+**Provider holds.** A provider-failure hold on a backlog task excludes crews
+until `not_before` (`application/task/provider_hold.rs`). Capacity, refusal
+and usage-limit holds apply on every host. An unavailable hold records the
+machine whose run failed and applies only there [ORB-16323], including to
+later tasks on that host: the drain draws another complexity-pool crew or,
+when the pool has none left, waits with `provider_backoff` instead of the
+workspace default. The task that owns the hold still falls back to that
+default. A stored unavailable hold with no machine still applies everywhere,
+and only to its own task. Pull admission uses the same machine check, so a
+follower is not deferred by another host's expired login.
+
 **The reactive guard.** The resource throttle (`runtime/host_resource/`)
 samples host CPU, memory and disk every 5 s while admission is being
 consulted, and stops 300 s after the last consult.

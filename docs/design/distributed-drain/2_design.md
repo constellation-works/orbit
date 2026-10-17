@@ -652,7 +652,12 @@ owns delivery:
   task (every crew of the refusing provider, 24 h base backoff); its own admission draws another
   provider's crew or defers the task with `provider_backoff`. The owner's pull admission defers
   (`deferred_conflicts`) any held task an executor would run as an excluded crew, its own or the
-  executor's default. `environment` and `owner_route`
+  executor's default. An unavailable hold records the machine whose login failed [ORB-16323].
+  Pull admission applies that hold only when the requesting executor is that machine, so a
+  healthy follower is not deferred for another host's expired login. Capacity, limit and
+  refusal holds, and an unavailable hold stored with no machine, still defer every executor
+  that would run an excluded crew. On the failing machine the local drain also stops admitting
+  that crew for the backoff: another pooled crew is drawn, and a task with none waits. `environment` and `owner_route`
   are the host's own failures: they suppress the host for the window (`crews.host_suppressed`),
   so the drain requests nothing more whatever crew a task names, and the owner holds every task
   from that drain run. For any excluding class the owner's admission also holds the released

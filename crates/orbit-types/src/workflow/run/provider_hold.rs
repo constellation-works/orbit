@@ -9,6 +9,10 @@
 //! crew from what is left — another member of its complexity pool, or the
 //! workspace default — and defers the task when nothing is left.
 //!
+//! An unavailable hold may name the machine whose run failed. That hold
+//! excludes its crews only on that machine. A hold with no machine, and
+//! every capacity, limit and refusal hold, still applies on every machine.
+//!
 //! The note carries the hold as JSON straight after
 //! [`PROVIDER_FAILURE_HOLD_MARKER`], so the writer (run finalization) and the
 //! readers (admission, the next hold) share one text form.
@@ -211,6 +215,11 @@ pub struct ProviderFailureHold {
     pub not_before: DateTime<Utc>,
     /// The run whose failure placed the hold.
     pub run_id: String,
+    /// The machine whose run failed, when this is an unavailable hold.
+    /// Absent on a hold stored before machines were recorded, and on every
+    /// other class. Those holds still apply on every machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
 }
 
 impl ProviderFailureHold {
@@ -242,5 +251,20 @@ impl ProviderFailureHold {
     #[must_use]
     pub fn excludes(&self, crew: &str) -> bool {
         self.excluded_crews.iter().any(|excluded| excluded == crew)
+    }
+
+    /// Whether this hold excludes crews for an admission on `machine`.
+    ///
+    /// An unavailable hold that names a machine applies only when the
+    /// admitting machine is that one. A missing `machine` — a hold stored
+    /// before this field existed, or a host that had no identity when the
+    /// hold was placed — still applies everywhere, as do capacity, limit
+    /// and refusal holds even when a machine is present.
+    #[must_use]
+    pub fn applies_on(&self, machine: Option<&str>) -> bool {
+        match self.machine.as_deref() {
+            Some(held) if self.class == ProviderFailureClass::Unavailable => machine == Some(held),
+            _ => true,
+        }
     }
 }

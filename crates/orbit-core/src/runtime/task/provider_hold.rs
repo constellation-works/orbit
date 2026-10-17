@@ -12,9 +12,10 @@
 //! crew of the refusing provider, since the content would be refused again on
 //! any of them. A usage limit belongs to the provider account, so it excludes
 //! every crew of that provider too, or only those on the model the limit
-//! names [ORB-14695]. The exclusion lasts until the hold's `not_before`: the
-//! reset a limit reported, else a backoff that grows with each consecutive
-//! hold.
+//! names [ORB-14695]. An unavailable hold records this host's machine and
+//! applies only there [ORB-16323]; the other classes stay provider-wide.
+//! The exclusion lasts until the hold's `not_before`: the reset a limit
+//! reported, else a backoff that grows with each consecutive hold.
 //!
 //! The hold is the task's latest status decision; any later status change
 //! supersedes it. While it stands, admission draws the task's crew from the
@@ -216,12 +217,24 @@ impl OrbitRuntime {
         }
         excluded.sort();
         excluded.dedup();
+        // [ORB-16323] Only an unavailable login is a property of this host.
+        // Capacity, limit and refusal stay account-wide, and a host with no
+        // identity leaves the machine unset so the hold keeps today's scope.
+        // A still-standing previous hold contributes its crews, not its
+        // machine: a later capacity hold must not become host-scoped, and a
+        // later unavailable hold must name the machine that just failed.
+        let machine = if class == ProviderFailureClass::Unavailable {
+            self.automation_machine_identity().map(ToOwned::to_owned)
+        } else {
+            None
+        };
         Ok(ProviderFailureHold {
             class,
             provider,
             excluded_crews: excluded,
             not_before,
             run_id: run_id.to_string(),
+            machine,
         })
     }
 }
@@ -272,12 +285,18 @@ pub(crate) fn provider_failure_hold_update(
     hold: &ProviderFailureHold,
 ) -> TaskAutomationUpdate {
     let provider = hold.provider.as_deref().unwrap_or("its provider");
+    let host = match (hold.class, hold.machine.as_deref()) {
+        (ProviderFailureClass::Unavailable, Some(machine)) => {
+            format!(", recorded on host `{machine}`")
+        }
+        _ => String::new(),
+    };
     TaskAutomationUpdate {
         status: Some(TaskStatus::Backlog),
         status_event: Some(PROVIDER_FAILURE_HOLD_EVENT.to_string()),
         status_note: Some(hold.text(&format!(
-            "workflow run held: job={job_id}, run_id={}; {} on {provider}, so the task waits in \
-             the backlog with crews {} excluded until {}; another crew may take it before then",
+            "workflow run held: job={job_id}, run_id={}; {} on {provider}{host}, so the task waits \
+             in the backlog with crews {} excluded until {}; another crew may take it before then",
             hold.run_id,
             hold.class.as_str(),
             hold.excluded_crews.join(", "),

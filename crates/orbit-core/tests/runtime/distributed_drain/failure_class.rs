@@ -1446,6 +1446,7 @@ model = \"gpt-luna\"
         );
         let hold = ProviderFailureHold::from_text(note).expect("the note carries the hold");
         assert_eq!(hold.class, ProviderFailureClass::Refusal);
+        assert_eq!(hold.machine, None, "a refusal stays account-wide: {hold:?}");
         assert_eq!(hold.provider.as_deref(), Some("codex"));
         assert_eq!(hold.run_id, leaf);
         assert!(

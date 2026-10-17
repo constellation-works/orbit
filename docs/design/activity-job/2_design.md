@@ -603,10 +603,11 @@ After [ORB-14266], a content-policy refusal is a third typed provider failure, `
 
 Step recovery and final recovery skip every provider failure. The failure activity's `error_code` is the marker's name. `pr_failure_handoff` returns `held_provider_failure`: it commits the candidate, pushes it only to its durable candidate ref, opens no PR and writes no task status. `candidate_resume` treats that decision as preserving.
 
-Run finalization moves the task to `backlog` under a `provider_failure_hold` history event whose note carries a typed `ProviderFailureHold` (`class`, `provider`, `excluded_crews`, `not_before`, `run_id`).
+Run finalization moves the task to `backlog` under a `provider_failure_hold` history event whose note carries a typed `ProviderFailureHold` (`class`, `provider`, `excluded_crews`, `not_before`, `run_id`, and `machine` when an unavailable hold records the host that failed).
 
-- **Capacity or unavailability** excludes the run's crew. When the failing step ran on another provider, it excludes that provider's crews instead.
-- **Refusal** excludes every crew of the provider.
+- **Capacity** excludes the run's crew on every host. When the failing step ran on another provider, it excludes that provider's crews instead.
+- **Unavailability** excludes the same crews, and only on the machine the hold records [ORB-16323]. A hold stored without a machine still applies on every host. On the recorded machine, later tasks also skip those crews until `not_before`: another complexity-pool crew is drawn, and a task with no other pooled crew waits with `provider_backoff` instead of falling through to the workspace default. The task that owns the hold still uses that default.
+- **Refusal** excludes every crew of the provider, on every host.
 - **Backoff** doubles for each hold the task got in the last 24 hours, capped at 24 hours.
 - **Admission** (`auto_task_crew_candidates`) draws around the excluded crews while the hold is the task's latest status event and `not_before` has not passed. When nothing is left, the backlog snapshot excludes the task with `provider_backoff`.
 
