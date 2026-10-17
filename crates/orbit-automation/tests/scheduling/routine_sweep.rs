@@ -61,6 +61,8 @@ struct FakeDispatch {
     /// Owner liveness per run id. Absent means `Stopped`, the historical
     /// assumption that a terminal run has finished working.
     liveness: RefCell<HashMap<String, RunOwnerLiveness>>,
+    /// Running workspace drain, when the sweep should yield a ship slot.
+    live_drain: RefCell<Option<String>>,
 }
 
 impl FakeDispatch {
@@ -71,7 +73,7 @@ impl FakeDispatch {
 
 impl RoutineDispatch for FakeDispatch {
     fn live_workspace_drain(&self, _dir: &Path) -> Result<Option<String>, OrbitError> {
-        Ok(None)
+        Ok(self.live_drain.borrow().clone())
     }
 
     fn submit(
@@ -659,6 +661,153 @@ fn failed_fire_with_retry_budget_survives_skipped_slots() {
         fires(&store, "hourly").len(),
         1,
         "no skip row while a retry is owed"
+    );
+}
+
+/// A drain-skipped retry occupies its attempt key. Later ticks must not
+/// report `slot_already_claimed` for that key: while the drain is live the
+/// sweep yields without writing another row, and once the drain is gone it
+/// dispatches the next free attempt. [ORB-16417]
+#[test]
+fn drain_skipped_retry_dispatches_on_the_next_free_attempt() {
+    if super::isolated("routine_sweep::drain_skipped_retry_dispatches_on_the_next_free_attempt") {
+        return;
+    }
+    let store = Store::open_in_memory().expect("in-memory store");
+    let job = routine_spec(
+        "ship",
+        "0 * * * *",
+        "skip",
+        "allow",
+        "workspace_ship_pipeline",
+        (1, 1),
+        30,
+    );
+    let slot = ts(2026, 1, 1, 0, 0, 0);
+    let slot_s = slot.to_rfc3339();
+    store
+        .routine_record_baseline("ship", &slot_s)
+        .expect("baseline");
+    claim(
+        &store,
+        "ship",
+        slot,
+        RoutineFireState::Failed,
+        Some("dispatch failed"),
+    );
+    store
+        .routine_record_fire_intent(&RoutineFireIntentParams {
+            routine_name: "ship".to_string(),
+            slot: slot_s.clone(),
+            attempt: 2,
+            source_workspace: "polaris".to_string(),
+        })
+        .expect("claim the drain-skipped retry");
+    store
+        .routine_mark_fire_outcome(
+            "ship",
+            &slot_s,
+            2,
+            RoutineFireState::Skipped,
+            Some("workspace_drain_live: drain-1"),
+        )
+        .expect("record the drain skip");
+    store
+        .connection()
+        .lock()
+        .expect("store")
+        .execute(
+            "UPDATE routine_fires SET updated_at = '2026-01-01T00:10:00+00:00' \
+             WHERE routine_name = 'ship' AND state = 'failed'",
+            [],
+        )
+        .expect("backdate the failure past its backoff");
+
+    let dispatch = FakeDispatch::default();
+    *dispatch.live_drain.borrow_mut() = Some("drain-1".to_string());
+    let now = ts(2026, 1, 1, 0, 30, 0);
+    let held = run_sweep_core(
+        &store,
+        &collection(vec![job]),
+        &dispatch,
+        SweepOptions::default(),
+        now,
+    )
+    .unwrap();
+    assert_ne!(
+        held[0].reason.as_deref(),
+        Some("slot_already_claimed"),
+        "a drain-skipped retry must not stick later ticks on slot_already_claimed"
+    );
+    assert_eq!(
+        held[0].reason.as_deref(),
+        Some("workspace_drain_live: drain-1")
+    );
+    assert_eq!(dispatch.submit_count(), 0);
+    assert_eq!(
+        fires(&store, "ship").len(),
+        2,
+        "a live drain must not record another skipped retry"
+    );
+
+    *dispatch.live_drain.borrow_mut() = None;
+    let job = routine_spec(
+        "ship",
+        "0 * * * *",
+        "skip",
+        "allow",
+        "workspace_ship_pipeline",
+        (1, 1),
+        30,
+    );
+    let reports = run_sweep_core(
+        &store,
+        &collection(vec![job]),
+        &dispatch,
+        SweepOptions::default(),
+        now,
+    )
+    .unwrap();
+    assert_ne!(
+        reports[0].reason.as_deref(),
+        Some("slot_already_claimed"),
+        "clearing the drain must dispatch the retry, not repeat slot_already_claimed"
+    );
+    assert_eq!(reports[0].action, "retry_fired");
+    assert_eq!(dispatch.submit_count(), 1);
+    let retry = fires(&store, "ship")
+        .into_iter()
+        .find(|fire| fire.slot == slot_s && fire.attempt == 3)
+        .expect("fresh attempt");
+    assert_eq!(retry.state, RoutineFireState::Dispatched);
+    let skipped = fires(&store, "ship")
+        .into_iter()
+        .find(|fire| fire.attempt == 2)
+        .expect("drain-skipped attempt");
+    assert_eq!(skipped.state, RoutineFireState::Skipped);
+
+    let job = routine_spec(
+        "ship",
+        "0 * * * *",
+        "skip",
+        "allow",
+        "workspace_ship_pipeline",
+        (1, 1),
+        30,
+    );
+    let again = run_sweep_core(
+        &store,
+        &collection(vec![job]),
+        &dispatch,
+        SweepOptions::default(),
+        now,
+    )
+    .unwrap();
+    assert_ne!(again[0].reason.as_deref(), Some("slot_already_claimed"));
+    assert_eq!(
+        dispatch.submit_count(),
+        1,
+        "the fresh attempt is not re-fired"
     );
 }
 

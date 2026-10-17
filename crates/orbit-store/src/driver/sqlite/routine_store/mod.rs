@@ -25,7 +25,8 @@ mod lock;
 mod pause;
 
 pub use crate::contracts::{
-    RoutineCursor, RoutineFireIntentParams, RoutineFireRecord, RoutineFireState, RoutinePauseRecord,
+    RoutineCursor, RoutineFireIntentParams, RoutineFireRecord, RoutineFireState,
+    RoutinePauseRecord, RoutineSlotAttempts,
 };
 
 pub use lock::try_acquire_routine_sweep_lock;

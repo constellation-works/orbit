@@ -5,7 +5,8 @@ use std::collections::BTreeMap;
 use orbit_common::OrbitError;
 
 use super::{
-    RoutineCursor, RoutineFireIntentParams, RoutineFireRecord, RoutineFireState, RoutinePauseRecord,
+    RoutineCursor, RoutineFireIntentParams, RoutineFireRecord, RoutineFireState,
+    RoutinePauseRecord, RoutineSlotAttempts,
 };
 use crate::Store;
 
@@ -69,6 +70,14 @@ impl crate::contracts::RoutineStoreBackend for Store {
         routine_name: &str,
     ) -> Result<Option<RoutineFireRecord>, OrbitError> {
         Self::routine_latest_non_skip_fire(self, routine_name)
+    }
+
+    fn routine_slot_attempts(
+        &self,
+        routine_name: &str,
+        slot: &str,
+    ) -> Result<Option<RoutineSlotAttempts>, OrbitError> {
+        Self::routine_slot_attempts(self, routine_name, slot)
     }
 
     fn routine_unresolved_fires(&self) -> Result<Vec<RoutineFireRecord>, OrbitError> {
