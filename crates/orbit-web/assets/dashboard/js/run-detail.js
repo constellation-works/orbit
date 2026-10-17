@@ -4,7 +4,7 @@
 //
 // Extracted from app.js (ORB-00181). Owns run-detail state and limits,
 // RUN_EVENT_COLUMNS, renderRunDetail*, renderRunSteps*, renderRunKnowledge, renderRunGantt +
-// tooltip fns, logsForStep/build*, renderRunEvents, summarizeEvent.
+// tooltip fns, logsForStep/build*, renderRunEvents, eventFields.
 // Fetch orchestrators (fetchAndRenderRun*) and refresh wiring remain in app.js as the
 // cross-domain shell. Gantt retry data is independent of the Events table page.
 //
@@ -41,6 +41,7 @@ let activeRunLogs = [];
 let activeRunLogsError = null;
 let activeRunSubtab = "steps";
 let expandedStepIndices = new Set();
+let expandedRunEvents = new Set();
 // The Step Timeline is drawn at the panel's pixel width; this observer
 // redraws it when that width changes.
 let ganttResizeObserver = null;
@@ -76,12 +77,6 @@ function fmtAbsTime(v) {
 
 function fmtRelative(v) {
   return hasCtx("fmtRelative") ? _runDetailCtx.fmtRelative(v) : (v || "-");
-}
-
-function truncate(text, max = 200) {
-  if (hasCtx("truncate")) return _runDetailCtx.truncate(text, max);
-  if (text == null) return "";
-  return String(text).slice(0, max);
 }
 
 function setRunDetailSubtab(name) {
@@ -171,6 +166,7 @@ function retireRunDetailView() {
   activeRunLogs = [];
   activeRunLogsError = null;
   expandedStepIndices = new Set();
+  expandedRunEvents = new Set();
   if (typeof document !== "undefined" && document.getElementById("run-detail-meta")) {
     renderRunDetailEmpty(activeRunId ? "Loading run…" : "No run selected.", { preserveFeedback: false });
     renderRunSteps();
@@ -1272,13 +1268,60 @@ function buildStepDetail(step) {
   return wrap;
 }
 
+// `event_type` is the dotted spelling of `body_kind`, so it gets no column.
 const RUN_EVENT_COLUMNS = [
   { key: "ts", label: "time" },
   { key: "body_kind", label: "kind" },
-  { key: "event_type", label: "scope" },
   { key: "agent_identity", label: "agent" },
   { key: "summary", label: "detail" },
 ];
+const ACTIVITY_SAMPLE_KIND = "cli_invocation_activity";
+
+// The supervisor samples a running agent every interval its output grows, and
+// each sample repeats the newest assistant message. Fold each consecutive run
+// of samples that carry one message into a single row. A sample whose output
+// tail held no message keeps the previous one, as the run projection reads it.
+function groupRunEvents(events) {
+  const groups = [];
+  for (const ev of events) {
+    const last = groups[groups.length - 1];
+    const head = last?.events[0];
+    if (head && ev.body_kind === ACTIVITY_SAMPLE_KIND && head.body_kind === ACTIVITY_SAMPLE_KIND
+        && ev.provider === head.provider
+        && (ev.latest_message == null || ev.latest_message === last.message)) {
+      last.events.push(ev);
+    } else {
+      groups.push({ events: [ev], message: ev.latest_message, truncated: ev.latest_message_truncated });
+    }
+  }
+  return groups;
+}
+
+function eventTime(ts, previousDay) {
+  const date = new Date(ts);
+  const day = Number.isFinite(date.getTime()) ? formatDate(ts) : null;
+  const clock = formatClock(ts);
+  return { day, text: day && day !== previousDay ? `${day} ${clock}` : (clock || "-") };
+}
+
+// A one-line preview that opens to every field on its own line.
+function buildEventDetail(key, fields) {
+  const td = el("td", { class: "stderr run-event-detail" });
+  if (fields.length === 0) {
+    td.textContent = "-";
+    return td;
+  }
+  const details = el("details");
+  details.open = expandedRunEvents.has(key);
+  details.addEventListener("toggle", () => {
+    if (details.open) expandedRunEvents.add(key);
+    else expandedRunEvents.delete(key);
+  });
+  details.appendChild(el("summary", { text: fields.join(" ") }));
+  details.appendChild(el("pre", { text: fields.join("\n") }));
+  td.appendChild(details);
+  return td;
+}
 
 export function renderRunEvents() {
   const body = $("run-events-body");
@@ -1332,47 +1375,55 @@ export function renderRunEvents() {
     tbody = table.querySelector("tbody");
   }
   syncNodes(body, [controls, table]);
-  const frag = document.createDocumentFragment();
+  const rows = [];
   let previousDay = null;
-  for (let i = 0; i < events.length; i++) {
-    const ev = events[i];
-    const summary = summarizeEvent(ev);
+  groupRunEvents(events).forEach((group, i) => {
+    const first = group.events[0];
+    const last = group.events[group.events.length - 1];
+    const start = eventTime(first.ts, previousDay);
+    let time = start.text;
+    previousDay = start.day;
+    let kind = first.body_kind || "-";
+    let title = first.ts || "";
+    let fields = eventFields(last);
+    if (first.body_kind === ACTIVITY_SAMPLE_KIND) {
+      // The message leads: it is what the row is read for.
+      fields = fields.filter(field => !field.startsWith("latest_message"));
+      if (group.truncated) fields.unshift("latest_message_truncated=true");
+      if (group.message != null) fields.unshift(`latest_message=${group.message}`);
+    }
+    if (group.events.length > 1) {
+      const end = eventTime(last.ts, previousDay);
+      previousDay = end.day;
+      time = `${time} – ${end.text}`;
+      title = `${first.ts} – ${last.ts}`;
+      kind = `${kind} ×${group.events.length}`;
+      const bytes = fields.findIndex(field => field.startsWith("observed_bytes="));
+      if (bytes >= 0) fields[bytes] = `observed_bytes=${first.observed_bytes}→${last.observed_bytes}`;
+    }
+    const key = `runev-${first.event_id || i}`;
     const tr = el("tr");
-    const date = new Date(ev.ts);
-    const day = Number.isFinite(date.getTime()) ? formatDate(ev.ts) : null;
-    const clock = formatClock(ev.ts);
-    const time = day && day !== previousDay ? `${day} ${clock}` : (clock || "-");
-    previousDay = day;
-    tr.appendChild(el("td", { text: time, title: ev.ts || "" }));
-    tr.appendChild(el("td", { text: ev.body_kind || "-" }));
-    tr.appendChild(el("td", { text: ev.event_type || "-" }));
-    tr.appendChild(el("td", { text: ev.agent_identity || "-" }));
-    const td = el("td", { class: "stderr" });
-    td.title = summary.title;
-    td.textContent = summary.text;
-    tr.appendChild(td);
-    tr.dataset.key = `runev-${ev.event_id || i}`;
-    tr.dataset.hash = `${ev.event_id || i}-${ev.body_kind}-${time}`;
-    frag.appendChild(tr);
-  }
-  syncNodes(tbody, Array.from(frag.children));
+    tr.appendChild(el("td", { text: time, title }));
+    tr.appendChild(el("td", { text: kind }));
+    tr.appendChild(el("td", { text: first.agent_identity || "-" }));
+    tr.appendChild(buildEventDetail(key, fields));
+    tr.dataset.key = key;
+    tr.dataset.hash = `${first.event_id || i}-${last.event_id || i}-${kind}-${time}`;
+    rows.push(tr);
+  });
+  syncNodes(tbody, rows);
 }
 
-function summarizeEvent(ev) {
-  const ignoreKeys = new Set([
-    "schemaVersion", "event_type", "event_id", "ts", "run_id",
-    "agent_identity", "parent_event_id", "workspace_path", "body_kind",
-  ]);
-  const parts = [];
+const EVENT_DETAIL_IGNORED_KEYS = new Set([
+  "schemaVersion", "event_type", "event_id", "ts", "run_id",
+  "agent_identity", "parent_event_id", "workspace_path", "body_kind",
+]);
+
+function eventFields(ev) {
+  const fields = [];
   for (const [k, v] of Object.entries(ev)) {
-    if (ignoreKeys.has(k)) continue;
-    if (v == null) continue;
-    if (typeof v === "object") {
-      parts.push(`${k}=${JSON.stringify(v)}`);
-    } else {
-      parts.push(`${k}=${v}`);
-    }
+    if (EVENT_DETAIL_IGNORED_KEYS.has(k) || v == null) continue;
+    fields.push(`${k}=${typeof v === "object" ? JSON.stringify(v) : v}`);
   }
-  const text = parts.join(" ");
-  return { text: truncate(text, 200), title: text };
+  return fields;
 }
