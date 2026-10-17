@@ -160,10 +160,15 @@ pub fn explain_workspace_auto_readiness(
     let pools = runtime.auto_crew_pools_for_input(&pool_input)?;
     // Without an explicit `--allow-crew`, apply the live drain's own crew
     // restriction, so a task it excludes as `crew_not_allowed` never reads as
-    // eligible here.
+    // eligible here. A replica's live pull drain applies when no local drain is
+    // live [ORB-16439].
     let allowlist = if allowed_crews.is_empty() {
-        match active_drain.as_ref() {
-            Some(drain) => runtime.crew_allowlist_from_input(&drain.input)?,
+        match active_drain
+            .as_ref()
+            .map(|drain| &drain.input)
+            .or_else(|| pull_drain.as_ref().map(|drain| &drain.input))
+        {
+            Some(input) => runtime.crew_allowlist_from_input(input)?,
             None => None,
         }
     } else {

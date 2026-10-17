@@ -155,6 +155,7 @@ pub(super) fn workspace_drains(
 /// and the ceiling it is admitting under [ORB-16337].
 pub(super) struct LivePullDrain {
     pub(super) run_id: String,
+    pub(super) input: Value,
     pub(super) stop: Option<DrainAdmissionsStop>,
     /// Why its last pass requested no claim although its window was open
     /// [ORB-15637].
@@ -188,10 +189,9 @@ pub(super) fn live_pull_drain(runtime: &OrbitRuntime) -> Result<Option<LivePullD
         .into_iter()
         .find(|run| run.state == orbit_types::workflow::JobRunState::Running)
         .map(|run| {
-            let submitted = run
-                .input
-                .as_ref()
-                .and_then(|input| input.get("max_active_leaf_runs"))
+            let input = run.input.unwrap_or_else(|| json!({}));
+            let submitted = input
+                .get("max_active_leaf_runs")
                 .and_then(json_u32)
                 .unwrap_or(DEFAULT_MAX_ACTIVE_LEAF_RUNS as u32);
             let state = runtime
@@ -209,6 +209,7 @@ pub(super) fn live_pull_drain(runtime: &OrbitRuntime) -> Result<Option<LivePullD
                 .and_then(|state| state.pull_drain.drain_worker_limit.clone());
             LivePullDrain {
                 run_id: run.run_id,
+                input,
                 stop: state.and_then(|state| state.pull_drain.drain_admissions_stop),
                 refusal,
                 submitted,
