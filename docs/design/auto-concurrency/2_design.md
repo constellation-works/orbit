@@ -231,10 +231,13 @@ same tick deltas. A changed CPU count invalidates the interval.
 
 Native memory is `hw.memsize − min(hw.memsize, (free_count + inactive_count)
 × sysconf(_SC_PAGESIZE))`, in bytes, from `host_statistics64(HOST_VM_INFO64)`
-and `sysctlbyname("hw.memsize")`. This is the throttle's existing estimate of
-non-reclaimable physical memory: free includes speculative pages, inactive is
-treated as reclaimable, and purgeable overlaps active/inactive so is not
-subtracted again. Compressed physical storage remains in used memory; logical
+and `sysctlbyname("hw.memsize")`. The kernel sets the returned count to the
+`vm_statistics64` revision it filled, which can be shorter than userspace
+`HOST_VM_INFO64_COUNT`; a successful count that covers `inactive_count` is a
+real reading, and a failed call stays unknown. This is the throttle's existing
+estimate of non-reclaimable physical memory: free includes speculative pages,
+inactive is treated as reclaimable, and purgeable overlaps active/inactive so
+is not subtracted again. Compressed physical storage remains in used memory; logical
 uncompressed pages and swap are not added. This estimate is not Activity
 Monitor's Memory Used or the sum of worker footprints. Both native users
 release each acquired Mach host send right. See Apple's
