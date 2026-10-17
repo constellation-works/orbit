@@ -258,6 +258,9 @@ os.execv(sys.argv[1], sys.argv[1:])
 /// checkpoint outlasts the fixture hang guard, so a runtime that outlives its
 /// stand-in keeps the store locked for the whole wait; the test kills it after.
 #[cfg(target_os = "linux")]
+const STORE_BUSY_BUDGET: Duration =
+    Duration::from_millis(orbit_common::storage::sqlite::DEFAULT_BUSY_TIMEOUT_MS as u64);
+#[cfg(target_os = "linux")]
 const LOCK_HOLDING_RUNTIME: &str = r#"#!/usr/bin/env python3
 import os, sqlite3, sys, time
 db = os.environ["ORBIT_FIXTURE_DB"]
@@ -369,8 +372,9 @@ exit_now()
 }
 
 /// The broker kills the ssh stand-in's pid. Without the parent-death wrapper
-/// the owner runtime keeps its exclusive lock (`database is locked`); with the
-/// wrapper the lock is released and the next open proceeds.
+/// the owner runtime keeps its exclusive lock, and a fresh Orbit runtime's
+/// store write probe exhausts the busy timeout. With the wrapper, the lock is
+/// released and the next Orbit store open succeeds within the busy budget.
 #[cfg(target_os = "linux")]
 #[test]
 fn ssh_stand_in_releases_the_owner_store_when_the_session_is_killed() {
@@ -394,15 +398,22 @@ fn session_kill_leaves_store_locked(release_on_parent_death: bool) -> bool {
     let caller_home = base.join("caller");
     fs::create_dir_all(caller_home.join(".ssh")).expect("ssh dir");
     fs::write(caller_home.join(".ssh/known_hosts"), "trusted\n").expect("known_hosts");
-    let owner_home = base.join("owner");
-    let work = base.join("work");
-    fs::create_dir_all(&owner_home).expect("owner home");
-    fs::create_dir_all(&work).expect("work");
+    let owner = Node::init(base, "owner", "TSO");
     let holder = base.join("runtime.py");
     fs::write(&holder, LOCK_HOLDING_RUNTIME).expect("holder");
     fs::set_permissions(&holder, fs::Permissions::from_mode(0o755)).expect("executable");
-    write_ssh_stand_in(base, &owner_home, &work, &holder, release_on_parent_death);
-    let db = base.join("owner.db");
+    write_ssh_stand_in(
+        base,
+        &owner.home,
+        &owner.work,
+        &holder,
+        release_on_parent_death,
+    );
+    let db = PathBuf::from(
+        owner.runtime().persistence_config_json()["audit"]["path"]
+            .as_str()
+            .expect("owner store path"),
+    );
     let ready = base.join("ready");
     let mut session = Command::new(base.join("bin/ssh"))
         .args(["-T", "--", "isolated-owner", "orbit hold"])
@@ -428,6 +439,33 @@ fn session_kill_leaves_store_locked(release_on_parent_death: bool) -> bool {
     } else {
         owner_store_locked_now(&db) && holder_still_running(pid)
     };
+    let open_started = Instant::now();
+    let next_open = OrbitRuntime::from_roots(&owner.global(), &owner.work.join(".orbit"))
+        .and_then(|runtime| runtime.sqlite_store()?.check_writable());
+    let open_elapsed = open_started.elapsed();
+    if release_on_parent_death {
+        if let Err(error) = next_open {
+            panic!("the Orbit owner open after the killed session must succeed: {error}");
+        }
+        assert!(
+            open_elapsed < STORE_BUSY_BUDGET,
+            "the Orbit owner open must finish within the store busy budget; took {open_elapsed:?}"
+        );
+    } else {
+        match next_open {
+            Err(error) => {
+                assert!(
+                    error.to_string().contains("locked"),
+                    "the failed Orbit store write probe must report its held SQLite lock: {error}"
+                );
+                assert!(
+                    open_elapsed >= STORE_BUSY_BUDGET.saturating_sub(Duration::from_millis(250)),
+                    "the next Orbit store open must wait out the busy budget; waited {open_elapsed:?}"
+                );
+            }
+            Ok(()) => panic!("the deliberately held owner lock must exhaust its busy timeout"),
+        }
+    }
     if holder_still_running(pid) {
         let _ = Command::new("kill")
             .args(["-KILL", &pid.to_string()])
