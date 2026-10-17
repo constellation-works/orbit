@@ -1917,6 +1917,11 @@ fn auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure() {
                         let update = git(
                             &fx.repo,
                             &[
+                                // The bare remote has no configured identity.
+                                "-c",
+                                "user.name=Provider",
+                                "-c",
+                                "user.email=provider@example.invalid",
                                 "--git-dir",
                                 remote,
                                 "commit-tree",
