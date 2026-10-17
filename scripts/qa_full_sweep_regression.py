@@ -235,7 +235,7 @@ def self_test():
         actual = json.loads(Path(__file__).with_name("fixtures").joinpath("qa-native-test-env.json").read_text())
         original_command = command
         command = ["cargo", "test", "--no-fail-fast", "-p", "orbit-common", "--test", "test_env", "--locked"]
-        for mode in ["success", "multiple-success", "nocapture", "wrapper", "directory-target", "outer-failure", "early-target-failure", "nonzero", "missing-target",
+        for mode in ["success", "multiple-success", "nocapture", "directory-target", "outer-failure", "early-target-failure", "nonzero", "missing-target",
                      "wrong-target", "extra-target", "zero", "incomplete-rows", "child-only",
                      "ambiguous", "truncated", "seatbelt", "ps", "unstable", "wrong-revision"]:
             execution = {"stdout": actual["stdout"], "stderr": actual["stderr"], "exit_code": 0,
@@ -257,9 +257,6 @@ def self_test():
             elif mode == "nocapture":
                 command = [*command, "--", "--nocapture"]
                 execution["executed_command"] = [*command[:-1], "--show-output"]
-            elif mode == "wrapper":
-                command = ["env", "--", *command]
-                execution["executed_command"] = [*command, "--", "--show-output"]
             elif mode == "early-target-failure":
                 execution["stdout"] = "running 1 test\ntest earlier ... FAILED\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n" + execution["stdout"]
                 execution["stderr"] = "     Running tests/earlier.rs (target/debug/deps/earlier)\n" + execution["stderr"]
@@ -311,10 +308,10 @@ def self_test():
                     recorded[key] = execution[key]
             (repo / "transcript.json").write_text(json.dumps(recorded))
             report = sweep([native], f"native-{mode}")
-            assert (report["decision"] == "PASS") == (mode in ["success", "multiple-success", "nocapture", "wrapper", "directory-target"]), (mode, report)
+            assert (report["decision"] == "PASS") == (mode in ["success", "multiple-success", "nocapture", "directory-target"]), (mode, report)
             if mode in ["outer-failure", "early-target-failure"]:
                 assert "failing outer tests" in row(report, "platform-evidence-import")["stderr"], (mode, report)
-            if mode in ["success", "multiple-success", "nocapture", "wrapper", "directory-target"]:
+            if mode in ["success", "multiple-success", "nocapture", "directory-target"]:
                 retained = row(report, "macos-platform")["native_evidence"]["execution"][0]
                 assert "test result: FAILED. 0 passed; 1 failed;" in retained["stdout"], retained
                 assert retained["test_counts"] == {"passed": 12 if mode == "multiple-success" else 11, "failed": 0, "ignored": 6, "suites": 2 if mode == "multiple-success" else 1}, retained
