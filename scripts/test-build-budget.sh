@@ -151,6 +151,16 @@ try:
             time.sleep(0.02)
         if mode == "release-fail":
             raise SystemExit(23)
+    elif mode == "barrier":
+        # Hold the slot until the driver releases the wave. A removed state directory
+        # means the driver has exited, and the deadline bounds any other abort.
+        deadline = time.monotonic() + duration
+        while (
+            not (state / "release-owner").exists()
+            and state.exists()
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.02)
     elif mode == "fail":
         time.sleep(duration)
         raise SystemExit(23)
@@ -172,6 +182,38 @@ finally:
 PY
 chmod +x "$TMP/helper.py"
 
+# Count helpers that have been admitted and recorded their start under $1.
+started_helpers() {
+  local marker started=0
+  for marker in "$1"/started-*; do
+    if [[ -e "$marker" ]]; then
+      started=$((started + 1))
+    fi
+  done
+  printf '%s\n' "$started"
+}
+
+# Admission under test: the first $2 helpers must be admitted together. Starts are
+# awaited through markers, so host load only delays the barrier and cannot shrink
+# the overlap. The wave then holds for a short settle window, so an over-admitted
+# helper has time to appear in the recorded max before release.
+hold_first_wave() {
+  local state="$1" expected="$2" total="$3" settle=0
+  local deadline=$((SECONDS + 15))
+  while [[ "$(started_helpers "$state")" -lt "$expected" ]]; do
+    if ((SECONDS >= deadline)); then
+      touch "$state/release-owner"
+      fail "only $(started_helpers "$state") of $expected admitted helpers started in $state"
+    fi
+    sleep 0.02
+  done
+  while [[ "$(started_helpers "$state")" -lt "$total" && "$settle" -lt 25 ]]; do
+    settle=$((settle + 1))
+    sleep 0.02
+  done
+  touch "$state/release-owner"
+}
+
 # Agent subprocesses retain HOME and PATH but receive no ORBIT_* settings.
 # The host files must still control admission, and an explicit slot override
 # must beat the host file when one is present.
@@ -185,13 +227,15 @@ run_agent_environment_case() {
   for label in a b c d; do
     if [[ -n "$override_slots" ]]; then
       (env -i HOME="$home" PATH="$PATH" ORBIT_BUILD_SLOTS="$override_slots" \
-        "$WRAPPER" -- "$TMP/helper.py" "$state" "$label" sleep 0.35) &
+        "$WRAPPER" -- "$TMP/helper.py" "$state" "$label" barrier 20) &
     else
       (env -i HOME="$home" PATH="$PATH" \
-        "$WRAPPER" -- "$TMP/helper.py" "$state" "$label" sleep 0.35) &
+        "$WRAPPER" -- "$TMP/helper.py" "$state" "$label" barrier 20) &
     fi
     pids+=("$!")
   done
+
+  hold_first_wave "$state" "$expected_slots" 4
 
   local pid
   for pid in "${pids[@]}"; do
@@ -234,17 +278,18 @@ for invalid_slots in banana 129; do
     "$TMP/invalid-host-slots.err" || fail "host slots value $invalid_slots had the wrong validation message"
 done
 
-# Different worktree paths share two slots, and enough overlapping work reaches both.
+# Different worktree paths share two slots, and the first wave reaches both.
 pids=()
 for label in a b c d; do
   (
     cd "$TMP/worktrees/$label"
     CARGO_TARGET_DIR="$TMP/targets/$label" ORBIT_BUILD_BUDGET_DIR="$TMP/locks-cross" \
       ORBIT_BUILD_SLOTS=2 ORBIT_CARGO_JOBS=3 \
-      "$WRAPPER" -- "$TMP/helper.py" "$TMP/state" "$label" sleep 0.25
+      "$WRAPPER" -- "$TMP/helper.py" "$TMP/state" "$label" barrier 20
   ) &
   pids+=("$!")
 done
+hold_first_wave "$TMP/state" 2 4
 for pid in "${pids[@]}"; do
   wait "$pid"
 done
