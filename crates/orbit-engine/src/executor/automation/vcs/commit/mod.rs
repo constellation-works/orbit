@@ -2,6 +2,7 @@ mod actions;
 mod already_landed;
 mod author;
 mod checkpoint;
+mod clean_tree;
 mod detached;
 mod diagnostics;
 mod git_ops;
