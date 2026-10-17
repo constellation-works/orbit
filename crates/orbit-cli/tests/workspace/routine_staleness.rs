@@ -116,7 +116,7 @@ fn sql(db: &std::path::Path, statement: &str) {
     );
 }
 
-fn staleness<'a>(report: &'a Value) -> &'a Value {
+fn staleness(report: &Value) -> &Value {
     report
         .as_array()
         .expect("doctor json is a list of checks")

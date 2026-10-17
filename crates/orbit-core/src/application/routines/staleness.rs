@@ -19,7 +19,7 @@ use crate::OrbitRuntime;
 const STALE_INTERVAL_MULTIPLE: i32 = 3;
 
 /// One enabled cron routine whose last success is older than
-/// [`STALE_INTERVAL_MULTIPLE`] times its current schedule gap.
+/// three times its current schedule gap.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StaleRoutine {
     /// Routine name, as `orbit routine list` prints it.
@@ -37,7 +37,7 @@ pub fn stale_cron_routines(
 ) -> Result<Vec<StaleRoutine>, OrbitError> {
     let report = checkout_routine_statuses(runtime)?;
     let database = orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::global_only(
-        &runtime.global_root(),
+        runtime.global_root(),
     ))?;
     let store = if database.exists() {
         Some(Store::open_read_only(&database)?)
