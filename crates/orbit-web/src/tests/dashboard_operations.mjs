@@ -1230,4 +1230,15 @@ assert(retainedText.includes('Last forecast') && retainedText.includes('2026-10-
 drainCapacityOverride = {};
 await fetchAndRenderAutoDrainPane();
 assert(forecastCard()?.querySelector('.drain-forecast-state')?.textContent === 'no forecast this pass', 'clearing the forecast returns the empty state');
+// A host whose size cannot be measured: the CPU peak keeps its value with no
+// percent, and readiness sends the CPU headroom as an explicit null. Number(null)
+// is 0, so the card must say the headroom is unknown, not 0.0 (which reads as
+// exactly at the admit limit).
+drainCapacityOverride = { admission_forecast: { ...enforceForecast, cpu_peak: { minute: 6, value: 7.2 }, headroom: { cpu_percent: null, memory_percent: 34, admit_cpu_percent: 89, admit_memory_percent: 74 } } };
+await fetchAndRenderAutoDrainPane();
+forecastText = forecastCard()?.textContent || '';
+assert(forecastText.includes('host capacity unknown') && forecastText.includes('admit 89%') && forecastText.includes('headroom unknown'), `an unmeasured host says its headroom is unknown: ${forecastText}`);
+assert(!forecastText.includes('headroom 0.0'), `an unknown headroom must not read as zero: ${forecastText}`);
+drainCapacityOverride = {};
+await fetchAndRenderAutoDrainPane();
 globalThis.operationsTestsPassed = true;
