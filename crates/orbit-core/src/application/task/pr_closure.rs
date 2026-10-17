@@ -210,7 +210,7 @@ impl OrbitRuntime {
     /// Whether a run or an unsettled claim of `task` may still be delivering
     /// one of its pull requests. An unreadable answer counts as live, so
     /// nothing is closed on a guess.
-    fn task_delivery_is_live(&self, task: &Task) -> bool {
+    pub(super) fn task_delivery_is_live(&self, task: &Task) -> bool {
         if let Some(run_id) = task.job_run_id.as_deref() {
             match self.stores().jobs().get_job_run(run_id) {
                 Ok(Some(run)) if !run.state.is_terminal() => return true,

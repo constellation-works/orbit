@@ -56,6 +56,19 @@ impl TaskPrForge for Forge {
     }
 }
 
+/// A forge holding the fixture's PR 17 open, as Orbit authored it.
+fn delivery_forge(f: &Fixture) -> Forge {
+    Forge {
+        open: ForgePullRequest {
+            number: 17,
+            head_branch: f.branch.clone(),
+            body: format!("Delivers {}.", f.task),
+            author: "orbit-bot".into(),
+        },
+        closed: Arc::default(),
+    }
+}
+
 struct SingleWorkspace(orbit_core::OrbitRuntime);
 
 impl RoutineWorkspaceProvider for SingleWorkspace {
@@ -320,15 +333,7 @@ fn changed_or_discarded_candidates_are_refused_with_a_discard_exit() {
         error.contains("--discard-candidate"),
         "the mismatch offers its exit: {error}"
     );
-    let forge = Forge {
-        open: ForgePullRequest {
-            number: 17,
-            head_branch: f.branch.clone(),
-            body: format!("Delivers {}.", f.task),
-            author: "orbit-bot".into(),
-        },
-        closed: Arc::default(),
-    };
+    let forge = delivery_forge(&f);
     f.runtime = f
         .runtime
         .clone()
@@ -391,7 +396,7 @@ fn a_transient_infra_block_is_requeued_onto_its_candidate_after_the_probe() {
 /// A publication that already took its automatic requeues stays blocked for
 /// an operator, who can still requeue it.
 fn transient_requeues_are_bounded_per_publication() {
-    let (f, _) = escalated_handoff_fixture(None, Some(TransientInfrastructure::LockBusy));
+    let (mut f, _) = escalated_handoff_fixture(None, Some(TransientInfrastructure::LockBusy));
     let spent = TaskHistoryEntry {
         at: Utc::now(),
         by: "system".into(),
@@ -431,6 +436,29 @@ fn transient_requeues_are_bounded_per_publication() {
     );
     assert_eq!(status(&f), TaskStatus::Blocked, "the bound holds");
     assert_eq!(requeue(&f, false).unwrap()["resumes"]["pull_request"], "17");
+    // The preserved [BLOCKED] pull request survives a shelf move: the next
+    // run still resumes it.
+    let forge = delivery_forge(&f);
+    f.runtime = f
+        .runtime
+        .clone()
+        .with_task_pr_forge(Arc::new(forge.clone()));
+    for shelf in [TaskStatus::Someday, TaskStatus::Backlog] {
+        f.runtime
+            .update_task_as_human(
+                &f.task,
+                orbit_core::application::task::TaskUpdateParams {
+                    status: Some(shelf),
+                    ..Default::default()
+                },
+                "human".into(),
+            )
+            .unwrap();
+    }
+    assert!(
+        forge.closed.lock().unwrap().is_empty(),
+        "a shelf move after the requeue closes nothing"
+    );
 }
 
 /// The race: final recovery blocks the task while its run is still live and
@@ -448,7 +476,7 @@ fn nothing_is_requeued_until_the_publishing_run_stops() {
                 blocked[0]
                     .held
                     .as_deref()
-                    .is_some_and(|held| held.contains("not conclusively stopped")),
+                    .is_some_and(|held| held.contains("may still")),
                 "{blocked:?}"
             );
             assert!(
@@ -464,7 +492,7 @@ fn nothing_is_requeued_until_the_publishing_run_stops() {
                 "the clock waits for the run"
             );
             let error = refused(f, false, "live run, unpublished");
-            assert!(error.contains("not conclusively stopped"), "{error}");
+            assert!(error.contains("may still"), "{error}");
         });
     tick(&f);
     assert_eq!(
@@ -503,6 +531,118 @@ fn a_human_word_on_a_transient_block_stands() {
     assert_eq!(requeue(&f, false).unwrap()["resumes"]["pull_request"], "17");
 }
 
+/// History entries of `event` recorded by Orbit on the fixture task.
+fn recorded(f: &Fixture, event: &str) -> usize {
+    f.runtime
+        .get_task_history(&f.task)
+        .unwrap()
+        .iter()
+        .filter(|entry| entry.event == event && entry.by == "system")
+        .count()
+}
+
+/// A publication that does not authenticate is refused once and then left
+/// to an operator; a transient error only defers the next attempt.
+fn automatic_authentication_failures_are_bounded() {
+    use orbit_types::workflow::{
+        TRANSIENT_INFRA_REQUEUE_DEFERRED_EVENT, TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT,
+    };
+    let (f, _) = escalated_handoff_fixture(None, Some(TransientInfrastructure::StoreLocked));
+    // The forge cannot be asked: the attempt is deferred, not refused.
+    let gh = f._root.path().join("bin/gh");
+    let healthy = std::fs::read_to_string(&gh).unwrap();
+    std::fs::write(&gh, "#!/bin/sh\necho 'HTTP 502' >&2\nexit 1\n").unwrap();
+    assert!(
+        f.runtime
+            .requeue_cleared_transient_infra_blocks()
+            .unwrap()
+            .is_empty()
+    );
+    std::fs::write(&gh, healthy).unwrap();
+    assert_eq!(recorded(&f, TRANSIENT_INFRA_REQUEUE_DEFERRED_EVENT), 1);
+    assert_eq!(recorded(&f, TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT), 0);
+    let blocked = f.runtime.transient_infra_blocked_tasks().unwrap();
+    assert!(
+        blocked[0]
+            .held
+            .as_deref()
+            .is_some_and(|held| held.starts_with("retrying after")),
+        "{blocked:?}"
+    );
+    assert!(
+        f.runtime
+            .requeue_cleared_transient_infra_blocks()
+            .unwrap()
+            .is_empty(),
+        "the next tick backs off"
+    );
+    assert_eq!(recorded(&f, TRANSIENT_INFRA_REQUEUE_DEFERRED_EVENT), 1);
+    assert_eq!(status(&f), TaskStatus::Blocked);
+}
+
+/// A candidate discarded by automation no longer authenticates: the clock
+/// records that once and stops asking.
+fn a_refused_publication_is_recorded_once() {
+    use orbit_types::workflow::TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT;
+    let (f, _) = escalated_handoff_fixture(None, Some(TransientInfrastructure::LockBusy));
+    f.runtime
+        .apply_task_automation_update(
+            &f.task,
+            TaskAutomationUpdate {
+                append_history: vec![TaskHistoryEntry {
+                    at: Utc::now(),
+                    by: "system".into(),
+                    event: orbit_types::task::CANDIDATE_DISCARDED_EVENT.into(),
+                    note: Some("fixture discard".into()),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: None,
+                    decision: None,
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    for _ in 0..2 {
+        assert!(
+            f.runtime
+                .requeue_cleared_transient_infra_blocks()
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert_eq!(recorded(&f, TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT), 1);
+    assert_eq!(status(&f), TaskStatus::Blocked);
+    let blocked = f.runtime.transient_infra_blocked_tasks().unwrap();
+    assert!(
+        blocked[0]
+            .held
+            .as_deref()
+            .is_some_and(|held| held.contains("could not authenticate")),
+        "{blocked:?}"
+    );
+}
+
+/// A pull request on record that no handoff receipt binds is refused with
+/// the discard exit, as the next admission would refuse it.
+fn a_requeue_without_a_receipt_refuses_an_unbound_pull_request() {
+    let (f, _) = escalated_handoff_fixture(None, None);
+    let mut state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    state.failure_activity_checkpoint = None;
+    f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+    assert!(
+        f.runtime
+            .get_task(&f.task)
+            .unwrap()
+            .github_pr_number()
+            .is_some()
+    );
+    let error = refused(&f, false, "unbound pull request");
+    assert!(error.contains("--discard-candidate"), "{error}");
+    let answer = requeue(&f, true).unwrap();
+    assert_eq!(answer["status"], "backlog");
+}
+
 crate::scenario_table!(
     handoff_requeue_scenarios,
     operator_requeue_resumes_the_failure_handoff_candidate_and_pull_request,
@@ -511,5 +651,8 @@ crate::scenario_table!(
     a_transient_infra_block_is_requeued_onto_its_candidate_after_the_probe,
     transient_requeues_are_bounded_per_publication,
     nothing_is_requeued_until_the_publishing_run_stops,
-    a_human_word_on_a_transient_block_stands
+    a_human_word_on_a_transient_block_stands,
+    automatic_authentication_failures_are_bounded,
+    a_refused_publication_is_recorded_once,
+    a_requeue_without_a_receipt_refuses_an_unbound_pull_request
 );

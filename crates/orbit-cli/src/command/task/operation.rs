@@ -436,7 +436,14 @@ pub(crate) fn requeue_text(value: &Value) -> String {
     }
     match value.get("discard_closure").and_then(Value::as_str) {
         Some("settled") => lines.push(
-            "Closed the task's undelivered Orbit pull requests; their branches are kept.".into(),
+            "Closed the task's undelivered Orbit pull requests, if it had any; their branches are \
+             kept."
+                .into(),
+        ),
+        Some("disabled") => lines.push(
+            "pr.close_on_terminal is off, so no pull request was closed; close the discarded one \
+             by hand."
+                .into(),
         ),
         Some(_) => lines.push(
             "Could not close every undelivered Orbit pull request of the task; close the rest by \

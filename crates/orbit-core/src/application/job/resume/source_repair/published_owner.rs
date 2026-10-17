@@ -129,11 +129,27 @@ impl OrbitRuntime {
         Ok((preserved_entry(&record)?, binding))
     }
 
-    /// Whether `task` has a pull request or a publication-preservation record
-    /// on record. With no failure-handoff receipt binding them, the next
-    /// admission refuses such a task (`owner_published_candidate`), so a
-    /// requeue without a discard would only strand it.
+    /// Whether `task`, last delivered by an owner PR run, has a pull request
+    /// or a publication-preservation record on record. With no
+    /// failure-handoff receipt binding them, the next admission refuses such
+    /// a task (`owner_published_candidate`), so a requeue without a discard
+    /// would only strand it. A claimed or local-only delivery keeps its own
+    /// candidate contract, as that admission does: a claim's kept candidate
+    /// republishes through its own pull request.
     pub(crate) fn unbound_publication_on_record(&self, task: &Task) -> Result<bool, OrbitError> {
+        if let Some(run_id) = task.job_run_id.as_deref() {
+            let owner_pr = self.get_job_run_backend(run_id)?.is_some_and(|run| {
+                run.job_id == "task_pr_pipeline"
+                    && run
+                        .input
+                        .as_ref()
+                        .is_none_or(|input| input["claimed"] != true)
+            });
+            // A run missing here is a follower's claimed leaf.
+            if !owner_pr {
+                return Ok(false);
+            }
+        }
         Ok(task.github_pr_number().is_some()
             || self
                 .get_task_history(&task.id)?

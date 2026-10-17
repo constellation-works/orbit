@@ -71,7 +71,8 @@ pub(crate) struct CandidateRequeue {
     pub(crate) actor: String,
     pub(crate) status_event: &'static str,
     pub(crate) status_note: String,
-    /// The final-recovery decision kind recorded with `requeued`.
+    /// The final-recovery decision kind recorded with `requeued`, which is
+    /// written only together with a preservation record.
     pub(crate) decision: &'static str,
     pub(crate) comment: Option<TaskComment>,
     /// The publication-preservation record the next run authenticates.
@@ -175,23 +176,31 @@ impl OrbitRuntime {
         task: &Task,
         requeue: CandidateRequeue,
     ) -> Result<Task, OrbitError> {
-        let decided = task.job_run_id.as_ref().map(|run_id| TaskHistoryEntry {
-            at: Utc::now(),
-            by: SYSTEM_ACTOR_LABEL.to_string(),
-            event: FINAL_RECOVERY_DECIDED_EVENT.to_string(),
-            note: Some(format!(
-                "{} (run_id={run_id}): outcome=requeued",
-                requeue.decision
-            )),
-            from_status: None,
-            to_status: None,
-            operation_id: None,
-            decision: Some(TaskDecision::FinalRecovery {
-                run_id: run_id.clone(),
-                decision: requeue.decision.to_string(),
-                outcome: RecordedFinalRecovery::Requeued,
-            }),
-        });
+        // The `requeued` decision is what lets the next run resume the
+        // preserved publication, and every reader takes the newest decision
+        // for a run as its outcome. Without a preservation record nothing is
+        // resumed, so the run's recorded escalation stands.
+        let decided = task
+            .job_run_id
+            .as_ref()
+            .filter(|_| requeue.preserved.is_some())
+            .map(|run_id| TaskHistoryEntry {
+                at: Utc::now(),
+                by: SYSTEM_ACTOR_LABEL.to_string(),
+                event: FINAL_RECOVERY_DECIDED_EVENT.to_string(),
+                note: Some(format!(
+                    "{} (run_id={run_id}): outcome=requeued",
+                    requeue.decision
+                )),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: Some(TaskDecision::FinalRecovery {
+                    run_id: run_id.clone(),
+                    decision: requeue.decision.to_string(),
+                    outcome: RecordedFinalRecovery::Requeued,
+                }),
+            });
         self.with_mutation(|| {
             let updated = self.stores().task_records().update(
                 &task.id,
@@ -224,16 +233,34 @@ impl OrbitRuntime {
     /// conclusively stopped. Final recovery blocks the task before the run's
     /// failure handoff runs, so a requeue in that window would race the
     /// handoff's publication and leave a pull request no record binds.
+    ///
+    /// A claimed task's run is a follower's leaf, which this store may never
+    /// see and whose process no local probe can reach: an unsettled execution
+    /// claim (or one that cannot be read) counts as live, exactly as the PR
+    /// closure counts it. Once the claim is settled its leaf is fenced, so a
+    /// run on another machine is then judged by its recorded state alone.
     pub(crate) fn unsettled_run(&self, task: &Task) -> Result<Option<String>, OrbitError> {
+        if self.task_delivery_is_live(task) {
+            return Ok(Some(
+                "a run or an unsettled execution claim of the task may still be delivering it, \
+                 so a failure handoff may still publish a candidate"
+                    .into(),
+            ));
+        }
         let Some(run_id) = task.job_run_id.as_deref() else {
             return Ok(None);
         };
         let Some(run) = self.get_job_run_backend(run_id)? else {
+            // Not in this store: a follower's leaf, fenced by its settled claim.
             return Ok(None);
+        };
+        let foreign = match (&run.executed_on, self.automation_machine_identity()) {
+            (Some(origin), Some(local)) => origin.machine_id != local,
+            _ => false,
         };
         if !run.state.is_terminal()
             || run.finished_at.is_none()
-            || run_owner_liveness(&run) != RunOwnerLiveness::Stopped
+            || (!foreign && run_owner_liveness(&run) != RunOwnerLiveness::Stopped)
         {
             return Ok(Some(format!(
                 "run `{run_id}` has not conclusively stopped, so its failure handoff may still \
@@ -352,7 +379,14 @@ impl OrbitRuntime {
         // requeue standing and is reported instead. The same closure as
         // `orbit task update --status backlog --discard-candidate`.
         let discard_closure = discard.then(|| {
-            if self.close_task_prs_after_requeue(TaskStatus::Blocked, &task, Some(&reason), true) {
+            if !self.context.settings().pr_settings().close_on_terminal {
+                "disabled"
+            } else if self.close_task_prs_after_requeue(
+                TaskStatus::Blocked,
+                &task,
+                Some(&reason),
+                true,
+            ) {
                 "settled"
             } else {
                 "incomplete"
@@ -421,7 +455,16 @@ impl OrbitRuntime {
                     receipt.pull_request
                 )));
             }
-            return self.failure_handoff_requeue_record(task).map(Some);
+            // Every authentication refusal (an interrupted or timed-out
+            // run, a newer execution, a foreign source, ...) has the same exit.
+            return self.failure_handoff_requeue_record(task).map(Some).map_err(
+                |error| match error {
+                    OrbitError::JobValidation(refusal) => OrbitError::InvalidInput(format!(
+                        "{refusal}. Nothing was changed. To {discard_hint}."
+                    )),
+                    error => error,
+                },
+            );
         }
         if let Some(run_id) = task.job_run_id.as_deref()
             && self.run_published_through_pipeline(run_id)?

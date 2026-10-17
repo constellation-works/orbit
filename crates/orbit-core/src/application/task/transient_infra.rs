@@ -17,9 +17,13 @@
 //!   settled (final recovery blocks the task before the handoff publishes);
 //! - nobody but Orbit's automation commented on or wrote to the task since
 //!   the block: a human's attributed call stands;
-//! - no earlier attempt on this block failed to authenticate the publication
-//!   ([`TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT`]), so a publication that no
-//!   longer authenticates costs one forge round trip, not one per tick;
+//! - no earlier attempt on this block found that the publication does not
+//!   authenticate ([`TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT`]), so such a
+//!   publication costs one forge round trip, not one per tick. An attempt
+//!   that failed on a transient error instead (the remote, the forge, the
+//!   store; [`TRANSIENT_INFRA_REQUEUE_DEFERRED_EVENT`]) is retried no sooner
+//!   than `DEFERRAL_BACKOFF_MINUTES` later, at most
+//!   `MAX_DEFERRALS` times;
 //! - the probe passes: the task store takes an immediate write transaction
 //!   now, and the task's own write lock is then free. The probe cannot take
 //!   the lock that actually timed out, which may have been another file
@@ -40,12 +44,21 @@ use orbit_types::record::OrbitEvent;
 use orbit_types::task::{Task, TaskDecision, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     MAX_TRANSIENT_INFRA_REQUEUES, TRANSIENT_INFRA_BLOCKED_EVENT,
-    TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT, TRANSIENT_INFRA_REQUEUED_EVENT, TransientInfraBlock,
-    TransientInfraRequeue, TransientInfrastructure,
+    TRANSIENT_INFRA_REQUEUE_DEFERRED_EVENT, TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT,
+    TRANSIENT_INFRA_REQUEUED_EVENT, TransientInfraBlock, TransientInfraRequeue,
+    TransientInfrastructure,
 };
 use rusqlite::TransactionBehavior;
 
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
+
+/// Transient authentication errors one block may take before it waits for an
+/// operator.
+const MAX_DEFERRALS: usize = 5;
+
+/// Minutes the cleared-infra requeue waits after a transient authentication
+/// error before it tries the same block again.
+const DEFERRAL_BACKOFF_MINUTES: i64 = 10;
 use super::helpers::{SYSTEM_ACTOR_LABEL, is_automation_actor};
 use super::requeue::CandidateRequeue;
 use super::transitions::INFRA_BLOCK_CLEARED_EVENT;
@@ -164,6 +177,29 @@ impl OrbitRuntime {
                 refused.note.as_deref().unwrap_or("no reason recorded")
             )));
         }
+        let deferrals = after
+            .iter()
+            .filter(|entry| {
+                entry.event == TRANSIENT_INFRA_REQUEUE_DEFERRED_EVENT
+                    && entry.by == SYSTEM_ACTOR_LABEL
+            })
+            .collect::<Vec<_>>();
+        if let Some(last) = deferrals.last() {
+            let note = last.note.as_deref().unwrap_or("no reason recorded");
+            if deferrals.len() >= MAX_DEFERRALS {
+                return Ok(Some(format!(
+                    "authenticating the publication failed {} times on transient errors; last: \
+                     {note}",
+                    deferrals.len()
+                )));
+            }
+            if Utc::now() - last.at < chrono::Duration::minutes(DEFERRAL_BACKOFF_MINUTES) {
+                return Ok(Some(format!(
+                    "retrying after a transient error at {}: {note}",
+                    last.at.to_rfc3339()
+                )));
+            }
+        }
         let comments = self.get_task_comments(&task.id)?;
         let human = after
             .iter()
@@ -226,8 +262,18 @@ impl OrbitRuntime {
         let preserved = match &scanned.pull_request {
             Some(_) => match self.failure_handoff_requeue_record(&task) {
                 Ok((entry, _)) => Some(entry),
-                Err(error) => {
+                // Only the authentication's own refusal is final; a remote,
+                // forge or store error says nothing about the publication.
+                Err(error @ OrbitError::JobValidation(_)) => {
                     self.refuse_transient_infra_requeue(scanned, &error.to_string())?;
+                    return Ok(None);
+                }
+                Err(error) => {
+                    self.record_transient_infra_attempt(
+                        scanned,
+                        TRANSIENT_INFRA_REQUEUE_DEFERRED_EVENT,
+                        &error.to_string(),
+                    )?;
                     return Ok(None);
                 }
             },
@@ -310,19 +356,31 @@ impl OrbitRuntime {
         Ok(cleared)
     }
 
-    /// Record, once, that the cleared-infra requeue could not authenticate
-    /// `scanned`'s publication, so later ticks leave it to an operator.
+    /// Record, once, that the cleared-infra requeue found `scanned`'s
+    /// publication does not authenticate, so later ticks leave it to an
+    /// operator.
     fn refuse_transient_infra_requeue(
         &self,
         scanned: &TransientInfraBlockedTask,
         reason: &str,
     ) -> Result<(), OrbitError> {
+        self.record_transient_infra_attempt(scanned, TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT, reason)
+    }
+
+    /// Append `event` (a refusal or a deferral) to `scanned`'s block, while
+    /// it is still the block that was scanned and nothing holds it.
+    fn record_transient_infra_attempt(
+        &self,
+        scanned: &TransientInfraBlockedTask,
+        event: &'static str,
+        reason: &str,
+    ) -> Result<(), OrbitError> {
         tracing::warn!(
             target: "orbit.core.transient_infra",
             task_id = %scanned.task_id,
+            event,
             reason,
-            "a transient-infrastructure block's publication did not authenticate; it waits for \
-             an operator"
+            "a transient-infrastructure block's publication was not authenticated"
         );
         self.stores()
             .tasks()
@@ -341,7 +399,7 @@ impl OrbitRuntime {
                             append_history: vec![TaskHistoryEntry {
                                 at: Utc::now(),
                                 by: SYSTEM_ACTOR_LABEL.to_string(),
-                                event: TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT.to_string(),
+                                event: event.to_string(),
                                 note: Some(format!("run_id={}: {reason}", scanned.run_id)),
                                 from_status: None,
                                 to_status: None,

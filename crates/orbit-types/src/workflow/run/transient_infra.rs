@@ -35,6 +35,12 @@ pub const TRANSIENT_INFRA_REQUEUED_EVENT: &str = "transient_infra_requeued";
 /// says why.
 pub const TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT: &str = "transient_infra_requeue_refused";
 
+/// History event recorded, by `system`, when the cleared-infra requeue could
+/// not finish authenticating a blocked task's publication because of a
+/// transient error (the remote, the forge or the store). Later ticks back off
+/// and give up after a bounded number of these. Its note says what failed.
+pub const TRANSIENT_INFRA_REQUEUE_DEFERRED_EVENT: &str = "transient_infra_requeue_deferred";
+
 /// Automatic requeues one candidate publication (or, unpublished, one task)
 /// may take for transient infrastructure before it stays blocked for an
 /// operator.

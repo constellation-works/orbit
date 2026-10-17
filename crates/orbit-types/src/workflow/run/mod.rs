@@ -71,8 +71,9 @@ pub use state::{
 };
 pub use transient_infra::{
     MAX_TRANSIENT_INFRA_REQUEUES, TRANSIENT_INFRA_BLOCKED_EVENT,
-    TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT, TRANSIENT_INFRA_REQUEUED_EVENT, TransientInfraBlock,
-    TransientInfraRequeue, TransientInfrastructure,
+    TRANSIENT_INFRA_REQUEUE_DEFERRED_EVENT, TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT,
+    TRANSIENT_INFRA_REQUEUED_EVENT, TransientInfraBlock, TransientInfraRequeue,
+    TransientInfrastructure,
 };
 pub use validation_gates::{HostValidationGates, ValidationGateSource, ValidationGates};
 

@@ -512,14 +512,18 @@ to start.
 
 The requeue waits for the task's run to stop. Final recovery blocks the task
 before the run's failure handoff publishes, so while the run is live the
-requeue is refused and nothing changes; requeue once it has stopped. It then
+requeue is refused and nothing changes; requeue once it has stopped. A claimed
+task's run is a follower's leaf that the owner cannot probe, so while its
+execution claim is unsettled the requeue is refused the same way. It then
 authenticates the handoff receipt, before taking the task's write lock: the
 stopped run is this machine's own single-task delivery, conclusively stopped
 and still the task's newest execution, its candidate was not discarded, and
 the task specification is unchanged. Under the lock it re-checks that the task
 is still blocked and unchanged, records a `requeued` decision that supersedes
 the escalation, plus the publication-preservation record, and returns the task
-to `backlog`. Both records are written by `system`, because the next run trusts
+to `backlog`. The decision is written only with that record: a discard, or a
+requeue with nothing published, leaves the run's escalation as its recorded
+outcome. Both records are written by `system`, because the next run trusts
 only Orbit's own records; the operator's name and reason are on the status
 change and its comment. The answer names the pull request, branch and head the
 next run resumes. That run re-authenticates the same receipt and adopts the
@@ -535,13 +539,19 @@ task's undelivered Orbit-authored pull requests, the same closure as
 `orbit task update <task-id> --status backlog --discard-candidate`, which is
 the equivalent route without a recorded requeue decision. The next run
 implements fresh. A closure the forge refuses is reported in the answer
-(`discard_closure: incomplete`), and the requeue stands. Also refused, with
+(`discard_closure: incomplete`), and the requeue stands. With
+`pr.close_on_terminal = false` nothing is closed (`discard_closure:
+disabled`); close the discarded pull request by hand. Any other refusal of the
+publication (an interrupted or timed-out run, a newer execution, a foreign
+source) offers the same discard exit. Also refused, with
 the same discard exit:
 
 - a run that published through its own push and `pr_open` steps with no
   handoff receipt; use explicit source repair (below) or discard;
-- a task with no handoff receipt that still has a pull request or preserved
-  candidate on record, which its next run would refuse to start from.
+- a task last delivered by an owner pull-request run, with no handoff receipt,
+  that still has a pull request or preserved candidate on record, which its
+  next run would refuse to start from. A claimed delivery keeps its own
+  candidate contract and is not refused this way.
 
 ### A task blocked on transient infrastructure
 
@@ -565,16 +575,24 @@ recur after a requeue.
 
 The owner's clock tick, and `orbit task recheck-blocked --confirm`, requeue a
 cleared block onto its candidate through the same records as the operator
-requeue, so the next run resumes the same pull request. A block is held, and
-left for an operator `orbit task requeue`, while:
+requeue, so the next run resumes the same pull request. `recheck-blocked`
+reports what holds a block (`held`). Two holds are temporary, and the clock
+retries once they pass:
 
-- its run has not conclusively stopped (its failure handoff may still
-  publish);
+- its run, or an execution claim of the task, has not conclusively stopped
+  (its failure handoff may still publish);
+- the last attempt hit a transient error (the remote, the forge or the store
+  did not answer). It is recorded as `transient_infra_requeue_deferred` and
+  retried no sooner than ten minutes later.
+
+The others leave the block for an operator `orbit task requeue`:
+
 - someone other than Orbit's automation commented on or wrote to the task
   after the block: a human's call stands;
-- an earlier attempt could not authenticate its publication. That refusal is
-  recorded once (`transient_infra_requeue_refused`), so a publication that no
-  longer authenticates is not re-checked against the forge on every tick.
+- an attempt found that its publication does not authenticate. That refusal is
+  recorded once (`transient_infra_requeue_refused`), so the forge is not asked
+  again on every tick;
+- five attempts in a row hit transient errors.
 
 Each publication (or, when nothing was published, each task) takes at most
 two such requeues; after that the task stays blocked for an operator. A
