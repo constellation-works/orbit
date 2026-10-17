@@ -234,7 +234,7 @@ fn job_run_badge_latency_with_26_active_runs() {
                 let mut sorted = samples.clone();
                 sorted.sort_by(f64::total_cmp);
                 let measurement = json!({"endpoint":path, "active_runs":26, "samples_ms": samples, "p50_ms":sorted[9], "p95_ms":sorted[18]});
-                eprintln!("{measurement}");
+                tracing::info!(%measurement, "job-run badge latency");
                 measurements.push(measurement);
                 assert!(
                     sorted[18] <= 60.0,
