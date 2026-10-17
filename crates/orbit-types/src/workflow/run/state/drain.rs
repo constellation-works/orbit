@@ -533,7 +533,9 @@ pub struct DrainAdmissionPass {
     /// window was open: the owner's probe refusal, a refused settlement
     /// (`settlement_refused`), the failure breaker (`circuit_open`), a host
     /// shutdown inside the hold horizon (`host_shutdown_scheduled`), or no
-    /// runnable crew (`no_runnable_crew`, `host_suppressed`). Set afresh each
+    /// runnable crew (`no_runnable_crew`, `host_suppressed`), or a bounded
+    /// backoff from an owner whose store stayed locked
+    /// (`owner_busy_backoff`). Set afresh each
     /// pass, never carried. Host pressure and degradation have their own
     /// fields. Pull drains only.
     #[serde(default, skip_serializing_if = "Option::is_none")]

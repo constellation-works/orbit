@@ -660,10 +660,14 @@ fn tool_on_surface(advertised: &[String], name: &str) -> bool {
 ///
 /// It covers only the classification phases. The routed `tools/call` is not
 /// re-labelled here, because once that request is written the call may have
-/// run: [`OrbitError::OutcomeUnknown`] is its honest class.
+/// run: [`OrbitError::OutcomeUnknown`] is its honest class. A destination
+/// whose store stayed locked is not a delivery miss either: it was reached
+/// and decided nothing, and its `lock_busy` class is what lets a caller retry
+/// it briefly rather than treat the host as gone.
 fn delivery_unreachable(destination: &Destination, error: OrbitError) -> OrbitError {
     match error {
         OrbitError::UnreachableDestination(_) => error,
+        error if error.is_lock_busy() => error,
         other => OrbitError::UnreachableDestination(format!("{}: {other}", destination.machine_id)),
     }
 }
