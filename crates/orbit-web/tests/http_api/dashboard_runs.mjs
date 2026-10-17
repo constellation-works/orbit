@@ -355,6 +355,58 @@ assert.equal(runsBody.querySelectorAll('.runs-group-child').length, 3, 'member r
 runsBody.querySelector('.runs-group').click();
 assert.equal(runRowKeys().length, 2, 'clicking again folds the group');
 
+// With dispatch lineage, a task's runs group per attempt: a failed attempt and
+// the running retry are two groups, and the failed one names its leaf's error,
+// not the success guard of the parents that echoed it.
+const ago = ms => new Date(Date.now() - ms).toISOString();
+const leafError = '[provider_unavailable] claude: OAuth session expired; run `claude login`';
+// A parent fails in its success guard after its child, so it sorts above it.
+const guard = (parent, leaf, finishedAgo) => ({
+  parent_run_id: parent, finished_at: ago(finishedAgo), root_cause: { leaf_run_id: leaf, task_id: 'ORB-1', step: 'implement', code: 'provider_unavailable' },
+  steps: [{ target_id: 'pipeline_success_guard', state: 'failed', error_code: 'action_failed', error_message: `child run ${leaf} did not succeed` }],
+});
+const failedAttempt = [
+  pipelineRun('jrun-a1-auto', 'task_auto_pipeline', 'failed', guard(null, 'jrun-a1-pr', 50000)),
+  pipelineRun('jrun-a1-gate', 'task_gate_pipeline', 'failed', guard('jrun-a1-auto', 'jrun-a1-pr', 60000)),
+  pipelineRun('jrun-a1-pr', 'task_pr_pipeline', 'failed', {
+    parent_run_id: 'jrun-a1-gate', root_cause: null, finished_at: ago(70000),
+    steps: [{ target_id: 'implement', state: 'failed', error_code: 'provider_unavailable', error_message: leafError }],
+  }),
+];
+const live = { finished_at: null, root_cause: null, steps: [{ target_id: 'implement', state: 'running' }] };
+const retryAttempt = [
+  pipelineRun('jrun-a2-pr', 'task_pr_pipeline', 'running', { ...live, parent_run_id: 'jrun-a2-gate', started_at: ago(1000) }),
+  pipelineRun('jrun-a2-gate', 'task_gate_pipeline', 'running', { ...live, parent_run_id: 'jrun-a2-auto', started_at: ago(2000) }),
+  pipelineRun('jrun-a2-auto', 'task_auto_pipeline', 'running', { ...live, parent_run_id: null, started_at: ago(3000) }),
+];
+currentRunsList = [...failedAttempt, ...retryAttempt];
+renderRuns(currentRunsList);
+const attemptGroups = runsBody.querySelectorAll('.runs-group');
+assert.equal(attemptGroups.length, 2, 'a failed attempt and its retry are two groups');
+assert.equal(runRowKeys().length, 2, 'each attempt folds into its own group row');
+assert.equal(attemptGroups[0].querySelector('[data-state]').dataset.state, 'running', 'the newest group is the running retry');
+assert.equal(attemptGroups[0].querySelector('.run-failed-at').children.length, 0, 'the running retry names no failure');
+assert.equal(attemptGroups[1].querySelector('[data-state]').dataset.state, 'failed', 'the older attempt reads failed');
+assert.equal(attemptGroups[1].querySelector('.run-failed-step').textContent, 'pr › implement', 'the failed attempt names its leaf step, not the guard');
+assert.match(attemptGroups[1].querySelector('.run-failed-excerpt').textContent, /^provider_unavailable: \[provider_unavailable\] claude: OAuth session expired/, 'the failed attempt shows the leaf provider error');
+assert.doesNotMatch(attemptGroups[1].querySelector('.run-failed-at').textContent, /pipeline_success_guard/);
+attemptGroups[1].click();
+assert.deepEqual(runsBody.querySelectorAll('.runs-group-child').map(r => r.dataset.key.split(':').pop()),
+  ['jrun-a1-auto', 'jrun-a1-gate', 'jrun-a1-pr'], 'opening the failed attempt lists only its own runs');
+runsBody.querySelectorAll('.runs-group')[1].click();
+
+// A leaf outside the group (another delivery job) is still the one named.
+const localLeaf = { ...failedAttempt[2], run_id: 'jrun-a1-local', job_id: 'task_local_pipeline', parent_run_id: 'jrun-a1-gate' };
+const echo = run => ({ ...run, root_cause: { ...run.root_cause, leaf_run_id: 'jrun-a1-local' } });
+currentRunsList = [echo(failedAttempt[0]), echo(failedAttempt[1]), localLeaf];
+renderRuns(currentRunsList);
+assert.equal(runsBody.querySelector('.runs-group .run-failed-step').textContent, 'local › implement', 'a listed leaf outside the group explains it');
+currentRunsList = [echo(failedAttempt[0]), echo(failedAttempt[1])];
+renderRuns(currentRunsList);
+const causeOnly = runsBody.querySelector('.runs-group .run-failed-at');
+assert.equal(causeOnly.querySelector('.run-failed-step').textContent, 'implement', 'an unlisted leaf is named from the recorded root cause');
+assert.equal(causeOnly.querySelector('.run-failed-excerpt').textContent, 'provider_unavailable');
+
 // Filters update the address and the scope note before the next fetch returns.
 const filterButton = (label) => [...runsBody.querySelectorAll('.runs-filter-button')].find((button) => button.textContent === label);
 const windowButton = (value) => [...runsBody.querySelectorAll('.runs-filter-button')].find((button) => button.dataset.window === value);

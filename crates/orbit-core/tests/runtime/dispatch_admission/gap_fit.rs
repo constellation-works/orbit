@@ -412,6 +412,50 @@ fn candidates_admitted_in_one_pass_count_each_other() {
     assert_eq!(reserved, expected);
 }
 
+/// Memory fits by a high quantile of the deliveries' summed memory, not the
+/// sum of their p90s. Of ten three-minute `low` deliveries, two used 9 GiB
+/// and the rest 1: a p90 of 9 GiB over a mean of 2.6. A candidate beside two
+/// running deliveries priced the same makes 27 GiB of p90s, over the 24 GiB
+/// threshold even before the host's own use, yet the quantile of their sum,
+/// about 16.9 GiB, fits over 2 GiB in use and is admitted. Over 10 GiB in
+/// use it does not, and the candidate is refused for memory.
+fn memory_fits_by_the_quantile_of_the_sum_not_the_sum_of_p90s() {
+    let fixture = Fixture::new("enforce", "");
+    for index in 0..10 {
+        let memory = if index < 2 { 9 * GIB } else { GIB };
+        fixture.finished_delivery_using("low", &[0.5; 3], memory);
+    }
+    fixture.running_hard_delivery();
+    fixture.running_hard_delivery();
+    let candidate = fixture.task("candidate", TaskPriority::High, TaskComplexity::Low);
+    let drain = fixture.drain();
+
+    write_proc(&fixture.proc_root, 10);
+    let busy = classify(&fixture.runtime, &drain, 4);
+    assert_eq!(admitted(&busy), Vec::<String>::new(), "{busy:#}");
+    let record = recorded(&fixture.runtime, &drain, &busy);
+    let [skip] = record.skipped.as_slice() else {
+        panic!("{record:#?}");
+    };
+    assert_eq!(skip.task_id, candidate);
+    assert_eq!(skip.resource.as_deref(), Some("memory"));
+    assert_eq!(skip.detail, "memory 84% at +0m", "{record:#?}");
+
+    write_proc(&fixture.proc_root, 2);
+    let roomy = classify(&fixture.runtime, &drain, 4);
+    assert_eq!(admitted(&roomy), vec![candidate.clone()], "{roomy:#}");
+    let record = recorded(&fixture.runtime, &drain, &roomy);
+    assert!(record.skipped.is_empty(), "{record:#?}");
+    let [admission] = record.admitted.as_slice() else {
+        panic!("{record:#?}");
+    };
+    assert_eq!(
+        admission.idle_host, None,
+        "it fits beside the running deliveries, not by the idle-host rule"
+    );
+    assert_eq!(fixture.reserved(&fixture.runtime), vec![candidate]);
+}
+
 /// `shadow` admits what `off` admits for the same inputs, records the
 /// decisions `enforce` would have made, and reserves nothing. `off` builds
 /// no forecast and records no block.
@@ -1186,6 +1230,7 @@ crate::scenario_table!(
     enforce_skips_a_colliding_candidate_and_admits_a_lighter_one_behind_it_scenarios,
     enforce_skips_a_colliding_candidate_and_admits_a_lighter_one_behind_it,
     candidates_admitted_in_one_pass_count_each_other,
+    memory_fits_by_the_quantile_of_the_sum_not_the_sum_of_p90s,
     shadow_admits_as_off_and_records_what_enforce_would_do,
     per_run_mode_overrides_the_host_and_survives_reopen,
     the_ceiling_holds_before_gap_fit,

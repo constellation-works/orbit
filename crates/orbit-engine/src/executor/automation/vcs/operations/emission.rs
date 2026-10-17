@@ -208,7 +208,13 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
     {
         return Ok(json!({"evidence":null}));
     }
-    for run in complete_list(&current.runs, "workflow_runs")? {
+    let runs = complete_list(&current.runs, "workflow_runs")?;
+    // [ORB-16339] Before any workflow has run on the head, nothing can show a
+    // context will never be emitted; the ordinary required-check wait applies.
+    if runs.is_empty() {
+        return Ok(json!({"evidence":null}));
+    }
+    for run in runs {
         same(&run["head_sha"], json!(head), "workflow head")?;
         same(
             &run["repository"]["id"],
@@ -305,10 +311,6 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
     )?;
     let app_id = number(&app, "id")?;
     let mut bound_runs = Vec::new();
-    let runs = complete_list(&current.runs, "workflow_runs")?;
-    if runs.is_empty() {
-        return Err(unreadable("no authenticated prior PR workflow source"));
-    }
     for listed in runs {
         let run = super::prerequisite::checked_run(deadline, workspace, &current, listed)?;
         if run["status"] != "completed" || run["conclusion"] != "success" {
@@ -567,7 +569,14 @@ pub(super) fn current_gates(input: &Value) -> Result<Value, OrbitError> {
         .required
         .iter()
         .all(|gate| gate_passed(gate, checks, statuses));
+    // [ORB-16339] Gates the head has not reported in any state: a fresh head
+    // owes them before the provider has queued its first check run.
+    let missing: Vec<_> = current
+        .required
+        .iter()
+        .filter(|gate| !gate_present(gate, checks, statuses))
+        .collect();
     Ok(
-        json!({"gates_passed":passed,"required":current.required,"policy":current.policy,"policy_revisions":revisions,"checks":current.checks,"statuses":current.statuses}),
+        json!({"gates_passed":passed,"required":current.required,"missing":missing,"policy":current.policy,"policy_revisions":revisions,"checks":current.checks,"statuses":current.statuses}),
     )
 }

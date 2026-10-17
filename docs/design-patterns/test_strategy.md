@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Boundary-First Testing: integration, golden and e2e by default; unit tests by exception"
-last_validated: 2026-10-14
+last_validated: 2026-10-16
 ---
 # Boundary-First Testing
 
@@ -56,6 +56,10 @@ The reserved base-refresh completion fixture and accepted-handoff expiry fixture
 Some suite waits are deadlines inside a debug `orbit` or dashboard child, where a thread-local clock does not apply. Those children read a debug-only environment variable and ignore it in a release build: `ORBIT_TEST_HOST_FORWARD_ATTACH_TIMEOUT_MS` shortens only the host-forward attach budget, `ORBIT_TEST_MCP_LIFECYCLE_INTERVAL_MS` shortens only the stdio lifecycle tick, and `ORBIT_TEST_PIPELINE_WAIT_VIRTUAL=1` advances a pipeline wait by each poll instead of sleeping. Each one still runs the real child and the real reap. The quiet-deadline fixture injects its bound through `run_child_test_within` and keeps the child's progress loop long enough that silence would still kill it.
 
 Use timings and failure evidence to find the actual bottleneck: runner setup, compilation, linting, test execution, fixture startup, serial groups or teardown. Compare the same source selection, runner/build settings and cache conditions; retain failed and slow runs as evidence. Measure the full hosted job after changes as well as focused before/after costs. Fix flakes and hangs at their cause. Retries, artificial sleeps, hidden skips, weaker assertions, zero-test selections and omitted required checks cannot satisfy the budget.
+
+The Check job's nextest phase runs on a 4-vCPU runner with every slot busy. Comparing per-test durations on fast and slow runners of that size showed that about a fifth of slot time does not scale with CPU speed: those tests wait on timers, deadlines, or child processes, so a core can sit idle while the slot stays taken. `scripts/cpu-utilisation.sh` reads the aggregate `cpu` line of `/proc/stat` immediately before and after that phase and prints one `cpu-util:` line to the job log. Busy time is user + nice + system + irq + softirq + steal. Idle and iowait are their own percentages of the counter delta, followed by the elapsed seconds and the `cpuN` count. A missing file, a counter that does not move, or a counter that steps backwards prints `unavailable` and leaves the test command's exit status unchanged.
+
+`.config/nextest.toml` profile `ci` sets `test-threads` to 6 and `retries` to 0. Six is two extra slots on the 4-vCPU runner: enough to overlap that wait-bound fraction, and short of doubling the CPU-bound tests. The profile inherits the default profile, so the group caps stay `stateful-runtime` 1, `task-contracts` 4, and `mcp-contracts` 8. `scripts/ci-guardrails.sh` and the Linux sandbox gate select it with `--profile ci`. A local run that does not pass `--profile ci` keeps the default profile, whose thread count is the logical CPU count. `NEXTEST_TEST_THREADS`, including the value `scripts/build-budget.py` exports from the host `test-threads` file, still overrides the profile.
 
 The recurring `test-quality-audit` creates evidence-backed proposed tasks for critical coverage gaps, weak assertions, duplication, flaky or slow fixtures and regressions against this budget. It searches existing tasks before filing, links each finding to the audit, and records concrete acceptance criteria. The audit leaves a durable report even when no new finding is confirmed; it does not treat a quota of findings or deletions as success.
 

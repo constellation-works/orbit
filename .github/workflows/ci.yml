@@ -466,11 +466,14 @@ jobs:
       # A prior failure in this job (including Bubblewrap preparation or
       # `Run CI guardrails`) skips this gate; if this step is missing, it did
       # not pass.
+      # `--profile ci` matches the workspace-tests phase: more test threads
+      # than the 4-vCPU default, with the same named group caps. That phase's
+      # CPU sample is the cpu-util line from ci-guardrails.sh.
       - name: Linux sandbox/policy enforcement gate
         run: |
-          cargo nextest run --no-fail-fast --locked --workspace --lib --bins --tests \
+          cargo nextest run --profile ci --no-fail-fast --locked --workspace --lib --bins --tests \
             -E 'package(orbit-exec) | package(orbit-policy) | package(orbit-tools)'
-          cargo nextest run --no-fail-fast --locked --workspace --lib --bins --tests \
+          cargo nextest run --profile ci --no-fail-fast --locked --workspace --lib --bins --tests \
             --run-ignored only \
             -E 'package(orbit-exec) & binary(sandbox) & test(/^linux_sandbox::/)'
 
