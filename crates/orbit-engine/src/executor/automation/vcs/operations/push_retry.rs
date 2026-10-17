@@ -256,6 +256,25 @@ impl PushFailure {
     }
 }
 
+/// Arguments for one push attempt. After a `missing necessary objects`
+/// refusal, later attempts pass `--no-thin` so the pack does not delta
+/// against bases the server advertised and then did not have.
+fn push_attempt_args(args: &[String], no_thin: bool) -> Vec<String> {
+    if !no_thin {
+        return args.to_vec();
+    }
+    let Some((command, rest)) = args.split_first() else {
+        return Vec::new();
+    };
+    let mut attempt_args = Vec::with_capacity(args.len() + 1);
+    attempt_args.push(command.clone());
+    if command == "push" {
+        attempt_args.push("--no-thin".to_string());
+    }
+    attempt_args.extend(rest.iter().cloned());
+    attempt_args
+}
+
 fn bounded_diagnostic(text: &str) -> String {
     let text = text.trim();
     if text.len() <= FORGE_HOLD_DIAGNOSTIC_BYTES {
@@ -288,9 +307,17 @@ fn execute_push_with_transient_retry(
     let mut waited_ms = 0_u64;
     let mut attempt = 1;
     let mut first_refusal = None;
+    // Set once this push is refused for missing thin-pack bases. Later
+    // attempts then send `--no-thin` and no longer depend on those bases.
+    let mut no_thin = false;
     loop {
-        let result = run_vcs_process("git", args.to_vec(), Some(repo_root), LONG_TIMEOUT_MS)
-            .map_err(PushFailure::Error)?;
+        let result = run_vcs_process(
+            "git",
+            push_attempt_args(args, no_thin),
+            Some(repo_root),
+            LONG_TIMEOUT_MS,
+        )
+        .map_err(PushFailure::Error)?;
         let diagnostic = format!("{}\n{}", result.stdout, result.stderr);
         if result.success || result.timed_out || !is_transient_push_failure(&diagnostic) {
             return succeeded(result, operation)
@@ -300,6 +327,9 @@ fn execute_push_with_transient_retry(
                     waited_ms,
                 })
                 .map_err(PushFailure::Error);
+        }
+        if rejected_for_missing_necessary_objects(&diagnostic) {
+            no_thin = true;
         }
 
         let remote = execute(
@@ -368,6 +398,7 @@ fn execute_push_with_transient_retry(
             waited_ms,
             target_ref,
             head_sha,
+            no_thin,
             past_budget = attempt >= backoff.attempts,
             "retrying push after a transient remote failure"
         );
@@ -426,6 +457,9 @@ fn is_transient_push_failure(message: &str) -> bool {
                 "(service unavailable)",
                 "(bad gateway)",
                 "(gateway timeout)",
+                // A thin pack whose delta bases the server no longer has.
+                // The retry sends `--no-thin` [ORB-16529].
+                "(missing necessary objects)",
             ]
             .iter()
             .any(|reason| line.ends_with(reason))
@@ -448,6 +482,16 @@ fn is_transient_push_failure(message: &str) -> bool {
         || text.contains("connection reset")
         || (text.contains("tls handshake")
             && (text.contains("timeout") || text.contains("timed out")))
+}
+
+/// A `[remote rejected] … (missing necessary objects)` line. Permanent
+/// diagnostics are decided first by [`is_transient_push_failure`].
+fn rejected_for_missing_necessary_objects(message: &str) -> bool {
+    let text = message.to_ascii_lowercase();
+    text.lines().any(|line| {
+        let line = line.trim_end();
+        line.contains("[remote rejected]") && line.ends_with("(missing necessary objects)")
+    })
 }
 
 /// Whether `value` is a ref under [`CANDIDATE_REF_PREFIX`] made of plain
