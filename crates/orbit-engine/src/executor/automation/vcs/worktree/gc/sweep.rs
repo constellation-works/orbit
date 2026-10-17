@@ -17,15 +17,46 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Task statuses that settle the work as done — the only statuses that
-/// license discarding a run's worktree and branch. Every other status
-/// (including `blocked` and `review`) retains it, and an unresolvable or
-/// missing task id retains it as well: the collector fails closed.
+/// Task statuses that settle the work as done and license discarding a run's
+/// worktree on the sweep's own age floor. `someday` is not one of them: it
+/// waits for [`WorktreeGcOptions::parked_reclaim_after`]. Every other status
+/// (including `backlog`, `blocked`, and `review`) retains the checkout, and
+/// an unresolvable or missing task id retains it as well: the collector
+/// fails closed.
 pub(super) fn task_status_permits_deletion(status: TaskStatus) -> bool {
     matches!(
         status,
         TaskStatus::Rejected | TaskStatus::Archived | TaskStatus::Done
     )
+}
+
+/// Whether a someday run has reached `cutoff`.
+///
+/// `None` means the sweep was not given a parked-age cutoff, so someday stays
+/// ineligible. `Some(true)` is old enough (`finished_at`, or `created_at`
+/// when the run has not recorded a finish, at or before the cutoff).
+pub(super) fn someday_parked_long_enough(
+    run: &JobRun,
+    cutoff: Option<DateTime<Utc>>,
+) -> Option<bool> {
+    cutoff.map(|cutoff| run.finished_at.unwrap_or(run.created_at) <= cutoff)
+}
+
+/// Instant before which a someday run's worktree may be removed.
+///
+/// `hours` is `worktree.parked_reclaim_after_hours`. Zero is the current
+/// instant, so a run that has already finished is eligible. The setting is
+/// admitted only through 8760; a larger value cannot be represented.
+pub fn parked_reclaim_cutoff(hours: u64) -> Result<DateTime<Utc>, OrbitError> {
+    let hours = i64::try_from(hours).map_err(|_| {
+        OrbitError::InvalidInput("worktree.parked_reclaim_after_hours is too large".to_string())
+    })?;
+    let duration = chrono::Duration::try_hours(hours).ok_or_else(|| {
+        OrbitError::InvalidInput("worktree.parked_reclaim_after_hours is too large".to_string())
+    })?;
+    Utc::now().checked_sub_signed(duration).ok_or_else(|| {
+        OrbitError::InvalidInput("worktree.parked_reclaim_after_hours is too large".to_string())
+    })
 }
 
 #[derive(Debug, Clone, Default)]
@@ -48,6 +79,11 @@ pub struct WorktreeGcOptions {
     /// recoverable elsewhere (a carry ref or published branch holding exactly
     /// it, or a verified rescue patch). Without it a dirty worktree is kept.
     pub rescue_dirty: bool,
+    /// When set, a terminal run whose every task is `someday` may lose its
+    /// whole worktree once the run finished at or before this instant.
+    /// `None` leaves someday ineligible. Rejected, archived, and done do not
+    /// consult it.
+    pub parked_reclaim_after: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

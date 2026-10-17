@@ -101,6 +101,24 @@ pub(super) fn resolve_retention_days(raw: Option<u32>, key: &str) -> Result<u32,
     }
 }
 
+/// Default `worktree.parked_reclaim_after_hours`: long enough that a parked
+/// task can be resumed the same week, short enough that a failed run left in
+/// `someday` does not keep a multi-gigabyte checkout indefinitely.
+pub(super) const DEFAULT_PARKED_RECLAIM_AFTER_HOURS: u64 = 72;
+
+/// Admit the someday whole-worktree age. Zero reclaims a finished run on the
+/// next sweep; a year is the ceiling.
+pub(super) fn resolve_parked_reclaim_after_hours(raw: Option<u64>) -> Result<u64, OrbitError> {
+    const MAX_HOURS: u64 = 8_760;
+    match raw {
+        Some(value) if value > MAX_HOURS => Err(OrbitError::InvalidInput(format!(
+            "worktree.parked_reclaim_after_hours has invalid value {value}; expected 0..={MAX_HOURS}"
+        ))),
+        Some(value) => Ok(value),
+        None => Ok(DEFAULT_PARKED_RECLAIM_AFTER_HOURS),
+    }
+}
+
 /// Admit a positive minute budget, defaulting when unset. A day is the
 /// ceiling: anything longer is indistinguishable from never escalating.
 pub(super) fn resolve_bounded_minutes(

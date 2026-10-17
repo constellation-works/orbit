@@ -140,6 +140,13 @@ See [Delivery Workflows](../../getting-started/workflows/).
 | `orbit gc runs` | Report this workspace's terminal runs older than `retention.runs_days` that still keep pipeline state; `--apply` drops that state and stamps the run archived. The run, its steps and its summary stay, so `run show` and run history keep working. Held and non-terminal runs are never touched. The host's per-minute resource history and recorded admission forecasts older than 30 days go in the same pass. `--older-than-days <N>`. |
 | `orbit gc tmp` | Report this workspace checkout's scratch contents (`.orbit/tmp/`) and empty it with `--confirm`, keeping the directory. `--confirm` refuses while any job run is pending, running, or retrying, and the command needs Linux or macOS. Without `--confirm` it only reports; `--dry-run` requests that default explicitly. |
 
+A someday task's whole worktree is reclaimed once the run is older than
+`worktree.parked_reclaim_after_hours` (default 72 hours). A claim that still
+holds a drain slot is `skipped:live_claim`, a held host-validation lease is
+`skipped:lease_held`, and any other status, including backlog, is kept.
+Rejected, archived, and done stay on `--older-than-hours` rather than that
+parked age.
+
 On a replica, `orbit gc worktrees` reaps a claimed run whose claim is already
 settled with the owner without checking its task. For any other run, it asks
 the owner machine for the task's status. A failed lookup is skipped and

@@ -73,8 +73,8 @@ pub(super) fn is_registered_worktree(repo_root: &Path, path: &Path) -> Result<bo
 #[cfg(all(target_os = "linux", feature = "test-support"))]
 pub use gc::with_host_target_removal_hook;
 pub use gc::{
-    WorktreeGcOptions, WorktreeGcResult, collect_worktrees, run_worktree_has_reclaim_output,
-    run_worktree_paths,
+    WorktreeGcOptions, WorktreeGcResult, collect_worktrees, parked_reclaim_cutoff,
+    run_worktree_has_reclaim_output, run_worktree_paths,
 };
 pub(in crate::executor::automation) use merge::merge_batch_worktree_into_base;
 pub use reclaim::WorktreeReclaimReport;

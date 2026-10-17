@@ -1,9 +1,9 @@
 ---
 type: runbook
-summary: Reclaim declared rebuildable outputs from kept terminal run worktrees and their host validation output.
+summary: Reclaim declared rebuildable outputs from kept terminal run worktrees, age-reclaim someday worktrees, and reclaim host validation output.
 tags: [disk, worktree, gc]
 paths: ["crates/orbit-engine/src/executor/automation/vcs/worktree/", "crates/orbit-core/src/application/gc/"]
-last_validated: 2026-10-14
+last_validated: 2026-10-17
 ---
 
 # Reclaim kept worktree output
@@ -140,13 +140,49 @@ attributed host target, so admission reclaims them oldest first. Sources,
 branches, refs, task artifacts, logs and other caches are never touched.
 `detail` names the checkout each attributed target was built for.
 
+## Parked someday worktrees
+
+A terminal run whose every task is `someday` is removed once it has been
+finished for at least `worktree.parked_reclaim_after_hours` hours (default 72;
+allowed `0` through `8760`). The clock is `finished_at`, or `created_at` when
+the run never recorded a finish. A timestamp equal to the cutoff is old enough.
+Rejected, archived, and done stay on
+the sweep's own floor (`--older-than-hours`, or the pipeline's
+`older_than_hours`, default 1). They are not held for the parked age. Backlog,
+blocked, review, in-progress, and a someday run younger than the cutoff stay.
+A young someday run is `skipped:parked_too_recent`.
+
+Two holds outrank that age, and the dry-run JSON names them:
+
+- `skipped:live_claim` — the run's claim still holds a drain slot (it is not
+  idle, settled, or refused). A settled claim is the existing license to
+  remove without asking the owner, and is unchanged. A live claim does not
+  keep a run whose tasks are already rejected, archived, or done.
+- `skipped:lease_held` — a host-validation lease names this checkout and its
+  lock records a live holder. A holder whose process has exited does not pin
+  the checkout. This check applies to every whole-worktree removal, including
+  rejected, archived, and done.
+
+Manual `orbit gc worktrees --confirm` still keeps a dirty tree
+(`skipped:dirty_rescue_candidate`). The scheduled pipeline may remove it after
+the candidate is recoverable, as below. Removing the worktree takes the
+checkout, including caches under its `.orbit/tmp`. It does not take task
+artifacts, rescue patches under `.orbit/state/rescue/`, or the run row.
+
+```toml
+[worktree]
+parked_reclaim_after_hours = 72
+```
+
 ## Dirty worktrees of settled tasks
 
 A failed claimed leaf keeps its uncommitted candidate in its worktree. The
 scheduled `worktree_gc_pipeline` removes such a worktree once the run is
 terminal, older than the age floor, has no live or undecidable worker, and
-every task it serves is `done`, `rejected` or `archived` (or its claim is
-settled), and only when the candidate is recoverable elsewhere. The candidate is
+every task it serves is `done`, `rejected` or `archived`, or `someday` past
+`worktree.parked_reclaim_after_hours` (or its claim is settled), and only when
+the candidate is recoverable elsewhere. A live claim or a held host-validation
+lease keeps the checkout, as [above](#parked-someday-worktrees). The candidate is
 every tracked change and every untracked path Git does not ignore, snapshotted
 as one tree through a scratch index. The worktree's own index and files are not
 changed. If a staged path differs from this working candidate, GC retains the

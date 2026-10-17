@@ -480,6 +480,20 @@ pub trait RuntimeHost: Send + Sync {
     /// about the task. `Some` names the settlement for the GC report; a host
     /// that pulls no work holds no claims.
     fn settled_claim_for_worktree_gc(&self, run_id: &str) -> Option<String>;
+    /// Hours after a terminal run finishes before a someday task's whole
+    /// worktree may be removed. `None` leaves someday ineligible, which is
+    /// what a host with no workspace settings does.
+    fn parked_worktree_reclaim_after_hours(&self) -> Option<u64> {
+        None
+    }
+    /// A claim that still holds a drain slot for `run_id`. `Some` names the
+    /// phase for the GC report. A host that pulls no work holds no claims.
+    ///
+    /// This keeps a someday checkout that the parked-age rule would otherwise
+    /// remove. It does not apply to a task already rejected, archived, or done.
+    fn live_claim_for_worktree_gc(&self, _run_id: &str) -> Option<String> {
+        None
+    }
     /// Prune this checkout's `.orbit/tmp` of top-level entries untouched for
     /// `retention_hours`. `None` means the host keeps no scratch directory to
     /// sweep.

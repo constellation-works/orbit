@@ -126,6 +126,10 @@ pub(crate) fn execute_engine_action<
             };
             let runs = host.list_job_runs_for_gc()?;
             let repo_root = host.repo_root()?;
+            let parked_reclaim_after = host
+                .parked_worktree_reclaim_after_hours()
+                .map(vcs::parked_reclaim_cutoff)
+                .transpose()?;
             let result = vcs::collect_worktrees(
                 std::path::Path::new(&repo_root),
                 &runs,
@@ -148,6 +152,7 @@ pub(crate) fn execute_engine_action<
                     // [ORB-15613] A settled run's dirty worktree goes once its
                     // candidate is recoverable; it no longer leaks for good.
                     rescue_dirty: true,
+                    parked_reclaim_after,
                 },
             )?;
             let mut output = serde_json::to_value(result).map_err(|error| {

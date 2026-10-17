@@ -4,7 +4,8 @@ schemaVersion: 1
 name: __ORBIT_ROUTINE_NAME__
 description: >
   Hourly reclamation of worktrees whose associated task has settled to
-  rejected, archived, or done.
+  rejected, archived, or done, and of someday worktrees older than
+  worktree.parked_reclaim_after_hours. A live claim or held lease is kept.
 enabled: false
 trigger:
   cron: "35 * * * *"

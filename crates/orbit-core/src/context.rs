@@ -434,6 +434,8 @@ pub(crate) struct OrbitRuntimeSettings {
     host_shutdown_hold_minutes: u32,
     worktree_reclaim: Vec<String>,
     worktree_reclaim_below_free_mib: Option<u64>,
+    /// `worktree.parked_reclaim_after_hours`.
+    worktree_parked_reclaim_after_hours: u64,
 }
 
 impl OrbitRuntimeSettings {
@@ -464,6 +466,7 @@ impl OrbitRuntimeSettings {
         host_shutdown_hold_minutes: u32,
         worktree_reclaim: Vec<String>,
         worktree_reclaim_below_free_mib: Option<u64>,
+        worktree_parked_reclaim_after_hours: u64,
     ) -> Self {
         Self {
             persistence,
@@ -491,6 +494,7 @@ impl OrbitRuntimeSettings {
             host_shutdown_hold_minutes,
             worktree_reclaim,
             worktree_reclaim_below_free_mib,
+            worktree_parked_reclaim_after_hours,
         }
     }
 
@@ -508,6 +512,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn worktree_reclaim_below_free_mib(&self) -> Option<u64> {
         self.worktree_reclaim_below_free_mib
+    }
+
+    pub(crate) fn worktree_parked_reclaim_after_hours(&self) -> u64 {
+        self.worktree_parked_reclaim_after_hours
     }
 
     pub(crate) fn operation(&self) -> &orbit_config::OperationPolicy {

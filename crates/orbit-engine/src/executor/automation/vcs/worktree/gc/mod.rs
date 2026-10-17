@@ -38,4 +38,4 @@ pub use reclaim::run_worktree_has_reclaim_output;
 // Keep the report type reachable at the existing GC module path.
 #[allow(unused_imports)]
 pub use sweep::WorktreeGcReport;
-pub use sweep::{WorktreeGcOptions, WorktreeGcResult, collect_worktrees};
+pub use sweep::{WorktreeGcOptions, WorktreeGcResult, collect_worktrees, parked_reclaim_cutoff};

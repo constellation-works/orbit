@@ -18,9 +18,9 @@ use super::resolve::{
     resolve_bounded_minutes, resolve_build_output_env, resolve_choice, resolve_cpu_light_leaves,
     resolve_distributed_completion, resolve_host_shutdown_hold_minutes, resolve_machine_id,
     resolve_machine_name, resolve_material_fields, resolve_memory_limit, resolve_non_empty,
-    resolve_optional_choice, resolve_optional_non_empty, resolve_percent, resolve_reclaim,
-    resolve_retention_days, resolve_task_prefix, resolve_validation_path_mode,
-    resolve_worker_tasks_max,
+    resolve_optional_choice, resolve_optional_non_empty, resolve_parked_reclaim_after_hours,
+    resolve_percent, resolve_reclaim, resolve_retention_days, resolve_task_prefix,
+    resolve_validation_path_mode, resolve_worker_tasks_max,
 };
 use crate::memory_limit::MemoryLimit;
 use crate::operation;
@@ -461,6 +461,12 @@ define_config_settings! {
         description: "When free MiB under the state directory falls below this optional threshold, admission reclaims declared paths in oldest terminal worktrees first. Unset disables admission reclamation.",
         section: ConfigSection::Housekeeping, order: 130,
         resolve: |raw: Option<u64>| Ok::<_, OrbitError>(raw),
+    },
+    worktree_parked_reclaim_after_hours: u64 => u64 {
+        key: "worktree.parked_reclaim_after_hours", value_type: "integer",
+        description: "Hours after a terminal run finishes before orbit gc worktrees may remove its whole worktree when every task it serves is someday. Rejected, archived and done stay on the sweep's own age floor. A live claim, a held host-validation lease, a dirty tree on a manual pass, and every other status keep the checkout. 0 reclaims a finished someday run on the next sweep (0..=8760, default 72).",
+        section: ConfigSection::Housekeeping, order: 140,
+        resolve: resolve_parked_reclaim_after_hours,
     },
     review_baseline_commands: Vec<String> => Vec<String> {
         key: "review.baseline_commands", value_type: "array<string>",

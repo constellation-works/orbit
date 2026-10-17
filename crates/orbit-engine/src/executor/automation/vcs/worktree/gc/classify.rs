@@ -6,11 +6,12 @@ use super::paths::{attributed_task_ids, branch_name, directory_bytes};
 use super::reclaim::collect_build_output;
 use super::rescue::{delete_run_branch, rescue_dirty_worktree};
 use super::sweep::{
-    NOT_REGISTERED_REMEDY, WorktreeGcOptions, WorktreeGcReport, task_status_permits_deletion,
+    NOT_REGISTERED_REMEDY, WorktreeGcOptions, WorktreeGcReport, someday_parked_long_enough,
+    task_status_permits_deletion,
 };
 use crate::context::{RuntimeHost, WorktreeGcTaskLookup};
 use orbit_common::OrbitError;
-use orbit_types::task::task_id_prefix;
+use orbit_types::task::{TaskStatus, task_id_prefix};
 use orbit_types::workflow::JobRun;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -155,20 +156,22 @@ pub(super) fn classify_known<H: RuntimeHost + ?Sized>(
         return collect_build_output(path, run, options, report);
     }
 
-    // Primary gate: only a task settled to rejected, archived, or done
-    // licenses deletion. A run's process finishing says nothing about
+    // Primary gate: rejected, archived, or done licenses deletion on the
+    // sweep's age floor. Someday licenses it only once the run is older than
+    // the parked-age cutoff. A run's process finishing says nothing about
     // whether the work it produced is settled — a run with no associated
     // task, or one whose task can't be resolved, is retained rather than
     // treated as eligible.
     //
     // Bundle rule (ORB-10427): a worktree that serves several tasks is
-    // eligible only when *every* task it serves is settled, so a bundle is
-    // never easier to discard than its least-settled member. The first
-    // member that blocks deletion becomes the reported task.
+    // eligible only when *every* task it serves is settled or parked long
+    // enough, so a bundle is never easier to discard than its least-settled
+    // member. The first member that blocks deletion becomes the reported task.
     //
     // A claimed leaf's settled claim stands in for its task's status: the
     // follower holds no task records, and the owner already has the leaf's
     // delivery whatever the task's status says now.
+    let mut parked_age_eligible = false;
     if let Some(settlement) = settled_claim {
         report.detail = Some(settlement);
     } else if resolved.is_empty() {
@@ -181,12 +184,36 @@ pub(super) fn classify_known<H: RuntimeHost + ?Sized>(
                 if task_status_permits_deletion(status) {
                     continue;
                 }
-                (
-                    Some(status),
-                    pr_status,
-                    "skipped:task_status_ineligible",
-                    None,
-                )
+                if status == TaskStatus::Someday {
+                    match someday_parked_long_enough(run, options.parked_reclaim_after) {
+                        Some(true) => {
+                            parked_age_eligible = true;
+                            continue;
+                        }
+                        Some(false) => (
+                            Some(status),
+                            pr_status,
+                            "skipped:parked_too_recent",
+                            Some(
+                                "younger than worktree.parked_reclaim_after_hours; the checkout stays until then"
+                                    .to_string(),
+                            ),
+                        ),
+                        None => (
+                            Some(status),
+                            pr_status,
+                            "skipped:task_status_ineligible",
+                            None,
+                        ),
+                    }
+                } else {
+                    (
+                        Some(status),
+                        pr_status,
+                        "skipped:task_status_ineligible",
+                        None,
+                    )
+                }
             }
             WorktreeGcTaskLookup::Unresolved => (None, None, "skipped:task_unresolved", None),
             WorktreeGcTaskLookup::TaskPrefixUnroutable => {
@@ -216,6 +243,24 @@ pub(super) fn classify_known<H: RuntimeHost + ?Sized>(
         report.pr_status = pr_status;
         report.action = action.to_string();
         report.detail = detail;
+        return Ok(report);
+    }
+
+    // A live claim blocks only the parked-age path. Done, rejected, and
+    // archived stay removable while an unsettled claim still asks the owner,
+    // which is what already decided those statuses above.
+    if parked_age_eligible
+        && let Some(detail) = lookups.host.live_claim_for_worktree_gc(&run.run_id)
+    {
+        report.action = "skipped:live_claim".to_string();
+        report.detail = Some(detail);
+        return Ok(report);
+    }
+    // A held host-validation lease names this checkout as the source of a
+    // build still in progress. A dead holder does not pin the checkout.
+    if let Some(detail) = super::super::super::scratch_target::held_checkout_lease(path) {
+        report.action = "skipped:lease_held".to_string();
+        report.detail = Some(detail);
         return Ok(report);
     }
 

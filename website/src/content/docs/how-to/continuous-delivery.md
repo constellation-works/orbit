@@ -478,8 +478,11 @@ orbit gc worktrees --confirm
 orbit gc worktrees --reclaim --confirm
 ```
 
-`orbit gc worktrees` collects only worktrees whose task is `done`, `rejected`,
-or `archived`, and removes nothing without `--confirm`. On a replica it reads
+`orbit gc worktrees` collects worktrees whose task is `done`, `rejected`, or
+`archived`, and a `someday` task once the run is older than
+`worktree.parked_reclaim_after_hours` (default 72 hours). A live claim, a held
+host-validation lease, and every other status, including backlog, are kept.
+It removes nothing without `--confirm`. On a replica it reads
 task status from the owner machine. `--reclaim` deletes declared
 `worktree.reclaim` paths (default `["target"]`) only after terminal-run, worker,
 registration, confinement, symlink and Git content checks. The failed run's

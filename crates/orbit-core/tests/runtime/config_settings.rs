@@ -23,6 +23,30 @@ fn reclaim_config_defaults_replaces_layers_and_refuses_unconfined_patterns() {
         load().unwrap().snapshot.worktree_reclaim,
         ["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]
     );
+    assert_eq!(
+        load().unwrap().snapshot.worktree_parked_reclaim_after_hours,
+        72
+    );
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[worktree]\nparked_reclaim_after_hours = 0\n",
+    )
+    .unwrap();
+    assert_eq!(
+        load().unwrap().snapshot.worktree_parked_reclaim_after_hours,
+        0
+    );
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[worktree]\nparked_reclaim_after_hours = 8761\n",
+    )
+    .unwrap();
+    let error = load().unwrap_err().to_string();
+    assert!(
+        error.contains("worktree.parked_reclaim_after_hours"),
+        "{error}"
+    );
+    std::fs::remove_file(workspace.join("config.toml")).unwrap();
     std::fs::write(
         global.join("config.toml"),
         "[worktree]\nreclaim = ['target', 'node_modules']\nreclaim_below_free_mib = 100\n",

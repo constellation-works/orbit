@@ -6,8 +6,10 @@ spec:
   type: deterministic
   description: >
     Reap worktrees whose associated task has settled to rejected, archived,
-    or done. A run that is not yet terminal or has no resolvable associated
-    task is always retained and reported. A settled run's dirty tree is
+    or done, and someday worktrees older than worktree.parked_reclaim_after_hours.
+    A live claim or a held host-validation lease keeps the checkout. A run that
+    is not yet terminal or has no resolvable associated task is always retained
+    and reported. Backlog, blocked, review, and in-progress tasks are kept. A settled run's dirty tree is
     removed only once its uncommitted candidate is recoverable: a carry ref
     or published branch on origin holding exactly it, or a rescue patch this
     sweep writes and verifies first; `recovery` names which. Otherwise it is

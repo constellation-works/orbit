@@ -18,28 +18,23 @@
 //! A target name neither record derives is never inferred to be scratch
 //! output.
 
-use std::path::Path;
-#[cfg(target_os = "linux")]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[cfg(target_os = "linux")]
 use std::time::Duration;
 
 use orbit_common::OrbitError;
-use orbit_common::fs::file_lock::FileLockGuard;
+use orbit_common::fs::file_lock::{FileLockGuard, read_file_lock_holder};
 #[cfg(target_os = "linux")]
 use orbit_common::fs::file_lock::{FileLockOptions, acquire_exclusive_file_lock};
 #[cfg(target_os = "linux")]
 use orbit_common::fs::io::atomic_write_bytes;
 use serde::{Deserialize, Serialize};
 
-#[cfg(target_os = "linux")]
 use super::build_output::{host_validation_source, host_validation_target_key};
 
 /// Where leases live, relative to the primary checkout: beside the targets,
 /// never inside them, so listing the targets lists only targets.
-#[cfg(target_os = "linux")]
 const LEASES_DIR: [&str; 3] = [".orbit", "state", "host-validation-leases"];
-#[cfg(target_os = "linux")]
 const LEASE_SCHEMA_VERSION: u32 = 1;
 /// Long enough to outlast GC removing a large target under the lock.
 #[cfg(target_os = "linux")]
@@ -59,7 +54,6 @@ pub enum ScratchHostTarget {
 }
 
 impl ScratchHostTarget {
-    #[cfg(target_os = "linux")]
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::HostEvidence => "host-evidence",
@@ -69,7 +63,6 @@ impl ScratchHostTarget {
 }
 
 /// What built one leased target.
-#[cfg(target_os = "linux")]
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct LeaseRecord {
     schema_version: u32,
@@ -155,7 +148,6 @@ pub(super) fn leased_target(primary: &Path, key: &str) -> Option<LeasedTarget> {
     })
 }
 
-#[cfg(target_os = "linux")]
 fn lease_paths(primary: &Path, key: &str) -> (PathBuf, PathBuf) {
     let directory = LEASES_DIR
         .iter()
@@ -168,10 +160,48 @@ fn lease_paths(primary: &Path, key: &str) -> (PathBuf, PathBuf) {
     )
 }
 
-#[cfg(target_os = "linux")]
 fn read_record(path: &Path) -> Option<LeaseRecord> {
     let bytes = std::fs::read(path).ok()?;
     serde_json::from_slice::<LeaseRecord>(&bytes)
         .ok()
         .filter(|record| record.schema_version == LEASE_SCHEMA_VERSION)
+}
+
+/// A live host-validation lease naming `checkout` as its source.
+///
+/// The lineage record must hash to this checkout. A recorded holder whose
+/// process has exited does not pin it: the operating system released that
+/// lock with the process, and a leftover file must not keep a gigabyte
+/// checkout. Where process liveness cannot be observed, a recorded holder
+/// counts as live.
+pub(super) fn held_checkout_lease(checkout: &Path) -> Option<String> {
+    let (primary, source) = host_validation_source(checkout).ok()?;
+    let key = host_validation_target_key(&source);
+    let (record_path, lock) = lease_paths(&primary, &key);
+    let record = read_record(&record_path)?;
+    if host_validation_target_key(&record.source) != key {
+        return None;
+    }
+    let holder = read_file_lock_holder(&lock)?;
+    if !holder_still_running(holder.pid) {
+        return None;
+    }
+    Some(format!(
+        "{} lease held by pid {} ({})",
+        record.kind.label(),
+        holder.pid,
+        holder.label
+    ))
+}
+
+fn holder_still_running(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        orbit_common::process::identity::process_is_alive(pid)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        true
+    }
 }

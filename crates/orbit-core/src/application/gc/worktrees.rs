@@ -3,7 +3,7 @@
 use chrono::{Duration, Utc};
 use orbit_engine::{
     RuntimeHost, WorktreeGcOptions, WorktreeGcResult, WorktreeGcTaskLookup, collect_worktrees,
-    run_worktree_has_reclaim_output,
+    parked_reclaim_cutoff, run_worktree_has_reclaim_output,
 };
 use orbit_store::contracts::{ClaimMutation, JobRunQuery, LocalPullPhase};
 use orbit_types::task::{TaskStatus, task_id_prefix};
@@ -132,6 +132,7 @@ impl OrbitRuntime {
                 reclaim_patterns: Some(self.worktree_reclaim_patterns()),
                 reclaim_kept: false,
                 rescue_dirty: false,
+                parked_reclaim_after: self.parked_reclaim_after()?,
             },
         )
         .map(Some)
@@ -281,6 +282,35 @@ impl OrbitRuntime {
         Some(format!("claim settled with its owner {owner}"))
     }
 
+    /// A claim that still holds a drain slot for this run. Reading it failing
+    /// keeps the checkout: a missing answer is not evidence the slot is free.
+    /// An absent row, and a settled, idle, or refused admission, hold nothing.
+    pub(crate) fn worktree_gc_live_claim(&self, run_id: &str) -> Option<String> {
+        match self.stores().jobs().local_pull_for_run(run_id) {
+            Ok(Some(record)) if record.holds_capacity() => Some(format!(
+                "claim phase {} still holds a drain slot",
+                pull_phase_name(record.phase)
+            )),
+            Ok(_) => None,
+            Err(error) => {
+                tracing::warn!(
+                    run_id,
+                    %error,
+                    "worktree GC could not read the run's claim admission; retaining the worktree"
+                );
+                Some(format!("claim admission could not be read: {error}"))
+            }
+        }
+    }
+
+    fn parked_reclaim_after(&self) -> Result<Option<chrono::DateTime<chrono::Utc>>, OrbitError> {
+        Ok(Some(parked_reclaim_cutoff(
+            self.context
+                .settings()
+                .worktree_parked_reclaim_after_hours(),
+        )?))
+    }
+
     /// Reclaim declared output of one terminal run, keeping its checkout.
     /// Registration, worker, confinement and Git content gates apply.
     pub(crate) fn reclaim_run_build_output(
@@ -301,6 +331,7 @@ impl OrbitRuntime {
                 reclaim_patterns: Some(self.worktree_reclaim_patterns()),
                 reclaim_kept: false,
                 rescue_dirty: false,
+                parked_reclaim_after: self.parked_reclaim_after()?,
             },
         )
     }
@@ -340,9 +371,17 @@ impl OrbitRuntime {
                 reclaim_patterns: Some(self.worktree_reclaim_patterns()),
                 reclaim_kept: false,
                 rescue_dirty: false,
+                parked_reclaim_after: self.parked_reclaim_after()?,
             },
         )
     }
+}
+
+fn pull_phase_name(phase: LocalPullPhase) -> String {
+    serde_json::to_value(phase)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 /// Only an unreachable destination, a lost result, or a fenced unavailable

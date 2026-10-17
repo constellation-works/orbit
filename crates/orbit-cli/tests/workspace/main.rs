@@ -49,6 +49,7 @@ mod init_linux_sandbox;
 mod init_minted_prefix;
 mod init_workspace_seed;
 mod layout_version;
+mod parked_worktree_gc;
 mod replica_routines;
 mod routine_root;
 mod routine_state_seed;

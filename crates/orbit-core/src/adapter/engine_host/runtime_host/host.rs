@@ -669,6 +669,18 @@ impl RuntimeHost for OrbitRuntime {
         self.worktree_gc_settled_claim(run_id)
     }
 
+    fn parked_worktree_reclaim_after_hours(&self) -> Option<u64> {
+        Some(
+            self.context
+                .settings()
+                .worktree_parked_reclaim_after_hours(),
+        )
+    }
+
+    fn live_claim_for_worktree_gc(&self, run_id: &str) -> Option<String> {
+        self.worktree_gc_live_claim(run_id)
+    }
+
     fn gc_scratch(
         &self,
         retention_hours: u64,

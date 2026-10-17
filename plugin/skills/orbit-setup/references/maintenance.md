@@ -20,8 +20,12 @@ orbit gc worktrees --target-only            # report only each worktree's target
 orbit gc worktrees --target-only --confirm  # delete target/ and keep the checkout
 ```
 
-Collection is conservative: it reaps only worktrees whose associated task has
-settled to `done`, `rejected`, or `archived`. A worktree belonging to live work
+Collection is conservative: it reaps worktrees whose associated task has
+settled to `done`, `rejected`, or `archived`, and a `someday` task once the
+run is older than `worktree.parked_reclaim_after_hours` (default 72 hours).
+A claim that still holds a drain slot (`skipped:live_claim`), a held
+host-validation lease (`skipped:lease_held`), and every other status,
+including backlog, stay. A worktree belonging to live work
 is never a candidate. A worktree with uncommitted changes is kept
 (`skipped:dirty_rescue_candidate`), except by the scheduled
 `worktree_gc_pipeline`. That pipeline removes a settled run's dirty worktree
