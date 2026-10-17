@@ -35,7 +35,7 @@ failed=0
 guard_pool_pid=""
 guard_phase_started=0
 guard_pool_seconds=0
-docs_chain_pid=""
+check_chain_pid=""
 # Keep all runtime output within the checkout, including on macOS.
 mkdir -p "$repo_root/.orbit/tmp"
 guard_logs="$(mktemp -d "$repo_root/.orbit/tmp/ci-guardrails.XXXXXX")"
@@ -55,19 +55,20 @@ join_guard_pool() {
   if [[ "$failed" -eq 0 ]]; then failed="$status"; fi
 }
 
-# Joins the background doctest and documentation chain: prints its output,
-# adopts its phase records and folds its status into the first failure.
-join_docs_chain() {
+# Joins the background production clippy, doctest and documentation chain:
+# prints its output, adopts its phase records and folds its status into the
+# first failure.
+join_check_chain() {
   local status=0 record
-  if [[ -z "$docs_chain_pid" ]]; then return 0; fi
-  wait "$docs_chain_pid" || status=$?
-  docs_chain_pid=""
-  cat "$guard_logs/docs.out"
-  cat "$guard_logs/docs.err" >&2
-  if [[ -f "$guard_logs/docs.phases" ]]; then
+  if [[ -z "$check_chain_pid" ]]; then return 0; fi
+  wait "$check_chain_pid" || status=$?
+  check_chain_pid=""
+  cat "$guard_logs/checks.out"
+  cat "$guard_logs/checks.err" >&2
+  if [[ -f "$guard_logs/checks.phases" ]]; then
     while IFS= read -r record; do
       phase_records+=("$record")
-    done <"$guard_logs/docs.phases"
+    done <"$guard_logs/checks.phases"
   fi
   if [[ "$failed" -eq 0 ]]; then failed="$status"; fi
 }
@@ -75,7 +76,7 @@ join_docs_chain() {
 report_phases() {
   local status=$? record
   join_guard_pool
-  join_docs_chain
+  join_check_chain
   if ((${#phase_records[@]})); then
     for record in "${phase_records[@]}"; do
       echo "ci-guardrails-phase: $record" >&2
@@ -143,8 +144,8 @@ run_phase fmt cargo fmt --all -- --check
 # Repository guards and self-tests share one sliding-window pool. Its width is
 # the build budget's cargo job count, the same number Cargo receives, so guard
 # fan-out stays inside the host-wide budget. The pool runs in a background
-# subshell, so in full mode the workflow test build and production clippy
-# below overlap it; nothing in the pool depends on them, and no pool member
+# subshell, so in full mode the workflow test build below overlaps it;
+# nothing in the pool depends on that build, and no pool member
 # takes the Cargo build lock. Each guard writes its own output files, and the
 # pool prints them in launch order as it reaps each guard.
 pool_width="$("$repo_root/scripts/build-budget.py" --cargo-jobs)"
@@ -155,17 +156,23 @@ launched=0
 reaped=0
 next_slot=0
 
-# Prints the oldest launched guard's output and folds its status into the first failure.
-reap_oldest() {
+# Waits for one guard, prints its output and folds its status into the first
+# failure. Arguments: pid, output slot, name.
+reap_guard() {
   local status=0
-  wait "${pids[$reaped]}" || status=$?
-  cat "$guard_logs/${slots[$reaped]}.out"
-  cat "$guard_logs/${slots[$reaped]}.err" >&2
+  wait "$1" || status=$?
+  cat "$guard_logs/$2.out"
+  cat "$guard_logs/$2.err" >&2
   if [[ "$status" -ne 0 ]]; then
-    echo "ci-guardrails: FAILED ${names[$reaped]} (exit $status)" >&2
+    echo "ci-guardrails: FAILED $3 (exit $status)" >&2
     # Preserve the first failure's exit status for existing callers.
     if [[ "$failed" -eq 0 ]]; then failed="$status"; fi
   fi
+}
+
+# Reaps the oldest launched guard.
+reap_oldest() {
+  reap_guard "${pids[$reaped]}" "${slots[$reaped]}" "${names[$reaped]}"
   reaped=$((reaped + 1))
 }
 
@@ -175,11 +182,11 @@ drain_pool() {
   done
 }
 
-# Starts one guard in its own output slot. bash's time keyword supplies
-# fractional wall time on Linux and bash 3.2.
-launch_guard() {
-  local name="${1##*/}" slot="$next_slot"
-  next_slot=$((next_slot + 1))
+# Forks one guard into output slot $1 and leaves its pid in started_pid.
+# bash's time keyword supplies fractional wall time on Linux and bash 3.2.
+start_guard() {
+  local slot="$1" name="${2##*/}"
+  shift
   (
     # bash 3.2 drops TIMEFORMAT when errexit aborts a failing timed command,
     # so a guard that exits non-zero would publish no duration line. Suspend
@@ -190,10 +197,37 @@ launch_guard() {
     status=$?
     exit "$status"
   ) >"$guard_logs/$slot.out" 2>"$guard_logs/$slot.err" &
-  pids+=("$!")
-  names+=("$name")
+  started_pid=$!
+}
+
+# Starts one pool member in the next output slot.
+launch_guard() {
+  local slot="$next_slot"
+  next_slot=$((next_slot + 1))
+  start_guard "$slot" "$@"
+  pids+=("$started_pid")
+  names+=("${1##*/}")
   slots+=("$slot")
   launched=$((launched + 1))
+}
+
+# A self-test that spends nearly all of its wall time in fixed waits starts
+# beside the pool, outside its window, and is reaped after the pool drains.
+# Inside the window it would hold a slot for its whole duration, and because
+# the window reaps in launch order, the guards behind it would wait on it.
+waiting_pid=""
+waiting_name=""
+start_waiting_guard() {
+  if skipped "$1"; then return 0; fi
+  waiting_name="${1##*/}"
+  start_guard waiting "$@"
+  waiting_pid="$started_pid"
+}
+
+reap_waiting_guard() {
+  if [[ -z "$waiting_pid" ]]; then return 0; fi
+  reap_guard "$waiting_pid" waiting "$waiting_name"
+  waiting_pid=""
 }
 
 # Self-tests run only when their inputs changed. The QA sweep's --check is also
@@ -226,14 +260,21 @@ run_exclusive_guard() {
   drain_pool
 }
 
-# Doctests, then documentation. Both take the Cargo build lock, so they run in
-# sequence; a doctest failure still reports documentation. Doctests use the
-# folded build's lint environment and so reuse its library artifacts.
-run_docs_chain() {
-  local status=0 doc_status=0
-  run_phase doctests "$lint" cargo test --no-fail-fast --workspace --doc || status=$?
-  RUSTDOCFLAGS="-D warnings" run_phase documentation cargo doc --no-deps --workspace || doc_status=$?
-  if [[ "$status" -eq 0 ]]; then status="$doc_status"; fi
+# Production clippy, doctests, then documentation. Each takes the Cargo build
+# lock, so they run in sequence; a failure still reports the later phases, and
+# the first failure is the chain's status. Production clippy is the only pass
+# that denies clippy::disallowed_methods, so test-only channels stay exempt on
+# the folded build; it checks lib and bin targets and writes no test binary.
+# Doctests use the folded build's lint environment and so reuse its library
+# artifacts.
+run_check_chain() {
+  local status=0 next=0
+  run_phase clippy-production cargo clippy --workspace --lib --bins -- -D warnings -D clippy::disallowed_methods || status=$?
+  run_phase doctests "$lint" cargo test --no-fail-fast --workspace --doc || next=$?
+  if [[ "$status" -eq 0 ]]; then status="$next"; fi
+  next=0
+  RUSTDOCFLAGS="-D warnings" run_phase documentation cargo doc --no-deps --workspace || next=$?
+  if [[ "$status" -eq 0 ]]; then status="$next"; fi
   return "$status"
 }
 
@@ -247,28 +288,34 @@ lower_priority() {
     echo "ci-guardrails: cannot lower background priority; continuing at normal priority" >&2
 }
 
-# Runs the doctest/documentation chain in the background while nextest runs.
-# At idle priority it takes only the CPU nextest leaves unused, so the
+# Runs the clippy/doctest/documentation chain in the background while nextest
+# runs. At idle priority it takes only the CPU nextest leaves unused, so the
 # workspace suites' elapsed-time and timeout assertions keep the host to
-# themselves. Neither command writes the test binaries nextest executes.
-start_docs_chain() {
+# themselves. None of its commands writes the test binaries nextest executes.
+start_check_chain() {
   (
     # The report trap belongs to the parent shell, not to the chain.
     trap - EXIT
     lower_priority
     phase_records=()
     status=0
-    run_docs_chain || status=$?
-    printf '%s\n' "${phase_records[@]}" >"$guard_logs/docs.phases"
+    run_check_chain || status=$?
+    printf '%s\n' "${phase_records[@]}" >"$guard_logs/checks.phases"
     exit "$status"
-  ) >"$guard_logs/docs.out" 2>"$guard_logs/docs.err" &
-  docs_chain_pid=$!
+  ) >"$guard_logs/checks.out" 2>"$guard_logs/checks.err" &
+  check_chain_pid=$!
 }
 
 guard_phase_started=$SECONDS
 (
   # The report trap belongs to the parent shell, not to the pool.
   trap - EXIT
+  # About 6 s of CPU time across about 63 s of wall time, nearly all of it
+  # fixed slow-child and hang delays. The helper's deadlines run on an
+  # injected clock, and a fixture step fails only after 120 s without output,
+  # which no correct run nears on a saturated host, so it runs beside the
+  # build instead of extending the exclusive suites.
+  start_waiting_guard "$repo_root/scripts/test-ci-download-verified.py"
   # Start the longer repository scans first; the pool keeps pool_width running.
   run_guard "$repo_root/scripts/check-orphan-modules.sh"
   run_guard "$repo_root/scripts/check-workflow-action-pins.sh"
@@ -324,6 +371,7 @@ guard_phase_started=$SECONDS
   run_guard "$repo_root/scripts/test-cross-revision-check.sh"
   run_guard "$repo_root/scripts/test-cpu-utilisation.py"
   drain_pool
+  reap_waiting_guard
   exit "$failed"
 ) >"$guard_logs/pool.out" 2>"$guard_logs/pool.err" &
 guard_pool_pid=$!
@@ -337,13 +385,11 @@ if [[ "$fast" == false ]]; then
   # The list-build lints lib, bins, tests and examples with the former
   # all-targets flags (see with-test-build-lint.sh). That replaces the separate
   # clippy-all-targets phase, which re-checked the same crates after this
-  # compile. Production clippy stays its own pass: it is the only one that
-  # denies clippy::disallowed_methods, so test-only channels stay exempt on
-  # the folded build. make ci-lint still runs a separate all-targets clippy
-  # because that gate does not build test binaries.
+  # compile. Production clippy stays its own pass, in the background check
+  # chain (run_check_chain). make ci-lint still runs a separate all-targets
+  # clippy because that gate does not build test binaries.
   run_phase workflow-test-list-build "$repo_root/scripts/check-ci-macos.sh" --workspace-build
-  run_phase clippy-production cargo clippy --workspace --lib --bins -- -D warnings -D clippy::disallowed_methods
-  # The pool has overlapped both builds. Join it before any test runs: the
+  # The pool has overlapped the build. Join it before any test runs: the
   # workspace suites assert elapsed time and timeouts, so nothing else at
   # normal priority shares the host with them.
   join_guard_pool
@@ -354,11 +400,11 @@ if [[ "$fast" == false ]]; then
   if cargo nextest --version >/dev/null 2>&1; then
     # List the folded build's test binaries (fresh, so nothing compiles), then
     # run nextest from that listing. The run invokes no Cargo build and holds
-    # no build lock, so the doctest/documentation chain can use Cargo meanwhile.
+    # no build lock, so the check chain can use Cargo meanwhile.
     run_phase workspace-test-listing "$lint" cargo nextest list --list-type binaries-only \
       --message-format json --workspace --lib --bins --tests >"$guard_logs/binaries.json"
     cargo metadata --format-version 1 --all-features --no-deps >"$guard_logs/cargo-metadata.json"
-    start_docs_chain
+    start_check_chain
     # Profile ci raises test-threads above the 4-vCPU runner default.
     # The sampler prints one cpu-util line and keeps nextest's exit status.
     run_phase workspace-tests "$repo_root/scripts/cpu-utilisation.sh" --label nextest -- \
@@ -366,13 +412,13 @@ if [[ "$fast" == false ]]; then
       --success-output immediate \
       --binaries-metadata "$guard_logs/binaries.json" \
       --cargo-metadata "$guard_logs/cargo-metadata.json"
-    join_docs_chain
+    join_check_chain
   else
     echo "cargo-nextest not found; falling back to cargo test" >&2
     run_phase workspace-tests "$lint" cargo test --no-fail-fast --workspace --lib --bins --tests
-    docs_status=0
-    run_docs_chain || docs_status=$?
-    if [[ "$failed" -eq 0 ]]; then failed="$docs_status"; fi
+    checks_status=0
+    run_check_chain || checks_status=$?
+    if [[ "$failed" -eq 0 ]]; then failed="$checks_status"; fi
   fi
   # Supply-chain gate: dependency advisories + license allow-list (deny.toml).
   # [ORB-00416] [ORB-11983] Soft-presence like nextest above — CI installs a pinned version;
@@ -393,7 +439,6 @@ join_guard_pool
 # real Cargo target; the rendezvous and deadline checks in ci-fast-guards count too.
 exclusive_started=$SECONDS
 run_exclusive_guard "$repo_root/scripts/test-build-budget.sh"
-run_exclusive_guard "$repo_root/scripts/test-ci-download-verified.py"
 run_exclusive_guard "$repo_root/scripts/test-ci-fast-guards.py"
 run_exclusive_guard "$repo_root/scripts/test-ci-test-affected.py"
 run_exclusive_guard "$repo_root/scripts/test-codeql-rust-local.py"

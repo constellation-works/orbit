@@ -60,7 +60,7 @@ claimed mode. Run only commands the task's own brief requires; a QA sweep may
 build and run the product, and a review may reproduce a finding when its brief
 asks for it. Keep the brief's evidence artifacts and execution summary.
 
-- `make ci-fast` runs independent repository script checks through a background pool. Its width is the build budget's Cargo job count (`scripts/build-budget.py --cargo-jobs`: `ORBIT_CARGO_JOBS`, then `CARGO_BUILD_JOBS`, then the `cargo-jobs` file, default 4), so guard fan-out never exceeds the same budget Cargo receives. The pool is a sliding window over launch order: a new guard starts only when the oldest launched guard finishes, even if later guards finished earlier, so a slow early guard keeps the slots of those finished guards occupied until it ends. Each script's output is captured separately and printed in launch order, per-script wall times are printed, and every failing script is named before the first failure's exit code is returned. Fixture self-tests run only when their inputs change: `scripts/`, `.github/`, `Makefile`, `.cargo/`, the root Cargo manifest/lockfile, `install.sh`, `RELEASING.md`, `plugin/`, `npm/`, `.agents/` or `.claude-plugin/`. Self-tests that assert wall-clock time or timeouts, measure build-budget admission, or drive a real Cargo target run exclusively, one at a time, after the pool drains: `test-build-budget.sh`, `test-ci-download-verified.py`, `test-ci-fast-guards.py`, `test-ci-test-affected.py`, `test-codeql-rust-local.py`, `test-compiler-cache.sh` and `test-compiler-cache-namespaces.sh`. Every other guard and self-test shares the pool. In full mode the pool starts after formatting and overlaps the workflow test build and production Clippy. It joins before the workspace tests start, so no guard shares the host with their elapsed-time and timeout assertions. Nothing in the pool depends on those builds or takes the Cargo build lock. Selection uses the same `CI_TEST_BASE` override and merge-base fallback as affected tests and includes committed, staged, unstaged, deleted and untracked paths. If Git cannot resolve the base or diff, every self-test runs. The QA sweep inventory check still runs for crates-only changes because it reads live CLI/MCP/web surfaces. Full `make ci` always runs all self-tests. The MSRV compile check is timed on its own, separate from those scripts: make prints `ci-fast: MSRV check <seconds> s` for `cargo +<MSRV> check --workspace --locked`, and each guardrail keeps its own `ci-guardrails: <name> <seconds> s` line.
+- `make ci-fast` runs independent repository script checks through a background pool. Its width is the build budget's Cargo job count (`scripts/build-budget.py --cargo-jobs`: `ORBIT_CARGO_JOBS`, then `CARGO_BUILD_JOBS`, then the `cargo-jobs` file, default 4), so guard fan-out never exceeds the same budget Cargo receives. The pool is a sliding window over launch order: a new guard starts only when the oldest launched guard finishes, even if later guards finished earlier, so a slow early guard keeps the slots of those finished guards occupied until it ends. Each script's output is captured separately and printed in launch order, per-script wall times are printed, and every failing script is named before the first failure's exit code is returned. Fixture self-tests run only when their inputs change: `scripts/`, `.github/`, `Makefile`, `.cargo/`, the root Cargo manifest/lockfile, `install.sh`, `RELEASING.md`, `plugin/`, `npm/`, `.agents/` or `.claude-plugin/`. Self-tests that assert wall-clock time or timeouts, measure build-budget admission, or drive a real Cargo target run exclusively, one at a time, after the pool drains: `test-build-budget.sh`, `test-ci-fast-guards.py`, `test-ci-test-affected.py`, `test-codeql-rust-local.py`, `test-compiler-cache.sh` and `test-compiler-cache-namespaces.sh`. `test-ci-download-verified.py` spends nearly all of its wall time in fixed slow-child and hang delays, so it starts beside the pool, outside its window, and is reaped after the pool drains. Its helper deadlines run on an injected clock, and a fixture step fails only after 120 s without output. Every other guard and self-test shares the pool. In full mode the pool starts after formatting and overlaps the workflow test build. It joins before the workspace tests start, so no guard shares the host with their elapsed-time and timeout assertions. Nothing in the pool depends on that build or takes the Cargo build lock. Selection uses the same `CI_TEST_BASE` override and merge-base fallback as affected tests and includes committed, staged, unstaged, deleted and untracked paths. If Git cannot resolve the base or diff, every self-test runs. The QA sweep inventory check still runs for crates-only changes because it reads live CLI/MCP/web surfaces. Full `make ci` always runs all self-tests. The MSRV compile check is timed on its own, separate from those scripts: make prints `ci-fast: MSRV check <seconds> s` for `cargo +<MSRV> check --workspace --locked`, and each guardrail keeps its own `ci-guardrails: <name> <seconds> s` line.
 - `make ci-fast` passing says nothing about the Rust tests. Focused test filters help you investigate but do not replace `make ci-test-affected`: an existing test can encode behavior your change breaks even when your new tests pass.
 - Run Cargo-based gates (`ci-fast`, `ci-test-affected`, `goldens`, `ci-lint`, `cargo test` / `nextest`) one at a time when they share a target directory, or give each its own `CARGO_TARGET_DIR`. Concurrent gates in one target can rebuild `target/debug/orbit` under running generation-bound fixtures and fail them.
 - Guardrails need Python 3.11+ for `tomllib`; stock macOS `/usr/bin/python3` is 3.9. [require-python.sh](../scripts/require-python.sh) runs first in `make ci-fast`, `make ci-lint` and `ci-guardrails.sh` and stops with the version and interpreter it found. The selected fixture self-tests also require PyYAML (`import yaml`), including the verified-download fixture. After resolving self-test selection, `ci-guardrails.sh` checks that import with the same `python3` before Cargo or any repository guard runs. Full CI always requires it; fast mode requires it whenever self-tests are selected, including unresolved selection. Missing prerequisites fail; nothing installs automatically. Put a supported `python3` first on `PATH`, then set up its environment as below. The standalone local workflow YAML linter may still warn and skip without PyYAML; that optional boundary never substitutes for the mandatory selected fixtures.
@@ -331,17 +331,27 @@ for the environment override; this does not change a persistent host setting.
 
 `ci-guardrails.sh` repeats its phase breakdown in the final log tail, including
 on failure: format, workflow test listing/build (which folds in the all-targets
-Clippy lint), production Clippy, workspace test listing, workspace tests,
+Clippy lint), workspace test listing, workspace tests, production Clippy,
 doctests, documentation, supply-chain checks and repository guards.
 `guard-pool` times the background pool from its start to its join. In fast mode
-that is the pool's own wall time. In full mode the join follows production
-Clippy, so `guard-pool` includes the overlapped builds.
+that is the pool's own wall time. In full mode the join follows the workflow
+test build, so `guard-pool` includes the overlapped build.
 `workspace-test-listing` lists the test binaries of the folded build, and
 `workspace-tests` runs nextest from that listing without invoking Cargo.
-Meanwhile doctests and then documentation run in the background in Linux's idle
-scheduling class (nice 19 where it is unavailable), so they use only CPU time
-the tests leave idle. Their records time each command from its own start and
-overlap `workspace-tests`; the chain joins before the supply-chain gate.
+Meanwhile production Clippy, doctests and then documentation run in the
+background in Linux's idle scheduling class (nice 19 where it is unavailable),
+so they use only CPU time the tests leave idle. Production Clippy checks lib and
+bin targets and writes no test binary nextest executes. Their records time each
+command from its own start and overlap `workspace-tests`; the chain joins
+before the supply-chain gate, and a failure in it still reports the later
+phases.
+
+The workflow sets `CARGO_PROFILE_DEV_DEBUG` and `CARGO_PROFILE_TEST_DEBUG` to
+`0`, so the job's dev and test builds, dependencies included, carry no
+debuginfo. Nothing in those jobs reads it: panic messages keep their source
+locations, and no job sets `RUST_BACKTRACE`. Coverage runs in its own workflow
+with line tables. A local build keeps the `[profile.dev]` line tables from
+`Cargo.toml`.
 `repository-guards` is the pool's wall time plus the exclusive self-tests'.
 These are wall seconds at Bash's one-second resolution with
 the original command exit status. They let bounded hosted excerpts retain build/check costs
@@ -509,7 +519,12 @@ and pre-push probe fixtures advance this clock only after the intended child
 signals readiness; prerequisite commands retain their ordinary budgets. Remote
 probe fixtures can also scale backoff with
 `orbit_engine::test_support::with_remote_probe_backoff`, retaining all three
-attempts and the elapsed/waited diagnostics. Broker request fixtures capture a
+attempts and the elapsed/waited diagnostics. A fixture of what follows a
+task-commit lock timeout shortens the boundary's 30 s acquisition deadline with
+`orbit_core::test_support::with_task_commit_lock_timeout` (`orbit-store`'s
+dev-only `test-support` feature) for the sections its thread enters; the lock
+error, its holder record and the caller's handling stay real. Broker request
+fixtures capture a
 per-listener request timeout when starting their workers. The isolated stdin
 fixture also scales its output-drain allowance with a `cfg(test)` guard and
 asks its escaped helper to acknowledge kernel `POLLHUP` after finalization,

@@ -8,6 +8,10 @@
 //! `enforce` gap fit wrote for its wave, and the next pass retries. A drain
 //! whose passes keep losing to the lock still fails, at the deferral limit, and
 //! any other admission failure still fails at once.
+//!
+//! The passes wait out a shortened task-commit lock deadline
+//! ([`LOCK_DEADLINE`]): what they guard is what follows the timeout, not its
+//! production length.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -38,6 +42,10 @@ const HOLD_SHARED: &str = "ORBIT_TEST_LOCK_BUSY_PASS_SHARED";
 
 /// The longest the holder keeps the lock if the test never releases it.
 const HOLD_CEILING: Duration = Duration::from_secs(300);
+
+/// The task-commit lock deadline of the held-out passes, instead of the
+/// production 30 s. Each pass waits it out on the lock its holder keeps.
+const LOCK_DEADLINE: Duration = Duration::from_secs(2);
 
 /// One admission pass of `drain`, with `enforce` gap fit.
 fn classify(runtime: &OrbitRuntime, drain: &str, extra: Value) -> Result<Value, String> {
@@ -197,6 +205,13 @@ fn wait_for(path: &Path) {
 /// deferred; a drain already one deferred pass short of the limit fails there
 /// with the lock error.
 fn a_drain_at_the_deferral_limit_fails_on_an_admission_section() {
+    orbit_core::test_support::with_task_commit_lock_timeout(
+        LOCK_DEADLINE,
+        deferral_limit_on_an_admission_section,
+    );
+}
+
+fn deferral_limit_on_an_admission_section() {
     let (root, runtime, _repo) = runtime();
     seed(&runtime, Seed::default());
     let first = running_run(&runtime, "workspace_auto_pipeline", json!({}));
@@ -257,6 +272,16 @@ fn a_drain_defers_an_admission_pass_held_out_by_the_task_commit_lock() {
     }
     let limit_case =
         std::thread::spawn(a_drain_at_the_deferral_limit_fails_on_an_admission_section);
+    orbit_core::test_support::with_task_commit_lock_timeout(
+        LOCK_DEADLINE,
+        passes_held_out_by_a_shared_holder,
+    );
+    if let Err(panic) = limit_case.join() {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+fn passes_held_out_by_a_shared_holder() {
     let (root, runtime, _repo) = runtime();
     let task = seed(&runtime, Seed::default());
     let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
@@ -349,7 +374,4 @@ fn a_drain_defers_an_admission_pass_held_out_by_the_task_commit_lock() {
         expected,
         "the admitted task holds one reservation, with none left by the deferred passes"
     );
-    if let Err(panic) = limit_case.join() {
-        std::panic::resume_unwind(panic);
-    }
 }

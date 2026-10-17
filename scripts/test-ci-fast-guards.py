@@ -398,18 +398,21 @@ open(os.path.join(os.environ["GUARD_TEST_CALLS"], "test-build-budget.sh"), "w").
         self.assertIn("--binaries-metadata", run)
         self.assertIn("--cargo-metadata", run)
         # Repository guards never share the host with the workspace suites:
-        # the last pool member ends before nextest starts. The doctest and
-        # documentation chain starts after the listing and joins before the
-        # exclusive self-tests.
+        # the last pool member ends before nextest starts. The production
+        # clippy, doctest and documentation chain starts after the listing and
+        # joins before the exclusive self-tests.
         self.assertLess(calls.index(["guard-end", "test-cpu-utilisation.py"]), calls.index(run), calls)
+        clippy = calls.index(["clippy", "--workspace", "--lib", "--bins", "--", "-D", "warnings",
+                              "-D", "clippy::disallowed_methods"])
         doctests = calls.index(["test", "--no-fail-fast", "--workspace", "--doc"])
-        self.assertLess(calls.index(listing), doctests, calls)
+        self.assertLess(calls.index(listing), clippy, calls)
+        self.assertLess(clippy, doctests, calls)
         self.assertLess(calls.index(["doc", "--no-deps", "--workspace"]),
                         calls.index(["guard-start", "test-build-budget.sh"]), calls)
         for phase in ("doctests", "documentation"):
             self.assertIn((phase, "0"), phases)
-        # A real command failure must keep its status and timing in the final
-        # diagnostic tail, and must not be followed by tests.
+        # A background check failure must keep its status and timing in the
+        # final diagnostic tail, and the chain's later phases still report.
         original = (self.bin / "cargo").read_text()
         (self.bin / "cargo").write_text(original.replace(
             'if sys.argv[1] == "metadata":',
@@ -419,6 +422,20 @@ open(os.path.join(os.environ["GUARD_TEST_CALLS"], "test-build-budget.sh"), "w").
         result = self.run_guard("ci-guardrails.sh")
         self.assertEqual(result.returncode, 23, result.stderr)
         self.assertRegex(result.stderr, r"ci-guardrails-phase: clippy-production wall_seconds=\d+ exit=23")
+        phases = re.findall(r"ci-guardrails-phase: (\S+) wall_seconds=\d+ exit=(\d+)", result.stderr)
+        for phase in ("doctests", "documentation"):
+            self.assertIn((phase, "0"), phases)
+        # A failed test build must keep its status and must not be followed by
+        # tests.
+        (self.bin / "cargo").write_text(original.replace(
+            'if sys.argv[1] == "metadata":',
+            'if sys.argv[1] == "test" and "--no-run" in sys.argv:\n    raise SystemExit(29)\n'
+            'if sys.argv[1] == "metadata":'))
+        self.log.write_text("")
+        result = self.run_guard("ci-guardrails.sh")
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertRegex(result.stderr,
+                         r"ci-guardrails-phase: workflow-test-list-build wall_seconds=\d+ exit=[1-9]")
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertFalse(any(call[:2] == ["nextest", "run"] for call in calls))
 
@@ -744,12 +761,12 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(len(doctests), 1, observed)
         for row in (*listing, *doctests):
             self.assertEqual({key: row[key] for key in lint}, lint, row)
-        # The doctest/documentation chain overlaps the tests only at lowered
-        # priority, so it cannot take CPU time from their deadline assertions;
-        # the tests themselves keep normal priority.
-        background = [row for row in observed if row["argv"][:1] == ["doc"] or
+        # The production clippy, doctest and documentation chain overlaps the
+        # tests only at lowered priority, so it cannot take CPU time from their
+        # deadline assertions; the tests themselves keep normal priority.
+        background = [row for row in observed if row["argv"][:1] in (["clippy"], ["doc"]) or
                       (row["argv"][:1] == ["test"] and "--doc" in row["argv"])]
-        self.assertEqual(len(background), 2, observed)
+        self.assertEqual(len(background), 3, observed)
         for row in background:
             self.assertTrue((row["idle"] and not foreground["idle"]) or
                             row["nice"] > foreground["nice"], (row, foreground))

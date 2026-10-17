@@ -91,6 +91,9 @@ pub mod test_support {
     /// reviewer's start and end, as the before-PR gate writes them, for tests
     /// that drive a reviewer without running the whole delivery pipeline.
     pub use orbit_store::contracts::{ReviewInvocationRecord, ReviewReserveRequest};
+    /// Shorten the task-commit lock deadline of the boundary sections entered
+    /// on this thread, for tests of what follows a lock timeout.
+    pub use orbit_store::test_support::with_task_commit_lock_timeout;
 
     use crate::application::routines::{
         RoutineMachineIdentity, RoutineWorkspaceProvider, SweepOptions, SweepOutcome,

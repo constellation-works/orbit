@@ -11,6 +11,11 @@ stability = "stable"
 [lints]
 workspace = true
 
+[features]
+# A scoped task-commit lock deadline for downstream tests only. Enable it only
+# from `[dev-dependencies]`, never in a shipped build.
+test-support = []
+
 [dependencies]
 blake3.workspace = true
 chrono.workspace = true

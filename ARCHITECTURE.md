@@ -75,6 +75,9 @@ That feature also enables Engine's `test-support` feature for scoped CLI
 supervision clocks. Landing fixtures freeze Core's source budget clock; auth
 fixtures expire Engine's deadline only after a real child signals readiness.
 Both clocks are thread-local, restored on unwind, and absent from shipped builds.
+It also enables Store's `test-support` feature, whose thread-local task-commit
+lock deadline lets a drain admission fixture wait out a held lock in seconds;
+it is restored the same way and is equally absent from shipped builds.
 
 Engine's dev-only edge to itself enables its `test-support` feature for its own
 unit and integration tests. The feature exports `test_support::NullRuntimeHost`,
