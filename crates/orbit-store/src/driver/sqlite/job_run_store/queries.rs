@@ -403,6 +403,42 @@ pub(super) fn job_run_list_sql(
 ) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
     let (where_clause, mut params) = job_run_filter_sql(workspace_id, query);
     let order_clause = job_run_order_sql(query.order_by);
+    if query.order_by == JobRunOrder::Recency
+        && query.states.len() > 1
+        && let Some(limit) = query.limit
+    {
+        // An IN predicate lets SQLite walk workspace recency and discard
+        // unrelated states until LIMIT. Bound each distinct state first,
+        // using its recency index even when other filters are present. The
+        // global top N must be among the top N of these disjoint sets.
+        let mut states = query
+            .states
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        states.sort();
+        states.dedup();
+        params.push(Box::new(limit as i64));
+        let limit_param = params.len();
+        let pages = states
+            .into_iter()
+            .map(|state| {
+                params.push(Box::new(state));
+                format!(
+                    "SELECT * FROM (SELECT {JOB_RUN_COLUMNS} FROM job_runs \
+                 INDEXED BY idx_job_runs_ws_state_recency \
+                 WHERE {where_clause} AND state = ?{} \
+                 ORDER BY {order_clause} LIMIT ?{limit_param})",
+                    params.len()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" UNION ALL ");
+        return (
+            format!("SELECT * FROM ({pages}) ORDER BY {order_clause} LIMIT ?{limit_param}"),
+            params,
+        );
+    }
     let mut sql = format!(
         "SELECT {JOB_RUN_COLUMNS} FROM job_runs WHERE {where_clause} ORDER BY {order_clause}"
     );

@@ -170,6 +170,14 @@ per-job creation index in bounded groups and hydrates steps in batches, so a
 catalog refresh does not issue separate run and step queries for each job or
 decode older run history. Empty catalogs require no run-store reads.
 
+Bounded multi-state recency pages select at most the requested limit from
+each distinct state through the workspace/state recency index, then merge
+those candidates by recency and run ID before applying the final limit.
+Active and failed page selection does not scan unrelated success history.
+Other filters apply inside each state selection; counts retain the complete
+matching set. Workspace HTTP lists reconcile stale runs once per request,
+while aggregate lists read the stored rows observationally.
+
 Task delivery observations without a named run prefilter candidate runs in
 SQLite by exact membership in the submitted `input.task_ids` array or equality
 with a text top-level `input.task_id`. The runtime then re-checks the
