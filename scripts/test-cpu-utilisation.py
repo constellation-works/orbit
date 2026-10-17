@@ -23,9 +23,11 @@ SCRATCH = ROOT / ".orbit" / "tmp"
 # /proc/stat line carries and this sampler ignores.
 START = "cpu 1000 0 0 1000 0 0 0 0 0 0"
 END = "cpu 1500 0 0 1300 200 0 0 0 0 0"
-MEASURED = (
-    "cpu-util: label=phase busy_pct=50.0 idle_pct=30.0 iowait_pct=20.0 "
-    "elapsed_s=0 cores=4"
+# The sampler reports whole seconds from bash's $SECONDS, which can tick over
+# while the child runs on a loaded host, so only the elapsed field may vary.
+MEASURED = re.compile(
+    r"^cpu-util: label=phase busy_pct=50\.0 idle_pct=30\.0 iowait_pct=20\.0 "
+    r"elapsed_s=\d+ cores=4$"
 )
 LIVE_LINE = re.compile(
     r"^cpu-util: label=live "
@@ -77,7 +79,7 @@ class CpuUtilisationTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "ran\n")
-        self.assertEqual(result.stderr.strip(), MEASURED)
+        self.assertRegex(result.stderr.strip(), MEASURED)
 
     def test_command_status_survives_the_sample(self):
         stat = self.root / "stat"
