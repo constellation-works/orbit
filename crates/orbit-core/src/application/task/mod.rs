@@ -90,7 +90,7 @@ pub use provider_limit::{
     UngatedLaneLimit, short_time,
 };
 pub use pull_request_links::PullRequestLinks;
-pub use record_json::{task_record_json, task_show_field_json};
+pub use record_json::{task_record_json, task_show_field_json, task_show_json};
 pub use screened::{ScreenedTaskWrite, TaskUpdateAuthority, TaskWriteScreen};
 pub(crate) use validation_tools::positive_validation_tools;
 

@@ -19,6 +19,8 @@ pub(crate) mod review_reset;
 mod show;
 pub(crate) mod support;
 
+pub(crate) use show::{final_recovery_text, next_step_text};
+
 pub(crate) use command::TaskInvocation;
 pub use command::{TaskCommand, TaskSubcommand};
 pub use publication::TaskPublicationSubcommand;

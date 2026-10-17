@@ -712,8 +712,13 @@ are not redacted or rewritten.
 and served by `OperationTool<TaskVerb>`. The handlers in
 [task_operation_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/task_operation_tools.rs)
 answer every surface, so the CLI and MCP read the same record: the full `show`
-record carries `next_step` for a run-blocked task and the `final_recovery`
-decision, and the `lint` sweep and the blocked-task next step moved from the
+record (`task_show_json`) carries `next_step` for a run-blocked task and the
+`final_recovery` decision (`run_id`, `decision`, `outcome`, `at`). The
+dashboard task detail serves that record plus its own controls (pull-request
+links, `status_transitions`, `job_run_navigable`, `readiness.preparing`). A
+routed `orbit task show` prints the same `Next:` and `Final Recovery:` lines
+as the local CLI when those keys are present. List rows do not carry either
+field. The `lint` sweep and the blocked-task next step moved from the
 CLI into `orbit-core` (`sweep_context_repairs`, `blocked_next_step`). The
 help goldens under `crates/orbit-cli/tests/help_goldens/task/` were captured
 before the migration and pass unchanged. The MCP snapshot moved only for
