@@ -1404,6 +1404,49 @@ fn auto_readiness_applies_the_live_drains_crew_restriction() {
                     "the drain admits it: {admitted}"
                 );
             }
+
+            // [ORB-16439] The only live drain is a restricted pull drain on a
+            // replica: readiness shows its allowed crews and excludes tasks that
+            // require other crews.
+            drain.state = JobRunState::Success;
+            drain.finished_at = Some(Utc::now());
+            fixture.save_run(&drain);
+
+            let mut pull_drain =
+                fixture.seed_run("jrun-pull", "workspace_pull_pipeline", JobRunState::Running);
+            pull_drain.input = Some(json!({"max_active_leaf_runs": 4, "allowed_crews": ["sol"]}));
+            fixture.save_run(&pull_drain);
+            let pull_live = json_ok(server.get(&uri));
+            assert_eq!(
+                pull_live["capacity"]["drain_run_id"],
+                Value::Null,
+                "{pull_live:#}"
+            );
+            assert_eq!(
+                pull_live["capacity"]["pull_drain_run_id"], "jrun-pull",
+                "{pull_live:#}"
+            );
+            assert_eq!(
+                pull_live["capacity"]["allowed_crews"],
+                json!(["sol"]),
+                "{pull_live:#}"
+            );
+            let pull_refused = entry(&pull_live, &excluded);
+            assert_eq!(pull_refused["eligible"], false, "{pull_refused}");
+            assert_eq!(pull_refused["reason"], "crew_not_allowed", "{pull_refused}");
+            assert_eq!(pull_refused["crew"], "opus", "{pull_refused}");
+            assert_eq!(
+                pull_refused["allowed_crews"],
+                json!(["sol"]),
+                "{pull_refused}"
+            );
+            for task in [&permitted, &defaulted] {
+                let admitted = entry(&pull_live, task);
+                assert_eq!(
+                    admitted["eligible"], true,
+                    "the pull drain admits it: {admitted}"
+                );
+            }
         },
     );
 }
