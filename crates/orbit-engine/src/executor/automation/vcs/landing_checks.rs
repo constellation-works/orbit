@@ -597,12 +597,14 @@ fn classify_logged_job<H: RuntimeHost + ?Sized>(
 }
 
 /// Whether every failed check on `head` is a workflow job the base already
-/// fails the same way, and `tip` has not moved past `base`.
+/// fails the same way, and the base does not yet show that failure is gone.
 ///
-/// `Ok(Some(reason))` is that hold: auto-fix waits and spends no repair.
-/// `Ok(None)` was read far enough to say this is not that hold, including a
-/// candidate-caused job and a check no workflow job answers. `Err` is a head
-/// job whose log or identity could not be read.
+/// The hold is an unmoved red base, or a base that has moved to a commit
+/// whose same job has not concluded. `Ok(Some(reason))` waits and spends no
+/// repair. `Ok(None)` was read far enough to say this is not that hold,
+/// including a candidate-caused job, a check no workflow job answers, a moved
+/// tip whose same job has concluded, and a moved tip with no such job. `Err`
+/// is a head job whose log or identity could not be read.
 pub(super) fn unmoved_red_base<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
@@ -647,8 +649,19 @@ pub(super) fn unmoved_red_base<H: RuntimeHost + ?Sized>(
     if reasons.is_empty() {
         return Ok(None);
     }
-    // The same predicate the landing uses before it updates a moved base.
-    if moved_tip.is_some_and(|tip| !contains(workspace, tip, head)) {
+    // The landing updates a branch once the base has moved past the head.
+    // Auto-fix has no such update on this poll. A tip job that has not
+    // concluded may still be the base's failure, so no repair is admitted.
+    // A concluded tip is not this hold: success is the landed refresh, which
+    // the caller decides before asking, and a concluded failure is repaired.
+    if let Some(tip) = moved_tip.filter(|tip| !contains(workspace, tip, head)) {
+        if moved_tip_job_unconcluded(host, workspace, &head_jobs, failed, tip, &mut tip_jobs) {
+            return Ok(Some(format!(
+                "base_red: {} and the base branch moved to {tip}, whose same job has not \
+                 concluded, so no repair agent runs",
+                reasons.join("; ")
+            )));
+        }
         return Ok(None);
     }
     Ok(Some(format!(
@@ -656,6 +669,59 @@ pub(super) fn unmoved_red_base<H: RuntimeHost + ?Sized>(
          repair agent runs",
         reasons.join("; ")
     )))
+}
+
+/// The moved base has the same job as an inherited head failure, and that job
+/// has not concluded. An unreadable tip, or a tip with no such job, is not
+/// this hold: missing evidence does not prove the base is still red.
+fn moved_tip_job_unconcluded<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &Path,
+    head_jobs: &[Value],
+    failed: &[(Option<String>, String)],
+    tip: &str,
+    tip_jobs: &mut CommitJobs,
+) -> bool {
+    let read = tip_jobs.get_or_insert_with(|| {
+        commit_jobs(host, workspace, tip).map_err(|error| error.to_string())
+    });
+    let Ok(jobs) = read.as_ref() else {
+        return false;
+    };
+    failed.iter().any(|check| {
+        head_jobs.iter().any(|head_job| {
+            unsuccessful(head_job)
+                && answers(head_job, check)
+                && jobs
+                    .iter()
+                    .any(|candidate| same_job(candidate, head_job) && !job_concluded(candidate))
+        })
+    })
+}
+
+/// A workflow job with a terminal conclusion. In-progress, queued, and other
+/// unfinished jobs have none, so a moved base can still explain the failure.
+fn job_concluded(job: &Value) -> bool {
+    if let Some(status) = job["status"].as_str()
+        && !status.is_empty()
+        && status != "completed"
+    {
+        return false;
+    }
+    matches!(
+        job["conclusion"].as_str(),
+        Some(
+            "success"
+                | "failure"
+                | "neutral"
+                | "cancelled"
+                | "skipped"
+                | "timed_out"
+                | "action_required"
+                | "stale"
+                | "startup_failure"
+        )
+    )
 }
 
 /// Whether the failure of `job`, with genuine `signature`, is the base's:

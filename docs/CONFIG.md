@@ -988,10 +988,15 @@ existing recovery activities, final validation and push do the repair:
   error signature and log excerpt as evidence. When that same signature already
   fails on the base commit and the base branch has not moved past it, the
   watcher admits no repair: it waits for the base within the completion
-  deadline and then stops with a base-red reason. That classification is the
-  landing's, not a second copy. A failure the base does not fail the same way
-  is still repaired, and the three-attempt budget is unchanged. A conflict is
-  rebased onto the current base by PR conflict recovery.
+  deadline and then stops with a base-red reason. That signature classification
+  is the landing's, not a second copy. The same wait also covers a base that
+  has moved to a commit whose same job has not concluded: that poll admits no
+  repair, and the watcher keeps waiting within the deadline. A moved tip whose
+  same job has concluded, and a moved tip with no such job, are not this wait.
+  A concluded success is still the landed refresh, which is decided before the
+  wait. A failure the base does not fail the same way is still repaired, and
+  the three-attempt budget is unchanged. A conflict is rebased onto the current
+  base by PR conflict recovery.
 - A failed required check run that no workflow produced (a provider app's
   aggregate result, such as a code-scanning check beside passing analysis jobs)
   is repaired only from its own failure annotations. The watcher reads them

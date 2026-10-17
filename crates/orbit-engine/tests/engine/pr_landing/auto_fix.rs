@@ -1889,6 +1889,28 @@ fn plant_commit_ci(fx: &Fixture, sha: &str, run_id: u64, conclusion: &str, log: 
     fs::write(dir.join("log"), log).unwrap();
 }
 
+/// The advanced base's same job, still running: REST status `in_progress`
+/// and a null conclusion, so the read has not concluded.
+fn plant_in_progress_commit_ci(fx: &Fixture, sha: &str, run_id: u64) {
+    let dir = fx.forge.join("commit-ci").join(sha);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("run_id"), run_id.to_string()).unwrap();
+    fs::write(
+        dir.join("runs.json"),
+        format!(r#"{{"workflow_runs":[{{"id":{run_id},"name":"CI"}}]}}"#),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("jobs.json"),
+        format!(
+            r#"{{"jobs":[{{"id":{},"name":"test","status":"in_progress","conclusion":null,"steps":[{{"name":"compile","status":"in_progress","conclusion":null}}]}}]}}"#,
+            run_id + 1
+        ),
+    )
+    .unwrap();
+    fs::write(dir.join("log"), "still running\n").unwrap();
+}
+
 /// An unmoved base whose own job fails the same way spends no repair attempt
 /// and stops base-red at the completion deadline. A failure the base does not
 /// fail that way is still admitted from the same budget, and so is a red base
@@ -2030,6 +2052,67 @@ fn auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure() {
                     assert_eq!(host.status(TASK_ID), TaskStatus::Review);
                 });
             }
+        },
+    );
+}
+
+/// The base advanced to a commit whose same job is still in progress. The
+/// head is red on the signature the old base already fails. That poll admits
+/// no repair: the failure is still the base's until the tip job concludes.
+/// The watch uses the logical completion clock, so the wait is not a spin.
+#[test]
+fn auto_fix_admits_no_repair_while_the_moved_base_job_is_in_progress() {
+    isolated(
+        "auto_fix::auto_fix_admits_no_repair_while_the_moved_base_job_is_in_progress",
+        |sandbox| {
+            in_fresh_row(sandbox, |row| {
+                let fx = Fixture::new(row);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+                open_for_completion(&fx, &host);
+                let shared = "error[E0433]: cannot find module `broken_base`\n\
+                    ##[error]Process completed with exit code 101.\n";
+                plant_commit_ci(&fx, &fx.candidate, 11, "failure", shared);
+                plant_commit_ci(&fx, &fx.base_sha, 21, "failure", shared);
+                fx.advance_base();
+                let tip = fx.local_tip(BASE);
+                assert_ne!(tip, fx.base_sha, "the base moved past the fork");
+                plant_in_progress_commit_ci(&fx, &tip, 31);
+                fx.script_checks(&["failure"]);
+                let mut input = fx.complete_ungated_input();
+                input["auto_fix"] = json!(true);
+                input["completion"] = json!("review");
+                input["max_wait_seconds"] = json!(15);
+                input["poll_interval_seconds"] = json!(5);
+                let reads_before = fx.status_reads();
+                let error = complete_with_logical_clock(&host, &input)
+                    .expect_err("the in-progress base tip holds the repair")
+                    .to_string();
+                let attempts = pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER);
+                let polls = fx.status_reads() - reads_before;
+                assert!(
+                    error.contains("auto_fix_stopped")
+                        && error.contains("base_red")
+                        && error.contains("has not concluded")
+                        && error.contains(&tip)
+                        && error.contains(&fx.base_sha)
+                        && !error.contains("has not moved past it")
+                        && !error.contains("timed out"),
+                    "the moved tip's unfinished job holds this poll: {error}"
+                );
+                assert!(
+                    !orbit_types::workflow::is_pr_auto_fix_check_repair(&error),
+                    "no repair handoff: {error}"
+                );
+                assert!(attempts.is_empty(), "no attempt is spent: {attempts:?}");
+                assert!(
+                    polls >= 2,
+                    "the poll that sees the unfinished tip job does not repair ({polls} polls)"
+                );
+                assert!(fx.merge_requests().is_empty(), "no merge");
+                assert_eq!(fx.head(), fx.candidate);
+                assert_eq!(fx.remote_tip(BASE), tip);
+                assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+            });
         },
     );
 }

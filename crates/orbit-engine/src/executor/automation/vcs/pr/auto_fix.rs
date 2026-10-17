@@ -22,8 +22,12 @@
 //!   A failure the landing classifies as inherited from the base commit, while
 //!   that base branch has not moved past it, spends no repair attempt
 //!   ([`red_base_wait`]): the watcher keeps polling until the completion
-//!   deadline and then stops with a base-red reason. A candidate-caused
-//!   failure is still admitted from the same budget.
+//!   deadline and then stops with a base-red reason. The same hold covers a
+//!   base that has moved to a commit whose same job has not concluded: that
+//!   poll admits no repair. A moved tip whose same job has concluded, or that
+//!   has no such job, is not this hold. A concluded success is the landed
+//!   refresh, decided before the wait. A candidate-caused failure is still
+//!   admitted from the same budget.
 //!
 //! An optional-only failure first passes the narrowly evidenced prerequisite
 //! recovery in `infrastructure`: one durable rerun, no crew or source repair.
@@ -308,10 +312,12 @@ pub(super) fn check_repair_handoff(
 }
 
 /// A required failure the base's own job already fails the same way, while
-/// the base branch has not moved past that commit.
+/// that failure is not yet shown to be gone: the base has not moved past
+/// that commit, or it has moved to a commit whose same job has not concluded.
 ///
 /// `Some(reason)` waits for the base and spends no repair attempt. `None`
-/// keeps the ordinary repair path, including a candidate-caused failure and
+/// keeps the ordinary repair path, including a candidate-caused failure, a
+/// moved tip whose same job has concluded, a moved tip with no such job, and
 /// any git state or evidence this classification could not read, such as a
 /// head object that is not local.
 pub(super) fn red_base_wait<H: RuntimeHost + ?Sized>(

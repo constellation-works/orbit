@@ -1298,9 +1298,11 @@ one. From then on:
     red, stops in `review` without a repair. `orbit run auto --auto-fix` uses
     this same classification for that unmoved red base: it spends no repair
     attempt, waits out its completion deadline, and stops with a base-red
-    reason. The owner merges that head only
-    when it is a clean merge of the accepted candidate with a commit already
-    on the landing branch.
+    reason. The same hold covers a base that has moved to a commit whose same
+    job has not concluded: that poll admits no repair. A moved tip whose same
+    job has concluded, or that has no such job, is not this hold. The owner
+    merges that head only when it is a clean merge of the accepted candidate
+    with a commit already on the landing branch.
     When the owner checkout has `origin`, adopting a newly observed updated
     head requires a successful fresh fetch of the landing branch, even if
     the initial fetch failed and the head and base are cached. A failed
