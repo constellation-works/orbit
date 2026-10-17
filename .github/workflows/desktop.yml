@@ -1,0 +1,121 @@
+name: Desktop App
+
+# Builds the Tauri desktop shell in desktop/. It is its own Cargo workspace,
+# outside the main build, so it runs only when the shell or this workflow
+# changes; the main Check / Clippy / Test budget never pays for the webview
+# stacks. Manual runs also bundle unsigned macOS and Linux packages.
+
+on:
+  push:
+    branches: [main, agent-main]
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop.yml"
+  pull_request:
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop.yml"
+  workflow_dispatch:
+
+# Superseded PR heads must not compete with their replacement. Every non-PR
+# run gets its own group, preserving independent push and manual runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Keep in step with desktop/Cargo.toml's tauri dependency line.
+  TAURI_CLI_VERSION: 2.12.3
+
+jobs:
+  # Read live state before allocating build runners; the PR event can be stale.
+  pr-state:
+    name: Live PR state
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      pull-requests: read
+    outputs:
+      state: ${{ steps.state.outputs.state }}
+    steps:
+      - name: Read live PR state
+        id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          gh api --method GET 'repos/{owner}/{repo}/pulls/${{ github.event.pull_request.number }}' --jq '
+            if .merged == true then "state=merged"
+            elif .state == "open" or .state == "closed" then "state=" + .state
+            else error("Unexpected pull request state") end
+          ' >> "$GITHUB_OUTPUT"
+
+  check:
+    needs: pr-state
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') }}
+    name: Desktop check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # Rust 1.98.1
+        with:
+          toolchain: "1.98.1"
+          components: clippy, rustfmt
+
+      - name: Install webview build dependencies
+        if: runner.os == 'Linux'
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev \
+            libxdo-dev libssl-dev patchelf
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: desktop
+          cache-bin: "false"
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Install Tauri CLI
+        if: github.event_name == 'workflow_dispatch'
+        run: cargo install tauri-cli --version "$TAURI_CLI_VERSION" --locked
+
+      - name: Bundle
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then bundles=app,dmg; else bundles=deb,appimage; fi
+          cargo tauri build --bundles "$bundles"
+
+      - name: Upload bundles
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: orbit-desktop-${{ runner.os }}
+          path: |
+            desktop/target/release/bundle/dmg/*.dmg
+            desktop/target/release/bundle/deb/*.deb
+            desktop/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error

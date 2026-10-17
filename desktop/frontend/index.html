@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Orbit</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #fafafa;
+      --fg: #0a0a0a;
+      --muted: #5c5c66;
+      --accent: #3b6fe0;
+      --border: #e2e2e6;
+      --danger: #c2372b;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0a0a0a;
+        --fg: #ededf0;
+        --muted: #9a9aa6;
+        --accent: #6e9fff;
+        --border: #26262c;
+        --danger: #ff7a6e;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: var(--bg);
+      color: var(--fg);
+      font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Ubuntu, Cantarell, sans-serif;
+      display: grid;
+      place-items: center;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    main { width: min(440px, calc(100% - 32px)); text-align: center; }
+    svg { width: 56px; height: 56px; }
+    h1 { font-size: 17px; font-weight: 600; margin: 20px 0 6px; }
+    p { margin: 0; color: var(--muted); -webkit-user-select: text; user-select: text; overflow-wrap: anywhere; }
+    .error h1 { color: var(--danger); }
+    .spinner {
+      width: 18px; height: 18px; margin: 18px auto 0;
+      border: 2px solid var(--border); border-top-color: var(--accent);
+      border-radius: 50%; animation: spin 0.9s linear infinite;
+    }
+    .error .spinner { display: none; }
+    button {
+      display: none; margin: 20px auto 0; padding: 7px 16px;
+      font: inherit; font-weight: 500; color: var(--fg);
+      background: transparent; border: 1px solid var(--border); border-radius: 8px; cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); }
+    .error button { display: block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
+  </style>
+</head>
+<body>
+  <main id="root">
+    <svg viewBox="0 0 32 32" aria-hidden="true">
+      <rect width="32" height="32" rx="7" fill="#0A0A0A"/>
+      <g transform="translate(-0.883 -0.883) scale(0.3377)">
+        <path d="M 82.00 49.47 A 32 32 0 1 1 50.53 18.00" fill="none" stroke="#EDEDF0" stroke-width="13" stroke-linecap="round"/>
+        <circle cx="50" cy="50" r="10" fill="#EDEDF0"/>
+        <circle cx="72.63" cy="27.37" r="12.5" fill="#6E9FFF"/>
+      </g>
+    </svg>
+    <h1 id="title">Starting the Orbit dashboard…</h1>
+    <p id="detail"></p>
+    <div class="spinner" aria-hidden="true"></div>
+    <button id="retry" type="button">Retry</button>
+  </main>
+  <script>
+    (function () {
+      const invoke = (cmd) => window.__TAURI_INTERNALS__.invoke(cmd);
+      const root = document.getElementById("root");
+      const title = document.getElementById("title");
+      const detail = document.getElementById("detail");
+
+      // Called by the app with each status change; also read once on load.
+      function render(status) {
+        if (!status) return;
+        root.className = status.phase === "error" ? "error" : "";
+        title.textContent = status.title || "";
+        detail.textContent = status.detail || "";
+      }
+
+      window.orbitDesktop = { render };
+      document.getElementById("retry").addEventListener("click", () => invoke("retry"));
+      invoke("status").then(render, () => {});
+    })();
+  </script>
+</body>
+</html>
