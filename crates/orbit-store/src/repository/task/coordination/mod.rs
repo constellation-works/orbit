@@ -19,16 +19,22 @@
 //!    admission section runs under the outer acquisition instead of
 //!    self-deadlocking. Every participant takes the boundary before any bundle
 //!    lock, so the two locks are always acquired in the same order.
-//! 2. **Prepare.** Write a durable pending marker in the partition directory,
-//!    then insert a `prepared` journal row. Nothing about the task has changed
-//!    yet.
+//! 2. **Prepare.** Under the task's bundle lock, which the committer keeps
+//!    until step 4 ends, name the task's commit lease: a file in the
+//!    partition's `.task-commit-applying/` that the committer keeps locked as
+//!    long. Then insert a `prepared` journal row. Nothing about the task has
+//!    changed yet.
 //! 3. **Decide.** One SQLite transaction inserts the reservation and dependent
 //!    coordination rows and flips the journal row to `committed`. This is the
-//!    commit point and the only place the decision exists.
-//! 4. **Apply.** Roll the decision forward onto the bundle: truncate
+//!    commit point and the only place the decision exists. `task.yaml` is then
+//!    published without syncs, so lock-free envelope readers see the decision.
+//! 4. **Apply.** Once the outermost admission section has released the
+//!    partition, roll the decision forward onto the bundle: truncate
 //!    `events.jsonl` to its recorded pre-apply length, append the intent's
-//!    events, republish `task.yaml`, settle the journal row `applied`, and
-//!    remove the marker.
+//!    events, republish `task.yaml` durably, settle the journal row
+//!    `applied`, update the registry index, unname the lease and release the
+//!    bundle lock. Only steps 2 and 3 exclude the partition, and they request
+//!    no file syncs.
 //!
 //! A failure before step 3 leaves no reservation, no coordination row, and an
 //! untouched bundle: compensation only has to abandon an undecided row. A
@@ -51,15 +57,22 @@
 //!
 //! # Recovery before exposure
 //!
-//! The pending marker is the cheap signal that a commit is in flight or was
-//! interrupted. Any participant that sees it first waits for the partition as
-//! a reader, which waits out a live commit's exclusive section; a marker still
-//! there once a reader gets in belongs to an interrupted commit, so the
-//! participant takes the boundary exclusively and replays the journal before
-//! it reads or writes anything. No caller observes a committed reservation
-//! whose task transition has not landed. A compensation or replay that fails
-//! leaves the marker in place and returns the error: the partition stays
-//! closed until recovery succeeds.
+//! A lease nobody holds is the cheap signal that a commit was interrupted: a
+//! live committer holds its lease's lock until it has applied, and the kernel
+//! drops a dead process's locks but not its files. A participant that finds a
+//! dead lease before it reads, or once it holds the partition, takes the
+//! boundary exclusively and replays the journal before it reads or writes
+//! anything, leaving rows whose leases are still held to their committers.
+//! A bundle reader or writer that meets a dead lease under the bundle lock is
+//! refused until then, and one that meets a live apply waits for it on the
+//! bundle lock, so no caller sees a committed transition half-applied. A
+//! lease's name is not synced, so a host crash may lose it while its decision
+//! survives; opening the boundary replays any unsettled row whose lease
+//! nobody holds. A compensation or replay that fails leaves the lease dead
+//! and returns the error: the partition stays closed until recovery succeeds. A
+//! pending marker an older version left is still honored: a participant that
+//! sees it waits for the partition as a reader first, as that version's
+//! commit held the partition until it cleared the marker.
 //!
 //! # Diagnosing contention
 //!
@@ -95,8 +108,9 @@ use crate::repository::task::v2_bundle::TaskBundleStoreV2;
 /// dot-prefixed sibling, so this name is never itself created or removed.
 const COORDINATION_LOCK_FILE: &str = "task-commit";
 const COORDINATION_LOCK_LABEL: &str = "task commit boundary";
-/// Present from the first durable step of a commit until the commit has been
-/// applied or abandoned.
+/// Written by older versions from the first durable step of a commit until
+/// it had been applied or abandoned, all inside its admission section.
+/// Recovery still honors one such a version left behind, and clears it.
 const PENDING_MARKER_FILE: &str = ".task-commit-pending";
 const REQUIRED_MARKER_FILE: &str = ".task-commit-required";
 const COMMIT_INTENT_SCHEMA_VERSION: u32 = 2;
@@ -134,6 +148,7 @@ pub struct TaskCommitBoundary {
 }
 
 mod admission;
+mod apply;
 mod boundary;
 mod branch_observation;
 mod commit;

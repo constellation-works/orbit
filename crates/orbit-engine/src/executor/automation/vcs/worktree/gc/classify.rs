@@ -2,7 +2,8 @@ use super::super::super::git::git_output;
 use super::super::cleanup::remove_worktree;
 use super::super::path_is_registered;
 use super::leftovers::{is_failed_removal_leftover, reclaim_failed_removal_leftover};
-use super::paths::{attributed_task_ids, branch_name, directory_bytes};
+use super::parked::{Parked, parked_commits_survive, parked_hold};
+use super::paths::{attributed_task_ids, branch_name, directory_bytes, worktree_lock};
 use super::reclaim::collect_build_output;
 use super::rescue::{delete_run_branch, rescue_dirty_worktree};
 use super::sweep::{
@@ -10,7 +11,7 @@ use super::sweep::{
 };
 use crate::context::{RuntimeHost, WorktreeGcTaskLookup};
 use orbit_common::OrbitError;
-use orbit_types::task::task_id_prefix;
+use orbit_types::task::{TaskStatus, task_id_prefix};
 use orbit_types::workflow::JobRun;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -97,7 +98,9 @@ pub(super) fn classify_known<H: RuntimeHost + ?Sized>(
             .collect::<Vec<(String, WorktreeGcTaskLookup)>>()
     };
     let first_task = resolved.first().and_then(|(_, lookup)| match lookup {
-        WorktreeGcTaskLookup::Found { status, pr_status } => Some((*status, pr_status.clone())),
+        WorktreeGcTaskLookup::Found {
+            status, pr_status, ..
+        } => Some((*status, pr_status.clone())),
         _ => None,
     });
 
@@ -169,24 +172,58 @@ pub(super) fn classify_known<H: RuntimeHost + ?Sized>(
     // A claimed leaf's settled claim stands in for its task's status: the
     // follower holds no task records, and the owner already has the leaf's
     // delivery whatever the task's status says now.
+    //
+    // A task parked in `someday` permits deletion only once it has been
+    // parked for the configured age, measured from the status change; the
+    // parked gates below then apply to the whole worktree.
     if let Some(settlement) = settled_claim {
         report.detail = Some(settlement);
     } else if resolved.is_empty() {
         report.action = "skipped:unattributed".to_string();
         return Ok(report);
     }
+    let mut parked: Option<Parked> = None;
     for (task_id, lookup) in resolved {
         let (task_status, pr_status, action, detail) = match lookup {
-            WorktreeGcTaskLookup::Found { status, pr_status } => {
+            WorktreeGcTaskLookup::Found {
+                status,
+                pr_status,
+                status_since,
+            } => {
                 if task_status_permits_deletion(status) {
                     continue;
                 }
-                (
-                    Some(status),
-                    pr_status,
-                    "skipped:task_status_ineligible",
-                    None,
-                )
+                match (status, options.parked_older_than, status_since) {
+                    (TaskStatus::Someday, Some(cutoff), Some(since)) if since <= cutoff => {
+                        // The most recently parked task names the removal.
+                        if parked.as_ref().is_none_or(|held| since > held.since) {
+                            parked = Some(Parked { since });
+                        }
+                        continue;
+                    }
+                    (TaskStatus::Someday, Some(cutoff), Some(since)) => (
+                        Some(status),
+                        pr_status,
+                        "skipped:parked_too_recent",
+                        Some(format!(
+                            "parked in someday since {}; reclaimable once parked since {} or earlier",
+                            since.to_rfc3339(),
+                            cutoff.to_rfc3339()
+                        )),
+                    ),
+                    (TaskStatus::Someday, Some(_), None) => (
+                        Some(status),
+                        pr_status,
+                        "skipped:parked_age_unknown",
+                        Some("the task store did not say when the task was parked".to_string()),
+                    ),
+                    _ => (
+                        Some(status),
+                        pr_status,
+                        "skipped:task_status_ineligible",
+                        None,
+                    ),
+                }
             }
             WorktreeGcTaskLookup::Unresolved => (None, None, "skipped:task_unresolved", None),
             WorktreeGcTaskLookup::TaskPrefixUnroutable => {
@@ -219,8 +256,23 @@ pub(super) fn classify_known<H: RuntimeHost + ?Sized>(
         return Ok(report);
     }
 
+    if let Some(parked) = &parked {
+        if let Some((action, detail)) = parked_hold(lookups.host, run) {
+            report.action = action.to_string();
+            report.detail = detail;
+            return Ok(report);
+        }
+        report.detail = Some(parked.detail());
+    }
+
     if !registered_here {
         return reclaim_failed_removal_leftover(path, run, options, report);
+    }
+
+    if let Some(reason) = worktree_lock(path)? {
+        report.action = "skipped:worktree_locked".to_string();
+        report.detail = Some(reason);
+        return Ok(report);
     }
 
     // The safety net: a task can be settled with uncommitted content still
@@ -242,7 +294,26 @@ pub(super) fn classify_known<H: RuntimeHost + ?Sized>(
         }
     };
     if dirty {
+        // A rescue patch pins its base commit, and a published ref holds
+        // the whole candidate, so the branch's commits survive either way.
         return rescue_dirty_worktree(repo_root, path, run, &branch, options, report);
+    }
+    // A clean parked worktree is often a failed run's only copy of the
+    // commits it made before publication failed. Its branch goes only when
+    // those commits survive elsewhere.
+    let mut checked_tip = None;
+    if parked.is_some() {
+        match parked_commits_survive(path, run, &branch) {
+            Ok((tip, recovery)) => {
+                checked_tip = Some(tip);
+                report.recovery = recovery;
+            }
+            Err(reason) => {
+                report.action = "skipped:unpublished_commits".to_string();
+                report.detail = Some(reason);
+                return Ok(report);
+            }
+        }
     }
 
     let estimated_bytes = if options.delete || options.estimate_bytes {
@@ -262,6 +333,6 @@ pub(super) fn classify_known<H: RuntimeHost + ?Sized>(
     // Git fail closed. Never replace this with raw recursive deletion.
     remove_worktree(repo_root, path, None, false)?;
     report.bytes_reclaimed = estimated_bytes;
-    report.action = delete_run_branch(repo_root, &branch);
+    report.action = delete_run_branch(repo_root, &branch, checked_tip.as_deref());
     Ok(report)
 }

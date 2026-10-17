@@ -144,10 +144,16 @@ which every acquisition and release updates. `detail` names the type and source
 checkout. A target that no run record, cache lock or lease derives, including a
 scratch target built before its record existed, is retained as
 `skipped:unattributed_host_target`; `--estimate-bytes` reports its
-`retained_bytes`. Only a primary checkout's own targets directory is
-inventoried. Admission's prefilter also selects terminal runs with an
-attributed host target, so admission reclaims them oldest first. Sources,
-branches, refs, task artifacts, logs and other caches are never touched.
+`retained_bytes`. GC inventories the targets directory its runs build into:
+that of the primary checkout owning the workspace's Git common directory. For
+a workspace that is itself a linked worktree, such as a replica checkout added
+with `git worktree add`, this is the primary clone's directory, not the
+workspace's own. An unscoped sweep reports a row for every target there; one
+this workspace's records do not derive, including another workspace's, stays
+`skipped:unattributed_host_target`. A `--run` sweep reports only that run's
+targets. Admission's prefilter also selects terminal runs with an attributed
+host target, so admission reclaims them oldest first. Sources, branches, refs,
+task artifacts, logs and other caches are never touched.
 `detail` names the checkout each attributed target was built for.
 
 The existing `worktree_gc_pipeline` and worktree-GC routine use this collector;
@@ -215,6 +221,60 @@ runs a cleanup command. `cargo clean` can honor a checkout's `build.target-dir`
 pointing outside the checkout; `make clean` and npm scripts can execute
 agent-written code. Declared paths let Orbit check confinement and Git content
 before deletion, without giving the checkout a host command execution path.
+
+## Worktrees of parked tasks
+
+A run's worktree normally stays until every task it serves is `done`,
+`rejected` or `archived`. A task parked in `someday` no longer holds it once
+it has stayed there for `worktree.parked_reclaim_after_hours` (default 336,
+two weeks; `0` reclaims at the next sweep). The age runs from the task's move
+into `someday`, read from the task history (or its last update when the
+history cannot be read), not from when the run finished, so a long-finished
+run whose task was parked just now keeps its worktree as
+`skipped:parked_too_recent`. A replica reads that history from the task's
+holder. `rejected` and `archived` tasks keep their immediate eligibility.
+
+```toml
+[worktree]
+parked_reclaim_after_hours = 336
+```
+
+Both `orbit gc worktrees` and the scheduled `worktree_gc_pipeline` apply the
+rule, with every gate a settled worktree passes plus these, each reported in
+the dry-run JSON:
+
+- `skipped:worker_alive`: the run's recorded worker is alive or undecidable.
+- `skipped:claim_live`: the run is a claimed leaf whose claim is not settled
+  with its owner, so the follower may still owe the owner its delivery.
+  `detail` names the claim's phase.
+- `skipped:worktree_locked`: Git holds the worktree locked
+  (`git worktree lock --reason <why>`); `detail` repeats the reason. This
+  applies to every removal, not only parked ones. Orbit takes no lease on a run
+  worktree; a Git lock is how an operator or tool holds one. Git itself
+  refuses to remove a locked worktree, so a lock taken after GC checks still
+  keeps it.
+- `skipped:unpublished_commits`: a clean worktree whose run branch holds
+  commits that no other ref reaches and that `origin` does not hold. Those
+  commits may be the only copy of a run that committed before publication
+  failed, so the worktree and its branch both stay. `detail` counts them.
+  Push the branch (or move its commits elsewhere) and the next sweep
+  reclaims it.
+- `skipped:parked_age_unknown`: the task store could not say when the task
+  was parked.
+
+A clean parked worktree goes only when its branch's commits survive the
+branch: when each is reachable from a ref that is not a run branch (the base
+or another local branch, a remote-tracking branch, a tag, a carry ref under
+`refs/orbit/candidates/` or a rescue base ref), or when the run's carry ref or
+branch on `origin` contains the branch tip. Other run branches (`orbit/*`)
+never vouch for each other. In the `origin` case the report's `recovery`
+names the ref and commit. GC then removes the worktree without `--force` and
+deletes the run branch only while it still points at the tip GC checked, so a
+commit made in the meantime keeps it (`removed:branch_retained`). A dirty parked worktree follows
+[Dirty worktrees of settled tasks](#dirty-worktrees-of-settled-tasks): only
+the scheduled pipeline removes it, after a carry ref or published branch holds
+its candidate or a verified rescue patch pins its `HEAD`, so its commits stay
+reachable when its branch is deleted.
 
 ## Relocated removal leftovers
 

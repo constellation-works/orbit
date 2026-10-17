@@ -53,6 +53,9 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         "orbit.friction.update" => A::destructive(false),
         "orbit.task.artifact.put" => A::destructive(true),
         "orbit.task.review_reset" => A::destructive(false),
+        // Supersedes a recorded escalation; with `discard_candidate` it also
+        // closes the published pull request.
+        "orbit.task.requeue" => A::destructive(false),
 
         // Starts work outside Orbit's own state: an agent, a workflow run's
         // agents, or an arbitrary process.

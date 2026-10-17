@@ -6,7 +6,7 @@
 // Readiness card asks for its own task's entry and words it with the same
 // `drainReadinessView`, so the dot and the card never disagree.
 
-import { onWorkspaceChange } from './common.js';
+import { el, onWorkspaceChange } from './common.js';
 
 // Readiness reasons that mean "waiting on another task or run": a context lock, a
 // grouped member, a reserved surface, a same-wave deferral, a live child's claim, or a task with no
@@ -83,6 +83,7 @@ export function drainWaitBadge(entry) {
   let holders = [];
   let runIds = [];
   let dependencies = [];
+  let message = DRAIN_LOCK_REASONS.has(reason) ? "" : detail;
   if (DRAIN_LOCK_REASONS.has(reason)) {
     holders = drainHolders(entry);
     runIds = [...new Set((Array.isArray(entry.run_ids) ? entry.run_ids : [])
@@ -97,6 +98,14 @@ export function drainWaitBadge(entry) {
     // Only an explicit request names a task outside the backlog; a proposed
     // one waits for approval before any drain can take it.
     text = entry.status === "proposed" ? "awaits approval" : "not in backlog";
+  } else if (reason === "crew_not_allowed") {
+    // The live drain's `--allow-crew` set leaves out the crew this task
+    // would run as; another drain, or reassigning the task, takes it.
+    const crew = typeof entry.crew === "string" && entry.crew ? entry.crew : "";
+    const allowed = drainCrewNames(entry.allowed_crews);
+    text = crew ? `crew ${crew} not allowed` : "crew not allowed";
+    const refusal = crew ? `Runs as ${crew}, which this drain does not allow` : "Runs as a crew this drain does not allow";
+    message ||= `${refusal}${allowed.length ? `; it allows only ${allowed.join(", ")}` : ""}.`;
   } else {
     text = WAIT_LABELS[reason] || reason.replaceAll("_", " ");
     if (reason === "unmet_dependency") {
@@ -106,10 +115,30 @@ export function drainWaitBadge(entry) {
       }
     }
   }
-  const message = DRAIN_LOCK_REASONS.has(reason) ? "" : detail;
   if (!lines.length) lines.push(text);
   if (message && !lines.includes(message)) lines.push(message);
   return { text, title: lines.join("\n"), pool: drainPoolKey(entry), holders, runIds, dependencies, detail: message, reason };
+}
+
+function drainCrewNames(crews) {
+  return (Array.isArray(crews) ? crews : []).filter(crew => typeof crew === "string" && crew);
+}
+
+// The Drain card's note on a crew-restricted window: the crews the live drain
+// allows and the backlog tasks it leaves out for running as another crew.
+// Null when no restriction applies.
+export function drainCrewNote(payload) {
+  const allowed = drainCrewNames(payload?.capacity?.allowed_crews);
+  if (allowed.length === 0) return null;
+  const excluded = (Array.isArray(payload.tasks) ? payload.tasks : [])
+    .filter(entry => entry?.eligible !== true && drainReason(entry) === "crew_not_allowed" && typeof entry.task_id === "string");
+  const shown = excluded.slice(0, 5).map(entry => (typeof entry.crew === "string" && entry.crew ? `${entry.task_id} (${entry.crew})` : entry.task_id));
+  const more = excluded.length > shown.length ? `, +${excluded.length - shown.length} more` : "";
+  const waiting = excluded.length === 0 ? ""
+    : ` ${excluded.length} backlog ${excluded.length === 1 ? "task runs" : "tasks run"} as another crew and ${excluded.length === 1 ? "waits" : "wait"}: ${shown.join(", ")}${more}.`;
+  const note = el("p", { class: "operation-control-note drain-crew-note", text: `Allowed crews: ${allowed.join(", ")}.${waiting}` });
+  note.setAttribute("role", "status");
+  return note;
 }
 
 // The readiness pools in the order the Backlog card lists them, each with the

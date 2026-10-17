@@ -38,29 +38,6 @@ pub(super) fn job_catalog_target_summary(job: &JobCatalogEntry) -> (String, Stri
         .unwrap_or_else(|| ("-".to_string(), "-".to_string()))
 }
 
-pub(super) fn job_catalog_to_json_with_last_run(
-    job: &JobCatalogEntry,
-    last_run: Option<&JobRun>,
-) -> Value {
-    let mut value = json!({
-        "job_id": job.job_id.clone(),
-        "kind": job.kind().to_string(),
-        "state": job.state().to_string(),
-        "default_input": job.spec.default_input,
-        "max_active_runs": job.spec.max_active_runs,
-        "steps": job.spec.steps.iter().map(job_v2_step_to_json).collect::<Vec<_>>(),
-        "path": job.path.display().to_string(),
-    });
-    value["last_run_state"] = last_run
-        .map(|r| serde_json::Value::String(r.state.to_string()))
-        .unwrap_or(serde_json::Value::Null);
-    value["last_run_at"] = last_run
-        .and_then(|r| r.finished_at.or(r.started_at).or(Some(r.scheduled_at)))
-        .map(|ts| serde_json::Value::String(ts.to_rfc3339()))
-        .unwrap_or(serde_json::Value::Null);
-    value
-}
-
 pub(super) fn job_catalog_to_signal_json(job: &JobCatalogEntry) -> Value {
     let (_, target_id) = job_catalog_target_summary(job);
     json!({
@@ -68,59 +45,6 @@ pub(super) fn job_catalog_to_signal_json(job: &JobCatalogEntry) -> Value {
         "target_id": target_id,
         "state": job.state().to_string(),
     })
-}
-
-fn job_v2_step_to_json(step: &JobV2Step) -> Value {
-    let mut value = json!({
-        "id": step.id.clone(),
-        "when": step.when,
-        "retry": step.retry,
-    });
-    match &step.body {
-        JobV2StepBody::TargetRef(target) => {
-            value["body"] = json!({
-                "kind": "target_ref",
-                "target": target.target.clone(),
-                "default_input": target.default_input,
-                "timeout_seconds": target.timeout_seconds,
-                "session": target.session,
-            });
-        }
-        JobV2StepBody::Target(target) => {
-            value["body"] = json!({
-                "kind": "target",
-                "default_input": target.default_input,
-                "timeout_seconds": target.timeout_seconds,
-                "session": target.session,
-                "spec": target.spec,
-            });
-        }
-        JobV2StepBody::Parallel { parallel } => {
-            value["body"] = json!({
-                "kind": "parallel",
-                "join": parallel.join,
-                "branches": parallel.branches.iter().map(job_v2_step_to_json).collect::<Vec<_>>(),
-            });
-        }
-        JobV2StepBody::FanOut { fan_out, fan_in } => {
-            value["body"] = json!({
-                "kind": "fan_out",
-                "items": fan_out.items,
-                "max_workers": fan_out.max_workers,
-                "worker": job_v2_step_to_json(&fan_out.worker),
-                "fan_in": fan_in,
-            });
-        }
-        JobV2StepBody::Loop { loop_ } => {
-            value["body"] = json!({
-                "kind": "loop",
-                "max_iterations": loop_.max_iterations,
-                "break_when": loop_.break_when,
-                "steps": loop_.steps.iter().map(job_v2_step_to_json).collect::<Vec<_>>(),
-            });
-        }
-    }
-    value
 }
 
 pub(super) fn write_v2_step(step: &JobV2Step, indent: usize, out: &mut String) {

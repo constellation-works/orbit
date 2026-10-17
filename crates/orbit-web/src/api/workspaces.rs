@@ -60,6 +60,121 @@ fn list_workspaces_json(state: &DashboardState) -> Vec<Value> {
         .collect()
 }
 
+/// `GET /api/fleet/drains` — one observational readiness row per registered
+/// workspace on this host. Unavailable workspaces remain explicit rows. Remote
+/// hosts expose the same endpoint through the existing single-hop forward.
+pub(super) async fn list_fleet_drains(State(state): State<DashboardState>) -> Response {
+    match blocking("fleet drains", move || {
+        let pinned = state.pin();
+        let items = pinned
+            .entries()
+            .iter()
+            .map(|entry| fleet_drain_row(&pinned, entry))
+            .collect::<Vec<_>>();
+        Ok::<_, orbit_core::OrbitError>(json!({"items": items}))
+    })
+    .await
+    {
+        Ok(value) => Json(value).into_response(),
+        Err(response) => *response,
+    }
+}
+
+fn fleet_drain_row(pinned: &Pinned, entry: &crate::state::WsEntry) -> Value {
+    let mut row = json!({
+        "workspace_id": entry.id,
+        "workspace_name": entry.name,
+        "phase": "unavailable",
+        "slots_used": null,
+        "slots_ceiling": null,
+        "eligible_count": null,
+        "top_wait_reason": null,
+        "holds": [],
+    });
+    let readiness = if entry.active {
+        pinned
+            .runtime_for(&entry.id)
+            .map_err(|error| orbit_core::OrbitError::Execution(format!("{error:?}")))
+            .and_then(|runtime| runtime.workspace_auto_readiness(&[], None, 500, &[]))
+    } else {
+        row["error"] = json!("workspace is unavailable");
+        return row;
+    };
+    match readiness {
+        Ok(payload) => {
+            let tasks = payload["tasks"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let eligible = tasks.iter().filter(|task| task["eligible"] == true).count();
+            let mut waits = BTreeMap::<&str, usize>::new();
+            for task in tasks.iter().filter(|task| task["eligible"] != true) {
+                if let Some(reason) = task["reason"].as_str() {
+                    *waits.entry(reason).or_default() += 1;
+                }
+            }
+            // Stable alphabetical tie-break; never return task-specific
+            // detail (which can contain internal task identifiers).
+            let top = waits
+                .iter()
+                .max_by(|(a, ac), (b, bc)| ac.cmp(bc).then_with(|| b.cmp(a)))
+                .map(|(reason, _)| *reason);
+            let capacity = &payload["capacity"];
+            let mut holds = Vec::new();
+            if capacity["admissions_stopped"] == true
+                || capacity["pull_drain_admissions_stopped"] == true
+            {
+                holds.push(json!("admissions stopped"));
+            }
+            if capacity["host_shutdown_holding"] == true {
+                holds.push(json!("host shutdown scheduled"));
+            }
+            if let Some(resources) = capacity["resource_throttle"]["resources"].as_array() {
+                for resource in resources {
+                    if let Some(name) = resource["resource"].as_str() {
+                        holds.push(json!(format!("{name} throttled")));
+                    }
+                }
+            }
+            for limit in payload["provider_limits"].as_array().into_iter().flatten() {
+                if limit["gated"] == true
+                    && let Some(provider) = limit["provider"].as_str()
+                {
+                    holds.push(json!(format!("{provider} usage limit")));
+                }
+            }
+            for failure in payload["provider_auth_failures"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                if let Some(provider) = failure["provider"].as_str() {
+                    holds.push(json!(format!("{provider} authentication failed")));
+                }
+            }
+            let phase =
+                if capacity["drain_phase"] == "idle" && capacity["pull_drain_run_id"].is_string() {
+                    "pulling"
+                } else {
+                    capacity["drain_phase"].as_str().unwrap_or("idle")
+                };
+            row["phase"] = json!(phase);
+            row["slots_used"] = capacity["active_leaf_runs"].clone();
+            row["slots_ceiling"] = capacity["max_active_leaf_runs"].clone();
+            row["eligible_count"] = json!(eligible);
+            row["counts_truncated"] =
+                json!(payload["total"].as_u64().unwrap_or(0) > tasks.len() as u64);
+            row["top_wait_reason"] = json!(top);
+            row["holds"] = json!(holds);
+        }
+        Err(error) => {
+            tracing::warn!(workspace = %entry.id, %error, "fleet readiness unavailable");
+            row["error"] = json!("readiness unavailable");
+        }
+    }
+    row
+}
+
 /// `GET /api/tasks/all` — dashboard tasks aggregated across active workspaces.
 ///
 /// Each task object is tagged with its owning workspace (`workspace_id` /

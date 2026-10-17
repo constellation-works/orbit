@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Task/Reservation Commit Boundary"
-last_validated: 2026-10-11
+last_validated: 2026-10-17
 ---
 # Task/Reservation Commit Boundary
 
@@ -64,22 +64,46 @@ admission: either would wait behind the shared lock the pass itself holds.
 
 | Step | What happens | What a crash here means |
 |---|---|---|
-| Prepare | Durable pending marker (only its presence: recovery reads the journal, so the marker is created in place and only its directory entry is synced), then a `prepared` journal row carrying the bundle-side intent | Undecided: recovery abandons it; the task is untouched |
-| Decide | **Commit point.** One SQLite transaction inserts reservations/coordination rows, checks and replaces lifecycle rows, releases the settling claim’s reservation, and flips the journal to `committed` | Decided: recovery replays the apply |
-| Apply | Truncate `events.jsonl` to the intent's recorded pre-apply length (nothing to do, and no sync, when it is already there), append its events in one write and one sync, replay summary/comments/artifact bytes and manifest, republish `task.yaml`, settle the row `applied`, drop the marker | Still decided: the next entrant replays it again |
+| Prepare | Name the task's commit lease, `<partition>/.task-commit-applying/<task>`: a file the committer keeps locked until its apply finishes, under the task's bundle lock, which it took before reading the bundle and keeps as long. Then a `prepared` journal row carrying the bundle-side intent | Undecided: recovery abandons it; the task is untouched |
+| Decide | **Commit point.** One SQLite transaction inserts reservations/coordination rows, checks and replaces lifecycle rows, releases the settling claim’s reservation, and flips the journal to `committed`. Then `task.yaml` is published without syncs, so lock-free envelope readers see the decided status | Decided: recovery replays the apply |
+| Apply | After the admission section has released the partition, still under the bundle lock and lease: truncate `events.jsonl` to the intent's recorded pre-apply length (nothing to do, and no sync, when it is already there), append its events in one write and one sync, replay summary/comments/artifact bytes and manifest, republish `task.yaml` durably, settle the row `applied`, update the registry index, then unname the lease and release the bundle | Still decided: the next entrant replays it again |
 
 Nothing infers the decision from bundle contents, and nothing tries to un-publish an envelope.
-Because no bundle file is touched before the commit point, a pre-commit failure has nothing to
-compensate beyond the journal row and the marker.
+Because no bundle file but `task.yaml` is touched before the apply, and that only after the
+commit point, a pre-commit failure has nothing to compensate beyond the journal row and the
+lease.
 
-**Recovery before exposure.** The marker signals interrupted publication. Ordinary operations check it
-once they hold their shared partition lock. A live commit holds the partition exclusively until
-it has dropped its marker, so a marker still there belongs to a commit that crashed, including
-one that crashed while they waited. Recovery drops that shared acquisition and settles the
-journal exclusively before exposing any state — so a committed reservation whose transition has not landed is never observable, and a
-live commit blocks a reader for its (short) duration instead of showing it a half-applied task.
-A compensation or replay that fails leaves the marker in place and returns the error: the
-partition stays closed until recovery succeeds, rather than opening with unknown commit state.
+Only the prepare and the decision exclude the partition. Every file sync a commit requests is
+in its apply, after the section, so a writer to another task in the partition waits for one
+task's decision, not for its publication. Under concurrent claim
+mutations with real syncs on ext4 the exclusive hold fell from p50 ~24 ms to ~1.2 ms
+(`exclusive_claim_sections_stay_short_under_concurrent_durable_mutations`, run on demand).
+A thread that commits a task twice in one section applies the first commit before the second
+reads the bundle.
+
+**Recovery before exposure.** A dead lease signals an interrupted commit. A live committer holds
+its lease's lock from before it prepares until it has applied, and the kernel drops a dead
+process's locks but not its files, so a lease nobody holds belongs to a commit that crashed.
+Every entrant checks the partition's leases: a store read before it reads, an ordinary section
+once it holds the partition shared, an admission once it holds it exclusively. Finding a dead
+one, it drops any shared acquisition and settles the journal exclusively. An undecided row is
+abandoned, a decided one is replayed under the task's bundle lock, and a row whose lease is
+still held is left to its live committer. A bundle reader or writer that meets a dead lease
+under the bundle lock is refused until that replay, so a half-applied task is never read or
+written over. A live apply blocks full bundle reads of its own task for its duration, and no
+other task's reads or partition sections. Listings that already tolerate a bundle in flight
+may show the decided envelope while its history is still being applied.
+
+The lease's name is not synced, which keeps every sync out of the section. A host crash can
+therefore lose a lease whose decision survived, so opening a partition's boundary, which every
+process does before it reads, replays any unsettled row whose lease nobody holds. A
+compensation or replay that fails leaves the lease dead and returns the error: the partition
+stays closed until recovery succeeds, rather than opening with unknown commit state.
+
+Older versions held a `.task-commit-pending` marker for a whole commit inside the section.
+Recovery still honors and clears one they left, waiting for the partition as a reader first.
+Their readers and writers do not check leases, so only this version refuses a bundle that a
+dead lease guards.
 
 ## Integration API
 
@@ -142,7 +166,7 @@ the decision leaves a repair obligation, never a successful partial settlement.
 Before preparing the journal, claimed evidence checks the combined artifact manifest for
 file/ancestor conflicts and verifies that existing destination parents are directories and
 replacement destinations are files. These checks run under admission and bundle locks, before
-any artifact writes or pending marker, so an impossible artifact topology cannot create a
+any artifact writes or commit lease, so an impossible artifact topology cannot create a
 durable replay obligation. Nested files and replacements retain the same recovery protocol.
 
 ## Composition and cost

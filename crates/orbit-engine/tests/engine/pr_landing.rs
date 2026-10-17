@@ -1524,6 +1524,34 @@ fn open_for_completion(fx: &Fixture, host: &DeliveryHost) -> usize {
     fx.forge_calls().len()
 }
 
+/// Drive `pr_complete` on one prerequisite clock.
+///
+/// Each read advances one millisecond, the gap that used to make a fresh
+/// budget look one second already spent. Each logical wait advances that
+/// same clock by the full delay. Wall time cannot change `waited_seconds`.
+fn complete_with_logical_clock(host: &DeliveryHost, input: &Value) -> Result<Value, OrbitError> {
+    let clock = std::rc::Rc::new(std::cell::Cell::new(1_000_000_u64));
+    let now = std::rc::Rc::clone(&clock);
+    let waited = std::rc::Rc::clone(&clock);
+    orbit_engine::test_support::with_prerequisite_clock(
+        move || {
+            let current = now.get();
+            now.set(current.saturating_add(1));
+            current
+        },
+        |_, _| {},
+        || {
+            orbit_engine::test_support::with_vcs_retry_wait(
+                move |duration| {
+                    let millis = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+                    waited.set(waited.get().saturating_add(millis));
+                },
+                || action(host, "pr_complete", input),
+            )
+        },
+    )
+}
+
 /// The refusal F2026-10-071 recorded: GitHub refuses the SHA-conditioned
 /// merge because another PR landed on the base first. Completion waits one
 /// poll, re-reads the PR, re-resolves the merge policy and asks again with the
@@ -1554,20 +1582,8 @@ fn a_base_modified_merge_refusal_retries_the_same_candidate_on_fresh_evidence() 
                     fx.complete_ungated_input()
                 };
 
-                // Every completion clock read advances one millisecond, so the
-                // deadline is always read back after a millisecond boundary.
-                // CI crossed that boundary by chance and reported a sixth
-                // waited second that no poll spent.
-                let clock = std::rc::Rc::new(std::cell::Cell::new(1_000_u64));
-                let completed = orbit_engine::test_support::with_prerequisite_clock(
-                    move || {
-                        clock.set(clock.get() + 1);
-                        clock.get()
-                    },
-                    |_, _| {},
-                    || action(&host, "pr_complete", &input),
-                )
-                .unwrap_or_else(|error| panic!("{case}: {error}"));
+                let completed = complete_with_logical_clock(&host, &input)
+                    .unwrap_or_else(|error| panic!("{case}: {error}"));
 
                 let condition = format!("sha={} merge_method=squash", fx.candidate);
                 assert_eq!(
@@ -1708,7 +1724,7 @@ fn assert_refresh_refuses(sandbox: &Path, cases: &[(&str, bool, &str, &str, &str
             fx.complete_ungated_input()
         };
 
-        let error = action(&host, "pr_complete", &input)
+        let error = complete_with_logical_clock(&host, &input)
             .expect_err("changed evidence after a base race must not complete");
 
         assert!(error.to_string().contains(refusal), "{case}: {error}");

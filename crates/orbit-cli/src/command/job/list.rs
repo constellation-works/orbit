@@ -1,13 +1,13 @@
 use clap::Args;
 use orbit_core::OrbitRuntime;
+use orbit_core::application::job::job_catalog_to_json_with_last_run;
 use orbit_types::workflow::JobKind;
 
 use crate::command::{CommandOut, Execute, Payload};
 use crate::output::color::Domain;
 
 use super::support::{
-    format_last_run, job_catalog_filter, job_catalog_target_summary,
-    job_catalog_to_json_with_last_run, job_catalog_to_signal_json,
+    format_last_run, job_catalog_filter, job_catalog_target_summary, job_catalog_to_signal_json,
 };
 
 #[derive(Args)]

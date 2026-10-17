@@ -22,6 +22,7 @@ use orbit_engine::{
 use orbit_types::workflow::activity_job::{ActivityV2, JobV2, V2AuditEventKind};
 use orbit_types::workflow::{
     FinalRecoveryCheckpoint, FinalRecoveryDecision, FinalRecoveryKey, JobRunState, PipelineState,
+    TransientInfrastructure,
 };
 use serde_json::{Value, json};
 
@@ -274,6 +275,11 @@ fn deterministic_activity(name: &str) -> ActivityV2 {
 /// `decide` as the final recovery activity. `work` may name `step_fix` as
 /// its step recovery.
 fn pipeline(step_recovery: bool) -> JobV2 {
+    pipeline_acting("work", step_recovery)
+}
+
+/// `setup → <middle> → deliver`, otherwise exactly [`pipeline`].
+fn pipeline_acting(middle: &str, step_recovery: bool) -> JobV2 {
     let step = |id: &str| {
         json!({
             "id": id,
@@ -287,7 +293,7 @@ fn pipeline(step_recovery: bool) -> JobV2 {
         "spec": {
             "state": "enabled",
             "kind": "workflow",
-            "steps": [step("setup"), step("work"), step("deliver")],
+            "steps": [step("setup"), step(middle), step("deliver")],
         },
     });
     let mut job = load_job_asset(&asset.to_string())
@@ -321,6 +327,22 @@ fn run_with_evidence(
     host: &RecoveryHost,
     resume: Option<&PipelineState>,
     prior_events: Vec<(&str, V2AuditEventKind)>,
+) -> Run {
+    run_with_input(
+        job,
+        host,
+        resume,
+        prior_events,
+        json!({ "task_ids": ["T-1"] }),
+    )
+}
+
+fn run_with_input(
+    job: &JobV2,
+    host: &RecoveryHost,
+    resume: Option<&PipelineState>,
+    prior_events: Vec<(&str, V2AuditEventKind)>,
+    input: Value,
 ) -> Run {
     let audit_root = tempfile::tempdir().expect("audit tempdir");
     let inner = Arc::new(InMemorySink::new(audit_root.path().join("blobs")));
@@ -356,14 +378,7 @@ fn run_with_evidence(
     for event in own_events {
         writer.emit(event).expect("persist own prior event");
     }
-    let result = execute_job_with_resume(
-        job,
-        json!({ "task_ids": ["T-1"] }),
-        RUN_ID,
-        writer.clone(),
-        host,
-        resume,
-    );
+    let result = execute_job_with_resume(job, input, RUN_ID, writer.clone(), host, resume);
     let mut attempts = Vec::new();
     let mut details = Vec::new();
     for event in writer.events_snapshot().expect("audit events") {
@@ -908,6 +923,91 @@ fn a_provider_authentication_failure_skips_final_recovery() {
         "the skip is recorded: {:?}",
         run.details
     );
+}
+
+/// A delivery step that lost only to a busy lock or a locked store is blocked
+/// on that condition without an agent, so the cleared-infra requeue can
+/// bring it back; a validation failure whose output merely contains the same
+/// text is still the candidate's, and goes to the agent.
+/// `reserve_locks` stands for every delivery action: the host runs it, and
+/// the classifier lists it.
+fn transient_infrastructure_is_escalated_without_an_agent() {
+    for (message, class) in [
+        (
+            "execution failed: remote tool failed (lock_busy): task write lock is held",
+            TransientInfrastructure::LockBusy,
+        ),
+        (
+            "timed out after 30000ms acquiring task lock '/repo/.orbit/locks/T-1.lock'",
+            TransientInfrastructure::LockBusy,
+        ),
+        (
+            "store error: SQLite database '/repo/.orbit/orbit.db' remained locked during task update",
+            TransientInfrastructure::StoreLocked,
+        ),
+    ] {
+        let host = RecoveryHost::new([
+            ("reserve_locks", vec![Reply::Diagnostic(message.into())]),
+            ("decide", vec![escalate()]),
+        ]);
+        let run = run(&pipeline_acting("reserve_locks", false), &host, None);
+
+        assert!(run.result.is_err(), "{message}");
+        assert_eq!(host.count("decide"), 0, "no agent judges it: {message}");
+        let applications = host.applications();
+        assert_eq!(applications.len(), 1, "{message}");
+        assert_eq!(applications[0].infrastructure, Some(class), "{message}");
+        assert!(
+            matches!(
+                applications[0].decision,
+                FinalRecoveryDecision::Escalate { .. }
+            ),
+            "{message}"
+        );
+        assert_eq!(host.count("handoff"), 1, "the candidate is published");
+        assert_eq!(run.attempts, [attempt("escalated", Some("escalate"))]);
+    }
+
+    // Each of these goes to the recovery agent as before: a lock display a
+    // validation action's output merely quotes, a lock display quoted after
+    // other text, and a delivery step of a claimed leaf, whose task is its
+    // owner's.
+    let lock = "store error: database is locked";
+    for (case, action, message, input) in [
+        (
+            "validation output",
+            "review_reconciliation_validate",
+            lock.to_string(),
+            json!({ "task_ids": ["T-1"] }),
+        ),
+        (
+            "quoted mid-message",
+            "reserve_locks",
+            format!("required validation 'make test' did not pass on candidate head: {lock}"),
+            json!({ "task_ids": ["T-1"] }),
+        ),
+        (
+            "claimed leaf",
+            "reserve_locks",
+            "execution failed: remote tool failed (lock_busy): task write lock is held".into(),
+            json!({ "task_ids": ["T-1"], "claimed": true }),
+        ),
+    ] {
+        let host = RecoveryHost::new([
+            (action, vec![Reply::Diagnostic(message)]),
+            ("decide", vec![escalate()]),
+        ]);
+        let run = run_with_input(
+            &pipeline_acting(action, false),
+            &host,
+            None,
+            Vec::new(),
+            input,
+        );
+        assert!(run.result.is_err(), "{case}");
+        assert_eq!(host.count("decide"), 1, "{case}: the agent judges it");
+        assert_eq!(host.applications()[0].infrastructure, None, "{case}");
+    }
 }
 
 fn an_empty_crew_pool_skips_final_recovery() {
@@ -1520,6 +1620,10 @@ fn recovery_contracts_4() {
             (
                 "final_recovery_resume_checkpoints_the_latest_conflict_diagnostics",
                 final_recovery_resume_checkpoints_the_latest_conflict_diagnostics,
+            ),
+            (
+                "transient_infrastructure_is_escalated_without_an_agent",
+                transient_infrastructure_is_escalated_without_an_agent,
             ),
         ]);
     });

@@ -225,7 +225,17 @@ fn apply(
             .ok()
             .flatten()
     };
-    let outcome = match runtime.apply_final_recovery(&request, Some(&output)) {
+    // Only the engine's own classification carries `infrastructure`.
+    let infra =
+        application
+            .infrastructure
+            .map(|class| orbit_types::workflow::TransientInfraBlock {
+                schema_version: 1,
+                run_id: checkpoint.key.run_id.clone(),
+                failed_step_id: application.failed_step_id.clone(),
+                class,
+            });
+    let outcome = match runtime.apply_classified_final_recovery(&request, Some(&output), infra) {
         Ok(outcome) => outcome,
         Err(error) => {
             let Some(outcome) = recorded() else {

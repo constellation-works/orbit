@@ -6,7 +6,13 @@ use super::*;
 /// attempt survives, the normal landing action completes, and replay keeps
 /// naming that one run after completion without changing the leaf binding.
 fn a_stopped_authorized_handoff_retries_once_through_the_public_operator_tool() {
-    let (owner, task, request, stopped) = stopped_retry_fixture();
+    let evidence = json!({
+        "schema_version":1, "kind":"owner_landing_refusal",
+        "reason":{"value":"required provider review was not yet satisfied"},
+        "observation":{"required_checks":{"state":"not_collected"}},
+    });
+    let (owner, task, request, stopped) =
+        retry_fixture_with_evidence(true, Some(JobRunState::Cancelled), &evidence.to_string());
     let runtime = &owner.pair.wire.owner;
     let before = owner.pair.owner_task(&task);
     let barrier = Arc::new(std::sync::Barrier::new(2));
@@ -79,6 +85,13 @@ fn a_stopped_authorized_handoff_retries_once_through_the_public_operator_tool() 
     let landed = owner.land(&task).unwrap();
     assert_eq!(landed["phase"], "landed");
     assert_eq!(owner.pair.owner_status(&task), "done");
+    assert_eq!(
+        runtime
+            .landing_attempt_record(&request.handoff_id, stopped.attempt)
+            .unwrap(),
+        Some(stopped),
+        "completed same-handoff retry preserves the first failed-attempt diagnostic"
+    );
     let completed_replay = retry_tool(runtime, &request, McpCapability::Operator).unwrap();
     assert_eq!(completed_replay["run_id"], response["run_id"]);
     let after = owner.pair.owner_task(&task);
@@ -491,6 +504,23 @@ fn retry_fixture(
     orbit_types::workflow::handoff::LandingRetryRequest,
     LandingAttempt,
 ) {
+    retry_fixture_with_evidence(
+        stop,
+        terminal,
+        "required provider review was not yet satisfied",
+    )
+}
+
+fn retry_fixture_with_evidence(
+    stop: bool,
+    terminal: Option<JobRunState>,
+    evidence: &str,
+) -> (
+    OwnerLocal,
+    String,
+    orbit_types::workflow::handoff::LandingRetryRequest,
+    LandingAttempt,
+) {
     let owner = OwnerLocal::new();
     let leaf = owner.handed_off_leaf(|checkout, _| {
         std::fs::write(checkout.join(FILE), FIRST).unwrap();
@@ -506,7 +536,7 @@ fn retry_fixture(
                 handoff_id: accepted.handoff_id.clone(),
                 step: orbit_engine::HandoffLandingStep::Stop { repairable: false },
                 observed: None,
-                evidence: "required provider review was not yet satisfied".into(),
+                evidence: evidence.into(),
             },
         )
         .unwrap();

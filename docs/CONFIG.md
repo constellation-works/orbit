@@ -375,6 +375,7 @@ path_mode = "prepend"
 | `workflow.validation_env.interactive` | `true` | Try `-i -l -c` first, so toolchains exported in rc files are found. `false` probes only `-l -c`. Ignored when `login_shell` is `false`. |
 | `workflow.validation_env.path` | `[]` | PATH entries to add. A leading `~/` expands to `HOME`. Agent sessions get them too ([below](#agent-sessions-share-the-configured-path)). |
 | `workflow.validation_env.build_output_env` | `[]` | Output environment variable names to bind to managed host output for required validation and host evidence; see [build output](#workspace-build-output). |
+| `workflow.validation_env.cargo_incremental` | `false` | When a host validation target is bound, force `CARGO_INCREMENTAL=0` on the validation command. `true` leaves the variable untouched. See [incremental compilation](#incremental-compilation). |
 | `workflow.validation_env.path_mode` | `prepend` | `prepend` puts `path` first; `replace` makes it the whole PATH. |
 
 Required validation commands and `local_shell` steps run in this environment over the [allowlisted agent environment](#executionenv--the-agent-subprocess-environment), so a drain started from a minimal PATH (a service manager, `env -i`, SSH) still finds the toolchain.
@@ -437,6 +438,10 @@ carry `build_output.env`, `directory`, `source` and `context: "host"`; an unconf
 run has empty `env` and null directory/source. Baseline cache schema 9 includes the
 bindings in its key, retaining prior records rather than certifying this contract with
 old results. Recovery fingerprints also include the bindings.
+
+#### Incremental compilation
+
+A host validation target is keyed by its checkout and is built once per candidate, so Cargo's incremental cache there is write-only. When a binding is configured, required validation, host replay, detached evidence, baseline reruns and recovery set `CARGO_INCREMENTAL=0` on the child, replacing any inherited value. The variable is applied where Orbit spawns the command, not by the repository Makefile. `workflow.validation_env.cargo_incremental = true` is the opt-in that leaves `CARGO_INCREMENTAL` untouched, so Cargo's profile default (incremental on for dev) or an allowlisted value stands. With no binding, Orbit does not set the variable. An incremental directory already in a target is left in place; later builds do not add to it. Baseline result identity is unchanged: the setting changes compiler writes, not command results.
 
 **Cleanup and transition.** The existing host-validation-targets layout, source keys,
 run attribution, base-cache locks and scratch lease lineage stay unchanged. Linux's
@@ -831,7 +836,7 @@ hard_complexity_crews   = ["opus", "sol"]          # bare = uniform
 - Weight `0` parks a crew (never drawn); at least one entry must weigh more than 0.
 - The draw walks the pool in canonical name order over `[0, total_weight)`.
 
-**Allowlists.** With `--allow-crew`, the draw renormalizes over permitted members, keeping their ratios. A pool with no permitted positive-weight member is disjoint, and `orbit run readiness --allow-crew <crew>` reports `crew_not_allowed`. The allowlist is checked against `task.crew` and still applies to system and review activities at dispatch.
+**Allowlists.** With `--allow-crew`, the draw renormalizes over permitted members, keeping their ratios. A pool with no permitted positive-weight member is disjoint, and `orbit run readiness --allow-crew <crew>` reports `crew_not_allowed`. Without `--allow-crew`, readiness (and the dashboard Drain card) applies the live drain's own set and reports it as `capacity.allowed_crews`. The allowlist is checked against `task.crew` and still applies to system and review activities at dispatch.
 
 **Frozen per run.** The admitting run captures the effective pools in run input `auto_crew_pools`, inherited by descendants. Each admitted leaf records `crew` and `crew_selection` (task ID, complexity, source, and the eligible `[{name, weight}]` after renormalization), shown as `Crew Selection:` in `orbit run show`. Retries and resumes keep it.
 
@@ -1272,7 +1277,7 @@ At claim admission the owner captures `review.before_pr` and `review.before_land
 |---|---|---|
 | `pr.task_url_template` | unset | URL template linking a task ID in PR descriptions. |
 | `pr.close_on_terminal` | `true` | Close a task's open Orbit-authored delivery and `[BLOCKED]` preservation PRs when it lands (`done`), is rejected or archived, when an operator or agent moves it back to `backlog` or `someday`, and when a newer delivery attempt opens its own PR (rules below). `false` disables all of these. |
-| `pr.delivery_authors` | `[]` | Forge logins (case-insensitive) whose PRs count as Orbit-authored. Empty: the login `gh` is authenticated as on this machine. Add a follower's login if it opens PRs this owner has not accepted as a handoff. |
+| `pr.delivery_authors` | `[]` | Forge logins (case-insensitive) whose PRs count as Orbit-authored, for closing them and for settling a task from its delivery PR merged outside Orbit ([stuck job runs](runbooks/stuck-job-runs.md#a-delivery-pull-request-merged-outside-orbit)). Empty: the login `gh` is authenticated as on this machine. Add a follower's login if it opens PRs this owner has not accepted as a handoff. |
 
 `pr.close_on_terminal` closes a PR only if its head branch is `orbit/<TASK-ID>-…`, its body names the task, and it was opened by a `pr.delivery_authors` login or is the delivery PR of an accepted follower handoff. Human PRs and other tasks' PRs are never touched, and branches are never deleted. On `done` the landing PR stays open: any `#N` the done note names, or, when the note names none and the task leaves `review`, the PR it was reviewed through. The closing comment names the landing (the done note, such as `delivered by pull request #N merged as <sha>` or `already landed as <sha>`) or the state and reason. Starting a run or blocking a task closes nothing.
 
@@ -1299,10 +1304,12 @@ A task with no recorded PR makes no forge call. A forge error is logged as a war
 | `runtime.log_retention_days` | `7` | Delete `orbit.jsonl` and `orbit-agent.jsonl` archives older than N days (≥ 1). |
 | `runtime.log_max_total_mb` | `500` | Operational `orbit.jsonl` archive budget in MiB, pruned oldest first (≥ 1). |
 | `runtime.log_max_file_mb` | `100` | Roll the active operational log past N MiB (≥ 1, ≤ `log_max_total_mb`). |
-| `retention.audit_days` | `60` | Days `orbit gc audit` keeps audit rows (1..=36500). Older host-wide command-audit rows and this workspace's run-audit rows become reclaimable, with blobs no remaining row or pending write names. Nothing is deleted until an operator runs `orbit gc audit --apply` or enables the `store-gc` routine. |
-| `retention.runs_days` | `60` | Days after a terminal run finishes before `orbit gc runs` may drop its pipeline state (1..=36500). The run row, steps and summary stay; held and non-terminal runs are never selected. The same pass prunes per-minute run and host resource history older than a fixed 30 days. |
+| `retention.audit_days` | `60` | Days `orbit gc audit` keeps audit rows (1..=36500). Older host-wide command-audit rows, this workspace's run-audit rows, and run-audit rows whose workspace id is no longer registered become reclaimable, with blobs no remaining row or pending write names. Another registered workspace keeps its own window. Nothing is deleted until an operator runs `orbit gc audit --apply` or enables the `store-gc` routine. |
+| `retention.runs_days` | `60` | Days after a terminal run finishes before `orbit gc runs` may drop its pipeline state (1..=36500). The run row, steps and summary stay; held and non-terminal runs are never selected. The same pass also reaches unregistered workspace ids, and prunes per-minute run and host resource history older than a fixed 30 days. On a large store, 14 reclaims much more terminal run state than 60 (about 1.8 GiB versus about 0.4 GiB on a store of about 6 GiB). |
+| `retention.store_warn_bytes` | `1073741824` | `orbit doctor` warns when the host store file is larger than this many bytes (default 1 GiB) and this workspace has no enabled `store-gc` routine. Zero warns for any non-empty file. The check stays ok under the threshold or while the routine is enabled. |
 | `worktree.reclaim` | `["target"]` | Relative rebuildable path globs reclaimed in kept terminal worktrees; an explicit list replaces earlier layers, `[]` disables. `*` stays within a component; a whole-component `**` spans components. Absolute, parent or root-matching patterns fail load. Registration, worker, symlink, confinement and Git content gates protect candidates and tracked files. See [worktree reclamation](runbooks/worktree-reclaim.md). |
 | `worktree.reclaim_below_free_mib` | unset | Also reclaim during admission while free space beneath the state directory is below this, oldest terminal worktrees first; active runs stay protected. |
+| `worktree.parked_reclaim_after_hours` | `336` | Hours a task must stay parked in `someday`, counted from that status change, before worktree GC removes a terminal run's worktree serving it (0..=876000). A live worker, an unsettled claim or a Git worktree lock keeps it, and a clean worktree whose run branch holds commits no other ref reaches and `origin` lacks stays with its branch. See [parked tasks](runbooks/worktree-reclaim.md#worktrees-of-parked-tasks). |
 | `security_alert_sweep.min_severity` | `moderate` | Lowest Dependabot and Code scanning severity the security alert sweep files. See [below](#security_alert_sweep--security-finding-severity). |
 | `plugin.legacy_callback_identity` | `false` | Deprecated. Also accept the environment token and process ancestry as a plugin callback credential. Removed next release. |
 

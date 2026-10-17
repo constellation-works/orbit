@@ -45,7 +45,7 @@ pub use agent_invoke::{
     DEFAULT_AGENT_INVOKE_TIMEOUT_SECONDS, MAX_AGENT_INVOKE_TIMEOUT_SECONDS, agent_invoke_result,
 };
 pub(crate) use catalog::{DEFAULT_JOB_FILES, seed_default_jobs};
-pub use catalog::{JobCatalogEntry, JobCatalogFilter};
+pub use catalog::{JobCatalogEntry, JobCatalogFilter, job_catalog_to_json_with_last_run};
 pub use catalog_layers::CatalogReferenceLayer;
 pub use exec::V2JobRunResult;
 pub(crate) use orphan_adoption::AdoptionAuthority;

@@ -31,7 +31,7 @@ Domain crates own their data and transport. Application layers compose them. Ker
 | `orbit-automation` | internal | common, store, types |
 | `orbit-engine` | internal | agent, common, exec, store, tools, types |
 | `orbit-mcp` | internal | common, registry, tools, types |
-| `orbit-core` | internal | automation, common, config, engine, exec, policy, search, store, tools, types (dev: core) |
+| `orbit-core` | internal | automation, common, config, engine, exec, policy, registry, search, store, tools, types (dev: core) |
 | `orbit-cmd` | internal | common, config, core, mcp, registry, store, tools, types |
 | `orbit-web` | internal | cmd, common, core, registry, types (dev: engine, store) |
 | `orbit-cli` | internal | cmd, common, config, core, mcp, registry, types, web (dev: engine, exec, tools) |
@@ -110,7 +110,7 @@ in member manifests with `workspace = true`.
 
 ### Application and surfaces
 
-- **orbit-core** composes the runtime. Its internal graph is `runtime ← application ← adapter`, with `composition` as the only module that joins config, bootstrap, runtime, and adapters. It exposes `OrbitRuntime` and never depends on `orbit-agent`, `orbit-cmd`, or transport crates. Notable application modules:
+- **orbit-core** composes the runtime. Its internal graph is `runtime ← application ← adapter`, with `composition` as the only module that joins config, bootstrap, runtime, and adapters. It exposes `OrbitRuntime` and never depends on `orbit-agent`, `orbit-cmd`, or transport crates. Store retention reads the workspace registry read-only, through `orbit-registry`, to tell a live partition from an id no checkout still owns. Notable application modules:
   - `review` runs the before-PR review gate (admit, settle, certificates, landing verification).
   - `landing` is the owner-side landing consumer for distributed drains, dispatched from the coordination outbox.
   - `config` projects `orbit-config` as structured data for the dashboard. Writes go through the same `ConfigStore`.

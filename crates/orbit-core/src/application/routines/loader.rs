@@ -44,8 +44,10 @@ pub const REPLICA_LOCAL_ROUTINE_JOB: &str = "worktree_gc_pipeline";
 /// [ORB-16354].
 ///
 /// It deletes command audit and resource history in the local host store, and
-/// this workspace's run audit, unreferenced audit blobs, and old terminal
-/// runs' pipeline state. It never opens the owner's coordination store.
+/// this workspace's run audit plus rows of workspace ids that are no longer
+/// registered, unreferenced audit blobs, and old terminal runs' pipeline
+/// state. Another registered workspace keeps its own window. It never opens
+/// the owner's coordination store.
 const REPLICA_LOCAL_STORE_GC_JOB: &str = "store_gc_pipeline";
 
 /// Cron jobs a replica checkout may schedule for itself. Every other target

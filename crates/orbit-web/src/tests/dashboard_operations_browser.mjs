@@ -441,15 +441,14 @@ try {
     if (rendered.card !== phase || rendered.header.toLowerCase() !== label.toLowerCase()) throw new Error(`Drain ${phase} header: ${JSON.stringify(rendered)}`);
     if (phase === 'draining' && (!rendered.live.includes('left') || !rendered.live.includes('jrun-'))) throw new Error(`Missing server deadline or run link: ${rendered.live}`);
     if (phase !== 'idle' && (rendered.admitted !== '3' || rendered.running !== '1')) throw new Error(`Missing scoped window count: ${JSON.stringify(rendered)}`);
-    if (phase === 'idle' ? !rendered.globalHidden || rendered.tab : rendered.globalHidden || !rendered.global.includes(label) || !rendered.tabLabel.includes(label)) throw new Error(`Drain ${phase} indicators: ${JSON.stringify(rendered)}`);
+    if (rendered.globalHidden || !rendered.global.includes('Draining · 1 of 2') || (phase === 'idle' ? rendered.tab : !rendered.tabLabel.includes(label))) throw new Error(`Drain ${phase} indicators: ${JSON.stringify(rendered)}`);
     if (phase === 'draining' && rendered.tab) throw new Error(`ORB-14489: Drain tab repeats draining state: ${rendered.tab}`);
     if (!rendered.status.includes(label)) throw new Error(`Drain ${phase} status announcement: ${rendered.status}`);
     await drainCheck(`state-${phase}`, 336);
   }
 
-  // A replica's pull drain with no owner window gets its own top-bar state:
-  // the indicator shows, reads as a pull drain (never idle), and says when
-  // admissions are stopped. Clearing the pull drain hides it again.
+  // The scoped dock still identifies pull drains and stopped admissions;
+  // the chrome keeps the fleet visible when this workspace becomes idle.
   const pullIndicator = () => page.evaluate(() => ({
     globalHidden: document.getElementById('global-drain-state').hidden,
     global: document.getElementById('global-drain-state').textContent,
@@ -459,13 +458,13 @@ try {
   }));
   await page.evaluate(() => globalThis.setDrainFixturePull({ runId: 'jrun-pull-fixture' }));
   let pulled = await pullIndicator();
-  if (pulled.globalHidden || pulled.state !== 'pulling' || pulled.global !== 'Pull drain' || pulled.tabLabel !== 'Drain: Pull drain') throw new Error(`Pull drain indicator: ${JSON.stringify(pulled)}`);
+  if (pulled.globalHidden || !pulled.global.includes('Draining · 1 of 2') || pulled.tabLabel !== 'Drain: Pull drain') throw new Error(`Pull drain indicator: ${JSON.stringify(pulled)}`);
   await page.evaluate(() => globalThis.setDrainFixturePull({ runId: 'jrun-pull-fixture', admissionsStopped: true }));
   pulled = await pullIndicator();
-  if (pulled.globalHidden || pulled.global !== 'Pull drain · admissions stopped' || !pulled.globalLabel.includes('admissions stopped') || pulled.tabLabel !== 'Drain: Pull drain · admissions stopped') throw new Error(`Stopped pull drain indicator: ${JSON.stringify(pulled)}`);
+  if (pulled.globalHidden || !pulled.global.includes('Draining · 1 of 2') || pulled.tabLabel !== 'Drain: Pull drain · admissions stopped') throw new Error(`Stopped pull drain indicator: ${JSON.stringify(pulled)}`);
   await page.evaluate(() => globalThis.setDrainFixturePull({}));
   const cleared = await pullIndicator();
-  if (!cleared.globalHidden || cleared.tabLabel !== 'Drain: idle') throw new Error(`Indicator after pull drain ends: ${JSON.stringify(cleared)}`);
+  if (cleared.globalHidden || !cleared.global.includes('Draining · 1 of 2') || cleared.tabLabel !== 'Drain: idle') throw new Error(`Indicator after pull drain ends: ${JSON.stringify(cleared)}`);
 
   // ORB-14566: changing concurrency alters the readiness URL but must keep
   // the panel scope stable while that refresh is pending, then restore focus.

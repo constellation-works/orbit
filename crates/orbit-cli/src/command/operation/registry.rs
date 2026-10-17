@@ -359,6 +359,11 @@ impl Commands {
                         }
                     },
                     TaskSubcommand::RecheckBlocked(_) => ("recheck-blocked", None, None),
+                    TaskSubcommand::SettleMerged(args) => (
+                        "settle-merged",
+                        args.id.as_ref().map(|_| "task"),
+                        args.id.as_deref(),
+                    ),
                     TaskSubcommand::Reindex(_) => ("reindex", None, None),
                 };
                 let runtime_need = match &command.command {

@@ -5,13 +5,25 @@ use super::*;
 /// GC must see distinct machine namespaces, including tasks this follower
 /// minted before it became a replica.
 fn gc_pair(tasks: usize) -> Pair {
+    gc_pair_with(tasks, "")
+}
+
+/// [`gc_pair`] with `config` appended to the follower's global `config.toml`.
+fn gc_pair_with(tasks: usize, config: &str) -> Pair {
+    replica_gc(Pair::new(tasks), config)
+}
+
+/// Reopen `pair`'s follower as a registered replica runtime, with `config`
+/// appended to its global `config.toml`.
+fn replica_gc(mut pair: Pair, config: &str) -> Pair {
     use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 
-    let mut pair = Pair::new(tasks);
     let global = pair.follower.global_root();
     std::fs::write(
         global.join("config.toml"),
-        "[machine]\nid = \"hm_0000000000000002\"\nname = \"follower\"\ntask_prefix = \"DANI\"\n",
+        format!(
+            "[machine]\nid = \"hm_0000000000000002\"\nname = \"follower\"\ntask_prefix = \"DANI\"\n{config}"
+        ),
     )
     .unwrap();
     TaskRegistryStore::open(&task_registry_path(&global))
@@ -41,22 +53,40 @@ fn gc_pair(tasks: usize) -> Pair {
 }
 
 fn terminal_worktree(pair: &Pair, tasks: &[&str]) -> (String, PathBuf) {
+    terminal_worktree_at(pair, tasks, Utc::now())
+}
+
+/// [`terminal_worktree`] for a run that started and failed at `at`.
+fn terminal_worktree_at(
+    pair: &Pair,
+    tasks: &[&str],
+    at: chrono::DateTime<Utc>,
+) -> (String, PathBuf) {
     let run = pair
         .follower_jobs
         .insert_job_run(
             "task_pr_pipeline",
             1,
-            Utc::now(),
+            at,
             Some(json!({"task_ids": tasks, "scope": "all"})),
             None,
         )
         .unwrap();
-    pair.follower_jobs
-        .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+    // The recorded worker is a real process that has exited, as after a
+    // failed run, so no liveness gate holds the worktree.
+    let mut worker = std::process::Command::new("cat")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .spawn()
         .unwrap();
     pair.follower_jobs
-        .finalize_job_run(&run.run_id, JobRunState::Failed, Utc::now(), None)
+        .mark_job_run_running(&run.run_id, at, worker.id())
         .unwrap();
+    pair.follower_jobs
+        .finalize_job_run(&run.run_id, JobRunState::Failed, at, None)
+        .unwrap();
+    drop(worker.stdin.take());
+    assert!(worker.wait().unwrap().success());
     let (path, _) = leaf_worktree(pair, &run.run_id);
     (run.run_id, path)
 }
@@ -144,6 +174,42 @@ fn leaf_worktree(pair: &Pair, leaf: &str) -> (PathBuf, u64) {
     std::fs::create_dir_all(&build).unwrap();
     std::fs::write(build.join("orbit"), vec![0u8; 4096]).unwrap();
     (worktree, 4096)
+}
+
+/// Make `replica` a linked worktree of a separate primary clone, as a replica
+/// checkout added with `git worktree add` is, and return the primary.
+fn link_replica_checkout(replica: &Path) -> PathBuf {
+    let parent = replica.parent().unwrap();
+    let primary = parent.join("primary");
+    git(
+        parent,
+        &["init", "-q", "-b", "main", primary.to_str().unwrap()],
+    );
+    std::fs::write(primary.join(".gitignore"), "/target/\n/.orbit/\n").unwrap();
+    git(&primary, &["add", ".gitignore"]);
+    git(&primary, &["commit", "-q", "-m", "init"]);
+    // `git worktree add` needs an empty directory, and the replica already
+    // holds its `.orbit`: add the worktree beside it, then move its link in.
+    let staged = parent.join("replica-link");
+    git(
+        &primary,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--no-checkout",
+            "-b",
+            "replica",
+            staged.to_str().unwrap(),
+        ],
+    );
+    std::fs::remove_dir_all(replica.join(".git")).unwrap();
+    std::fs::rename(staged.join(".git"), replica.join(".git")).unwrap();
+    std::fs::remove_dir(&staged).unwrap();
+    git(replica, &["worktree", "repair"]);
+    git(replica, &["reset", "-q", "--hard"]);
+    assert!(replica.join(".git").is_file());
+    primary.canonicalize().unwrap()
 }
 
 fn gc_report(result: &impl serde::Serialize, leaf: &str) -> Value {
@@ -365,6 +431,93 @@ fn an_accepted_handoff_gives_back_its_build_output_and_then_its_worktree() {
     assert!(
         pair.wire.task_reads.lock().unwrap().is_empty(),
         "an accepted handoff needs no task read or follower task records"
+    );
+}
+
+/// [ORB-16398] A replica checkout that is a linked worktree builds its leaves'
+/// host validation output under the primary that owns its Git directory, not
+/// under its own root. Once the leaf's claim is settled, worktree GC reaps the
+/// leaf's checkout and must reclaim that output with it, while a target no run
+/// derives stays, reported.
+fn a_linked_replica_reclaims_a_settled_leafs_host_validation_output() {
+    let pair = Pair::new(1);
+    let primary = link_replica_checkout(&pair.follower_repo);
+    let config = pair.follower_repo.join(".orbit/config.toml");
+    let mut workspace = std::fs::read_to_string(&config).unwrap_or_default();
+    workspace.push_str("\n[workflow.validation_env]\nbuild_output_env = ['BUILD_OUTPUT_DIR']\n");
+    std::fs::write(&config, workspace).unwrap();
+    let pair = replica_gc(pair, "");
+    let drain = pair.run_drain();
+    let (leaf, worker) = pair.running_leaf_with_worker(&drain, 1);
+    pair.leaf_hands_off(&leaf);
+    assert!(
+        std::process::Command::new("kill")
+            .args(["-TERM", &worker.pid.to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(worker.stopped(), "the handed-off leaf's worker has exited");
+    let settled = pair.pass(&drain);
+    assert!(settled["error"].is_null(), "{settled}");
+    let (worktree, _) = leaf_worktree(&pair, &leaf);
+    let built = orbit_engine::review_gate::run_required_validation(
+        &pair.follower,
+        &worktree,
+        "mkdir -p \"$BUILD_OUTPUT_DIR/debug\" && printf 'leaf host output' > \"$BUILD_OUTPUT_DIR/debug/output\"",
+    )
+    .unwrap();
+    assert!(built.passed, "{}", built.output);
+    let target = PathBuf::from(
+        built.environment["build_output"]["directory"]
+            .as_str()
+            .unwrap(),
+    )
+    .canonicalize()
+    .unwrap();
+    let targets = primary.join(".orbit/state/host-validation-targets");
+    assert_eq!(target.parent(), Some(targets.as_path()));
+    let stray = targets.join("0".repeat(64));
+    std::fs::create_dir_all(stray.join("debug")).unwrap();
+    std::fs::write(stray.join("debug/output"), "unattributed").unwrap();
+
+    let gc = pair
+        .follower
+        .gc_worktrees(true, None, None, false, false)
+        .unwrap();
+    let reports = serde_json::to_value(&gc).unwrap()["reports"].clone();
+    let at = |path: &Path| {
+        reports
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|report| report["path"] == path.to_string_lossy().as_ref())
+            .cloned()
+            .unwrap_or_else(|| panic!("no report for {}: {reports:#}", path.display()))
+    };
+    assert_eq!(at(&worktree)["action"], "removed", "{reports:#}");
+    assert!(!worktree.exists());
+    let reclaimed = at(&target);
+    assert_eq!(reclaimed["action"], "reclaimed", "{reclaimed:#}");
+    assert_eq!(reclaimed["run_id"], leaf, "{reclaimed:#}");
+    assert!(
+        reclaimed["bytes_reclaimed"]
+            .as_u64()
+            .is_some_and(|bytes| bytes >= 16),
+        "{reclaimed:#}"
+    );
+    assert!(
+        !target.exists(),
+        "the settled leaf's host output is reclaimed"
+    );
+    assert_eq!(
+        at(&stray)["action"],
+        "skipped:unattributed_host_target",
+        "{reports:#}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(stray.join("debug/output")).unwrap(),
+        "unattributed"
     );
 }
 
@@ -683,14 +836,183 @@ fn replica_gc_looks_each_id_up_on_the_host_its_prefix_names() {
     );
 }
 
+/// Park an owner task in `someday`, as a human does.
+fn park(pair: &Pair, task: &str) {
+    pair.wire
+        .owner
+        .update_task_as_human(
+            task,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(orbit_types::task::TaskStatus::Someday),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+}
+
+/// [ORB-16385] A failed run's worktree whose task is parked in `someday` past
+/// `worktree.parked_reclaim_after_hours` is reclaimed. A Git worktree lock, an
+/// unsettled claim or a backlog task keeps it, and so do run branch commits
+/// that exist on no published ref and in no rescue patch: the branch is the
+/// only copy of a run that committed before publication failed.
+fn a_parked_tasks_failed_worktree_goes_only_when_its_commits_survive() {
+    let pair = gc_pair_with(1, "[worktree]\nparked_reclaim_after_hours = 0\n");
+    let drain = pair.start_drain();
+    // Cancellation's terminal hook and the launch pass both try delivery,
+    // so the leaf's claim stays unsettled.
+    pair.wire.lose_next_reply("orbit.drain.claim.settle");
+    pair.wire.lose_next_reply("orbit.drain.claim.settle");
+    pair.pass(&drain);
+    let claimed_leaf = pair.leaf_runs().pop().expect("leaf");
+    let claimed = pair.claimed_task(&claimed_leaf);
+    assert_eq!(
+        pair.follower
+            .pull_leaf_claim(&claimed_leaf)
+            .unwrap()
+            .expect("claimed leaf")
+            .settlement_phase,
+        "settling"
+    );
+    let (claimed_path, _) = leaf_worktree(&pair, &claimed_leaf);
+    // Added after the only drain pass, so no leaf claims them.
+    let [clean_task, committed_task, backlog_task] =
+        ["src/clean.rs", "src/committed.rs", "src/backlog.rs"]
+            .map(|file| super::backlog_task(&pair.wire.owner, &pair.owner_repo, file, None));
+    for task in [&claimed, &clean_task, &committed_task] {
+        park(&pair, task);
+    }
+    let (clean, clean_path) = terminal_worktree(&pair, &[&clean_task]);
+    let (locked, locked_path) = terminal_worktree(&pair, &[&clean_task]);
+    git(
+        &pair.follower_repo,
+        &[
+            "worktree",
+            "lock",
+            "--reason",
+            "operator hold",
+            locked_path.to_str().unwrap(),
+        ],
+    );
+    let (committed, committed_path) = terminal_worktree(&pair, &[&committed_task]);
+    std::fs::write(committed_path.join("unpublished.rs"), "fn kept() {}\n").unwrap();
+    git(&committed_path, &["add", "unpublished.rs"]);
+    git(
+        &committed_path,
+        &["commit", "-q", "-m", "committed before publication failed"],
+    );
+    let head = git(&committed_path, &["rev-parse", "HEAD"]);
+    let branch = format!("orbit/{committed}");
+    let (backlogged, backlog_path) = terminal_worktree(&pair, &[&backlog_task]);
+
+    let preview = pair
+        .follower
+        .gc_worktrees(false, None, None, false, false)
+        .unwrap();
+    for (leaf, action) in [
+        (&clean, "would_remove"),
+        (&locked, "skipped:worktree_locked"),
+        (&claimed_leaf, "skipped:claim_live"),
+        (&committed, "skipped:unpublished_commits"),
+        (&backlogged, "skipped:task_status_ineligible"),
+    ] {
+        let report = gc_report(&preview, leaf);
+        assert_eq!(report["action"], action, "{report:#}");
+    }
+    assert!(
+        gc_report(&preview, &locked)["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("operator hold")),
+        "{preview:#?}"
+    );
+
+    let swept = pair
+        .follower
+        .gc_worktrees(true, None, None, false, false)
+        .unwrap();
+    assert_eq!(gc_report(&swept, &clean)["action"], "removed");
+    assert!(!clean_path.exists());
+    for (leaf, path) in [
+        (&locked, &locked_path),
+        (&claimed_leaf, &claimed_path),
+        (&committed, &committed_path),
+        (&backlogged, &backlog_path),
+    ] {
+        assert!(
+            gc_report(&swept, leaf)["action"]
+                .as_str()
+                .is_some_and(|action| action.starts_with("skipped:")),
+            "{swept:#?}"
+        );
+        assert!(path.exists(), "{leaf} keeps its worktree");
+    }
+    assert_eq!(
+        git(&pair.follower_repo, &["rev-parse", &branch]),
+        head,
+        "an unpublished run branch is not deleted"
+    );
+
+    // Once origin holds the branch, its commits survive the branch.
+    let origin = pair._root.path().join("origin.git");
+    git(
+        pair._root.path(),
+        &["init", "-q", "--bare", origin.to_str().unwrap()],
+    );
+    git(
+        &pair.follower_repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&pair.follower_repo, &["push", "-q", "origin", &branch]);
+    // Leave only origin's own listing to vouch for it.
+    git(
+        &pair.follower_repo,
+        &["update-ref", "-d", &format!("refs/remotes/origin/{branch}")],
+    );
+    let published = pair
+        .follower
+        .gc_worktrees(true, None, None, false, false)
+        .unwrap();
+    let report = gc_report(&published, &committed);
+    assert_eq!(report["action"], "removed", "{report:#}");
+    assert_eq!(
+        report["recovery"]["source"], "published_branch",
+        "{report:#}"
+    );
+    assert_eq!(report["recovery"]["commit"], head.trim(), "{report:#}");
+    assert!(!committed_path.exists());
+}
+
+/// [ORB-16385] A task's parked age runs from its move to `someday`, not from
+/// its run's end: a run that failed long ago keeps its worktree when its task
+/// was parked just now.
+fn a_parked_age_is_measured_from_the_status_change() {
+    let pair = gc_pair_with(1, "[worktree]\nparked_reclaim_after_hours = 24\n");
+    let task = pair.tasks[0].clone();
+    let (leaf, path) =
+        terminal_worktree_at(&pair, &[&task], Utc::now() - chrono::Duration::days(30));
+    park(&pair, &task);
+
+    let gc = pair
+        .follower
+        .gc_worktrees(true, None, Some(24), false, false)
+        .unwrap();
+    let report = gc_report(&gc, &leaf);
+    assert_eq!(report["action"], "skipped:parked_too_recent", "{report:#}");
+    assert_eq!(report["task_status"], "someday", "{report:#}");
+    assert!(path.exists());
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     delivery_retains_a_shared_worktree_until_every_mapped_run_is_terminal_scenarios,
     delivery_retains_a_shared_worktree_until_every_mapped_run_is_terminal,
     an_accepted_handoff_gives_back_its_build_output_and_then_its_worktree,
+    a_linked_replica_reclaims_a_settled_leafs_host_validation_output,
     a_released_claim_keeps_its_backlogged_worktree_and_unhanded_commit,
     an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure,
     a_replica_collects_a_local_done_task_without_asking_the_owner,
     replica_gc_routes_owner_ids_and_keeps_other_prefixes_independent,
-    replica_gc_looks_each_id_up_on_the_host_its_prefix_names
+    replica_gc_looks_each_id_up_on_the_host_its_prefix_names,
+    a_parked_tasks_failed_worktree_goes_only_when_its_commits_survive,
+    a_parked_age_is_measured_from_the_status_change
 );

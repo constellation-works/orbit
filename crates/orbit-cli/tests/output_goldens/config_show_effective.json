@@ -237,6 +237,12 @@
       "path": null,
       "shadowed_by": []
     },
+    "retention.store_warn_bytes": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "review.baseline_commands": {
       "scope": "built-in",
       "state": "default",
@@ -455,6 +461,12 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.validation_env.cargo_incremental": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.validation_env.interactive": {
       "scope": "built-in",
       "state": "default",
@@ -480,6 +492,12 @@
       "shadowed_by": []
     },
     "workflow.xhard_complexity_crews": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "worktree.parked_reclaim_after_hours": {
       "scope": "built-in",
       "state": "default",
       "path": null,

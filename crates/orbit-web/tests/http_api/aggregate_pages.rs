@@ -81,6 +81,99 @@ fn find_envelope(dir: &Path, task_id: &str) -> Option<PathBuf> {
 }
 
 #[test]
+fn fleet_drains_exposes_idle_ready_work_beside_a_live_workspace() {
+    isolated(
+        "aggregate_pages::fleet_drains_exposes_idle_ready_work_beside_a_live_workspace",
+        || {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let global = tmp.path().join("global");
+            std::fs::create_dir_all(&global).unwrap();
+            std::fs::write(global.join("config.toml"),
+                "[workflow]\ndefault_crew = \"sol\"\n[crews.sol]\nprovider = \"codex\"\nmodel = \"fixture\"\n").unwrap();
+            let (alpha_orbit, alpha_repo) = seed_workspace(&global, tmp.path(), "alpha");
+            let (bravo_orbit, bravo_repo) = seed_workspace(&global, tmp.path(), "bravo");
+            write_registry(&global, &[("alpha", &alpha_repo), ("bravo", &bravo_repo)]);
+            let alpha = OrbitRuntime::from_roots(&global, &alpha_orbit).unwrap();
+            let bravo = OrbitRuntime::from_roots(&global, &bravo_orbit)
+                .unwrap()
+                .with_actor(ActorIdentity::human("fixture"));
+            std::fs::write(bravo_repo.join("ready.rs"), "fixture").unwrap();
+            bravo
+                .add_task(TaskAddParams {
+                    title: "Idle ready work".into(),
+                    description: "Ready work must remain visible without a drain".into(),
+                    acceptance_criteria: vec!["The work is visible".into()],
+                    plan: "Fixture plan".into(),
+                    context_files: vec!["file:ready.rs".into()],
+                    complexity: orbit_core::TaskComplexity::Medium,
+                    status: Some(TaskStatus::Backlog),
+                    ..Default::default()
+                })
+                .unwrap();
+            let mut drain = seed_run(
+                &alpha,
+                "jrun-fleet",
+                "workspace_auto_pipeline",
+                JobRunState::Running,
+            );
+            drain.input = Some(serde_json::json!({"max_active_leaf_runs": 4}));
+            write_seeded_run(&alpha, &drain);
+            let server = spawn_server(
+                tmp.path(),
+                true,
+                false,
+                false,
+                &tmp.path().join("process.log"),
+                None,
+                &[],
+            );
+            let payload = json_ok(server.get("/api/fleet/drains"));
+            let rows = payload["items"].as_array().unwrap();
+            assert_eq!(rows.len(), 2, "every registered workspace is visible");
+            let row = |name: &str| rows.iter().find(|row| row["workspace_id"] == name).unwrap();
+            assert_eq!(row("alpha")["phase"], "draining", "{payload:#}");
+            assert_eq!(row("alpha")["slots_used"], 0);
+            assert_eq!(row("alpha")["slots_ceiling"], 4);
+            assert_eq!(row("bravo")["phase"], "idle");
+            assert_eq!(
+                row("bravo")["eligible_count"],
+                1,
+                "idle ready work is discoverable: {payload:#}"
+            );
+            for row in rows {
+                assert!(row["holds"].is_array());
+                assert!(row.get("top_wait_reason").is_some());
+                assert_eq!(row["counts_truncated"], false);
+            }
+            // A waiting task gets a reason in the fleet, rather than looking
+            // identical to an empty workspace.
+            bravo
+                .add_task(TaskAddParams {
+                    title: "Needs preparation".into(),
+                    description: "Incomplete task waits for preparation".into(),
+                    status: Some(TaskStatus::Backlog),
+                    ..Default::default()
+                })
+                .unwrap();
+            let waiting = json_ok(server.get("/api/fleet/drains"));
+            let row = waiting["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["workspace_id"] == "bravo")
+                .unwrap();
+            assert!(
+                row["top_wait_reason"]
+                    .as_str()
+                    .is_some_and(|reason| !reason.is_empty()),
+                "{waiting:#}"
+            );
+            assert_eq!(row["eligible_count"], 1);
+        },
+    );
+}
+
+#[test]
 fn aggregate_job_runs_page_is_bounded_and_observational() {
     isolated(
         "aggregate_pages::aggregate_job_runs_page_is_bounded_and_observational",

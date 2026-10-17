@@ -4,24 +4,21 @@
 //! dashboard's own extras. A mutation response builds on `task_record_json`
 //! instead, so it does not carry show-only guidance. An audit event builds on
 //! the base the CLI shares (`orbit_types::telemetry::audit_event_base_json`).
-//! The other projections are dashboard-local.
+//! The job-catalog projection lives in `orbit_core::application::job`; the
+//! other projections are dashboard-local.
 
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::fs::overlap_index::OverlapIndex;
-use orbit_core::application::job::JobCatalogEntry;
 use orbit_core::application::task::{
     PullRequestLinks, TaskRow, declared_context_files, task_record_json, task_show_json,
     task_status_transition_allowed, task_status_transition_required_field,
 };
 use orbit_core::runtime::engine::ConfiguredCrewRegistryProjection;
-use orbit_core::{
-    AuditEvent, JobRun, OrbitError, OrbitRuntime, ResolvedCrewProjection, Task, TaskStatus,
-};
+use orbit_core::{AuditEvent, OrbitError, OrbitRuntime, ResolvedCrewProjection, Task, TaskStatus};
 use orbit_types::task::{TaskEnvelopeV2, task_base_json};
 use orbit_types::telemetry::audit_event_base_json;
-use orbit_types::workflow::{JobV2Step, JobV2StepBody};
 use serde_json::{Map, Value, json};
 
 pub(crate) fn audit_event_to_json(event: &AuditEvent) -> Value {
@@ -34,82 +31,6 @@ pub(crate) fn audit_event_to_json(event: &AuditEvent) -> Value {
     value["actor_vendor"] = json!(actor.vendor);
     value["actor_family"] = json!(actor.family);
     value["actor_model"] = json!(actor.model);
-    value
-}
-
-pub(crate) fn job_catalog_to_json_with_last_run(
-    job: &JobCatalogEntry,
-    last_run: Option<&JobRun>,
-) -> Value {
-    let mut value = json!({
-        "job_id": job.job_id.clone(),
-        "kind": job.kind().to_string(),
-        "state": job.state().to_string(),
-        "default_input": job.spec.default_input,
-        "max_active_runs": job.spec.max_active_runs,
-        "steps": job.spec.steps.iter().map(job_v2_step_to_json).collect::<Vec<_>>(),
-        "path": job.path.display().to_string(),
-    });
-    value["last_run_state"] = last_run
-        .map(|r| serde_json::Value::String(r.state.to_string()))
-        .unwrap_or(serde_json::Value::Null);
-    value["last_run_at"] = last_run
-        .and_then(|r| r.finished_at.or(r.started_at).or(Some(r.scheduled_at)))
-        .map(|ts| serde_json::Value::String(ts.to_rfc3339()))
-        .unwrap_or(serde_json::Value::Null);
-    value
-}
-
-fn job_v2_step_to_json(step: &JobV2Step) -> Value {
-    let mut value = json!({
-        "id": step.id.clone(),
-        "when": step.when,
-        "retry": step.retry,
-    });
-    match &step.body {
-        JobV2StepBody::TargetRef(target) => {
-            value["body"] = json!({
-                "kind": "target_ref",
-                "target": target.target.clone(),
-                "default_input": target.default_input,
-                "timeout_seconds": target.timeout_seconds,
-                "session": target.session,
-            });
-        }
-        JobV2StepBody::Target(target) => {
-            value["body"] = json!({
-                "kind": "target",
-                "default_input": target.default_input,
-                "timeout_seconds": target.timeout_seconds,
-                "session": target.session,
-                "spec": target.spec,
-            });
-        }
-        JobV2StepBody::Parallel { parallel } => {
-            value["body"] = json!({
-                "kind": "parallel",
-                "join": parallel.join,
-                "branches": parallel.branches.iter().map(job_v2_step_to_json).collect::<Vec<_>>(),
-            });
-        }
-        JobV2StepBody::FanOut { fan_out, fan_in } => {
-            value["body"] = json!({
-                "kind": "fan_out",
-                "items": fan_out.items,
-                "max_workers": fan_out.max_workers,
-                "worker": job_v2_step_to_json(&fan_out.worker),
-                "fan_in": fan_in,
-            });
-        }
-        JobV2StepBody::Loop { loop_ } => {
-            value["body"] = json!({
-                "kind": "loop",
-                "max_iterations": loop_.max_iterations,
-                "break_when": loop_.break_when,
-                "steps": loop_.steps.iter().map(job_v2_step_to_json).collect::<Vec<_>>(),
-            });
-        }
-    }
     value
 }
 

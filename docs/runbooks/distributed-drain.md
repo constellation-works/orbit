@@ -581,6 +581,16 @@ Drain card follows the same rule: readiness reports `replica: true` and the
 approve-proposed window (`orbit run auto --approve-proposed`, or **Approve
 qualifying** in the owner's Drain card) on the owner.
 
+Readiness uses one shared snapshot across `orbit run readiness`, MCP
+`orbit.workflow.auto` with `action: "status"`, and
+`GET /api/workflows/auto/readiness`. MCP status accepts `task` (one id or a
+list), `concurrency`, `limit` (1–500, default 50), and `allow_crew` (configured
+crew names). HTTP accepts `task` and `allow_crew` as comma-separated query
+values, plus the same concurrency and limit. Omitted crew selection uses the
+live drain's restriction, if any. All three JSON responses include `replica`
+and `validation_env_warning` (null when no warning applies). CLI text prints
+that warning when present. Selection never reserves work or starts a drain.
+
 Every admission receipt captures the owner's
 `workflow.required_validation_commands` and `review.baseline_commands`, whether
 or not review is on. A claimed leaf validates against those captured gates,
@@ -728,12 +738,20 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
 - An owner that times out waiting on its task commit lock or its database
   answers `lock_busy`. So does an owner whose `orbit` exits on its locked store
   before it answers the follower's SSH session (`session ended before answering
-  'initialize'; ssh stderr: ... database is locked`): the follower reads the
-  owner's own diagnostic and does not report that host as unreachable. A
+  'initialize'; ssh stderr: ... error: store error: database is locked`): the
+  follower reads only the owner `orbit`'s final error, the last stderr line,
+  and only when ssh carried the remote command's exit. An ssh failure (exit
+  255) or a lock error quoted only by an earlier warning stays an unreachable
+  owner, and a `tools/call` whose session ended that way stays
+  `outcome_unknown`, because it may already have run. A
   leaf's owner reads retry it twice before failing, and a step it still fails
   releases the claim as `transient` and marks it `owner_busy`. The owner was
   reached and decided nothing, so the release blames neither the follower's
-  host nor its crew, and it does not count against the task's release budget.
+  host nor its crew. The owner honours the mark only on a `transient` release,
+  and only for a task's first three busy releases within the release budget's
+  24 hours: those do not count against the task's release budget, and later
+  ones count like any other `transient` release, so a task the owner keeps
+  failing is eventually blocked rather than cycling across drains.
   The drain backs its claims off instead: for 5 minutes from when the leaf
   ended it requests nothing (`owner_busy_backoff:` refusal,
   `crews.owner_busy_backoff` with `until`, `episodes` and `releases`), then
@@ -741,10 +759,16 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   straight back. Releases that end within 5 minutes of the previous one, such
   as several leaves that were running when the store locked, are one episode.
   A third episode in one window suppresses the host for the rest of the window
-  (`host_suppressed:`, whose reason names the episode and release counts),
-  because an owner that stays busy across backoffs needs an operator. An owner
-  older than this release records the mark without honouring it, and holds the
-  task from that drain as for any other `transient` release. When these recur,
+  (`host_suppressed:`, whose reason names the episode and release counts, and
+  `crews.host_suppressed_by_busy_owner`), because an owner that stays busy
+  across backoffs needs an operator; the follower host is not at fault, and
+  the refusal points at the owner's lock holders instead of the host. Upgrade
+  the owner before its followers: an owner that predates the mark drops it
+  when it reads the release, records an ordinary `transient` release that
+  counts against the task's release budget of two in 24 hours (so the third
+  such release blocks the task), and holds the task from that drain for the
+  rest of its window, while the newer follower still backs off rather than
+  excluding the crew. When these recur,
   read the owner's `orbit.jsonl`: the `still waiting for advisory file lock`
   warning names each holder of the lock by pid, section and call site, and
   `advisory file lock held past its threshold` names a section that held it
@@ -830,8 +854,9 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   `crews.host_suppressed`); fix the host and start a new drain. An owner whose
   store stayed locked is not one of these: its `transient` release backs the
   drain off briefly instead (`owner_busy_backoff`, above), and only repeated
-  episodes suppress the host. In either
-  case (forge and busy-owner releases aside) the owner does not hand the released task back
+  episodes suppress the host, with guidance to clear the owner's lock holders. In either
+  case (forge releases, and busy-owner releases within the task's allowance of three,
+  aside) the owner does not hand the released task back
   to that drain, so it is not pulled straight back; another drain may still
   take it. When the leaf had
   committed a candidate, the release or block names it, and the task's next
@@ -1301,6 +1326,34 @@ one. From then on:
   failure past that budget, or one the landing cannot classify (its jobs or
   log are unreadable), stops the landing with the task in `review` and the
   classification in the stop evidence (`orbit task show <task-id>`).
+  Owner PR refusals also retain a versioned JSON diagnostic in the existing
+  landing-attempt evidence string (`kind: owner_landing_refusal`,
+  `schema_version: 1`), alongside its safe human-readable `reason.value`.
+  Read it from the stopped attempt, whose attempt number and owner run bind it
+  to the accepted handoff; retrying the same handoff preserves that first
+  attempt's evidence. Older plain-string evidence remains valid.
+
+  The diagnostic records the accepted base/candidate, latest typed PR identity,
+  review and rollup, owner-owed contexts, final observed classification, and
+  whether the required-check read was collected, failed to read/parse, or
+  disagreed about the head. Its allowlisted required-check projection includes
+  the provider's `isRequired` observations, **not** a separately versioned
+  branch-policy snapshot. Missing, null, unreadable, unknown and collected-empty
+  observations must not be interpreted as passing checks.
+
+  Capture adds no provider requests. Only the latest status observation is
+  retained; `status_observations` counts the observations it replaces. Each
+  collection retains at most 32 entries with original count and truncation,
+  and observation strings are redacted before a 512-character limit with
+  original character count and truncation. The human reason has a separate
+  4,096-character limit, retaining its beginning and final disposition when
+  truncated. Arbitrary payloads, URL fields and transcript archives are excluded.
+  Workflow prerequisites and emission proof are explicitly `not_collected` by
+  this diagnostic, even if separate recovery work obtained its own evidence.
+  A later workflow/job timestamp therefore cannot prove what the initial API
+  returned or that a required check would eventually appear. These observations
+  grant no wait, repair or merge authority and do not change existing deadlines.
+
 - An older published head can also lack a currently required context while
   every reported check succeeded. With captured landing authority (or the
   owner's `auto_fix` completion authority), recovery can update the branch
@@ -1726,6 +1779,22 @@ Each kept worktree's declared build output is reclaimed on every sweep, and
 `orbit run show <gc-run>` lists every kept worktree with its reason and
 `retained_bytes`.
 
+A claimed leaf's required validation builds its host validation output outside
+the leaf's worktree, under the primary checkout that owns the replica's Git
+common directory. When the replica checkout is itself a linked worktree, that
+is the primary clone it was added from
+([worktree-reclaim.md](worktree-reclaim.md#host-validation-output)). The
+replica's GC attributes each such target to the leaf run whose worktree path
+hashes to its name, from the follower's own run records. Once that run is
+terminal with no live worker, the target goes with the leaf's worktree: in the
+sweep that reaps it, or in a later one after the worktree is gone. After a
+settled claim, the drain's next pass also gives it back with the leaf's
+`target/`, unless `worktree.reclaim` is empty and the worktree remains. A
+running leaf keeps it as `skipped:run_not_terminal` and a held lease keeps
+it as `skipped:host_target_in_use`. A target no follower record derives stays
+as `skipped:unattributed_host_target`. An unscoped `orbit gc worktrees`
+reports a row for every target it examines.
+
 ## Replica store GC
 
 The follower's host store is not the owner's. Command audit, resource history,
@@ -1753,17 +1822,20 @@ orbit routine list --workspace <replica-workspace>
 
 The run applies both plans against the local store. It deletes command-audit
 rows and per-minute resource history past their windows (those tables are
-host-wide on this machine), and this workspace's run-audit rows, the audit
+host-wide on this machine), this workspace's run-audit rows, run-audit rows
+and terminal run state whose workspace id is no longer registered, the audit
 blobs nothing still names, and the pipeline state of terminal runs older than
-`retention.runs_days`. Run rows and steps stay, and nothing is vacuumed. The
-activity does not call the owner and does not write the owner's coordination
-store. Enabling it on the owner is unchanged: that routine still prunes only
-the owner's store.
+`retention.runs_days`. Another registered workspace keeps its own window. Run
+rows and steps stay, and nothing is vacuumed. The activity does not call the
+owner and does not write the owner's coordination store. Enabling it on the
+owner is unchanged: that routine still prunes only the owner's store, plus
+unregistered ids in that same file.
 
-One enabled replica routine is enough for the host-wide tables. Each
-replicated workspace still needs its own routine, or a pass from that
-workspace, before its run audit and run state are pruned. A delivery- or
-state-triggered copy of the job stays owner work and is listed `owner-only`.
+One enabled replica routine is enough for the host-wide tables and for
+unregistered workspace ids. Each replicated workspace still needs its own
+routine, or a pass from that workspace, before its run audit and run state
+are pruned. A delivery- or state-triggered copy of the job stays owner work
+and is listed `owner-only`.
 
 ## Scheduled host shutdown or reboot
 

@@ -188,9 +188,14 @@ impl crate::OrbitRuntime {
             if let Some(failure) = &evidence.failure
                 && failure.owner_busy
             {
-                if let Some(at) = self.leaf_ended_at(record.leaf_run_id.as_deref()) {
-                    owner_busy.record(at, format!("{task} was released: {}", failure.reason));
-                }
+                // A leaf whose run is no longer recorded here ended long
+                // ago: its release still counts towards the episode bound,
+                // and its backoff has passed. A failed read fails the window
+                // instead, so it cannot add an episode.
+                let at = self
+                    .leaf_ended_at(record.leaf_run_id.as_deref())?
+                    .unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
+                owner_busy.record(at, format!("{task} was released: {}", failure.reason));
                 continue;
             }
             if let Some(failure) = &evidence.failure
@@ -236,7 +241,7 @@ impl crate::OrbitRuntime {
                     .is_some_and(|failure| failure.provider_limit)
                 && let Some(unavailable) = &evidence.provider_unavailable
                 && let Some(crew) = unavailable.crew.as_deref()
-                && let Some(at) = self.leaf_ended_at(record.leaf_run_id.as_deref())
+                && let Some(at) = self.leaf_ended_at(record.leaf_run_id.as_deref())?
             {
                 capacity
                     .entry(crew.to_string())
@@ -300,9 +305,13 @@ impl crate::OrbitRuntime {
         // crew whose capacity backoff passed is runnable again in the same
         // window. A crew excluded for the window already keeps that.
         let now = Utc::now();
+        let mut host_suppressed_by_busy_owner = false;
         let owner_busy_backoff = match owner_busy.verdict() {
             Some(OwnerBusyVerdict::Suppress(reason)) => {
-                host_suppressed.get_or_insert(reason);
+                if host_suppressed.is_none() {
+                    host_suppressed = Some(reason);
+                    host_suppressed_by_busy_owner = true;
+                }
                 None
             }
             Some(OwnerBusyVerdict::Backoff(backoff)) if backoff.until > now => Some(backoff),
@@ -412,6 +421,7 @@ impl crate::OrbitRuntime {
             excluded,
             auth_exclusions,
             host_suppressed,
+            host_suppressed_by_busy_owner,
             owner_busy_backoff,
         })
     }
@@ -440,10 +450,16 @@ impl crate::OrbitRuntime {
     }
 
     /// When `leaf` ended, or started when it records no end; `None` when its
-    /// run is unknown here.
-    fn leaf_ended_at(&self, leaf: Option<&str>) -> Option<DateTime<Utc>> {
-        let run = self.stores().jobs().get_job_run(leaf?).ok().flatten()?;
-        Some(run.finished_at.or(run.started_at).unwrap_or(run.created_at))
+    /// run is unknown here. A failed read is an error, not an unknown run.
+    fn leaf_ended_at(&self, leaf: Option<&str>) -> Result<Option<DateTime<Utc>>, OrbitError> {
+        let Some(leaf) = leaf else {
+            return Ok(None);
+        };
+        Ok(self
+            .stores()
+            .jobs()
+            .get_job_run(leaf)?
+            .map(|run| run.finished_at.or(run.started_at).unwrap_or(run.created_at)))
     }
 
     /// `failed` plus every configured crew whose provider parses to the same

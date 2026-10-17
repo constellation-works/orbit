@@ -5,9 +5,9 @@
 schemaVersion: 1
 name: __ORBIT_ROUTINE_NAME__
 description: >
-  Daily retention of this workspace's audit rows, unreferenced audit blobs and
-  old terminal runs' pipeline state, under retention.audit_days and
-  retention.runs_days.
+  Daily retention of this workspace's audit rows, unregistered workspace ids'
+  audit rows and run state, unreferenced audit blobs and old terminal runs'
+  pipeline state, under retention.audit_days and retention.runs_days.
 enabled: false
 trigger:
   cron: "17 4 * * *"

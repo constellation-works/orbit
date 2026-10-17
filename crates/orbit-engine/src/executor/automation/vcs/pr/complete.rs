@@ -318,8 +318,12 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         MAX_POLL_INTERVAL_SECONDS,
     )?
     .max(MIN_POLL_INTERVAL_SECONDS);
-    let completion_started = std::time::Instant::now();
-    let completion_deadline_ms = super::super::completion_deadline::now_ms()?
+    // One sample sets the proposed deadline and the already-waited prefix.
+    // A second read can cross a millisecond boundary and charge a second no
+    // poll spent (one 5s poll recorded as 6s). A persisted deadline is still
+    // that host's earlier absolute instant, measured against this same sample.
+    let completion_started_ms = super::super::completion_deadline::now_ms()?;
+    let completion_deadline_ms = completion_started_ms
         .checked_add(max_wait_seconds.saturating_mul(1000))
         .ok_or_else(|| stopped(pr_number, "completion deadline overflow"))?;
     let completion_deadline_ms = match input_string_field(input, "run_id")
@@ -331,12 +335,11 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         _ => completion_deadline_ms,
     };
     // Round the remaining budget up: only whole seconds already spent count
-    // as waited, matching the `as_secs()` elapsed reads in the loop. Rounding
-    // down charged a full second for the milliseconds between setting the
-    // deadline and reading it back, reporting and consuming a wait that never
-    // happened.
+    // as waited, matching the truncating elapsed reads in the loop. The
+    // difference uses the sample above, so a millisecond between two reads
+    // cannot shrink it.
     let remaining_seconds = completion_deadline_ms
-        .saturating_sub(super::super::completion_deadline::now_ms()?)
+        .saturating_sub(completion_started_ms)
         .div_ceil(1000);
     let mut waited_seconds = max_wait_seconds.saturating_sub(remaining_seconds);
 
@@ -392,8 +395,12 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     let observation_budget = (max_wait_seconds > 0).then_some(completion_deadline_ms);
 
     loop {
-        waited_seconds = waited_seconds
-            .max(waited_before.saturating_add(completion_started.elapsed().as_secs()));
+        // Same clock as the deadline. A fixture advances it by each logical
+        // wait, so wall time between samples is not a second source.
+        let elapsed_seconds = super::super::completion_deadline::now_ms()?
+            .saturating_sub(completion_started_ms)
+            / 1000;
+        waited_seconds = waited_seconds.max(waited_before.saturating_add(elapsed_seconds));
         // Every flag is set immediately before a `continue` or at the end of
         // an iteration, so this covers every read made in the iteration.
         // Durable write-ahead provenance covers mutations inside it.

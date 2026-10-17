@@ -26,6 +26,12 @@ const UNAUTHORED_TASK_PLAN_PLACEHOLDER: &str = "To be authored by executing agen
 /// an override.
 pub(crate) const FORCED_STATUS_EVENT: &str = "forced";
 
+/// Status event recorded when Orbit settles a task to `done` from its delivery
+/// pull request merged outside Orbit (`external_merge`). Like the delivery
+/// pipeline's own completion, the settlement is not an edge of the table
+/// below: the forge's merge, not a caller's claim, is its evidence.
+pub const EXTERNAL_MERGE_SETTLED_EVENT: &str = "external_merge_settled";
+
 /// Whether `from -> to` is a legal lifecycle edge.
 ///
 /// The shape mirrors the diagram agents are given in the `orbit` skill:

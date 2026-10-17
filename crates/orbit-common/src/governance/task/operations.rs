@@ -18,7 +18,9 @@
 use orbit_types::task::{TASK_SHOW_DELIVERY_FIELD, TASK_SHOW_PROJECTION_FIELDS_CSV};
 use orbit_types::tool::McpToolScope;
 
-use super::lifecycle_operations::{DELETE, RECONCILE_REVIEW, REJECT, RETRY_HANDOFF, REVIEW_RESET};
+use super::lifecycle_operations::{
+    DELETE, RECONCILE_REVIEW, REJECT, REQUEUE, RETRY_HANDOFF, REVIEW_RESET,
+};
 use super::nested_operations::{
     ARTIFACT_GET, ARTIFACT_PUT, LOCKS_LIST, LOCKS_RELEASE, LOCKS_RESERVE,
 };
@@ -68,6 +70,9 @@ operation_registry! {
         ReviewReset => REVIEW_RESET,
         /// Validate and review a recovered delivery's changed merged head.
         ReconcileReview => RECONCILE_REVIEW,
+        /// Requeue a blocked task onto its published candidate, as an
+        /// operator decision.
+        Requeue => REQUEUE,
         /// Retry a stopped or uncertain authorized owner handoff.
         RetryHandoff => RETRY_HANDOFF,
         /// Reject a task.

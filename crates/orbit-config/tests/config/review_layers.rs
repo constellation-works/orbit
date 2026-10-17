@@ -577,3 +577,31 @@ fn build_output_bindings_default_empty_and_workspace_replaces_global() {
         );
     }
 }
+
+#[test]
+fn cargo_incremental_defaults_off_and_a_workspace_can_opt_in() {
+    let global = tempfile::tempdir().expect("global");
+    let workspace = tempfile::tempdir().expect("workspace");
+    let roots = ConfigRoots::new(global.path(), workspace.path());
+    let load = || {
+        ResolvedConfig::load(&roots)
+            .expect("config loads")
+            .snapshot
+            .workflow_validation_env_cargo_incremental
+    };
+    assert!(!load());
+    review_layers_write_config(
+        global.path(),
+        "[workflow.validation_env]\ncargo_incremental = true\n",
+    );
+    assert!(load());
+    review_layers_write_config(
+        workspace.path(),
+        "[workflow.validation_env]\ncargo_incremental = false\n",
+    );
+    assert!(
+        !load(),
+        "an explicit workspace false replaces a global opt-in"
+    );
+    admit_settable_config_key("workflow.validation_env.cargo_incremental").expect("live key");
+}

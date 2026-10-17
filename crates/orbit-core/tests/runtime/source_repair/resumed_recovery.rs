@@ -169,6 +169,7 @@ fn resumed_fixture() -> Resumed {
         resume_context: None,
         workspace_path: checkout.clone(),
         completion_done: false,
+        infrastructure: None,
     };
     assert_eq!(
         RuntimeHost::apply_final_recovery(&f.runtime, &resumed, &application).unwrap(),

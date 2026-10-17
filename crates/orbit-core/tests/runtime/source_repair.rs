@@ -20,6 +20,8 @@ use fixture::{Fixture, git};
 mod completion;
 #[path = "source_repair/generations.rs"]
 mod generations;
+#[path = "source_repair/handoff_requeue.rs"]
+mod handoff_requeue;
 #[path = "source_repair/publication.rs"]
 mod publication;
 #[path = "source_repair/published_owner.rs"]
@@ -36,7 +38,9 @@ use completion::mutation::{
 };
 use completion::prerequisite::{
     later_prerequisite_read_failure_resumes_only_completion,
+    permanent_required_check_and_merge_capability_answers_do_not_resume,
     prerequisite_read_after_mutation_provenance_never_resumes,
+    transient_required_check_and_merge_capability_reads_resume_completion,
 };
 use completion::{
     changed_base_gets_fresh_native_validation, completion_reuse_refuses_drift,
@@ -848,5 +852,7 @@ crate::scenario_table!(
     enabled_completion_refuses_repair_and_mutation_provenance,
     expired_completion_budget_never_merges,
     later_prerequisite_read_failure_resumes_only_completion,
-    prerequisite_read_after_mutation_provenance_never_resumes
+    prerequisite_read_after_mutation_provenance_never_resumes,
+    transient_required_check_and_merge_capability_reads_resume_completion,
+    permanent_required_check_and_merge_capability_answers_do_not_resume
 );

@@ -441,7 +441,6 @@
     "orbit-mcp": {
       "test_function_paths": [
         "adapter/tests/name_map.rs::build_name_map_rejects_sanitized_name_collisions",
-        "federated/probe/tests/session.rs::a_destination_that_exits_on_its_locked_store_is_lock_busy_not_unreachable",
         "federated/probe/tests/session.rs::a_flooding_destination_is_refused_without_buffering_the_flood",
         "federated/probe/tests/session.rs::a_lost_internal_admission_answer_is_outcome_unknown",
         "federated/probe/tests/session.rs::malformed_mutation_replies_preserve_unknown_outcome_identity_without_replay",
@@ -496,7 +495,10 @@
         "repository/task/coordination/tests/boundary.rs::an_admission_is_not_starved_by_overlapping_reentrant_ordinary_sections",
         "repository/task/coordination/tests/boundary.rs::nested_reads_never_queue_behind_writers_they_hold_back",
         "repository/task/coordination/tests/claim_section.rs::a_claim_mutation_section_decodes_its_own_claim_and_syncs_only_its_commit",
-        "repository/task/coordination/tests/claim_section.rs::a_reader_waits_out_a_slow_claim_commit_and_no_longer",
+        "repository/task/coordination/tests/claim_section.rs::a_slow_claim_apply_holds_its_bundle_and_not_its_partition",
+        "repository/task/coordination/tests/claim_section.rs::exclusive_claim_sections_stay_short_under_concurrent_durable_mutations",
+        "repository/task/coordination/tests/commit_replay.rs::a_bind_interrupted_after_its_decision_converges_to_the_committed_state",
+        "repository/task/coordination/tests/commit_replay.rs::opening_a_boundary_replays_a_decision_whose_lease_was_lost",
         "repository/task/coordination/tests/lock_holders.rs::a_partition_wait_names_its_exclusive_holder",
         "repository/task/coordination/tests/lock_holders.rs::a_partition_wait_names_its_shared_holders",
         "repository/task/coordination/tests/lock_holders.rs::a_section_held_past_its_threshold_reports_its_label_and_duration",

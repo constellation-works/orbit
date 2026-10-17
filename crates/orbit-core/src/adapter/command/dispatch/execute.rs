@@ -862,16 +862,7 @@ fn is_store_lock_contention(error: &OrbitError) -> bool {
     if error.is_lock_busy() {
         return true;
     }
-    let message = match error {
-        OrbitError::Store(message) => message.as_str(),
-        other => return lock_message(&other.to_string()),
-    };
-    lock_message(message)
-}
-
-fn lock_message(message: &str) -> bool {
-    let message = message.to_ascii_lowercase();
-    message.contains("database is locked") || message.contains("database is busy")
+    orbit_common::is_lock_busy_message(&error.to_string())
 }
 
 /// Fold a successful tool call together with its audit-write outcome into the

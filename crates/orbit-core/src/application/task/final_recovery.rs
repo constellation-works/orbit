@@ -20,7 +20,9 @@ use orbit_types::task::{
     FINAL_RECOVERY_DECIDED_EVENT, RecordedFinalRecovery, Task, TaskComment, TaskDecision,
     TaskHistoryEntry, TaskStatus,
 };
-use orbit_types::workflow::FinalRecoveryDecision;
+use orbit_types::workflow::{
+    FinalRecoveryDecision, TRANSIENT_INFRA_BLOCKED_EVENT, TransientInfraBlock,
+};
 use serde_json::{Value, json};
 
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
@@ -308,6 +310,9 @@ struct Plan {
     comment: String,
     execution_summary: Option<String>,
     outcome: FinalRecoveryOutcome,
+    /// The engine's transient-infrastructure classification an escalation
+    /// carries, recorded beside it for the cleared-infra requeue.
+    infra: Option<TransientInfraBlock>,
 }
 
 impl OrbitRuntime {
@@ -331,6 +336,19 @@ impl OrbitRuntime {
         &self,
         request: &FinalRecoveryRequest,
         output: Option<&Value>,
+    ) -> Result<FinalRecoveryOutcome, OrbitError> {
+        self.apply_classified_final_recovery(request, output, None)
+    }
+
+    /// [`Self::apply_final_recovery`] for a decision the engine made itself
+    /// after classifying the failure as transient infrastructure. `infra`
+    /// is set only by that engine path, never from an agent's output; an
+    /// `escalate` it accompanies is recorded as an infra block.
+    pub(crate) fn apply_classified_final_recovery(
+        &self,
+        request: &FinalRecoveryRequest,
+        output: Option<&Value>,
+        infra: Option<TransientInfraBlock>,
     ) -> Result<FinalRecoveryOutcome, OrbitError> {
         let decision = FinalRecoveryDecision::from_output(output);
         if let FinalRecoveryDecision::Resume { step_id, .. } = &decision {
@@ -373,7 +391,7 @@ impl OrbitRuntime {
                 let current = self.final_recovery_revision_after(&request.observed, &task)?;
                 let plan = match refusal(&task, &current, request) {
                     Some(reason) => Plan::refused(&task, request, &decision, reason),
-                    None => self.plan(&task, request, &decision)?,
+                    None => self.plan(&task, request, &decision, infra.as_ref())?,
                 };
                 if plan.status == TaskStatus::Done {
                     self.ensure_resolves_are_workspace_local(&task)?;
@@ -451,7 +469,8 @@ impl OrbitRuntime {
 
     /// The outcome the applier recorded on the task for `run_id`'s decision,
     /// when it already applied one: read back from the typed decision it
-    /// recorded with the task change.
+    /// recorded with the task change. An operator or cleared-infra requeue of
+    /// that run's block records a later one, which supersedes it.
     pub(crate) fn recorded_final_recovery(
         &self,
         task_id: &str,
@@ -460,6 +479,7 @@ impl OrbitRuntime {
         let typed = self
             .get_task_history(task_id)?
             .into_iter()
+            .rev()
             .find_map(|entry| match entry.decision {
                 Some(TaskDecision::FinalRecovery {
                     run_id: recorded,
@@ -484,6 +504,7 @@ impl OrbitRuntime {
         task: &Task,
         request: &FinalRecoveryRequest,
         decision: &FinalRecoveryDecision,
+        infra: Option<&TransientInfraBlock>,
     ) -> Result<Plan, OrbitError> {
         let header = comment_header(request, decision);
         Ok(match decision {
@@ -529,6 +550,7 @@ impl OrbitRuntime {
                             status,
                             evidence_commit: commit,
                         },
+                        infra: None,
                     }
                 }
                 Err(reason) => {
@@ -563,6 +585,7 @@ impl OrbitRuntime {
                 ),
                 execution_summary: None,
                 outcome: FinalRecoveryOutcome::Rejected,
+                infra: None,
             },
             FinalRecoveryDecision::Archive { reason } => Plan {
                 status: TaskStatus::Archived,
@@ -575,6 +598,7 @@ impl OrbitRuntime {
                 comment: format!("{header} outcome=archived\nreason: {}", reason.trim()),
                 execution_summary: None,
                 outcome: FinalRecoveryOutcome::Archived,
+                infra: None,
             },
             FinalRecoveryDecision::Requeue { reason } => {
                 let bound = request.requeue_bound;
@@ -616,19 +640,37 @@ impl OrbitRuntime {
                         ),
                         execution_summary: None,
                         outcome: FinalRecoveryOutcome::Requeued,
+                        infra: None,
                     }
                 }
             }
             FinalRecoveryDecision::Escalate {
                 diagnosis,
                 human_action,
-            } => Plan::escalated(
-                request,
-                &header,
-                diagnosis.trim(),
-                &format!("human_action: {}", human_action.trim()),
-                None,
-            ),
+            } => match infra {
+                // The engine classified the failure; the block names its
+                // condition so a passing probe requeues it.
+                Some(infra) => Plan {
+                    infra: Some(infra.clone()),
+                    ..Plan::escalated(
+                        request,
+                        &header,
+                        diagnosis.trim(),
+                        &format!("human_action: {}", human_action.trim()),
+                        Some(format!(
+                            "blocked on transient infrastructure ({})",
+                            infra.class.as_str()
+                        )),
+                    )
+                },
+                None => Plan::escalated(
+                    request,
+                    &header,
+                    diagnosis.trim(),
+                    &format!("human_action: {}", human_action.trim()),
+                    None,
+                ),
+            },
         })
     }
 
@@ -676,6 +718,23 @@ impl OrbitRuntime {
         } else {
             None
         };
+        let infra = plan
+            .infra
+            .as_ref()
+            .map(|infra| {
+                serde_json::to_string(infra).map(|note| TaskHistoryEntry {
+                    at: comment.at,
+                    by: SYSTEM_ACTOR_LABEL.to_string(),
+                    event: TRANSIENT_INFRA_BLOCKED_EVENT.to_string(),
+                    note: Some(note),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: None,
+                    decision: None,
+                })
+            })
+            .transpose()
+            .map_err(|error| OrbitError::Execution(format!("encode infra block: {error}")))?;
         let transition = plan.status != task.status;
         // A requeue is a new retry decision even if the task is already in
         // backlog. Its event must guard cleanup and count toward the bound.
@@ -694,6 +753,7 @@ impl OrbitRuntime {
                         .clone()
                         .into_iter()
                         .chain(published.clone())
+                        .chain(infra.clone())
                         .chain(if transition && plan.status == TaskStatus::Done {
                             pending_resolves_history(task)
                         } else {
@@ -737,6 +797,7 @@ impl Plan {
             ),
             execution_summary: None,
             outcome: FinalRecoveryOutcome::Refused { reason },
+            infra: None,
         }
     }
 
@@ -759,6 +820,7 @@ impl Plan {
             outcome: FinalRecoveryOutcome::Escalated {
                 reason: override_reason,
             },
+            infra: None,
         }
     }
 }

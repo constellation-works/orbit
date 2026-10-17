@@ -190,6 +190,10 @@ fn busy_owner_releases_past_the_episode_bound_suppress_the_host_naming_the_count
         suppressed.contains("3 backoffs") && suppressed.contains("3 releases"),
         "{suppressed}"
     );
+    assert!(
+        window.host_suppressed_by_busy_owner,
+        "the remedy is on the owner, not this host: {window:#?}"
+    );
     let pulls = pair.wire.calls("orbit.task.pull").len();
     let pass = pair.pass(&drain);
     assert!(
@@ -206,8 +210,91 @@ fn busy_owner_releases_past_the_episode_bound_suppress_the_host_naming_the_count
     );
 }
 
+/// The owner bounds the busy-owner exemption per task: within the release
+/// budget's day, a task's first three busy releases are outside the budget,
+/// and every later one counts, so a task the owner keeps failing cannot
+/// cycle forever across drains and followers. Each release here comes from a
+/// fresh drain, whose own window never reaches its episode bound.
+fn the_owner_counts_a_tasks_busy_releases_past_its_allowance_against_the_budget() {
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let task = pair.tasks[0].clone();
+    // Three exempt, then the budget's two, then the release that exceeds it.
+    for release in 1..=6 {
+        let drain = pair.run_drain();
+        let leaf = pair.running_leaf(&drain, 1);
+        assert_eq!(pair.claimed_task(&leaf), task, "release {release}");
+        let locked = locked_owner_failure(&pair, &leaf);
+        pair.leaf_fails_at(&leaf, &locked, Utc::now() - Duration::minutes(10));
+        let pass = pair.pass_over(&drain, json!({"window_expired": true}));
+        let expected = if release < 6 { "backlog" } else { "blocked" };
+        assert_eq!(
+            pair.owner_status(&task),
+            expected,
+            "release {release}: {pass}"
+        );
+    }
+}
+
+/// The owner honours the busy-owner mark only on a `transient` release. A
+/// release of another class that carries it is an ordinary release of that
+/// class: an `owner_route` one still holds the task from the drain that
+/// released it, where a `transient` busy one does not.
+fn the_owner_honours_the_busy_owner_mark_only_on_a_transient_release() {
+    for (class, held) in [
+        (ClaimFailureClass::Transient, false),
+        (ClaimFailureClass::OwnerRoute, true),
+    ] {
+        let class_name = class.as_str();
+        let pair = Pair::with_crews(&[Some("sol")]);
+        let drain = pair.run_drain();
+        let leaf = pair.running_leaf(&drain, 1);
+        let record = pair.admission(&leaf);
+        let claim = record.receipt.unwrap().claim.unwrap();
+        let settlement = ClaimMutation::Release(ClaimEvidence {
+            summary: Some("released by follower drain: the owner's store stayed locked".into()),
+            failure: Some(orbit_store::contracts::ClaimFailure {
+                class,
+                reason: "database is locked".into(),
+                crew: Some("sol".into()),
+                candidate: None,
+                provider_limit: false,
+                provider_refusal: false,
+                owner_busy: true,
+            }),
+            ..ClaimEvidence::default()
+        });
+        pair.wire
+            .call(
+                "",
+                "orbit.drain.claim.settle",
+                json!({"claim_id": claim.claim_id, "run_id": leaf, "settlement": settlement}),
+            )
+            .unwrap_or_else(|error| panic!("{class_name}: {error}"));
+        let class = class_name;
+        assert_eq!(pair.owner_status(&claim.task_id), "backlog", "{class}");
+
+        let mut request = pair.wire.calls("orbit.task.pull")[0].clone();
+        request["request_id"] = json!(format!("after-the-{class}-release"));
+        let answer = pair.wire.call("", "orbit.task.pull", request).unwrap();
+        let held_from_drain = answer["receipt"]["crew_unavailable"]
+            .as_array()
+            .is_some_and(|held| {
+                held.iter()
+                    .any(|entry| entry["task_id"] == claim.task_id.as_str())
+            });
+        assert_eq!(held_from_drain, held, "{class}: {answer:#}");
+        assert_eq!(
+            answer["receipt"]["claim"]["task_id"].is_string(),
+            !held,
+            "{class}: {answer:#}"
+        );
+    }
+}
+
 crate::scenario_table!(
     a_busy_owner_release_backs_the_drain_off_and_it_claims_again_in_the_window_scenarios,
     a_busy_owner_release_backs_the_drain_off_and_it_claims_again_in_the_window,
-    busy_owner_releases_past_the_episode_bound_suppress_the_host_naming_the_count
+    busy_owner_releases_past_the_episode_bound_suppress_the_host_naming_the_count,
+    the_owner_counts_a_tasks_busy_releases_past_its_allowance_against_the_budget,
+    the_owner_honours_the_busy_owner_mark_only_on_a_transient_release
 );

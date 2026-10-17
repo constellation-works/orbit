@@ -233,9 +233,13 @@ pub struct ClaimFailure {
     /// lock-wait deadline ([`orbit_types::workflow::OWNER_BUSY_MARKER`]): the
     /// owner was reached and decided nothing. Neither the executing host nor
     /// its crew is at fault, so the release excludes neither for the drain's
-    /// window, does not count against the task's release budget, and the
-    /// drain backs its claims off for a bounded time instead. An owner that
-    /// predates the field treats it as an ordinary `transient` release.
+    /// window, and the drain backs its claims off for a bounded time instead.
+    /// The owner honours the mark only on a `transient` release and only for
+    /// the task's first few such releases within its release-budget window:
+    /// those neither count against the task's release budget nor hold the
+    /// task from the drain, and later ones are ordinary `transient` releases.
+    /// An owner that predates the field drops it and records an ordinary
+    /// `transient` release.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub owner_busy: bool,
 }

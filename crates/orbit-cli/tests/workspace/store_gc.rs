@@ -506,6 +506,241 @@ fn run_retention_prunes_resource_minutes_past_thirty_days() {
     assert_eq!(fixture.count("SELECT COUNT(*) FROM admission_forecasts"), 1);
 }
 
+fn doctor_check(fixture: &Fixture, name: &str) -> Value {
+    let doctor = fixture.orbit().args(["doctor", "--json"]).output().unwrap();
+    assert!(
+        doctor.status.success(),
+        "doctor failed: {}",
+        String::from_utf8_lossy(&doctor.stderr)
+    );
+    let doctor: Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    find_check(&doctor, name)
+        .unwrap_or_else(|| panic!("missing {name} in {doctor}"))
+        .clone()
+}
+
+fn set_store_warn_bytes(fixture: &Fixture, bytes: u64) {
+    let path = fixture.work.join(".orbit/config.toml");
+    let mut text = fs::read_to_string(&path).unwrap_or_default();
+    const MARKER: &str = "\n# store-warn-bytes-test\n";
+    if let Some(start) = text.find(MARKER) {
+        text.truncate(start);
+    }
+    text.push_str(&format!(
+        "{MARKER}[retention]\nstore_warn_bytes = {bytes}\n"
+    ));
+    fs::write(&path, text).unwrap();
+}
+
+/// A store past `retention.store_warn_bytes` warns, and names how to enable
+/// store GC, while GC is disabled. Under the threshold, or once the routine
+/// is enabled, the same check is ok.
+fn store_retention_warns_only_when_the_store_is_large_and_gc_is_disabled() {
+    let fixture = Fixture::new();
+    assert_eq!(
+        doctor_check(&fixture, "store-retention")["status"],
+        "ok",
+        "the default threshold leaves a fixture store ok"
+    );
+
+    set_store_warn_bytes(&fixture, 1);
+    let warning = doctor_check(&fixture, "store-retention");
+    assert_eq!(warning["status"], "warning", "{warning}");
+    let remediation = warning["remediation"].as_str().expect("remediation");
+    assert!(
+        remediation.contains("orbit.routine.control")
+            && remediation.contains("enabled")
+            && remediation.contains(".orbit/routines/store_gc.yaml")
+            && remediation.contains("job:store_gc_pipeline"),
+        "the warning names the enable command: {remediation}"
+    );
+
+    set_store_warn_bytes(&fixture, 10 * 1024 * 1024 * 1024);
+    assert_eq!(
+        doctor_check(&fixture, "store-retention")["status"],
+        "ok",
+        "under the configured threshold the check is ok"
+    );
+
+    set_store_warn_bytes(&fixture, 1);
+    // `workspace init` does not seed routines; the check reads whatever YAML
+    // is under `.orbit/routines`. A disabled definition still warns.
+    let routines = fixture.work.join(".orbit/routines");
+    fs::create_dir_all(&routines).unwrap();
+    let routine = routines.join("store_gc.yaml");
+    fs::write(
+        &routine,
+        "schemaVersion: 1\nname: store-gc-retention\nenabled: false\ntrigger:\n  \
+         cron: \"17 4 * * *\"\n  missed_run: skip\ntarget: job:store_gc_pipeline\n",
+    )
+    .unwrap();
+    assert_eq!(
+        doctor_check(&fixture, "store-retention")["status"],
+        "warning",
+        "a disabled store-gc routine still warns"
+    );
+    let raw = fs::read_to_string(&routine).unwrap();
+    fs::write(&routine, raw.replacen("enabled: false", "enabled: true", 1)).unwrap();
+    assert_eq!(
+        doctor_check(&fixture, "store-retention")["status"],
+        "ok",
+        "an enabled store-gc routine keeps the check ok"
+    );
+}
+
+fn workspace_id_at(work: &Path) -> String {
+    let config: Value =
+        serde_yaml::from_slice(&fs::read(work.join(".orbit/config.yaml")).unwrap()).unwrap();
+    config["workspace_id"].as_str().unwrap().to_owned()
+}
+
+/// Plan (the default, which is the dry run) counts an unregistered workspace's
+/// old rows. `--apply` removes them. A second registered workspace's old rows,
+/// and rows still inside the window, stay.
+fn legacy_workspace_rows_are_counted_and_removed_without_touching_registered_ones() {
+    let fixture = Fixture::new();
+    let current = fixture.workspace_id();
+    let other_work = fixture._temp.path().join("kept");
+    crate::git_repo::init(&other_work);
+    fixture
+        .orbit()
+        .current_dir(&other_work)
+        .args(["workspace", "init", "--name", "retention-kept"])
+        .assert()
+        .success();
+    let registered = workspace_id_at(&other_work);
+    assert_ne!(current, registered);
+    let legacy = "legacy-unregistered";
+    let now = chrono::Utc::now().to_rfc3339();
+    {
+        let db = fixture.db();
+        for (workspace_id, event_id, at) in [
+            (current.as_str(), "current-old", OLD),
+            (current.as_str(), "current-new", now.as_str()),
+            (registered.as_str(), "registered-old", OLD),
+            (legacy, "legacy-old", OLD),
+            (legacy, "legacy-new", now.as_str()),
+        ] {
+            db.execute(
+                "INSERT INTO v2_audit_events (workspace_id, event_id, source, schema_version, \
+                     event_type, ts, run_id, agent_identity, payload_json) \
+                 VALUES (?1, ?2, 'loop_event', 1, 'tool.call.result', ?3, ?2, 'codex', '{}')",
+                params![workspace_id, event_id, at],
+            )
+            .unwrap();
+        }
+        for (workspace_id, run_id, state, finished) in [
+            (current.as_str(), "current-old", "success", Some(OLD)),
+            (
+                current.as_str(),
+                "current-new",
+                "success",
+                Some(now.as_str()),
+            ),
+            (current.as_str(), "current-held", "held", Some(OLD)),
+            (registered.as_str(), "registered-old", "success", Some(OLD)),
+            (legacy, "legacy-old", "success", Some(OLD)),
+            (legacy, "legacy-new", "success", Some(now.as_str())),
+            (legacy, "legacy-held", "held", Some(OLD)),
+        ] {
+            db.execute(
+                "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, \
+                     scheduled_at, started_at, finished_at, duration_ms, created_at, pid) \
+                 VALUES (?1, ?2, 'fixture', 1, ?3, ?4, ?4, ?5, 1, ?4, ?6)",
+                params![
+                    run_id,
+                    workspace_id,
+                    state,
+                    OLD,
+                    finished,
+                    std::process::id()
+                ],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO job_run_states (workspace_id, run_id, pipeline_state_json) \
+                 VALUES (?1, ?2, '{}')",
+                params![workspace_id, run_id],
+            )
+            .unwrap();
+        }
+    }
+
+    let audit_rows = |report: &Value| {
+        report["tables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|table| table["table"] == "v2_audit_events")
+            .unwrap()["rows"]
+            .as_u64()
+            .unwrap()
+    };
+    let before = fixture.count("SELECT COUNT(*) FROM v2_audit_events");
+    let plan = fixture.json(&["gc", "audit", "--json"]);
+    assert_eq!(plan["apply"], false);
+    assert_eq!(
+        audit_rows(&plan),
+        2,
+        "current and legacy rows past the cutoff, not the other workspace: {plan}"
+    );
+    assert_eq!(
+        fixture.count("SELECT COUNT(*) FROM v2_audit_events"),
+        before,
+        "a plan deletes nothing"
+    );
+
+    let applied = fixture.json(&["gc", "audit", "--apply", "--json"]);
+    assert_eq!(applied["tables"][1]["rows_removed"], 2, "{applied}");
+    assert_eq!(
+        fixture.count(
+            "SELECT COUNT(*) FROM v2_audit_events WHERE event_id IN ('current-old', 'legacy-old')"
+        ),
+        0
+    );
+    assert_eq!(
+        fixture.count(
+            "SELECT COUNT(*) FROM v2_audit_events \
+             WHERE event_id IN ('current-new', 'registered-old', 'legacy-new')"
+        ),
+        3,
+        "registered rows and rows inside the window stay"
+    );
+
+    let runs_before = fixture.count("SELECT COUNT(*) FROM job_run_states");
+    let runs = fixture.json(&["gc", "runs", "--json"]);
+    assert_eq!(runs["apply"], false);
+    assert_eq!(
+        runs["runs"], 2,
+        "only the current and legacy finished runs past the cutoff: {runs}"
+    );
+    assert_eq!(
+        fixture.count("SELECT COUNT(*) FROM job_run_states"),
+        runs_before
+    );
+
+    let archived = fixture.json(&["gc", "runs", "--apply", "--json"]);
+    assert_eq!(archived["runs_archived"], 2, "{archived}");
+    let remaining: Vec<String> = fixture
+        .db()
+        .prepare("SELECT run_id FROM job_run_states ORDER BY run_id")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        remaining,
+        [
+            "current-held",
+            "current-new",
+            "legacy-held",
+            "legacy-new",
+            "registered-old",
+        ]
+    );
+}
+
 fn find_check<'a>(value: &'a Value, name: &str) -> Option<&'a Value> {
     match value {
         Value::Object(map) => {
@@ -539,6 +774,15 @@ fn store_retention_contracts() {
         (
             "run_retention_prunes_resource_minutes_past_thirty_days",
             run_retention_prunes_resource_minutes_past_thirty_days as fn(),
+        ),
+        (
+            "store_retention_warns_only_when_the_store_is_large_and_gc_is_disabled",
+            store_retention_warns_only_when_the_store_is_large_and_gc_is_disabled as fn(),
+        ),
+        (
+            "legacy_workspace_rows_are_counted_and_removed_without_touching_registered_ones",
+            legacy_workspace_rows_are_counted_and_removed_without_touching_registered_ones
+                as fn(),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");

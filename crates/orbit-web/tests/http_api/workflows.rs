@@ -1075,6 +1075,12 @@ fn auto_readiness_reports_authorization_and_replica_for_the_start_form() {
             let agent = json_ok(fixture.server(false).get(&uri));
             assert_eq!(agent["controls_authorized"], false, "{agent}");
             assert_eq!(agent["replica"], false, "{agent}");
+            assert!(
+                agent
+                    .get("validation_env_warning")
+                    .is_some_and(Value::is_null),
+                "{agent}"
+            );
             let operator = json_ok(fixture.server(true).get(&uri));
             assert_eq!(operator["controls_authorized"], true, "{operator}");
             assert_eq!(operator["replica"], false, "{operator}");
@@ -1283,6 +1289,120 @@ fn auto_readiness_explains_the_tasks_it_names() {
                     "/api/workflows/auto/readiness?workspace={WS}&task={bad}"
                 ));
                 assert_eq!(response.status().as_u16(), 400, "{bad}");
+            }
+        },
+    );
+}
+
+/// Readiness applies the live drain's own `--allow-crew` set: a task it
+/// excludes reads `crew_not_allowed` with its crew and the permitted set, and
+/// the tasks the drain would admit stay eligible.
+#[test]
+fn auto_readiness_applies_the_live_drains_crew_restriction() {
+    isolated(
+        "workflows::auto_readiness_applies_the_live_drains_crew_restriction",
+        || {
+            let fixture = Fixture::new();
+            std::fs::write(
+                fixture.global.join("config.toml"),
+                "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"sol-model\"\n\n[crews.opus]\nprovider = \"claude\"\nmodel = \"opus-model\"\n",
+            )
+            .unwrap();
+            let crewed = |title: &str, file: &str, crew: Option<&str>| {
+                std::fs::write(fixture.runtime.paths().repo_root.join(file), "fixture\n").unwrap();
+                fixture
+                    .runtime
+                    .add_task(TaskAddParams {
+                        title: title.into(),
+                        description: format!("Readiness fixture: {title}"),
+                        acceptance_criteria: vec!["The fixture is observable.".into()],
+                        plan: "Fixture plan.".into(),
+                        context_files: vec![format!("file:{file}")],
+                        complexity: TaskComplexity::Medium,
+                        status: Some(TaskStatus::Backlog),
+                        crew: crew.map(str::to_string),
+                        ..Default::default()
+                    })
+                    .unwrap()
+            };
+            let excluded = crewed("runs as opus", "opus.rs", Some("opus"));
+            let permitted = crewed("runs as sol", "sol.rs", Some("sol"));
+            let defaulted = crewed("runs as the default crew", "default.rs", None);
+            let server = fixture.server(false);
+            let uri = format!("/api/workflows/auto/readiness?workspace={WS}");
+            let entry = |payload: &Value, task: &Task| {
+                payload["tasks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|entry| entry["task_id"] == task.id.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| panic!("{} missing: {payload:#}", task.id))
+            };
+
+            let selected_uri = format!(
+                "{uri}&task={},{}&concurrency=7&limit=500&allow_crew=sol",
+                excluded.id, permitted.id
+            );
+            let selected = json_ok(server.get(&selected_uri));
+            assert_eq!(selected["tasks"].as_array().unwrap().len(), 2, "{selected}");
+            assert_eq!(selected["capacity"]["max_active_leaf_runs"], 7);
+            assert_eq!(selected["capacity"]["allowed_crews"], json!(["sol"]));
+            assert_eq!(entry(&selected, &excluded)["reason"], "crew_not_allowed");
+            assert_eq!(entry(&selected, &permitted)["eligible"], true);
+            let both_crews =
+                json_ok(server.get(&selected_uri.replace("allow_crew=sol", "allow_crew=sol,opus")));
+            assert_eq!(entry(&both_crews, &excluded)["eligible"], true);
+            assert_eq!(
+                both_crews["capacity"]["allowed_crews"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                2
+            );
+
+            assert_eq!(
+                server
+                    .get(&selected_uri.replace("limit=500", "limit=1"))
+                    .status(),
+                400,
+                "explicit selections larger than the limit are refused"
+            );
+            for limit in [0, 501] {
+                assert_eq!(server.get(&format!("{uri}&limit={limit}")).status(), 400);
+            }
+            let idle = json_ok(server.get(&uri));
+            assert_eq!(idle["capacity"]["allowed_crews"], Value::Null, "{idle:#}");
+            for task in [&excluded, &permitted, &defaulted] {
+                assert_eq!(
+                    entry(&idle, task)["eligible"],
+                    true,
+                    "no drain restricts crews: {idle:#}"
+                );
+            }
+
+            let mut drain =
+                fixture.seed_run("jrun-auto", "workspace_auto_pipeline", JobRunState::Running);
+            drain.input = Some(json!({"max_active_leaf_runs": 4, "allowed_crews": ["sol"]}));
+            fixture.save_run(&drain);
+            let live = json_ok(server.get(&uri));
+            assert_eq!(live["capacity"]["drain_run_id"], "jrun-auto", "{live:#}");
+            let refused = entry(&live, &excluded);
+            assert_eq!(refused["eligible"], false, "{refused}");
+            assert_eq!(refused["reason"], "crew_not_allowed", "{refused}");
+            assert_eq!(refused["crew"], "opus", "{refused}");
+            assert_eq!(refused["allowed_crews"], json!(["sol"]), "{refused}");
+            assert_eq!(
+                live["capacity"]["allowed_crews"],
+                json!(["sol"]),
+                "{live:#}"
+            );
+            for task in [&permitted, &defaulted] {
+                let admitted = entry(&live, task);
+                assert_eq!(
+                    admitted["eligible"], true,
+                    "the drain admits it: {admitted}"
+                );
             }
         },
     );

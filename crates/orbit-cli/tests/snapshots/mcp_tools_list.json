@@ -1296,6 +1296,42 @@
     }
   },
   {
+    "name": "orbit_task_requeue",
+    "description": "Return a blocked task to the backlog so its next run resumes the candidate and pull request its stopped run published, re-authenticating that publication exactly as automatic adoption does. Requires trusted operator authority; unavailable to managed runs. A task whose run has not stopped is refused. A changed task specification is refused with the option to set discard_candidate, which closes the task's undelivered Orbit pull requests and lets the next run implement fresh.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workspace": {
+          "type": "string",
+          "description": "Workspace selector from discovery. Omitted, a bound session uses its workspace and an unbound one resolves the task id through this host's task registry"
+        },
+        "id": {
+          "type": "string",
+          "description": "Blocked task to requeue"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Required explanation retained in the task history"
+        },
+        "discard_candidate": {
+          "type": "boolean",
+          "description": "Discard the published candidate, close the task's undelivered Orbit pull requests and let the next run implement fresh"
+        }
+      },
+      "required": [
+        "id",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
     "name": "orbit_task_retry_handoff",
     "description": "Retry a stopped or uncertain authorized handoff on its explicit owner workspace. Requires trusted operator authority; unavailable to managed runs. Compare the exact accepted candidate/base and latest attempt/state, supply a reason and a durable request_key. Replaying identical input returns the original landing run. The normal landing job reconciles external intent and rechecks all merge gates.",
     "inputSchema": {
@@ -1993,7 +2029,39 @@
         },
         "concurrency": {
           "type": "integer",
-          "description": "Worker limit, positive u32. Optional for start (omitted uses runtime default); required for resize. The drain's only ceiling: delivery jobs impose none of their own"
+          "description": "Worker limit, positive u32. Optional for start (omitted uses runtime default); required for resize. Status previews this ceiling; omitted uses the live local drain, then live pull drain, then default. The drain's only ceiling: delivery jobs impose none of their own"
+        },
+        "task": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Status only: one task ID or a list to explain instead of the bounded backlog"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Status only: maximum tasks to explain, including an explicit selection (1-500; default 50)"
+        },
+        "allow_crew": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Status only: configured crews to evaluate; omitted uses the live drain's restriction, if any"
         },
         "id": {
           "type": "string",

@@ -31,7 +31,7 @@ Options:
   -h, --help
           Print help (see a summary with '-h')
 
-Without --apply this only reports. The command audit (`audit_events`) is host-wide; run audit rows and blobs are this workspace's. A blob is kept while any remaining run audit row, run step or pipeline state names it, while a pending-publication marker newer than the cutoff names it, and for 24 hours after it was last written. Deletes run in batches of 1,000 rows, each its own write transaction. Freed pages stay in the store file; VACUUM it while Orbit is idle to return them to the filesystem.
+Without --apply this only reports. The command audit (`audit_events`) is host-wide. Run audit rows are this workspace's, plus rows whose workspace id is no longer registered; another registered workspace keeps its own window. Blobs are this workspace's. A blob is kept while any remaining run audit row, run step or pipeline state names it, while a pending-publication marker newer than the cutoff names it, and for 24 hours after it was last written. Deletes run in batches of 1,000 rows, each its own write transaction. Freed pages stay in the store file; VACUUM it while Orbit is idle to return them to the filesystem.
 
 Examples:
   orbit gc audit

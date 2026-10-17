@@ -503,6 +503,43 @@ fn readiness_bootstrap_preserves_stale_runs_and_held_reservations() {
     );
 }
 
+#[test]
+fn readiness_snapshot_reports_replica_and_validation_warning() {
+    if !isolated_run_observation(
+        "run_observation::readiness_snapshot_reports_replica_and_validation_warning",
+    ) {
+        return;
+    }
+    let fixture = Fixture::terminal();
+    let idle = fixture.json(&["run", "readiness", "--json"]);
+    assert_eq!(idle["replica"], false, "{idle}");
+    assert!(
+        idle.get("validation_env_warning")
+            .is_some_and(Value::is_null),
+        "{idle}"
+    );
+    for (key, value) in [
+        ("workflow.validation_env.login_shell", "false"),
+        (
+            "workflow.required_validation_commands",
+            r#"["make ci-fast"]"#,
+        ),
+    ] {
+        fixture
+            .orbit()
+            .args(["config", "set", "--seed-from-global", key, value])
+            .assert()
+            .success();
+    }
+    let warned = fixture.json(&["run", "readiness", "--json"]);
+    let warning = warned["validation_env_warning"]
+        .as_str()
+        .expect("validation warning");
+    let text = fixture.orbit().args(["run", "readiness"]).output().unwrap();
+    assert!(text.status.success(), "{text:?}");
+    assert!(String::from_utf8(text.stdout).unwrap().contains(warning));
+}
+
 fn readiness_reports_total_and_notifies_only_when_backlog_is_truncated() {
     use orbit_core::application::task::TaskAddParams;
     use orbit_core::{TaskComplexity, TaskStatus, TaskType};

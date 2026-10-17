@@ -113,7 +113,7 @@
 .drain-forecast-retained { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding-top: 8px; border-top: 1px solid var(--hair); }
 
 /* Holds the operator cannot clear from here: amber boxes. */
-.drain-throttle-note, .drain-provider-limit-note, .drain-provider-readings, .drain-provider-auth {
+.drain-throttle-note, .drain-provider-limit-note, .drain-provider-readings, .drain-provider-auth, .drain-crew-note {
   margin: 0; padding: 9px 11px; border: 1px solid var(--warn-line); border-radius: 8px;
   background: var(--warn-wash); color: var(--warn-fg); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere;
 }
@@ -185,3 +185,21 @@
 
 /* Settlement report shown on the runs table after cancelling a drain run. */
 .run-cancel-notice { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+
+/* A fleet table becomes labelled rows inside the narrow Tasks dock. */
+#auto-drain-panel { container: drain-card / inline-size; }
+.fleet-drains { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12px; }
+.fleet-drains caption { text-align: left; padding-bottom: 10px; color: var(--fg-mute); }
+.fleet-drains th, .fleet-drains td { text-align: left; padding: 7px 4px; vertical-align: top; overflow-wrap: anywhere; border-bottom: 1px solid var(--border); }
+.fleet-workspace { color: var(--accent); background: none; border: 0; padding: 0; font: inherit; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.fleet-selectable { cursor: pointer; }
+.fleet-selectable:hover { background: var(--bg-control); }
+.fleet-workspace:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fleet-unavailable { color: var(--fg-mute); }
+@container (max-width: 650px) {
+  .fleet-drains, .fleet-drains caption, .fleet-drains tbody, .fleet-drains tr, .fleet-drains td { display: block; width: 100%; box-sizing: border-box; }
+  .fleet-drains thead { display: none; }
+  .fleet-drains tr { padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .fleet-drains td { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; border: 0; padding: 3px 0; }
+  .fleet-drains td::before { content: attr(data-label); color: var(--fg-mute); }
+}

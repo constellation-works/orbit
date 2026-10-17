@@ -170,7 +170,8 @@ for an auto drain it is opt-in and scoped to that run's window:
   choosing one.
 - A backlog task whose crew is excluded is **skipped, not remapped**. It stays in
   `backlog` on its own crew, and `orbit run readiness --allow-crew ...` reports it
-  as `crew_not_allowed` with the crew it would have run as. Moving that work to a
+  as `crew_not_allowed` with the crew it would have run as. Without `--allow-crew`,
+  readiness applies the live drain's own set (`capacity.allowed_crews`). Moving that work to a
   permitted crew is an operator decision — reassign the task, then it drains
   normally. Everything permitted keeps filling the slots at the usual rate.
 - It governs only what this drain *starts*. Tasks another invocation already has
@@ -430,9 +431,24 @@ orbit run show <run-id> --json
 orbit task update <task-id> --status backlog   # only once you know a rerun can succeed
 ```
 
-For blocks caused by a missing provider launcher, `orbit task recheck-blocked`
-reports whether the launcher now resolves. Its `--confirm` option requeues only
-the cleared launcher blocks; it leaves implementation failures blocked.
+A blocked task whose failure handoff published a `[BLOCKED]` PR is not moved
+with a plain `--status backlog`: its next run would refuse the unauthenticated
+publication. Once the task's run has stopped, an operator resumes that
+candidate with `orbit task requeue <task-id> --reason '<why>'` (MCP
+`orbit.task.requeue`); while the run is live the requeue is refused, since its
+failure handoff may still be publishing. Add `--discard-candidate` to close the
+task's undelivered Orbit PRs and rerun fresh, which a changed task
+specification requires; `orbit task update <task-id> --status backlog
+--discard-candidate` is the same discard and closure without a recorded
+requeue decision.
+
+For blocks caused by a missing provider launcher or by transient
+infrastructure (a busy lock, a locked task store), `orbit task recheck-blocked`
+reports whether the condition cleared. Its `--confirm` option requeues only
+the cleared blocks, a transient one onto its published candidate once its run
+has stopped; it leaves implementation failures blocked, and a transient block
+a human commented on, or whose publication did not authenticate, for
+`orbit task requeue`.
 
 ## Retry a stopped owner landing
 

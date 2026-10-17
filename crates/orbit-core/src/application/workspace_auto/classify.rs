@@ -131,6 +131,18 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
     )?;
 
     let live_leaves = live_leaf_runs(runtime, action)?;
+    // A delivery PR an operator merged outside Orbit settles its task once
+    // stale runs are reconciled. The settlement starts nothing, so a forge or
+    // store failure only logs and admission goes on.
+    if runtime.coordination_task_write_refusal().is_none()
+        && let Err(error) = runtime.settle_externally_merged_tasks()
+    {
+        tracing::warn!(
+            target: "orbit.core.external_merge",
+            error = %error,
+            "the admission pass could not settle tasks from merged delivery pull requests"
+        );
+    }
     let claimed: BTreeSet<String> = live_leaves
         .iter()
         .flat_map(|run| run.task_ids.iter().cloned())

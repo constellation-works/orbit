@@ -13,14 +13,14 @@ use super::super::{
     ConfigSection, DEFAULT_WORKFLOW_BASE_BRANCH, SECURITY_ALERT_SEVERITIES,
 };
 use super::resolve::{
-    DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES, DEFAULT_WORKER_MEMORY_HIGH, DEFAULT_WORKER_MEMORY_MAX,
-    default_log_rotation, default_pass_list, normalize_logins, normalize_pass_list, read_optional,
-    resolve_bounded_minutes, resolve_build_output_env, resolve_choice, resolve_cpu_light_leaves,
-    resolve_distributed_completion, resolve_host_shutdown_hold_minutes, resolve_machine_id,
-    resolve_machine_name, resolve_material_fields, resolve_memory_limit, resolve_non_empty,
-    resolve_optional_choice, resolve_optional_non_empty, resolve_percent, resolve_reclaim,
-    resolve_retention_days, resolve_task_prefix, resolve_validation_path_mode,
-    resolve_worker_tasks_max,
+    DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES, DEFAULT_STORE_WARN_BYTES, DEFAULT_WORKER_MEMORY_HIGH,
+    DEFAULT_WORKER_MEMORY_MAX, default_log_rotation, default_pass_list, normalize_logins,
+    normalize_pass_list, read_optional, resolve_bounded_minutes, resolve_build_output_env,
+    resolve_choice, resolve_cpu_light_leaves, resolve_distributed_completion,
+    resolve_host_shutdown_hold_minutes, resolve_machine_id, resolve_machine_name,
+    resolve_material_fields, resolve_memory_limit, resolve_non_empty, resolve_optional_choice,
+    resolve_optional_non_empty, resolve_percent, resolve_reclaim, resolve_retention_days,
+    resolve_task_prefix, resolve_validation_path_mode, resolve_worker_tasks_max,
 };
 use crate::memory_limit::MemoryLimit;
 use crate::operation;
@@ -446,9 +446,15 @@ define_config_settings! {
     },
     retention_runs_days: u32 => u32 {
         key: "retention.runs_days", value_type: "integer",
-        description: "Days after a terminal job run finishes before `orbit gc runs` may drop its pipeline state; the run row and its steps stay (1..=36500; default 60).",
+        description: "Days after a terminal job run finishes before `orbit gc runs` may drop its pipeline state; the run row and its steps stay (1..=36500; default 60). On a large store, 14 reclaims much more run state than 60.",
         section: ConfigSection::Housekeeping, order: 110,
         resolve: |raw: Option<u32>| resolve_retention_days(raw, "retention.runs_days"),
+    },
+    retention_store_warn_bytes: u64 => u64 {
+        key: "retention.store_warn_bytes", value_type: "integer",
+        description: "Warn from `orbit doctor` when the host store file is larger than this many bytes and this workspace has no enabled store-gc routine (default 1073741824, 1 GiB). Zero warns for any non-empty file. The check stays quiet under the threshold or while a store-gc routine is enabled.",
+        section: ConfigSection::Housekeeping, order: 115,
+        resolve: |raw: Option<u64>| Ok::<_, OrbitError>(raw.unwrap_or(DEFAULT_STORE_WARN_BYTES)),
     },
     worktree_reclaim: Vec<String> => Vec<String> {
         key: "worktree.reclaim", value_type: "array<string>",
@@ -461,6 +467,17 @@ define_config_settings! {
         description: "When free MiB under the state directory falls below this optional threshold, admission reclaims declared paths in oldest terminal worktrees first. Unset disables admission reclamation.",
         section: ConfigSection::Housekeeping, order: 130,
         resolve: |raw: Option<u64>| Ok::<_, OrbitError>(raw),
+    },
+    worktree_parked_reclaim_after_hours: u64 => u64 {
+        key: "worktree.parked_reclaim_after_hours", value_type: "integer",
+        description: "Hours a task must stay parked in `someday`, counted from that status change, before worktree GC may remove the worktree of a terminal run serving it. Removal also needs no live worker, no unsettled claim and no Git worktree lock. A clean tree goes only when its run branch's commits are reachable from another ref or on origin; otherwise the worktree and branch stay as `skipped:unpublished_commits` (0..=876000, default 336).",
+        section: ConfigSection::Housekeeping, order: 135,
+        resolve: |raw: Option<u64>| match raw {
+            Some(hours) if hours > 876_000 => Err(OrbitError::InvalidInput(format!(
+                "worktree.parked_reclaim_after_hours must be at most 876000, got {hours}"
+            ))),
+            raw => Ok(raw.unwrap_or(336)),
+        },
     },
     review_baseline_commands: Vec<String> => Vec<String> {
         key: "review.baseline_commands", value_type: "array<string>",
@@ -653,6 +670,12 @@ define_config_settings! {
         description: "Workspace output variables bound to a host-owned source-keyed directory for required validation and host evidence on every platform. Empty (default) allocates nothing. Configured bindings replace inherited values; commands must honor them. Execution identity and ORBIT_ variables are reserved.",
         section: ConfigSection::Delivery, order: 65,
         resolve: |raw: Option<Vec<String>>| resolve_build_output_env(raw),
+    },
+    workflow_validation_env_cargo_incremental: bool => bool {
+        key: "workflow.validation_env.cargo_incremental", value_type: "bool",
+        description: "When false (default), required validation, host evidence, baseline reruns and recovery that bind a host validation target force CARGO_INCREMENTAL=0 so one-shot targets do not accumulate an incremental cache. True leaves CARGO_INCREMENTAL untouched. Applied where Orbit spawns those commands. No binding allocates nothing and does not set the variable.",
+        section: ConfigSection::Delivery, order: 66,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
     },
     workflow_validation_env_path_mode: String => String {
         key: "workflow.validation_env.path_mode", value_type: "string",

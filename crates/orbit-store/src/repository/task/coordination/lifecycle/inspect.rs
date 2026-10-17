@@ -13,7 +13,7 @@ impl TaskCommitBoundary {
         let section = Section::here("inspection");
         self.shared(&self.host_lock_target(), section, || {
             self.shared(&self.lock_target(), section, || {
-                if self.pending_marker_path().try_exists()? {
+                if self.interrupted_commit()? {
                     return Err(invalid(
                         "claim inspection unavailable until pending commit is recovered",
                     ));

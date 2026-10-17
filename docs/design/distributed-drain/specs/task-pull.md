@@ -230,7 +230,9 @@ for a pull drain as for a local one.
    failure — the host itself is suppressed for the window; another drain may take them
    [ORB-14257]. A `transient` release marked `owner_busy` (the leaf's owner call lost to the
    owner's own lock-wait deadline) holds neither the task nor the host, and does not count
-   against the task's release budget. A `provider` release for a content refusal excludes no crew; instead the owner
+   against the task's release budget, for the task's first three such releases within the
+   budget window; the owner ignores the mark on any other class and records every later busy
+   release as an ordinary `transient` one. A `provider` release for a content refusal excludes no crew; instead the owner
    records a provider failure hold on the task, and admission defers, into `deferred_conflicts`,
    a held task whose crew (or, for a task naming none, the request's `default_crew`) the hold
    excludes [ORB-15573]. An admitted task carries `resume_candidate`, the candidate the owner kept from

@@ -46,7 +46,7 @@ These records describe evidence at the recorded commit or date; they do not cert
 | Record | Purpose |
 | --- | --- |
 | [QA evidence](./qa/README.md) | This directory holds coverage records from QA passes. |
-| [CLI command evidence](./qa/cli-command-evidence.md) | The help inventory contains 172 command nodes: 146 terminal paths and 26 parent groups. |
+| [CLI command evidence](./qa/cli-command-evidence.md) | The help inventory contains 173 command nodes: 147 terminal paths and 26 parent groups. |
 | [Orbit desktop control-center validation](./qa/mcp-apps-probe.md) | The candidate provides Tasks, Runs, Review, Auto-drain and Automation views in the existing Orbit plugin. |
 | [MCP behavioral evidence](./qa/mcp-tool-evidence.md) | Behavioral evidence matrix for the advertised MCP tools and their verified limits. |
 | [Shipped workflow evidence](./qa/workflow-evidence.md) | Evidence map for shipped Orbit jobs and the coverage boundaries of their named tests. |

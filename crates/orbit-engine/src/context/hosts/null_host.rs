@@ -470,11 +470,15 @@ pub trait NullRuntimeHost: Send + Sync {
             .map(String::from)
             .to_vec()
     }
+    fn worktree_parked_reclaim_after_hours(&self) -> Option<u64> {
+        None
+    }
     fn lookup_task_for_worktree_gc(&self, _run_id: &str, task_id: &str) -> WorktreeGcTaskLookup {
         match NullRuntimeHost::get_task(self, task_id) {
             Ok(task) => WorktreeGcTaskLookup::Found {
                 status: task.status,
                 pr_status: task.pr_status,
+                status_since: Some(task.updated_at),
             },
             Err(_) => WorktreeGcTaskLookup::Unresolved,
         }
@@ -483,6 +487,9 @@ pub trait NullRuntimeHost: Send + Sync {
         Some("local".to_string())
     }
     fn settled_claim_for_worktree_gc(&self, _run_id: &str) -> Option<String> {
+        None
+    }
+    fn live_claim_for_worktree_gc(&self, _run_id: &str) -> Option<String> {
         None
     }
     fn gc_scratch(&self, _retention_hours: u64) -> Result<Option<ScratchGcReport>, OrbitError> {
@@ -1119,6 +1126,9 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     fn worktree_reclaim_patterns(&self) -> Vec<String> {
         NullRuntimeHost::worktree_reclaim_patterns(self)
     }
+    fn worktree_parked_reclaim_after_hours(&self) -> Option<u64> {
+        NullRuntimeHost::worktree_parked_reclaim_after_hours(self)
+    }
     fn lookup_task_for_worktree_gc(&self, run_id: &str, task_id: &str) -> WorktreeGcTaskLookup {
         NullRuntimeHost::lookup_task_for_worktree_gc(self, run_id, task_id)
     }
@@ -1127,6 +1137,9 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     }
     fn settled_claim_for_worktree_gc(&self, run_id: &str) -> Option<String> {
         NullRuntimeHost::settled_claim_for_worktree_gc(self, run_id)
+    }
+    fn live_claim_for_worktree_gc(&self, run_id: &str) -> Option<String> {
+        NullRuntimeHost::live_claim_for_worktree_gc(self, run_id)
     }
     fn gc_scratch(&self, retention_hours: u64) -> Result<Option<ScratchGcReport>, OrbitError> {
         NullRuntimeHost::gc_scratch(self, retention_hours)

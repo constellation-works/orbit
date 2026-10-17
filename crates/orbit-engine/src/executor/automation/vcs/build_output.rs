@@ -77,8 +77,20 @@ fn host_validation_target(primary: PathBuf, source: &Path) -> Result<PathBuf, Or
     Ok(target)
 }
 
+/// Name of Cargo's incremental-compilation switch. Set on the child only
+/// when a host target is bound, so a Makefile or `.cargo/config.toml` is
+/// not what turns the cache off.
+const CARGO_INCREMENTAL: &str = "CARGO_INCREMENTAL";
+
 /// Apply the workspace mapping after ordinary environment resolution.
 /// No configured binding means no allocation and no environment mutation.
+///
+/// A bound directory is keyed by the checkout and is rebuilt once per
+/// candidate, so an incremental cache there is write-only. Required
+/// validation, host evidence, baseline reruns, flaky replays and recovery
+/// all bind through here. Unless
+/// [`ValidationEnvironment::cargo_incremental`] is set, the child receives
+/// `CARGO_INCREMENTAL=0`, replacing any inherited value.
 pub(super) fn bind_host_output(
     environment: &mut ValidationEnvironment,
     checkout: &Path,
@@ -96,6 +108,14 @@ pub(super) fn bind_host_output(
         .retain(|(name, _)| !environment.build_output_env.contains(name));
     for name in &environment.build_output_env {
         environment.env.push((name.clone(), value.clone()));
+    }
+    if !environment.cargo_incremental {
+        environment
+            .env
+            .retain(|(name, _)| name != CARGO_INCREMENTAL);
+        environment
+            .env
+            .push((CARGO_INCREMENTAL.to_string(), "0".to_string()));
     }
     environment.build_output_source = Some(source);
     environment.build_output_dir = Some(directory);

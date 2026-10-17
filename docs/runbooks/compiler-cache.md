@@ -409,8 +409,19 @@ for each run, so Cargo may rebuild its timestamp-changed workspace sources.
 
 The effective target appears in `validation_env.build_output.directory`, with the
 configured variables, canonical source and host execution context beside it. Commands,
-build-budget admission, toolchain environment and candidate/base/tree evidence
-bindings are unchanged. Baseline result schema 9 includes the workspace output
+build-budget admission and candidate/base/tree evidence bindings are unchanged.
+Because each target is built once per candidate checkout,
+its incremental cache would be write-only. When a binding is configured, Orbit
+sets `CARGO_INCREMENTAL=0` on the validation child — required validation, host
+evidence, baseline reruns and recovery alike — replacing any inherited value.
+That is applied where the command is spawned
+([`workflow.validation_env.cargo_incremental`](../CONFIG.md#incremental-compilation)),
+not by this repository's Makefile. The default `false` keeps incremental off so
+sccache can cache the rustc invocations this checkout's wrapper forwards.
+`cargo_incremental = true` leaves `CARGO_INCREMENTAL` untouched; pinned sccache
+`0.17.0` then rejects those invocations, so turn the compiler cache off
+(`ORBIT_COMPILER_CACHE=0`) before opting in. An incremental directory already
+in a target is not deleted. Baseline result schema 9 includes the workspace output
 bindings in a new versioned cache key so earlier results cannot certify the new execution contract; old records
 are retained at their earlier keys. These targets are rebuildable host state;
 configuration does not delete old output or shared caches. Native Linux and macOS

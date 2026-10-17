@@ -102,6 +102,14 @@ fn host_validation_rebuilds_test_binaries_built_through_the_stable_build_mount()
                     !binaries.is_empty(),
                     "the corrected route built a real integration-test binary"
                 );
+                let incremental = host_target.join("debug/incremental");
+                let cache_units = fs::read_dir(&incremental)
+                    .map(|entries| entries.count())
+                    .unwrap_or(0);
+                assert_eq!(
+                    cache_units, 0,
+                    "a host validation target built by delivery must not contain incremental output"
+                );
                 let second = run();
                 assert_eq!(
                     first["build_output"]["directory"], second["build_output"]["directory"],
@@ -370,6 +378,95 @@ fn workspace_build_output_is_opt_in_and_toolchain_neutral() {
                 sources[0], sources[2],
                 "detached sources cannot reuse checkout output"
             );
+        },
+    );
+}
+
+/// Host-bound validation forces incremental compilation off at the spawn.
+/// Required validation, its scratch base-rerun and recovery checkouts, and
+/// detached host evidence all bind through the same runner. No binding
+/// leaves the variable alone. `cargo_incremental` is the operator opt-in.
+#[test]
+fn host_validation_forces_incremental_off_unless_the_operator_opts_in() {
+    isolated(
+        "stable_build_mount::host_validation_forces_incremental_off_unless_the_operator_opts_in",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            fx.commit(".gitignore", "/.orbit/\n");
+            let candidate = fx.commit(
+                "check.sh",
+                "if [ -z \"${CARGO_INCREMENTAL+x}\" ]; then printf unset; else printf '%s' \"$CARGO_INCREMENTAL\"; fi\n",
+            );
+            let fx = Fixture { candidate, ..fx };
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let command = "sh check.sh";
+            host.require_commands(&[command]);
+            let path = vec![("PATH".into(), "/usr/bin:/bin".into())];
+
+            let mut ambient = path.clone();
+            ambient.push(("CARGO_INCREMENTAL".into(), "1".into()));
+            host.resolve_validation_env(ValidationEnvironment::launcher(ambient.clone()));
+            let unbound = review_gate::run_required_validation(&host, &fx.repo, command).unwrap();
+            assert!(unbound.passed, "{}", unbound.output);
+            assert_eq!(unbound.output, "1");
+            assert!(unbound.environment["build_output"]["directory"].is_null());
+            assert!(
+                !fx.repo
+                    .join(".orbit/state/host-validation-targets")
+                    .exists(),
+                "no binding allocates no host target"
+            );
+
+            let mut bound = ValidationEnvironment::launcher(ambient.clone());
+            bound.build_output_env = vec!["CARGO_TARGET_DIR".into()];
+            host.resolve_validation_env(bound);
+            let forced = review_gate::run_required_validation(&host, &fx.repo, command).unwrap();
+            assert!(forced.passed, "{}", forced.output);
+            assert_eq!(
+                forced.output, "0",
+                "an inherited CARGO_INCREMENTAL is replaced when a host target is bound"
+            );
+            let checkout_target = PathBuf::from(
+                forced.environment["build_output"]["directory"]
+                    .as_str()
+                    .unwrap(),
+            );
+            assert!(checkout_target.is_dir());
+
+            let revision = orbit_types::workflow::automation::SourceRevision {
+                commit: fx.candidate.clone(),
+                tree: git(&fx.repo, &["rev-parse", "HEAD^{tree}"]),
+            };
+            let admitted =
+                orbit_types::workflow::HostSandboxCommand::admit(command, &[command.to_string()])
+                    .unwrap();
+            let evidence =
+                review_gate::run_host_sandbox_test(&host, &fx.repo, &revision, &admitted, RUN_ID)
+                    .unwrap();
+            assert!(evidence.judgement.is_ok(), "{evidence:?}");
+            assert_eq!(evidence.output, "0");
+            assert_ne!(
+                evidence.environment["build_output"]["directory"],
+                forced.environment["build_output"]["directory"],
+                "a detached evidence checkout binds its own host target and still forces incremental off"
+            );
+
+            let mut opted = ValidationEnvironment::launcher(ambient);
+            opted.build_output_env = vec!["CARGO_TARGET_DIR".into()];
+            opted.cargo_incremental = true;
+            host.resolve_validation_env(opted);
+            let kept = review_gate::run_required_validation(&host, &fx.repo, command).unwrap();
+            assert!(kept.passed, "{}", kept.output);
+            assert_eq!(
+                kept.output, "1",
+                "cargo_incremental leaves an explicit CARGO_INCREMENTAL in place"
+            );
+
+            host.resolve_validation_env(ValidationEnvironment::launcher(path));
+            let untouched = review_gate::run_required_validation(&host, &fx.repo, command).unwrap();
+            assert!(untouched.passed, "{}", untouched.output);
+            assert_eq!(untouched.output, "unset");
+            assert!(untouched.environment["build_output"]["directory"].is_null());
         },
     );
 }
