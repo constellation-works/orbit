@@ -7,8 +7,8 @@
 //! [`run_sweep_with_providers`] pass, invoked every minute by the OS clock
 //! (see [`clock`]), fires whatever is due on this host through the existing
 //! v2 run machinery. Every owner checkout is an independent schedule; a
-//! replica checkout schedules only host-local worktree GC [ORB-14173]
-//! (design in `docs/design/routines/`).
+//! replica checkout schedules only host-local worktree GC [ORB-14173] and
+//! store GC [ORB-16354] (design in `docs/design/routines/`).
 
 use std::path::Path;
 use std::sync::Arc;
