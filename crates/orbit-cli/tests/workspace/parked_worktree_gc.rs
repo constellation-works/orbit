@@ -36,8 +36,10 @@ fn parked_age_reclaims_someday_and_keeps_lease_claim_and_backlog() {
     }
 
     let temp = tempdir().unwrap();
-    let home = temp.path().join("home");
-    let repo = temp.path().join("repo");
+    // GC reports canonical paths; macOS temp dirs sit behind the /var symlink.
+    let root = temp.path().canonicalize().unwrap();
+    let home = root.join("home");
+    let repo = root.join("repo");
     fs::create_dir_all(&home).unwrap();
     fs::create_dir_all(&repo).unwrap();
     crate::git_repo::SeededRepo::new(&repo)
