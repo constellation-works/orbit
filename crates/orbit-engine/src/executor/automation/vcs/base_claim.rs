@@ -553,7 +553,7 @@ pub fn verify_claimed_known_red<H: RuntimeHost + ?Sized>(
             "the owner settlement base comparison deadline expired".into(),
         ));
     }
-    on_owner_base(workspace_path, base_branch, base_sync, base_sha).map_err(Inconclusive)?;
+    verify_claimed_known_red_base(workspace_path, base_branch, base_sync, base_sha)?;
     let cached = cached_base_check(host, workspace_path, base_sha, command, selection)
         .filter(super::baseline::BaselineCheck::conclusive);
     let (check, whole) = match (cached, failing_tests_selection(selection, failures, &[])) {
@@ -621,14 +621,21 @@ pub fn verify_claimed_known_red<H: RuntimeHost + ?Sized>(
 /// the base it synchronized onto, and the owner only checked that the
 /// candidate descends from it, so a commit off the integration branch would
 /// make the candidate's own regressions look like the base's.
-fn on_owner_base(
+/// This check runs no validation command and applies even when the follower's
+/// OS prevents comparison with an owner-side base run.
+pub fn verify_claimed_known_red_base(
     workspace_path: &Path,
     base_branch: &str,
     base_sync: BaseSyncMode,
     base_sha: &str,
-) -> Result<(), String> {
-    let tip = resolve_worktree_start_point(workspace_path, base_branch, base_sync)
-        .map_err(|error| format!("this owner could not read its base '{base_branch}': {error}"))?;
+) -> Result<(), KnownRedUnconfirmed> {
+    use KnownRedUnconfirmed::Inconclusive;
+    let tip =
+        resolve_worktree_start_point(workspace_path, base_branch, base_sync).map_err(|error| {
+            Inconclusive(format!(
+                "this owner could not read its base '{base_branch}': {error}"
+            ))
+        })?;
     match git_command_success(
         workspace_path,
         &[
@@ -640,13 +647,13 @@ fn on_owner_base(
         ],
     ) {
         Ok(true) => Ok(()),
-        Ok(false) => Err(format!(
+        Ok(false) => Err(Inconclusive(format!(
             "base {base_sha} is not in the history of this owner's {tip}, so its failures are \
              not the integration branch's"
-        )),
-        Err(error) => Err(format!(
+        ))),
+        Err(error) => Err(Inconclusive(format!(
             "this owner could not place base {base_sha} in {tip}: {error}"
-        )),
+        ))),
     }
 }
 

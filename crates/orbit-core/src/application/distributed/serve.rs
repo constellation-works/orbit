@@ -542,8 +542,9 @@ impl crate::OrbitRuntime {
     /// That comparison is scoped to the host OS recorded when the follower
     /// was admitted [ORB-16432]. A different OS is a different validation
     /// environment: the owner's base run is not started and cannot contradict
-    /// the report. The owner accepts the follower's reported failures for
-    /// that OS and keeps the handoff, including a pull request the leaf opened.
+    /// the report. After the same owner-base history check, the owner accepts
+    /// the follower's reported failures for that OS and keeps the handoff,
+    /// including a pull request the leaf opened.
     fn observe_known_red(
         &self,
         handoff: &TaskHandoff,
@@ -600,7 +601,13 @@ impl crate::OrbitRuntime {
                     report.base_sha
                 )))
             } else if across_os.is_some() {
-                Ok(report.failures.clone())
+                orbit_engine::verify_claimed_known_red_base(
+                    &self.paths().repo_root,
+                    &ship.base_branch,
+                    base_sync,
+                    base_sha,
+                )
+                .map(|()| report.failures.clone())
             } else {
                 orbit_engine::verify_claimed_known_red(
                     self,

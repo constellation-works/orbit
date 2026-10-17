@@ -2601,6 +2601,172 @@ fn a_macos_leaf_known_red_report_is_not_contradicted_by_a_linux_owner_base() {
     fixture.assert_no_blocked();
 }
 
+/// A published candidate may descend from the follower's reported base even
+/// when that base is off the owner's admitted branch. Cross-OS settlement must
+/// refuse that report before accepting the handoff or running any command.
+#[test]
+#[cfg(unix)]
+fn a_cross_os_known_red_report_from_off_the_owners_branch_is_refused() {
+    use orbit_types::task::HostOs;
+    use orbit_types::workflow::KNOWN_RED_VALIDATION_EVENT;
+    use orbit_types::workflow::handoff::HandoffKnownRed;
+    use std::os::unix::fs::PermissionsExt;
+
+    if !isolated(
+        module_path!(),
+        "a_cross_os_known_red_report_from_off_the_owners_branch_is_refused",
+    ) {
+        return;
+    }
+    let red = RedCheck::new();
+    let config = format!(
+        "[workflow]\nrequired_validation_commands = [\"{}\"]\n",
+        red.command()
+    );
+    let mut pair = Pair::with_owner_host(&config, "", &[None], |owner| {
+        owner.with_host_os(Some(HostOs::Linux))
+    });
+    pair.follower = pair.follower.clone().with_host_os(Some(HostOs::Macos));
+    let task = &pair.tasks[0];
+    let owner_base = prepare_clean_owner(&pair, task);
+    let drain = pair.run_drain();
+    let leaf = pair.launched_leaf(&drain, 1, std::process::id());
+    let admission = pair.admission(&leaf);
+    assert_eq!(admission.request.os, Some(HostOs::Macos));
+    assert_eq!(admission.request.ship.base_branch, "main");
+    prepare_clean_follower(&pair, task, &owner_base);
+    let repo = &pair.follower_repo;
+    git(
+        repo,
+        &["commit", "-q", "--allow-empty", "-m", "Foreign base"],
+    );
+    let foreign_base = super::before_pr::revision(repo, "HEAD");
+    std::fs::write(repo.join("src/f0.rs"), "fn delivered() {}\n").unwrap();
+    git(repo, &["commit", "-q", "-am", "Deliver on foreign base"]);
+    let mut delivered = handoff(&admission);
+    delivered.candidate.base = foreign_base;
+    delivered.candidate.candidate = super::before_pr::revision(repo, "HEAD");
+    git(repo, &["push", "-q", "origin", "HEAD"]);
+
+    // Only the provider response is substituted. Settlement reads the real
+    // published objects, checks their ancestry and judges the pinned log.
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    std::fs::create_dir_all(home.join("bin")).unwrap();
+    let gh = home.join("bin/gh");
+    std::fs::write(
+        &gh,
+        format!(
+            "#!/bin/sh\ncat <<'JSON'\n{}\nJSON\n",
+            json!({
+                "number": 42, "state": "OPEN", "mergedAt": null,
+                "headRefName": delivered.candidate.source_branch,
+                "headRefOid": delivered.candidate.candidate.commit,
+                "baseRefName": "main", "mergeStateStatus": "CLEAN",
+                "url": "https://github.com/owner/repository/pull/42",
+            })
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // The fixture's URL redirect gives the published bare origin its own
+    // repository identity; carry the identity the public observer reads.
+    delivered.candidate = orbit_engine::observe_published_candidate(
+        &pair.wire.owner,
+        &pair.owner_repo,
+        &delivered.candidate,
+    )
+    .unwrap();
+    let log = HandoffValidationLog {
+        schema_version: 1,
+        workspace_id: delivered.workspace_id.clone(),
+        task_id: task.clone(),
+        claim_id: delivered.claim_id.clone(),
+        machine_id: delivered.machine_id.clone(),
+        run_id: leaf.clone(),
+        candidate: delivered.candidate.clone(),
+        tested_head: delivered.candidate.candidate.commit.clone(),
+        command: red.command(),
+        exit_code: 3,
+        output: "test suite::broken ... FAILED".into(),
+        known_red: Some(HandoffKnownRed {
+            base_sha: delivered.candidate.base.commit.clone(),
+            selection: None,
+            failures: BTreeSet::from([RedCheck::FAILURE.to_string()]),
+        }),
+        flaky: None,
+    };
+    let artifact = TaskArtifact {
+        path: "validation/foreign-base.json".into(),
+        content: serde_json::to_vec(&log).unwrap(),
+        media_type: "application/json".into(),
+        created_by: None,
+    };
+    delivered.validation.push(HandoffArtifactRef {
+        path: artifact.path.clone(),
+        sha256: sha256_hex(&artifact.content),
+    });
+    let context = ClaimInvocation::trusted_worker(
+        task.clone(),
+        delivered.claim_id.clone(),
+        FOLLOWER.into(),
+        Some(ClaimRun {
+            machine_id: FOLLOWER.into(),
+            run_id: leaf.clone(),
+        }),
+    );
+    pair.wire
+        .owner
+        .mutate_execution_claim(
+            Some(&context),
+            "foreign-base-log",
+            &ClaimMutation::Evidence(ClaimEvidence {
+                artifacts: vec![artifact],
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    let error = pair
+        .wire
+        .owner
+        .run_tool_with_context_and_role(
+            "orbit.drain.claim.settle",
+            json!({"claim_id": delivered.claim_id, "run_id": leaf,
+            "settlement": ClaimMutation::AcceptHandoff(delivered.clone())}),
+            Role::Admin,
+            ToolContext {
+                session_context: ToolSessionContext {
+                    caller_machine_id: Some(FOLLOWER.into()),
+                    process_machine_id: Some(OWNER.into()),
+                    transport: Some(McpTransport::SshMcp),
+                    effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+                    ..ToolSessionContext::default()
+                },
+                ..ToolContext::default()
+            },
+        )
+        .expect_err("an off-branch base must not authorize cross-OS known red")
+        .to_string();
+    assert!(
+        error.contains("known_red_unverified") && error.contains("not in the history"),
+        "{error}"
+    );
+    assert_eq!(red.runs(), 0, "an off-branch report runs no owner command");
+    assert_eq!(pair.owner_status(task), "in-progress");
+    assert!(
+        pair.wire
+            .owner
+            .accepted_task_handoff(&delivered.claim_id)
+            .is_err()
+    );
+    assert!(
+        pair.owner_task(task)["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|event| event["event"] != KNOWN_RED_VALIDATION_EVENT)
+    );
+}
+
 impl RedCheck {
     /// From now on the command runs `body` wherever it runs, still counted.
     fn runs_as(&self, body: &str) {
