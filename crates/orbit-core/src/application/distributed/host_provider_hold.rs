@@ -28,15 +28,14 @@ use orbit_types::workflow::{
 };
 
 use super::PULL_DRAIN_JOB;
-use super::auth_failures::{
-    SCAN_LIMIT, bounded_query, canonical_provider, clearing_at, host_of, run_at,
-};
+use super::auth_failures::{SCAN_LIMIT, canonical_provider, clearing_at, host_of, run_at};
 use crate::OrbitRuntime;
 use crate::runtime::task::provider_hold::base_backoff;
 
-/// How far back a failure or the success that clears it is read. The longest
-/// base backoff honoured here is 30 minutes; the extra half hour keeps a
-/// failure whose row was created slightly before it finished.
+/// One hour of run recency: finish time, else start time, else creation time.
+/// The longest base backoff honoured here is 30 minutes. Bounding by finish
+/// time keeps recent failures and clearing successes regardless of how long
+/// their pipelines ran or waited before starting.
 const LOOKBACK: Duration = Duration::hours(1);
 
 /// One standing unavailable or capacity hold on this host.
@@ -112,7 +111,7 @@ impl OrbitRuntime {
         let failures = self
             .stores()
             .jobs()
-            .list_job_runs_filtered(&bounded_query(JobRunState::Failed, since, true))?
+            .list_job_runs_filtered(&hold_query(JobRunState::Failed, since, true))?
             .into_iter()
             .filter(|run| on_this_host(run, &aliases, &fallback))
             .filter_map(|run| {
@@ -129,7 +128,7 @@ impl OrbitRuntime {
         let successes = self
             .stores()
             .jobs()
-            .list_job_runs_filtered(&bounded_query(JobRunState::Success, since, false))?
+            .list_job_runs_filtered(&hold_query(JobRunState::Success, since, false))?
             .into_iter()
             .filter(|run| on_this_host(run, &aliases, &fallback))
             .collect::<Vec<_>>();
@@ -325,6 +324,17 @@ impl OrbitRuntime {
             aliases.insert(id.to_string());
         }
         aliases
+    }
+}
+
+fn hold_query(state: JobRunState, since: DateTime<Utc>, include_steps: bool) -> JobRunQuery {
+    JobRunQuery {
+        state: Some(state),
+        recency_since: Some(since),
+        limit: Some(SCAN_LIMIT),
+        order_by: JobRunOrder::Recency,
+        include_steps,
+        ..JobRunQuery::default()
     }
 }
 
