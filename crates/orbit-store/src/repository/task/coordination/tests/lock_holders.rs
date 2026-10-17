@@ -278,18 +278,84 @@ fn report_millis(report: &BTreeMap<String, String>, field: &str) -> u64 {
         .unwrap_or_else(|| panic!("{field} in {report:?}"))
 }
 
+/// Own-time slices a hold report lists, as `(name, milliseconds)`.
+///
+/// The reporter prints them largest first (`name=Nms`, then `, N more`
+/// once the list is truncated). Milliseconds truncate, so two slices can
+/// tie in the report after the reporter has already ordered their
+/// sub-millisecond durations.
+fn reported_hold_slices(report: &BTreeMap<String, String>) -> Vec<(String, u64)> {
+    let steps = report
+        .get("steps")
+        .map(String::as_str)
+        .unwrap_or_else(|| panic!("steps in {report:?}"));
+    if steps.is_empty() {
+        panic!("steps in {report:?}");
+    }
+    steps
+        .split(", ")
+        .filter(|entry| !entry.ends_with(" more"))
+        .map(|entry| {
+            let (name, millis) = entry
+                .rsplit_once('=')
+                .unwrap_or_else(|| panic!("step slice {entry:?} in {report:?}"));
+            let millis = millis
+                .strip_suffix("ms")
+                .and_then(|millis| millis.parse().ok())
+                .unwrap_or_else(|| panic!("step millis {entry:?} in {report:?}"));
+            (name.to_string(), millis)
+        })
+        .collect()
+}
+
+fn slice_millis(report: &BTreeMap<String, String>, name: &str) -> u64 {
+    reported_hold_slices(report)
+        .into_iter()
+        .find(|(step, _)| step == name)
+        .map(|(_, millis)| millis)
+        .unwrap_or_else(|| panic!("{name} own time in {report:?}"))
+}
+
+/// `slowest_step` names a slice tied for the greatest reported own-time.
+/// An `unattributed` gap keeps that name when the report ranks it there.
+fn assert_slowest_is_largest_slice(report: &BTreeMap<String, String>) {
+    let slices = reported_hold_slices(report);
+    let max_ms = slices
+        .iter()
+        .map(|(_, millis)| *millis)
+        .max()
+        .unwrap_or_else(|| panic!("a slice in {report:?}"));
+    let slowest = report.get("slowest_step").map(String::as_str);
+    assert!(
+        slices
+            .iter()
+            .any(|(name, millis)| slowest == Some(name.as_str()) && *millis == max_ms),
+        "slowest_step is the greatest reported slice, including an unattributed gap: {report:?}"
+    );
+    assert_eq!(
+        report_millis(report, "slowest_step_ms"),
+        max_ms,
+        "slowest_step_ms matches that slice: {report:?}"
+    );
+}
+
 /// ORB-15534: ordinary sections still held the boundary for seconds under
 /// drain load, and the report named only the section. It must also name
 /// where the hold went: the slowest step by its own time, so a step nested
 /// inside the operation is named rather than the operation that ran it, and
 /// a wait for the partition is named as one.
+///
+/// Time no step owns stays a slice named `unattributed` and is slowest when
+/// that gap is the largest, including host bookkeeping around an injected
+/// step (ORB-16328). The injected step's own time is still required.
 #[test]
 fn a_section_held_past_its_threshold_reports_its_label_and_duration() {
+    let warn_after = Duration::from_secs(1);
     let (_root, overdue) = boundary(FileLockOptions {
         timeout: Duration::from_secs(10),
         // Give the observed wait a margin over pre-acquisition bookkeeping
         // stalls before releasing its holder; no releaser timer orders it.
-        warn_after: Duration::from_secs(1),
+        warn_after,
         warn_held_after: Some(Duration::from_millis(30)),
         ..contending()
     });
@@ -303,29 +369,24 @@ fn a_section_held_past_its_threshold_reports_its_label_and_duration() {
         })
     });
 
-    let report = hold_report(&events, ".task-commit.lock");
-    assert!(
-        report
-            .get("label")
-            .is_some_and(|label| label.starts_with(&section_label("ordinary"))),
-        "the report names the section: {report:?}"
-    );
-    assert_eq!(report.get("mode").map(String::as_str), Some("shared"));
-    assert!(
-        report_millis(report, "held_ms") >= held_for.as_millis() as u64,
-        "the report carries the held duration: {report:?}"
-    );
     for lock_file in [".task-commit.lock", ".host-task-commit.lock"] {
         let report = hold_report(&events, lock_file);
-        assert_eq!(
-            report.get("slowest_step").map(String::as_str),
-            Some("slow step"),
-            "{report:?}"
+        assert!(
+            report
+                .get("label")
+                .is_some_and(|label| label.starts_with(&section_label("ordinary"))),
+            "the report names the section: {report:?}"
+        );
+        assert_eq!(report.get("mode").map(String::as_str), Some("shared"));
+        assert!(
+            report_millis(report, "held_ms") >= held_for.as_millis() as u64,
+            "the report carries the held duration: {report:?}"
         );
         assert!(
-            report_millis(report, "slowest_step_ms") >= held_for.as_millis() as u64,
-            "the report carries the slowest step's own time: {report:?}"
+            slice_millis(report, "slow step") >= held_for.as_millis() as u64,
+            "the report carries the slow step's own time: {report:?}"
         );
+        assert_slowest_is_largest_slice(report);
     }
 
     // A section that waited for its partition behind an exclusive holder
@@ -358,11 +419,14 @@ fn a_section_held_past_its_threshold_reports_its_label_and_duration() {
     holder.join().expect("holder thread");
     result.expect("the ordinary section runs once the holder releases");
     let report = hold_report(&events, ".host-task-commit.lock");
-    assert_eq!(
-        report.get("slowest_step").map(String::as_str),
-        Some(".task-commit.lock wait"),
-        "{report:?}"
+    // The holder stays until this wait is warned, so the recorded wait covers
+    // at least `warn_after`. Host bookkeeping outside that wait is its own
+    // slice and wins when it is larger.
+    assert!(
+        slice_millis(report, ".task-commit.lock wait") >= warn_after.as_millis() as u64,
+        "the host lock records the partition wait observed before release: {report:?}"
     );
+    assert_slowest_is_largest_slice(report);
 
     // A section inside its threshold says nothing. The margin is wide so a
     // scheduling stall on a loaded host cannot push an empty section past it.
