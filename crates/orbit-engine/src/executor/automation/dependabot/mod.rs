@@ -7,25 +7,15 @@
 mod collect;
 mod query;
 
-use std::path::PathBuf;
-
 use orbit_common::OrbitError;
 use serde_json::Value;
 
 use crate::context::RuntimeHost;
 
-use super::input::{canonicalize_existing_dir, input_string_field};
+use super::github_host::{OUTCOME_CAPABILITY_UNAVAILABLE, query_root};
 
-const OUTCOME_CAPABILITY_UNAVAILABLE: &str = "capability_unavailable";
 const OUTCOME_NO_OPEN_ALERTS: &str = "no_open_alerts";
 const OUTCOME_OPEN_ALERTS: &str = "open_alerts";
-
-fn query_root<H: RuntimeHost + ?Sized>(host: &H, input: &Value) -> Result<PathBuf, OrbitError> {
-    match input_string_field(input, "workspace_path") {
-        Some(path) => canonicalize_existing_dir(&path, "workspace_path"),
-        None => Ok(PathBuf::from(host.repo_root()?)),
-    }
-}
 
 pub(super) fn collect_dependabot_alerts<H: RuntimeHost + ?Sized>(
     host: &H,

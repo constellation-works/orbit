@@ -1,5 +1,6 @@
 pub(crate) mod ci;
 mod dependabot;
+mod github_host;
 mod input;
 pub(crate) mod review;
 mod shell;
