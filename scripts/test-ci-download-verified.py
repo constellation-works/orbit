@@ -41,16 +41,54 @@ def signal(stage):
     if "DOWNLOAD_READY_FD" in os.environ:
         os.write(int(os.environ["DOWNLOAD_READY_FD"]), stage)
 
+def note_elapsed():
+    # A finished transport consumes a fixed slice of the injected clock so the
+    # next backoff shares one deadline. 0.05s stays inside the 0.3s budget
+    # (that attempt still finishes and refuses the 1s backoff) and makes the
+    # 1.4s budget's second watchdog strictly under 0.4s without real time.
+    clock = os.environ.get("ORBIT_CI_DOWNLOAD_FAKE_CLOCK")
+    if not clock:
+        return
+    path = Path(clock)
+    now = float(path.read_text())
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(f"{now + 0.05:.6f}\n")
+    temporary.replace(path)
+
+def block_until_deadline():
+    # The helper arms the deadline after readiness, then this transport crosses
+    # it. Wall time does not decide the outcome; the safety sleep only holds
+    # the process until the helper's watchdog kills it.
+    arm = os.environ.get("ORBIT_CI_DOWNLOAD_CLOCK_ARM_FD")
+    wake = os.environ.get("ORBIT_CI_DOWNLOAD_CLOCK_WAKE_FD")
+    clock = os.environ.get("ORBIT_CI_DOWNLOAD_FAKE_CLOCK")
+    if not (arm and wake and clock):
+        time.sleep(60)
+        return
+    data = b""
+    while b"\n" not in data:
+        chunk = os.read(int(arm), 64)
+        if not chunk:
+            break
+        data += chunk
+    end = float(data.strip() or "0")
+    path = Path(clock)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(f"{end + 0.001:.6f}\n")
+    temporary.replace(path)
+    os.write(int(wake), b"X")
+    time.sleep(60)
+
 if row.get("pause_start"):
     signal(b"S")
-    time.sleep(60)
+    block_until_deadline()
 # Cancellation must leave either the old complete receipt or the new one.
 # The barrier exposes the old truncate-before-write failure without host load.
 pending = root / "calls.pending"
 pending.write_text("")
 if row.get("pause_receipt"):
     signal(b"W")
-    time.sleep(60)
+    block_until_deadline()
 pending.write_text(json.dumps(history))
 pending.replace(calls)
 output = args[args.index("--output") + 1] if "--output" in args else args[args.index("-o") + 1]
@@ -58,21 +96,21 @@ if "body" in row:
     Path(output).write_bytes(base64.b64decode(row["body"]))
 signal(b"R")
 if row.get("stall"):
-    time.sleep(60)
+    block_until_deadline()
 print("fixture curl diagnostic", file=sys.stderr)
 if "--write-out" in args:
     sys.stdout.write(row.get("http", "000"))
+note_elapsed()
 sys.exit(row.get("exit", 0))
 '''
 
 
 # This test-only python3 launcher executes the public helper's stdin unchanged.
-# Popen waits for an explicit fixture stage before the real watchdog starts.
-# Only fixture startup is excluded from the helper's clock; backoff, transport
-# execution and watchdogs use real elapsed time. Ordinary regressions also
-# include startup. This avoids betting on cold Python starting within 0.3s.
+# The helper's fake clock, not this launcher, decides backoff and the watchdog.
+# Readiness is still an explicit fixture stage so cancellation barriers record
+# the same ordering. Ordinary regressions do not install this launcher.
 DEADLINE_PYTHON = r'''
-import builtins, json, os, select, subprocess, sys, time
+import builtins, json, os, subprocess, sys, time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -80,33 +118,29 @@ from unittest.mock import patch
 source = sys.stdin.read()
 root = Path(os.environ["DOWNLOAD_FIXTURE"])
 events = []
-excluded_startup = 0.0
-started = time.monotonic()
-real_run, real_popen = subprocess.run, subprocess.Popen
+real_popen = subprocess.Popen
 real_import = builtins.__import__
 
 class ReadyPopen(real_popen):
     def __init__(self, *args, **kwargs):
-        global excluded_startup
-        startup = time.monotonic()
         read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        env = dict(kwargs.get("env") or os.environ)
+        env["DOWNLOAD_READY_FD"] = str(write_fd)
+        kwargs["env"] = env
+        kwargs["pass_fds"] = tuple(kwargs.get("pass_fds") or ()) + (write_fd,)
         try:
-            kwargs["env"] = dict(os.environ, DOWNLOAD_READY_FD=str(write_fd))
-            kwargs["pass_fds"] = (write_fd,)
             super().__init__(*args, **kwargs)
         finally:
             os.close(write_fd)
         try:
-            if not select.select([read_fd], [], [], 5)[0]:
-                raise RuntimeError("fixture readiness timed out")
             stage = os.read(read_fd, 1).decode()
             expected = os.environ.get("DOWNLOAD_EXPECT_READY", "R")
             attempt = sum("pid" in event for event in events)
-            if stage != expected[min(attempt, len(expected) - 1)]:
+            if not stage or stage != expected[min(attempt, len(expected) - 1)]:
                 raise RuntimeError(f"unexpected fixture readiness: {stage!r}")
-            elapsed = time.monotonic() - startup
-            excluded_startup += elapsed
-            events.append({"stage": stage, "pid": self.pid, "startup_seconds": elapsed})
+            self.deadline_event = {"stage": stage, "pid": self.pid, "startup_seconds": 0.0}
+            events.append(self.deadline_event)
         except BaseException:
             self.kill()
             self.wait()
@@ -114,33 +148,23 @@ class ReadyPopen(real_popen):
         finally:
             os.close(read_fd)
 
+    def kill(self):
+        event = getattr(self, "deadline_event", None)
+        if event is not None:
+            event["timed_out"] = True
+        return super().kill()
+
 def run(*args, **kwargs):
-    timeout = kwargs["timeout"]
-    try:
-        return real_run(*args, **kwargs)
-    except subprocess.TimeoutExpired:
-        events[-1]["timed_out"] = True
-        raise
-    finally:
-        event = events[-1]
-        event["timeout"] = timeout
-        # subprocess.run must have waited for every owned transport, including
-        # on TimeoutExpired. A live child or a zombie is a failure, not a skip.
-        try:
-            os.waitpid(event["pid"], os.WNOHANG)
-        except ChildProcessError:
-            event["reaped"] = True
-        else:
-            raise RuntimeError("transport was not reaped by subprocess.run")
-        (root / "deadline-events.json").write_text(json.dumps(events))
+    raise RuntimeError("deadline tests must use the injected clock, not wall-clock subprocess.run")
 
 def sleep(delay):
     events.append({"backoff": delay})
-    time.sleep(delay)
+    if not os.environ.get("ORBIT_CI_DOWNLOAD_FAKE_CLOCK"):
+        time.sleep(delay)
 
 def import_module(name, globals=None, *args, **kwargs):
     if name == "time" and globals and globals.get("__name__") == "__main__":
-        return SimpleNamespace(monotonic=lambda: time.monotonic() - excluded_startup, sleep=sleep)
+        return SimpleNamespace(monotonic=lambda: None, sleep=sleep)
     return real_import(name, globals, *args, **kwargs)
 
 sys.argv = ["-", *sys.argv[2:]]
@@ -149,9 +173,21 @@ try:
             patch.object(subprocess, "Popen", ReadyPopen), patch.object(subprocess, "run", run):
         exec(compile(source, "ci-download-verified.sh:stdin", "exec"), {"__name__": "__main__"})
 finally:
+    for event in events:
+        if "pid" not in event:
+            continue
+        try:
+            os.waitpid(event["pid"], os.WNOHANG)
+        except ChildProcessError:
+            event["reaped"] = True
+        else:
+            event["reaped"] = False
+    (root / "deadline-events.json").write_text(json.dumps(events))
+    clock = os.environ.get("ORBIT_CI_DOWNLOAD_FAKE_CLOCK")
+    active = float(Path(clock).read_text()) if clock else 0.0
     (root / "deadline-summary.json").write_text(json.dumps({
-        "active_seconds": time.monotonic() - started - excluded_startup,
-        "excluded_startup_seconds": excluded_startup,
+        "active_seconds": active,
+        "excluded_startup_seconds": 0.0,
     }))
 '''
 
@@ -192,7 +228,10 @@ class VerifiedDownloadTests(unittest.TestCase):
             launcher = self.bin / "python3"
             launcher.write_text(f"#!{sys.executable}\n" + DEADLINE_PYTHON)
             launcher.chmod(0o755)
-            env = dict(env, DOWNLOAD_EXPECT_READY=stage)
+            clock = self.root / "fake-clock"
+            clock.write_text("0.000000\n")
+            env = dict(env, DOWNLOAD_EXPECT_READY=stage,
+                       ORBIT_CI_DOWNLOAD_FAKE_CLOCK=str(clock))
         return subprocess.run([str(HELPER), url, digest or hashlib.sha256(BODY).hexdigest(),
                                str(self.destination), "--budget-seconds", str(budget)],
                               env=env, text=True, capture_output=True, timeout=8)
