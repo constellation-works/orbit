@@ -93,6 +93,7 @@ fn config_admission_rejects_invalid_thresholds_and_exposes_overrides() {
         "cpu_high_percent = 0",
         "disk_resume_percent = 101",
         "memory_resume_percent = 95\nmemory_high_percent = 90",
+        "io_full_resume_percent = 25\nio_full_high_percent = 20",
     ] {
         std::fs::write(&path, format!("[workflow.resource_throttle]\n{body}")).unwrap();
         assert!(

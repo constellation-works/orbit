@@ -709,7 +709,7 @@ pub struct GapFitHeadStall {
 /// One host resource whose sustained pressure holds new admissions.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResourcePressure {
-    /// `cpu`, `memory`, or `disk <path>`.
+    /// `cpu`, `memory`, `io full` or `disk <path>`.
     pub resource: String,
     pub percent: f64,
     pub high_percent: u8,

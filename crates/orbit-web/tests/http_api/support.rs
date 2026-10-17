@@ -628,6 +628,7 @@ pub(super) fn serve_fixture() {
                         }),
                     cpu_percent: (phase != 3).then_some(95.0),
                     memory_percent: Some(50.0),
+                    io_full_percent: None,
                     disks: paths
                         .iter()
                         .enumerate()

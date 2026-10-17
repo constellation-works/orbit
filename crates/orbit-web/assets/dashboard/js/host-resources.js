@@ -20,7 +20,7 @@ export function hostReading(payload, resource) {
   const known = Number.isFinite(reading?.percent) && !payload?.stale;
   const severity = known ? reading.severity : 'unknown';
   const pressures = verdictUnknown || !payload.throttle ? [] : (payload.pressures || []).filter(pressure =>
-    resource === 'disk' ? pressure.resource.startsWith('disk ') : pressure.resource === resource);
+    resource === 'disk' ? pressure.resource.startsWith('disk ') : pressure.resource === (resource === 'io' ? 'io full' : resource));
   const note = known ? severity : payload?.stale ? 'stale' : reading?.unknown_reason || 'unavailable';
   return { reading, known, severity, held: pressures.length > 0, pressures, note };
 }

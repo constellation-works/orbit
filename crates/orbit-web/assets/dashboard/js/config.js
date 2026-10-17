@@ -44,7 +44,15 @@ const SUBTAB_SOURCES = {
 
 /// The System tab is the resource throttle only: its keys, in display order.
 const THROTTLE_PREFIX = "workflow.resource_throttle.";
-const THROTTLE_RESOURCES = ["cpu", "memory", "disk"];
+const THROTTLE_RESOURCES = ["cpu", "memory", "disk", "io"];
+// The `io` resource's keys are named for the pressure line they read.
+const THROTTLE_KEY_STEM = { io: "io_full" };
+
+/// Disk I/O pressure exists only on hosts that report it (Linux with PSI), so
+/// its row appears only when the host's payload carries a reading.
+function throttleResources(host) {
+  return THROTTLE_RESOURCES.filter((resource) => resource !== "io" || host?.io);
+}
 
 let activeSubtab = "effective";
 let lastPayload = null;
@@ -148,7 +156,7 @@ function renderPanels(payload, body) {
   }
   if (activeSubtab === "system") {
     body.appendChild(systemPanel(payload));
-    $("config-count").textContent = `${THROTTLE_RESOURCES.length} resources`;
+    $("config-count").textContent = `${throttleResources(payload.host).length} resources`;
     return;
   }
   if (activeSubtab === "crews") {
@@ -664,7 +672,7 @@ function systemPanel(payload) {
     el("span", { text: "resume below" }),
   ]);
   body.appendChild(head);
-  for (const resource of THROTTLE_RESOURCES) body.appendChild(systemResource(resource, rows, payload, host));
+  for (const resource of throttleResources(host)) body.appendChild(systemResource(resource, rows, payload, host));
   panel.appendChild(body);
   return panel;
 }
@@ -676,7 +684,7 @@ function systemVerdict(host, verdict, rows, payload) {
     el("span", { class: "config-key mono", text: "enabled" }),
     rows[enabledKey] ? systemValueCell(rows[enabledKey], payload) : el("span", { class: "config-value mono", text: NO_VALUE }),
   ]));
-  const pressures = THROTTLE_RESOURCES.flatMap((resource) => hostReading(host, resource).pressures);
+  const pressures = throttleResources(host).flatMap((resource) => hostReading(host, resource).pressures);
   let text;
   if (verdict.status === "held") {
     text = `Holding new admissions: ${pressures.map(describePressure).join("; ")}`;
@@ -708,8 +716,9 @@ function describePressure(pressure) {
 
 function systemResource(resource, rows, payload, host) {
   const reading = hostReading(host, resource);
-  const high = rows[`${THROTTLE_PREFIX}${resource}_high_percent`];
-  const resume = rows[`${THROTTLE_PREFIX}${resource}_resume_percent`];
+  const stem = THROTTLE_KEY_STEM[resource] || resource;
+  const high = rows[`${THROTTLE_PREFIX}${stem}_high_percent`];
+  const resume = rows[`${THROTTLE_PREFIX}${stem}_resume_percent`];
   const node = el("div", { class: "config-sys-resource" });
   node.dataset.resource = resource;
   const live = el("span", { class: `config-sys-reading ${reading.severity}${reading.held ? " throttled" : ""}` }, [

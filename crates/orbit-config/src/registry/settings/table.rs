@@ -602,7 +602,7 @@ define_config_settings! {
     },
     workflow_resource_throttle_cpu_light_leaves: u8 => u8 {
         key: "workflow.resource_throttle.cpu_light_leaves", value_type: "integer",
-        description: "Leaves reserved for CPU-light work (`no-diff-expected` auto-tasks) while only CPU pressure throttles admissions; memory and disk pressure still hold them (0..=32, default 2; 0 holds them too).",
+        description: "Leaves reserved for CPU-light work (`no-diff-expected` auto-tasks) while only CPU pressure throttles admissions; memory, disk and I/O pressure still hold them (0..=32, default 2; 0 holds them too).",
         section: ConfigSection::Delivery, order: 137,
         resolve: |raw: Option<u8>| resolve_cpu_light_leaves(raw),
     },
@@ -629,6 +629,18 @@ define_config_settings! {
         description: "Enable the host resource throttle verdict; disabled still reports pressure.",
         section: ConfigSection::Delivery, order: 134,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
+    },
+    workflow_resource_throttle_io_full_high_percent: u8 => u8 {
+        key: "workflow.resource_throttle.io_full_high_percent", value_type: "integer",
+        description: "Linux disk I/O high-water mark: the share of the last minute (`/proc/pressure/io` `full avg60`) in which every runnable task was stalled on I/O (1..=100, default 20). Hosts without pressure stall information are not gated.",
+        section: ConfigSection::Delivery, order: 138,
+        resolve: |raw: Option<u8>| resolve_percent(raw, 20, "workflow.resource_throttle.io_full_high_percent"),
+    },
+    workflow_resource_throttle_io_full_resume_percent: u8 => u8 {
+        key: "workflow.resource_throttle.io_full_resume_percent", value_type: "integer",
+        description: "Linux disk I/O resume mark: admission resumes once `/proc/pressure/io` `full avg60` falls below it (1..=100, default 10).",
+        section: ConfigSection::Delivery, order: 139,
+        resolve: |raw: Option<u8>| resolve_percent(raw, 10, "workflow.resource_throttle.io_full_resume_percent"),
     },
     workflow_resource_throttle_memory_high_percent: u8 => u8 {
         key: "workflow.resource_throttle.memory_high_percent", value_type: "integer",

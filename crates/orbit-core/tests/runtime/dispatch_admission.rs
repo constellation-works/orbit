@@ -1375,6 +1375,8 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
 pub(super) struct PressureProbe {
     reading: Mutex<(Option<f64>, Option<f64>, DateTime<Utc>)>,
     disk: Mutex<f64>,
+    /// `/proc/pressure/io` `full avg60`; `None` is a host without PSI.
+    io: Mutex<Option<f64>>,
     samples: AtomicUsize,
 }
 
@@ -1383,6 +1385,7 @@ impl PressureProbe {
         Arc::new(Self {
             reading: Mutex::new((Some(10.0), Some(10.0), Utc::now())),
             disk: Mutex::new(10.0),
+            io: Mutex::new(None),
             samples: AtomicUsize::new(0),
         })
     }
@@ -1404,6 +1407,12 @@ impl PressureProbe {
         let mut reading = self.reading.lock().unwrap();
         reading.1 = Some(percent);
         reading.2 = at;
+    }
+
+    /// Disk I/O stall share at `percent`, observed at `at`; `None` is no PSI.
+    fn io(&self, percent: Option<f64>, at: DateTime<Utc>) {
+        *self.io.lock().unwrap() = percent;
+        self.reading.lock().unwrap().2 = at;
     }
 
     pub(super) fn cpu(&self, percent: Option<f64>) {
@@ -1438,6 +1447,7 @@ impl HostResourceProbe for PressureProbe {
             sampled_at: at,
             cpu_percent: cpu,
             memory_percent: memory,
+            io_full_percent: *self.io.lock().unwrap(),
             disks: paths
                 .iter()
                 .map(|path| DiskSample {
@@ -1810,6 +1820,102 @@ fn sustained_pressure_holds_local_admission_until_it_clears_below_resume() {
     );
 }
 
+/// Sustained disk I/O stall holds the local drain's wave and readiness with a
+/// typed reason until `full avg60` falls below the resume mark; a live child
+/// keeps running throughout, and a host without PSI admits as before.
+fn sustained_io_pressure_holds_local_admission_until_it_clears_below_resume() {
+    let probe = PressureProbe::calm();
+    let (_root, runtime, _repo) = runtime();
+    let runtime = runtime.with_host_resource_probe(probe.clone());
+    let running = seed(
+        &runtime,
+        Seed {
+            title: "running",
+            context_files: Some(&["file:src/running.rs"]),
+            ..Seed::default()
+        },
+    );
+    let queued = seed(
+        &runtime,
+        Seed {
+            title: "queued",
+            context_files: Some(&["file:src/queued.rs"]),
+            ..Seed::default()
+        },
+    );
+    let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
+    let child = running_run(
+        &runtime,
+        "task_auto_pipeline",
+        json!({"task_ids": [running.id]}),
+    );
+
+    // A host without PSI reports no I/O reading and is not unknown telemetry.
+    let open = classify(&runtime, &drain);
+    assert_eq!(open["loose_task_ids"], json!([queued.id]), "{open}");
+    assert_eq!(open["resource_throttle"], Value::Null, "{open}");
+    assert_eq!(open["resource_telemetry_unknown"], json!([]), "{open}");
+
+    // Pressure above the 20% mark that has not been sustained holds nothing.
+    probe.io(Some(47.0), Utc::now() - chrono::Duration::seconds(12));
+    let spike = classify(&runtime, &drain);
+    assert_eq!(spike["loose_task_ids"], json!([queued.id]), "{spike}");
+
+    probe.io(Some(47.0), Utc::now());
+    let held = classify(&runtime, &drain);
+    assert_eq!(held["loose_task_ids"], json!([]), "{held}");
+    let pressure = &held["resource_throttle"]["resources"][0];
+    assert_eq!(pressure["resource"], "io full", "{held}");
+    assert_eq!(pressure["percent"], 47.0, "{held}");
+    assert_eq!(pressure["high_percent"], 20, "{held}");
+    assert_eq!(pressure["resume_percent"], 10, "{held}");
+    let recorded = runtime
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .pull_drain
+        .drain_last_pass
+        .expect("last pass")
+        .resource_throttle
+        .expect("the pass records the throttle");
+    assert_eq!(recorded.resources[0].resource, "io full");
+    let readiness = runtime
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .unwrap();
+    assert_eq!(
+        readiness["capacity"]["resource_throttle"]["resources"][0]["resource"],
+        "io full"
+    );
+    let waiting = readiness_task(&readiness, &queued.id);
+    assert_eq!(waiting["reason"], "resource_throttled", "{waiting}");
+    assert!(
+        waiting["detail"].as_str().is_some_and(
+            |detail| detail.starts_with("io full 47% (throttled at \u{2265} 20% since ")
+        ),
+        "{waiting}"
+    );
+
+    // Between the resume and high marks the hold continues.
+    probe.io(Some(15.0), Utc::now());
+    let band = classify(&runtime, &drain);
+    assert_eq!(band["loose_task_ids"], json!([]), "{band}");
+
+    // Running work was never touched.
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        runtime.sqlite_store().unwrap(),
+        runtime.workspace_id().unwrap(),
+    );
+    assert_eq!(
+        jobs.get_job_run(&child).unwrap().unwrap().state,
+        JobRunState::Running
+    );
+
+    probe.io(Some(5.0), Utc::now());
+    let resumed = classify(&runtime, &drain);
+    assert_eq!(resumed["loose_task_ids"], json!([queued.id]), "{resumed}");
+    assert_eq!(resumed["resource_throttle"], Value::Null, "{resumed}");
+}
+
 /// With `workflow.resource_throttle.enabled = false` admission is what it was
 /// before the throttle: no sample is taken for it and pressure holds nothing.
 fn a_disabled_throttle_admits_under_pressure_without_sampling() {
@@ -2046,8 +2152,8 @@ fn a_cpu_only_throttle_holds_qa_sweep_while_admitting_review_auto_tasks() {
     }
 }
 
-/// Memory and disk pressure hold light leaves like any other: an agent
-/// session costs memory and its artifacts cost disk, whatever CPU does.
+/// Memory, disk and I/O pressure hold light leaves like any other: an agent
+/// session costs memory and its artifacts cost disk and I/O, whatever CPU does.
 fn memory_and_disk_pressure_still_hold_light_auto_tasks() {
     let probe = PressureProbe::calm();
     let (_root, runtime, _repo) = runtime();
@@ -2096,6 +2202,10 @@ fn memory_and_disk_pressure_still_hold_light_auto_tasks() {
     probe.memory(10.0, Utc::now());
     probe.sustain(&runtime, |probe| *probe.disk.lock().unwrap() = 95.0);
     assert_held("disk");
+
+    *probe.disk.lock().unwrap() = 10.0;
+    probe.sustain(&runtime, |probe| probe.io(Some(47.0), Utc::now()));
+    assert_held("io");
 }
 
 /// A frozen delivery batch within two hours of its deadline sorts ahead of
@@ -2496,6 +2606,7 @@ crate::scenario_table!(
     review_gate_writes_system_provenance_without_borrowing_the_operator_scenarios,
     review_gate_writes_system_provenance_without_borrowing_the_operator,
     sustained_pressure_holds_local_admission_until_it_clears_below_resume,
+    sustained_io_pressure_holds_local_admission_until_it_clears_below_resume,
     a_disabled_throttle_admits_under_pressure_without_sampling,
     a_cpu_only_throttle_admits_light_auto_tasks_within_the_reserved_budget,
     a_cpu_only_throttle_holds_qa_sweep_while_admitting_review_auto_tasks,

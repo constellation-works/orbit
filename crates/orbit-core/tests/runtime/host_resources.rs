@@ -36,6 +36,7 @@ fn runtime_injection_shares_hysteresis_and_reports_unknown_and_stale() {
             sampled_at: Utc::now(),
             cpu_percent: Some(99.0),
             memory_percent: Some(25.0),
+            io_full_percent: None,
             disks: vec![],
         },
     ))));
@@ -95,6 +96,16 @@ fn native_sampler_observes_the_host_and_missing_directory_filesystem() {
             sample
                 .memory_percent
                 .is_some_and(|value| (0.0..=100.0).contains(&value))
+        );
+        // The kernel's own text parses; a kernel without PSI reports nothing.
+        assert_eq!(
+            sample.io_full_percent.is_some(),
+            std::path::Path::new("/proc/pressure/io").exists()
+        );
+        assert!(
+            sample
+                .io_full_percent
+                .is_none_or(|value| (0.0..=100.0).contains(&value))
         );
     }
     #[cfg(target_os = "macos")]

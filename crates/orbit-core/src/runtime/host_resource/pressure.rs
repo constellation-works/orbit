@@ -11,6 +11,9 @@ use super::{
     ResourceReading, ResourceSeverity,
 };
 
+/// The held-pressure name of the Linux disk I/O stall share.
+const IO_PRESSURE: &str = "io full";
+
 #[derive(Default, Serialize, Deserialize)]
 struct PressureState {
     last_sample: Option<DateTime<Utc>>,
@@ -140,6 +143,17 @@ impl ResourcePressureEvaluator {
             settings.memory_resume_percent,
             false,
         );
+        // A host without pressure stall information has no `io` reading at all:
+        // it is neither gated nor an unknown telemetry entry.
+        let io = sample.io_full_percent.map(|percent| {
+            reading(
+                IO_PRESSURE.into(),
+                Some(percent),
+                settings.io_full_high_percent,
+                settings.io_full_resume_percent,
+                false,
+            )
+        });
         let disks: Vec<_> = sample
             .disks
             .into_iter()
@@ -186,6 +200,7 @@ impl ResourcePressureEvaluator {
         });
         let severities: Vec<_> = [cpu.severity, memory.severity]
             .into_iter()
+            .chain(io.as_ref().map(|io| io.severity))
             .chain(disks.iter().map(|disk| disk.reading.severity))
             .collect();
         let severity = if severities.contains(&ResourceSeverity::Critical) {
@@ -227,6 +242,7 @@ impl ResourcePressureEvaluator {
             stale,
             cpu,
             memory,
+            io,
             disk,
             disks,
             severity,
@@ -260,6 +276,9 @@ impl ResourceAdmission {
         };
         note("cpu".into(), &status.cpu);
         note("memory".into(), &status.memory);
+        if let Some(io) = &status.io {
+            note("io".into(), io);
+        }
         for disk in &status.disks {
             note(format!("disk {}", disk.path.display()), &disk.reading);
         }

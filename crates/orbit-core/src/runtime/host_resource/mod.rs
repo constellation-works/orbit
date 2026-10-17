@@ -51,6 +51,9 @@ pub struct HostResourceSample {
     pub sampled_at: DateTime<Utc>,
     pub cpu_percent: Option<f64>,
     pub memory_percent: Option<f64>,
+    /// Linux `/proc/pressure/io` `full avg60`. Absent where the host has no
+    /// pressure stall information; that is not gated and not unknown.
+    pub io_full_percent: Option<f64>,
     pub disks: Vec<DiskSample>,
 }
 
@@ -113,6 +116,8 @@ pub struct HostResourceStatus {
     pub stale: bool,
     pub cpu: ResourceReading,
     pub memory: ResourceReading,
+    /// Disk I/O stall share; absent on hosts without pressure stall information.
+    pub io: Option<ResourceReading>,
     /// Highest known usage across all watched paths; absent when none is known.
     pub disk: Option<DiskReading>,
     /// Per-path readings retained for admission's unknown-telemetry diagnostics.

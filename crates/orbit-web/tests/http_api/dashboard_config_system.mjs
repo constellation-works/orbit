@@ -126,7 +126,7 @@ const document = { activeElement: null, body: new Node('body'), createElement: t
 
 // ---- fixture API ----
 const KEY = 'workflow.resource_throttle.';
-const defaults = { enabled: true, cpu_high_percent: 90, cpu_resume_percent: 85, memory_high_percent: 90, memory_resume_percent: 85, disk_high_percent: 90, disk_resume_percent: 85 };
+const defaults = { enabled: true, cpu_high_percent: 90, cpu_resume_percent: 85, memory_high_percent: 90, memory_resume_percent: 85, disk_high_percent: 90, disk_resume_percent: 85, io_full_high_percent: 20, io_full_resume_percent: 10 };
 const globalSet = { disk_resume_percent: 80 };
 const workspaceSet = { memory_high_percent: 75 };
 const GLOBAL_PATH = '/home/test/.orbit/config.toml';
@@ -360,6 +360,16 @@ respond({ ...hostPayload, cpu: { percent: 55, severity: 'ok' } });
 await host.fetchAndRenderHostResources();
 assert.match(textOf(body, 'config-sys-reading')[0], /^20\.0%/, 'an open editor is not rebuilt under the operator');
 press('Cancel');
+// A host that reports disk I/O stall (Linux with PSI) gains an I/O row over its own keys and names the hold.
+respond({ ...hostPayload, throttle: true, io: { percent: 47, severity: 'critical' }, pressures: [
+  { resource: 'io full', percent: 47, high_percent: 20, resume_percent: 10, since: '2026-10-04T08:41:12Z' },
+] });
+await host.fetchAndRenderHostResources();
+assert.deepEqual(named(body, 'config-sys-resource').map(node => node.dataset.resource), ['cpu', 'memory', 'disk', 'io']);
+assert.match(textOf(body, 'config-sys-verdict-text')[0], /Holding new admissions: io full 47% ≥ 20% since/);
+assert.match(textOf(resource('io'), 'config-sys-reading')[0], /47\.0%critical.*held/);
+assert.deepEqual(textOf(cell('io_full_high_percent'), 'config-value'), ['20']);
+assert.deepEqual(textOf(cell('io_full_resume_percent'), 'config-value'), ['10']);
 respond(null);
 await assert.rejects(host.fetchAndRenderHostResources(), 'a failed poll is reported to its caller');
 assert.equal(textOf(body, 'config-verdict')[0], 'unknown');

@@ -113,6 +113,10 @@ pub struct ResourceThrottleSettings {
     pub disk_high_percent: u8,
     /// Disk recovery percentage.
     pub disk_resume_percent: u8,
+    /// Linux disk I/O high-water percentage, read from `/proc/pressure/io` `full avg60`.
+    pub io_full_high_percent: u8,
+    /// Linux disk I/O recovery percentage, strictly below the high-water mark.
+    pub io_full_resume_percent: u8,
 }
 
 /// Host-wide delivery admission thresholds and profile bounds.

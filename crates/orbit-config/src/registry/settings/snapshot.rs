@@ -87,6 +87,11 @@ impl ConfigSnapshot {
                 resources.disk_high_percent,
                 resources.disk_resume_percent,
             ),
+            (
+                "io_full",
+                resources.io_full_high_percent,
+                resources.io_full_resume_percent,
+            ),
         ] {
             if resume >= high {
                 return Err(OrbitError::InvalidInput(format!(
@@ -233,6 +238,8 @@ impl ConfigSnapshot {
             memory_resume_percent: self.workflow_resource_throttle_memory_resume_percent,
             disk_high_percent: self.workflow_resource_throttle_disk_high_percent,
             disk_resume_percent: self.workflow_resource_throttle_disk_resume_percent,
+            io_full_high_percent: self.workflow_resource_throttle_io_full_high_percent,
+            io_full_resume_percent: self.workflow_resource_throttle_io_full_resume_percent,
         }
     }
 }
