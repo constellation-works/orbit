@@ -351,7 +351,7 @@ fn failure_handoff_reconstructs_the_exact_repair_and_requires_fresh_gates() {
     );
 }
 
-fn refused_without_writes(f: &Fixture, source: &str, binding: &Value, case: &str) {
+pub(super) fn refused_without_writes(f: &Fixture, source: &str, binding: &Value, case: &str) {
     let task = serde_json::to_value(f.runtime.get_task(&f.task).unwrap()).unwrap();
     let state = serde_json::to_value(f.runtime.read_run_state(source).unwrap()).unwrap();
     let history = serde_json::to_value(f.runtime.get_task_history(&f.task).unwrap()).unwrap();
@@ -520,7 +520,7 @@ fn failed_push_refusals_preserve_task_and_receipts() {
     }
 }
 
-fn provider_refusals(f: &Fixture, id: &str, binding: &Value) {
+pub(super) fn provider_refusals(f: &Fixture, id: &str, binding: &Value) {
     let original: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
     for (field, value) in [
         ("headRefOid", json!(f.base)),

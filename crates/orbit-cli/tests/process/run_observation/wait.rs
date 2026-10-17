@@ -33,6 +33,7 @@ fn wait_expiry_reports_active_state_without_timing_out_the_run() {
         for as_json in [true, false] {
             let mut command = fixture.orbit();
             command
+                .env("ORBIT_TEST_PIPELINE_WAIT_VIRTUAL", "1")
                 .args(&args)
                 .args(["--wait", "--timeout-seconds", "1"]);
             if as_json {

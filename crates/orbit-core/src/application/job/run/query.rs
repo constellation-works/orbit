@@ -86,6 +86,14 @@ impl OrbitRuntime {
         self.list_job_runs_filtered_backend(&job_run_query(params))
     }
 
+    /// [`Self::count_job_runs`] without its stale-run reconciliation, for the
+    /// same no-mutation readers as [`Self::list_job_runs_observed`].
+    pub fn count_job_runs_observed(&self, params: JobRunListParams) -> Result<u64, OrbitError> {
+        self.stores()
+            .jobs()
+            .count_job_runs_filtered(&job_run_query(params))
+    }
+
     /// [`Self::show_job_run`] without its stale-run reconciliation; see
     /// [`Self::list_job_runs_observed`].
     pub fn show_job_run_observed(&self, run_id: &str) -> Result<JobRun, OrbitError> {

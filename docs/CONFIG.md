@@ -960,6 +960,22 @@ existing recovery activities, final validation and push do the repair:
   whose job log shows a code failure is repaired, with that head's failed step,
   error signature and log excerpt as evidence. A conflict is rebased onto the
   current base by PR conflict recovery.
+- A failed required check run that no workflow produced (a provider app's
+  aggregate result, such as a code-scanning check beside passing analysis jobs)
+  is repaired only from its own failure annotations. The watcher reads them
+  from the forge for the check run and app identity that the head-bound
+  required-check read reported, and requires a complete, unchanged answer bound to the
+  repository, pull request, head and base branch. Each failure annotation must
+  name a relative source file that exists at that head, through an exact-head
+  blob link, with a line and a message. A passing analysis job does not satisfy
+  the aggregate, and a failed workflow job beside it does not hide it: every
+  failed required check needs its own evidence. Duplicate, foreign, stale,
+  truncated or changed provider answers, a missing identity, an aggregate
+  without failure annotations, and annotations on workflow configuration, on a
+  path outside the checkout or showing a runner or network failure stop the
+  watcher without spending an attempt. The answer is retained under
+  `auto-fix/<run>/check-annotations-<failed-head>.json` before the repair is
+  admitted from the same attempt budget.
 - A job log that exceeds the display or full-command retention limit can still
   supply bounded failure regions. Recovery requires a fully scanned source,
   complete command and region selection, and exactly one provider-reported

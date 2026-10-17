@@ -73,13 +73,33 @@ pub(crate) struct TunnelConfig {
     pub(crate) identity_timeout: Duration,
 }
 
+/// Debug-build fixture only. Milliseconds to wait for an already-running remote
+/// dashboard. Release builds keep the five-second budget whatever this says.
+/// Unset, zero, unparsable, or larger values keep that budget too.
+const TEST_ATTACH_TIMEOUT_ENV: &str = "ORBIT_TEST_HOST_FORWARD_ATTACH_TIMEOUT_MS";
+
+fn attach_timeout_from_env(value: Option<&str>, debug_build: bool) -> Duration {
+    const PRODUCTION: Duration = Duration::from_secs(5);
+    if !debug_build {
+        return PRODUCTION;
+    }
+    value
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|milliseconds| (1..=5_000).contains(milliseconds))
+        .map(Duration::from_millis)
+        .unwrap_or(PRODUCTION)
+}
+
 impl Default for TunnelConfig {
     fn default() -> Self {
         Self {
             ssh_program: "ssh".to_string(),
             remote_port: DEFAULT_DASHBOARD_PORT,
             idle_timeout: Duration::from_secs(5 * 60),
-            attach_timeout: Duration::from_secs(5),
+            attach_timeout: attach_timeout_from_env(
+                std::env::var(TEST_ATTACH_TIMEOUT_ENV).ok().as_deref(),
+                cfg!(debug_assertions),
+            ),
             ready_timeout: Duration::from_secs(30),
             bind_timeout: Duration::from_secs(CONNECT_TIMEOUT_SECS + 10),
             identity_timeout: Duration::from_secs(10),

@@ -364,7 +364,50 @@ export function renderRunDetailMeta() {
   if (waiting) wrap.appendChild(waiting);
   const children = buildChildDispatches(run);
   if (children) wrap.appendChild(children);
+  const processes = buildProviderProcesses(detail.provider_processes);
+  if (processes) wrap.appendChild(processes);
   syncNodes(meta, [wrap, feedback]);
+}
+
+// Provider children of this run's agent steps. Each object is
+// `RunProviderProcess::to_json`: the page already knows the run, so these
+// rows have no `run_id`. Mirrors the `Agent:` lines of `orbit run show`.
+function buildProviderProcesses(processes) {
+  if (!Array.isArray(processes) || processes.length === 0) return null;
+  const panel = el("div", { class: "child-dispatch-panel provider-processes" });
+  panel.appendChild(el("div", { class: "label", text: `provider processes (${processes.length})` }));
+  for (const process of processes) {
+    const blocked = process.blocked_on_stopped_descendant;
+    const parts = [
+      `provider ${process.provider || "-"}`,
+      `pid ${process.pid == null ? "-" : process.pid}`,
+      `step ${process.step_id || "-"}`,
+      `liveness ${process.liveness || "-"}`,
+    ];
+    if (blocked) parts.push("blocked=stopped-descendant");
+    if (process.finished) parts.push("finished");
+    if (process.last_activity_at) parts.push(`last activity ${fmtAbsTime(process.last_activity_at)}`);
+    panel.appendChild(el("div", { class: "child-dispatch-row provider-process" }, [
+      el("span", { class: "child-dispatch-meta", text: parts.join(" · ") }),
+    ]));
+    if (process.latest_message) {
+      panel.appendChild(el("div", {
+        class: "child-dispatch-row provider-process-message",
+        text: process.latest_message,
+      }));
+    }
+    for (const descendant of Array.isArray(process.stopped_descendants) ? process.stopped_descendants : []) {
+      const outcome = descendant.ended
+        ? "ended by the supervisor"
+        : `the supervisor could not end it (${descendant.error || "no reason recorded"})`;
+      const still = descendant.still_stopped ? "; still stopped" : "";
+      panel.appendChild(el("div", {
+        class: "child-dispatch-row stopped-descendant",
+        text: `stopped descendant: pid=${descendant.pid} command=\`${descendant.command || "-"}\`; ${outcome}${still}`,
+      }));
+    }
+  }
+  return panel;
 }
 
 // `execution.env.pass` names the submitting process did not hold when the run

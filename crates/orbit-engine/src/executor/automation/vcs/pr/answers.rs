@@ -188,10 +188,8 @@ impl StatusCheck {
         let state = Self::classify(check);
         Self {
             name: reported(check.get("name").or_else(|| check.get("context"))),
-            workflow_name: check
-                .get("workflowName")
-                .and_then(Value::as_str)
-                .map(|workflow| workflow.trim().to_string()),
+            // A check run no workflow produced reports an empty workflow name.
+            workflow_name: reported(check.get("workflowName")),
             state,
             owed_state: Self::classify_owed(check, state),
         }
@@ -400,9 +398,22 @@ pub(in crate::executor::automation::vcs) struct RequiredChecks {
     pub(in crate::executor::automation::vcs) head_sha: String,
     pub(in crate::executor::automation::vcs) required: Vec<(Option<String>, String)>,
     /// The independently reported PR head, checked against its commit before waiting.
-    pub(super) reported_head_sha: Option<String>,
+    pub(in crate::executor::automation::vcs) reported_head_sha: Option<String>,
     /// Required contexts and their provider states from this same observation.
     pub(super) checks: Vec<StatusCheck>,
+    /// [ORB-16185] Required check runs no workflow produced, with the check
+    /// run and app identities this same head-bound observation reported.
+    pub(in crate::executor::automation::vcs) check_runs: Vec<RequiredCheckRun>,
+}
+
+/// A required check run outside any workflow (a provider app's aggregate
+/// result), as the policy read identified it. Absent identities stay absent:
+/// they cannot authorize a provider read of the run's annotations.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::executor::automation::vcs) struct RequiredCheckRun {
+    pub(in crate::executor::automation::vcs) name: String,
+    pub(in crate::executor::automation::vcs) check_run_id: Option<u64>,
+    pub(in crate::executor::automation::vcs) app_id: Option<u64>,
 }
 
 impl RequiredChecks {
@@ -433,6 +444,7 @@ impl RequiredChecks {
                 required: Vec::new(),
                 reported_head_sha: reported(pull_request.get("headRefOid")),
                 checks: Vec::new(),
+                check_runs: Vec::new(),
             });
         };
         if contexts.pointer("/pageInfo/hasNextPage") != Some(&Value::Bool(false)) {
@@ -440,6 +452,7 @@ impl RequiredChecks {
         }
         let mut required = Vec::new();
         let mut checks = Vec::new();
+        let mut check_runs = Vec::new();
         for node in contexts["nodes"]
             .as_array()
             .ok_or_else(|| unreadable("carried no check list"))?
@@ -455,6 +468,15 @@ impl RequiredChecks {
                     let mut check = StatusCheck::parse(node);
                     check.workflow_name = workflow.clone();
                     checks.push(check);
+                    if workflow.is_none() && node.get("__typename") == Some(&json!("CheckRun")) {
+                        check_runs.push(RequiredCheckRun {
+                            name: name.clone(),
+                            check_run_id: node.get("databaseId").and_then(Value::as_u64),
+                            app_id: node
+                                .pointer("/checkSuite/app/databaseId")
+                                .and_then(Value::as_u64),
+                        });
+                    }
                     required.push((workflow, name));
                 }
                 Some(false) => {}
@@ -469,6 +491,7 @@ impl RequiredChecks {
             head_sha,
             required,
             checks,
+            check_runs,
             reported_head_sha: reported(pull_request.get("headRefOid")),
         })
     }

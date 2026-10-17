@@ -1,6 +1,7 @@
 //! A terminal hook publishes preserved work without certifying that candidate.
 use super::identity::PublicationIdentity;
 use super::observation::authenticated_checkpoint;
+use super::resumed_recovery::authenticated_repair_parent;
 use super::*;
 
 impl OrbitRuntime {
@@ -17,6 +18,18 @@ impl OrbitRuntime {
             .ok_or_else(|| refuse("failure-handoff checkpoint missing"))?;
         let output = &checkpoint.output;
         let worktree = authenticated_checkpoint(&definition, &state, "worktree", "worktree_setup")?;
+        // A generic resume's hook names the run whose worktree it reused; the
+        // owner's immutable checkpoints then stand in for the preceding host
+        // chain, and the resumed run contributes only its exact repair.
+        let resumed = self.resumed_recovery(&source, &task.id)?;
+        let (owner, owner_state, owner_definition) = match &resumed {
+            Some(resumed) => (
+                &resumed.owner,
+                &resumed.owner_state,
+                &resumed.owner_definition,
+            ),
+            None => (&source, &state, &definition),
+        };
         let failed_index = definition
             .steps
             .iter()
@@ -34,8 +47,8 @@ impl OrbitRuntime {
             || field(output, "task_id")? != task.id
             || field(output, "handoff_run_id")? != source.run_id
             || field(output, "failed_step_id")? != checkpoint.failed_step_id
-            || field(output, "checkpoint_owner")? != source.run_id
-            || field(worktree, "job_run_id")? != source.run_id
+            || field(output, "checkpoint_owner")? != owner.run_id
+            || field(worktree, "job_run_id")? != owner.run_id
             || field(output, "original_base_sha")? != field(worktree, "base_sha")?
             || !task.spec_digest_matches(field(output, "task_spec_digest")?)
         {
@@ -51,24 +64,24 @@ impl OrbitRuntime {
             .and_then(|i| i.get("base_branch"))
             .and_then(Value::as_str)
             .unwrap_or("main");
-        let prior = if source
+        let prior = if owner
             .input
             .as_ref()
             .is_some_and(|i| i.get(SOURCE_REPAIR_KEY).is_some())
         {
             Some(self.source_repair_adopted_binding(
-                &source,
+                owner,
                 &task,
                 worktree,
                 authenticated_checkpoint(
-                    &definition,
-                    &state,
+                    owner_definition,
+                    owner_state,
                     "resume_candidate",
                     "candidate_resume",
                 )?,
             )?)
         } else {
-            self.read_owner_publication_binding(&source.run_id, false)?
+            self.read_owner_publication_binding(&owner.run_id, false)?
         };
         if branch
             != prior
@@ -134,11 +147,19 @@ impl OrbitRuntime {
         } else {
             head.to_string()
         };
+        let parent = match &resumed {
+            Some(resumed) => {
+                authenticated_repair_parent(resumed, &definition, &state, worktree, &parent, repo)?
+            }
+            None => parent,
+        };
+        let (source_state, source_definition) = (&state, &definition);
+        let (state, definition) = (owner_state, owner_definition);
         if state.pipeline.get("commit").is_some_and(|v| !v.is_null()) {
-            authenticated_checkpoint(&definition, &state, "commit", "git_commit")?;
+            authenticated_checkpoint(definition, state, "commit", "git_commit")?;
         }
         let commit = self
-            .observe_task_delivery(&task.id, Some(&source.run_id))?
+            .observe_task_delivery(&task.id, Some(&owner.run_id))?
             .commit;
         let mut allowed = vec![field(worktree, "base_sha")?.to_string()];
         if matches!(
@@ -154,9 +175,8 @@ impl OrbitRuntime {
                 .is_some_and(|v| !v.is_null())
             {
                 let prepared =
-                    authenticated_checkpoint(&definition, &state, "prepare_branch", "pr_prepare")?;
-                let sync =
-                    authenticated_checkpoint(&definition, &state, "sync_base", "git_rebase")?;
+                    authenticated_checkpoint(definition, state, "prepare_branch", "pr_prepare")?;
+                let sync = authenticated_checkpoint(definition, state, "sync_base", "git_rebase")?;
                 if field(prepared, "head")? != branch
                     || field(sync, "head")? != branch
                     || field(prepared, "base")? != base_branch
@@ -197,11 +217,11 @@ impl OrbitRuntime {
                 // Reuse normal publication's settlement and exact-head host
                 // validation contract; the hook's push alone certifies no work.
                 let checkpoint = |id: &str, action: &str| {
-                    authenticated_checkpoint(&definition, &state, id, action)
+                    authenticated_checkpoint(definition, state, id, action)
                 };
                 let reviewed = super::publication::reviewed_head(
-                    &definition,
-                    &state,
+                    definition,
+                    state,
                     &checkpoint,
                     false,
                     synchronized,
@@ -211,7 +231,13 @@ impl OrbitRuntime {
                 allowed.push(reviewed.into());
             }
         }
-        if !allowed.contains(&parent)
+        // A resumed repair starts from the owner's latest host candidate; an
+        // earlier ancestor would attribute host-certified history to it.
+        let contiguous = match &resumed {
+            Some(_) => allowed.last() == Some(&parent),
+            None => allowed.contains(&parent),
+        };
+        if !contiguous
             || !run_git(
                 repo,
                 &[
@@ -229,7 +255,7 @@ impl OrbitRuntime {
         }
         for id in ["push", "landing_push"] {
             if state.pipeline.get(id).is_some_and(|v| !v.is_null()) {
-                let published = authenticated_checkpoint(&definition, &state, id, "git_push")?;
+                let published = authenticated_checkpoint(definition, state, id, "git_push")?;
                 if field(published, "phase")? != "push"
                     || field(published, "branch")? != branch
                     || !run_git(
@@ -250,8 +276,7 @@ impl OrbitRuntime {
             }
         }
         if let Some(pr) = state.pipeline.get("pr_open").filter(|v| !v.is_null()) {
-            let authenticated =
-                authenticated_checkpoint(&definition, &state, "pr_open", "pr_open")?;
+            let authenticated = authenticated_checkpoint(definition, state, "pr_open", "pr_open")?;
             if pr != authenticated
                 || pr["pr_number"] != number
                 || pr["head"] != branch
@@ -262,11 +287,15 @@ impl OrbitRuntime {
                 ));
             }
         }
-        let result = self.bind_source_publication(
+        let checkpoint_owner = resumed
+            .as_ref()
+            .map(|resumed| resumed.binding())
+            .transpose()?;
+        let mut result = self.bind_source_publication(
             source.clone(),
             task.clone(),
-            state.clone(),
-            definition.clone(),
+            source_state.clone(),
+            source_definition.clone(),
             PublicationIdentity {
                 branch,
                 head,
@@ -283,6 +312,7 @@ impl OrbitRuntime {
         {
             return Err(refuse("failure-handoff PR repository identity disagrees"));
         }
+        result.2.checkpoint_owner = checkpoint_owner;
         Ok(result)
     }
 }
