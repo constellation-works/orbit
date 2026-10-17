@@ -315,6 +315,34 @@
   overflow: hidden; clip-path: inset(50%); white-space: nowrap;
 }
 
+/* Provider usage: one chip per provider and window, the host chips' key and
+   value without the bar. Every chip has a fixed width (a long key is cut with
+   an ellipsis; the title has it all), so a new reading does not move the bar.
+   A stale reading is dashed and dimmed, a gating-off one dashed, and each says
+   so in a flag as well. Where the list would not fit beside the drain label
+   and Refresh, one summary chip (the worst reading, every reading in its title)
+   replaces it. */
+.provider-usage { width: 6.75rem; }
+.provider-usage-item { width: 9.5rem; }
+.provider-usage-more { width: 5.5rem; }
+.provider-usage .k { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.provider-usage.stale { border-style: dashed; border-color: var(--border-strong); opacity: 0.75; }
+.provider-usage.gating-off { border-style: dashed; }
+.provider-usage-flag { font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-dim); }
+.provider-usage-chips .provider-usage-summary { display: none; }
+@media (max-width: 1899px) {
+  .provider-usage-chips .provider-usage-item { display: none; }
+  .provider-usage-chips .provider-usage-summary { display: inline-flex; }
+}
+
+/* Shorter meters and gaps give the usage summary chip its room, so the host's
+   name and the connection text keep theirs. */
+@media (max-width: 1340px) {
+  .host-resource { gap: 6px; }
+  .host-resource-bar { width: 20px; }
+  .host-resource[data-resource="cpu"] { min-width: 10.25rem; }
+}
+
 /* Below 1240px the bar tightens its spacing, so the widest destination, the
    three chips, the aggregate drain label and Refresh still share one row. */
 @media (max-width: 1240px) {

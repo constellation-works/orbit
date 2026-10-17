@@ -139,6 +139,122 @@ fn readiness_shows_stale_readings_and_clears_a_host_auth_failure_after_success()
 }
 
 #[test]
+fn host_resources_carry_the_hosts_provider_readings_for_the_top_bar() {
+    isolated(
+        "provider_auth::host_resources_carry_the_hosts_provider_readings_for_the_top_bar",
+        || {
+            let fixture = claude_fixture();
+            let server = fixture.server(false);
+            let empty = json_ok(server.get("/api/host/resources"));
+            assert_eq!(
+                empty["provider_limits"],
+                serde_json::json!([]),
+                "a host with no readings answers an empty list, not a missing field"
+            );
+
+            let now = Utc::now();
+            fixture
+                .runtime
+                .record_provider_limit(&reading(
+                    "codex",
+                    "seven_day",
+                    92.0,
+                    now - Duration::days(3),
+                    now + Duration::days(4),
+                ))
+                .unwrap();
+            fixture
+                .runtime
+                .record_provider_limit(&reading(
+                    "claude",
+                    "five_hour",
+                    40.0,
+                    now,
+                    now + Duration::hours(5),
+                ))
+                .unwrap();
+            // The workspace query is ignored: the bar names the host, not a workspace.
+            let sample = json_ok(server.get("/api/host/resources?workspace=missing"));
+            assert!(
+                sample["cpu"].is_object(),
+                "the resource sample is still served: {sample}"
+            );
+            assert_reading(&sample["provider_limits"], "codex", true, 2 * 24 * 3600);
+            assert_reading(&sample["provider_limits"], "claude", false, 0);
+            let claude = sample["provider_limits"]
+                .as_array()
+                .and_then(|items| items.iter().find(|item| item["provider"] == "claude"))
+                .unwrap();
+            assert_eq!(claude["window"], "five_hour");
+            assert_eq!(claude["used_percent"], 40.0);
+            assert_eq!(claude["gated"], false);
+            assert!(claude["threshold"].is_number() || claude["threshold"] == "off");
+        },
+    );
+}
+
+/// Runs the shipped dashboard in Chromium against the real server: the top bar
+/// shows the host's stored readings on every destination. Browser dependencies
+/// and the evidence path are supplied explicitly.
+#[test]
+#[ignore = "requires ORBIT_PLAYWRIGHT_MODULE and ORBIT_PROVIDER_USAGE_BROWSER_EVIDENCE_DIR"]
+fn dashboard_top_bar_shows_provider_usage_on_every_tab() {
+    isolated(
+        "provider_auth::dashboard_top_bar_shows_provider_usage_on_every_tab",
+        || {
+            let fixture = Fixture::new();
+            let global_path = fixture.global.join("config.toml");
+            let mut global = std::fs::read_to_string(&global_path).unwrap();
+            global.push_str(concat!(
+                "\n[workflow]\ndefault_crew = \"opus\"\nprovider_limit_overrides = [\"codex:off\"]\n",
+                "\n[crews.opus]\nprovider = \"claude\"\nmodel = \"opus\"\n",
+            ));
+            std::fs::write(global_path, global).unwrap();
+            let now = Utc::now();
+            for (provider, window, used, observed_at) in [
+                ("codex", "primary", 100.0, now - Duration::days(3)),
+                ("claude", "five_hour", 5.0, now),
+                ("claude", "seven_day", 26.0, now),
+            ] {
+                fixture
+                    .runtime
+                    .record_provider_limit(&reading(
+                        provider,
+                        window,
+                        used,
+                        observed_at,
+                        now + Duration::days(4),
+                    ))
+                    .unwrap();
+            }
+            let server = fixture.server(false);
+            let output = std::process::Command::new("node")
+                .arg(
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("tests/http_api/dashboard_provider_usage_browser.mjs"),
+                )
+                .arg(
+                    std::env::var_os("ORBIT_PLAYWRIGHT_MODULE")
+                        .expect("prepared Playwright module"),
+                )
+                .arg(
+                    std::env::var_os("ORBIT_PROVIDER_USAGE_BROWSER_EVIDENCE_DIR")
+                        .expect("browser evidence directory"),
+                )
+                .arg(&server.origin)
+                .output()
+                .expect("launch provider usage browser fixture");
+            assert!(
+                output.status.success(),
+                "provider usage browser check failed:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        },
+    );
+}
+
+#[test]
 fn readiness_keeps_a_failure_that_an_overlapping_success_did_not_clear() {
     isolated(
         "provider_auth::readiness_keeps_a_failure_that_an_overlapping_success_did_not_clear",

@@ -734,10 +734,18 @@ async function assertTopbarSingleRow(page) {
     const refresh = rect('refresh-btn');
     const strip = document.getElementById('host-resource-chips');
     const chips = [...strip.querySelectorAll('.host-resource')];
-    const lastChip = chips.at(-1).getBoundingClientRect();
+    // Provider usage shows its chips on a wide bar and one summary chip on a narrow one.
+    const usageStrip = document.getElementById('provider-usage-chips');
+    const usage = [...usageStrip.querySelectorAll('.provider-usage')].filter(chip => chip.getClientRects().length);
+    const lastChip = (usage.length ? usage : chips).at(-1).getBoundingClientRect();
     const drain = document.getElementById('global-drain-state');
     return {
       height: bar.height, refreshLeft: refresh.left, rows, drainShown: !drain.hidden,
+      usage: usage.map(chip => ({
+        className: chip.className, width: chip.getBoundingClientRect().width, left: chip.getBoundingClientRect().left,
+        clipped: chip.scrollWidth > chip.clientWidth,
+      })),
+      usageOverflows: usageStrip.scrollWidth > usageStrip.clientWidth,
       chips: chips.map(chip => ({
         resource: chip.dataset.resource, className: chip.className, width: chip.getBoundingClientRect().width,
         left: chip.getBoundingClientRect().left, clipped: chip.scrollWidth > chip.clientWidth,
@@ -747,11 +755,25 @@ async function assertTopbarSingleRow(page) {
     };
   });
   await page.evaluate(async () => {
-    const { renderHostResources } = await import('/js/host-resources.js');
+    const { renderHostResources, renderProviderUsage } = await import('/js/host-resources.js');
     const drain = document.getElementById('global-drain-state');
     drain.hidden = false;
     drain.dataset.drainState = 'per-workspace';
     drain.querySelector('.global-drain-label').textContent = 'Per-workspace drain status';
+    globalThis.topbarUsage = many => {
+      const reading = extra => ({
+        provider: 'claude', scope: null, window: 'five_hour', used_percent: 5, exhausted: false, threshold: 90, gating: true,
+        gated: false, partial: false, stale: false, age_seconds: 30, observed_at: new Date().toISOString(),
+        until: '2026-10-18T03:00:00Z', crews: ['opus'], ...extra,
+      });
+      renderProviderUsage({ provider_limits: many ? [
+        reading({ window: 'seven_day', used_percent: 100, exhausted: true, gated: true }),
+        reading({ provider: 'codex', window: 'primary', used_percent: 100, threshold: 'off', stale: true, age_seconds: 3 * 86400 }),
+        reading({ scope: 'sonnet', window: 'seven_day', used_percent: 87 }),
+        reading({ used_percent: null }),
+        reading({ window: 'weekly_extra', used_percent: 12 }),
+      ] : [reading({})] });
+    };
     globalThis.topbarHost = throttle => renderHostResources({
       cpu: { percent: 1234, severity: 'critical' }, memory: { percent: 100, severity: 'critical' },
       disk: { path: '/workspace', percent: 100, severity: 'critical' }, sample_age_seconds: 1, max_age_seconds: 15,
@@ -760,7 +782,7 @@ async function assertTopbarSingleRow(page) {
     });
   });
   try {
-    for (const width of [1024, 1280, 1440]) {
+    for (const width of [1024, 1280, 1440, 1600, 1920]) {
       await page.setViewportSize({ width, height: 900 });
       const heights = new Set();
       for (const route of routes) {
@@ -782,6 +804,23 @@ async function assertTopbarSingleRow(page) {
           if (state.chips.some(chip => chip.clipped)) throw new Error(`A host reading is cut off on #${route} at ${width}px: ${JSON.stringify(state.chips)}`);
         }
         const [open, held] = flips;
+        // The provider readings changing (one chip to the worst case, with a
+        // stale, a gating-off, a gated, a missing and a folded one) must not
+        // move the host chips, Refresh or the bar's height, nor clip or wrap.
+        const usageStates = [];
+        for (const many of [false, true, false]) {
+          await page.evaluate(many => globalThis.topbarUsage(many), many);
+          const state = await snapshot();
+          if (state.height > 64 || state.rows !== 1 || state.usageOverflows || state.overlaps || state.refreshRight > state.barRight + 0.5) {
+            throw new Error(`Provider usage overflows the top bar on #${route} at ${width}px: ${JSON.stringify(state)}`);
+          }
+          if (!state.usage.length || state.usage.some(chip => chip.clipped)) throw new Error(`A provider usage reading is cut off on #${route} at ${width}px: ${JSON.stringify(state.usage)}`);
+          usageStates.push(state);
+        }
+        const hostGeometry = state => JSON.stringify([state.height, state.refreshLeft, state.chips.map(chip => [chip.left, chip.width])]);
+        if (new Set(usageStates.map(hostGeometry)).size !== 1 || hostGeometry(usageStates[0]) !== hostGeometry(open)) {
+          throw new Error(`Provider usage readings moved the top bar on #${route} at ${width}px: ${JSON.stringify(usageStates)}`);
+        }
         if (held.chips.map(chip => chip.className.includes('throttled')).join() !== 'true,false,true') {
           throw new Error(`Only the held resources must read as throttled: ${JSON.stringify(held.chips)}`);
         }
@@ -1423,7 +1462,7 @@ try {
     });
     await page.waitForFunction(() => document.getElementById('meta-text').textContent.includes('offline'));
     if (!(await page.locator('#conn-status').getAttribute('class')).includes('red')) throw new Error('Stopped server must show red connection status');
-    fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Task, run and friction rows with no controls nested in a button, one Tab stop per row list with Up/Down/Home/End between rows, Enter/Space toggling the focused task, its disclosure keeping focus across a refresh that rebuilds the row, and / focusing the task search; Runs pinned first column and scroll edge while the card is narrower than the grid, including at 1280px, and a plain table once the card fits, for the default grid and All-workspaces; card layout and an in-body toolbar at 375px; Runs, Audit events and Errors as cards without sideways scrolling at 375px, unchanged tables at 1280px; Cost paints provider and derived dollars and normalized tokens for a fixed payload at 1280px and 375px, #analytics/cost restores its window and the retired Health cost routes do not open it; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; single-row top bar of identical height across Tasks, Automation, Settings, Knowledge and Plugins with a fixed host chip and Refresh offset when the throttle verdict flips at 1024px, 1280px and 1440px; terminal protocol skew code, fingerprints and repair at 1280px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
+    fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Task, run and friction rows with no controls nested in a button, one Tab stop per row list with Up/Down/Home/End between rows, Enter/Space toggling the focused task, its disclosure keeping focus across a refresh that rebuilds the row, and / focusing the task search; Runs pinned first column and scroll edge while the card is narrower than the grid, including at 1280px, and a plain table once the card fits, for the default grid and All-workspaces; card layout and an in-body toolbar at 375px; Runs, Audit events and Errors as cards without sideways scrolling at 375px, unchanged tables at 1280px; Cost paints provider and derived dollars and normalized tokens for a fixed payload at 1280px and 375px, #analytics/cost restores its window and the retired Health cost routes do not open it; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; single-row top bar of identical height across Tasks, Automation, Settings, Knowledge and Plugins with a fixed host chip and Refresh offset when the throttle verdict flips or the provider usage readings change at 1024px, 1280px, 1440px, 1600px and 1920px; terminal protocol skew code, fingerprints and repair at 1280px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
     console.log('Chromium dashboard lifecycle and accessible visible feedback passed.');
   }
   }

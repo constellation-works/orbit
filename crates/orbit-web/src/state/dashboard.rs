@@ -472,6 +472,23 @@ impl DashboardState {
         Ok(monitor.snapshot(&paths))
     }
 
+    /// The serving host's live provider usage readings, as readiness lists
+    /// them, for the top bar. The store is host-wide; thresholds and crew
+    /// coverage come from the default workspace's effective config, so with no
+    /// servable workspace (or an unreadable store) this is `None` and the bar
+    /// shows the readings as unavailable. May read files and must be called
+    /// through `blocking`.
+    pub(crate) fn host_provider_limits(&self) -> Option<serde_json::Value> {
+        let pinned = self.pin();
+        let runtime = pinned.runtime_for(pinned.default_workspace()?).ok()?;
+        let view = runtime.provider_limits_view(chrono::Utc::now());
+        if let Some(error) = &view.error {
+            tracing::warn!("top bar shows no provider usage: {error}");
+            return None;
+        }
+        serde_json::to_value(view.readings).ok()
+    }
+
     /// The serving host's host file: its last valid snapshot, reloaded when
     /// the file changes, and the error of a newer file that failed to load.
     /// May read files and must be called through `blocking`.
