@@ -2,7 +2,7 @@
 title: Routines — Design
 owner: claude
 last_updated: 2026-10-11
-last_validated: 2026-10-11
+last_validated: 2026-10-17
 status: Accepted
 feature: routines
 doc_role: design
@@ -506,7 +506,7 @@ so neither promotion path can turn a pending publication into automatic version 
 
 The seeded `ship_sweep` targets `job:workspace_ship_pipeline` with `missed_run: skip` and
 `overlap: forbid`. The wrapper resolves the source runtime's ship mode and configured base
-branch, invokes and waits for `task_auto_pipeline` without explicit task IDs, and guards
+branch, invokes and waits for `workspace_auto_pipeline` without explicit task IDs, and guards
 its result. It never calls the legacy cross-workspace CLI sweep or consults
 `[workflow] auto_ship`; the child's existing empty-backlog path is a successful no-op.
 Waiting keeps the wrapper run active for the whole shipment, so routine overlap protection
