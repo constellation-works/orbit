@@ -7,6 +7,7 @@ mod ledger;
 mod view;
 
 pub(crate) use gate::ProviderLimit;
+pub use orbit_config::ProviderLimitThreshold;
 pub use view::{
     CrewProviderLimit, ProviderLimitReading, ProviderLimitsView, ProviderUsageStatus,
     UngatedLaneLimit, short_time,

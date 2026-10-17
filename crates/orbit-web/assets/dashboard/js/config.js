@@ -872,7 +872,13 @@ function crewLimitCell(limit) {
           text: "gated",
           title: `Admission skips this crew until ${formatDateTime(limit.until)} (limit ${limit.threshold}%)`,
         })
-      : null,
+      : limit.threshold === "off"
+        ? el("span", {
+            class: "config-crew-limit-window",
+            text: "gating off",
+            title: "This provider's usage gate is off. Readings stay visible. A usage-limit failure still holds the task.",
+          })
+        : null,
   ]));
   const resets = limit.resets_at || limit.until;
   cell.appendChild(el("span", {

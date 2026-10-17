@@ -190,7 +190,10 @@ fn spend_at_the_threshold_gates_until_the_oldest_spend_ages_out() {
         reading.gated && reading.gating && !reading.partial,
         "{reading:?}"
     );
-    assert_eq!(reading.threshold, 90);
+    assert_eq!(
+        serde_json::to_value(reading.threshold).unwrap(),
+        serde_json::json!(90)
+    );
     assert_eq!(reading.crews, ["groky"]);
     assert_eq!(
         reading.resets_at,
@@ -356,11 +359,42 @@ fn a_reported_reading_or_limit_failure_takes_precedence_over_the_ledger() {
     assert!(reading.gated, "{reading:?}");
 }
 
+/// [ORB-16371] `off` does not retune a budget reading. Spend at the default
+/// 90% still produces the same used percent and reset, and the reading does
+/// not limit the crew.
+fn an_off_override_shows_the_budget_reading_without_gating_it() {
+    let fx = Fixture::new(&config(
+        "provider_limit_budgets = [\"grok:30usd/5h\"]\n\
+         provider_limit_overrides = [\"grok:off\"]",
+    ));
+    let task = fx.task();
+    let oldest = fx.grok(12.0, Duration::hours(4));
+    fx.grok(15.0, Duration::hours(2));
+
+    let [reading] = fx.readings("grok").try_into().unwrap();
+    assert_eq!(reading.source, ProviderLimitSource::Ledger);
+    assert_eq!(reading.used_percent, Some(90.0));
+    assert!(!reading.gated, "{reading:?}");
+    assert_eq!(
+        serde_json::to_value(reading.threshold).unwrap(),
+        serde_json::json!("off")
+    );
+    assert_eq!(
+        reading.resets_at,
+        Some(oldest + Duration::hours(5)),
+        "the reset still follows the default percent"
+    );
+    let entry = fx.readiness(&task);
+    assert_eq!(entry["eligible"], true, "{entry}");
+    assert_ne!(entry["reason"], "provider_limit", "{entry}");
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     spend_at_the_threshold_gates_until_the_oldest_spend_ages_out_scenarios,
     spend_at_the_threshold_gates_until_the_oldest_spend_ages_out,
     spend_below_the_threshold_gates_nothing,
+    an_off_override_shows_the_budget_reading_without_gating_it,
     an_empty_budget_window_reports_positive_zero,
     a_token_budget_counts_the_providers_tokens_and_resets_with_the_oldest,
     a_dollar_budget_marks_the_reading_partial_when_invocations_lack_a_cost,

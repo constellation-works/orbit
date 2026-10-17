@@ -1068,7 +1068,11 @@ function limitBar(limit) {
     meter,
     el("span", { class: "cfx-limit-reset" }, [
       resets ? `${limit.resets_at ? "Resets" : "Counts until"} ${formatDateTime(resets)}` : "Reset not reported",
-      limit.gated ? el("span", { class: "cfx-gated", text: "gated", title: `Admission skips these crews until ${formatDateTime(limit.until)} (limit ${limit.threshold}%)` }) : null,
+      limit.gated
+        ? el("span", { class: "cfx-gated", text: "gated", title: `Admission skips these crews until ${formatDateTime(limit.until)} (limit ${limit.threshold}%)` })
+        : limit.threshold === "off"
+          ? el("span", { class: "cfx-muted", text: "gating off", title: "This provider's usage gate is off. Readings stay visible. A usage-limit failure still holds the task." })
+          : null,
     ]),
   ]);
 }

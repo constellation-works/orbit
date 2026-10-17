@@ -748,7 +748,15 @@ repair: the wait lifts by itself at the next admission pass after the reset.
 To run it sooner, give the pool an unlimited member, set the task's `crew` to
 a crew on another provider, or raise the threshold
 (`workflow.provider_limit_max_used_pct`, or `workflow.provider_limit_overrides`
-for that provider). An explicitly crewed task waits by default; with
+for that provider). To keep using a provider whose plan window is exhausted
+while paid credits remain, set that provider's override to `off`
+(`["codex:off"]`). Readings stay recorded and shown: readiness JSON lists
+them with `threshold` `off` and `gated` false, and `orbit doctor`'s
+`provider-limits:<provider>` row says gating is off. No reading then limits
+a crew. A later run that actually fails on a usage limit still records the
+task's provider failure hold, which is the signal that paid credits have run
+out. Removing the `off` entry gates the same readings again. An explicitly
+crewed task waits by default; with
 `workflow.provider_limit_explicit_crews = "pool"` it is drawn from its
 complexity pool instead. See
 [CONFIG.md](../CONFIG.md#provider-usage-limits).
