@@ -92,7 +92,7 @@
 }
 
 /* Holds the operator cannot clear from here: amber boxes. */
-.drain-throttle-note, .drain-provider-limit-note {
+.drain-throttle-note, .drain-provider-limit-note, .drain-crew-note {
   margin: 0; padding: 9px 11px; border: 1px solid var(--warn-line); border-radius: 8px;
   background: var(--warn-wash); color: var(--warn-fg); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere;
 }

@@ -1288,6 +1288,89 @@ fn auto_readiness_explains_the_tasks_it_names() {
     );
 }
 
+/// Readiness applies the live drain's own `--allow-crew` set: a task it
+/// excludes reads `crew_not_allowed` with its crew and the permitted set, and
+/// the tasks the drain would admit stay eligible.
+#[test]
+fn auto_readiness_applies_the_live_drains_crew_restriction() {
+    isolated(
+        "workflows::auto_readiness_applies_the_live_drains_crew_restriction",
+        || {
+            let fixture = Fixture::new();
+            std::fs::write(
+                fixture.global.join("config.toml"),
+                "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"sol-model\"\n\n[crews.opus]\nprovider = \"claude\"\nmodel = \"opus-model\"\n",
+            )
+            .unwrap();
+            let crewed = |title: &str, file: &str, crew: Option<&str>| {
+                std::fs::write(fixture.runtime.paths().repo_root.join(file), "fixture\n").unwrap();
+                fixture
+                    .runtime
+                    .add_task(TaskAddParams {
+                        title: title.into(),
+                        description: format!("Readiness fixture: {title}"),
+                        acceptance_criteria: vec!["The fixture is observable.".into()],
+                        plan: "Fixture plan.".into(),
+                        context_files: vec![format!("file:{file}")],
+                        complexity: TaskComplexity::Medium,
+                        status: Some(TaskStatus::Backlog),
+                        crew: crew.map(str::to_string),
+                        ..Default::default()
+                    })
+                    .unwrap()
+            };
+            let excluded = crewed("runs as opus", "opus.rs", Some("opus"));
+            let permitted = crewed("runs as sol", "sol.rs", Some("sol"));
+            let defaulted = crewed("runs as the default crew", "default.rs", None);
+            let server = fixture.server(false);
+            let uri = format!("/api/workflows/auto/readiness?workspace={WS}");
+            let entry = |payload: &Value, task: &Task| {
+                payload["tasks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|entry| entry["task_id"] == task.id.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| panic!("{} missing: {payload:#}", task.id))
+            };
+
+            let idle = json_ok(server.get(&uri));
+            assert_eq!(idle["capacity"]["allowed_crews"], Value::Null, "{idle:#}");
+            for task in [&excluded, &permitted, &defaulted] {
+                assert_eq!(
+                    entry(&idle, task)["eligible"],
+                    true,
+                    "no drain restricts crews: {idle:#}"
+                );
+            }
+
+            let mut drain =
+                fixture.seed_run("jrun-auto", "workspace_auto_pipeline", JobRunState::Running);
+            drain.input = Some(json!({"max_active_leaf_runs": 4, "allowed_crews": ["sol"]}));
+            fixture.save_run(&drain);
+            let live = json_ok(server.get(&uri));
+            assert_eq!(live["capacity"]["drain_run_id"], "jrun-auto", "{live:#}");
+            assert_eq!(
+                live["capacity"]["allowed_crews"],
+                json!(["sol"]),
+                "{live:#}"
+            );
+            let refused = entry(&live, &excluded);
+            assert_eq!(refused["eligible"], false, "{refused}");
+            assert_eq!(refused["reason"], "crew_not_allowed", "{refused}");
+            assert_eq!(refused["crew"], "opus", "{refused}");
+            assert_eq!(refused["allowed_crews"], json!(["sol"]), "{refused}");
+            for task in [&permitted, &defaulted] {
+                let admitted = entry(&live, task);
+                assert_eq!(
+                    admitted["eligible"], true,
+                    "the drain admits it: {admitted}"
+                );
+            }
+        },
+    );
+}
+
 // Not `ORBIT_`-prefixed: those names are never reported unset.
 const UNSET_PASS: &str = "FIXTURE_HTTP_NOTICE_TOKEN";
 
