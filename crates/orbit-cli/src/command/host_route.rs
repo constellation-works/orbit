@@ -295,6 +295,7 @@ enum Render {
     TaskWrite { verb: &'static str },
     ArtifactGet { out: Option<PathBuf> },
     ReviewReset,
+    Requeue,
     Reconcile,
     ToolRun { full: bool, fields: Vec<String> },
 }
@@ -411,6 +412,11 @@ fn task_call(command: &TaskSubcommand, holder: &HostEntry) -> Result<RoutedCall,
                 name: invocation.spec.tool_name.into(),
                 input: without_host(&invocation.input),
                 render: Render::Reconcile,
+            },
+            TaskVerb::Requeue => RoutedCall {
+                name: invocation.spec.tool_name.into(),
+                input: without_host(&invocation.input),
+                render: Render::Requeue,
             },
             TaskVerb::RetryHandoff
             | TaskVerb::LocksList
@@ -529,6 +535,10 @@ fn render(name: &str, render: Render, value: Value, holder: &HostEntry) -> Comma
             super::task::review_reset::REVIEW_RESET_TEXT,
         )
         .into()),
+        Render::Requeue => {
+            let text = super::task::operation::requeue_text(&value);
+            Ok(Payload::detail(with_host(value, holder), text).into())
+        }
         Render::Reconcile => {
             let text = super::task::reconcile_review::reconciliation_text(&value);
             Ok(Payload::detail(with_host(value, holder), text).into())

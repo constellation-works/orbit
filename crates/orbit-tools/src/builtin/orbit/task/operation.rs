@@ -74,6 +74,9 @@ impl GuardedModes for TaskVerb {
             TaskVerb::ReviewReset => {
                 managed_run_refusal(ctx, "managed runs cannot reset review budgets")
             }
+            TaskVerb::Requeue => {
+                managed_run_refusal(ctx, "managed runs cannot requeue blocked tasks")
+            }
             TaskVerb::Show
             | TaskVerb::List
             | TaskVerb::Eligible
@@ -101,6 +104,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::LocksReserve
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
+            | TaskVerb::Requeue
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
             | TaskVerb::Reject => return,
@@ -182,6 +186,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::LocksReserve
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
+            | TaskVerb::Requeue
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
             | TaskVerb::Reject
@@ -218,6 +223,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::LocksReserve
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
+            | TaskVerb::Requeue
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
             | TaskVerb::Reject
@@ -239,6 +245,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::LocksReserve
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
+            | TaskVerb::Requeue
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
             | TaskVerb::Reject

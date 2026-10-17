@@ -494,6 +494,111 @@ worker's continuation
 through this check. No successful receipt is rewritten and no replacement PR is
 created by the continuation.
 
+## Requeue a failure-handoff task onto its published candidate
+
+A run whose failure handoff published a `[BLOCKED]` pull request leaves the
+task `blocked`. When the candidate is sound (the failure was the environment,
+not the work), requeue it as an operator decision:
+
+```bash
+orbit task requeue <task-id> --reason '<why this candidate can continue>'
+```
+
+The MCP equivalent is `orbit.task.requeue` with `id`, `reason` and optional
+`discard_candidate`; it needs operator authority and is unavailable inside a
+managed run. Do not move such a task with a plain `orbit task update --status
+backlog`: its next run finds a publication it cannot authenticate and refuses
+to start.
+
+The requeue waits for the task's run to stop. Final recovery blocks the task
+before the run's failure handoff publishes, so while the run is live the
+requeue is refused and nothing changes; requeue once it has stopped. A claimed
+task's run is a follower's leaf that the owner cannot probe, so while its
+execution claim is unsettled the requeue is refused the same way. It then
+authenticates the handoff receipt, before taking the task's write lock: the
+stopped run is this machine's own single-task delivery, conclusively stopped
+and still the task's newest execution, its candidate was not discarded, and
+the task specification is unchanged. Under the lock it re-checks that the task
+is still blocked and unchanged, records a `requeued` decision that supersedes
+the escalation, plus the publication-preservation record, and returns the task
+to `backlog`. The decision is written only with that record: a discard, or a
+requeue with nothing published, leaves the run's escalation as its recorded
+outcome. Both records are written by `system`, because the next run trusts
+only Orbit's own records; the operator's name and reason are on the status
+change and its comment. The answer names the pull request, branch and head the
+next run resumes. That run re-authenticates the same receipt and adopts the
+branch without re-implementing (`resumed_carried`, `implement: false`). Commit,
+validation, review, push and landing run afresh on the same pull request, which
+later moves between `backlog` and `someday` do not close. Its `[BLOCKED]` title
+is not rewritten.
+
+A refusal changes nothing. A specification edited since the publication is
+reported with its exit: `--discard-candidate` (MCP `discard_candidate: true`)
+records the discard and returns the task to `backlog`. It then closes the
+task's undelivered Orbit-authored pull requests, the same closure as
+`orbit task update <task-id> --status backlog --discard-candidate`, which is
+the equivalent route without a recorded requeue decision. The next run
+implements fresh. A closure the forge refuses is reported in the answer
+(`discard_closure: incomplete`), and the requeue stands. With
+`pr.close_on_terminal = false` nothing is closed (`discard_closure:
+disabled`); close the discarded pull request by hand. Any other refusal of the
+publication (an interrupted or timed-out run, a newer execution, a foreign
+source) offers the same discard exit. Also refused, with
+the same discard exit:
+
+- a run that published through its own push and `pr_open` steps with no
+  handoff receipt; use explicit source repair (below) or discard;
+- a task last delivered by an owner pull-request run, with no handoff receipt,
+  that still has a pull request or preserved candidate on record, which its
+  next run would refuse to start from. A claimed delivery keeps its own
+  candidate contract and is not refused this way.
+
+### A task blocked on transient infrastructure
+
+A deterministic delivery step (worktree, locks, commit, branch, push, pull
+request, review gate, completion) that lost only to a busy lock (`lock_busy`,
+a file-lock timeout) or a locked task store did not judge the candidate. Final
+recovery classifies it without an agent, blocks the task with a
+`transient_infra_blocked` history entry, and the failure handoff still
+publishes the candidate. A validation step's failure is never classified this
+way, even when its output quotes the same text, and neither is a claimed
+leaf's: its task belongs to its owner, and its recovery agent decides as
+before. `orbit task recheck-blocked` lists these blocks with their class, pull
+request, whether the probe passes now, how many requeues they have taken, and
+what holds one (`held`).
+
+The probe is a proxy, not a replay: it checks that the task store takes an
+immediate write transaction and that the task's own write lock is then free.
+It cannot take the lock that actually timed out, which may have been another
+file lock or a remote owner's, so a condition that persists elsewhere can
+recur after a requeue.
+
+The owner's clock tick, and `orbit task recheck-blocked --confirm`, requeue a
+cleared block onto its candidate through the same records as the operator
+requeue, so the next run resumes the same pull request. `recheck-blocked`
+reports what holds a block (`held`). Two holds are temporary, and the clock
+retries once they pass:
+
+- its run, or an execution claim of the task, has not conclusively stopped
+  (its failure handoff may still publish);
+- the last attempt hit a transient error (the remote, the forge or the store
+  did not answer). It is recorded as `transient_infra_requeue_deferred` and
+  retried no sooner than ten minutes later.
+
+The others leave the block for an operator `orbit task requeue`:
+
+- someone other than Orbit's automation commented on or wrote to the task
+  after the block: a human's call stands;
+- an attempt found that its publication does not authenticate. That refusal is
+  recorded once (`transient_infra_requeue_refused`), so the forge is not asked
+  again on every tick;
+- five attempts in a row hit transient errors.
+
+Each publication (or, when nothing was published, each task) takes at most
+two such requeues; after that the task stays blocked for an operator. A
+claimed worker that could not reach its owner (`owner_route_unavailable`) is
+not blocked this way: final recovery skips it and its claim is released.
+
 ## Explicit rework of a successful unmerged publication
 
 A successful owner PR run can still leave an acceptance criterion unmet, such

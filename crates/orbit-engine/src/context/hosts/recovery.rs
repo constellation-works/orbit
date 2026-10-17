@@ -141,6 +141,10 @@ pub struct FinalRecoveryApplication {
     pub workspace_path: std::path::PathBuf,
     /// Whether the run held `completion: done` authority.
     pub completion_done: bool,
+    /// Set when the engine, not an agent, classified the failed step as
+    /// transient infrastructure. The decision is then an `escalate` the host
+    /// records as an infra block that a passing probe requeues.
+    pub infrastructure: Option<orbit_types::workflow::TransientInfrastructure>,
 }
 
 /// [ORB-13907] What applying a final-recovery decision did.

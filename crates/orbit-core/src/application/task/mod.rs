@@ -31,9 +31,11 @@ mod pull_request_links;
 mod query;
 mod record_json;
 mod records;
+mod requeue;
 mod resolves;
 mod retained_candidate;
 mod screened;
+mod transient_infra;
 mod transitions;
 mod update;
 pub(crate) mod validation_tools;
@@ -92,6 +94,7 @@ pub use provider_limit::{
 pub use pull_request_links::PullRequestLinks;
 pub use record_json::{task_record_json, task_show_field_json, task_show_json};
 pub use screened::{ScreenedTaskWrite, TaskUpdateAuthority, TaskWriteScreen};
+pub use transient_infra::TransientInfraBlockedTask;
 pub(crate) use validation_tools::positive_validation_tools;
 
 pub(crate) use helpers::{SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution};

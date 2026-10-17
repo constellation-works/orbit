@@ -10,6 +10,7 @@ mod implementer_findings;
 mod provider_hold;
 mod root_cause;
 mod state;
+mod transient_infra;
 mod validation_gates;
 
 pub use agent_blocker::{
@@ -67,6 +68,12 @@ pub use state::{
     is_owner_busy, is_owner_route_unavailable, is_provider_capacity_exhausted, is_provider_failure,
     is_provider_limit, is_provider_refusal, is_provider_unavailable,
     is_validation_environment_failure,
+};
+pub use transient_infra::{
+    MAX_TRANSIENT_INFRA_REQUEUES, TRANSIENT_INFRA_BLOCKED_EVENT,
+    TRANSIENT_INFRA_REQUEUE_DEFERRED_EVENT, TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT,
+    TRANSIENT_INFRA_REQUEUED_EVENT, TransientInfraBlock, TransientInfraRequeue,
+    TransientInfrastructure,
 };
 pub use validation_gates::{HostValidationGates, ValidationGateSource, ValidationGates};
 

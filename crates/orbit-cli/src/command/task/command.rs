@@ -43,8 +43,9 @@ Health:
                Validate and review a recovered delivery's changed merged head
   retry-handoff
                Retry a stopped authorized handoff through normal owner landing
+  requeue      Requeue a blocked task onto its published candidate
   recheck-blocked
-               Requeue tasks blocked by a provider launcher that now resolves
+               Requeue tasks whose infrastructure block has cleared
 
 Bundles:
   export       Export task bundles to a portable tar.zst archive
@@ -92,8 +93,8 @@ pub enum TaskSubcommand {
     Archive(TaskArchiveArgs),
     /// Show filed-vs-closed rates over time — whether the backlog is draining
     Flow(TaskFlowArgs),
-    /// Re-check tasks blocked by a missing provider launcher; `--confirm` returns
-    /// the ones whose launcher now resolves to backlog
+    /// Re-check tasks blocked by a missing provider launcher or transient
+    /// infrastructure; `--confirm` returns the cleared ones to backlog
     RecheckBlocked(TaskRecheckBlockedArgs),
     /// Export task bundles to a portable tar.zst archive
     Export(TaskExportArgs),

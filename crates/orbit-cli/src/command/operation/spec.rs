@@ -339,6 +339,7 @@ pub(super) fn task_operation(
         | TaskVerb::Eligible
         | TaskVerb::Show
         | TaskVerb::ReviewReset
+        | TaskVerb::Requeue
         | TaskVerb::ReconcileReview
         | TaskVerb::RetryHandoff
         | TaskVerb::Reject

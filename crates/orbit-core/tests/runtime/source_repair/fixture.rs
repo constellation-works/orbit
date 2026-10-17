@@ -405,6 +405,24 @@ impl Fixture {
             _env: env,
         }
     }
+    /// Admit final recovery on this fixture's runtime: give it a crew pool
+    /// and reopen the runtime on that configuration.
+    pub(super) fn enable_final_recovery(&mut self) {
+        let config = self.repo.join(".orbit/config.toml");
+        let text = std::fs::read_to_string(&config).unwrap().replacen(
+            "[workflow]\n",
+            "[workflow]\nfinal_recovery_crews = [\"fixture\"]\n",
+            1,
+        );
+        std::fs::write(&config, text).unwrap();
+        self.runtime =
+            OrbitRuntime::from_roots(&self._root.path().join("global"), &self.repo.join(".orbit"))
+                .unwrap()
+                .with_automation_execution_location(Some(ExecutionLocation {
+                    machine_id: "hm_fixture".into(),
+                    machine_name: None,
+                }));
+    }
     /// Replace only isolated fixture evidence, including deliberately inconsistent refs.
     pub(super) fn replace_refs(&self, refs: Vec<ExternalRef>) {
         use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};

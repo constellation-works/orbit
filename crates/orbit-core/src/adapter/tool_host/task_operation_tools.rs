@@ -83,6 +83,24 @@ pub(super) fn dispatch(
             runtime,
             input.as_value(),
         )),
+        TaskVerb::Requeue => {
+            // The tool chokepoint admits only an operator; a managed agent is
+            // refused here as well, including an accidentally elevated run.
+            if orbit_common::governance::authorization::agent_context_declared() {
+                return Err(OrbitError::CapabilityDenied(
+                    "managed agents cannot requeue blocked tasks".into(),
+                ));
+            }
+            let id = input.required_string("id")?;
+            let reason = input.required_string("reason")?;
+            let discard = input
+                .as_value()
+                .get("discard_candidate")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let response = runtime.requeue_blocked_task(&id, &reason, discard)?;
+            Ok((response, Some(id)))
+        }
         TaskVerb::ReconcileReview => reviewed(
             crate::application::review::reconciliation::reconcile_review(
                 runtime,

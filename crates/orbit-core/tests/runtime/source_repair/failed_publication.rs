@@ -21,6 +21,55 @@ fn escalate(f: &Fixture, id: &str) {
     assert!(matches!(outcome, FinalRecoveryOutcome::Escalated { .. }));
 }
 
+/// The engine's transient-infrastructure escalation, through the host
+/// contract it calls: admission, then the classified application.
+fn infra_escalate(
+    f: &Fixture,
+    run_id: &str,
+    failed_step: &str,
+    checkout: &Path,
+    class: orbit_types::workflow::TransientInfrastructure,
+) {
+    use orbit_engine::{
+        FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
+        FinalRecoveryApplied,
+    };
+    let admission = RuntimeHost::admit_final_recovery(
+        &f.runtime,
+        run_id,
+        &FinalRecoveryAdmissionRequest {
+            task_id: f.task.clone(),
+            failed_step_id: failed_step.into(),
+            base_ref: Some("main".into()),
+        },
+    )
+    .unwrap();
+    assert_eq!(admission, FinalRecoveryAdmission::Admitted);
+    let applied = RuntimeHost::apply_final_recovery(
+        &f.runtime,
+        run_id,
+        &FinalRecoveryApplication {
+            task_id: f.task.clone(),
+            failed_step_id: failed_step.into(),
+            decision: orbit_types::workflow::FinalRecoveryDecision::Escalate {
+                diagnosis: format!("step `{failed_step}` failed on transient infrastructure"),
+                human_action: "wait for the condition to clear".into(),
+            },
+            resume_step_index: None,
+            repair_commit: None,
+            resume_context: None,
+            workspace_path: checkout.to_path_buf(),
+            completion_done: false,
+            infrastructure: Some(class),
+        },
+    )
+    .unwrap();
+    assert!(
+        matches!(applied, FinalRecoveryApplied::Escalated { .. }),
+        "{applied:?}"
+    );
+}
+
 fn failed_after_push_gets_fresh_authority_without_replaying_the_attempt() {
     let f = Fixture::with_policy("before-landing");
     let first_input = f.submit(f.inspect());
@@ -101,11 +150,34 @@ fn failure_handoff_fixture() -> (Fixture, String) {
 // Some(false) retains the reviewer head; Some(true) preserves one dirty repair
 // on top. None keeps the pre-review validation-failure scenario.
 fn handoff_fixture(reviewer: Option<bool>) -> (Fixture, String) {
+    escalated_handoff_fixture(reviewer, None)
+}
+
+/// [`handoff_fixture`], escalated through the engine's host contract with
+/// `infra` as the engine's classification when it is set.
+pub(super) fn escalated_handoff_fixture(
+    reviewer: Option<bool>,
+    infra: Option<orbit_types::workflow::TransientInfrastructure>,
+) -> (Fixture, String) {
+    escalated_handoff_fixture_with(reviewer, infra, &|_| {})
+}
+
+/// [`escalated_handoff_fixture`], calling `mid_handoff` once final recovery
+/// has blocked the task and before the still-live run's failure handoff
+/// publishes its candidate.
+pub(super) fn escalated_handoff_fixture_with(
+    reviewer: Option<bool>,
+    infra: Option<orbit_types::workflow::TransientInfrastructure>,
+    mid_handoff: &dyn Fn(&Fixture),
+) -> (Fixture, String) {
     let mut f = if reviewer.is_some() {
         Fixture::with_policy("before-pr")
     } else {
         Fixture::handoff()
     };
+    if infra.is_some() {
+        f.enable_final_recovery();
+    }
     std::fs::write(f._root.path().join("bin/gh"), format!(
         "#!/bin/sh\ncase \"$1 $2\" in\n 'pr list') printf '['; cat '{}'; printf ']';;\n 'pr create') echo https://github.com/owner/repository/pull/17;;\n 'pr view') cat '{}';;\n *) exit 99;;\nesac\n",
         f.answer.display(), f.answer.display())).unwrap();
@@ -235,7 +307,14 @@ fn handoff_fixture(reviewer: Option<bool>) -> (Fixture, String) {
     f.runtime.write_run_state(&run.run_id, &state).unwrap();
     f.source = run.clone();
     // Escalated permits the real terminal hook; direct Requeued suppresses it.
-    escalate(&f, &run.run_id);
+    match infra {
+        None => escalate(&f, &run.run_id),
+        Some(class) => {
+            infra_escalate(&f, &run.run_id, failed_step, &checkout, class);
+            state = f.runtime.read_run_state(&run.run_id).unwrap().unwrap();
+        }
+    }
+    mid_handoff(&f);
     if reviewer != Some(false) {
         std::fs::write(
             checkout.join("qa-fixed.txt"),

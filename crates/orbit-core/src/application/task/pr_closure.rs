@@ -18,7 +18,9 @@
 //! - everything when the task was last `blocked` before it was shelved (the
 //!   failure handoff's candidate) or a final-recovery requeue shelved it
 //!   (the published candidate), however often it moved between the shelves
-//!   since;
+//!   since, and while the current run's newest recorded decision is a
+//!   requeue that preserved its publication (an operator or cleared-infra
+//!   requeue);
 //! - the pull request of a candidate the owner kept from the task's last
 //!   claim (its next claim republishes through it), and everything when that
 //!   candidate cannot be read.
@@ -235,7 +237,7 @@ impl OrbitRuntime {
     /// Whether a run or an unsettled claim of `task` may still be delivering
     /// one of its pull requests. An unreadable answer counts as live, so
     /// nothing is closed on a guess.
-    fn task_delivery_is_live(&self, task: &Task) -> bool {
+    pub(super) fn task_delivery_is_live(&self, task: &Task) -> bool {
         if let Some(run_id) = task.job_run_id.as_deref() {
             match self.stores().jobs().get_job_run(run_id) {
                 Ok(Some(run)) if !run.state.is_terminal() => return true,
@@ -256,11 +258,17 @@ impl OrbitRuntime {
     /// failure handoff's candidate and `[BLOCKED]` PR), or a final-recovery
     /// requeue shelved it (the published candidate and its PR), and no
     /// discard came since. Later moves between the shelves keep that answer.
-    /// An unreadable history keeps everything.
+    /// So does a standing requeue decision for the current run that
+    /// preserved its publication (an operator or cleared-infra requeue),
+    /// whichever status event carried it. An unreadable history keeps
+    /// everything.
     fn shelved_candidate_resumes(&self, task: &Task) -> bool {
         let Ok(history) = self.get_task_history(&task.id) else {
             return true;
         };
+        if super::requeue::current_run_requeue_stands(task, &history) {
+            return true;
+        }
         for entry in history.iter().rev() {
             if entry.event == CANDIDATE_DISCARDED_EVENT {
                 return false;

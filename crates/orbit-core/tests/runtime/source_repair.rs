@@ -20,6 +20,8 @@ use fixture::{Fixture, git};
 mod completion;
 #[path = "source_repair/generations.rs"]
 mod generations;
+#[path = "source_repair/handoff_requeue.rs"]
+mod handoff_requeue;
 #[path = "source_repair/publication.rs"]
 mod publication;
 #[path = "source_repair/published_owner.rs"]
