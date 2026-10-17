@@ -2403,9 +2403,193 @@ function autoDrainProviderAuth(failures) {
   return list;
 }
 
-// The status card reads top to bottom: the live window (if any), the slots it
-// competes for and why nothing more starts, any host or provider hold, then
-// Stop. Starting a window is its own card below, hidden in a read-only view.
+// A recorded forecast object, or null when the field is absent or not an object.
+function asForecast(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+
+function forecastBuiltAt(forecast) {
+  return typeof forecast?.forecast_at === "string" && forecast.forecast_at ? forecast.forecast_at : "";
+}
+
+// `detail` and `stall.friction_id` are not rendered: a persisted starvation
+// sentence names a task id, and a friction id is not the hold itself.
+function forecastHoldDetail(item) {
+  const percent = Number(item?.percent);
+  const minute = Number(item?.minute);
+  if (item?.resource && Number.isFinite(percent) && Number.isFinite(minute)) {
+    return `${item.resource} ${percent.toFixed(0)}% at +${minute}m`;
+  }
+  return "waiting for the protected queue head to fit";
+}
+
+function forecastAmount(resource, value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "";
+  if (resource === "cpu") return `${amount.toFixed(1)} cores`;
+  const units = ["bytes", "KiB", "MiB", "GiB", "TiB"];
+  let size = amount;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  const text = unit === 0 ? String(Math.round(size)) : size.toFixed(size >= 10 ? 0 : 1);
+  return `${text} ${units[unit]}`;
+}
+
+function forecastTaskRef(forecast, taskId) {
+  const title = forecast.task_titles?.[taskId];
+  const link = taskLink(String(taskId), selectedWorkspace()?.id);
+  if (!title) return link;
+  return el("span", { class: "drain-forecast-task-name" }, [String(title), " ", link]);
+}
+
+function forecastHasDecisions(forecast) {
+  if (!forecast) return false;
+  const admitted = Array.isArray(forecast.admitted) && forecast.admitted.some(task => task?.task_id);
+  const skipped = Array.isArray(forecast.skipped) && forecast.skipped.some(task => task?.task_id);
+  return admitted || skipped || Boolean(forecast.head?.task_id && (forecast.head.protected === true || forecast.head.stall?.stuck === true));
+}
+
+function forecastTime(at) {
+  const node = el("time", { class: "drain-forecast-when", text: time(at), title: String(at) });
+  node.dateTime = String(at);
+  return node;
+}
+
+function forecastPeaks(forecast) {
+  const headroom = asForecast(forecast.headroom);
+  const tiles = ["cpu", "memory"].map((resource) => {
+    const peak = asForecast(forecast[`${resource}_peak`]);
+    if (!peak || (!Number.isFinite(Number(peak.value)) && !Number.isFinite(Number(peak.percent)))) return null;
+    const figure = Number.isFinite(Number(peak.percent)) ? `${Number(peak.percent).toFixed(1)}%` : "host capacity unknown";
+    const amount = forecastAmount(resource, peak.value);
+    const when = Number.isFinite(Number(peak.minute)) ? `at +${peak.minute}m` : "";
+    const admitKey = resource === "cpu" ? "admit_cpu_percent" : "admit_memory_percent";
+    const roomKey = resource === "cpu" ? "cpu_percent" : "memory_percent";
+    const admit = headroom
+      ? (Number.isFinite(Number(headroom[admitKey])) ? `admit ${headroom[admitKey]}%` : "admit threshold unknown")
+      : "";
+    const roomNumber = Number(headroom?.[roomKey]);
+    const room = headroom ? (Number.isFinite(roomNumber) ? `headroom ${roomNumber.toFixed(1)}` : "headroom unknown") : "";
+    const over = Number.isFinite(roomNumber) && roomNumber < 0;
+    return el("div", { class: `drain-forecast-peak${over ? " over" : ""}` }, [
+      el("dt", { text: resource === "cpu" ? "CPU peak" : "Memory peak" }),
+      el("dd", { class: "drain-forecast-figure" }, [
+        figure,
+        amount ? el("span", { class: "drain-forecast-meta", text: ` ${amount}` }) : null,
+        when ? el("span", { class: "drain-forecast-meta", text: ` ${when}` }) : null,
+      ]),
+      admit || room ? el("dd", { class: "drain-forecast-threshold", text: [admit, room].filter(Boolean).join(" · ") }) : null,
+    ]);
+  }).filter(Boolean);
+  if (tiles.length === 0) return null;
+  const list = el("dl", { class: "drain-forecast-peaks" }, tiles);
+  list.setAttribute("aria-label", "Forecast peaks");
+  return list;
+}
+
+function forecastDecisions(forecast, hypothetical) {
+  const items = [];
+  const admitVerb = hypothetical ? "Would admit " : "Admitted ";
+  const holdVerb = hypothetical ? "Would hold " : "Held ";
+  for (const task of Array.isArray(forecast.admitted) ? forecast.admitted : []) {
+    if (!task?.task_id) continue;
+    const notes = [`profile ${task.profile_source || "unknown"}`];
+    if (task.idle_host) notes.push(String(task.idle_host));
+    items.push(el("li", { class: "drain-forecast-task admitted" }, [
+      admitVerb,
+      forecastTaskRef(forecast, task.task_id),
+      ` · ${notes.join(" · ")}`,
+    ]));
+  }
+  for (const task of Array.isArray(forecast.skipped) ? forecast.skipped : []) {
+    if (!task?.task_id) continue;
+    items.push(el("li", { class: "drain-forecast-task held" }, [
+      holdVerb,
+      forecastTaskRef(forecast, task.task_id),
+      ` · ${forecastHoldDetail(task)} · profile ${task.profile_source || "unknown"}`,
+    ]));
+  }
+  if (forecast.head?.protected === true && forecast.head.task_id) {
+    items.push(el("li", { class: "drain-forecast-task held" }, [
+      hypothetical ? "Starvation guard would protect " : "Starvation guard protects ",
+      forecastTaskRef(forecast, forecast.head.task_id),
+    ]));
+  }
+  const stall = forecast.head?.stall;
+  if (stall?.stuck === true && forecast.head.task_id) {
+    const miss = forecast.head.miss || {};
+    const resource = miss.resource || "resource";
+    const profile = miss.profile_key
+      ? `profile ${miss.profile_key} via ${miss.profile_source || "?"}`
+      : `profile ${miss.profile_source || "none"}`;
+    const baseline = Number.isFinite(Number(miss.baseline_percent))
+      ? `${Number(miss.baseline_percent).toFixed(0)}%`
+      : "unmeasured";
+    const since = stall.since ? time(stall.since) : "unknown";
+    items.push(el("li", { class: "drain-forecast-task held" }, [
+      `${hypothetical ? "Stuck head (shadow; hypothetical)" : "Stuck head"}: `,
+      forecastTaskRef(forecast, forecast.head.task_id),
+      ` — ${forecastHoldDetail(miss)} (${profile}; ${resource} baseline ${baseline}) has not improved over ${stall.passes ?? "?"} protected passes since ${since}.`,
+    ]));
+  }
+  if (items.length === 0) return null;
+  const list = el("ul", { class: "drain-forecast-tasks" }, items);
+  list.setAttribute("aria-label", hypothetical ? "Hypothetical forecast decisions" : "Forecast decisions");
+  return list;
+}
+
+function forecastBlock(forecast, { retained }) {
+  const hypothetical = forecast.mode === "shadow";
+  const at = forecastBuiltAt(forecast);
+  const block = el("div", { class: retained ? "drain-forecast-retained" : "drain-forecast-built" });
+  block.dataset.forecastMode = forecast.mode || "";
+  block.append(
+    el("div", { class: "drain-forecast-head" }, [
+      el("span", { class: "drain-capacity-label", text: retained ? "Last forecast" : "Admission forecast" }),
+      at ? forecastTime(at) : null,
+      el("span", { class: `drain-forecast-mode${hypothetical ? " shadow" : ""}`, text: hypothetical ? "shadow · hypothetical" : (forecast.mode || "forecast") }),
+    ]),
+    ...[forecastPeaks(forecast), forecastDecisions(forecast, hypothetical)].filter(Boolean),
+  );
+  return block;
+}
+
+// The last local pass's gap-fit forecast. Readiness puts the pass on
+// `capacity.admission_forecast` and the last forecast that was actually built
+// on `capacity.last_admission_forecast`. A pass that built none still says so.
+function autoDrainForecast(payload) {
+  const capacity = payload?.capacity || {};
+  const current = asForecast(capacity.admission_forecast);
+  const last = asForecast(capacity.last_admission_forecast);
+  const built = forecastBuiltAt(current);
+  const section = el("div", { class: "drain-forecast", role: "group", "aria-label": "Admission forecast" });
+  if (!built) {
+    section.dataset.forecastState = forecastBuiltAt(last) ? "retained" : "none";
+    section.append(
+      el("div", { class: "drain-forecast-head" }, [
+        el("span", { class: "drain-capacity-label", text: "Admission forecast" }),
+      ]),
+      el("p", { class: "drain-forecast-state", text: "no forecast this pass" }),
+    );
+    if (forecastHasDecisions(current)) {
+      const decisions = forecastDecisions(current, current.mode === "shadow");
+      if (decisions) section.append(decisions);
+    }
+    if (forecastBuiltAt(last)) section.append(forecastBlock(last, { retained: true }));
+    return section;
+  }
+  section.dataset.forecastState = "built";
+  section.append(forecastBlock(current, { retained: false }));
+  return section;
+}
+
+// The status card reads top to bottom: the live window (if any), the last
+// admission forecast, the slots it competes for and why nothing more starts,
+// any host or provider hold, then Stop. Starting a window is its own card
+// below, hidden in a read-only view.
 function renderAutoDrain(payload) {
   lastAutoDrain = payload;
   setDrainReadiness(payload);
@@ -2424,12 +2608,13 @@ function renderAutoDrain(payload) {
     autoDrainProviderAuth(payload.provider_auth_failures),
   ].filter(Boolean);
   if (reasons.submit) {
-    body.append(...holds, el("div", { class: "operations-readonly-note", text: reasons.submit }));
+    body.append(autoDrainForecast(payload), ...holds, el("div", { class: "operations-readonly-note", text: reasons.submit }));
     renderAutoDrainStart(payload, reasons);
     return;
   }
   body.append(...[
     autoDrainWindow(payload),
+    autoDrainForecast(payload),
     autoDrainCapacity(payload.capacity || {}, autoDrainCounts(payload), autoDrainBlocked(payload).length),
     ...holds,
     el("div", { class: "drain-stop-block" }, [autoDrainStopButton(payload), autoDrainStopNote(payload)]),
