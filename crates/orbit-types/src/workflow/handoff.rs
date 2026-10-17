@@ -178,8 +178,11 @@ pub struct HandoffValidationLog {
 }
 
 /// A claimed leaf's report that a required command failed only with tests
-/// its base fails too [ORB-15427]. It is the leaf's claim, never proof: the
-/// owner reruns the command on this base itself before it accepts the log.
+/// its base fails too [ORB-15427]. It is the leaf's claim, never proof. When
+/// the host OSes match or either is unknown, the owner reruns the command on
+/// this base before it accepts the log. When both OSes are known and differ,
+/// the owner checks that the base is still on its captured base-branch history
+/// and accepts the follower's reported failures for that OS without a base run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HandoffKnownRed {
