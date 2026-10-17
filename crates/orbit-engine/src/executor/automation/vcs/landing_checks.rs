@@ -268,50 +268,22 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
                 )));
             }
         };
-        let signature = error_signature(&log, failed_step(job));
-        let (class, why, tip_passes) = if let Some(evidence) = transient_evidence(&log) {
-            (
-                CheckFailureClass::Transient,
-                format!("the log shows `{evidence}`"),
-                false,
-            )
-        } else if signature.step_fallback {
-            (
-                CheckFailureClass::Inconclusive,
-                "its log names no diagnostic, only the failed step".to_string(),
-                false,
-            )
-        } else {
-            match inherited(
-                host,
-                workspace,
-                job,
-                &signature.text,
-                base,
-                moved_tip,
-                &mut base_jobs,
-                &mut tip_jobs,
-            ) {
-                Err(gap) => (CheckFailureClass::Inconclusive, gap, false),
-                Ok(Some(found)) => (CheckFailureClass::Inherited, found.why, found.tip_passes),
-                Ok(None) => (
-                    CheckFailureClass::Candidate,
-                    format!(
-                        "base {base} does not fail it that way{}",
-                        moved_tip.map_or_else(String::new, |tip| format!(
-                            " and it does not pass on the current base {tip}"
-                        ))
-                    ),
-                    false,
-                ),
-            }
-        };
+        let (class, why, tip_passes, signature) = classify_logged_job(
+            host,
+            workspace,
+            job,
+            &log,
+            base,
+            moved_tip,
+            &mut base_jobs,
+            &mut tip_jobs,
+        );
         jobs.push(FailedJob {
             run_id: Some(run_id),
             job_id,
             label,
             class,
-            signature: signature.text,
+            signature,
             why,
             excerpt: excerpt(&log),
             tip_passes,
@@ -557,6 +529,131 @@ struct Inheritance {
     /// the first update still happens, and the failure is not treated as
     /// surviving onto a passing tip.
     tip_passes: bool,
+}
+
+/// The class of one failed job whose log was already read.
+///
+/// Landing and auto-fix both call this. The signature comparison is
+/// [`inherited`]; nothing here re-implements it.
+#[allow(clippy::too_many_arguments)]
+fn classify_logged_job<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &Path,
+    job: &Value,
+    log: &str,
+    base: &str,
+    moved_tip: Option<&str>,
+    base_jobs: &mut CommitJobs,
+    tip_jobs: &mut CommitJobs,
+) -> (CheckFailureClass, String, bool, String) {
+    let signature = error_signature(log, failed_step(job));
+    if let Some(evidence) = transient_evidence(log) {
+        return (
+            CheckFailureClass::Transient,
+            format!("the log shows `{evidence}`"),
+            false,
+            signature.text,
+        );
+    }
+    if signature.step_fallback {
+        return (
+            CheckFailureClass::Inconclusive,
+            "its log names no diagnostic, only the failed step".to_string(),
+            false,
+            signature.text,
+        );
+    }
+    match inherited(
+        host,
+        workspace,
+        job,
+        &signature.text,
+        base,
+        moved_tip,
+        base_jobs,
+        tip_jobs,
+    ) {
+        Err(gap) => (CheckFailureClass::Inconclusive, gap, false, signature.text),
+        Ok(Some(found)) => (
+            CheckFailureClass::Inherited,
+            found.why,
+            found.tip_passes,
+            signature.text,
+        ),
+        Ok(None) => (
+            CheckFailureClass::Candidate,
+            format!(
+                "base {base} does not fail it that way{}",
+                moved_tip.map_or_else(String::new, |tip| format!(
+                    " and it does not pass on the current base {tip}"
+                ))
+            ),
+            false,
+            signature.text,
+        ),
+    }
+}
+
+/// Whether every failed check on `head` is a workflow job the base already
+/// fails the same way, and `tip` has not moved past `base`.
+///
+/// `Ok(Some(reason))` is that hold: auto-fix waits and spends no repair.
+/// `Ok(None)` was read far enough to say this is not that hold, including a
+/// candidate-caused job and a check no workflow job answers. `Err` is a head
+/// job whose log or identity could not be read.
+pub(super) fn unmoved_red_base<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &Path,
+    head: &str,
+    base: &str,
+    tip: &str,
+    failed: &[(Option<String>, String)],
+) -> Result<Option<String>, String> {
+    let head_jobs = commit_jobs(host, workspace, head).map_err(|error| error.to_string())?;
+    let moved_tip = (tip != base).then_some(tip);
+    let mut base_jobs = None;
+    let mut tip_jobs = None;
+    let mut reasons = Vec::new();
+    for check in failed {
+        let Some(job) = head_jobs
+            .iter()
+            .find(|job| unsuccessful(job) && answers(job, check))
+        else {
+            return Ok(None);
+        };
+        let (Some(run_id), Some(job_id)) = (job["run_id"].as_u64(), job["job_id"].as_u64()) else {
+            return Err("a failed job reported no identity".to_string());
+        };
+        let label = job_label(job);
+        let log = job_log(host, workspace, run_id, job_id, job)
+            .map_err(|error| format!("the log of '{label}' could not be read: {error}"))?;
+        let (class, why, _, _) = classify_logged_job(
+            host,
+            workspace,
+            job,
+            &log,
+            base,
+            moved_tip,
+            &mut base_jobs,
+            &mut tip_jobs,
+        );
+        if class != CheckFailureClass::Inherited {
+            return Ok(None);
+        }
+        reasons.push(why);
+    }
+    if reasons.is_empty() {
+        return Ok(None);
+    }
+    // The same predicate the landing uses before it updates a moved base.
+    if moved_tip.is_some_and(|tip| !contains(workspace, tip, head)) {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "base_red: {} and the base branch has not moved past it, so the base is still red and no \
+         repair agent runs",
+        reasons.join("; ")
+    )))
 }
 
 /// Whether the failure of `job`, with genuine `signature`, is the base's:

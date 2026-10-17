@@ -7794,10 +7794,19 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
         operation: &str,
         input: Value,
     ) -> Result<Value, OrbitError> {
-        if matches!(
-            operation,
-            "ci.job_log" | "ci.commit_jobs" | "ci.prerequisite_evidence"
-        ) && let Some(answer) = self.scripted.lock().unwrap().get(operation).cloned()
+        if operation == "ci.commit_jobs"
+            && let Some(answer) = self.scripted.lock().unwrap().get(operation).cloned()
+        {
+            let commit = input.get("commit").and_then(Value::as_str).unwrap_or("");
+            // A head-only script does not describe the base tip. An inherited
+            // red base is planted through the substitute `gh`.
+            if commit == git(&self.repo, &["rev-parse", BASE]) {
+                return Ok(json!({"commit": commit, "jobs": []}));
+            }
+            return Ok(answer);
+        }
+        if matches!(operation, "ci.job_log" | "ci.prerequisite_evidence")
+            && let Some(answer) = self.scripted.lock().unwrap().get(operation).cloned()
         {
             return Ok(answer);
         }
@@ -8080,6 +8089,67 @@ refuse() {
     exit 1
 }
 
+# Jobs and logs planted per commit under `$forge/commit-ci/<sha>/`.
+commit_ci_api() {
+    if [ ! -d "$forge/commit-ci" ]; then
+        echo "fake gh: unsupported call: $*" >&2
+        exit 2
+    fi
+    path="${4:-}"
+    case "$path" in
+        repos/*/actions/runs)
+            sha=""
+            for arg in "$@"; do
+                case "$arg" in
+                    head_sha=*) sha=${arg#head_sha=} ;;
+                esac
+            done
+            if [ -n "$sha" ] && [ -f "$forge/commit-ci/$sha/runs.json" ]; then
+                cat "$forge/commit-ci/$sha/runs.json"
+            else
+                echo '{"workflow_runs":[]}'
+            fi
+            ;;
+        repos/*/actions/runs/*/jobs)
+            run=$(basename "$(dirname "$path")")
+            found=""
+            for dir in "$forge/commit-ci"/*; do
+                [ -f "$dir/run_id" ] || continue
+                if [ "$(cat "$dir/run_id")" = "$run" ]; then
+                    found=$dir
+                    break
+                fi
+            done
+            if [ -z "$found" ]; then
+                echo "fake gh: no jobs for run $run" >&2
+                exit 2
+            fi
+            cat "$found/jobs.json"
+            ;;
+        *)
+            echo "fake gh: unsupported call: $*" >&2
+            exit 2
+            ;;
+    esac
+}
+
+commit_ci_log() {
+    if [ ! -d "$forge/commit-ci" ]; then
+        echo "fake gh: unsupported call: $*" >&2
+        exit 2
+    fi
+    run="${3:-}"
+    for dir in "$forge/commit-ci"/*; do
+        [ -f "$dir/run_id" ] || continue
+        if [ "$(cat "$dir/run_id")" = "$run" ]; then
+            cat "$dir/log"
+            return
+        fi
+    done
+    echo "fake gh: no log for run $run" >&2
+    exit 2
+}
+
 # Advance a remote branch by one commit, as another writer would.
 advance() {
     ref="refs/heads/$1"
@@ -8171,7 +8241,19 @@ if [ -f "$forge/failed-command-log" ]; then
         "run view") cat "$forge/failed-command-log"; exit ;;
         "api --method")
             case "${4:-}" in
-                'repos/{owner}/{repo}/actions/runs') echo '{"workflow_runs":[{"id":10,"name":"CI"}]}'; exit ;;
+                'repos/{owner}/{repo}/actions/runs')
+                    sha=""
+                    for arg in "$@"; do
+                        case "$arg" in
+                            head_sha=*) sha=${arg#head_sha=} ;;
+                        esac
+                    done
+                    if [ "$sha" = "$(head_sha)" ]; then
+                        echo '{"workflow_runs":[{"id":10,"name":"CI"}]}'
+                    else
+                        echo '{"workflow_runs":[]}'
+                    fi
+                    exit ;;
                 'repos/{owner}/{repo}/actions/runs/10/jobs') cat "$forge/failed-command-jobs"; exit ;;
             esac ;;
     esac
@@ -8255,6 +8337,8 @@ case "$1 ${2:-}" in
         [ ! -f "$forge/merge-methods-disallowed" ] || allowed=false
         printf '{"data":{"repository":{"autoMergeAllowed":true,"mergeCommitAllowed":false,"rebaseMergeAllowed":%s,"squashMergeAllowed":%s,"pullRequest":{"baseRefName":"%s","baseRef":{"branchProtectionRule":{"requiresLinearHistory":true}}}}}}\n' "$allowed" "$allowed" "$(cat "$forge/pr-base")" ;;
     "api repos/{owner}/{repo}/pulls/42/merge") merge "$@" ;;
+    "api --method") commit_ci_api "$@" ;;
+    "run view") commit_ci_log "$@" ;;
     *) echo "fake gh: unsupported call: $*" >&2; exit 2 ;;
 esac
 "#;

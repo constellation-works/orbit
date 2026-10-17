@@ -958,8 +958,13 @@ existing recovery activities, final validation and push do the repair:
   required failure still takes precedence over pending checks. Review gates and
   unreadable or stale evidence still stop the watcher. A failed required check
   whose job log shows a code failure is repaired, with that head's failed step,
-  error signature and log excerpt as evidence. A conflict is rebased onto the
-  current base by PR conflict recovery.
+  error signature and log excerpt as evidence. When that same signature already
+  fails on the base commit and the base branch has not moved past it, the
+  watcher admits no repair: it waits for the base within the completion
+  deadline and then stops with a base-red reason. That classification is the
+  landing's, not a second copy. A failure the base does not fail the same way
+  is still repaired, and the three-attempt budget is unchanged. A conflict is
+  rebased onto the current base by PR conflict recovery.
 - A failed required check run that no workflow produced (a provider app's
   aggregate result, such as a code-scanning check beside passing analysis jobs)
   is repaired only from its own failure annotations. The watcher reads them

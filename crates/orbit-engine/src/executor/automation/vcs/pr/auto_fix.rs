@@ -19,6 +19,11 @@
 //!   required check run outside a workflow (a provider app's aggregate) is
 //!   repaired only from its authenticated source failure annotations, which
 //!   are retained with the task before the repair is admitted [ORB-16185].
+//!   A failure the landing classifies as inherited from the base commit, while
+//!   that base branch has not moved past it, spends no repair attempt
+//!   ([`red_base_wait`]): the watcher keeps polling until the completion
+//!   deadline and then stops with a base-red reason. A candidate-caused
+//!   failure is still admitted from the same budget.
 //!
 //! An optional-only failure first passes the narrowly evidenced prerequisite
 //! recovery in `infrastructure`: one durable rerun, no crew or source repair.
@@ -59,7 +64,7 @@ use super::super::freshness::{commit_sha, remote_branch_sha};
 use super::super::git::{
     base_sync_mode_from_input, git_command_success, git_output, resolve_worktree_start_point,
 };
-use super::super::landing_checks::{HeadCheckEvidence, head_check_evidence};
+use super::super::landing_checks::{HeadCheckEvidence, head_check_evidence, unmoved_red_base};
 use super::super::push::push_batch_changes;
 use super::answers::{CheckState, PullRequestStatus, RequiredChecks, read_required_checks};
 use super::delivery::{DeliveryPin, blocked_checks};
@@ -300,6 +305,38 @@ pub(super) fn check_repair_handoff(
          pull request and watches the new head.\n{evidence}",
         attempt.attempt, attempt.budget, attempt.crew, attempt.crew_source
     ))
+}
+
+/// A required failure the base's own job already fails the same way, while
+/// the base branch has not moved past that commit.
+///
+/// `Ok(Some(reason))` waits for the base and spends no repair attempt.
+/// `Ok(None)` keeps the ordinary repair path, including a candidate-caused
+/// failure and evidence this classification could not read.
+pub(super) fn red_base_wait<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    workspace_path: &str,
+    status: &PullRequestStatus,
+    failed: &[(Option<String>, String)],
+) -> Result<Option<String>, OrbitError> {
+    let Some(head) = status.head_sha.as_deref() else {
+        return Ok(None);
+    };
+    let Some(base_name) = input_string_field(input, "base") else {
+        return Ok(None);
+    };
+    let workspace = Path::new(workspace_path);
+    let base_ref =
+        resolve_worktree_start_point(workspace, &base_name, base_sync_mode_from_input(input)?)?;
+    let tip = commit_sha(workspace, &base_ref)?;
+    let base = git_output(workspace, &["merge-base", head, &tip])?;
+    match unmoved_red_base(host, workspace, head, &base, &tip, failed) {
+        Ok(reason) => Ok(reason),
+        // An unreadable answer is not itself a red base. The repair read
+        // still stops when the head evidence is missing.
+        Err(_) => Ok(None),
+    }
 }
 
 /// Read the failed checks on the pinned head and admit their repair. Returns

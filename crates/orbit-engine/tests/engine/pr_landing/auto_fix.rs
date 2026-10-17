@@ -484,7 +484,14 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
         }
         "ci.commit_jobs" => {
             let commit = input["commit"].as_str().unwrap();
-            let contents = contract(commit);
+            // The base tip's own job stays green here. A shared source file is
+            // still a candidate failure; a base whose job fails the same way
+            // is planted through the substitute `gh`.
+            let contents = if commit == git(&host.repo, &["rev-parse", BASE]) {
+                "fixed".to_string()
+            } else {
+                contract(commit)
+            };
             let run = u64::from_str_radix(&commit[..12], 16).unwrap();
             let test = json!({"name":"test","workflow":"CI","conclusion":if contents == "fixed" {"success"} else {"failure"},"run_id":run,"job_id":run+1,"failed_step":"source contract"});
             let jobs = match aggregate.as_deref() {
@@ -1847,6 +1854,127 @@ fn auto_fix_repairs_required_aggregate_from_authenticated_source_annotations() {
                         fx.merge_requests().is_empty(),
                         "repair does not grant completion"
                     );
+                    assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+                });
+            }
+        },
+    );
+}
+
+/// One commit's workflow run, as `gh api` serves `ci.commit_jobs` and
+/// `gh run view --log-failed` serves `ci.job_log`. Absent unless this test
+/// plants it, so other rows keep the substitute's ordinary refusal.
+fn plant_commit_ci(fx: &Fixture, sha: &str, run_id: u64, conclusion: &str, log: &str) {
+    let dir = fx.forge.join("commit-ci").join(sha);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("run_id"), run_id.to_string()).unwrap();
+    fs::write(
+        dir.join("runs.json"),
+        format!(r#"{{"workflow_runs":[{{"id":{run_id},"name":"CI"}}]}}"#),
+    )
+    .unwrap();
+    let steps = if conclusion == "failure" {
+        r#"[{"name":"compile","conclusion":"failure"}]"#
+    } else {
+        r#"[{"name":"compile","conclusion":"success"}]"#
+    };
+    fs::write(
+        dir.join("jobs.json"),
+        format!(
+            r#"{{"jobs":[{{"id":{},"name":"test","status":"completed","conclusion":"{conclusion}","steps":{steps}}}]}}"#,
+            run_id + 1
+        ),
+    )
+    .unwrap();
+    fs::write(dir.join("log"), log).unwrap();
+}
+
+/// An unmoved base whose own job fails the same way spends no repair attempt
+/// and stops base-red at the completion deadline. A failure the base does not
+/// fail that way is still admitted from the same budget.
+#[test]
+fn auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure() {
+    isolated(
+        "auto_fix::auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure",
+        |sandbox| {
+            for case in ["red_base", "candidate"] {
+                in_fresh_row(sandbox, |row| {
+                    let fx = Fixture::new(row);
+                    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+                    open_for_completion(&fx, &host);
+                    let shared = "error[E0433]: cannot find module `broken_base`\n\
+                        ##[error]Process completed with exit code 101.\n";
+                    let candidate_only = "error[E0433]: cannot find module `candidate_only`\n\
+                        ##[error]Process completed with exit code 101.\n";
+                    plant_commit_ci(
+                        &fx,
+                        &fx.candidate,
+                        11,
+                        "failure",
+                        if case == "red_base" {
+                            shared
+                        } else {
+                            candidate_only
+                        },
+                    );
+                    plant_commit_ci(
+                        &fx,
+                        &fx.base_sha,
+                        21,
+                        if case == "red_base" {
+                            "failure"
+                        } else {
+                            "success"
+                        },
+                        shared,
+                    );
+                    fx.script_checks(&["failure"]);
+                    let mut input = fx.complete_ungated_input();
+                    input["auto_fix"] = json!(true);
+                    input["completion"] = json!("review");
+                    input["max_wait_seconds"] = json!(15);
+                    input["poll_interval_seconds"] = json!(5);
+                    let reads_before = fx.status_reads();
+                    let error = action(&host, "pr_complete", &input)
+                        .expect_err(case)
+                        .to_string();
+                    let attempts = pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER);
+                    let polls = fx.status_reads() - reads_before;
+                    if case == "red_base" {
+                        assert!(
+                            error.contains("auto_fix_stopped")
+                                && error.contains("base_red")
+                                && error.contains("has not moved past it")
+                                && error.contains(&fx.base_sha)
+                                && !error.contains("timed out"),
+                            "{case}: {error}"
+                        );
+                        assert!(
+                            !orbit_types::workflow::is_pr_auto_fix_check_repair(&error),
+                            "{case}: no repair handoff: {error}"
+                        );
+                        assert!(attempts.is_empty(), "{case}: no attempt is spent");
+                        assert!(
+                            polls >= 2,
+                            "{case}: waits for the base before the deadline ({polls} polls)"
+                        );
+                    } else {
+                        assert!(
+                            orbit_types::workflow::is_pr_auto_fix_check_repair(&error),
+                            "{case}: {error}"
+                        );
+                        assert!(
+                            error.contains("error[e0433]: cannot find module `candidate_only`"),
+                            "{case}: the candidate signature is the repair evidence: {error}"
+                        );
+                        assert_eq!(attempts.len(), 1, "{case}: one repair is admitted");
+                        assert_eq!(attempts[0].budget, PR_AUTO_FIX_BUDGET);
+                        assert_eq!(attempts[0].head_sha, fx.candidate);
+                        assert_eq!(polls, 1, "{case}: a candidate failure does not wait");
+                    }
+                    assert!(fx.merge_requests().is_empty(), "{case}: no merge");
+                    assert_eq!(fx.head(), fx.candidate, "{case}");
+                    assert_eq!(fx.remote_tip(BASE), fx.base_sha, "{case}");
                     assert_eq!(host.status(TASK_ID), TaskStatus::Review);
                 });
             }
