@@ -430,27 +430,7 @@ fn workspace_job_runs(
     state_filter: AllJobRunsState,
     scope: &JobRunScope,
 ) -> Result<Vec<JobRun>, orbit_core::OrbitError> {
-    let list = |state| {
-        runtime.list_job_runs_observed(JobRunListParams {
-            job_id: scope.job_id.clone(),
-            task_id: scope.task_id.clone(),
-            state,
-            since: scope.since,
-            limit: Some(limit),
-            order_by: JobRunOrder::Recency,
-            ..Default::default()
-        })
-    };
-    let states: &[JobRunState] = match state_filter {
-        AllJobRunsState::All => return list(None),
-        AllJobRunsState::Failed => &FAILED_RUN_STATES,
-        AllJobRunsState::Active => &[JobRunState::Pending, JobRunState::Running],
-    };
-    let mut runs = Vec::new();
-    for &run_state in states {
-        runs.extend(list(Some(run_state))?);
-    }
-    Ok(runs)
+    runtime.list_job_runs_observed(workspace_job_run_params(scope, state_filter, Some(limit)))
 }
 
 /// How many runs in one workspace match the filter, independent of `limit`.
@@ -459,25 +439,28 @@ fn workspace_job_run_count(
     state_filter: AllJobRunsState,
     scope: &JobRunScope,
 ) -> Result<u64, orbit_core::OrbitError> {
-    let count = |state| {
-        runtime.count_job_runs_observed(JobRunListParams {
-            job_id: scope.job_id.clone(),
-            task_id: scope.task_id.clone(),
-            state,
-            since: scope.since,
-            ..Default::default()
-        })
+    runtime.count_job_runs_observed(workspace_job_run_params(scope, state_filter, None))
+}
+
+fn workspace_job_run_params(
+    scope: &JobRunScope,
+    state_filter: AllJobRunsState,
+    limit: Option<usize>,
+) -> JobRunListParams {
+    let states = match state_filter {
+        AllJobRunsState::All => Vec::new(),
+        AllJobRunsState::Failed => FAILED_RUN_STATES.to_vec(),
+        AllJobRunsState::Active => vec![JobRunState::Pending, JobRunState::Running],
     };
-    let states: &[JobRunState] = match state_filter {
-        AllJobRunsState::All => return count(None),
-        AllJobRunsState::Failed => &FAILED_RUN_STATES,
-        AllJobRunsState::Active => &[JobRunState::Pending, JobRunState::Running],
-    };
-    let mut total = 0_u64;
-    for &run_state in states {
-        total = total.saturating_add(count(Some(run_state))?);
+    JobRunListParams {
+        job_id: scope.job_id.clone(),
+        task_id: scope.task_id.clone(),
+        states,
+        since: scope.since,
+        limit,
+        order_by: JobRunOrder::Recency,
+        ..Default::default()
     }
-    Ok(total)
 }
 
 fn run_timestamp(run: &JobRun) -> DateTime<Utc> {

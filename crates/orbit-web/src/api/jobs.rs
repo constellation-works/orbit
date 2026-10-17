@@ -7,7 +7,7 @@ use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_common::governance::authorization::{DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_JOB_RUN};
 use orbit_core::application::job::{JobRunListParams, JobRunOrder, job_run_to_json};
-use orbit_core::{JobRun, JobRunState, OrbitRuntime};
+use orbit_core::{JobRunState, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -210,8 +210,11 @@ fn job_runs_page(
     state: JobRunListState,
     limit: usize,
 ) -> Result<Value, orbit_core::OrbitError> {
-    let runs = list_job_runs_for_state(runtime, scope, state, limit)?;
-    let total = count_job_runs_for_state(runtime, scope, state)?;
+    let params = job_run_list_params(scope, state, Some(limit));
+    // Reconcile once before selecting the combined state page. Counting the
+    // resulting stored rows must not start another stale-run scan.
+    let runs = runtime.list_job_runs(params.clone())?;
+    let total = runtime.count_job_runs_observed(params)?;
     let truncated = total > runs.len() as u64;
     let titles = super::run_tasks::task_titles(runtime, &runs)?;
     let mut items: Vec<Value> = runs
@@ -232,82 +235,32 @@ fn job_runs_page(
     }))
 }
 
-fn list_job_runs_for_state(
-    runtime: &OrbitRuntime,
-    scope: &JobRunScope,
-    state: JobRunListState,
-    limit: usize,
-) -> Result<Vec<JobRun>, orbit_core::OrbitError> {
-    let list = |run_state, terminal_only| {
-        runtime.list_job_runs(job_run_list_params(
-            scope,
-            run_state,
-            terminal_only,
-            Some(limit),
-        ))
-    };
-    let states: &[JobRunState] = match state {
-        JobRunListState::All => return list(None, false),
-        JobRunListState::Concrete(run_state) => return list(Some(run_state), false),
-        JobRunListState::Terminal => return list(None, true),
-        JobRunListState::Failed => &FAILED_RUN_STATES,
-        JobRunListState::Active => &[JobRunState::Pending, JobRunState::Running],
-    };
-    let mut runs = Vec::new();
-    for &run_state in states {
-        runs.extend(list(Some(run_state), false)?);
-    }
-    runs.sort_by(|left, right| {
-        job_run_timestamp(right)
-            .cmp(&job_run_timestamp(left))
-            .then_with(|| left.run_id.cmp(&right.run_id))
-    });
-    runs.truncate(limit);
-    Ok(runs)
-}
-
-fn count_job_runs_for_state(
-    runtime: &OrbitRuntime,
-    scope: &JobRunScope,
-    state: JobRunListState,
-) -> Result<u64, orbit_core::OrbitError> {
-    let count = |run_state, terminal_only| {
-        runtime.count_job_runs(job_run_list_params(scope, run_state, terminal_only, None))
-    };
-    let states: &[JobRunState] = match state {
-        JobRunListState::All => return count(None, false),
-        JobRunListState::Concrete(run_state) => return count(Some(run_state), false),
-        JobRunListState::Terminal => return count(None, true),
-        JobRunListState::Failed => &FAILED_RUN_STATES,
-        JobRunListState::Active => &[JobRunState::Pending, JobRunState::Running],
-    };
-    let mut total = 0_u64;
-    for &run_state in states {
-        total = total.saturating_add(count(Some(run_state), false)?);
-    }
-    Ok(total)
-}
-
 fn job_run_list_params(
     scope: &JobRunScope,
-    state: Option<JobRunState>,
-    terminal_only: bool,
+    filter: JobRunListState,
     limit: Option<usize>,
 ) -> JobRunListParams {
+    let (state, states, terminal_only) = match filter {
+        JobRunListState::All => (None, Vec::new(), false),
+        JobRunListState::Concrete(state) => (Some(state), Vec::new(), false),
+        JobRunListState::Terminal => (None, Vec::new(), true),
+        JobRunListState::Failed => (None, FAILED_RUN_STATES.to_vec(), false),
+        JobRunListState::Active => (
+            None,
+            vec![JobRunState::Pending, JobRunState::Running],
+            false,
+        ),
+    };
     JobRunListParams {
         job_id: scope.job_id.clone(),
         task_id: scope.task_id.clone(),
         state,
+        states,
         terminal_only,
         since: scope.since,
         limit,
         order_by: JobRunOrder::Recency,
-        ..Default::default()
     }
-}
-
-fn job_run_timestamp(run: &JobRun) -> DateTime<Utc> {
-    run.finished_at.or(run.started_at).unwrap_or(run.created_at)
 }
 
 /// [ORB-10709] Optional body carrying the workspace claim token, for a resume

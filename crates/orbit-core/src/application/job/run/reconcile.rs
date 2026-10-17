@@ -132,6 +132,12 @@ impl OrbitRuntime {
         job_id: Option<&str>,
         pass: &mut ReconcilePass,
     ) -> Result<usize, OrbitError> {
+        let _scan = tracing::debug_span!(
+            target: "orbit.core.job_run.reconcile",
+            "stale_job_run_scan",
+            job_id,
+        )
+        .entered();
         let runs = if let Some(job_id) = job_id {
             self.stores()
                 .jobs()
