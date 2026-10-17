@@ -491,6 +491,12 @@
       "path": null,
       "shadowed_by": []
     },
+    "worktree.parked_reclaim_after_hours": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "worktree.reclaim": {
       "scope": "built-in",
       "state": "default",

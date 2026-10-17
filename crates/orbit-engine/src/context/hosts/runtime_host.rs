@@ -465,6 +465,10 @@ pub trait RuntimeHost: Send + Sync {
     fn list_job_runs_for_gc(&self) -> Result<Vec<JobRun>, OrbitError>;
     /// Admitted rebuildable paths, independent of checkout-authored commands.
     fn worktree_reclaim_patterns(&self) -> Vec<String>;
+    /// `worktree.parked_reclaim_after_hours`: how long a task must have been
+    /// parked in `someday` before the scheduled sweep may remove its run's
+    /// worktree. `None` keeps parked worktrees.
+    fn worktree_parked_reclaim_after_hours(&self) -> Option<u64>;
     /// A task's settlement state for worktree GC, read from the store that
     /// owns the workspace's tasks. `run_id` is the run whose worktree is
     /// being classified, so a replica can ask through that run's own claim
@@ -480,6 +484,10 @@ pub trait RuntimeHost: Send + Sync {
     /// about the task. `Some` names the settlement for the GC report; a host
     /// that pulls no work holds no claims.
     fn settled_claim_for_worktree_gc(&self, run_id: &str) -> Option<String>;
+    /// Whether `run_id` is a claimed leaf whose claim is not yet settled with
+    /// its owner, so this follower may still owe the owner the leaf's
+    /// delivery. `Some` names the claim's phase, or why it could not be read.
+    fn live_claim_for_worktree_gc(&self, run_id: &str) -> Option<String>;
     /// Prune this checkout's `.orbit/tmp` of top-level entries untouched for
     /// `retention_hours`. `None` means the host keeps no scratch directory to
     /// sweep.

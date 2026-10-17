@@ -27,7 +27,9 @@ use std::path::{Component, Path, PathBuf};
 use orbit_common::OrbitError;
 use serde::Serialize;
 
-use super::super::git::{git_output, git_output_with_env, git_run_bytes, git_success};
+use super::super::git::{
+    git_command_success, git_output, git_output_with_env, git_run_bytes, git_success,
+};
 use super::super::operations::CANDIDATE_REF_PREFIX;
 
 /// The store's directory under the owning checkout.
@@ -153,6 +155,89 @@ pub(super) fn published_recovery(
     run_id: &str,
     snapshot: &CandidateSnapshot,
 ) -> Option<WorktreeGcRecovery> {
+    origin_run_refs(worktree, branch, task_ids, run_id)?
+        .into_iter()
+        .find(|recovery| {
+            git_output(
+                worktree,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("{}^{{tree}}", recovery.commit),
+                ],
+            )
+            .is_ok_and(|tree| tree == snapshot.tree)
+        })
+}
+
+/// A clean worktree's `HEAD` and where its commits survive once GC deletes
+/// its run branch [ORB-16385]. No recovery: every commit on `HEAD` is
+/// reachable from a ref that is not a run branch: the base or another local
+/// branch, a remote-tracking branch, a tag, a carry ref or a rescue base ref.
+/// A recovery: the run's carry ref or branch on `origin` contains `HEAD`. The
+/// error says how many commits only the run branch holds, and keeps the
+/// worktree.
+pub(super) fn committed_recovery(
+    worktree: &Path,
+    branch: &str,
+    task_ids: &[String],
+    run_id: &str,
+) -> Result<(String, Option<WorktreeGcRecovery>), String> {
+    let head = git_output(worktree, &["rev-parse", "--verify", "HEAD^{commit}"])
+        .map_err(|error| format!("cannot read the worktree's HEAD: {error}"))?;
+    // Other run branches are excluded: each is collected by the same rule,
+    // so one never vouches for another.
+    let exclude_branch = format!("--exclude={branch}");
+    let unique = git_output(
+        worktree,
+        &[
+            "rev-list",
+            "--count",
+            &head,
+            "--not",
+            "--exclude=orbit/*",
+            &exclude_branch,
+            "--branches",
+            "--remotes",
+            "--tags",
+            &format!("--glob={}", CANDIDATE_REF_PREFIX.trim_end_matches('/')),
+            &format!("--glob={}", RESCUE_BASE_REF_PREFIX.trim_end_matches('/')),
+        ],
+    )
+    .map_err(|error| format!("cannot tell which commits only the run branch holds: {error}"))?;
+    if unique == "0" {
+        return Ok((head, None));
+    }
+    let contains_head = |recovery: &WorktreeGcRecovery| {
+        recovery.commit == head
+            || git_command_success(
+                worktree,
+                &["merge-base", "--is-ancestor", &head, &recovery.commit],
+            )
+            .unwrap_or(false)
+    };
+    if let Some(recovery) = origin_run_refs(worktree, branch, task_ids, run_id)
+        .unwrap_or_default()
+        .into_iter()
+        .find(contains_head)
+    {
+        return Ok((head, Some(recovery)));
+    }
+    Err(format!(
+        "{unique} commit(s) on '{branch}' exist on no published ref and in no rescue \
+         patch; push the branch or keep its commits elsewhere, then rerun GC"
+    ))
+}
+
+/// The run's carry refs, then its branch, as `origin` lists them. `None`
+/// when `origin` cannot be listed.
+fn origin_run_refs(
+    worktree: &Path,
+    branch: &str,
+    task_ids: &[String],
+    run_id: &str,
+) -> Option<Vec<WorktreeGcRecovery>> {
     let carry_refs = task_ids
         .iter()
         .map(|task_id| format!("{CANDIDATE_REF_PREFIX}{task_id}/{run_id}"))
@@ -165,7 +250,7 @@ pub(super) fn published_recovery(
         Ok(listed) => listed,
         Err(error) => {
             tracing::info!(path = %worktree.display(), %error,
-                "worktree GC could not list origin's candidate refs; falling back to a rescue patch");
+                "worktree GC could not list origin's run refs");
             return None;
         }
     };
@@ -174,28 +259,21 @@ pub(super) fn published_recovery(
         .filter_map(|line| line.split_once('\t'))
         .map(|(sha, name)| (name.trim().to_string(), sha.trim().to_string()))
         .collect::<Vec<_>>();
-    carry_refs
-        .iter()
-        .map(|name| (name, "carry_ref"))
-        .chain(std::iter::once((&branch_ref, "published_branch")))
-        .find_map(|(name, source)| {
-            let (_, sha) = remote.iter().find(|(listed, _)| listed == name)?;
-            let tree = git_output(
-                worktree,
-                &[
-                    "rev-parse",
-                    "--verify",
-                    "--quiet",
-                    &format!("{sha}^{{tree}}"),
-                ],
-            )
-            .ok()?;
-            (tree == snapshot.tree).then(|| WorktreeGcRecovery {
-                source: source.to_string(),
-                location: name.clone(),
-                commit: sha.clone(),
+    Some(
+        carry_refs
+            .iter()
+            .map(|name| (name, "carry_ref"))
+            .chain(std::iter::once((&branch_ref, "published_branch")))
+            .filter_map(|(name, source)| {
+                let (_, sha) = remote.iter().find(|(listed, _)| listed == name)?;
+                Some(WorktreeGcRecovery {
+                    source: source.to_string(),
+                    location: name.clone(),
+                    commit: sha.clone(),
+                })
             })
-        })
+            .collect(),
+    )
 }
 
 /// Write the candidate as a patch against `snapshot.head` to the bounded

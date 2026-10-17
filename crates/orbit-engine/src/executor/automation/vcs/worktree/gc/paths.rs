@@ -103,6 +103,26 @@ pub(super) fn branch_name(worktree: &Path) -> Result<String, OrbitError> {
     Ok(branch.to_string())
 }
 
+/// Why Git holds this worktree locked (`git worktree lock`), if it does. The
+/// lock is the hold an operator or tool can take on a run checkout; Orbit
+/// itself takes none. Git refuses to remove a locked worktree, with or
+/// without a single `--force`, so a lock taken after this check still keeps
+/// it. A lock file GC cannot read counts as held.
+pub(super) fn worktree_lock(worktree: &Path) -> Result<Option<String>, OrbitError> {
+    let admin_dir = git_output(worktree, &["rev-parse", "--absolute-git-dir"])?;
+    match fs::read_to_string(Path::new(&admin_dir).join("locked")) {
+        Ok(reason) if reason.trim().is_empty() => Ok(Some("Git holds this worktree locked".into())),
+        Ok(reason) => Ok(Some(format!(
+            "Git holds this worktree locked: {}",
+            reason.trim()
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Ok(Some(format!(
+            "cannot read the worktree's Git lock: {error}"
+        ))),
+    }
+}
+
 pub(super) fn branch_exists(repo_root: &Path, branch: &str) -> bool {
     git_command_success(
         repo_root,

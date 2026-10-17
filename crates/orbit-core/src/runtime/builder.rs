@@ -349,6 +349,7 @@ pub(crate) fn build_context_from_roots(
             runtime_config.snapshot.host_shutdown_hold_minutes(),
             runtime_config.snapshot.worktree_reclaim.clone(),
             runtime_config.snapshot.worktree_reclaim_below_free_mib,
+            runtime_config.snapshot.worktree_parked_reclaim_after_hours,
         ),
     ))
 }
