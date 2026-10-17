@@ -2,7 +2,8 @@
 //!
 //! The backend keeps the host filesystem readable (`--ro-bind / /`), so
 //! without this a confined worker could read `~/.ssh`, `~/.aws`, the `gh`
-//! token and a cargo publish token. The macOS profile denies the same list;
+//! token, a cargo publish token and the default Linux browser profile roots.
+//! The macOS profile denies the same list;
 //! [`crate::credential_paths`] is the single source of truth for both.
 //! Linux also masks the per-user runtime directories: mounting socket paths
 //! read-only does not prevent connections to same-UID host services.
