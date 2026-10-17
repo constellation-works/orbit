@@ -13,12 +13,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod sidecar;
+mod tray;
+mod watch;
 
 use std::sync::Arc;
 
 use serde_json::Value;
 use tauri::webview::{NewWindowResponse, PageLoadEvent};
 use tauri::{Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::sidecar::Sidecar;
@@ -51,8 +54,24 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        // Its commands are not granted to any page; the tray toggles it.
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(Arc::clone(&sidecar))
         .invoke_handler(tauri::generate_handler![status, retry])
+        .on_window_event(|window, event| {
+            // On macOS closing the window keeps the app in the menu bar, so
+            // the tray and notifications carry on; Quit ends it.
+            #[cfg(target_os = "macos")]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (window, event);
+        })
         .setup(move |app| {
             let handle = app.handle().clone();
             let navigation = Arc::clone(&sidecar);
@@ -81,6 +100,12 @@ fn main() {
                 })
                 .build()?;
             exit_on_signal(handle.clone())?;
+            let tray = tray::build(&handle, Arc::clone(&sidecar))?;
+            let watched = Arc::clone(&sidecar);
+            let watcher = handle.clone();
+            std::thread::Builder::new()
+                .name("dashboard-watch".into())
+                .spawn(move || watch::run(watcher, watched, tray))?;
             let supervised = Arc::clone(&sidecar);
             std::thread::Builder::new()
                 .name("dashboard-server".into())
@@ -101,12 +126,7 @@ fn main() {
     app.run(|handle, event| match event {
         RunEvent::Exit => handle.state::<Arc<Sidecar>>().shutdown(),
         #[cfg(target_os = "macos")]
-        RunEvent::Reopen { .. } => {
-            if let Some(window) = handle.get_webview_window(MAIN_WINDOW) {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
-        }
+        RunEvent::Reopen { .. } => tray::show_window(handle),
         _ => {}
     });
 }
