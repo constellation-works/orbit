@@ -360,7 +360,7 @@ impl OrbitRuntime {
     /// committed rows, which are never selected; aborted rows stay too.
     /// Another registered workspace keeps its own window. The rows are
     /// selected once, by a read, then deleted by primary key in batches of
-    /// [`RETENTION_BATCH_ROWS`], so no write transaction scans the table.
+    /// `RETENTION_BATCH_ROWS`, so no write transaction scans the table.
     /// `retention_days` overrides `retention.journal_days`.
     pub fn gc_journal(
         &self,
