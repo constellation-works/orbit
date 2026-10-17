@@ -625,9 +625,10 @@ pub(crate) fn pull_refill(
         format!(
             "host_suppressed: this drain claims no more work on this host for its window \
              because {reason}. This host is not at fault: find what holds the owner's store \
-             (the owner's `orbit.jsonl` names each lock holder in its `still waiting for \
-             advisory file lock` and `advisory file lock held past its threshold` warnings), \
-             then start a new drain"
+             (the owner's `orbit.jsonl` names each advisory lock holder in its `still waiting \
+             for advisory file lock` and `advisory file lock held past its threshold` \
+             warnings, and its store errors name SQLite contention, such as `database is \
+             locked` or `remained locked during`), then start a new drain"
         )
     } else if let Some(reason) = host_suppressed {
         format!(

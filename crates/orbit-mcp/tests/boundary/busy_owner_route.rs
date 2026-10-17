@@ -76,6 +76,35 @@ fn locked_store() -> OrbitError {
     orbit_common::storage::sqlite::sqlite_store_error(error)
 }
 
+/// SQLite's `SQLITE_LOCKED`, which carries no path: a connection that drops
+/// a table its own unfinished read still holds.
+fn locked_table() -> OrbitError {
+    let connection = rusqlite::Connection::open_in_memory().unwrap();
+    connection
+        .execute_batch("CREATE TABLE t (x); INSERT INTO t VALUES (1), (2);")
+        .unwrap();
+    let mut reading = connection.prepare("SELECT x FROM t").unwrap();
+    let mut rows = reading.query([]).unwrap();
+    rows.next().unwrap();
+    let error = connection
+        .execute_batch("DROP TABLE t")
+        .expect_err("an unfinished read locks its table");
+    assert_eq!(
+        error.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseLocked),
+        "{error}"
+    );
+    orbit_common::storage::sqlite::sqlite_store_error(error)
+}
+
+/// A `SQLITE_BUSY` that SQLite reported without a message.
+fn messageless_busy_store() -> OrbitError {
+    orbit_common::storage::sqlite::sqlite_store_error(rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+        None,
+    ))
+}
+
 fn contended_store() -> OrbitError {
     OrbitError::SqliteContention(Box::new(orbit_common::SqliteContention {
         path: "/state/orbit.db".into(),
@@ -110,6 +139,20 @@ fn a_session_that_ends_on_the_destinations_locked_store_is_lock_busy() {
         (
             "locked-store",
             format!("{warning}\n{}", orbit_error(&locked_store())),
+            1,
+            "start",
+            "lock_busy",
+        ),
+        (
+            "locked-table",
+            orbit_error(&locked_table()),
+            1,
+            "start",
+            "lock_busy",
+        ),
+        (
+            "messageless-busy",
+            orbit_error(&messageless_busy_store()),
             1,
             "start",
             "lock_busy",

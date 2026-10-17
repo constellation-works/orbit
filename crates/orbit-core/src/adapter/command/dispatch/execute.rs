@@ -862,10 +862,7 @@ fn is_store_lock_contention(error: &OrbitError) -> bool {
     if error.is_lock_busy() {
         return true;
     }
-    match error {
-        OrbitError::Store(message) => orbit_common::is_lock_busy_message(message),
-        other => orbit_common::is_lock_busy_message(&other.to_string()),
-    }
+    orbit_common::is_lock_busy_message(&error.to_string())
 }
 
 /// Fold a successful tool call together with its audit-write outcome into the

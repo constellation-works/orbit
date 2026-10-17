@@ -293,9 +293,12 @@ pub const LOCK_BUSY_ERROR_CODE: &str = "lock_busy";
 
 /// Whether an error's text says it lost only to a lock-wait deadline, for an
 /// error that reached this process as text rather than as a typed
-/// [`OrbitError`]: SQLite's own `database is locked` / `database is busy`,
-/// which a store error quotes, or the display of
-/// [`OrbitError::SqliteContention`] or [`OrbitError::FileLockTimeout`].
+/// [`OrbitError`]: SQLite's own `database is locked` / `database is busy` /
+/// `database table is locked`, which a store error quotes; the text of a
+/// `SQLITE_BUSY` that carried no message (`The database file is locked`);
+/// the `code=DatabaseBusy` / `code=DatabaseLocked` markers a store error's
+/// detail carries; or the display of [`OrbitError::SqliteContention`] or
+/// [`OrbitError::FileLockTimeout`].
 ///
 /// The one place such text is recognised, so the patterns change together
 /// with the displays they match.
@@ -303,6 +306,10 @@ pub fn is_lock_busy_message(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
     message.contains("database is locked")
         || message.contains("database is busy")
+        || message.contains("database table is locked")
+        || message.contains("the database file is locked")
+        || message.contains("code=databasebusy")
+        || message.contains("code=databaselocked")
         // `OrbitError::SqliteContention`.
         || message.contains("remained locked during")
         // `FileLockTimeout`: "timed out after {ms}ms acquiring {label} lock '{path}'".

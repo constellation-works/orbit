@@ -844,7 +844,8 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   store stayed locked is not one of these: its `transient` release backs the
   drain off briefly instead (`owner_busy_backoff`, above), and only repeated
   episodes suppress the host, with guidance to clear the owner's lock holders. In either
-  case (forge and busy-owner releases aside) the owner does not hand the released task back
+  case (forge releases, and busy-owner releases within the task's allowance of three,
+  aside) the owner does not hand the released task back
   to that drain, so it is not pulled straight back; another drain may still
   take it. When the leaf had
   committed a candidate, the release or block names it, and the task's next
