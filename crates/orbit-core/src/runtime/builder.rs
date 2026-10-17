@@ -338,6 +338,7 @@ pub(crate) fn build_context_from_roots(
             default_crew,
             runtime_config.complexity_crews.clone(),
             runtime_config.snapshot.final_recovery_crews().to_vec(),
+            runtime_config.snapshot.purpose_crews(),
             runtime_config.snapshot.provider_limit_policy(),
             operation,
             runtime_config.snapshot.worker_containment(),

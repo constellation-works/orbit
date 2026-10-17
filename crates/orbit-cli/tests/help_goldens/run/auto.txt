@@ -27,7 +27,7 @@ Options:
           Approve qualifying `proposed` tasks into the backlog on every pass of this drain, including tasks filed while the window is open. A task qualifies with the `no-diff-expected` tag, or with context files and an assessed complexity. It must then pass task-pilot verification: no duplicate, already-landed, conflict or warning finding. Tasks that fail, and tasks tagged `no-auto-approve`, stay proposed, and the drain reports why. Off by default
 
       --auto-fix
-          Repair the pull requests this drain opens when a required check fails on their head or their branch conflicts with its base: the run's repair pipeline fixes, validates and pushes the repair, then watches the new head. Repair crews come from `workflow.low_complexity_crews`. This never merges; `--complete` still decides that. Off by default
+          Repair the pull requests this drain opens when a required check fails on their head or their branch conflicts with its base: the run's repair pipeline fixes, validates and pushes the repair, then watches the new head. Repair crews come from `workflow.purpose_crews.auto_fix`, else `workflow.low_complexity_crews`. This never merges; `--complete` still decides that. Off by default
 
       --allow-crew <CREW>
           Restrict this run to these configured crews, e.g. when a provider is unavailable or its budget is spent. Repeatable and comma-separated. Every name must be configured here; an unknown or empty one fails before anything is dispatched. Omitted, the drain runs every crew, as before. This is scoped to this run's window only — no workspace configuration is changed, no task is reassigned, and nothing another invocation is already running is cancelled. With `--pull`, only tasks on these crews are claimed from the owner
@@ -118,9 +118,10 @@ the repair, reruns required validation and pushes it to the same pull
 request, then watches the new head. Pending checks are waited on. Review
 requirements, unreadable or non-workflow checks, runner and network failures,
 and other administrative blockers stop without an agent. Repair crews come
-from `workflow.low_complexity_crews`, under `--allow-crew` and the host's
-provider limits. Each pull request gets at most 3 repairs in total, and one
-per head and blocker, across retries and restarts. `--auto-fix` never merges:
+from `workflow.purpose_crews.auto_fix`, else `workflow.low_complexity_crews`,
+under `--allow-crew` and the host's provider limits. Each pull request gets
+at most 3 repairs in total, and one per head and blocker, across retries and
+restarts. `--auto-fix` never merges:
 without `--complete` the tasks stay in `review` once the pull request is
 mergeable; with it, completion merges as usual. Pull requests only; local
 delivery is unaffected.

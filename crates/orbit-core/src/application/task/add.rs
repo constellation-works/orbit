@@ -9,7 +9,7 @@ use orbit_types::task::{
 
 use crate::OrbitRuntime;
 use crate::application::job::crew_pools::{
-    CreationCrewAssignment, random_crew_ticket, seeded_crew_ticket,
+    CreationCrewAssignment, random_crew_ticket, seeded_crew_ticket, task_crew_purpose,
 };
 
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
@@ -174,10 +174,12 @@ impl OrbitRuntime {
         self.validate_crew_name(params.crew.as_deref())?;
         // [ORB-12717] Crew is initially decided here, and never by a later status
         // transition. A caller-supplied crew is kept verbatim; otherwise the
-        // complexity pools (then `default_crew`) choose one for this task.
+        // purpose pool its tags name, then the complexity pools (then
+        // `default_crew`), choose one for this task.
         let mut crew_assignment = self.creation_crew_assignment(
             Some(params.complexity),
             params.crew.as_deref(),
+            task_crew_purpose(&params.tags),
             &mut creation_crew_ticket(action_key),
         )?;
         // A crew the system chose from a setting records that setting rather

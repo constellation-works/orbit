@@ -48,7 +48,7 @@ pub(crate) use submit::reconcile_review;
 const RECONCILIATION_AUDIT: &str = "review.reconciliation";
 
 /// Tag carried by the follow-up task a reconciliation files.
-const FOLLOW_UP_TAG_PREFIX: &str = "review-reconciliation:";
+pub(crate) const FOLLOW_UP_TAG_PREFIX: &str = "review-reconciliation:";
 
 /// Redact strings in reconciliation reports while keeping the stored command
 /// identity available to the evidence-bound disposition checks.

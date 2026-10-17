@@ -47,9 +47,10 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
                   request, then watches the new head. Pending checks are waited on. Review\n\
                   requirements, unreadable or non-workflow checks, runner and network failures,\n\
                   and other administrative blockers stop without an agent. Repair crews come\n\
-                  from `workflow.low_complexity_crews`, under `--allow-crew` and the host's\n\
-                  provider limits. Each pull request gets at most 3 repairs in total, and one\n\
-                  per head and blocker, across retries and restarts. `--auto-fix` never merges:\n\
+                  from `workflow.purpose_crews.auto_fix`, else `workflow.low_complexity_crews`,\n\
+                  under `--allow-crew` and the host's provider limits. Each pull request gets\n\
+                  at most 3 repairs in total, and one per head and blocker, across retries and\n\
+                  restarts. `--auto-fix` never merges:\n\
                   without `--complete` the tasks stay in `review` once the pull request is\n\
                   mergeable; with it, completion merges as usual. Pull requests only; local\n\
                   delivery is unaffected.\n\n\
@@ -141,8 +142,9 @@ pub struct AutoCommand {
     /// Repair the pull requests this drain opens when a required check fails
     /// on their head or their branch conflicts with its base: the run's
     /// repair pipeline fixes, validates and pushes the repair, then watches
-    /// the new head. Repair crews come from `workflow.low_complexity_crews`.
-    /// This never merges; `--complete` still decides that. Off by default.
+    /// the new head. Repair crews come from `workflow.purpose_crews.auto_fix`,
+    /// else `workflow.low_complexity_crews`. This never merges; `--complete`
+    /// still decides that. Off by default.
     #[arg(long)]
     pub auto_fix: bool,
     /// Restrict this run to these configured crews, e.g. when a provider is

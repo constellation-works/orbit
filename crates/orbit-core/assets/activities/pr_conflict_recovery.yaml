@@ -52,10 +52,14 @@ spec:
           type: object
       log_tail:
         type: string
-      # Injected by the recovery dispatcher only: the medium pool, or the low
-      # pool for an `--auto-fix` run's completion step.
+      # Injected by the recovery dispatcher only: the failure-recovery purpose
+      # pool, or the auto-fix one for an `--auto-fix` run's completion step.
+      # Each falls back to its complexity pool (medium, low) while unset. The
+      # complexity keys remain for inputs recorded before purposes existed.
       crew_config_key:
         enum:
+          - workflow.purpose_crews.failure_recovery
+          - workflow.purpose_crews.auto_fix
           - workflow.medium_complexity_crews
           - workflow.low_complexity_crews
       failed_step_id:

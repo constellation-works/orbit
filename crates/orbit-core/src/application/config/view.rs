@@ -50,6 +50,7 @@ pub fn effective_view(runtime: &OrbitRuntime) -> Result<JsonValue, OrbitError> {
         "sections": sections,
         "crews": crew_rows(runtime, values),
         "crews_enumerated": true,
+        "crew_purposes": super::purposes::crew_purposes_view(values),
         "paths": path_rows_json(runtime, None),
         "crew_fields": CREW_FIELDS,
         "write_scope_default": ConfigScope::Workspace.label(),

@@ -7,6 +7,7 @@ use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::{Crew, resolve_crew};
 use orbit_types::task::TaskComplexity;
+use orbit_types::workflow::CrewPurpose;
 use serde::{Deserialize, Serialize};
 
 /// Separates a pool entry's crew name from its relative draw weight.
@@ -44,6 +45,28 @@ impl ComplexityCrewPools {
             TaskComplexity::XHard => self.xhard.as_deref(),
             TaskComplexity::Unassessed => None,
         }
+    }
+}
+
+/// The admitted `workflow.purpose_crews.<purpose>` pools. An empty pool is
+/// unset: its purpose keeps the route it had before purposes existed.
+/// Final recovery and review are not here; their pools keep their own keys.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PurposeCrewPools {
+    pools: BTreeMap<CrewPurpose, Vec<String>>,
+}
+
+impl PurposeCrewPools {
+    /// Pools keyed by purpose, in their admitted `name[:weight]` form.
+    pub fn new(pools: impl IntoIterator<Item = (CrewPurpose, Vec<String>)>) -> Self {
+        Self {
+            pools: pools.into_iter().collect(),
+        }
+    }
+
+    /// The pool configured for `purpose`; empty when it is unset.
+    pub fn pool(&self, purpose: CrewPurpose) -> &[String] {
+        self.pools.get(&purpose).map_or(&[], Vec::as_slice)
     }
 }
 

@@ -395,6 +395,48 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.purpose_crews.auto_fix": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.purpose_crews.baseline_red_repair": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.purpose_crews.ci_failure_sweep": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.purpose_crews.dependabot": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.purpose_crews.failure_recovery": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.purpose_crews.merged_head_repair": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.purpose_crews.task_pilot": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.required_validation_commands": {
       "scope": "built-in",
       "state": "default",

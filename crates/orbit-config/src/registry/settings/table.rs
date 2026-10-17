@@ -588,6 +588,48 @@ define_config_settings! {
         section: ConfigSection::Delivery, order: 107,
         resolve: |raw: Option<Vec<String>>| crate::provider_limit::admit_overrides(raw),
     },
+    workflow_purpose_crews_auto_fix: Vec<String> => Vec<String> {
+        key: "workflow.purpose_crews.auto_fix", value_type: "array<string>",
+        description: "Weighted crew pool `orbit run auto --auto-fix` pull-request repairs draw from, once per run. Unset or [] keeps today's route: `workflow.low_complexity_crews`. Entries are `name` or `name:weight` (all bare or all weighted). An explicit crew wins over it, and the run's allowed_crews still applies.",
+        section: ConfigSection::Delivery, order: 106,
+        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
+    },
+    workflow_purpose_crews_baseline_red_repair: Vec<String> => Vec<String> {
+        key: "workflow.purpose_crews.baseline_red_repair", value_type: "array<string>",
+        description: "Weighted crew pool tasks the red-base re-check files (tag `baseline-red-repair`) draw from when they are created without a crew. Unset or [] keeps today's route: the task's complexity pool, then `workflow.default_crew`. Entries are `name` or `name:weight` (all bare or all weighted). An explicit crew wins over it, and the run's allowed_crews still applies.",
+        section: ConfigSection::Delivery, order: 106,
+        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
+    },
+    workflow_purpose_crews_ci_failure_sweep: Vec<String> => Vec<String> {
+        key: "workflow.purpose_crews.ci_failure_sweep", value_type: "array<string>",
+        description: "Weighted crew pool tasks the CI failure sweep files (tag `ci-failure-sweep`) draw from when they are created without a crew. Unset or [] keeps today's route: the task's complexity pool, then `workflow.default_crew`. Entries are `name` or `name:weight` (all bare or all weighted). An explicit crew wins over it, and the run's allowed_crews still applies.",
+        section: ConfigSection::Delivery, order: 106,
+        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
+    },
+    workflow_purpose_crews_dependabot: Vec<String> => Vec<String> {
+        key: "workflow.purpose_crews.dependabot", value_type: "array<string>",
+        description: "Weighted crew pool Dependabot and code-scanning sweep tasks (tags `dependabot-sweep`, `code-scanning-sweep`) draw from when they are created without a crew. Unset or [] keeps today's route: the task's complexity pool, then `workflow.default_crew`. Entries are `name` or `name:weight` (all bare or all weighted). An explicit crew wins over it, and the run's allowed_crews still applies.",
+        section: ConfigSection::Delivery, order: 106,
+        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
+    },
+    workflow_purpose_crews_failure_recovery: Vec<String> => Vec<String> {
+        key: "workflow.purpose_crews.failure_recovery", value_type: "array<string>",
+        description: "Weighted crew pool step-failure and PR conflict recovery draw from, once per run. Unset or [] keeps today's route: `workflow.medium_complexity_crews`. Entries are `name` or `name:weight` (all bare or all weighted). An explicit crew wins over it, and the run's allowed_crews still applies.",
+        section: ConfigSection::Delivery, order: 106,
+        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
+    },
+    workflow_purpose_crews_merged_head_repair: Vec<String> => Vec<String> {
+        key: "workflow.purpose_crews.merged_head_repair", value_type: "array<string>",
+        description: "Weighted crew pool merged-head repair tasks a review reconciliation files draw from when they are created without a crew. Unset or [] keeps today's route: the task's complexity pool, then `workflow.default_crew`. Entries are `name` or `name:weight` (all bare or all weighted). An explicit crew wins over it, and the run's allowed_crews still applies.",
+        section: ConfigSection::Delivery, order: 106,
+        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
+    },
+    workflow_purpose_crews_task_pilot: Vec<String> => Vec<String> {
+        key: "workflow.purpose_crews.task_pilot", value_type: "array<string>",
+        description: "Weighted crew pool the task pilot draws from, once per run, keeping only crews that can inspect source natively. Unset or [], or with no such crew, keeps today's route: `workflow.low_complexity_crews`. Entries are `name` or `name:weight` (all bare or all weighted). An explicit crew wins over it, and the run's allowed_crews still applies.",
+        section: ConfigSection::Delivery, order: 106,
+        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
+    },
     workflow_required_validation_commands: Vec<String> => Vec<String> {
         key: "workflow.required_validation_commands", value_type: "array<string>",
         description: "Commands every delivered candidate must pass: owner PR and local deliveries run them before push or merge, and a distributed execution claim must pass them before this owner accepts its handoff; empty means no required check on any path: nothing runs and a claimed handoff carries no validation logs.",

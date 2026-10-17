@@ -37,7 +37,8 @@
 //! reviewed head).
 //!
 //! Every repair is admitted by the host first ([`admit`]): the run's crew is
-//! drawn once from `workflow.low_complexity_crews` and the pull request's
+//! drawn once from `workflow.purpose_crews.auto_fix` (the low complexity
+//! pool while that purpose is unset) and the pull request's
 //! durable ledger dedupes the head and blocker and bounds the attempts. A
 //! check repair is then handed to the step's repair activity as a failure
 //! led by [`PR_AUTO_FIX_CHECK_REPAIR_MARKER`]; the executor routes it to the

@@ -1,6 +1,9 @@
 //! Shared JSON projection for persisted job runs.
 
-use orbit_types::workflow::{JobRun, JobRunState, JobRunStep, PipelineState, run_id_role};
+use orbit_types::workflow::{
+    CrewPurpose, FINAL_RECOVERY_CREWS_KEY, JobRun, JobRunState, JobRunStep, PipelineState,
+    run_id_role,
+};
 use serde_json::{Value, json};
 
 use crate::runtime::run_input::carried_task_ids;
@@ -17,6 +20,40 @@ pub struct ActivityInvocationEvidence {
     pub activity_id: String,
     pub provider: String,
     pub model: Option<String>,
+}
+
+/// Every activity crew draw the run froze, with the rule that chose it: the
+/// purpose's own pool, the fallback an unset purpose keeps, or the pool key
+/// the activity named. A draw that fell back to `workflow.default_crew` says
+/// so.
+fn activity_crew_draws_json(state: Option<&PipelineState>) -> Value {
+    Value::Array(
+        state
+            .into_iter()
+            .flat_map(|state| &state.activity_crew_draws)
+            .map(|(key, draw)| {
+                let rule = if draw.source.starts_with("workflow.default_crew") {
+                    "default_crew"
+                } else if CrewPurpose::from_purpose_key(key).is_some() {
+                    if draw.source.starts_with(key.as_str()) {
+                        "purpose_pool"
+                    } else {
+                        "purpose_unset_fallback"
+                    }
+                } else if key == FINAL_RECOVERY_CREWS_KEY {
+                    "final_recovery_pool"
+                } else {
+                    "complexity_pool"
+                };
+                json!({
+                    "key": key,
+                    "crew": draw.crew,
+                    "rule": rule,
+                    "source": draw.source,
+                })
+            })
+            .collect(),
+    )
 }
 
 /// Task identities recorded in submitted run input, without any task-store reads.
@@ -145,6 +182,7 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
             "crew": run.resolved_crew,
             "model": run.crew_model,
         },
+        "activity_crew_draws": activity_crew_draws_json(state_for_agent_result),
         // The record's own steps, exactly as stored. A surface that renders
         // a run's steps chooses them with `run_display_steps`.
         "steps": run.steps.iter().map(|step| RunDisplayStep::from_job_step(step).to_json()).collect::<Vec<_>>(),

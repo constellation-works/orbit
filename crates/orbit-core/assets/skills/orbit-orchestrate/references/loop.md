@@ -72,10 +72,11 @@ attribution and does not correct a stale execution crew.
 
 Task crew and system-activity crew are different. Inspect the effective job
 and resolved provider/model, not just its crew label. The shipped
-`task_pilot_pipeline` draws its pilot crew from `workflow.low_complexity_crews`
-(`crew_config_key` on the pilot step) and has no per-run crew input: passing
+`task_pilot_pipeline` draws its pilot crew from `workflow.purpose_crews.task_pilot`,
+else `workflow.low_complexity_crews` (`crew_config_key` on the pilot step) and has no per-run crew input: passing
 `--input crew=...` does not override that step. Step-failure and PR conflict
-recovery draw from `workflow.medium_complexity_crews`. Each run draws once per
+recovery draw from `workflow.purpose_crews.failure_recovery`, else
+`workflow.medium_complexity_crews`. Each run draws once per
 pool and records it in its state; an empty pool falls back to
 `workflow.default_crew`. A host `provider_unavailable` or `provider_capacity`
 hold withholds the task-pilot routine while it covers every crew that draw

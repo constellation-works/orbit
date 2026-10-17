@@ -150,6 +150,8 @@ The same sweep files one `baseline-red-repair` task per red base failure (a
 command and the tests it fails on the base) at complexity `medium` and links each
 later task held for the same failures to it, so the red base has an owner
 without anyone reading worker logs.
+Its crew comes from `workflow.purpose_crews.baseline_red_repair` when that is
+set, else the `medium` complexity pool.
 It never runs on a follower or inside a claimed worker.
 
 ## Built in: Linux CodeQL evidence for held reviews

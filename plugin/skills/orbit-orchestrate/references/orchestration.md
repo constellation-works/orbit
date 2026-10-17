@@ -305,7 +305,8 @@ orbit run task-pilot <id> <id>                  # audit exactly these
 orbit run job task_pilot_pipeline --input 'task_ids=["<id>"]' --json
 ```
 
-The shipped pilot steps draw their crew from `workflow.low_complexity_crews`.
+The shipped pilot steps draw their crew from `workflow.purpose_crews.task_pilot`,
+or from `workflow.low_complexity_crews` while that is unset.
 Neither a `--crew` flag nor `--input crew=<name>` changes those steps. Inspect
 the effective job and that pool before promising a provider; see
 [crew selection](loop.md#select-an-allowed-crew).
@@ -628,8 +629,9 @@ It cannot be combined with `--pull` or `--stop`.
 - The repair goes through the ordinary commit, required final validation and
   lease-checked push. The watcher then re-checks the new head, and a reviewed
   head goes back through re-review before it can merge.
-- The crew comes from `workflow.low_complexity_crews` through the run's frozen
-  pool draw, restricted by `--allow-crew`. Conflict recovery uses this pool too
+- The crew comes from `workflow.purpose_crews.auto_fix`, else
+  `workflow.low_complexity_crews`, through the run's frozen pool draw,
+  restricted by `--allow-crew`. Conflict recovery uses this pool too
   under `--auto-fix`. Task complexity and crew are never changed, and nothing
   escalates.
 - Every attempt is written to the primary task's history with the PR, head,

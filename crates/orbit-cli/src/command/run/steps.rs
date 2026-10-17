@@ -192,6 +192,18 @@ pub(crate) fn run_header_text_with_lock_holders(
             run.crew_model.as_deref().unwrap_or("model unavailable"),
         ));
     }
+    // The pool each activity drew its crew from, and the rule that chose it.
+    for (key, draw) in state
+        .into_iter()
+        .flat_map(|state| &state.activity_crew_draws)
+    {
+        lines.push(format!(
+            "{} {} for {key} via {}",
+            bold("Activity Crew:"),
+            draw.crew,
+            draw.source
+        ));
+    }
     if let Some(line) = format_waiting_line_with_holders(run.state, state, holders) {
         lines.push(line);
     }

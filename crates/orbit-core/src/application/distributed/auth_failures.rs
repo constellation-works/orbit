@@ -13,7 +13,8 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::{JobRunOrder, JobRunQuery};
 use orbit_types::task::TaskComplexity;
 use orbit_types::workflow::{
-    JobRun, JobRunState, PipelineState, Provider, ProviderFailureClass, failed_provider,
+    CrewPurpose, FINAL_RECOVERY_CREWS_KEY, JobRun, JobRunState, PipelineState, Provider,
+    ProviderFailureClass, failed_provider,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -287,15 +288,20 @@ impl RunCrewLookup {
         let Some(state) = self.0.get(&run.run_id) else {
             return Vec::new();
         };
-        let key = match run.job_id.as_str() {
-            "task_pilot_pipeline" => Some(complexity_crews_key(TaskComplexity::Low)),
-            "blocked_task_recovery_pipeline" => Some("workflow.final_recovery_crews".to_string()),
-            _ => None,
+        // A pilot run admitted before the task-pilot purpose froze its draw
+        // under the low complexity pool's key.
+        let keys = match run.job_id.as_str() {
+            "task_pilot_pipeline" => vec![
+                CrewPurpose::TaskPilot.config_key().to_string(),
+                complexity_crews_key(TaskComplexity::Low),
+            ],
+            "blocked_task_recovery_pipeline" => vec![FINAL_RECOVERY_CREWS_KEY.to_string()],
+            _ => Vec::new(),
         };
-        if let Some(key) = key {
-            return state
-                .activity_crew_draws
-                .get(&key)
+        if !keys.is_empty() {
+            return keys
+                .iter()
+                .find_map(|key| state.activity_crew_draws.get(key))
                 .map(|draw| vec![draw.crew.clone()])
                 .unwrap_or_default();
         }
