@@ -23,6 +23,8 @@ Health:
   requeue      Requeue a blocked task onto its published candidate
   recheck-blocked
                Requeue tasks whose infrastructure block has cleared
+  settle-merged
+               Settle tasks whose delivery pull request merged outside Orbit
 
 Bundles:
   export       Export task bundles to a portable tar.zst archive

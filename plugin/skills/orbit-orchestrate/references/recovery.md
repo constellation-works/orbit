@@ -146,10 +146,21 @@ the remaining work. Discard a candidate only deliberately, with
 
 ## Close a rescued blocked task
 
-When a blocked task's work landed outside its run (its PR was merged by hand),
-close the task rather than rerunning it. First confirm that no run is live on
-it and that the merged commit meets its acceptance criteria. Then, as an
-operator in the owning workspace's checkout, run:
+When a task's delivery PR was merged by hand, Orbit settles the task to `done`
+from the merge. Each `orbit run auto` pass settles a `blocked`, `in-progress` or
+`review` task whose delivery PR is among the recent merges into its target
+branch, when no run or claim of its own is live. To settle one task now, run
+`orbit task settle-merged <task-id>` in the owning workspace's checkout. It reads
+each PR Orbit recorded for the task, and names the reason when the task does not
+settle. The settlement starts no work, so another task's claim on the same files
+does not refuse it. History records it as `external_merge_settled`, with a
+landing note naming the PR and merge commit
+([stuck job runs](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/stuck-job-runs.md#a-delivery-pull-request-merged-outside-orbit)).
+
+When the work landed some other way (a commit, or a PR that is not the task's
+delivery PR), close the task rather than rerunning it. First confirm that no
+run is live on it and that the merged commit meets its acceptance criteria.
+Then, as an operator in the owning workspace's checkout, run:
 
 ```bash
 export ORBIT_OPERATOR=1

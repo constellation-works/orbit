@@ -1,9 +1,9 @@
 //! The composed runtime through its public surface: dispatch admission, the
 //! distributed drain, `os:` tag routing, retired deterministic stubs, final
 //! recovery, repeated rebase recovery, relation auto-close, PR closure on
-//! terminal decisions and requeues, orphaned delivery adoption, plugin
-//! inspection, the sandbox opt-out, the agent sandbox mask and cold lexical
-//! search hydration.
+//! terminal decisions and requeues, settlement from a delivery PR merged
+//! outside Orbit, orphaned delivery adoption, plugin inspection, the sandbox
+//! opt-out, the agent sandbox mask and cold lexical search hydration.
 //!
 //! One integration-test binary per area keeps link cost down; add a module
 //! here rather than a new top-level `tests/*.rs` file
@@ -104,6 +104,7 @@ mod run_cli_invocations;
 mod run_history;
 mod run_outcome_contract;
 mod task_delivery;
+mod task_external_merge;
 mod task_lint_paths;
 mod task_pilot;
 mod task_pr_closure;

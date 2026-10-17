@@ -16,6 +16,7 @@ mod recheck_blocked;
 pub(crate) mod reconcile_review;
 mod reindex;
 pub(crate) mod review_reset;
+mod settle_merged;
 mod show;
 pub(crate) mod support;
 

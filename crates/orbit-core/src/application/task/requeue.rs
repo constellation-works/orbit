@@ -240,7 +240,7 @@ impl OrbitRuntime {
     /// closure counts it. Once the claim is settled its leaf is fenced, so a
     /// run on another machine is then judged by its recorded state alone.
     pub(crate) fn unsettled_run(&self, task: &Task) -> Result<Option<String>, OrbitError> {
-        if self.task_delivery_is_live(task) {
+        if self.live_task_delivery(task).is_some() {
             return Ok(Some(
                 "a run or an unsettled execution claim of the task may still be delivering it, \
                  so a failure handoff may still publish a candidate"

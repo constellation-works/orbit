@@ -45,7 +45,8 @@
 //! is best effort: the transition has already been written, so a forge error is
 //! a warning (log plus session event), never a failure. Branches are kept.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_types::record::OrbitEvent;
@@ -57,6 +58,7 @@ use orbit_types::workflow::handoff::HandoffDelivery;
 
 use crate::OrbitRuntime;
 use crate::runtime::task::FINAL_RECOVERY_REQUEUED_EVENT;
+use crate::runtime::task_pr_forge::TaskPrForge;
 
 impl OrbitRuntime {
     /// Close `task`'s open Orbit-authored PRs when this write moved it from
@@ -123,7 +125,7 @@ impl OrbitRuntime {
         {
             return true;
         }
-        if self.task_delivery_is_live(task) {
+        if self.live_task_delivery(task).is_some() {
             return true;
         }
         let mut keep = BTreeSet::new();
@@ -159,7 +161,6 @@ impl OrbitRuntime {
         comment: &str,
         closed_message: &'static str,
     ) -> bool {
-        let settings = self.context.settings().pr_settings();
         // Orbit records every PR it opens on the task, and every follower PR it
         // accepts on the claim. A task with neither never had an Orbit PR, so it
         // costs no forge call (local delivery, proposals, manual tasks).
@@ -190,24 +191,20 @@ impl OrbitRuntime {
         }
 
         let mut settled = true;
-        let authors = if settings.delivery_authors.is_empty() {
-            match forge.authenticated_login(&repo_root) {
-                Ok(login) => vec![login.to_ascii_lowercase()],
-                // Without a delivery identity only accepted follower PRs can
-                // be proven Orbit's; the rest stay open.
-                Err(error) => {
-                    self.warn_pr_closure(&task.id, None, &error);
-                    settled = false;
-                    Vec::new()
-                }
+        let authors = match self.delivery_authors(forge, &repo_root) {
+            Ok(authors) => authors,
+            // Without a delivery identity only accepted follower PRs can be
+            // proven Orbit's; the rest stay open.
+            Err(error) => {
+                self.warn_pr_closure(&task.id, None, &error);
+                settled = false;
+                Vec::new()
             }
-        } else {
-            settings.delivery_authors.clone()
         };
 
         for pr in candidates {
             let authored = authors.contains(&pr.author.to_ascii_lowercase())
-                || follower_prs.contains(&pr.number);
+                || follower_prs.contains_key(&pr.number);
             if !authored || keep.contains(&pr.number) {
                 continue;
             }
@@ -234,22 +231,48 @@ impl OrbitRuntime {
         settled
     }
 
-    /// Whether a run or an unsettled claim of `task` may still be delivering
-    /// one of its pull requests. An unreadable answer counts as live, so
-    /// nothing is closed on a guess.
-    pub(super) fn task_delivery_is_live(&self, task: &Task) -> bool {
+    /// The logins Orbit opens delivery PRs under, lowercased:
+    /// `pr.delivery_authors`, else the login this machine's forge credentials
+    /// act as.
+    pub(super) fn delivery_authors(
+        &self,
+        forge: &dyn TaskPrForge,
+        repo_root: &Path,
+    ) -> Result<Vec<String>, OrbitError> {
+        let configured = &self.context.settings().pr_settings().delivery_authors;
+        if configured.is_empty() {
+            Ok(vec![
+                forge.authenticated_login(repo_root)?.to_ascii_lowercase(),
+            ])
+        } else {
+            Ok(configured.clone())
+        }
+    }
+
+    /// Why a run or an unsettled claim of `task` may still be delivering one
+    /// of its pull requests, or `None` when nothing of the task is live. An
+    /// unreadable answer counts as live, so nothing is decided on a guess.
+    pub(super) fn live_task_delivery(&self, task: &Task) -> Option<String> {
         if let Some(run_id) = task.job_run_id.as_deref() {
             match self.stores().jobs().get_job_run(run_id) {
-                Ok(Some(run)) if !run.state.is_terminal() => return true,
+                Ok(Some(run)) if !run.state.is_terminal() => {
+                    return Some(format!("its run {run_id} is still {}", run.state));
+                }
                 Ok(_) => {}
-                Err(_) => return true,
+                Err(_) => return Some(format!("its run {run_id} cannot be read")),
             }
         }
         match self.stores().tasks().inspect_execution_claims() {
             Ok(claims) => claims
                 .iter()
-                .any(|claim| claim.claim.task_id == task.id && claim.claim.phase.is_unsettled()),
-            Err(_) => true,
+                .find(|claim| claim.claim.task_id == task.id && claim.claim.phase.is_unsettled())
+                .map(|claim| {
+                    format!(
+                        "its execution claim for run {} is unsettled",
+                        claim.claim.run_context.run_id
+                    )
+                }),
+            Err(_) => Some("its execution claims cannot be read".to_string()),
         }
     }
 
@@ -309,12 +332,13 @@ impl OrbitRuntime {
     }
 
     /// Delivery PR numbers of the follower handoffs this owner accepted for
-    /// the task. A backend without claims, or a failed read, contributes none:
-    /// those PRs then stay open rather than being guessed at.
-    fn accepted_handoff_pull_requests(&self, task_id: &str) -> BTreeSet<u64> {
+    /// the task, each with the branch its handoff lands on. A backend without
+    /// claims, or a failed read, contributes none: those PRs then stay open
+    /// rather than being guessed at.
+    pub(super) fn accepted_handoff_pull_requests(&self, task_id: &str) -> BTreeMap<u64, String> {
         let tasks = self.stores().tasks();
         let Ok(claims) = tasks.inspect_execution_claims() else {
-            return BTreeSet::new();
+            return BTreeMap::new();
         };
         claims
             .iter()
@@ -326,7 +350,9 @@ impl OrbitRuntime {
                     .flatten()
             })
             .filter_map(|accepted| match accepted.handoff.candidate.delivery {
-                HandoffDelivery::PullRequest { number } => Some(number),
+                HandoffDelivery::PullRequest { number } => {
+                    Some((number, accepted.handoff.candidate.landing_branch))
+                }
                 _ => None,
             })
             .collect()

@@ -984,6 +984,40 @@ pull requests that no live run is delivering are closed
 never adopted this way: its claim's release keeps the candidate and pull request,
 and the task's next claim continues them ([distributed drain](distributed-drain.md)).
 
+## A delivery pull request merged outside Orbit
+
+When you merge a task's delivery pull request on GitHub yourself, no run observes
+the merge, so the task stays `blocked`, `in-progress` or `review`. Orbit settles it
+to `done` from the merge. Each pass of a running owner drain (`orbit run auto`) does
+this after it reconciles stale runs, matching against the 100 most recently merged
+pull requests. To settle a task now, or one whose pull request merged before
+those 100, run this in the owning workspace's checkout:
+
+```bash
+orbit task settle-merged <task-id>   # read each pull request Orbit recorded for the task
+orbit task settle-merged             # match every candidate against the recent merges
+```
+
+A task settles only when all of these hold:
+
+- it is `blocked`, `in-progress` or `review`;
+- no run or unsettled execution claim of its own is live, and no live `run auto`
+  leaf carries it. That run lands or fails the task itself;
+- one of its delivery pull requests is merged into the task's target branch. A
+  delivery pull request has an `orbit/<task-id>-…` head branch and a body naming the
+  task. Its author is a delivery identity (`pr.delivery_authors`, else the forge
+  login), or it is a follower handoff the owner accepted. The target branch is that
+  handoff's landing branch, else the base branch of the task's delivery run, else
+  the workspace base branch.
+
+The settlement records an `external_merge_settled` history entry from the old
+status to `done`. Its landing note names the pull request, the branch and the merge
+commit. A task with no execution summary gets one naming the same landing. The
+settlement starts no work, so another task's execution claim on the same files does
+not refuse it. The task's other open Orbit pull requests close as on any landing.
+`orbit task settle-merged <task-id>` names the reason a task does not settle, such
+as its own live claim or no merge into its target branch.
+
 ## Replay from the beginning
 
 When checkpoint outputs are invalid or the run must start from step zero:
