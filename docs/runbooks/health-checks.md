@@ -65,7 +65,7 @@ SQLite `PRAGMA quick_check`; it reads the entire store and can take much longer 
 | `provider-limits:operation.review_crew` | That lane's crew uses a provider a reading gates | `warning` with the reset. This lane is not gated, so its runs may fail until then; wait, or point the setting at a crew on another provider. A single `provider-limits` `warning` replaces every row when the store cannot be read. |
 | `mcp-registration` | Recognized client configuration for this workspace | `ok` when a registration is found (connection is **not** checked); otherwise `warning` naming `orbit mcp init --auto` or `orbit mcp init --client <client>`. |
 | `mcp-callers` | Retired destination-side caller-authorization files under the user's `~/.orbit` | `warning` when inert files remain; otherwise `ok`. Remove the obsolete files; SSH keys govern remote access. The row is omitted when the home directory cannot be resolved. |
-| `clock-unit` | Installed launchd/systemd sweep unit's invocation, program path, and `--version` | `skipped` when no unit is installed; `ok` when matching; `warning` for a different path, stale invocation, unrunnable program, or inspection failure; `error` for version mismatch. Follow the unit-file/access remedy or `orbit clock repair`; this row does not establish native timer readiness. |
+| `clock-unit` | Installed launchd/systemd sweep unit's invocation, program path, `--version`, and whether that timer is armed | `skipped` when no unit is installed; `ok` when the unit matches and, on Linux, `orbit-sweep.timer` is enabled and active, or, on macOS, `com.orbit.sweep` is loaded and `~/.orbit/logs/sweep.log` was written within the tick interval; `warning` for a different path, stale invocation, unrunnable program, inspection failure, a disabled or inactive timer, an unloaded agent, or a sweep log older than the tick interval; `error` for version mismatch. `orbit clock repair` rewrites the unit file. `orbit clock enable` is the fix when the timer is not armed. An operator pause stays `paused` on `orbit clock status` and is still this warning. |
 | `store-retention` | Reclaimable audit rows, terminal-run pipeline state, candidate audit blobs, and SQLite file/free-list space under configured retention windows | `ok` when measured; `warning` if inspection fails. This is a read-only estimate. Plan audit and run cleanup with `orbit gc audit` and `orbit gc runs`, then pass `--apply` to delete. The blob amount is an upper bound until the audit reference scan. |
 | `worktree-reclaim` | Bytes reclaimable from kept run worktrees and host validation output | `warning` above 10 GiB or when inspection fails; otherwise `ok`. Inspect `orbit gc worktrees --reclaim`; to reclaim the declared output, run `ORBIT_OPERATOR=1 orbit gc worktrees --reclaim --confirm`. `skipped` outside a Git checkout. |
 
@@ -408,14 +408,18 @@ same comparison in check form:
 
 - **ok** — the unit invokes this binary (canonical path and version match)
 - **warning** — the unit's program path differs but `--version` matches (two installs; the
-  clock can drift), or the named program is missing/unrunnable
+  clock can drift), the named program is missing/unrunnable, the Linux timer is disabled
+  or inactive, the macOS agent is not loaded, or `~/.orbit/logs/sweep.log` is older than
+  the tick interval. The fix for an unarmed timer is `orbit clock enable`
 - **ERROR** — the unit's program reports a different version than this binary. The row names
   the unit file, both program paths, and both versions. Rewrite the unit with
   `orbit clock repair`, or repoint the package-manager install the unit
   names so it is this version
 - **skipped** — no launchd plist or systemd user service is installed
 
-`orbit clock repair` is the repair for every one of those rows. It rewrites the installed unit
+When a unit is installed, a matching program is not enough for `ok`. On Linux the systemd user timer must be enabled and active. On macOS the launchd agent must be loaded and `~/.orbit/logs/sweep.log` must have been written within the configured tick interval. A disabled or inactive timer, an unloaded agent, or a sweep log older than that interval is a warning, and the fix is `orbit clock enable`. `orbit clock status` still reports an operator pause as `paused`: a stopped clock is not a clock-status failure, and there is no separate pause record that would let doctor tell a pause from a timer that was never enabled. Doctor warns in both cases because unattended sweeps are not running.
+
+`orbit clock repair` is the repair for a unit whose program or recovery settings drifted. It does not resume a paused clock. It rewrites the installed unit
 to this binary and re-registers it with launchd/systemd, prints what it changed, and exits
 non-zero when the manager would not reload the rewritten unit. A unit that already names this
 binary is left alone, and a paused clock is corrected on disk without being resumed — use
@@ -461,7 +465,8 @@ post-activation verification.
 
 Systemd enablement and runtime activity can differ. A disabled timer that is still active is
 reported as `unhealthy` with `running: true` and its next trigger when known. Run `orbit clock
-pause` to stop it. Pause checks the resulting inactive state and absence of a future trigger
+pause` to stop it. A disabled or inactive timer is a `clock-unit` warning in `orbit doctor`;
+run `orbit clock enable` to arm it again. Pause checks the resulting inactive state and absence of a future trigger
 before reporting success; an unavailable manager or ambiguous state makes pause fail. The
 dashboard also marks this state unhealthy and offers **Pause clock**.
 
@@ -474,7 +479,9 @@ program that cannot report a version (the same detection behind `orbit doctor`'s
 `properties`, or when the dump cannot be read at all. Each case prints the reason and the
 same recovery: `orbit clock enable` rewrites the unit to this binary and reloads it.
 Enable checks these signals even when the agent is already loaded; a healthy loaded
-agent keeps running without a rewrite or reload. The version probe retains its
+agent keeps running without a rewrite or reload. `orbit doctor`'s `clock-unit` row is also a
+warning when `launchctl list com.orbit.sweep` shows the agent is not loaded, or when
+`~/.orbit/logs/sweep.log` is missing or older than the configured tick interval. The version probe retains its
 three-second deadline and process-group cleanup; debug tracing records the health
 reason before an enable operation rewrites and reloads the agent. Pause unloads the agent without
 rewriting it or trying to repair its health. The

@@ -3,9 +3,10 @@
 //! `orbit run readiness`, `orbit doctor` and the dashboard show provider
 //! limits only through [`ProviderLimitsView`], never by reading the store: which
 //! readings are live, which keep their crews out of delivery admission, until
-//! when, and which crews those are. Liveness, thresholds and crew coverage are
-//! admission's own rules (`provider_limit`), so no surface can disagree with
-//! the drain about what is gated.
+//! when, which crews those are, and how old each reading is. Liveness,
+//! thresholds and crew coverage are admission's own rules (`provider_limit`),
+//! so no surface can disagree with the drain about what is gated. A reading
+//! observed on an earlier UTC date is stale even while its reset keeps it live.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -40,6 +41,14 @@ pub struct ProviderLimitReading {
     pub resets_at: Option<DateTime<Utc>>,
     pub source: ProviderLimitSource,
     pub observed_at: DateTime<Utc>,
+    /// Seconds from `observed_at` until the view was built. Never negative:
+    /// a reading observed in the future reports `0`.
+    #[serde(default)]
+    pub age_seconds: i64,
+    /// Whether `observed_at` falls on an earlier UTC date than the view.
+    /// A reading from earlier the same UTC date is fresh.
+    #[serde(default)]
+    pub stale: bool,
     /// Whether reaching this window stops the account's runs; an overage
     /// window is shown but never gates.
     pub gating: bool,
@@ -221,6 +230,8 @@ impl ProviderLimitsView {
                     resets_at: observation.resets_at,
                     source: observation.source,
                     observed_at: observation.observed_at,
+                    age_seconds: (now - observation.observed_at).num_seconds().max(0),
+                    stale: observation.observed_at.date_naive() < now.date_naive(),
                     gating: observation.gating,
                     partial: observation.partial,
                     threshold,

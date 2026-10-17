@@ -246,6 +246,7 @@
         "application/routines/clock/tests/manager.rs::missing_manager_program_names_the_command",
         "application/routines/clock/tests/status.rs::active_timer_does_not_hide_an_overdue_tick_or_a_failed_tick",
         "application/routines/clock/tests/status.rs::active_timer_with_infinite_next_elapse_waits_for_the_service_tick",
+        "application/routines/clock/tests/status.rs::launchd_doctor_readiness_flags_an_unloaded_agent_or_a_stale_sweep_log",
         "application/routines/tests/materialize.rs::confined_writer_preserves_the_previous_file_when_staging_write_fails",
         "application/routines/tests/materialize.rs::confined_writer_refuses_links",
         "application/routines/tests/materialize.rs::confined_writer_replaces_the_file_without_changing_an_open_readers_content",

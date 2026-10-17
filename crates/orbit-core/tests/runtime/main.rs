@@ -36,6 +36,7 @@ mod admission_forecast;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod agent_sandbox_mask;
 mod artifact_tools;
+mod audit_commit_report;
 mod auto_task_update;
 mod baseline_hold_refresh;
 mod baseline_hold_tick;
@@ -50,6 +51,7 @@ mod drain_cancel;
 mod drain_extend;
 mod final_recovery;
 mod finding_verification;
+mod fixture_template;
 mod flaky_validation;
 mod forecast_accuracy;
 mod forge_hold_resume;

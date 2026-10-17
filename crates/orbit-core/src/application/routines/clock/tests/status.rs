@@ -1,9 +1,12 @@
 //! Fault-injected native service state, including a stuck oneshot tick.
 
+use std::path::Path;
+use std::time::{Duration, SystemTime};
+
 use super::super::manager::{
     ClockCommandRunner, ClockPlatform, ManagerCommand, ManagerCommandOutput,
 };
-use super::super::status::clock_status_with;
+use super::super::status::{LaunchdHealthProbe, clock_status_with, doctor_clock_not_running_issue};
 use orbit_automation::routines::sweep::TICK_DEADLINE;
 use orbit_common::OrbitError;
 
@@ -129,5 +132,110 @@ fn active_timer_with_infinite_next_elapse_waits_for_the_service_tick() {
                 "systemd timer is enabled but is not active with a finite future trigger"
             ));
         }
+    }
+}
+
+/// Substitute `launchctl` plus a temp sweep log. Guards the doctor signal that
+/// an unloaded agent or a sweep log older than the tick interval is not ok,
+/// while a loaded agent with a fresh log is.
+#[cfg(unix)]
+#[test]
+fn launchd_doctor_readiness_flags_an_unloaded_agent_or_a_stale_sweep_log() {
+    for (name, loaded, stale) in [
+        ("not loaded", false, false),
+        ("stale log", true, true),
+        ("loaded and fresh", true, false),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let probe = LaunchdHealthProbe::at(root.path()).unwrap();
+        let status = clock_status_with(
+            root.path(),
+            ClockPlatform::Launchd,
+            &Launchctl { loaded },
+            Some(&probe),
+            None,
+        )
+        .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let age = if stale {
+            Duration::from_secs(status.configured_cadence_seconds.saturating_add(120))
+        } else {
+            Duration::ZERO
+        };
+        write_sweep_log(root.path(), age);
+        let issue = doctor_clock_not_running_issue(&status, root.path());
+        match (loaded, stale) {
+            (false, _) => {
+                let issue = issue.expect(name);
+                assert!(issue.contains("not loaded"), "{name}: {issue}");
+                assert!(issue.contains("orbit clock enable"), "{name}: {issue}");
+                assert!(!issue.contains("older than"), "{name}: {issue}");
+            }
+            (true, true) => {
+                let issue = issue.expect(name);
+                assert!(issue.contains("older than"), "{name}: {issue}");
+                assert!(issue.contains("sweep.log"), "{name}: {issue}");
+                assert!(issue.contains("orbit clock enable"), "{name}: {issue}");
+                assert!(!issue.contains("not loaded"), "{name}: {issue}");
+            }
+            (true, false) => {
+                assert!(issue.is_none(), "{name}: {issue:?}");
+                assert!(status.enabled, "{name}");
+                assert!(status.health_issue.is_none(), "{name}: {status:?}");
+            }
+        }
+    }
+}
+
+struct Launchctl {
+    loaded: bool,
+}
+
+impl ClockCommandRunner for Launchctl {
+    fn run(&self, command: &ManagerCommand) -> Result<bool, OrbitError> {
+        self.probe(command).map(|output| output.success)
+    }
+
+    fn stdout(&self, command: &ManagerCommand) -> Result<Option<String>, OrbitError> {
+        let output = self.probe(command)?;
+        Ok(output.success.then_some(output.stdout))
+    }
+
+    fn probe(&self, command: &ManagerCommand) -> Result<ManagerCommandOutput, OrbitError> {
+        let display = command.display();
+        if display.contains("list com.orbit.sweep") {
+            if self.loaded {
+                return Ok(launchctl_output(true, "123\t0\tcom.orbit.sweep\n", ""));
+            }
+            return Ok(launchctl_output(
+                false,
+                "",
+                "Could not find service \"com.orbit.sweep\" in domain",
+            ));
+        }
+        if display.contains("print ") {
+            return Ok(launchctl_output(true, "last exit code = 0\n", ""));
+        }
+        Err(OrbitError::Execution(format!(
+            "unexpected launchctl command {display}"
+        )))
+    }
+}
+
+fn launchctl_output(success: bool, stdout: &str, stderr: &str) -> ManagerCommandOutput {
+    ManagerCommandOutput {
+        success,
+        exit_code: Some(if success { 0 } else { 113 }),
+        stdout: stdout.to_string(),
+        stderr: stderr.to_string(),
+    }
+}
+
+fn write_sweep_log(root: &Path, age: Duration) {
+    let path = root.join("logs").join("sweep.log");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let file = std::fs::File::create(&path).unwrap();
+    if age > Duration::ZERO {
+        file.set_modified(SystemTime::now().checked_sub(age).unwrap())
+            .unwrap();
     }
 }

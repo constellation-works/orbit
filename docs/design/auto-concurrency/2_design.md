@@ -335,9 +335,12 @@ For each minute `m` since admission, the profile holds:
 | `alive(m)` | fraction of deliveries still running at minute `m` |
 | `cpu(m)` | mean cores used at `m`, over the deliveries alive at `m` |
 | `mem(m)` | 90th-percentile memory at `m`, over the deliveries alive at `m` |
+| `mem_mean(m)`, `mem_sd(m)` | mean and standard deviation of that memory |
 
 CPU uses the mean and memory a high percentile because the costs differ. Too
-much CPU only slows everyone down. Too much memory kills a process.
+much CPU only slows everyone down. Too much memory kills a process. The
+memory mean and spread let the forecast sum several deliveries' memory as a
+quantile of the sum (§4.1) rather than adding their percentiles.
 
 `alive` gives the duration distribution. The candidate's **horizon** `H` is
 the minute at which `alive` falls below 0.1, the 90th-percentile duration,
@@ -405,9 +408,12 @@ F(t) = B + Σ over running deliveries i of P_i(a_i + t) · alive_i(a_i + t) / al
   included.
 - **Reservations.** An admission that has been decided but whose run does not
   exist yet is a reservation (§5.2). It is counted from `t = 0`.
+- **Memory sums as a quantile.** For memory, the sum over profiled
+  deliveries and reservations is a high quantile of their summed memory, not
+  the sum of their 90th percentiles (§4.1).
 
-Implemented in `runtime/host_resource/forecast/` (`build.rs`, `host_load.rs`)
-and built only under the host admission lock (§5.2):
+Implemented in `runtime/host_resource/forecast/` (`build.rs`, `host_load.rs`,
+`memory.rs`) and built only under the host admission lock (§5.2):
 
 - **Running set.** Live (`pending`, `running`, `retrying`) runs of the
   delivery jobs (`runtime/host_resource/delivery.rs`) in every workspace,
@@ -430,6 +436,57 @@ and built only under the host admission lock (§5.2):
   minute, plus the running deliveries and reservations with the profile step
   that described each, and the profiles a caller looks candidates up in.
 
+### 4.1 Summed memory
+
+Each delivery's `mem(m)` is its own 90th percentile. Adding those for `N`
+deliveries forecasts the case where every one of them is at its 90th
+percentile at once, which is far rarer than one in ten, so the over-statement
+grows with `N`. On dk-server-1 on 2026-10-17, four deliveries measured
+4.4 GiB on average and 9.4 GiB at most, against a sum of percentiles of about
+15.6 GiB for five or six, and admission was held at `admit_memory_percent`
+with 24 GiB available.
+
+At minute `t`, each profiled delivery or reservation `i`, still running with
+chance `s_i` (`alive_i(a_i + t) / alive_i(a_i)` for a running delivery,
+`alive_r(t)` for a reservation or candidate), contributes its percentile
+`p_i = mem_i · s_i`, its mean `μ_i = mem_mean_i · s_i`, and the variance of
+"running with chance `s_i`, then drawn from that minute's deliveries":
+`v_i = s_i · mem_sd_i² + s_i · (1 − s_i) · mem_mean_i²`. Treating the
+deliveries' memory as independent, their sum is about normal, and
+
+```
+F_mem(t) = B + held flat + clamp(Σ μ_i + z · sqrt(Σ v_i), max p_i, Σ p_i)
+```
+
+with `z = 1.645`, the sum's 95th percentile, in whole bytes. The clamp keeps
+one delivery at exactly its 90th-percentile profile value, never puts `N`
+deliveries below the largest of them, and never forecasts more than the sum
+of percentiles did. The baseline and deliveries held at their measured use
+stay exact. A pending pull counts, at each minute, the alternative with the
+most `p_i` as one delivery (§5.2).
+
+**Why memory stays more conservative than CPU.** CPU sums each delivery's
+mean, `Σ cpu_i · s_i`: an over-forecast only slows everyone down. Memory sums
+to a high quantile, at least the largest single delivery's 90th percentile,
+because too much memory kills a process. The quantile sits `z` standard
+deviations of the sum above its mean, so wider profiles forecast more, and
+the term `s_i · (1 − s_i) · mem_mean_i²` adds the chance that a delivery
+expected to have finished is still running.
+
+**Evaluation.** Chosen by replaying the recorded forecast/actual pairs of
+dk-server-1's store (`orbit run profiles --accuracy`) on 2026-10-17: each
+recorded point kept its baseline and other terms, and the sum of the
+replayed profiled deliveries' percentiles was swapped for the quantile. The
+replay rebuilt profiles from the deliveries finished before each forecast
+and reconstructed the recorded forecasts with a median residual of
+−0.09 GiB. In the enforce cohort, the only one with two or more profiled
+deliveries in a forecast, the +5m mean memory over-forecast fell from
++6.34 GiB to +4.01 GiB, its worst from +18.5 GiB to +9.8 GiB, and
+under-forecast minutes stayed at 8.3%. `z = 1.282`, the sum's 90th
+percentile, under-forecast 8.7% at +5m but 14.7% at +10m against 10.0%.
+The earlier shadow cohort rarely had two profiled deliveries at once and
+barely moves: +1.01 GiB and 25.0% under at +5m, before and after.
+
 ## 5. Admission
 
 ### 5.1 Gap fit
@@ -441,8 +498,11 @@ every `t` in `0 … H_c`:
 
 ```
 F_cpu(t) + P_c.cpu(t) · alive_c(t) ≤ admit_cpu_percent    × host cores
-F_mem(t) + P_c.mem(t) · alive_c(t) ≤ admit_memory_percent × host memory
+F_mem(t) with P_c in its summed quantile ≤ admit_memory_percent × host memory
 ```
+
+The candidate joins the memory quantile of §4.1 as one more delivery with
+`s_c = alive_c(t)`; alone, it is `P_c.mem(t) · alive_c(t)`.
 
 When a candidate is admitted, its profile is added to `F` before the next
 candidate is checked. One pass can therefore admit several tasks, each
@@ -544,9 +604,11 @@ Implemented as `OrbitRuntime::admit_against_forecast`, over the store's
   was created at or after the reservation. Rows older than five minutes are
   deleted when the next lock is taken. A pending pull holds the alternatives
   in its final admissible set under one `pending:<request_id>` key. Its CPU
-  and memory contributions are the maximum at each minute across those
-  alternatives, not their sum: exactly one task can be granted. This covers
-  different CPU and memory peaks without assuming one profile dominates both.
+  contribution is the maximum at each minute across those alternatives, and
+  its memory the alternative with the most 90th-percentile memory at that
+  minute, counted as one delivery in the quantile (§4.1), not their sum:
+  exactly one task can be granted. This covers different CPU and memory
+  peaks without assuming one profile dominates both.
 - **Exchange and release.** The store can remove reservation keys, read the
   remaining load and write replacements in one host transaction. A returned
   claim replaces its pending key with the task's precise key before creating
@@ -768,7 +830,7 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   every pass with `mode = off`, records nothing. Recording is best effort,
   like `drain_last_pass`.
 - **What is forecast.** The recorded value is `F(t)` plus each task the
-  pass actually admitted, at `P(t) · alive(t)` as a reservation counts: the
+  pass actually admitted, counted as a reservation counts: the
   load the forecast expects given what admission did. Under `shadow` that is
   the `off` wave, not the gap-fit wave. A baseline that could not be read
   counts as zero, as it did for admission.
@@ -849,11 +911,15 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
 - **Averaging blurs spikes.** Tasks of one class and complexity differ in
   length, so the validation build lands at different minutes. A per-minute average of
   misaligned spikes is a lower, wider hump. The forecast then underestimates
-  peaks and overestimates how long moderate load lasts. The 90th percentile
+  peaks and overestimates how long moderate load lasts. The high quantile
   for memory and the throttle backstop absorb part of this. Profiles aligned
   to pipeline steps instead of minutes would fix it
   ([3_vision.md §1](./3_vision.md#1-open-questions), question 1). The
   profiles report in step 2 shows how bad it is before anything enforces.
+- **Summed memory assumes independence.** The quantile of §4.1 treats
+  deliveries' memory as independent. Deliveries that peak together, such as
+  validation builds started in the same minute, can exceed it; the floor at
+  the largest single percentile and the throttle backstop bound the miss.
 - **Labels are coarse.** Complexity is set at filing or by the task pilot,
   and is sometimes wrong. A code change filed without its real size, or a
   task that writes code while tagged `no-diff-expected`, carries the wrong

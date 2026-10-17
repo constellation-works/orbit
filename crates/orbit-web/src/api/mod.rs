@@ -29,6 +29,7 @@ mod reliability;
 mod routes;
 pub(crate) mod routines;
 mod run_failure;
+mod run_lineage;
 mod run_tasks;
 mod runs;
 mod search;

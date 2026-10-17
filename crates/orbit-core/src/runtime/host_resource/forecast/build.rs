@@ -7,10 +7,12 @@ use chrono::{DateTime, Utc};
 use orbit_store::contracts::{AdmissionLoad, AdmissionRun};
 use orbit_types::workflow::AUTO_TASK_TAG_PREFIX;
 
-use super::{ForecastSeries, HostLoad, HostLoadForecast, ReservedAdmission, RunningDelivery};
+use super::{
+    ForecastSeries, HostLoad, HostLoadForecast, MemoryTerms, ReservedAdmission, RunningDelivery,
+};
 use crate::runtime::host_resource::delivery::resource_class_in;
 use crate::runtime::host_resource::profile::{
-    BaseClass, ProfileLookup, ProfileMatch, ProfilePeak, ProfileSet, ResourceProfile,
+    BaseClass, ProfileLookup, ProfileMatch, ProfileMinute, ProfilePeak, ProfileSet, ResourceProfile,
 };
 use crate::runtime::run_input::singular_task_id_from_input;
 
@@ -18,7 +20,9 @@ use crate::runtime::run_input::singular_task_id_from_input;
 /// so the lookup falls back to the heavier profiles.
 const UNKNOWN_WORK_CLASS: &str = "change";
 
-type PendingSeries = (Vec<f64>, Vec<f64>);
+/// A pending pull's CPU per minute, and the profile minute of its alternative
+/// with the most memory then.
+type PendingSeries = (Vec<f64>, Vec<Option<ProfileMinute>>);
 
 /// The forecast over `0 ..= horizon` minutes from `now`.
 pub(crate) fn build_forecast(
@@ -32,7 +36,7 @@ pub(crate) fn build_forecast(
         .unwrap_or(usize::MAX)
         .saturating_add(1);
     let mut cpu = vec![0.0; points];
-    let mut memory = vec![0.0; points];
+    let mut memory = vec![MemoryTerms::default(); points];
 
     let mut running = Vec::new();
     for delivery in running_deliveries(load, now) {
@@ -47,9 +51,9 @@ pub(crate) fn build_forecast(
         match profile {
             Some(profile) => add_running(profile, age, &mut cpu, &mut memory),
             None => {
-                for (cores, bytes) in cpu.iter_mut().zip(memory.iter_mut()) {
+                for (cores, terms) in cpu.iter_mut().zip(memory.iter_mut()) {
                     *cores += delivery.current_cpu_cores;
-                    *bytes += delivery.current_memory_bytes as f64;
+                    terms.add_flat(delivery.current_memory_bytes as f64);
                 }
             }
         }
@@ -80,16 +84,21 @@ pub(crate) fn build_forecast(
         if let Some(profile) = found.profile.as_deref() {
             for (t, minute) in profile.series.iter().take(points).enumerate() {
                 let cores = minute.cpu_cores * minute.alive;
-                let bytes = minute.memory_bytes as f64 * minute.alive;
                 if reservation.task_id.starts_with("pending:") {
                     let (cpu, memory) = pending
                         .entry((&reservation.workspace_id, &reservation.task_id))
-                        .or_insert_with(|| (vec![0.0; points], vec![0.0; points]));
+                        .or_insert_with(|| (vec![0.0; points], vec![None; points]));
                     cpu[t] = cpu[t].max(cores);
-                    memory[t] = memory[t].max(bytes);
+                    let bytes = |at: &ProfileMinute| at.memory_bytes as f64 * at.alive;
+                    if memory[t]
+                        .as_ref()
+                        .is_none_or(|heaviest| bytes(minute) > bytes(heaviest))
+                    {
+                        memory[t] = Some(minute.clone());
+                    }
                 } else {
                     cpu[t] += cores;
-                    memory[t] += bytes;
+                    memory[t].add_profiled(minute, minute.alive);
                 }
             }
         }
@@ -107,7 +116,9 @@ pub(crate) fn build_forecast(
     for (pending_cpu, pending_memory) in pending.into_values() {
         for t in 0..points {
             cpu[t] += pending_cpu[t];
-            memory[t] += pending_memory[t];
+            if let Some(minute) = &pending_memory[t] {
+                memory[t].add_profiled(minute, minute.alive);
+            }
         }
     }
 
@@ -119,6 +130,12 @@ pub(crate) fn build_forecast(
         .and_then(|host| host.cpu_cores)
         .map(|cores| (cores - running_cpu).max(0.0));
     let memory_baseline = host.map(|host| host.memory_bytes.saturating_sub(running_memory) as f64);
+    for cores in &mut cpu {
+        *cores += cpu_baseline.unwrap_or(0.0);
+    }
+    for terms in &mut memory {
+        terms.add_flat(memory_baseline.unwrap_or(0.0));
+    }
 
     HostLoadForecast {
         at: now,
@@ -127,26 +144,27 @@ pub(crate) fn build_forecast(
         running,
         reservations,
         cpu: series(cpu_baseline, cpu),
-        memory: series(memory_baseline, memory),
+        memory: series(
+            memory_baseline,
+            memory.iter().map(MemoryTerms::bytes).collect(),
+        ),
+        memory_terms: memory,
         profiles,
     }
 }
 
 /// `P_i(a_i + t) · alive_i(a_i + t) / alive_i(a_i)` for each `t`.
-fn add_running(profile: &ResourceProfile, age: usize, cpu: &mut [f64], memory: &mut [f64]) {
+fn add_running(profile: &ResourceProfile, age: usize, cpu: &mut [f64], memory: &mut [MemoryTerms]) {
     let alive_now = profile.series[age].alive;
     for (t, minute) in profile.series[age..].iter().take(cpu.len()).enumerate() {
         let still_running = minute.alive / alive_now;
         cpu[t] += minute.cpu_cores * still_running;
-        memory[t] += minute.memory_bytes as f64 * still_running;
+        memory[t].add_profiled(minute, still_running);
     }
 }
 
-fn series(baseline: Option<f64>, mut minutes: Vec<f64>) -> ForecastSeries {
-    let flat = baseline.unwrap_or(0.0);
-    for value in &mut minutes {
-        *value += flat;
-    }
+/// The series of `minutes`, which already count `baseline`.
+fn series(baseline: Option<f64>, minutes: Vec<f64>) -> ForecastSeries {
     let peak = minutes.iter().enumerate().fold(
         ProfilePeak {
             minute: 0,

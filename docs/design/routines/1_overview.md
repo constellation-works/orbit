@@ -101,7 +101,7 @@ fragmentation this feature exists to end.
   definitions, records state, and exits. `orbit sweep` is a compatibility alias.
 - **Routine source** — a registered, active owner checkout on the host: registration
   is the whole opt-in [ORB-12236]. A replica checkout schedules only its host-local
-  worktree-GC routine; its other routines are owner-only ([2_design.md §2.1](./2_design.md#21-replica-checkouts-host-local-worktree-gc-only)).
+  worktree-GC and store-GC routines; its other routines are owner-only ([2_design.md §2.1](./2_design.md#21-replica-checkouts-host-local-worktree-gc-and-store-gc)).
 - **Host identity** — the `machine_id`, name, and task prefix in host-local config under
   `~/.orbit/`. The ID names run ownership and display and binds state-triggered routines
   to their owner machine.
