@@ -81,6 +81,8 @@ pub mod test_support {
     pub use crate::application::job::pipeline::worker_command_override::install_process_wide as install_substitute_pipeline_worker;
     pub use crate::application::landing::with_landing_retry_reservation_hook;
     pub use crate::application::managed_assets::test_support::with_auto_task_manifest_read_hook;
+    /// Fail the next drain pass's release of its unadmitted gap-fit reservations.
+    pub use crate::application::workspace_auto::with_reservation_release_failure;
     pub use crate::runtime::{
         with_host_load_sampling_wait, with_owner_read_retry_wait, with_pipeline_poll_wait,
     };
