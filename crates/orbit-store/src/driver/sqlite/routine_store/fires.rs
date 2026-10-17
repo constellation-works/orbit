@@ -4,7 +4,7 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
-use super::{RoutineFireIntentParams, RoutineFireRecord, RoutineFireState};
+use super::{RoutineFireIntentParams, RoutineFireRecord, RoutineFireState, RoutineSlotAttempts};
 use crate::Store;
 
 impl Store {
@@ -169,6 +169,41 @@ impl Store {
         )
     }
 
+    /// Highest attempt number on one slot, and how many of those rows are
+    /// real tries. `None` when the slot has no fires.
+    ///
+    /// A drain-skipped retry occupies `highest` and is excluded from
+    /// `non_skipped`, so retry selection can step past it without spending
+    /// `retries.max`.
+    pub fn routine_slot_attempts(
+        &self,
+        routine_name: &str,
+        slot: &str,
+    ) -> Result<Option<RoutineSlotAttempts>, OrbitError> {
+        let conn = self.read()?;
+        let (highest, non_skipped) = conn
+            .query_row(
+                "SELECT MAX(attempt),
+                        COALESCE(SUM(CASE WHEN state != 'skipped' THEN 1 ELSE 0 END), 0)
+                 FROM routine_fires
+                 WHERE routine_name = ?1 AND slot = ?2",
+                params![routine_name, slot],
+                |row| {
+                    let highest: Option<i64> = row.get(0)?;
+                    let non_skipped: i64 = row.get(1)?;
+                    Ok((highest, non_skipped))
+                },
+            )
+            .map_err(sqlite_store_error)?;
+        let Some(highest) = highest else {
+            return Ok(None);
+        };
+        Ok(Some(RoutineSlotAttempts {
+            highest: sql_attempt(highest)?,
+            non_skipped: sql_attempt(non_skipped)?,
+        }))
+    }
+
     /// Newest successful fire. Freshness uses `updated_at`, so a catch-up slot
     /// that just succeeded counts as recent even when its scheduled slot is old.
     pub fn routine_latest_succeeded_fire(
@@ -244,6 +279,14 @@ impl Store {
 
 const FIRE_COLUMNS: &str =
     "routine_name, slot, attempt, state, run_id, source_workspace, detail, created_at, updated_at";
+
+fn sql_attempt(value: i64) -> Result<u32, OrbitError> {
+    u32::try_from(value).map_err(|_| {
+        OrbitError::Store(format!(
+            "routine fire attempt {value} is outside the supported range"
+        ))
+    })
+}
 
 struct FireRow {
     routine_name: String,

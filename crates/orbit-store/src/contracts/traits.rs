@@ -24,7 +24,8 @@ use super::invocation::{
 };
 use super::params::*;
 use super::routine::{
-    RoutineCursor, RoutineFireIntentParams, RoutineFireRecord, RoutineFireState, RoutinePauseRecord,
+    RoutineCursor, RoutineFireIntentParams, RoutineFireRecord, RoutineFireState,
+    RoutinePauseRecord, RoutineSlotAttempts,
 };
 use super::session_log::{SessionLogAppendParams, SessionLogEntry, SessionLogFilter};
 use super::v2_audit::{
@@ -539,6 +540,15 @@ pub trait RoutineStoreBackend: Send + Sync {
         &self,
         routine_name: &str,
     ) -> Result<Option<RoutineFireRecord>, OrbitError>;
+    /// Highest attempt and non-skipped count for one slot.
+    ///
+    /// `None` when the slot has no fires. Skipped rows raise `highest`
+    /// without increasing `non_skipped`.
+    fn routine_slot_attempts(
+        &self,
+        routine_name: &str,
+        slot: &str,
+    ) -> Result<Option<RoutineSlotAttempts>, OrbitError>;
     fn routine_unresolved_fires(&self) -> Result<Vec<RoutineFireRecord>, OrbitError>;
     fn routine_recent_fires(
         &self,
