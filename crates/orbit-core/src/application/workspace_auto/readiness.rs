@@ -57,7 +57,9 @@ pub fn explain_workspace_auto_readiness(
     // [ORB-11253] Without an explicit `--concurrency`, report what the live
     // drain is admitting under — including an operator adjustment — rather than
     // the static default, so readiness and the drain cannot disagree about the
-    // ceiling that decides `capacity_saturated`.
+    // ceiling that decides `capacity_saturated`. A replica often has no local
+    // drain: its pull drain's own ceiling is that number [ORB-16337]. A local
+    // drain still wins when both are live.
     let (active_drain, queued_drains) = workspace_drains(runtime)?;
     let pull_drain = live_pull_drain(runtime)?;
     let recent_drain = if active_drain.is_none() {
@@ -128,18 +130,27 @@ pub fn explain_workspace_auto_readiness(
     } else {
         "idle"
     };
-    let (max_active_leaf_runs, limit_source) = match (max_active_leaf_runs, &active_drain) {
-        (Some(requested), _) => (u64::from(requested), "requested"),
-        (None, Some(drain)) => (
-            u64::from(drain.effective_max_active_leaf_runs()),
-            if drain.limit.is_some() {
-                "run_control"
-            } else {
-                "run_input"
-            },
-        ),
-        (None, None) => (DEFAULT_MAX_ACTIVE_LEAF_RUNS, "default"),
-    };
+    let (max_active_leaf_runs, limit_source) =
+        match (max_active_leaf_runs, &active_drain, &pull_drain) {
+            (Some(requested), _, _) => (u64::from(requested), "requested"),
+            (None, Some(drain), _) => (
+                u64::from(drain.effective_max_active_leaf_runs()),
+                if drain.limit.is_some() {
+                    "run_control"
+                } else {
+                    "run_input"
+                },
+            ),
+            (None, None, Some(drain)) => (
+                u64::from(drain.effective_max_active_leaf_runs()),
+                if drain.limit.is_some() {
+                    "pull_run_control"
+                } else {
+                    "pull_run_input"
+                },
+            ),
+            (None, None, None) => (DEFAULT_MAX_ACTIVE_LEAF_RUNS, "default"),
+        };
 
     // Validated here, before any snapshot work, so a typo reads the same way
     // it would on `orbit run auto --allow-crew`.
@@ -723,8 +734,9 @@ pub fn explain_workspace_auto_readiness(
                 .and_then(|drain| drain.stop.clone()),
             // A replica's live pull drain is a second coordinator the same
             // stop control acts on; it is reported apart from `drain_run_id`
-            // because it admits leaves the owner assigned, under the owner's
-            // ceiling, and never reads this workspace's auto ceiling.
+            // because it admits leaves the owner assigned. When no local drain
+            // is live, `max_active_leaf_runs` above is this pull drain's own
+            // ceiling, not this workspace's auto default [ORB-16337].
             "pull_drain_run_id": pull_drain.as_ref().map(|drain| &drain.run_id),
             "pull_drain_admissions_stopped": pull_drain
                 .as_ref()

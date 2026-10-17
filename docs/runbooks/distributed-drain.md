@@ -1006,7 +1006,15 @@ request is audited on the run (`pipeline.run.window_extend.completed`, with
 idle one waiting at least `poll_sleep_seconds`) still bounds a drain extended
 over days; past it the drain ends and a new one carries its admissions. The drain's `--concurrency`, as last
 retuned, is the only ceiling on its leaves: the claimed leaf jobs declare no
-active-run limit of their own. A leaf in its before-landing review (the owner's
+active-run limit of their own. On the follower, `orbit run readiness` with no
+`--concurrency` and no local drain reports that ceiling. Text prints
+`Active leaf runs: <occupied>/<ceiling>` and the free slots left under it, plus
+a `Leaf ceiling:` line. `--json` sets `capacity.max_active_leaf_runs`,
+`capacity.free_slots`, and `capacity.limit_source` to `pull_run_input` for the
+submitted value or `pull_run_control` after `orbit run concurrency --set` (or
+`orbit run extend --concurrency`). A live local drain still supplies the
+ceiling instead (`run_input` or `run_control`), and with neither drain live
+the report stays at 5 (`default`). A leaf in its before-landing review (the owner's
 `review.before_landing`) runs no implementer but keeps its claim until it
 settles. Admission counts `occupied - min(reviewing, --concurrency)` against
 `--concurrency` before each claim. Reviewing starts after the persisted
