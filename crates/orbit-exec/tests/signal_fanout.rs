@@ -6,8 +6,9 @@
 //! Ctrl-C must terminate every live supervised process group, not only the
 //! one that happened to hold the (former) process-wide handler mutex.
 //!
-//! This lives in its own test binary so `raise(SIGINT)` cannot interrupt
-//! other `orbit-exec` unit tests sharing a process.
+//! This lives in its own test binary: it installs process-wide `sigaction`
+//! handlers and raises SIGINT and SIGTERM, which must not share a process
+//! with the other `orbit-exec` cases.
 
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
