@@ -510,6 +510,7 @@ const readinessEntries = {
   'ORB-46': { task_id: 'ORB-46', status: 'backlog', eligible: true, reason: 'ready' },
   'ORB-47': { task_id: 'ORB-47', status: 'backlog', eligible: false, reason: 'brand_new_wait', detail: 'something the dashboard has never heard of' },
   'ORB-48': { task_id: 'ORB-48', status: 'proposed', eligible: false, reason: 'not_backlog' },
+  'ORB-60': { task_id: 'ORB-60', status: 'backlog', eligible: false, reason: 'crew_not_allowed', crew: 'opus', allowed_crews: ['sol'] },
 };
 const readinessReads = [];
 const heldReads = new Map();
@@ -538,6 +539,7 @@ const cardTasks = [
   task(46, { status: 'backlog', readiness: advisoryGap }),
   task(47, { status: 'backlog', readiness: readyGaps }),
   task(48, { status: 'proposed', readiness: readyGaps }),
+  task(60, { status: 'backlog', readiness: readyGaps }),
   task(49, { status: 'backlog', readiness: readyGaps }),
 ];
 const cardContext = { ...taskContext, getActiveStatuses: () => new Set(['proposed', 'backlog']), statusOrder: ['proposed', 'backlog'] };
@@ -609,6 +611,13 @@ assert.ok(readinessCard('ORB-47').textContent.includes('brand new wait'));
 assert.deepEqual(cardHead('ORB-48'), ['', 'Waiting, other']);
 assert.ok(readinessCard('ORB-48').textContent.includes('awaits approval'), 'a proposed task still names approval as its cause');
 
+// ORB-16358: a task the live drain's `--allow-crew` set leaves out waits,
+// naming the crew it runs as and the crews the drain allows.
+assert.deepEqual(cardHead('ORB-60'), ['', 'Waiting, other']);
+assert.ok(readinessCard('ORB-60').textContent.includes('crew opus not allowed'), readinessCard('ORB-60').textContent);
+assert.ok(readinessCard('ORB-60').textContent.includes('it allows only sol'), readinessCard('ORB-60').textContent);
+assert.ok(!readinessCard('ORB-60').textContent.includes('Ready: nothing is missing.'), 'a crew-excluded task is never Ready');
+
 // No answer and no snapshot: the card says readiness is unknown, never Ready.
 assert.ok(readinessCard('ORB-49').textContent.includes('Drain readiness unknown: readiness unavailable.'), readinessCard('ORB-49').textContent);
 assert.ok(!readinessCard('ORB-49').textContent.includes('Ready'), 'unknown readiness is not Ready');
@@ -620,12 +629,22 @@ drainWaits.setDrainReadiness({ tasks: [
   { task_id: 'ORB-49', status: 'backlog', eligible: false, reason: 'capacity_saturated' },
 ] });
 paintCards();
-for (const id of ['ORB-41', 'ORB-42', 'ORB-43', 'ORB-44', 'ORB-45']) {
+for (const id of ['ORB-41', 'ORB-42', 'ORB-43', 'ORB-44', 'ORB-45', 'ORB-60']) {
   const [, pool] = cardHead(id);
   const dotLabel = dotOf(id).getAttribute('aria-label');
   assert.ok(dotLabel === pool || dotLabel.startsWith(`${pool}: `), `${id}: dot "${dotLabel}" matches card pool "${pool}"`);
 }
 assert.deepEqual(cardHead('ORB-49'), ['', 'Waiting on capacity'], 'the snapshot entry stands in');
+assert.equal(dotOf('ORB-60').getAttribute('aria-label'), 'Waiting, other: crew opus not allowed', 'the dot names the excluded crew');
+assert.ok(dotOf('ORB-60').title.includes('it allows only sol'), `the tooltip names the allowed crews: ${dotOf('ORB-60').title}`);
+assert.equal(dotOf('ORB-44').dataset.pool, 'eligible', 'a task the drain allows stays eligible');
+
+// The Drain card names the live drain's crews and the tasks they leave out.
+const crewNote = drainWaits.drainCrewNote({ capacity: { allowed_crews: ['sol'] }, tasks: Object.values(readinessEntries) });
+assert.ok(crewNote.textContent.includes('Allowed crews: sol.'), crewNote.textContent);
+assert.ok(crewNote.textContent.includes('1 backlog task runs as another crew and waits: ORB-60 (opus).'), crewNote.textContent);
+assert.ok(!crewNote.textContent.includes('ORB-44'), 'an eligible task is not listed as excluded');
+assert.equal(drainWaits.drainCrewNote({ capacity: { allowed_crews: null }, tasks: Object.values(readinessEntries) }), null, 'no restriction, no note');
 for (const item of cardTasks) {
   const title = rowFor(item.id).querySelector('button.title');
   title.parentNode.dispatch('click', { target: title });

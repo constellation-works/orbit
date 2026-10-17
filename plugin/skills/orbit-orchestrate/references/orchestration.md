@@ -170,7 +170,8 @@ for an auto drain it is opt-in and scoped to that run's window:
   choosing one.
 - A backlog task whose crew is excluded is **skipped, not remapped**. It stays in
   `backlog` on its own crew, and `orbit run readiness --allow-crew ...` reports it
-  as `crew_not_allowed` with the crew it would have run as. Moving that work to a
+  as `crew_not_allowed` with the crew it would have run as. Without `--allow-crew`,
+  readiness applies the live drain's own set (`capacity.allowed_crews`). Moving that work to a
   permitted crew is an operator decision — reassign the task, then it drains
   normally. Everything permitted keeps filling the slots at the usual rate.
 - It governs only what this drain *starts*. Tasks another invocation already has

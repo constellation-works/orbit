@@ -144,7 +144,8 @@ Common reasons a backlog task waits:
   then starts the task only when nothing else is running. File such tasks as
   `proposed` and let the pilot prepare them before promoting them.
 - **`crew_not_allowed`**, when you preview a
-  [crew restriction](#restrict-a-window-to-some-crews).
+  [crew restriction](#restrict-a-window-to-some-crews) or a running window
+  has one.
 - **`pilot_duplicate`** or **`pilot_already_landed`**: the latest applied
   task-pilot assessment found duplicate work or work already landed. This
   also holds tasks filed directly into backlog. Read the finding in the task
@@ -286,7 +287,9 @@ orbit run readiness --allow-crew opus,sonnet
   model is refused. The allowlist gates the crew that normal precedence picks;
   it never picks one.
 - **Skips, never remaps.** A task whose crew is excluded stays in `backlog`,
-  and readiness reports it as `crew_not_allowed`. **There is no automatic
+  and readiness reports it as `crew_not_allowed`, also without
+  `--allow-crew` while the window runs. The dashboard's Drain card lists the
+  window's allowed crews and the tasks they leave out. **There is no automatic
   fallback to another provider.** To move the task, change its crew in
   **Tasks** or with `orbit task update <id> --crew <name>`.
 - **Leaves other work alone.** Work another invocation already started keeps
