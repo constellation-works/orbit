@@ -1,3 +1,4 @@
+#[cfg(debug_assertions)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, PoisonError};
 
@@ -14,6 +15,7 @@ pub(super) const PIPELINE_WAIT_MIN_POLL_SECONDS: u64 = 1;
 /// Release builds ignore it. The virtual clock does not wake when a worker is
 /// reaped, so set it only on a deadline that must expire while the run is
 /// still active. A wait that should observe completion keeps the real clock.
+#[cfg(debug_assertions)]
 pub(crate) const PIPELINE_WAIT_VIRTUAL_ENV: &str = "ORBIT_TEST_PIPELINE_WAIT_VIRTUAL";
 
 pub(crate) trait PipelineWaitClock {
