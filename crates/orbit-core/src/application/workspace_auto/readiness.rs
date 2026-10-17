@@ -702,7 +702,8 @@ pub fn explain_workspace_auto_readiness(
         tracing::warn!("readiness shows no provider limits: {error}");
     }
     // Recent authentication failures, grouped by host and provider, dropped
-    // once a later successful run of that provider on that host is on record.
+    // once a successful run of that provider on that host that started after
+    // the failure is on record.
     let provider_auth_failures = runtime.provider_auth_failures(now);
 
     let mut payload = json!({
