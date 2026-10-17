@@ -71,6 +71,26 @@ private injection and security seams retain sibling source tests. The
 [applied audit](../reviews/unit-test-audit-orbit-exec-applied-2026-10-12.md)
 records the per-identity coverage and the qualifying seams.
 
+Where a crate had grown one integration binary per file, those files now share
+one area binary. A file stays its own binary only when its header says why:
+it installs signal handlers, or it mutates the process environment outside
+`orbit_common::test_env`. Former roots are included at the area crate root, so
+in-binary test paths do not change; only the Cargo binary name does.
+
+- `orbit-common` cases are `tests/common/main.rs`, with one
+  `isolate_test_process!()` for that binary.
+- `orbit-store` cases are `tests/store/main.rs`. `support` and
+  `git_test_support` are declared once, and the unit-test path includes
+  `tests/store/support/git.rs`.
+- `orbit-config` cases are `tests/config/main.rs`.
+- `orbit-types` plugin, task, tool, workflow, workspace publication, digest
+  and deferred-sandbox cases share `tests/contracts/main.rs`.
+- `orbit-exec` streaming-stdout and validation-env cases are included in
+  `tests/sandbox/main.rs`. `tests/signal_fanout.rs` stays separate because it
+  installs `sigaction` handlers and raises SIGINT and SIGTERM.
+  `tests/sandbox_profile_goldens.rs` stays separate so the golden gate selects
+  that binary without linking the enforcement suite.
+
 ## Edge case: standalone top-level files
 
 For source files directly under `src/` with no enclosing module directory, tests go in a top-level `src/tests/` directory mirroring them:
@@ -105,8 +125,8 @@ The MCP `adapter` module declares `dispatch`, `name_map`, `presentation`, `schem
 
 The audit's plugin, task, tool and workflow cases use the crate's exported API
 from `crates/orbit-types/tests/contracts/main.rs`, grouped into surface modules
-under that one binary. Workspace publication cases use the existing
-`tests/workspace.rs` binary. These public helper checks need no sibling unit
+under that one binary. Workspace publication, digest and deferred-sandbox cases
+are included in the same binary. These public helper checks need no sibling unit
 module; the emptied source test declarations and their scaffolding are removed.
 The later review gate-note unit admission retains its existing sibling layout.
 
@@ -177,11 +197,12 @@ deterministic interleavings, fault injection and platform behavior that the
 crate-root boundary cannot reach economically.
 
 
-Orbit-store's public persistence cases are grouped by boundary in
-`tests/file_store.rs`, `tests/task_mutations.rs`, `tests/migration_freeze.rs`,
-`tests/task_registry_ledger.rs` and `tests/publication.rs`, with supporting modules
-under matching directories. `tests/support/mod.rs` supplies isolated child
-execution and the shared task-creation fixture. Disk snapshots used as fixture
+Orbit-store's public persistence cases share `tests/store/main.rs`. The included
+roots group the boundaries: `file_store.rs`, `task_mutations.rs`,
+`migration_freeze.rs`, `task_registry_ledger.rs` and `publication.rs`, with
+supporting modules under matching directories. `tests/store/support/mod.rs`
+supplies isolated child execution and the shared task-creation fixture. Disk
+snapshots used as fixture
 evidence deserialize exported persisted types; they do not copy the private
 bundle reader. Private builders, ledger prefixes, counters and publication stage
 hooks remain beside their source as documented in the

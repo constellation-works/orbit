@@ -236,8 +236,8 @@ The [orbit-config audit delivery](../reviews/unit-test-audit-orbit-config-delive
 - The [delivery work-class tests](../../crates/orbit-core/src/application/job/pipeline/worker/tests/delivery_class.rs): `work_class_prefers_template_then_no_diff_then_change` (criterion 1) is the class precedence table. `class_is_captured_once_per_delivery_and_survives_tag_edits` (criteria 1 and 3) walks the admission decision table: a child inherits its delivery's class after a tag edit, a fresh submission recaptures it and overwrites a caller-supplied class, and resumes, retry runs and adopted runs are marked resumed. Reaching each row at the boundary would need a full delivery pipeline per case. `worker_without_a_scope_records_nothing_and_logs_nothing` (criterion 2, fault injection) injects an absent scope and then a fixture scope into the sampler's start and asserts no rows and no warning, then one row; the boundary cannot choose whether a worker resolves a scope.
 - `crates/orbit-store/src/driver/sqlite/migration/tests/ledger.rs`: `resource_minute_tables_keep_an_older_binary_writing` (persisted format with a migration; criterion 3). It applies the ledger through the resource-minute migrations, then opens the database with the registry that ends before them, and asserts the older binary still opens it writable. No test can build an older binary.
 
-- `crates/orbit-store/src/driver/sqlite/migration/tests/ledger.rs::store_schema_prefix_goldens` (criterion 3, persisted-schema safety): applies each shipped ledger prefix independently and compares its normalized SQLite schema with a lossless per-version golden. The public store-open boundary always applies the latest registry and cannot exercise historical prefixes without widening production visibility. The legacy recreation and actor data backfill cases use the public boundary in `tests/migration_freeze.rs`.
-- `crates/orbit-store/src/driver/sqlite/migration/tests/ledger.rs::task_registry_schema_prefix_goldens` (criterion 3, persisted-schema safety): the same per-prefix golden for the task registry's own ledger (`task_registry/tests/registry_schema.golden`), a separate SQLite file the store-open boundary never builds. Adoption, the `user_version` fence and newer-registry decisions use the public registry boundary in `tests/task_registry_ledger.rs`.
+- `crates/orbit-store/src/driver/sqlite/migration/tests/ledger.rs::store_schema_prefix_goldens` (criterion 3, persisted-schema safety): applies each shipped ledger prefix independently and compares its normalized SQLite schema with a lossless per-version golden. The public store-open boundary always applies the latest registry and cannot exercise historical prefixes without widening production visibility. The legacy recreation and actor data backfill cases use the public boundary in `tests/store/migration_freeze.rs`.
+- `crates/orbit-store/src/driver/sqlite/migration/tests/ledger.rs::task_registry_schema_prefix_goldens` (criterion 3, persisted-schema safety): the same per-prefix golden for the task registry's own ledger (`task_registry/tests/registry_schema.golden`), a separate SQLite file the store-open boundary never builds. Adoption, the `user_version` fence and newer-registry decisions use the public registry boundary in `tests/store/task_registry_ledger.rs`.
 
 - `crates/orbit-config/src/tests/machine.rs::host_shutdown_hold_minutes_defaults_and_rejects_non_positive_values` (criterion 3, fail-closed crafted input). Zero is rejected by the resolver with a message that names `machine.host_shutdown_hold_minutes`; a negative fails the integer read and names the same key. The default 180 and an uncapped 10080 are controls in the same test. This admission [ORB-15796] was added after the pinned orbit-config audit and remains unchanged by that slice; the public workspace `[machine]` refusal now lives in the crate-root review-layer integration target.
 - `the_hold_includes_the_horizon_and_a_later_instant_admits` (criterion 1), beside `crates/orbit-core/src/runtime/host_signal.rs`. One table pins the horizon arithmetic: equality holds, one second later admits, and a past timestamp holds. The pull and local drain tests, and the sweep test below, place the schedule with `Utc::now()` at minute granularity, so they cannot pin the one-second boundary without a race [ORB-15796].
@@ -283,11 +283,10 @@ cases do not earn unit admission because the public boundary costs the same.
 
 ## Public types contract boundary
 
-`orbit-types`' plugin, task, tool and workflow cases live in
+`orbit-types`' plugin, task, tool, workflow, workspace publication, digest and
+deferred-sandbox cases live in
 [`tests/contracts/main.rs`](../../crates/orbit-types/tests/contracts/main.rs),
-with modules for each surface in one integration binary. Publication cases
-join the existing
-[`tests/workspace.rs`](../../crates/orbit-types/tests/workspace.rs) binary.
+with modules for each surface in one integration binary.
 The admission audit's 40 moved cases use the same inputs and assertions through
 exported helpers and types, including the vendored provider-resolution fixture;
 none needs a provider process or production visibility change.
@@ -638,11 +637,11 @@ is widened and no implementation is copied into a boundary fixture.
 
 The [orbit-store per-identity reconciliation](../reviews/unit-test-admission-orbit-store-2026-10-13.json)
 checks the pinned audit against the current export surface. Twenty-nine existing
-cases now use crate-root boundaries: catalog and definition composition in
-`tests/file_store.rs`, task/history/document mutations in `tests/task_mutations.rs`,
-store adoption and frozen-v1 compatibility in `tests/migration_freeze.rs`, relation
-validation in `tests/task_registry_ledger.rs`, and archive/publication workflows in
-`tests/publication.rs`. Mutable cases re-execute in children with inherited Orbit
+cases now use crate-root boundaries in `tests/store/main.rs`: catalog and
+definition composition in `file_store.rs`, task/history/document mutations in
+`task_mutations.rs`, store adoption and frozen-v1 compatibility in
+`migration_freeze.rs`, relation validation in `task_registry_ledger.rs`, and
+archive/publication workflows in `publication.rs`. Mutable cases re-execute in children with inherited Orbit
 authority cleared and disposable homes. The ignored listing benchmark, three
 stale run-state allowances, and the audit-aggregate planner identity removed
 independently by ORB-15922 are retired; twenty-seven of the original twenty-eight

@@ -31,6 +31,10 @@
 //! and a fixture `HOME`, so provider and Cargo overrides on the host cannot
 //! leak into the output. Fixture paths render as `<ROOT>`.
 //!
+//! This stays its own binary. The golden gate selects
+//! `--test sandbox_profile_goldens`, so it does not link the sandbox
+//! enforcement suite.
+//!
 //! Regenerate with `make goldens UPDATE=1` (or
 //! `ORBIT_UPDATE_SANDBOX_GOLDENS=1 cargo test -p orbit-exec --test
 //! sandbox_profile_goldens`) and explain every diff in the PR: a policy
