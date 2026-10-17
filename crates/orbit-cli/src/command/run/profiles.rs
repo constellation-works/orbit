@@ -46,7 +46,9 @@ the host's measured CPU and memory for that minute. Error is forecast minus meas
 is its mean, UNDER how often the forecast was below the measured load, and WORST the largest \
 miss with the minute it forecast. PENDING counts target minutes that have not fully ended at \
 report time, even if partly measured; MISSING counts ended minutes without measurements. \
-Their sum is the compatible unmeasured count. Only ended measured minutes form error pairs. \
+MISSING splits into UNSAMPLED, when no delivery run was live in that minute, and GAP, when a \
+delivery run was live but wrote no host row. PENDING plus MISSING is the compatible unmeasured \
+count. Only ended measured minutes form error pairs. \
 Below, per drain, its shadow passes against what it admitted: WOULD_HOLD counts the \
 tasks it admitted that gap fit would have held, WOULD_ADD those gap fit would have admitted \
 that it did not. Pull drains record one forecast per request, counting a returned claim. \
@@ -219,6 +221,8 @@ fn accuracy(
         Column::new("PAIRS").fixed(),
         Column::new("PENDING").fixed(),
         Column::new("MISSING").fixed(),
+        Column::new("UNSAMPLED").fixed(),
+        Column::new("GAP").fixed(),
         Column::new("CPU_MEAN_ERR").fixed(),
         Column::new("CPU_UNDER").fixed(),
         Column::new("CPU_WORST").fixed(),
@@ -236,6 +240,8 @@ fn accuracy(
             }),
             Cell::new(offset.pending),
             Cell::new(offset.missing),
+            Cell::new(offset.unsampled),
+            Cell::new(offset.gap),
         ];
         row.extend(error_cells(&offset.cpu, |cores| {
             format!("{cores:+.1} cores")

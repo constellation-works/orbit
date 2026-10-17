@@ -206,8 +206,10 @@ select a cohort; without filters the report uses all drains and modes from
 the last 30 days. Both output formats identify that selection and report
 time. Only fully ended target minutes with measurements form error pairs.
 `pending` counts future/incomplete minutes, even with a partial measured row;
-`missing` counts ended minutes with no row. The compatible `unmeasured` count
-is their sum. `--json` adds the raw pairs and effective selection. A selected
+`missing` counts ended minutes with no row. `missing` splits into `unsampled`
+(no delivery run was live in that minute, so an idle drain had nothing to
+pair with) and `gap` (a delivery run was live but wrote no host row). The
+compatible `unmeasured` count is pending plus missing. `--json` adds the raw pairs and effective selection. A selected
 drain/time range does not attest source, build-budget or threshold settings:
 those are not stored in forecast rows. Per-task profiles remain a separate
 population whose sparsity and spread still limit confidence. See the

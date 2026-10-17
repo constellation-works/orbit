@@ -186,6 +186,34 @@ impl Fixture {
             .unwrap();
     }
 
+    /// Insert one job run. `started` is absent when the worker never started.
+    fn job_run(
+        &self,
+        run_id: &str,
+        job_id: &str,
+        state: &str,
+        started: Option<DateTime<Utc>>,
+        finished: Option<DateTime<Utc>>,
+    ) {
+        let stamp = |at: DateTime<Utc>| at.to_rfc3339_opts(SecondsFormat::Micros, true);
+        let created = started.or(finished).unwrap_or_else(Utc::now);
+        self.db()
+            .execute(
+                "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, \
+                     scheduled_at, started_at, finished_at, created_at) \
+                 VALUES (?1, 'ws_fixture', ?2, 1, ?3, ?4, ?5, ?6, ?4)",
+                params![
+                    run_id,
+                    job_id,
+                    state,
+                    stamp(created),
+                    started.map(stamp),
+                    finished.map(stamp),
+                ],
+            )
+            .unwrap();
+    }
+
     /// Record the host's measured minute at `at`.
     fn host_minute(&self, at: DateTime<Utc>, cores: f64, gib: i64) {
         self.db()
@@ -583,6 +611,8 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
     assert_eq!(thirty["unmeasured"], 1);
     assert_eq!(thirty["pending"], 0);
     assert_eq!(thirty["missing"], 1);
+    assert_eq!(thirty["unsampled"], 1);
+    assert_eq!(thirty["gap"], 0);
     assert_eq!(thirty["cpu"]["mean_error"], Value::Null);
 
     let drains = doc["drains"].as_array().unwrap();
@@ -660,4 +690,151 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
         ],
         "{plain}"
     );
+}
+
+/// Idle target minutes are `unsampled`. A delivery that was live and wrote
+/// no host row is a `gap`. A drain, a run that never started, and a run that
+/// only touches the minute's boundary stay unsampled. A measured minute stays
+/// paired, with the same error, even when a delivery overlaps it.
+#[test]
+fn accuracy_splits_idle_minutes_from_sampling_gaps() {
+    if crate::isolated_test::run_in_child(
+        "run_profiles::accuracy_splits_idle_minutes_from_sampling_gaps",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let minute = (Utc::now() - chrono::Duration::hours(3))
+        .duration_trunc(chrono::Duration::minutes(1))
+        .unwrap();
+    let at = |minutes: i64| minute + chrono::Duration::minutes(minutes);
+    fixture.forecast(
+        "jrun-drain",
+        "shadow",
+        minute + chrono::Duration::seconds(20),
+        &[(5, 4.0, 8), (10, 3.0, 2), (20, 1.0, 1)],
+        &[],
+        &[],
+        &[],
+    );
+    // Still inside its horizon, so this point is pending rather than a gap.
+    fixture.forecast(
+        "jrun-drain",
+        "shadow",
+        Utc::now() - chrono::Duration::seconds(20),
+        &[(5, 9.0, 9)],
+        &[],
+        &[],
+        &[],
+    );
+    fixture.host_minute(at(5), 6.0, 6);
+    fixture.job_run(
+        "jrun-paired-worker",
+        "task_auto_pipeline",
+        "success",
+        Some(at(5) + chrono::Duration::seconds(1)),
+        Some(at(5) + chrono::Duration::seconds(50)),
+    );
+    fixture.job_run(
+        "jrun-gap-worker",
+        "task_claimed_pr_pipeline",
+        "success",
+        Some(at(10) + chrono::Duration::seconds(15)),
+        Some(at(10) + chrono::Duration::seconds(45)),
+    );
+    // Finished as the idle minute started, so it does not cover that minute.
+    fixture.job_run(
+        "jrun-boundary",
+        "task_gate_pipeline",
+        "success",
+        Some(at(19)),
+        Some(at(20)),
+    );
+    // The drain records forecasts while idle and does not sample the host.
+    fixture.job_run(
+        "jrun-pull",
+        "workspace_pull_pipeline",
+        "running",
+        Some(at(20)),
+        Some(at(21)),
+    );
+    fixture.job_run(
+        "jrun-unstarted",
+        "task_local_pipeline",
+        "pending",
+        None,
+        None,
+    );
+
+    let doc: Value =
+        serde_json::from_str(&fixture.stdout(&["run", "profiles", "--accuracy", "--json"]))
+            .unwrap();
+    let offsets = doc["offsets"].as_array().unwrap();
+    let offset = |minutes: u64| {
+        offsets
+            .iter()
+            .find(|offset| offset["offset_minutes"] == minutes)
+            .unwrap()
+    };
+    let five = offset(5);
+    assert_eq!(five["paired"], 1);
+    assert_eq!(five["pending"], 1);
+    assert_eq!(five["missing"], 0);
+    assert_eq!(five["unsampled"], 0);
+    assert_eq!(five["gap"], 0);
+    assert_eq!(five["unmeasured"], 1);
+    assert_eq!(five["cpu"]["mean_error"], -2.0);
+    assert_eq!(five["cpu"]["under_rate"], 1.0);
+    assert_eq!(five["memory"]["mean_error"], 2.0 * GIB as f64);
+    assert_eq!(five["memory"]["under_rate"], 0.0);
+    let ten = offset(10);
+    assert_eq!(ten["paired"], 0);
+    assert_eq!(ten["pending"], 0);
+    assert_eq!(ten["missing"], 1);
+    assert_eq!(ten["unsampled"], 0);
+    assert_eq!(ten["gap"], 1);
+    assert_eq!(ten["cpu"]["mean_error"], Value::Null);
+    assert_eq!(ten["memory"]["worst_miss"], Value::Null);
+    let twenty = offset(20);
+    assert_eq!(twenty["paired"], 0);
+    assert_eq!(twenty["pending"], 0);
+    assert_eq!(twenty["missing"], 1);
+    assert_eq!(twenty["unsampled"], 1);
+    assert_eq!(twenty["gap"], 0);
+    assert_eq!(twenty["cpu"]["mean_error"], Value::Null);
+    let thirty = offset(30);
+    assert_eq!(thirty["paired"], 0);
+    assert_eq!(thirty["pending"], 0);
+    assert_eq!(thirty["missing"], 0);
+    assert_eq!(thirty["unsampled"], 0);
+    assert_eq!(thirty["gap"], 0);
+
+    let plain = fixture.stdout(&["run", "profiles", "--accuracy", "--format", "plain"]);
+    let row = |label: &str| {
+        plain
+            .lines()
+            .find(|line| line.starts_with(label))
+            .unwrap_or_else(|| panic!("missing {label} row in {plain}"))
+            .split('\t')
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    let ten_row = row("+10m\t");
+    assert_eq!(
+        &ten_row[..6],
+        ["+10m", "0 (1 unmeasured)", "0", "1", "0", "1"]
+    );
+    assert!(ten_row[6..].iter().all(|cell| cell == "-"), "{ten_row:?}");
+    let twenty_row = row("+20m\t");
+    assert_eq!(
+        &twenty_row[..6],
+        ["+20m", "0 (1 unmeasured)", "0", "1", "1", "0"]
+    );
+    let five_row = row("+5m\t");
+    assert_eq!(
+        &five_row[..6],
+        ["+5m", "1 (1 unmeasured)", "1", "0", "0", "0"]
+    );
+    assert_eq!(five_row[6], "-2.0 cores");
+    assert_eq!(five_row[9], "+2.0 GiB");
 }
