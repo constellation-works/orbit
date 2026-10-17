@@ -57,8 +57,8 @@ use super::landing_checks::{
 use super::operations;
 use super::pr::{
     BlockedCheckWait, DeliveryPin, OwedHostedChecks, PrMergeState, PullRequestStatus,
-    checked_pr_state, classify_pr_state, owed_hosted_checks, read_pr_status, read_pr_status_before,
-    resolve_permitted_merge,
+    UnreportedChecks, checked_pr_state, classify_pr_state, owed_hosted_checks, read_pr_status,
+    read_pr_status_before, resolve_permitted_merge,
 };
 use super::remote_probe::fixed_wait as sleep;
 use super::worktree::{checkout_holding_branch, ensure_clean_checkout};
@@ -316,6 +316,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
             max_wait_seconds.saturating_mul(1000)
         });
     let mut recovery = CheckRecovery::before(deadline_ms);
+    let mut unreported = UnreportedChecks::new();
     let mut waited_seconds = 0_u64;
     let mut intent: Option<String> = None;
     loop {
@@ -329,6 +330,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 number,
                 max_wait_seconds,
                 &context.owed_hosted_checks,
+                &unreported,
             )?);
         }
         let status = if max_wait_seconds == 0 {
@@ -406,6 +408,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
             &pr_number,
             &status,
             BlockedCheckWait::Owner(&context.owed_hosted_checks),
+            &mut unreported,
             deadline_ms,
         ) {
             Ok(state) => state,
@@ -417,7 +420,11 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 )?);
             }
         };
-        if !refresh_wait && matches!(state, PrMergeState::Blocked(_)) {
+        // A required context the head has not reported may be one only the
+        // advanced base emits, so absent-context recovery still diagnoses it.
+        if !refresh_wait
+            && (matches!(state, PrMergeState::Blocked(_)) || unreported.awaiting_policy_checks())
+        {
             match super::base_refresh::recover(
                 host,
                 &workspace,
@@ -551,6 +558,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                         number,
                         max_wait_seconds,
                         &context.owed_hosted_checks,
+                        &unreported,
                     )?);
                 }
                 if updated_head.is_some() {
@@ -566,6 +574,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                                 number,
                                 max_wait_seconds,
                                 &context.owed_hosted_checks,
+                                &unreported,
                             )?);
                         }
                         let delay = poll_interval_seconds
@@ -589,6 +598,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                         number,
                         max_wait_seconds,
                         &context.owed_hosted_checks,
+                        &unreported,
                     )?);
                 }
                 let observed = observe_or_stop(host, context, Some(&status), view)?;
@@ -656,6 +666,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 number,
                 max_wait_seconds,
                 waiting,
+                &unreported,
             )?);
         }
         let sleep_seconds = poll_interval_seconds.min(max_wait_seconds - waited_seconds);
@@ -670,12 +681,14 @@ fn landing_timeout<H: RuntimeHost + ?Sized>(
     number: u64,
     max_wait_seconds: u64,
     owed: &[String],
+    unreported: &UnreportedChecks,
 ) -> Result<OrbitError, OrbitError> {
-    let waiting = if owed.is_empty() {
+    let mut waiting = if owed.is_empty() {
         String::new()
     } else {
         format!(" (owed hosted checks not yet passed: {})", owed.join(", "))
     };
+    waiting.push_str(&unreported.timeout_note());
     stop(
         host,
         context,
