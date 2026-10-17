@@ -88,6 +88,39 @@ pub(crate) const REVIEW_ADMITTED_JOBS: &[&str] = &[
 /// as a final route.
 pub(crate) const LOCAL_ROUTE_JOB: &str = "task_local_pipeline";
 
+/// Longest resume chain followed back to its first run.
+const MAX_RESUME_CHAIN: usize = 64;
+
+/// Whether `run_id` resumes `owner` through same-job `retry_source_run_id`
+/// links, within the bounded resume chain. Review admission and evidence
+/// receipt must agree on the checkpoint owner's authority.
+fn resumes_owner(
+    runtime: &crate::OrbitRuntime,
+    run_id: &str,
+    owner: &str,
+) -> Result<bool, OrbitError> {
+    let Some(mut current) = runtime.get_job_run_backend(run_id)? else {
+        return Ok(false);
+    };
+    let job_id = current.job_id.clone();
+    for _ in 0..MAX_RESUME_CHAIN {
+        let Some(source) = current.retry_source_run_id.clone() else {
+            return Ok(false);
+        };
+        let Some(parent) = runtime.get_job_run_backend(&source)? else {
+            return Ok(false);
+        };
+        if parent.job_id != job_id {
+            return Ok(false);
+        }
+        if parent.run_id == owner {
+            return Ok(true);
+        }
+        current = parent;
+    }
+    Ok(false)
+}
+
 /// One candidate lineage: the task set one delivery run lineage delivers
 /// together against a base. `root_run_id` is the first run of the
 /// lineage — a resumed run shares its source's budget, while a fresh
