@@ -57,8 +57,13 @@ is the most frequent reason among those tasks, with alphabetical ties. Slots
 include shared leaf occupancy, matching the workspace Drain card.
 
 The browser combines this endpoint across the serving host's registered hosts
-through `/api/on/<host>/fleet/drains`, with at most three requests in flight and a
-15-second cache. Unreachable hosts remain error rows and the indicator marks
+through `/api/on/<host>/fleet/drains`, with at most three requests in flight.
+A snapshot is kept for 60 seconds, longer than the dashboard's 30-second panel
+poll, and that poll paints the indicator from the snapshot instead of asking
+again. The snapshot is warmed once hosts are known and refreshed on its own
+60-second timer, which does not run inside the panel poll and pauses while the
+tab is hidden. The fleet card refetches only when its snapshot is older than
+that cadence. Unreachable hosts remain error rows and the indicator marks
 partial coverage. No recursive federation or workspace writes are performed.
 
 ## 3. At a Glance

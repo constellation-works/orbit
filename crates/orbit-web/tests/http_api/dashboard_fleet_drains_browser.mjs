@@ -13,6 +13,7 @@ fs.mkdirSync(evidence, { recursive: true });
 const initializer = `
   globalThis.EventSource = class { close() {} };
   globalThis.fleetRequests = [];
+  const budget = new URLSearchParams(location.search).get('budget') === '1';
   const workspaces = [
     { id: 'idle', name: 'Idle workspace with ready work', status: 'active', is_default: true },
     { id: 'busy', name: 'BusyWorkspaceWithAVeryLongUnbrokenNameForMobileLayout', status: 'active' },
@@ -26,11 +27,14 @@ const initializer = `
     const host = url.pathname.startsWith('/api/on/') ? url.pathname.split('/')[3] : 'owner';
     const api = url.pathname.replace(/^\\/api\\/on\\/[^/]+/, '/api');
     const json = (body, status = 200) => new Response(JSON.stringify(body), { status });
-    if (api === '/api/hosts') return json({ hosts: [
-      { name: 'owner', machine_id: 'owner-id', local: true },
-      { name: 'remote', machine_id: 'remote-id', local: false },
-      { name: 'UnreachableHostWithALongNameForMobileLayout', machine_id: 'offline-id', local: false },
-    ] });
+    if (api === '/api/hosts') {
+      const hosts = [
+        { name: 'owner', machine_id: 'owner-id', local: true },
+        { name: 'remote', machine_id: 'remote-id', local: false },
+      ];
+      if (!budget) hosts.push({ name: 'UnreachableHostWithALongNameForMobileLayout', machine_id: 'offline-id', local: false });
+      return json({ hosts });
+    }
     if (api.endsWith('/connection')) return json({ reachable: true, forward_writes: { authorized: false } });
     if (api === '/api/fleet/drains') {
       if (host.startsWith('Unreachable')) return json({ error: 'Host unreachable' }, 502);
@@ -46,6 +50,100 @@ const initializer = `
   await import('/app.js');
   globalThis.fleetReady = true;
 `;
+const POLL_VIEWS = [
+  ['tasks', 'tasks'],
+  ['run detail', 'runs/jrun-fixture'],
+  ['frictions', 'knowledge/frictions'],
+  ['analytics/metrics', 'analytics/metrics'],
+  ['jobs live', 'jobs/live'],
+  ['jobs history', 'jobs/history'],
+  ['operations/auto-tasks', 'operations/auto-tasks'],
+  ['operations/routines', 'operations/routines'],
+  ['settings', 'config/effective'],
+  ['workspaces', 'config/hosts'],
+];
+
+async function settleDashboard(page) {
+  await page.waitForFunction(() => {
+    const text = document.getElementById('meta-text')?.textContent || '';
+    return text.length > 0 && !text.startsWith('fetching');
+  });
+}
+
+// One refreshDashboard cycle. Host-resource reads stay out of the count: the
+// dashboard also polls them on a separate 5s timer.
+async function measurePoll(page) {
+  const measured = await page.evaluate(async () => {
+    const start = globalThis.fleetRequests.length;
+    document.getElementById('refresh-btn').click();
+    const deadline = performance.now() + 3000;
+    let sawFetching = false;
+    while (performance.now() < deadline) {
+      const text = document.getElementById('meta-text')?.textContent || '';
+      if (text.startsWith('fetching')) sawFetching = true;
+      if (sawFetching && !text.startsWith('fetching')) break;
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    return { sawFetching, requests: globalThis.fleetRequests.slice(start) };
+  });
+  assert.equal(measured.sawFetching, true, 'a poll cycle started');
+  return measured.requests.filter(url => !url.includes('/host/resources'));
+}
+
+async function assertPollBudget(browser, port) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    await page.goto(`http://127.0.0.1:${port}/?budget=1&workspace=idle#tasks`);
+    await page.waitForFunction(() => globalThis.fleetReady);
+    await settleDashboard(page);
+    await page.waitForFunction(() => document.querySelector('.global-drain-label')?.textContent.includes('Draining · 1 of 3'));
+    const fleetReads = () => page.evaluate(() => globalThis.fleetRequests.filter(url => url.includes('/fleet/drains')).length);
+    assert.equal(await fleetReads(), 2, 'two registered hosts are read once at startup; the first panel poll does not read the fleet');
+    const polls = [];
+    for (const [label, route] of POLL_VIEWS) {
+      const beforeFleet = await fleetReads();
+      await page.evaluate(async (next) => {
+        const { setActiveTab } = await import('/js/router.js');
+        const meta = document.getElementById('meta-text');
+        setActiveTab(next);
+        const deadline = performance.now() + 3000;
+        let sawFetching = false;
+        while (performance.now() < deadline) {
+          const text = meta?.textContent || '';
+          if (text.startsWith('fetching')) sawFetching = true;
+          if (sawFetching && !text.startsWith('fetching')) return;
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+        throw new Error(`navigation did not settle on ${next}: ${meta?.textContent}`);
+      }, route);
+      assert.equal(await fleetReads(), beforeFleet, `${label} navigation reads fleet drains`);
+      const counted = await measurePoll(page);
+      const fleet = counted.filter(url => url.includes('/fleet/drains'));
+      assert.deepEqual(fleet, [], `${label} poll reads fleet drains: ${counted.join(', ')}`);
+      assert.ok(counted.length > 0 && counted.length <= 10, `${label} poll issued ${counted.length} requests: ${counted.join(', ')}`);
+      polls.push({ view: label, count: counted.length, requests: counted });
+    }
+    const beforeCard = await fleetReads();
+    await page.locator('#global-drain-state').click();
+    await page.locator('.fleet-drains').waitFor({ state: 'visible' });
+    assert.equal(await fleetReads(), beforeCard, 'opening the fleet card paints the snapshot without another host fan-out');
+    const card = await page.locator('.fleet-drains').innerText();
+    assert.match(card, /draining/i);
+    assert.match(card, /2 \/ 4/);
+    assert.match(card, /4/);
+    assert.match(card, /context lock conflict/);
+    assert.match(card, /codex usage limit/);
+    assert.match(card, /claude authentication failed/);
+    assert.equal(await page.locator('.fleet-drains tbody tr').count(), 3);
+    assert.deepEqual(errors, []);
+    return polls;
+  } finally {
+    await page.close();
+  }
+}
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
   const served = url.pathname === '/fixture.mjs' ? { data: initializer, type: 'text/javascript' } : dashboardFile(url.pathname);
@@ -64,6 +162,8 @@ try {
   await page.goto(`http://127.0.0.1:${server.address().port}/?workspace=idle#auto-drain`);
   await page.waitForFunction(() => globalThis.fleetReady);
   await page.waitForFunction(() => document.querySelector('.global-drain-label')?.textContent.includes('Draining · 1 of 3'));
+  const startupFleet = await page.evaluate(() => globalThis.fleetRequests.filter(url => url.includes('/fleet/drains')));
+  assert.equal(startupFleet.length, 3, 'startup reads each registered host once; the first panel poll does not read the fleet again');
   assert.equal(await page.locator('#global-drain-state').isVisible(), true, 'an idle default workspace still shows a live fleet drain');
   await page.locator('#global-drain-state').click();
   await page.locator('.fleet-drains').waitFor({ state: 'visible' });
@@ -110,9 +210,10 @@ try {
   });
   await page.waitForFunction(() => document.querySelector('#workspace-select')?.value === 'idle');
   assert.deepEqual(errors, []);
-  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ status: 'passed', measurements,
-    guarantees: ['idle workspace fleet indicator', 'host failures retained', '375px no horizontal page scroll', 'keyboard remote scope selection', 'row click local scope selection'], errors }, null, 2));
-  console.log('fleet browser scope and mobile checks passed');
+  const polls = await assertPollBudget(browser, server.address().port);
+  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ status: 'passed', measurements, polls,
+    guarantees: ['idle workspace fleet indicator', 'host failures retained', '375px no horizontal page scroll', 'keyboard remote scope selection', 'row click local scope selection', 'two-host poll stays within 10 requests', 'panel poll does not read fleet drains'], errors }, null, 2));
+  console.log('fleet browser scope, mobile, and poll-budget checks passed');
 } finally {
   if (browser) await browser.close();
   await new Promise(resolve => server.close(resolve));

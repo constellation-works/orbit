@@ -1,17 +1,38 @@
 // Fleet reads use each host's local aggregate through the existing one-hop
 // forward. At most three requests run at once; a failed host remains a row.
+// The panel poll is 30s (polling.js). A snapshot stays fresh across that
+// interval, so the next poll does not ask again. The indicator's own timer
+// refreshes it on this longer cadence, outside the panel poll.
 import { el, fetchJson, getRegisteredHosts, getHost } from './common.js';
+
+export const FLEET_CACHE_MS = 60_000;
 
 let cached = null;
 let pending = null;
 let cachedAt = 0;
 let cachedKey = '';
 
-export function fetchFleetDrains() {
+function fleetSources() {
   const hosts = getRegisteredHosts();
-  const sources = hosts.length ? hosts : [{ name: getHost() || 'This host', selector: getHost(), fallback: true }];
-  const key = JSON.stringify(sources.map(host => [host.name, host.machine_id, host.ssh, host.fallback]));
-  if (key === cachedKey && cached && Date.now() - cachedAt < 15000) return Promise.resolve(cached);
+  return hosts.length ? hosts : [{ name: getHost() || 'This host', selector: getHost(), fallback: true }];
+}
+
+function fleetKey(sources) {
+  return JSON.stringify(sources.map(host => [host.name, host.machine_id, host.ssh, host.fallback]));
+}
+
+// The snapshot the panel poll may paint. `fresh` is false once it is older
+// than one fleet cadence; callers that already have a snapshot do not refetch.
+export function peekFleetDrains() {
+  const key = fleetKey(fleetSources());
+  if (key !== cachedKey || !cached) return null;
+  return { payload: cached, fresh: Date.now() - cachedAt < FLEET_CACHE_MS };
+}
+
+export function fetchFleetDrains({ force = false } = {}) {
+  const sources = fleetSources();
+  const key = fleetKey(sources);
+  if (!force && key === cachedKey && cached && Date.now() - cachedAt < FLEET_CACHE_MS) return Promise.resolve(cached);
   if (key === cachedKey && pending) return pending;
   if (key !== cachedKey) cached = null;
   cachedKey = key;

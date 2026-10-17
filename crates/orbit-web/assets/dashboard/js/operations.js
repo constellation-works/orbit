@@ -3,7 +3,7 @@
 import { normalizeTaskStatus, captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, isAggregateView, onWorkspaceChange, postJson, runHref, statusPill, submissionNoticeLines, fmtDuration, bindTaskLink } from './common.js';
 import { navigateToRun, setActiveTab } from './router.js';
 import { renderAutomation } from './automation.js';
-import { fetchFleetDrains, fleetDrainLabel, renderFleetDrains } from './fleet-drains.js';
+import { FLEET_CACHE_MS, fetchFleetDrains, fleetDrainLabel, peekFleetDrains, renderFleetDrains } from './fleet-drains.js';
 import { cpuLoadMultiple } from './host-resources.js';
 import { DRAIN_LOCK_REASONS, drainCrewNote, drainReason, setDrainReadiness } from './drain-waits.js';
 
@@ -2638,10 +2638,67 @@ function renderAutoDrainStart(payload, reasons) {
   );
 }
 
+// A panel poll paints the snapshot it already has. Opening the fleet card
+// refetches only once that snapshot is older than the fleet cadence. The
+// indicator timer, not this poll, is what asks the hosts again.
+function loadFleetSnapshot({ refreshWhenStale }) {
+  const seen = peekFleetDrains();
+  if (seen && (!refreshWhenStale || seen.fresh)) return Promise.resolve(seen.payload);
+  return fetchFleetDrains();
+}
+
+function paintFleetSurfaces(payload) {
+  renderFleetIndicator(payload);
+  const card = $("auto-drain-panel");
+  if (card?.dataset.drainState !== "fleet") return;
+  const body = $("auto-drain-body");
+  if (body) body.replaceChildren(renderFleetDrains(payload, context.selectFleetScope));
+}
+
+let fleetRefreshStarted = false;
+
+// One read after hosts are known, then again on the fleet cadence. This is
+// not a panel-poll job: a view's 30s refresh must not fan out to every host.
+export function startFleetIndicatorRefresh() {
+  const refresh = () => fetchFleetDrains({ force: true }).then(payload => {
+    const seen = peekFleetDrains();
+    if (seen && seen.payload === payload) paintFleetSurfaces(payload);
+  });
+  const arm = () => {
+    const timer = setTimeout(() => {
+      if (document.hidden) {
+        arm();
+        return;
+      }
+      refresh().catch(error => console.error(error)).finally(arm);
+    }, FLEET_CACHE_MS);
+    if (typeof timer === "object" && typeof timer.unref === "function") timer.unref();
+  };
+  if (!fleetRefreshStarted) {
+    fleetRefreshStarted = true;
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) return;
+      const seen = peekFleetDrains();
+      if (seen?.fresh) return;
+      refresh().catch(error => console.error(error));
+    });
+    arm();
+  }
+  const seen = peekFleetDrains();
+  if (seen?.fresh) {
+    paintFleetSurfaces(seen.payload);
+    return Promise.resolve(seen.payload);
+  }
+  return fetchFleetDrains().then(payload => {
+    paintFleetSurfaces(payload);
+    return payload;
+  });
+}
+
 function fetchAndRenderAutoDrain() {
   const workspace = selectedWorkspace();
   if (!workspace) {
-    return requestPanel("auto-drain-body", "fleet", fetchFleetDrains, payload => {
+    return requestPanel("auto-drain-body", "fleet", () => loadFleetSnapshot({ refreshWhenStale: true }), payload => {
       setDrainReadiness({});
       updateDrainIndicators('fleet', 'Fleet drains');
       const card = $("auto-drain-panel");
@@ -2670,7 +2727,7 @@ function fetchAndRenderAutoDrain() {
   const path = `${scope}${query}`;
   const visit = captureWorkspaceVisit();
   const readiness = requestPanel("auto-drain-body", scope, () => fetchJson(path), renderAutoDrain, "auto-drain-phase-label");
-  const fleet = fetchFleetDrains().then(payload => {
+  const fleet = loadFleetSnapshot({ refreshWhenStale: false }).then(payload => {
     if (visit.isCurrent()) renderFleetIndicator(payload);
     return payload;
   });
