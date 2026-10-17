@@ -542,14 +542,12 @@ class VerifiedDownloadTests(unittest.TestCase):
     def test_cleanliness_assertions_ignore_surrounding_dirs_and_fail_on_seeded_leak(self):
         scratch = ROOT / ".orbit/tmp"
         scratch.mkdir(parents=True, exist_ok=True)
-        unrelated_scratch = scratch / "download-test-unrelated-worktree"
-        unrelated_scratch.mkdir(exist_ok=True)
-        self.addCleanup(lambda: unrelated_scratch.rmdir() if unrelated_scratch.exists() else None)
+        # Unique per run: a fixed name would let concurrent runs adopt or remove each other's directories.
+        unrelated_scratch = tempfile.TemporaryDirectory(dir=scratch, prefix="download-test-unrelated-")
+        self.addCleanup(unrelated_scratch.cleanup)
 
-        system_tmp = Path(tempfile.gettempdir())
-        unrelated_tmp = system_tmp / "download-test-unrelated-tmp"
-        unrelated_tmp.mkdir(exist_ok=True)
-        self.addCleanup(lambda: unrelated_tmp.rmdir() if unrelated_tmp.exists() else None)
+        unrelated_tmp = tempfile.TemporaryDirectory(prefix="download-test-unrelated-")
+        self.addCleanup(unrelated_tmp.cleanup)
 
         # Baseline cleanliness assertions pass even when surrounding TMPDIR or worktree has download-test-*
         self.assert_clean()
