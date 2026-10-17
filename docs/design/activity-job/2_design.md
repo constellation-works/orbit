@@ -661,10 +661,16 @@ failures, with jittered exponential backoff between attempts (10 s doubling to a
 160 s cap, about five minutes in all; a step's `forge_retry` input may narrow it).
 These include generic remote `(failed)` rejections without policy diagnostics,
 `[remote rejected]` refusals for `Internal Server Error`, `Service Unavailable`,
-`Bad Gateway` or `Gateway Timeout`, `remote: Internal Server Error`, HTTP 5xx,
-RPC failures, early EOF, connection resets, and TLS handshake timeouts. Authentication, permission,
+`Bad Gateway`, `Gateway Timeout`, or `missing necessary objects`, `remote: Internal Server Error`, HTTP 5xx,
+RPC failures, early EOF, connection resets, and TLS handshake timeouts. A
+`missing necessary objects` refusal means the thin pack named bases the server
+advertised and then did not have, which happens while refs are moving. Later
+attempts of that push pass `--no-thin`, so the pack carries its own objects
+instead of those bases. Other transient retries stay thin. The operation output
+records the retry as `attempts` and `waited_ms`; `git_push` copies them to
+`push_attempts` and `push_waited_ms`. Authentication, permission,
 non-fast-forward, hook, protection, and stale-lease refusals fail immediately,
-even when accompanied by a transport error. After each transient failure,
+even when accompanied by a transport error or by `missing necessary objects`. After each transient failure,
 `ls-remote` checks the exact target ref: if it already holds the intended local
 SHA, the operation succeeds without resending the push or consuming the lease
 again. A failed confirmation read stops further pushes; a different remote SHA

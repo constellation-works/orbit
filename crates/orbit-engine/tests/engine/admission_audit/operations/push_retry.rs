@@ -60,6 +60,78 @@ fn pushes_recover_from_transient_remote_failures() {
                     assert_eq!(output["attempts"], 2, "{operation}: {message}");
                     assert_eq!(fixture.calls(), ["push", "ls-remote", "push"]);
                     assert_eq!(fixture.push_count(), 2, "{operation}: {message}");
+                    assert_eq!(
+                        fixture.packs(),
+                        ["thin", "thin"],
+                        "{operation}: {message} keeps the default thin pack"
+                    );
+                }
+            }
+        },
+    );
+}
+
+/// GitHub can reject a thin pack with `missing necessary objects` while the
+/// bases it advertised move out from under the pack [ORB-16529]. The next
+/// attempt must land when the remote accepts, and it must not reuse those bases.
+#[test]
+fn pushes_retry_a_missing_necessary_objects_rejection_with_a_self_contained_pack() {
+    with_stub_path(
+        concat!(
+            module_path!(),
+            "::pushes_retry_a_missing_necessary_objects_rejection_with_a_self_contained_pack"
+        ),
+        |root| {
+            let fixture = PushFixture::new(root);
+            const MISSING_OBJECTS: &str = "\
+ ! [remote rejected]     branch -> branch (missing necessary objects)\n\
+error: failed to push some refs to 'https://github.com/example/orbit.git'\n";
+
+            for (operation, lease) in [
+                ("push", false),
+                ("push", true),
+                ("push.candidate_ref", false),
+            ] {
+                fixture.reset(MISSING_OBJECTS, 1, false);
+                let mut input = fixture.input(operation, lease);
+                input["forge_retry"] = fast_retry(3);
+                let output = run_private_operation(operation, &input)
+                    .expect("a missing-objects refusal must be retried");
+                assert_eq!(output["stdout"], "pushed\n", "{operation} lease={lease}");
+                assert_eq!(
+                    output["attempts"], 2,
+                    "{operation}: the push output records the retry"
+                );
+                let waited = output["waited_ms"].as_u64().expect("waited_ms");
+                assert!(
+                    (2..=4).contains(&waited),
+                    "{operation}: retry wait {waited} ms was not recorded"
+                );
+                assert_eq!(fixture.calls(), ["push", "ls-remote", "push"]);
+                assert_eq!(
+                    fixture.packs(),
+                    ["thin", "no-thin"],
+                    "{operation}: only the retry drops the thin pack"
+                );
+            }
+
+            for operation in ["push", "push.candidate_ref"] {
+                for message in [
+                    "fatal: Authentication failed for origin",
+                    "! [rejected] branch -> branch (non-fast-forward)",
+                    "remote: error: GH006: Protected branch update failed",
+                    "! [remote rejected] branch -> branch (pre-receive hook declined)",
+                ] {
+                    let mixed = format!(
+                        "{message}\n! [remote rejected] branch -> branch (missing necessary objects)\n"
+                    );
+                    fixture.reset(&mixed, 9, false);
+                    let error = run_private_operation(operation, &fixture.input(operation, false))
+                        .expect_err("a permanent refusal beside missing objects stops immediately");
+                    assert!(error.to_string().contains(message), "{operation}: {error}");
+                    assert_eq!(fixture.calls(), ["push"], "{operation}: {message}");
+                    assert_eq!(fixture.push_count(), 1, "{operation}: {message}");
+                    assert_eq!(fixture.packs(), ["thin"], "{operation}: {message}");
                 }
             }
         },
@@ -254,6 +326,12 @@ case "$command" in
     printf '%s\n' push >> calls
     [ "$1" = --no-verify ] || exit 2
     shift
+    pack=thin
+    if [ "$1" = --no-thin ]; then
+      pack=no-thin
+      shift
+    fi
+    printf '%s\n' "$pack" >> packs
     if [ -s lease ]; then
       [ "$1" = '--force-with-lease=refs/heads/branch:{PUSH_PREVIOUS_HEAD}' ] || exit 2
       shift
@@ -303,6 +381,7 @@ esac
         self.write("remote", "");
         self.write("lookup-failure", "");
         self.write("lease", "");
+        self.write("packs", "");
     }
 
     fn input(&self, operation: &str, lease: bool) -> serde_json::Value {
@@ -333,5 +412,14 @@ esac
 
     fn push_count(&self) -> usize {
         read_count(&self.root.as_path().join("count"))
+    }
+
+    /// `thin` or `no-thin` for each push, in order.
+    fn packs(&self) -> Vec<String> {
+        fs::read_to_string(self.root.as_path().join("packs"))
+            .expect("read pack modes")
+            .lines()
+            .map(str::to_string)
+            .collect()
     }
 }

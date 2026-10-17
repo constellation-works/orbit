@@ -834,7 +834,7 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   candidate could not be synchronized onto a base that moved). The failure
   breaker does not count a release. When the forge refuses a claimed PR
   leaf's push for a server-side reason (`Internal Server Error`, `Service
-  Unavailable` and the like), the leaf keeps its claim and retries the push
+  Unavailable`, `missing necessary objects`, and the like), the leaf keeps its claim and retries the push
   of the same reviewed head, past the usual backoff budget, for up to two
   hours from the first refusal (the pipeline's `forge_retry.window_ms`). The
   claim stays live and the leaf's runtime stays busy, so an upgrade waits
