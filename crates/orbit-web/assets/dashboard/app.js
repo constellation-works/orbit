@@ -1897,7 +1897,17 @@ setScopeChangeListener(() => {
   }
   refreshDashboard();
 });
-initOperations({ getJobsSubtab: () => activeJobsSubtab, getWorkspaces: () => dashboardWorkspaces, getOperationsSubtab: () => activeOperationsSubtab });
+function selectFleetScope(host, workspace) {
+  const changed = chooseHost(host);
+  if (changed) workspacesWanted = true;
+  setWorkspace(workspace);
+  persistScopeToUrl();
+  if (!changed) buildWorkspaceSelector();
+  sAT("auto-drain", { refresh: false });
+  refreshDashboard();
+}
+
+initOperations({ selectFleetScope, getJobsSubtab: () => activeJobsSubtab, getWorkspaces: () => dashboardWorkspaces, getOperationsSubtab: () => activeOperationsSubtab });
 initConfig();
 
 initRuns(runsContext());
