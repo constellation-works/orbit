@@ -157,13 +157,23 @@ fn audit_retention_removes_only_rows_past_the_cutoff() {
 
     let (removed, _) = drain(|| {
         store
-            .prune_audit_retention_batch(AuditRetentionTable::Command, workspace_only("ws_a"), cutoff, 3)
+            .prune_audit_retention_batch(
+                AuditRetentionTable::Command,
+                workspace_only("ws_a"),
+                cutoff,
+                3,
+            )
             .unwrap()
     });
     assert_eq!(removed, 4);
     let (removed, _) = drain(|| {
         store
-            .prune_audit_retention_batch(AuditRetentionTable::Run, workspace_only("ws_a"), cutoff, 64)
+            .prune_audit_retention_batch(
+                AuditRetentionTable::Run,
+                workspace_only("ws_a"),
+                cutoff,
+                64,
+            )
             .unwrap()
     });
     assert_eq!(removed, 250);
@@ -288,7 +298,9 @@ fn run_retention_drops_terminal_state_and_keeps_runs_and_steps() {
         .finalize_job_run(&foreign.run_id, JobRunState::Success, old, Some(1))
         .unwrap();
 
-    let plan = store.run_state_retention_selection(workspace_only("ws_a"), cutoff).unwrap();
+    let plan = store
+        .run_state_retention_selection(workspace_only("ws_a"), cutoff)
+        .unwrap();
     assert_eq!(plan.rows, 2, "old success and old failed only");
     assert!(plan.bytes >= 2 * 4096);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM job_run_states"), 6);
@@ -321,7 +333,9 @@ fn run_retention_drops_terminal_state_and_keeps_runs_and_steps() {
     }
     assert!(other.read_run_state(&foreign.run_id).unwrap().is_some());
     assert_eq!(
-        store.run_state_retention_selection(workspace_only("ws_a"), cutoff).unwrap(),
+        store
+            .run_state_retention_selection(workspace_only("ws_a"), cutoff)
+            .unwrap(),
         RetentionSelection::default()
     );
 }
@@ -352,11 +366,11 @@ fn million_row_run_audit_prunes_in_sub_second_batches() {
     let (removed, slowest) = drain(|| {
         store
             .prune_audit_retention_batch(
-            AuditRetentionTable::Run,
-            workspace_only("ws_a"),
-            cutoff,
-            BATCH_ROWS,
-        )
+                AuditRetentionTable::Run,
+                workspace_only("ws_a"),
+                cutoff,
+                BATCH_ROWS,
+            )
             .unwrap()
     });
     assert_eq!(removed, 500_000);
@@ -378,7 +392,8 @@ fn insert_journal_row(
     state: &str,
     created_at: DateTime<Utc>,
 ) {
-    let applied_at = (state == "applied").then(|| (created_at + TimeDelta::seconds(1)).to_rfc3339());
+    let applied_at =
+        (state == "applied").then(|| (created_at + TimeDelta::seconds(1)).to_rfc3339());
     store
         .connection()
         .lock()
@@ -392,7 +407,10 @@ fn insert_journal_row(
                 workspace_id,
                 task_id,
                 state,
-                format!("{{\"task_id\":\"{task_id}\",\"pad\":\"{}\"}}", "x".repeat(512)),
+                format!(
+                    "{{\"task_id\":\"{task_id}\",\"pad\":\"{}\"}}",
+                    "x".repeat(512)
+                ),
                 created_at.to_rfc3339(),
                 applied_at
             ],
@@ -434,10 +452,22 @@ fn journal_retention_removes_old_applied_rows_and_keeps_unsettled_and_newest() {
         // itself stays.
         ("ws_a", "a-t3-1", "T-3", "applied", days_before(30)),
         ("ws_a", "a-t3-2", "T-3", "applied", days_before(5)),
-        ("ws_a", "a-t3-3", "T-3", "applied", cutoff + TimeDelta::days(1)),
+        (
+            "ws_a",
+            "a-t3-3",
+            "T-3",
+            "applied",
+            cutoff + TimeDelta::days(1),
+        ),
         // Unsettled and aborted rows are never selected, however old.
         ("ws_a", "a-t4-prepared", "T-4", "prepared", days_before(40)),
-        ("ws_a", "a-t4-committed", "T-4", "committed", days_before(40)),
+        (
+            "ws_a",
+            "a-t4-committed",
+            "T-4",
+            "committed",
+            days_before(40),
+        ),
         ("ws_a", "a-t4-aborted", "T-4", "aborted", days_before(40)),
         ("ws_a", "a-t4-1", "T-4", "applied", days_before(35)),
         ("ws_a", "a-t4-2", "T-4", "applied", days_before(34)),
@@ -451,7 +481,10 @@ fn journal_retention_removes_old_applied_rows_and_keeps_unsettled_and_newest() {
         insert_journal_row(&store, workspace_id, journal_id, task_id, state, created_at);
     }
     assert_eq!(
-        store.distinct_workspace_ids(RetentionIdSource::CommitJournal).unwrap().len(),
+        store
+            .distinct_workspace_ids(RetentionIdSource::CommitJournal)
+            .unwrap()
+            .len(),
         3
     );
     let legacy = vec!["ws_old".to_string()];
@@ -482,12 +515,16 @@ fn journal_retention_removes_old_applied_rows_and_keeps_unsettled_and_newest() {
     });
     assert_eq!(removed, 6);
     assert_eq!(
-        store.delete_applied_journal_rows(&plan.journal_ids).unwrap(),
+        store
+            .delete_applied_journal_rows(&plan.journal_ids)
+            .unwrap(),
         0,
         "a repeated batch deletes nothing"
     );
     assert_eq!(
-        store.delete_applied_journal_rows(&["a-t4-committed".to_string()]).unwrap(),
+        store
+            .delete_applied_journal_rows(&["a-t4-committed".to_string()])
+            .unwrap(),
         0,
         "a batch never deletes a row that is not applied"
     );
@@ -608,9 +645,11 @@ fn forty_thousand_row_journal_selects_once_and_deletes_in_short_batches() {
         TASKS,
         "every task keeps an applied row"
     );
-    assert!(store
-        .journal_retention_candidates(workspace_only("ws_a"), cutoff)
-        .unwrap()
-        .journal_ids
-        .is_empty());
+    assert!(
+        store
+            .journal_retention_candidates(workspace_only("ws_a"), cutoff)
+            .unwrap()
+            .journal_ids
+            .is_empty()
+    );
 }
