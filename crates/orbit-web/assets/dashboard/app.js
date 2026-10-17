@@ -16,7 +16,7 @@ import { getIncidentClass, getIncidentWindow } from './js/incidents.js';
 import { renderMarkdown } from './js/markdown.js';
 import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, scopeRouteHash, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
 import { initRuns, jobRunsQuery, runsQueryKey, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
-import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, fetchAndRenderJobs, initOperations, peekRoutineFailures } from './js/operations.js';
+import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, fetchAndRenderJobs, initOperations, peekRoutineFailures, startFleetIndicatorRefresh } from './js/operations.js';
 import { onDrainReadinessChange } from './js/drain-waits.js';
 import { onTaskRuntimeChange, setRunningRuns, setTaskLocks } from './js/task-runtime.js';
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
@@ -1923,6 +1923,9 @@ workspacesWanted = true;
 await ensureHostScope();
 persistScopeToUrl();
 syncWindowSelectors();
+// Warm the fleet snapshot before the router's first poll. That poll paints
+// the indicator from the snapshot and does not ask every host again.
+await startFleetIndicatorRefresh();
 iT();
 
 initLogTail();

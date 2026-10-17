@@ -43,7 +43,7 @@ Date.now = () => clock;
 try {
   await module.link(() => common);
   await module.evaluate();
-  const { fetchFleetDrains, renderFleetDrains, fleetDrainLabel } = module.namespace;
+  const { fetchFleetDrains, peekFleetDrains, renderFleetDrains, fleetDrainLabel, FLEET_CACHE_MS } = module.namespace;
   const [payload, concurrent] = await Promise.all([fetchFleetDrains(), fetchFleetDrains()]);
   assert.strictEqual(payload, concurrent, 'concurrent refreshes share one fleet read');
   assert.equal(requests.length, 4);
@@ -64,9 +64,16 @@ try {
   assert.equal(body.children[2].events.click, undefined, 'unavailable hosts cannot select a workspace');
   await fetchFleetDrains();
   assert.equal(requests.length, 4, 'fresh snapshots are reused');
-  clock = 15001;
+  clock = 30_000;
   await fetchFleetDrains();
-  assert.equal(requests.length, 8, 'expired snapshots are refreshed');
+  assert.equal(requests.length, 4, 'a snapshot still serves the next 30s panel poll');
+  const stale = peekFleetDrains();
+  clock = FLEET_CACHE_MS;
+  assert.equal(peekFleetDrains().fresh, false, 'a snapshot older than the fleet cadence is not fresh');
+  assert.equal(stale.payload, peekFleetDrains().payload, 'a panel poll can paint the stale snapshot');
+  assert.equal(requests.length, 4, 'reading the cached fleet does not fetch');
+  await fetchFleetDrains();
+  assert.equal(requests.length, 8, 'a snapshot older than the fleet cadence is refreshed');
   hosts = [{ name: 'changed' }];
   const [updated, shared] = await Promise.all([fetchFleetDrains(), fetchFleetDrains()]);
   assert.strictEqual(updated, shared);
