@@ -258,9 +258,6 @@ os.execv(sys.argv[1], sys.argv[1:])
 /// checkpoint outlasts the fixture hang guard, so a runtime that outlives its
 /// stand-in keeps the store locked for the whole wait; the test kills it after.
 #[cfg(target_os = "linux")]
-const STORE_BUSY_BUDGET: Duration =
-    Duration::from_millis(orbit_common::storage::sqlite::DEFAULT_BUSY_TIMEOUT_MS as u64);
-#[cfg(target_os = "linux")]
 const LOCK_HOLDING_RUNTIME: &str = r#"#!/usr/bin/env python3
 import os, sqlite3, sys, time
 db = os.environ["ORBIT_FIXTURE_DB"]
