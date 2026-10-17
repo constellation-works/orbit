@@ -31,6 +31,15 @@ For each consolidation or retirement, record the invariant and important failure
 
 Table-driven cases may amortize setup, but each row must remain isolated where needed and print its identity before running. Sharing fixtures must preserve authority scrubbing, state isolation, process ownership and cleanup. A smaller number of carriers with the same expensive work is not a runtime improvement, and a carrier that hangs or hides the failing row is a quality regression.
 
+Fixture templates follow these rules:
+
+- **Profile first.** Each runtime scenario row prints `scenario: <row> row elapsed <seconds>`. The parent prints `child elapsed` for each child it runs, which includes process startup. A separate-process family has one child per row, and any other table runs as one `<module>::*` child.
+- **What a template may replace.** Only setup whose result is the same for every row. One example is a migrated `orbit.db`; the schema migrations dominate a first runtime open. Another is the Git commands that build a checkout and its bare remote. A template may be built once per test process and copied into each row.
+- **A private copy for each row.** The template is held in memory as a tree (`tests/runtime/fixture_template.rs`) and written as a byte copy into the row's own root. It is never a shared path, handle, hard link or symlink, so nothing is left on disk to clean up.
+- **No per-row identity.** A template carries no workspace registration, checkout path or other identity that differs per row. Each absolute path it records is rewritten to point at the row's copy. The runtime still opens and bootstraps each root itself.
+- **A public isolation control.** Each template has a control table. One row writes into its copy. A later row in the same child process then proves its own copy is unchanged.
+- **Child processes stay.** The 2026-10-17 profile measured child startup at about 1% of the delivery and distributed-drain row time. Families that install process-wide substitutions therefore keep one child per row.
+
 The distributed no-diff read fixtures prepare unrelated media through a public
 owner update before claim admission. This avoids encoding and persisting a
 large worker replay receipt solely for read-fixture setup. Each case retains

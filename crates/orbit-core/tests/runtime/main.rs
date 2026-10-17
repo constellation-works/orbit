@@ -51,6 +51,7 @@ mod drain_cancel;
 mod drain_extend;
 mod final_recovery;
 mod finding_verification;
+mod fixture_template;
 mod flaky_validation;
 mod forecast_accuracy;
 mod forge_hold_resume;

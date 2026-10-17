@@ -52,6 +52,7 @@ impl Fixture {
                 "schemaVersion: 2\nkind: Job\nmetadata:\n  name: {name}\nspec:\n  state: enabled\n{delivery}  steps: []\n"
             )).unwrap();
         }
+        crate::fixture_template::seed_store(&global);
         let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
         let task = |title: &str| {
             runtime
