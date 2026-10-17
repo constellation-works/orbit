@@ -578,21 +578,32 @@ contribute one kind of routine only (§2.1). Two properties fall out:
   a central workspace; the mechanism tolerates additional sources, and `orbit routine list`
   names each routine's source workspace so provenance is never ambiguous.
 
-### 2.1 Replica checkouts: host-local worktree GC only
+### 2.1 Replica checkouts: host-local worktree GC and store GC
 
-A replica checkout schedules exactly one kind of routine for itself: a cron
-definition targeting `job:worktree_gc_pipeline` [ORB-14173]. That job reclaims this
-host's own run worktrees. It reads historical tasks carrying this machine's prefix
-locally and asks the owner over its tool surface only for the owner's prefix;
-it writes nothing to the owner's task store. The owner prefix comes from existing
-claim admissions, or a single foreign prefix in this workspace's stored task ids
-before any pull. Other prefixes, including ambiguous foreign mirrors without
-admissions, are retained as `skipped:task_prefix_unroutable` without an owner call.
-Owner and replica definitions
-load together, so a name claimed in both still fails closed.
+A replica checkout schedules a cron routine only when it targets one of two
+jobs. Owner and replica definitions load together, so a name claimed in both
+still fails closed.
+
+`job:worktree_gc_pipeline` reclaims this host's own run worktrees [ORB-14173].
+It reads historical tasks carrying this machine's prefix locally and asks the
+owner over its tool surface only for the owner's prefix; it writes nothing to
+the owner's task store. The owner prefix comes from existing claim admissions,
+or a single foreign prefix in this workspace's stored task ids before any pull.
+Other prefixes, including ambiguous foreign mirrors without admissions, are
+retained as `skipped:task_prefix_unroutable` without an owner call.
+
+`job:store_gc_pipeline` prunes this host's own store [ORB-16354]. The activity
+opens the local sqlite store and this workspace's audit directory. It deletes
+command-audit rows and resource history past their windows (those tables are
+host-wide on this machine) and this workspace's run-audit rows, unreferenced
+audit blobs, and the pipeline state of old terminal runs. Run rows and steps
+stay. It does not call the owner and does not read or write the owner's
+coordination store. A follower-only host otherwise cannot trim that store:
+every checkout is a replica, and the owner's store-gc routine runs against the
+owner's store, not the follower's.
 
 Every other replica definition — ship sweep, task pilot, CI and Dependabot sweeps, and
-any delivery- or state-triggered routine, including one targeting the GC job — is owner
+any delivery- or state-triggered routine, including one targeting either GC job — is owner
 work. The sweep reports it as `skipped` with an `owner_only_in_replica:` reason naming
 the owner machine and never dispatches it. `orbit routine list` and `show`, the
 dashboard's `owner_only` rows and the MCP `orbit.routine.control` list all project the

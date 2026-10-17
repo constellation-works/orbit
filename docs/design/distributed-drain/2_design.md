@@ -555,7 +555,7 @@ owns delivery:
   drain's refill pass delivers too, and first reconciles any launched leaf whose worker died, so
   an orphaned leaf's settlement is recorded and delivered without operator action. Once the
   worker and every drain are gone, the OS clock sweep retries: each tick also opens the host's
-  replica checkouts (they fire only host-local worktree-GC routines; owner-work
+  replica checkouts (they fire only host-local worktree-GC and store-GC routines; owner-work
   schedules stay inert) and runs a delivery-only pass
   (`OrbitRuntime::deliver_recorded_pull_settlements`). That pass delivers what is recorded and
   records a terminal leaf's settlement, but never ends unlaunched work.
