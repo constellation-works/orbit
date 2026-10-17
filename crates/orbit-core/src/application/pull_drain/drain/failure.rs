@@ -10,11 +10,11 @@ use orbit_store::contracts::{
 };
 use orbit_types::workflow::{
     BASELINE_RED_MARKER, BaselineRedHold, ClaimFailureClass, FORGE_UNAVAILABLE_MARKER,
-    FinalRecoveryDecision, ForgeUnavailableHold, JobRunState, OWNER_ROUTE_UNAVAILABLE_MARKER,
-    PROVIDER_CAPACITY_MARKER, PROVIDER_LIMIT_MARKER, PROVIDER_UNAVAILABLE_MARKER, PipelineState,
-    ReviewEvidenceHold, TRANSIENT_FAILURE_MARKER, UPGRADE_PENDING_MARKER,
-    VALIDATION_ENVIRONMENT_MARKER, is_baseline_red_failure, is_forge_unavailable,
-    is_provider_limit, is_provider_refusal,
+    FinalRecoveryDecision, ForgeUnavailableHold, JobRunState, OWNER_BUSY_MARKER,
+    OWNER_ROUTE_UNAVAILABLE_MARKER, PROVIDER_CAPACITY_MARKER, PROVIDER_LIMIT_MARKER,
+    PROVIDER_UNAVAILABLE_MARKER, PipelineState, ReviewEvidenceHold, TRANSIENT_FAILURE_MARKER,
+    UPGRADE_PENDING_MARKER, VALIDATION_ENVIRONMENT_MARKER, is_baseline_red_failure,
+    is_forge_unavailable, is_owner_busy, is_provider_limit, is_provider_refusal,
 };
 
 use super::super::candidate::{
@@ -291,6 +291,11 @@ fn leaf_failure(
     let provider_refusal = typed.as_ref().is_some_and(|(class, reason)| {
         *class == ClaimFailureClass::Provider && is_provider_refusal(None, Some(reason))
     });
+    // An owner call that lost to the owner's own lock-wait deadline blames
+    // neither this host nor the crew: the drain backs its claims off instead.
+    let owner_busy = typed.as_ref().is_some_and(|(class, reason)| {
+        *class == ClaimFailureClass::Transient && is_owner_busy(Some(reason))
+    });
     let (class, reason) = typed.unwrap_or_else(|| {
         let reason = last_failed
             .and_then(|step| step.error_message.clone())
@@ -355,11 +360,12 @@ fn leaf_failure(
         candidate: state.and_then(|state| preserved_candidate(run, state)),
         provider_limit,
         provider_refusal,
+        owner_busy,
     }
 }
 
 /// Orbit's typed failure markers, which a failure's reason quotes without.
-const FAILURE_MARKERS: [&str; 9] = [
+const FAILURE_MARKERS: [&str; 10] = [
     FORGE_UNAVAILABLE_MARKER,
     PROVIDER_UNAVAILABLE_MARKER,
     PROVIDER_CAPACITY_MARKER,
@@ -368,6 +374,7 @@ const FAILURE_MARKERS: [&str; 9] = [
     OWNER_ROUTE_UNAVAILABLE_MARKER,
     BASELINE_RED_MARKER,
     TRANSIENT_FAILURE_MARKER,
+    OWNER_BUSY_MARKER,
     UPGRADE_PENDING_MARKER,
 ];
 
@@ -573,6 +580,12 @@ fn release_reason(run: &orbit_types::workflow::JobRun, failure: &ClaimFailure) -
         ClaimFailureClass::OperatorCancel => {
             format!("its leaf {} was cancelled ({})", run.run_id, failure.reason)
         }
+        ClaimFailureClass::Transient if failure.owner_busy => format!(
+            "leaf {} ended on a `transient` failure: the owner's store stayed locked past its \
+             lock-wait deadline ({}); the work was not judged, the release does not count \
+             against the task's release budget, and this drain backs its claims off briefly",
+            run.run_id, failure.reason
+        ),
         ClaimFailureClass::BaseConflict => format!(
             "leaf {} ended on a `base_conflict` failure: its committed candidate could not be \
              synchronized onto a base that moved under it ({})",
@@ -627,6 +640,7 @@ pub(crate) fn operator_cancel_release(
         candidate,
         provider_limit: false,
         provider_refusal: false,
+        owner_busy: false,
     };
     let mut evidence = release_evidence(record, &format!("{why}{}", candidate_note(&failure)));
     evidence.failure = Some(failure);

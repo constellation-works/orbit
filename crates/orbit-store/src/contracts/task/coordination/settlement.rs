@@ -29,13 +29,20 @@ pub struct ClaimReleaseRecord {
     /// task's release budget.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub provider_limit: bool,
+    /// The release was for the owner's own busy store
+    /// (`ClaimFailure::owner_busy`), which blames neither the drain's host
+    /// nor its crew nor the task: admission does not keep the task or the
+    /// host from that drain, and the release does not count against the
+    /// task's release budget.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub owner_busy: bool,
 }
 
 impl ClaimReleaseRecord {
     /// Whether this release counts against the task's release budget.
     #[must_use]
     pub fn budgeted(&self) -> bool {
-        self.class.budgeted() && !self.provider_limit
+        self.class.budgeted() && !self.provider_limit && !self.owner_busy
     }
 }
 

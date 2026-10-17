@@ -229,23 +229,32 @@ pub struct ClaimFailure {
     /// releases the task unheld.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub provider_refusal: bool,
+    /// Set on a `transient` failure whose owner call lost to the owner's own
+    /// lock-wait deadline ([`orbit_types::workflow::OWNER_BUSY_MARKER`]): the
+    /// owner was reached and decided nothing. Neither the executing host nor
+    /// its crew is at fault, so the release excludes neither for the drain's
+    /// window, does not count against the task's release budget, and the
+    /// drain backs its claims off for a bounded time instead. An owner that
+    /// predates the field treats it as an ordinary `transient` release.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub owner_busy: bool,
 }
 
 impl ClaimFailure {
     /// Whether the executing drain stops running the leaf's crew for the rest
     /// of its window: its class [says so](orbit_types::workflow::ClaimFailureClass::excludes_crew)
-    /// and it is not a provider's content refusal.
+    /// and it is neither a provider's content refusal nor a busy owner.
     #[must_use]
     pub fn excludes_crew(&self) -> bool {
-        self.class.excludes_crew() && !self.provider_refusal
+        self.class.excludes_crew() && !self.provider_refusal && !self.owner_busy
     }
 
     /// Whether a release for this failure counts against the task's release
     /// budget: its class is [budgeted](orbit_types::workflow::ClaimFailureClass::budgeted)
-    /// and it is not a provider usage limit.
+    /// and it is neither a provider usage limit nor a busy owner.
     #[must_use]
     pub fn budgeted(&self) -> bool {
-        self.class.budgeted() && !self.provider_limit
+        self.class.budgeted() && !self.provider_limit && !self.owner_busy
     }
 
     /// Whether a failed claim with this failure counts toward its pull
