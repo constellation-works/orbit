@@ -329,8 +329,9 @@ guarded packaged AppArmor profile checks. See the
 for the environment override; this does not change a persistent host setting.
 
 `ci-guardrails.sh` repeats its phase breakdown in the final log tail, including
-on failure: format, workflow test listing/build, both Clippy passes, workspace
-tests, doctests, documentation, supply-chain checks and repository guards.
+on failure: format, workflow test listing/build (which folds in the all-targets
+Clippy lint), production Clippy, workspace tests, doctests, documentation,
+supply-chain checks and repository guards.
 `guard-pool` times the background pool from its start to its join. In fast mode
 that is the pool's own wall time. In full mode the join follows the doctests,
 documentation and supply-chain gate, so `guard-pool` and `repository-guards` both
