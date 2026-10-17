@@ -213,8 +213,8 @@ fn host_validation_output_is_reclaimed_only_for_terminal_inactive_attributed_che
         module_path!(),
         "host_validation_output_is_reclaimed_only_for_terminal_inactive_attributed_checkouts",
         || {
-            // The descriptor-bound host output collector runs only on Linux.
-            if !cfg!(target_os = "linux") {
+            // Native supported hosts exercise the same public collector contract.
+            if !cfg!(any(target_os = "linux", target_os = "macos")) {
                 return;
             }
             let fixture = Fixture::new();
@@ -249,6 +249,11 @@ fn host_validation_output_is_reclaimed_only_for_terminal_inactive_attributed_che
                     "skipped:run_not_terminal",
                 ),
                 ("alive", "skipped:worker_alive", "skipped:worker_alive"),
+                (
+                    "unverifiable-worker",
+                    "skipped:worker_alive",
+                    "skipped:worker_alive",
+                ),
                 (
                     "shared-active",
                     "skipped:run_not_terminal",
@@ -286,6 +291,10 @@ fn host_validation_output_is_reclaimed_only_for_terminal_inactive_attributed_che
                     }
                     "active" => run.state = JobRunState::Running,
                     "alive" => run.pid = Some(std::process::id()),
+                    "unverifiable-worker" => {
+                        run.pid = Some(std::process::id());
+                        run.pid_start_time = Some("unverifiable-legacy-token".into());
+                    }
                     "shared-active" => {
                         let mut live = run.clone();
                         live.run_id = format!("{run_id}-live");
@@ -301,6 +310,26 @@ fn host_validation_output_is_reclaimed_only_for_terminal_inactive_attributed_che
                 host.add_run(run);
                 targets.insert(case, target);
             }
+            // Public dry-run regression: the source is already gone, but its
+            // recorded path must still attribute and measure the host output.
+            let preview = orbit_engine::collect_worktrees(
+                &fixture.repo,
+                &host.list_job_runs_for_gc().unwrap(),
+                &host,
+                &orbit_engine::WorktreeGcOptions {
+                    estimate_bytes: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let orphan = preview
+                .reports
+                .iter()
+                .find(|report| report.path == targets["orphan"])
+                .expect("a removed checkout's attributed host output must be inventoried");
+            assert_eq!(orphan.action, "would_reclaim", "{orphan:#?}");
+            assert!(orphan.bytes_reclaimed >= 10, "{orphan:#?}");
+            assert!(targets["orphan"].join("debug/output").is_file());
             // A detached scratch checkout no run record names.
             let scratch = fixture
                 .repo
@@ -314,6 +343,25 @@ fn host_validation_output_is_reclaimed_only_for_terminal_inactive_attributed_che
                 &fixture.repo,
                 &["worktree", "remove", "--force", path_str(&scratch)],
             );
+            // A plausible lease record with unmatched source lineage grants
+            // no ownership of the unknown target.
+            let bad_record = unattributed
+                .parent()
+                .unwrap()
+                .with_file_name("host-validation-leases")
+                .join(format!(
+                    "{}.json",
+                    unattributed.file_name().unwrap().to_str().unwrap()
+                ));
+            fs::create_dir_all(bad_record.parent().unwrap()).unwrap();
+            fs::write(
+                &bad_record,
+                serde_json::to_vec(&json!({
+                    "schema_version": 1, "kind": "recovery", "source": outside
+                }))
+                .unwrap(),
+            )
+            .unwrap();
             // Scratch checkouts whose builder left a durable record: a base
             // run's cache lock, or a lease. Each is reclaimed only while GC
             // holds that lock; a held one is in use.
@@ -589,11 +637,66 @@ fn host_validation_output_is_reclaimed_only_for_terminal_inactive_attributed_che
                 assert_eq!(report["action"], "reclaimed", "{case}: {report:#}");
                 assert!(!targets[case].exists(), "{case}: {report:#}");
             }
+            // An unmeasurable directory must be refused before any permission
+            // repair or removal. This is an actual public GC call, not a test
+            // of the private held-directory helper.
+            #[cfg(target_os = "macos")]
+            {
+                let task = "T-HOST-unreadable";
+                let run_id = "jrun-host-unreadable";
+                host.add_task(task, TaskStatus::Backlog);
+                let input = setup_input(&[task], run_id);
+                let checkout =
+                    Checkout::from_setup(&action(&host, "worktree_setup", &input).unwrap());
+                let unreadable = build(&checkout.path);
+                git(
+                    &fixture.repo,
+                    &["worktree", "remove", "--force", path_str(&checkout.path)],
+                );
+                host.add_run(job_run(run_id, JobRunState::Failed, input));
+                fs::set_permissions(unreadable.join("debug"), fs::Permissions::from_mode(0o000))
+                    .unwrap();
+                for delete in [false, true] {
+                    let result = orbit_engine::collect_worktrees(
+                        &fixture.repo,
+                        &host.list_job_runs_for_gc().unwrap(),
+                        &host,
+                        &orbit_engine::WorktreeGcOptions {
+                            delete,
+                            estimate_bytes: true,
+                            run_id: Some(run_id.into()),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                    let report =
+                        &host_reports(&serde_json::to_value(&result).unwrap())[&unreadable];
+                    assert!(
+                        report["action"].as_str().unwrap().starts_with("failed:"),
+                        "{report:#}"
+                    );
+                    assert_eq!(report["bytes_reclaimed"], 0, "{report:#}");
+                    assert_eq!(
+                        fs::metadata(unreadable.join("debug"))
+                            .unwrap()
+                            .permissions()
+                            .mode()
+                            & 0o7777,
+                        0
+                    );
+                }
+                fs::set_permissions(unreadable.join("debug"), fs::Permissions::from_mode(0o700))
+                    .unwrap();
+                assert_eq!(
+                    fs::read_to_string(unreadable.join("debug/output")).unwrap(),
+                    "host build"
+                );
+            }
             // Replacing a component after GC's last check redirects nothing:
             // the targets directory swapped for a redirect to outside data
             // under the target's own key, or the target swapped for an outside
             // directory. That data and its read-only permissions survive.
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             for case in ["ancestor-swap", "target-swap"] {
                 let task = format!("T-HOST-{case}");
                 let run_id = format!("jrun-host-{case}");
