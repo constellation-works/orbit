@@ -201,6 +201,9 @@ pub(crate) const WORKSPACE_PROBES: &[DoctorProbe] = &[
     DoctorProbe::one("automation-consumers", |runtime, _| {
         doctor_check_stalled_automation(runtime)
     }),
+    DoctorProbe::one("routine-freshness", |runtime, _| {
+        doctor_check_routine_freshness(runtime)
+    }),
     DoctorProbe::one("review", |runtime, _| doctor_check_review(runtime)),
     DoctorProbe::one("forge-remote", |runtime, _| {
         doctor_check_forge_remote(runtime)

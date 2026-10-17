@@ -256,16 +256,25 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
             natural_slot_grace_for_cadence(case.cadence).unwrap(),
         )
         .unwrap_or_else(|error| panic!("{}: {error}", case.name));
-        let expected = case
-            .fire
-            .map_or(DueDecision::NotDue, |(slot, is_catch_up)| {
-                DueDecision::Fire {
-                    slot: at(slot).with_timezone(&case.zone),
-                    is_catch_up,
-                }
-            });
+        let expected = if case.name == "real downtime skips" {
+            DueDecision::RecordSkip {
+                slot: at("2026-09-07T01:05:00Z").with_timezone(&case.zone),
+            }
+        } else {
+            case.fire
+                .map_or(DueDecision::NotDue, |(slot, is_catch_up)| {
+                    DueDecision::Fire {
+                        slot: at(slot).with_timezone(&case.zone),
+                        is_catch_up,
+                    }
+                })
+        };
         assert_eq!(actual, expected, "{}", case.name);
-        if let DueDecision::Fire { slot, .. } = actual {
+        let consumed = match &actual {
+            DueDecision::Fire { slot, .. } | DueDecision::RecordSkip { slot } => Some(*slot),
+            DueDecision::NotDue => None,
+        };
+        if let Some(slot) = consumed {
             assert_eq!(
                 due_decision_with_grace(
                     &cron,

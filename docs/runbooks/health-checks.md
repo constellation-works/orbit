@@ -68,6 +68,7 @@ SQLite `PRAGMA quick_check`; it reads the entire store and can take much longer 
 | `clock-unit` | Installed launchd/systemd sweep unit's invocation, program path, `--version`, and whether that timer is armed | `skipped` when no unit is installed; `ok` when the unit matches and, on Linux, `orbit-sweep.timer` is enabled and active, or, on macOS, `com.orbit.sweep` is loaded and `~/.orbit/logs/sweep.log` was written within the tick interval; `warning` for a different path, stale invocation, unrunnable program, inspection failure, a disabled or inactive timer, an unloaded agent, or a sweep log older than the tick interval; `error` for version mismatch. `orbit clock repair` rewrites the unit file. `orbit clock enable` is the fix when the timer is not armed. An operator pause stays `paused` on `orbit clock status` and is still this warning. |
 | `store-retention` | Reclaimable audit rows, terminal-run pipeline state, candidate audit blobs, and SQLite file/free-list space under configured retention windows | `ok` when measured; `warning` if inspection fails. This is a read-only estimate. Plan audit and run cleanup with `orbit gc audit` and `orbit gc runs`, then pass `--apply` to delete. The blob amount is an upper bound until the audit reference scan. |
 | `worktree-reclaim` | Bytes reclaimable from kept run worktrees and host validation output | `warning` above 10 GiB or when inspection fails; otherwise `ok`. Inspect `orbit gc worktrees --reclaim`; to reclaim the declared output, run `ORBIT_OPERATOR=1 orbit gc worktrees --reclaim --confirm`. `skipped` outside a Git checkout. |
+| `routine-freshness` | Enabled cron routines whose last success — or first observation, when none has succeeded — is older than three times that routine's schedule interval | `warning` naming each stale routine; `ok` otherwise, including when no enabled cron routine is scheduled; `skipped` when this host has no machine identity. Inspect `orbit routine list` and run `orbit clock tick`. |
 
 The skills check also scans symlinks directly under `.agents/skills` and `.claude/skills`
 beside the selected global root (`~/.orbit` by default, or the root selected with
@@ -488,8 +489,12 @@ rewriting it or trying to repair its health. The
 dashboard's Host Sweep Clock card shows the same states — a degraded clock is badged
 `missed`, not `healthy`, even though the launchd service itself is still enabled.
 It does not replay every tick missed during host or manager downtime: on the next sweep,
-routine `missed_run: catch_up_once` fires once for a gap while `skip` waits for the next natural
-cron slot.
+routine `missed_run: catch_up_once` fires once for a gap (the seeded worktree-gc routine uses
+this) while `skip` records each missed past-grace slot as a skipped fire with the reason
+`missed_run: skip` and waits for the next natural cron slot. That reason is on the fire's
+`detail`, readable from `orbit routine list --json` and `orbit routine show`. `orbit doctor`'s
+`routine-freshness` row warns when an enabled routine's last success is older than three times
+its schedule interval.
 
 If an `overlap: forbid` routine remains `overlap_in_flight` after a restart, run one explicit
 `orbit clock tick --json` and inspect the referenced run. The tick releases a dispatched in-flight

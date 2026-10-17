@@ -53,6 +53,7 @@ impl RoutineListArgs {
                         "attempt": fire.attempt,
                         "state": fire.state.as_str(),
                         "run_id": fire.run_id,
+                        "detail": fire.detail,
                     })),
                 })
             })
