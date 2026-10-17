@@ -24,10 +24,10 @@ use super::duplicates::{
 };
 
 const SUPPORTED_SCHEMA_VERSION: u64 = 2;
-const DEPENDABOT_TAG: &str = "dependabot-sweep";
+pub(crate) const DEPENDABOT_TAG: &str = "dependabot-sweep";
 pub(super) const DEPENDABOT_KEY_PREFIX: &str = "dependabot:";
 const DEPENDABOT_TITLE_PREFIX: &str = "[dependabot-sweep] ";
-pub(super) const CODE_TAG: &str = "code-scanning-sweep";
+pub(crate) const CODE_TAG: &str = "code-scanning-sweep";
 pub(super) const CODE_KEY_PREFIX: &str = "code-scanning:";
 pub(super) const CODE_GROUP_KEY_PREFIX: &str = "code-scanning-group:";
 pub(super) const CODE_TITLE_PREFIX: &str = "[code-scanning-sweep] ";

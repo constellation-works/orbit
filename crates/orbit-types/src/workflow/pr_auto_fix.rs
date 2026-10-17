@@ -27,9 +27,10 @@ pub const PR_AUTO_FIX_PUSHED_EVENT: &str = "pr_auto_fix_pushed";
 /// step's repair activity. Only the watcher writes it, after admission.
 pub const PR_AUTO_FIX_CHECK_REPAIR_MARKER: &str = "pr_auto_fix_check_repair";
 
-/// The configuration key auto-fix repairs draw their crew from: the low
-/// complexity pool, through the ordinary activity-crew draw.
-pub const PR_AUTO_FIX_CREWS_KEY: &str = "workflow.low_complexity_crews";
+/// The configuration key auto-fix repairs draw their crew from: the auto-fix
+/// purpose pool, which falls back to the low complexity pool while unset,
+/// through the ordinary activity-crew draw.
+pub const PR_AUTO_FIX_CREWS_KEY: &str = "workflow.purpose_crews.auto_fix";
 
 /// What blocks the pull request's merge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,7 +62,7 @@ pub struct PrAutoFixAttempt {
     pub attempt: u32,
     pub budget: u32,
     pub run_id: String,
-    /// The crew the low-complexity draw selected for this run.
+    /// The crew the run's auto-fix draw selected.
     pub crew: String,
     /// The draw's source: the pool, or the fallback and filters it applied.
     pub crew_source: String,

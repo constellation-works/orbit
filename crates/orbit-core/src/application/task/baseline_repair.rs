@@ -43,7 +43,7 @@ use crate::OrbitRuntime;
 /// External ref system that keys a repair task by its command and failures.
 const BASELINE_RED_REF_SYSTEM: &str = "baseline-red";
 /// Tag on every repair task the tick files.
-const BASELINE_RED_REPAIR_TAG: &str = "baseline-red-repair";
+pub(crate) const BASELINE_RED_REPAIR_TAG: &str = "baseline-red-repair";
 /// Hex digits of the key digest kept in the external ref.
 const KEY_DIGITS: usize = 24;
 

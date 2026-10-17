@@ -243,7 +243,8 @@ orbit run auto --for 4h --auto-fix --complete
 
 The drain keeps watching each PR. Pending checks wait. A failed required check
 or a conflict goes to the existing repair step, which runs as a crew from
-`workflow.low_complexity_crews` (narrowed by `--allow-crew`). The repair then
+`workflow.purpose_crews.auto_fix`, else `workflow.low_complexity_crews`
+(narrowed by `--allow-crew`). The repair then
 passes your required validation and is pushed, and the drain checks the new
 head. Approvals, permissions, admin rules, unknown status and optional-check
 failures launch no agent. Each PR gets at most one repair per head and blocker,

@@ -116,13 +116,18 @@ available. Do not infer provider usage or token cost from the requested or
 resolved crew, and do not charge deterministic workflow wrapper steps to a
 model.
 
-Activities with a `crew_config_key` draw from that pool once per run: the task
-pilot from `workflow.low_complexity_crews`, step-failure and PR conflict
-recovery from `workflow.medium_complexity_crews`, final recovery from
-`workflow.final_recovery_crews`. The run state's `activity_crew_draws` records
-each draw, its source and the eligible members; an empty complexity pool falls
-back to `workflow.default_crew` and the source says so. Other activities use an
-explicit activity `crew` when present, otherwise the run's resolved crew.
+An explicit activity `crew` always wins. Otherwise activities with a
+`crew_config_key` draw from that pool once per run: the task pilot from
+`workflow.purpose_crews.task_pilot`, step-failure and PR conflict recovery from
+`workflow.purpose_crews.failure_recovery`, auto-fix repairs from
+`workflow.purpose_crews.auto_fix`, final recovery from
+`workflow.final_recovery_crews`. An unset purpose pool falls back to the pool
+it replaced (`low` for the pilot and auto-fix, `medium` for recovery). The run
+state's `activity_crew_draws` records each draw, its source and the eligible
+members; `orbit run show` prints them as `Activity Crew:` lines, and `--json`
+names each draw's `rule`. An empty complexity pool falls back to
+`workflow.default_crew` and the source says so. Other activities use the run's
+resolved crew.
 Check `activity_provenance` after execution to verify the effective route,
 especially after changing crew configuration.
 

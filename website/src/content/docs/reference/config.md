@@ -237,17 +237,51 @@ budget within it.
 ### System work
 
 Orbit's own work draws its crew from the complexity pools, like a task with no
-crew. Shipped auto-task templates name no crew, so each minted task draws from
-the pool for its complexity; a `template.crew` setting, an explicit template
-crew, and `operation.review_crew` for `delivery-code-review` still win. The
-task pilot draws from `low`, and step-failure and PR conflict recovery from
-`medium`. Repairs authorized by `orbit run auto --auto-fix`, conflict repairs
-included, draw from `low`, narrowed only by `--allow-crew`; there is no
-separate auto-fix key, and a pool the run cannot use stops the repair rather
-than escalating. A run draws once per pool, keeping the pool's weights and skipping
-disabled and usage-limited crews, and records the draw in its state. An empty
-pool falls back to `default_crew`, and the recorded draw says so. Recovery
-never inherits a failed task's crew.
+crew, until you give a purpose a pool of its own (see
+[purpose pools](#purpose-pools)). Shipped auto-task templates name no crew, so
+each minted task draws from the pool for its complexity; a `template.crew`
+setting, an explicit template crew, and `operation.review_crew` for
+`delivery-code-review` still win. While their purpose pools are unset, the
+task pilot draws from `low`, step-failure and PR conflict recovery from
+`medium`, and repairs authorized by `orbit run auto --auto-fix`, conflict
+repairs included, from `low`. Repairs are narrowed only by `--allow-crew`, and a
+pool the run cannot use stops the repair rather than escalating. A run draws
+once per pool, keeping the pool's weights and skipping disabled and
+usage-limited crews, and records the draw in its state. An empty pool falls
+back to `default_crew`, and the recorded draw says so. Recovery never inherits
+a failed task's crew.
+
+### Purpose pools
+
+Each purpose of work can name a weighted pool of its own under
+`[workflow.purpose_crews]`, written like the complexity pools:
+
+```toml
+[workflow.purpose_crews]
+task_pilot = ["luna:3", "sonnet:1"]
+failure_recovery = ["sol"]
+baseline_red_repair = ["opus"]
+```
+
+The purposes are `task_pilot`, `failure_recovery`, `auto_fix`,
+`baseline_red_repair`, `ci_failure_sweep`, `merged_head_repair` and
+`dependabot`. Final recovery and automatic review keep their existing keys,
+`workflow.final_recovery_crews` and `operation.review_crew`. A crew is chosen
+in this order:
+
+1. An explicit crew on the task, auto-task template or activity input, used as
+   it is.
+2. The purpose's pool, when it has an enabled member.
+3. The route the purpose had before purpose pools: the complexity pool named
+   above, else `default_crew`.
+
+`--allow-crew` narrows a purpose draw the same way it narrows a complexity
+draw. A task's purpose comes from the tag it was filed with
+(`baseline-red-repair`, `ci-failure-sweep`, the Dependabot and code-scanning
+tags, a merged-head follow-up tag), or from a `crew-purpose:<purpose>` tag an
+auto-task template adds. `orbit config show` lists each purpose's resolved
+pool and where it comes from, and `orbit run show` names the rule behind each
+activity crew a run drew.
 
 `[workflow] system_crew` is deprecated: it still loads for one release with a
 warning, but is ignored. Orbit no longer defines a built-in `system` crew, so a
@@ -263,11 +297,18 @@ warning. A `[crews.system]` table you define is an ordinary crew.
 | `workflow.base_branch` | string · **Default:** `main`<br>Base branch for ship, auto, and the task pilot when the registered workspace has none. |
 | `workflow.default_crew` | string · **Default:** See [Crews](#crews)<br>Crew for a task that names none and gets no override. |
 | `workflow.auto_ship` | bool · **Default:** `false`<br>Opt this workspace in to `orbit run ship-sweep`. The seeded `ship-sweep` routine does not read it; its `enabled:` flag is its switch. |
-| `workflow.low_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for low-complexity tasks with no crew, and for the task pilot. |
-| `workflow.medium_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for medium-complexity tasks with no crew, and for step-failure and PR conflict recovery. |
+| `workflow.low_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for low-complexity tasks with no crew, and for the task pilot and PR auto-fix while their purpose pools are unset. |
+| `workflow.medium_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for medium-complexity tasks with no crew, and for step-failure and PR conflict recovery while their purpose pool is unset. |
 | `workflow.hard_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for hard-complexity tasks with no crew. |
 | `workflow.xhard_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for xhard-complexity tasks with no crew. |
 | `workflow.final_recovery_crews` | array&lt;string&gt; · **Default:** `["sol:100", "opus:20"]`<br>Crew pool for final recovery, drawn once per run after step recovery is exhausted. The default keeps only members you define; `[]` disables final recovery. |
+| `workflow.purpose_crews.auto_fix` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for repairs authorized by `orbit run auto --auto-fix`. Unset or `[]`, they draw from `workflow.low_complexity_crews`. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
+| `workflow.purpose_crews.baseline_red_repair` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for the tasks the red-base re-check files. Unset or `[]`, they draw from their complexity pool. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
+| `workflow.purpose_crews.ci_failure_sweep` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for the tasks the CI failure sweep files. Unset or `[]`, they draw from their complexity pool. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
+| `workflow.purpose_crews.dependabot` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for the tasks the Dependabot and code-scanning sweeps file. Unset or `[]`, they draw from their complexity pool. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
+| `workflow.purpose_crews.failure_recovery` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for step-failure and PR conflict recovery. Unset or `[]`, they draw from `workflow.medium_complexity_crews`. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
+| `workflow.purpose_crews.merged_head_repair` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for the merged-head repairs a review reconciliation files. Unset or `[]`, they draw from their complexity pool. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
+| `workflow.purpose_crews.task_pilot` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for the task pilot. Unset or `[]`, it draws from `workflow.low_complexity_crews`. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
 | `workflow.provider_limit_max_used_pct` | integer · **Default:** `90`<br>Delivery admission skips a crew while a live usage window of its provider, or of its model, is exhausted or used at or above this percent. `100` skips only on exhaustion. |
 | `workflow.provider_limit_overrides` | array&lt;string&gt; · **Default:** `[]`<br>Per-provider thresholds replacing `workflow.provider_limit_max_used_pct`, each `provider:percent` or `provider:off` (record readings without gating admission), such as `["claude:80", "grok:100", "codex:off"]`. |
 | `workflow.provider_limit_budgets` | array&lt;string&gt; · **Default:** `[]`<br>Rolling budgets for providers that report no usage, each `provider:<amount><usd\|tokens>/<n><h\|d>`, such as `["grok:30usd/5h"]`. Counts this host's Orbit runs only. |

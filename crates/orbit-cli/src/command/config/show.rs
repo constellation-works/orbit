@@ -29,7 +29,10 @@ impl Execute for ConfigShowArgs {
             let review = review_switches(runtime);
             let mut json = effective_json(runtime, effective.values());
             json["review"] = review.json;
+            let purposes = orbit_core::application::config::crew_purposes_view(effective.values());
             let mut text = effective_text(runtime, effective.values(), self.all);
+            text.push_str(&crew_purposes_text(&purposes));
+            json["crew_purposes"] = purposes;
             text.push_str(&review.text);
             return Ok(Payload::detail(json, text).into());
         }
@@ -71,6 +74,41 @@ fn review_switches(runtime: &OrbitRuntime) -> ReviewView {
         ),
     };
     ReviewView { json, text }
+}
+
+/// The `Crew purposes:` block `orbit config show` prints.
+fn crew_purposes_text(view: &JsonValue) -> String {
+    let mut text = String::from("\nCrew purposes:\n");
+    for row in view.as_array().into_iter().flatten() {
+        let field = |name: &str| row[name].as_str().unwrap_or("-");
+        let pool = row["pool"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(JsonValue::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let line = if row["configured"].as_bool() == Some(true) {
+            format!("{pool} ({}, {})", field("key"), field("source"))
+        } else if field("resolved_from") == field("key") {
+            format!("none ({} is empty or unset)", field("key"))
+        } else if row["source"].is_null() {
+            format!("unset; falls back to {}", field("resolved_from"))
+        } else if pool.is_empty() {
+            format!(
+                "unset; falls back to {} (empty, so workflow.default_crew)",
+                field("resolved_from")
+            )
+        } else {
+            format!(
+                "unset; falls back to {} [{pool}] ({})",
+                field("resolved_from"),
+                field("source")
+            )
+        };
+        text.push_str(&format!("  {}: {line}\n", field("purpose")));
+    }
+    text
 }
 
 fn effective_json(runtime: &OrbitRuntime, values: &[EffectiveConfigValue]) -> JsonValue {

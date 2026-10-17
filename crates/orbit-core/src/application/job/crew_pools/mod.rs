@@ -10,6 +10,7 @@ mod activity;
 mod admission;
 mod candidates;
 mod draw;
+mod purpose;
 mod types;
 
 pub(crate) use admission::strip_auto_crew_admission;
@@ -17,4 +18,5 @@ pub(crate) use draw::{
     complexity_crews_key, complexity_of_crews_key, random_crew_ticket, seeded_crew_ticket,
     weighted_draw,
 };
+pub(crate) use purpose::task_crew_purpose;
 pub(crate) use types::{CapturedCrewPools, CreationCrewAssignment, CrewCandidate, InspectionPool};

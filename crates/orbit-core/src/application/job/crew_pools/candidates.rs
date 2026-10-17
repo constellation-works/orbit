@@ -2,6 +2,7 @@ use orbit_common::OrbitError;
 use orbit_config::{canonical_crew_pool, canonical_crew_pool_entries};
 use orbit_types::identity::Crew;
 use orbit_types::task::{Task, TaskComplexity, TaskHistoryEntry};
+use orbit_types::workflow::CrewPurpose;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -11,6 +12,7 @@ use super::draw::{
     INSPECTION_CREW_UNAVAILABLE, can_inspect, complexity_crews_key, permitted_candidates,
     pools_from_input, random_crew_ticket, sole_candidate, weighted_draw,
 };
+use super::purpose::{PURPOSE_SOURCE_PREFIX, task_crew_purpose};
 use super::types::{
     COMPLEXITIES, CapturedCrewPool, CapturedCrewPools, CreationCrewAssignment, CrewCandidate,
     InspectionPool, POOLS_KEY,
@@ -72,8 +74,12 @@ impl OrbitRuntime {
             return Ok(None);
         }
         let before = task.crew.clone();
-        let assignment =
-            self.creation_crew_assignment(complexity, None, &mut random_crew_ticket)?;
+        let assignment = self.creation_crew_assignment(
+            complexity,
+            None,
+            task_crew_purpose(&task.tags),
+            &mut random_crew_ticket,
+        )?;
         task.crew = assignment
             .as_ref()
             .map(|assignment| assignment.crew.clone());
@@ -194,7 +200,38 @@ impl OrbitRuntime {
         let pool_tier = source
             .as_deref()
             .and_then(|source| source.strip_prefix("pool:"));
-        if pool_tier.is_some() || source.as_deref() == Some("default") {
+        let purpose_source = source
+            .as_deref()
+            .and_then(|source| source.strip_prefix(PURPOSE_SOURCE_PREFIX));
+        let unassigned = self
+            .crew_unless_retired(task.crew.as_deref())
+            .and_then(non_empty)
+            .is_none();
+        // A purpose pool draws for a task whose crew the system chose (a pool,
+        // purpose or default assignment) or that has none yet; an explicit
+        // crew is kept as it is.
+        if (unassigned
+            || pool_tier.is_some()
+            || purpose_source.is_some()
+            || source.as_deref() == Some("default"))
+            && let Some(purpose) = task_crew_purpose(&task.tags)
+            && let Some((candidates, pool_source)) = self.purpose_pool_candidates(purpose, false)?
+        {
+            if purpose_source == Some(purpose.as_str())
+                && let Some(candidate) = candidates.iter().find(|candidate| {
+                    candidate.weight > 0
+                        && Some(candidate.crew.name.as_str()) == task.crew.as_deref()
+                })
+            {
+                return Ok((
+                    vec![sole_candidate(candidate.crew.clone())],
+                    source.unwrap_or_default(),
+                ));
+            }
+            return Ok((candidates, pool_source));
+        }
+        // A purpose assignment whose pool is gone routes like a default one.
+        if pool_tier.is_some() || purpose_source.is_some() || source.as_deref() == Some("default") {
             if let Some((candidates, pool_source)) =
                 self.complexity_pool_candidates(task.complexity, pools)?
             {
@@ -350,6 +387,8 @@ impl OrbitRuntime {
 
     /// Decide the crew a task is created with [ORB-12717].
     ///
+    /// An explicit crew wins; then the pool of the purpose the task's tags
+    /// name, when one is configured (source `purpose:<purpose>`).
     /// Creation and complexity re-rates draw from the complexity pools;
     /// a status transition alone never revisits the choice, and
     /// `task update --crew ""` re-enters here for the task's current
@@ -360,12 +399,24 @@ impl OrbitRuntime {
         &self,
         complexity: Option<TaskComplexity>,
         explicit: Option<&str>,
+        purpose: Option<CrewPurpose>,
         random: &mut impl FnMut() -> Result<u64, OrbitError>,
     ) -> Result<Option<CreationCrewAssignment>, OrbitError> {
         if let Some(explicit) = explicit.and_then(non_empty) {
             return Ok(Some(CreationCrewAssignment {
                 crew: explicit.to_string(),
                 source: "explicit".to_string(),
+            }));
+        }
+        if let Some(purpose) = purpose
+            && let Some((candidates, _)) = self.purpose_pool_candidates(purpose, false)?
+        {
+            let source = format!("{PURPOSE_SOURCE_PREFIX}{purpose}");
+            let candidates = permitted_candidates(candidates, &source, None)?;
+            let selected = weighted_draw(&candidates, &source, random)?;
+            return Ok(Some(CreationCrewAssignment {
+                crew: selected.crew.name.clone(),
+                source,
             }));
         }
         let pools = self.capture_auto_crew_pools(&Value::Null)?;

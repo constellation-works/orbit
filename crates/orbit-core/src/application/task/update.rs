@@ -13,7 +13,9 @@ use orbit_types::workflow::{REVIEW_REPORT_ARTIFACT, ReviewReport, is_reserved_re
 
 use super::TaskRecordUpdateParams;
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::{CreationCrewAssignment, random_crew_ticket};
+use crate::application::job::crew_pools::{
+    CreationCrewAssignment, random_crew_ticket, task_crew_purpose,
+};
 
 use super::helpers::{
     SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution, build_task_comments,
@@ -739,6 +741,7 @@ impl OrbitRuntime {
                 crew_assignment = self.creation_crew_assignment(
                     params.complexity.or(task.complexity),
                     None,
+                    task_crew_purpose(params.tags.as_deref().unwrap_or(&task.tags)),
                     &mut random_crew_ticket,
                 )?;
                 *crew = crew_assignment

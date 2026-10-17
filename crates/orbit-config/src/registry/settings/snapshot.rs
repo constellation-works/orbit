@@ -4,6 +4,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_common::observability::log_rotation::LogRotationConfig;
 use orbit_types::identity::Crew;
+use orbit_types::workflow::CrewPurpose;
 use orbit_types::workflow::automation::members::PreparationFreshness;
 
 use super::machine::{
@@ -44,6 +45,38 @@ impl ConfigSnapshot {
             crews,
             "workflow.xhard_complexity_crews",
         )?;
+        for (pool, setting) in [
+            (
+                &mut self.workflow_purpose_crews_auto_fix,
+                "workflow.purpose_crews.auto_fix",
+            ),
+            (
+                &mut self.workflow_purpose_crews_baseline_red_repair,
+                "workflow.purpose_crews.baseline_red_repair",
+            ),
+            (
+                &mut self.workflow_purpose_crews_ci_failure_sweep,
+                "workflow.purpose_crews.ci_failure_sweep",
+            ),
+            (
+                &mut self.workflow_purpose_crews_dependabot,
+                "workflow.purpose_crews.dependabot",
+            ),
+            (
+                &mut self.workflow_purpose_crews_failure_recovery,
+                "workflow.purpose_crews.failure_recovery",
+            ),
+            (
+                &mut self.workflow_purpose_crews_merged_head_repair,
+                "workflow.purpose_crews.merged_head_repair",
+            ),
+            (
+                &mut self.workflow_purpose_crews_task_pilot,
+                "workflow.purpose_crews.task_pilot",
+            ),
+        ] {
+            admit_crew_pool(pool, crews, setting)?;
+        }
         if let Some(pool) = self.operation_review_crew.as_mut() {
             admit_crew_pool(pool, crews, crate::operation::REVIEW_CREW_KEY)?;
         }
@@ -109,6 +142,40 @@ impl ConfigSnapshot {
         self.workflow_final_recovery_crews
             .as_deref()
             .unwrap_or_default()
+    }
+
+    /// The admitted `workflow.purpose_crews.<purpose>` pools.
+    pub fn purpose_crews(&self) -> crate::PurposeCrewPools {
+        crate::PurposeCrewPools::new([
+            (
+                CrewPurpose::TaskPilot,
+                self.workflow_purpose_crews_task_pilot.clone(),
+            ),
+            (
+                CrewPurpose::FailureRecovery,
+                self.workflow_purpose_crews_failure_recovery.clone(),
+            ),
+            (
+                CrewPurpose::AutoFix,
+                self.workflow_purpose_crews_auto_fix.clone(),
+            ),
+            (
+                CrewPurpose::BaselineRedRepair,
+                self.workflow_purpose_crews_baseline_red_repair.clone(),
+            ),
+            (
+                CrewPurpose::CiFailureSweep,
+                self.workflow_purpose_crews_ci_failure_sweep.clone(),
+            ),
+            (
+                CrewPurpose::MergedHeadRepair,
+                self.workflow_purpose_crews_merged_head_repair.clone(),
+            ),
+            (
+                CrewPurpose::Dependabot,
+                self.workflow_purpose_crews_dependabot.clone(),
+            ),
+        ])
     }
 
     /// This machine's identity, as admitted from the same registry rows every

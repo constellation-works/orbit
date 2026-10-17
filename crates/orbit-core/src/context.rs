@@ -420,6 +420,8 @@ pub(crate) struct OrbitRuntimeSettings {
     complexity_crews: orbit_config::ComplexityCrewPools,
     /// Admitted `workflow.final_recovery_crews`; empty disables final recovery.
     final_recovery_crews: Vec<String>,
+    /// Admitted `workflow.purpose_crews.<purpose>` pools; empty is unset.
+    purpose_crews: orbit_config::PurposeCrewPools,
     /// Admitted `workflow.provider_limit_*`: how close to a usage limit a
     /// provider's crews stay admissible.
     provider_limit: orbit_config::ProviderLimitPolicy,
@@ -458,6 +460,7 @@ impl OrbitRuntimeSettings {
         default_crew: Option<String>,
         complexity_crews: orbit_config::ComplexityCrewPools,
         final_recovery_crews: Vec<String>,
+        purpose_crews: orbit_config::PurposeCrewPools,
         provider_limit: orbit_config::ProviderLimitPolicy,
         operation: orbit_config::OperationPolicy,
         worker_containment: orbit_config::WorkerContainmentSettings,
@@ -486,6 +489,7 @@ impl OrbitRuntimeSettings {
             default_crew,
             complexity_crews,
             final_recovery_crews,
+            purpose_crews,
             provider_limit,
             operation,
             worker_containment,
@@ -589,6 +593,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn final_recovery_crews(&self) -> &[String] {
         &self.final_recovery_crews
+    }
+
+    pub(crate) fn purpose_crews(&self) -> &orbit_config::PurposeCrewPools {
+        &self.purpose_crews
     }
 
     pub(crate) fn provider_limit(&self) -> &orbit_config::ProviderLimitPolicy {

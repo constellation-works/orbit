@@ -89,7 +89,8 @@ use orbit_common::fs::open_read_only_no_follow;
 use orbit_common::security::redaction::redact_home_dir;
 
 pub use crew_pools::{
-    ComplexityCrewPools, CrewPoolEntry, canonical_crew_pool, canonical_crew_pool_entries,
+    ComplexityCrewPools, CrewPoolEntry, PurposeCrewPools, canonical_crew_pool,
+    canonical_crew_pool_entries,
 };
 pub use layering::{
     ConfigFallback, ConfigValueSourceKind, ConfigValueState, EffectiveConfigValue, ShadowReason,

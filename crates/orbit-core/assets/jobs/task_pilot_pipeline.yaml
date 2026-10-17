@@ -59,18 +59,22 @@
 # qualifying, warning-free proposed task.
 #
 # Crew resolution
-# - The pilot steps name `workflow.low_complexity_crews` as their
-#   `crew_config_key`: piloting reads tasks and writes a bounded proposal, so it
-#   is low work. The run draws one crew from that pool on the first pilot
-#   dispatch, keeping the pool's weights and skipping disabled and
-#   provider-limited crews, and every pilot and repair pilot of the run reuses
-#   it; `orbit run show` records the draw. An empty pool falls back to
+# - The pilot steps name `workflow.purpose_crews.task_pilot` as their
+#   `crew_config_key`. The run draws one crew from that pool on the first pilot
+#   dispatch, keeping the pool's weights and only the crews that can inspect
+#   source natively, skipping disabled and provider-limited crews, and every
+#   pilot and repair pilot of the run reuses it; `orbit run show` records the
+#   draw and the pool it came from.
+# - While that purpose is unset, the pilot draws from
+#   `workflow.low_complexity_crews` instead: piloting reads tasks and writes a
+#   bounded proposal, so it is low work. An empty low pool falls back to
 #   `workflow.default_crew`, and the recorded draw says so.
 # - Crews under a host `provider_unavailable` or `provider_capacity` hold are
 #   skipped while any other member remains. When that hold covers every crew
 #   the draw would use, the task-pilot routine does not start this job. See
 #   "Routines" under Provider failure holds in docs/CONFIG.md.
-# - Change the model behind these pilots by editing that pool.
+# - Change the model behind these pilots by setting the task-pilot purpose
+#   pool, or by editing the low pool while it is unset.
 # - There is deliberately no per-run `crew` job input: the step-level pool key
 #   below already wins over run input during dispatch, so such an input could
 #   never take effect.
@@ -135,7 +139,7 @@ spec:
             source_revision: "{{ steps.prepare.output.source.source_revision }}"
             inspection_revision: "{{ steps.prepare.output.source.source_revision }}"
             # See the crew-resolution note at the top of this file.
-            crew_config_key: workflow.low_complexity_crews
+            crew_config_key: workflow.purpose_crews.task_pilot
       fan_in:
         join:
           mode: any
@@ -169,7 +173,7 @@ spec:
             base_branch: "{{ steps.prepare.output.source.base_branch }}"
             source_revision: "{{ steps.prepare.output.source.source_revision }}"
             inspection_revision: "{{ steps.prepare.output.source.source_revision }}"
-            crew_config_key: workflow.low_complexity_crews
+            crew_config_key: workflow.purpose_crews.task_pilot
       fan_in:
         join:
           mode: any

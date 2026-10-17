@@ -2,8 +2,9 @@
 //!
 //! The completion watcher asks before it hands a failed required check or a
 //! merge conflict to the run's repair pipeline. The answer comes from two
-//! durable records: the run's frozen `workflow.low_complexity_crews` draw,
-//! which names the crew every repair of the run uses, and the pull request's
+//! durable records: the run's frozen `workflow.purpose_crews.auto_fix` draw
+//! (the low complexity pool while that purpose is unset), which names the
+//! crew every repair of the run uses, and the pull request's
 //! ledger in the primary task's history, which bounds and deduplicates the
 //! dispatches across heads, restarts and runs. Infrastructure prerequisite
 //! recovery has a separate one-rerun history reservation under the same owner
@@ -13,13 +14,13 @@ use orbit_common::OrbitError;
 use orbit_engine::{PrAutoFixAdmission, PrAutoFixRequest, RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::{TaskComplexity, TaskHistoryEntry};
 use orbit_types::workflow::{
-    PR_AUTO_FIX_ADMITTED_EVENT, PR_AUTO_FIX_BUDGET, PR_AUTO_FIX_CREWS_KEY, PrAutoFixClaim,
-    PrAutoFixDecision, decide_pr_auto_fix, pr_auto_fix_attempts,
+    CrewPurpose, PR_AUTO_FIX_ADMITTED_EVENT, PR_AUTO_FIX_BUDGET, PR_AUTO_FIX_CREWS_KEY,
+    PrAutoFixClaim, PrAutoFixDecision, decide_pr_auto_fix, pr_auto_fix_attempts,
 };
 use serde_json::json;
 
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::random_crew_ticket;
+use crate::application::job::crew_pools::{complexity_crews_key, random_crew_ticket};
 use crate::runtime::engine::crew::enforce_crew_allowlist;
 
 impl OrbitRuntime {
@@ -50,11 +51,7 @@ impl OrbitRuntime {
             "allowed_crews": request.allowed_crews,
         });
         let crew = match self
-            .complexity_pool_activity_crew(
-                &draw_input,
-                TaskComplexity::Low,
-                &mut random_crew_ticket,
-            )
+            .purpose_activity_crew(&draw_input, CrewPurpose::AutoFix, &mut random_crew_ticket)
             .and_then(|crew| {
                 let allowlist = self.crew_allowlist_from_input(&draw_input)?;
                 let origin = format!("`{PR_AUTO_FIX_CREWS_KEY}`");
@@ -72,11 +69,14 @@ impl OrbitRuntime {
             .stores()
             .jobs()
             .read_run_state(&request.run_id)?
-            .and_then(|state| {
+            .and_then(|mut state| {
+                // A run admitted before the auto-fix purpose froze its draw
+                // under the low complexity pool's key.
+                let legacy = complexity_crews_key(TaskComplexity::Low);
                 state
                     .activity_crew_draws
-                    .get(PR_AUTO_FIX_CREWS_KEY)
-                    .cloned()
+                    .remove(PR_AUTO_FIX_CREWS_KEY)
+                    .or_else(|| state.activity_crew_draws.remove(&legacy))
             })
             .map_or_else(|| PR_AUTO_FIX_CREWS_KEY.to_string(), |draw| draw.source);
 

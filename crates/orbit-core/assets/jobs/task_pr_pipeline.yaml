@@ -51,7 +51,8 @@
 #   the PR is mergeable. With it, a required check that fails on the PR's
 #   head is handed to `step_failure_recovery` (the completion step's conflict
 #   leaf cannot repair it) and a conflicting head takes the conflict path
-#   above. Both draw their crew from `workflow.low_complexity_crews`, are
+#   above. Both draw their crew from `workflow.purpose_crews.auto_fix` (the
+#   low complexity pool while that purpose is unset), are
 #   admitted against the PR's durable repair ledger (one repair per head and
 #   blocker, a bounded budget per PR), and publish the repaired head only
 #   after required validation passes on it; a reviewed head is re-reviewed

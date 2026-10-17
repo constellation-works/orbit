@@ -23,11 +23,12 @@ pub(super) use retry::{StepFailure, recover_or_return_original};
 
 const PR_CONFLICT_RECOVERY_ACTIVITY: &str = "pr_conflict_recovery";
 const STEP_FAILURE_RECOVERY_ACTIVITY: &str = "step_failure_recovery";
-/// The pool step-failure and PR conflict recovery draw their crew from
-/// [ORB-15663]. Medium: recovery diagnoses a failure in work of any tier, so
-/// it is not low work, and the medium pool is the one an unassessed task is
-/// verified on.
-const RECOVERY_CREWS_KEY: &str = "workflow.medium_complexity_crews";
+/// The pool step-failure and PR conflict recovery draw their crew from: the
+/// failure-recovery purpose pool. While it is unset the host draws from the
+/// medium complexity pool [ORB-15663]: recovery diagnoses a failure in work of
+/// any tier, so it is not low work, and the medium pool is the one an
+/// unassessed task is verified on.
+const RECOVERY_CREWS_KEY: &str = "workflow.purpose_crews.failure_recovery";
 
 /// The job's `step_failure_recovery`, resolved from the first top-level step
 /// that declares it: the repair an `--auto-fix` check failure is routed to.

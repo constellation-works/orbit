@@ -270,11 +270,12 @@ provider_limit_explicit_crews = "wait"
 | `workflow.base_branch` | `main` | Fallback base branch for ship, auto and pilot. The workspace registry's value (`orbit workspace show`) wins; `--base <branch>` overrides both. For a two-branch repo, register with `--base-branch agent-main`. |
 | `workflow.default_crew` | see [resolution](#resolution-precedence) | Crew for a task with no `crew`. Must name a defined crew. |
 | `workflow.system_crew` | — | **Deprecated, ignored.** Loads with a deprecation warning for one release; `config get`/`set` refuse it. System work draws from the complexity pools instead: see [system work](#system-work-draws-from-the-complexity-pools). Delete the key. |
-| `workflow.low_complexity_crews` | `[]` | Pool a crew-less `low` task, and the task pilot, draws from; empty uses `default_crew`. See [pools](#automatic-crew-pools-by-complexity). |
-| `workflow.medium_complexity_crews` | `[]` | The same, for `medium`; step-failure and PR conflict recovery draw from it too. |
+| `workflow.low_complexity_crews` | `[]` | Pool a crew-less `low` task draws from, and the task pilot and PR auto-fix while their [purpose pools](#purpose-crew-pools) are unset; empty uses `default_crew`. See [pools](#automatic-crew-pools-by-complexity). |
+| `workflow.medium_complexity_crews` | `[]` | The same, for `medium`; step-failure and PR conflict recovery draw from it too while `workflow.purpose_crews.failure_recovery` is unset. |
 | `workflow.hard_complexity_crews` | `[]` | The same, for `hard`. |
 | `workflow.xhard_complexity_crews` | `[]` | The same, for `xhard`. |
 | `workflow.final_recovery_crews` | `["sol:100", "opus:20"]` | Weighted pool for the final-recovery activity; `[]` disables it. See [final recovery pool](#final-recovery-pool). |
+| `workflow.purpose_crews.<purpose>` | `[]` | Weighted pool for one purpose of work (`task_pilot`, `failure_recovery`, `auto_fix`, `baseline_red_repair`, `ci_failure_sweep`, `merged_head_repair`, `dependabot`). Unset or `[]` keeps the purpose's earlier route. See [purpose crew pools](#purpose-crew-pools). |
 | `workflow.provider_limit_max_used_pct` | `90` | Admission skips a crew while a live usage window of its provider or model is exhausted or used at or above this percent (`1`–`100`; `100` skips only on exhaustion). See [provider usage limits](#provider-usage-limits). |
 | `workflow.provider_limit_overrides` | `[]` | Per-provider thresholds replacing the one above, each `provider:percent` (`["claude:80", "grok:100"]`) or `provider:off` (`["codex:off"]`, record readings without gating admission). One entry per provider, percent `1`–`100`, an alias such as `anthropic` stored as its provider. |
 | `workflow.provider_limit_budgets` | `[]` | Rolling budgets for providers that report no usage, each `provider:<amount><usd\|tokens>/<n><h\|d>` (`["grok:30usd/5h"]`). See [budgets](#budgets-for-providers-that-report-no-usage). |
@@ -630,7 +631,7 @@ orbit config set crews.gemini.enabled true
 
 ### System work draws from the complexity pools
 
-Orbit's own work has no crew lane of its own; it draws from the [complexity pools](#automatic-crew-pools-by-complexity) like a task does.
+Orbit's own work draws from the [complexity pools](#automatic-crew-pools-by-complexity) like a task does, unless its [purpose pool](#purpose-crew-pools) is configured. The table is the route each kind of work keeps while its purpose pool is unset.
 
 | Work | Pool | Why |
 |---|---|---|
@@ -639,9 +640,47 @@ Orbit's own work has no crew lane of its own; it draws from the [complexity pool
 | Step-failure recovery, PR conflict recovery | `medium` | Recovery diagnoses failures in work of any tier, so it is not low work; medium is also the tier an unassessed task is verified on. |
 | [`orbit run auto --auto-fix`](#pr-auto-fix-repairs) repairs (failed required checks and merge conflicts on the drain's PRs) | `low` | The repair is bounded to one named blocker on a candidate that already passed its gates. |
 
-A pilot or recovery activity names its pool as `crew_config_key: workflow.<tier>_complexity_crews`. The run draws once per pool on its first such dispatch: the pool's weights apply, disabled crews and those outside the run's `allowed_crews` are skipped, and crews at a [provider usage limit](#provider-usage-limits) are skipped while another member is left. Every later dispatch of that pool in the run, and a resume, reuses the draw, which the run's state records with the eligible members. An empty or wholly disabled pool falls back to `workflow.default_crew`, as an unassigned task does, and the recorded draw says so. The task pilot and finding verification inspect pinned source with the provider's native file-read and command tools, which only Codex and Claude have, so their draws skip crews of any other provider (Gemini, Grok, Antigravity, ...). A pool with no such member passes to the next tier up, then to `workflow.default_crew`; when that cannot inspect either, the activity fails with `inspection_crew_unavailable` before a provider launches. The pilot's recorded draw names the filter and the crews it skipped.
+A pilot, recovery or auto-fix activity names its purpose as `crew_config_key: workflow.purpose_crews.<purpose>` (an older asset may still name `workflow.<tier>_complexity_crews`, which draws that pool directly). The run draws once per pool on its first such dispatch: the pool's weights apply, disabled crews and those outside the run's `allowed_crews` are skipped, and crews at a [provider usage limit](#provider-usage-limits) are skipped while another member is left. Every later dispatch of that pool in the run, and a resume, reuses the draw, which the run's state records with the eligible members. An empty or wholly disabled pool falls back to `workflow.default_crew`, as an unassigned task does, and the recorded draw says so. The task pilot and finding verification inspect pinned source with the provider's native file-read and command tools, which only Codex and Claude have, so their draws skip crews of any other provider (Gemini, Grok, Antigravity, ...). A pool with no such member passes to the next tier up, then to `workflow.default_crew`; when that cannot inspect either, the activity fails with `inspection_crew_unavailable` before a provider launches. The pilot's recorded draw names the filter and the crews it skipped.
 
 **Migration.** `workflow.system_crew` still loads for one release but is ignored, with a deprecation warning naming the pools. Orbit no longer defines a built-in `system` crew or aliases it to `[crews.qa]`. A template, job or activity still naming `crew: system` (or `crew_config_key: workflow.system_crew`) resolves through the pools with a warning: a template by its complexity, a job or activity step through `medium`. A user-authored `[crews.system]` table is an ordinary crew and keeps working wherever it is named.
+
+### Purpose crew pools
+
+Each purpose of work can draw its crew from a weighted pool of its own, written like the [complexity pools](#weighting-a-pool):
+
+```toml
+[workflow.purpose_crews]
+task_pilot = ["luna:3", "sonnet:1"]
+failure_recovery = ["sol"]
+auto_fix = ["luna"]
+baseline_red_repair = ["opus"]
+```
+
+| Purpose | Key | Chooses the crew for | While unset or `[]` |
+|---|---|---|---|
+| Task pilot | `workflow.purpose_crews.task_pilot` | `task_pilot_pipeline`'s pilot activities | `workflow.low_complexity_crews` |
+| Failure recovery | `workflow.purpose_crews.failure_recovery` | step-failure and PR conflict recovery | `workflow.medium_complexity_crews` |
+| Final recovery | `workflow.final_recovery_crews` | the [final-recovery](#final-recovery-pool) activity | its own default; there is no other route |
+| PR auto-fix | `workflow.purpose_crews.auto_fix` | [`--auto-fix`](#pr-auto-fix-repairs) repairs | `workflow.low_complexity_crews` |
+| Automatic review | `operation.review_crew` | [automatic review](#review-and-operation--automatic-review) | the review's existing rules |
+| Red-base repair | `workflow.purpose_crews.baseline_red_repair` | tasks the red-base re-check files (`baseline-red-repair` tag) | the task's complexity pool, then `default_crew` |
+| CI failure sweep | `workflow.purpose_crews.ci_failure_sweep` | tasks the CI failure sweep files (`ci-failure-sweep` tag) | the same |
+| Merged-head repair | `workflow.purpose_crews.merged_head_repair` | repairs a review reconciliation files (its follow-up tag) | the same |
+| Dependabot | `workflow.purpose_crews.dependabot` | tasks the Dependabot and code-scanning sweeps file | the same |
+
+Final recovery and automatic review already had a pool, so their existing keys are their purpose pools and keep working unchanged.
+
+**Resolution order.** The first rule that applies wins:
+
+1. **Explicit crew.** A `crew` on the task, the auto-task template or the activity input is used as it is and skips the purpose. An activity's explicit `crew` also beats its `crew_config_key`.
+2. **Purpose pool.** The purpose's pool, drawn by weight once per run for an activity and at creation for a task. Disabled crews are skipped, `--allow-crew` narrows the draw (a pool with no permitted member fails as a complexity pool does), and [provider usage limits](#provider-usage-limits) and [failure holds](#provider-failure-holds) skip crews while another member is left. The task pilot keeps only members that [inspect natively](#system-work-draws-from-the-complexity-pools).
+3. **Earlier route.** A purpose whose pool is unset, `[]`, wholly disabled, or (for the pilot) has no inspection-capable member resolves exactly as it did before purpose pools: the right-hand column above.
+
+**A task's purpose** comes from its tags: a `crew-purpose:<purpose>` tag naming one of the `workflow.purpose_crews` purposes, else the tag the system filed it with. An auto-task template names a purpose for the tasks it mints by adding a `crew-purpose:<purpose>` tag. A task drawn from its purpose pool records `crew_source: purpose:<purpose>`; admission keeps that crew while it is still an enabled positive-weight member of the pool, and otherwise redraws as for a stale pool assignment. A purpose task that cannot use its pool falls back to its complexity pool. A complexity change keeps a purpose-sourced crew, because the purpose does not depend on the tier.
+
+**Seeing the choice.** `orbit config show` lists **Crew purposes**: each purpose's resolved pool, the key it came from and that key's layer (`crew_purposes` in `--json`). `orbit run show` prints one `Activity Crew:` line per pool a run drew from, naming the crew, the key and the draw's source; `--json` adds `activity_crew_draws` with a `rule` of `default_crew`, `purpose_pool`, `purpose_unset_fallback`, `final_recovery_pool` or `complexity_pool`.
+
+**Resume.** Purpose pools are read from the current configuration when a run first draws, then frozen in its state like a complexity draw. A run that froze a complexity-pool draw before purpose pools existed keeps it on resume.
 
 ### Disabled crews
 
@@ -708,7 +747,7 @@ Every `provider` string (a crew's, an activity's inline `provider`, setup detect
 **Which crew a task dispatches.** The first tier that is set wins:
 
 1. **explicit**: `--crew` or run-input `crew`.
-2. **task_config**: an explicit `task.crew`, or a pool assignment valid for the current tier (normally set at creation; admission redraws stale pool assignments and default fallbacks, see [pools](#automatic-crew-pools-by-complexity)).
+2. **task_config**: an explicit `task.crew`, or a pool or [purpose](#purpose-crew-pools) assignment still valid for its pool (normally set at creation; admission redraws stale pool assignments and default fallbacks, see [pools](#automatic-crew-pools-by-complexity)).
 3. **workspace_default**: `workflow.default_crew`.
 4. **environment_default**: `CONSTELLATION_DEFAULT_PROVIDER`, a provider ID or alias. `claude` selects `opus` and `codex` selects `sol` when defined; any other ID selects the same-named crew. Never overrides a configured `default_crew`.
 5. **system_default**: the `opus` crew, or a legacy `claude` crew.
@@ -718,7 +757,7 @@ An unset or blank variable leaves the built-in default in effect. An invalid
 provider is refused during config admission unless a file configures
 `workflow.default_crew`, which takes precedence over the variable.
 
-**Which crew an activity uses.** A non-empty `crew` in its rendered input, otherwise the run's crew. Activity and job assets that declare `role` are rejected.
+**Which crew an activity uses.** A non-empty `crew` in its rendered input, otherwise the pool its `crew_config_key` names ([purpose](#purpose-crew-pools), complexity or final-recovery pool), otherwise the run's crew. Activity and job assets that declare `role` are rejected.
 
 **Crew over inline baseline.** For each of `provider`, `model` and `effort`, the selected crew's value wins when present, else the activity's inline `agent_loop` value. An unrecognized crew `provider` is logged and falls back to the inline provider, so a typo never moves dispatch to another runtime. A provider already recorded on a run is reused verbatim on reconciliation.
 
@@ -822,7 +861,7 @@ hard_complexity_crews = ["astra"]
 xhard_complexity_crews = ["fable", "astra"]
 ```
 
-- **Selected at creation.** A task created without `crew` (`orbit task add`, `orbit.task.add`, an auto-task mint with no template crew, an import) draws from its complexity's pool, else `default_crew`, storing `task.crew` and its provenance `task.crew_source`; a `crew_assigned` history entry records the source (`explicit`, `pool:<complexity>` or `default`). That entry is a second write after the insert; if it fails, the task is still created and returned, and the failure is logged. With no crews configured the field stays unset.
+- **Selected at creation.** A task created without `crew` (`orbit task add`, `orbit.task.add`, an auto-task mint with no template crew, an import) draws from its complexity's pool, else `default_crew`, storing `task.crew` and its provenance `task.crew_source`; a `crew_assigned` history entry records the source (`explicit`, `pool:<complexity>`, `purpose:<purpose>` or `default`). A task with a [purpose](#purpose-crew-pools) whose pool is configured draws from that pool instead of its complexity's. That entry is a second write after the insert; if it fails, the task is still created and returned, and the failure is logged. With no crews configured the field stays unset.
 - **Complexity changes redraw automatic crews.** When the pilot or `task update --complexity` changes the tier, a crew sourced from another pool or the `default` fallback is redrawn in the same mutation, logged as `crew_redrawn` with previous and new source and crew. Explicit crews stay pinned, even when an update names the crew a pool already chose; status transitions keep the selection. `task update --crew <name>` pins; [`--crew ""`](#setting-taskcrew) redraws. Every stored change records the actor, prior and new crew, and whether it was named or drawn.
 - **Tiers:** `low`, `medium`, `hard`, `xhard`. Unset or `unassessed` complexity uses the default chain. The task pilot never demotes a task out of `xhard`.
 - **Empty pool** (`[]`, the init scaffold) means no pool: the task gets `default_crew`, as it does when all members are [disabled](#disabled-crews). Blank entries and unknown crew names fail before dispatch.
@@ -870,7 +909,7 @@ Recognized usage-limit texts: Antigravity's `Individual quota reached … Resets
 
 **Host outages.** A local run that fails `[provider_unavailable]` also records each crew it excluded in the global store (`~/.orbit/orbit.db`, table `provider_crew_outages`), one row per provider and crew, until the hold's own backoff ends; a longer outage of the crew is kept. Until then this host's local admission draws no task onto that crew, not only the held one, and whatever became of the held task: a task whose own crew, complexity pool or default leaves another crew draws it, and the rest wait with `provider_backoff`. A crew of the same name on another provider is not covered. The record is advisory: a failure to record it logs a warning, and the task is still held. Followers and their pull drains are not affected; their own crew window handles their own logins. Operator steps: [stuck job runs](runbooks/stuck-job-runs.md#a-task-held-after-a-provider-failure).
 
-**Routines.** The task-pilot routine honours a host provider failure hold. It reads recent runs on this host — the failures `orbit run readiness --json` projects as `provider_auth_failures`, plus `provider_capacity` — over a one-hour window of finish time (falling back to start time, then creation time), and does not write a new hold record. A recently finished failure remains in that window even when its pipeline was created more than an hour ago. Clearing successes use the same finish-time window. While a `provider_unavailable` failure from the last 30 minutes, or a `provider_capacity` failure from the last 15 minutes, covers every crew the pilot would draw (the inspection-capable members of `workflow.low_complexity_crews`, or of the next tier up when none can inspect, else `workflow.default_crew`, after the usage-limit narrowing), the routine withholds the dispatch. The withhold reason starts with `provider_hold:` and names the provider or crew, when the backoff ends, the failing run, and the crews skipped. It does not start `task_pilot_pipeline`. Unavailability covers every crew of that provider on this host, because a failed login is the provider's. Capacity covers the crew the run ran as, or every crew of the failing step's provider when that step did not run as that crew. The routine and the readiness auth-failure card share crew attribution: `task_pilot_pipeline` uses its recorded `workflow.low_complexity_crews` draw, `blocked_task_recovery_pipeline` uses its `workflow.final_recovery_crews` draw, and `finding_verification_pipeline` uses its prepared verifier partitions, including escalations. These jobs' `resolved_crew` names the tasks' crews and does not identify the agents they dispatched. A missing draw counts as no known crew. A verifier failure counts for the partition whose recorded error the failure message carries; a verifier success counts only partitions with a recorded result. Other jobs use `resolved_crew`. A pilot's provider failure is recorded on the run itself: a failed pilot fan-out prefers a provider-classified worker message over an ordinary failure message, preserving the provider marker even when an earlier worker failed on the work. The backoff is the base in the table above, measured from the latest uncleared failure's finish time; it does not double. A successful run of that provider on this host that started after the failure, or a pull-drain auth probe that records `recovered_at` for that provider on this host, clears unavailability before the backoff ends; a success that started before the failure does not, even when it finishes after it, the same rule `provider_auth_failures` uses. Capacity clears when such a success is of the held crew, or of any of the provider's crews when the hold covers the provider. A probe does not clear capacity. `provider_limit` and `provider_refusal` do not withhold the routine. When any drawable crew remains, the routine still dispatches and the draw skips the held crews, naming the hold in the draw's source. The next tick after the hold lifts dispatches again with no operator action, once the routine's own debounce has passed. Another host's failure does not hold this one. Step-failure and PR conflict recovery share that draw, so they skip a held crew the same way; the routine withhold itself is only the task-pilot routine.
+**Routines.** The task-pilot routine honours a host provider failure hold. It reads recent runs on this host — the failures `orbit run readiness --json` projects as `provider_auth_failures`, plus `provider_capacity` — over a one-hour window of finish time (falling back to start time, then creation time), and does not write a new hold record. A recently finished failure remains in that window even when its pipeline was created more than an hour ago. Clearing successes use the same finish-time window. While a `provider_unavailable` failure from the last 30 minutes, or a `provider_capacity` failure from the last 15 minutes, covers every crew the pilot would draw (the inspection-capable members of `workflow.purpose_crews.task_pilot` when it has one, else of `workflow.low_complexity_crews`, or of the next tier up when none can inspect, else `workflow.default_crew`, after the usage-limit narrowing), the routine withholds the dispatch. The withhold reason starts with `provider_hold:` and names the provider or crew, when the backoff ends, the failing run, and the crews skipped. It does not start `task_pilot_pipeline`. Unavailability covers every crew of that provider on this host, because a failed login is the provider's. Capacity covers the crew the run ran as, or every crew of the failing step's provider when that step did not run as that crew. The routine and the readiness auth-failure card share crew attribution: `task_pilot_pipeline` uses its recorded task-pilot draw (or, for a run admitted before purpose pools, its `workflow.low_complexity_crews` draw), `blocked_task_recovery_pipeline` uses its `workflow.final_recovery_crews` draw, and `finding_verification_pipeline` uses its prepared verifier partitions, including escalations. These jobs' `resolved_crew` names the tasks' crews and does not identify the agents they dispatched. A missing draw counts as no known crew. A verifier failure counts for the partition whose recorded error the failure message carries; a verifier success counts only partitions with a recorded result. Other jobs use `resolved_crew`. A pilot's provider failure is recorded on the run itself: a failed pilot fan-out prefers a provider-classified worker message over an ordinary failure message, preserving the provider marker even when an earlier worker failed on the work. The backoff is the base in the table above, measured from the latest uncleared failure's finish time; it does not double. A successful run of that provider on this host that started after the failure, or a pull-drain auth probe that records `recovered_at` for that provider on this host, clears unavailability before the backoff ends; a success that started before the failure does not, even when it finishes after it, the same rule `provider_auth_failures` uses. Capacity clears when such a success is of the held crew, or of any of the provider's crews when the hold covers the provider. A probe does not clear capacity. `provider_limit` and `provider_refusal` do not withhold the routine. When any drawable crew remains, the routine still dispatches and the draw skips the held crews, naming the hold in the draw's source. The next tick after the hold lifts dispatches again with no operator action, once the routine's own debounce has passed. Another host's failure does not hold this one. Step-failure and PR conflict recovery share that draw, so they skip a held crew the same way; the routine withhold itself is only the task-pilot routine.
 
 **The host's limit record.** A usage-limit failure also records an observation in the global store (`~/.orbit/orbit.db`, table `provider_limit_observations`): one row per provider, model and window with the reset, run, crew and provider text. A newer observation replaces the row, an older one never does. Recording is advisory: a failure to record logs a warning, and the run is still typed and held. After every Codex or Claude run, successful or not, the host also records the provider's own reading of each window (source `event`): percent used (can exceed 100), window length and reset.
 
@@ -929,7 +968,7 @@ Grok, Antigravity and Gemini don't report how close an account is to its limit; 
 
 ### Final recovery pool
 
-`workflow.final_recovery_crews` is the weighted pool the `final_recovery` activity draws one crew from, once per run, when a task fails after step-failure recovery is exhausted; that crew evaluates the failure and attempts a final typed decision and fix.
+`workflow.final_recovery_crews` is the final-recovery [purpose pool](#purpose-crew-pools): the weighted pool the `final_recovery` activity draws one crew from, once per run, when a task fails after step-failure recovery is exhausted; that crew evaluates the failure and attempts a final typed decision and fix.
 
 ```toml
 [workflow]
@@ -976,11 +1015,13 @@ The crew comes from the existing pool resolution, in this order:
 
 1. `--allow-crew` restricts which crews the draw may pick, as for every
    activity in the run.
-2. `workflow.low_complexity_crews` is the pool, drawn once per run with its
-   weights, disabled crews skipped and provider usage limits honoured, as
+2. `workflow.purpose_crews.auto_fix` is the pool when it has an enabled member,
+   else `workflow.low_complexity_crews` ([purpose crew pools](#purpose-crew-pools)).
+   The pool is drawn once per run with its weights, disabled crews skipped and
+   provider usage limits honoured, as
    [above](#system-work-draws-from-the-complexity-pools). Conflict repairs under
-   `--auto-fix` use this pool too, rather than the medium pool.
-3. An empty or wholly disabled pool falls back to `workflow.default_crew`.
+   `--auto-fix` use this pool too, rather than the failure-recovery or medium pool.
+3. An empty or wholly disabled low pool falls back to `workflow.default_crew`.
 
 A pool none of whose crews the run may use stops auto-fix with a diagnostic
 rather than escalating to another pool. Auto-fix never changes a task's

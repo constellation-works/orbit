@@ -125,8 +125,8 @@ pub(super) fn dispatch_recovery(
         }
         inject_recovery_evidence(ctx, &mut input).map_err(|error| ("input", error))?;
         // An `--auto-fix` run repairs its pull request, check or conflict,
-        // with the crew drawn from the low pool, the draw its admission
-        // recorded.
+        // with the crew drawn from the auto-fix purpose pool (the low pool
+        // while it is unset), the draw its admission recorded.
         let auto_fix = input
             .pointer("/failed_step_input/auto_fix")
             .and_then(Value::as_bool)

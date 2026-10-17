@@ -50,7 +50,8 @@ assuming a value.
 |---|---|
 | `workflow.base_branch` | Config fallback for ship/auto/pilot base branch. A registered workspace `base_branch` takes precedence. |
 | `workflow.default_crew` | Crew for any task that doesn't declare one. |
-| `workflow.<tier>_complexity_crews` | Automatic crew pool per task complexity (`low`, `medium`, `hard`, `xhard`); entries `name` or `name:weight`. Empty (`[]`) routes that tier to `default_crew`. Orbit's own work draws from them too: auto-task templates by complexity, the task pilot from `low`, failure and PR conflict recovery from `medium`. The retired system-crew key loads with a deprecation warning and is ignored. |
+| `workflow.<tier>_complexity_crews` | Automatic crew pool per task complexity (`low`, `medium`, `hard`, `xhard`); entries `name` or `name:weight`. Empty (`[]`) routes that tier to `default_crew`. Orbit's own work draws from them too while its purpose pool is unset: auto-task templates by complexity, the task pilot and PR auto-fix from `low`, failure and PR conflict recovery from `medium`. The retired system-crew key loads with a deprecation warning and is ignored. |
+| `workflow.purpose_crews.<purpose>` | Weighted pool for one purpose of work, written like the complexity pools: `task_pilot`, `failure_recovery`, `auto_fix`, `baseline_red_repair`, `ci_failure_sweep`, `merged_head_repair`, `dependabot`. An explicit task, template or activity crew wins; otherwise the purpose pool is drawn, narrowed by `--allow-crew`; unset or `[]` keeps the earlier route. Final recovery and automatic review keep `workflow.final_recovery_crews` and `operation.review_crew`. `orbit config show` lists each purpose's resolved pool and its source. |
 | `workflow.auto_ship` | Opt-in for `orbit run ship-sweep` unattended ship dispatch. The seeded `ship-sweep` routine does not read it. |
 | `workflow.provider_limit_max_used_pct` | Skip a crew while a live usage window of its provider or model is exhausted or used at or above this percent (1..=100, default 90; 100 skips only on exhaustion). |
 | `workflow.provider_limit_overrides` | Per-provider replacement for that percent: `provider:percent` (1..=100) or `provider:off` (record readings without gating). Each provider once. |
@@ -167,7 +168,8 @@ table, nor a system-crew key: system work draws from the pools. The four
 grok joins `medium`, `antigravity` or else `gemini` joins `low`; other families
 leave them `[]`). A user-authored
 legacy `qa` crew remains loadable, but init never creates it. To move system
-work, edit the complexity pool it draws from. With no supported
+work, set its `workflow.purpose_crews.<purpose>` pool, or edit the complexity
+pool it falls back to. With no supported
 agent CLI, every crew is written disabled and no default crew is set, so nothing
 dispatches until you enable a crew. Which provider CLIs
 this machine can launch, and each executor's sandbox mode:
@@ -221,7 +223,9 @@ For ship dispatch, an explicit run crew overrides the task's explicit pin,
 validated pool assignment, or `default` fallback. Otherwise the complexity pool
 and default chain apply as described below. A creation without a crew draws
 from its complexity pool, falling back to `default_crew`, and stores
-`crew_source` as `explicit`, `pool:<complexity>`, or `default`, also recorded
+`crew_source` as `explicit`, `pool:<complexity>`, `purpose:<purpose>` (a task
+whose system tag or `crew-purpose:<purpose>` tag names a configured purpose
+pool), or `default`, also recorded
 in assignment history. A complexity re-rate redraws a pool-sourced crew from
 another tier or a `default` fallback and records the previous and new sources
 and crews in `crew_redrawn` history; explicit crews stay pinned. A `default`

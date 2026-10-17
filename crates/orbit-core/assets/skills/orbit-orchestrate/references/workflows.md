@@ -415,7 +415,8 @@ absent. In `task_pr_pipeline` it runs `pr_complete` even under
 task: it returns once the PR is mergeable or merged elsewhere. A failed required
 check fails the step with a marked hand-off that the executor routes to the
 job's `step_failure_recovery`. A conflict goes to the step's existing
-`pr_conflict_recovery`. Both draw their crew from `workflow.low_complexity_crews`.
+`pr_conflict_recovery`. Both draw their crew from `workflow.purpose_crews.auto_fix`,
+else `workflow.low_complexity_crews`.
 The retried `pr_complete` validates and publishes the repair and then watches the
 new head. A reviewed head is sent through the `re_review_*` round instead. See
 [orchestration.md](orchestration.md#auto-fix-authorization).

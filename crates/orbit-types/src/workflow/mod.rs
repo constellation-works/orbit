@@ -5,6 +5,7 @@ mod auto_concurrency;
 mod auto_task;
 pub use auto_concurrency::AutoConcurrencyMode;
 mod child_dispatch;
+mod crew_purpose;
 mod error;
 mod executor_def;
 mod final_recovery;
@@ -57,6 +58,7 @@ pub use auto_task::{
 pub use child_dispatch::{
     ChildCancellation, ChildCancellationPolicy, ChildDispatch, ChildDispatchPhase,
 };
+pub use crew_purpose::{CREW_PURPOSE_TAG_PREFIX, CrewPurpose, PURPOSE_CREWS_KEY_PREFIX};
 pub use executor_def::{
     AuthProbe, AuthProbeSuccess, ExecutorDef, ExecutorSandboxKind, ExecutorType, ModelPairOverride,
     StdoutFormat,

@@ -14,6 +14,7 @@
 
 mod paths;
 mod provenance;
+mod purposes;
 mod rows;
 mod view;
 mod write;
@@ -23,5 +24,6 @@ mod write;
 pub use orbit_config::ConfigScope;
 
 pub use paths::path_rows;
+pub use purposes::crew_purposes_view;
 pub use view::{effective_view, file_view, key_catalog, parse_config_scope};
 pub use write::{ConfigWriteInit, ConfigWriteOutcome, delete_crew, set_crew, set_key, unset_key};

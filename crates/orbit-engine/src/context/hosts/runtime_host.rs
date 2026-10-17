@@ -224,7 +224,8 @@ pub trait RuntimeHost: Send + Sync {
     fn validate_source_repair(&self, run_id: &str) -> Result<(), OrbitError>;
     /// Admit one `--auto-fix` repair of a pull request's failed required
     /// checks or merge conflict before any agent runs. The host draws the
-    /// run's repair crew from `workflow.low_complexity_crews` and decides the
+    /// run's repair crew from `workflow.purpose_crews.auto_fix` (the low
+    /// complexity pool while that purpose is unset) and decides the
     /// request against the pull request's durable ledger under the primary
     /// task's lock, recording an admitted attempt in the same critical
     /// section.

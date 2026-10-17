@@ -27,12 +27,14 @@ pub struct ResolvedAgentSettings {
 /// selects the crew for a given activity.
 const ALLOWED_CREWS_KEY: &str = "allowed_crews";
 /// Activity input naming the configuration the host resolves the crew from
-/// (a `workflow.<tier>_complexity_crews` pool, `workflow.final_recovery_crews`).
+/// (a `workflow.purpose_crews.<purpose>` or `workflow.<tier>_complexity_crews`
+/// pool, `workflow.final_recovery_crews`).
 const CREW_CONFIG_KEY: &str = "crew_config_key";
 
 /// Resolve one crew assignment for an activity. Explicit activity input wins —
-/// a named `crew` or a `crew_config_key` the host resolves from configuration;
-/// absent both, the run input preserves the run's resolved crew selection.
+/// a named `crew`, which the host uses as it is, else a `crew_config_key` the
+/// host resolves from configuration; absent both, the run input preserves the
+/// run's resolved crew selection.
 pub fn resolve_crew_settings(
     host: &dyn RuntimeHost,
     inline: &AgentLoopSpec,

@@ -3,6 +3,7 @@
 mod add;
 mod baseline_hold;
 mod baseline_repair;
+pub(crate) use baseline_repair::BASELINE_RED_REPAIR_TAG;
 mod blocked_next_step;
 mod blocked_recovery;
 pub(crate) mod blocked_recovery_steps;
