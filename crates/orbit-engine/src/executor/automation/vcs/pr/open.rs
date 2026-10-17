@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::{KNOWN_RED_VALIDATION_EVENT, KnownRedValidation};
+use orbit_types::workflow::{
+    FLAKY_VALIDATION_EVENT, FlakyValidation, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation,
+};
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
@@ -143,8 +146,38 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
                 pr_opener_model.as_deref(),
             )
         });
-    let body = with_known_red(host, body, context, base_sha, input);
-    let body = with_flaky(host, body, context, base_sha, input);
+    let known_red = collect_validation_records(
+        host,
+        context,
+        base_sha,
+        input,
+        (KNOWN_RED_VALIDATION_EVENT, "known_red"),
+        KnownRedValidation::from_text,
+        |record| ValidationRecord {
+            command: &record.command,
+            run_id: &record.run_id,
+            base_sha: &record.base_sha,
+            tested_head: &record.tested_head,
+            valid: true,
+        },
+    );
+    let body = append_section(body, render_known_red_section(&known_red));
+    let flaky = collect_validation_records(
+        host,
+        context,
+        base_sha,
+        input,
+        (FLAKY_VALIDATION_EVENT, "flaky"),
+        FlakyValidation::from_text,
+        |record| ValidationRecord {
+            command: &record.command,
+            run_id: &record.run_id,
+            base_sha: &record.base_sha,
+            tested_head: &record.tested_head,
+            valid: record.valid(),
+        },
+    );
+    let body = append_section(body, super::body::render_flaky_section(&flaky));
     let body = bound_pr_body(with_review_fixes(body, input), &context.tasks);
     // A failed create may already have taken effect. Reconcile by head before
     // every retry; the private create operation must remain single-shot.
@@ -500,76 +533,84 @@ pub(in crate::executor::automation::vcs) fn open_or_reuse_unchecked<H: RuntimeHo
     Ok((number, viewed_url.or_else(|| Some(url.to_string())), true))
 }
 
-/// [ORB-15375] `body` with the required validation this run found red on the
-/// base too, for this run, base and checked-out head, one per command (the
-/// latest): the delivered tasks' known-red history notes, then the
-/// `known_red` records of a claimed leaf's validation output, handed in as
-/// `claim_validation` [ORB-15427], since a claimed leaf cannot write the
-/// owner's task history.
-fn with_known_red<H: RuntimeHost + ?Sized>(
+/// Borrowed fields used to admit and deduplicate either kind of evidence.
+struct ValidationRecord<'a> {
+    command: &'a str,
+    run_id: &'a str,
+    base_sha: &'a str,
+    tested_head: &'a str,
+    valid: bool,
+}
+
+/// Keep the latest matching record per command, from delivered tasks' history
+/// followed by a claimed leaf's handed validation output. Claimed leaves cannot
+/// write the owner's task history.
+fn collect_validation_records<H: RuntimeHost + ?Sized, T: DeserializeOwned>(
     host: &H,
-    body: String,
     context: &HandoffContext,
     base_sha: &str,
     input: &Value,
-) -> String {
+    (event, key): (&str, &str),
+    parse: fn(&str) -> Option<T>,
+    fields: impl Fn(&T) -> ValidationRecord<'_>,
+) -> Vec<T> {
+    let kind = key.replace('_', "-");
     let head = match git_output(&context.workspace_path, &["rev-parse", "HEAD"]) {
         Ok(head) => head,
         Err(error) => {
-            tracing::warn!("pr_open could not read HEAD for known-red validation: {error}");
-            return body;
+            tracing::warn!("pr_open could not read HEAD for {kind} validation: {error}");
+            return Vec::new();
         }
     };
     let mut records = BTreeMap::new();
+    let mut insert_matching = |record| {
+        let evidence = fields(&record);
+        if evidence.valid
+            && evidence.run_id == context.batch_id
+            && evidence.base_sha == base_sha
+            && evidence.tested_head == head
+        {
+            records.insert(evidence.command.to_string(), record);
+        }
+    };
     for task in &context.tasks {
         let history = match host.get_task_history(&task.id) {
             Ok(history) => history,
             Err(error) => {
                 tracing::warn!(
                     task_id = task.id,
-                    "pr_open could not read task history for known-red validation: {error}"
+                    "pr_open could not read task history for {kind} validation: {error}"
                 );
                 continue;
             }
         };
         for record in history
             .iter()
-            .filter(|entry| entry.event == KNOWN_RED_VALIDATION_EVENT)
-            .filter_map(|entry| {
-                entry
-                    .note
-                    .as_deref()
-                    .and_then(KnownRedValidation::from_text)
-            })
-            .filter(|record| {
-                record.run_id == context.batch_id
-                    && record.base_sha == base_sha
-                    && record.tested_head == head
-            })
+            .filter(|entry| entry.event == event)
+            .filter_map(|entry| entry.note.as_deref().and_then(parse))
         {
-            records.insert(record.command.clone(), record);
+            insert_matching(record);
         }
     }
-    let handed = input
+    if let Some(handed) = input
         .get("claim_validation")
-        .and_then(|validation| validation.get("known_red"))
+        .and_then(|validation| validation.get(key))
         .filter(|value| !value.is_null())
-        .cloned()
-        .map(serde_json::from_value::<Vec<KnownRedValidation>>)
-        .transpose()
-        .unwrap_or_else(|error| {
-            tracing::warn!("pr_open ignored a malformed known_red input: {error}");
-            None
-        })
-        .unwrap_or_default();
-    for record in handed.into_iter().filter(|record| {
-        record.run_id == context.batch_id
-            && record.base_sha == base_sha
-            && record.tested_head == head
-    }) {
-        records.insert(record.command.clone(), record);
+    {
+        match serde_json::from_value::<Vec<T>>(handed.clone()) {
+            Ok(handed) => {
+                for record in handed {
+                    insert_matching(record);
+                }
+            }
+            Err(error) => tracing::warn!("pr_open ignored a malformed {key} input: {error}"),
+        }
     }
-    match render_known_red_section(&records.into_values().collect::<Vec<_>>()) {
+    records.into_values().collect()
+}
+
+fn append_section(body: String, section: Option<String>) -> String {
+    match section {
         Some(section) => format!("{}\n\n{section}\n", body.trim_end()),
         None => body,
     }
@@ -581,13 +622,12 @@ fn with_known_red<H: RuntimeHost + ?Sized>(
 /// visible where it is published. Without any applicable sections the body
 /// is unchanged.
 fn with_review_fixes(body: String, input: &Value) -> String {
-    match input_string_field(input, "review_fixes")
-        .map(|section| section.trim().to_string())
-        .filter(|section| !section.is_empty())
-    {
-        Some(section) => format!("{}\n\n{section}\n", body.trim_end()),
-        None => body,
-    }
+    append_section(
+        body,
+        input_string_field(input, "review_fixes")
+            .map(|section| section.trim().to_string())
+            .filter(|section| !section.is_empty()),
+    )
 }
 
 /// Refuse to publish when the checked-out head or the pinned base differ from
@@ -714,61 +754,4 @@ fn pr_output(output: PrOutput<'_>) -> Value {
         "commits_behind": output.freshness.commits_behind,
         "commits_ahead": output.freshness.commits_ahead,
     })
-}
-
-/// Include flaky names and the captured replay evidence from this run/head/base.
-fn with_flaky<H: RuntimeHost + ?Sized>(
-    host: &H,
-    body: String,
-    context: &HandoffContext,
-    base_sha: &str,
-    input: &Value,
-) -> String {
-    use orbit_types::workflow::{FLAKY_VALIDATION_EVENT, FlakyValidation};
-    let Ok(head) = git_output(&context.workspace_path, &["rev-parse", "HEAD"]) else {
-        return body;
-    };
-    let mut records = BTreeMap::new();
-    for task in &context.tasks {
-        match host.get_task_history(&task.id) {
-            Ok(history) => {
-                for record in history
-                    .iter()
-                    .filter(|entry| entry.event == FLAKY_VALIDATION_EVENT)
-                    .filter_map(|entry| entry.note.as_deref().and_then(FlakyValidation::from_text))
-                {
-                    records.insert(record.command.clone(), record);
-                }
-            }
-            Err(error) => {
-                tracing::warn!("pr_open could not read flaky validation history: {error}")
-            }
-        }
-    }
-    if let Some(handed) = input
-        .get("claim_validation")
-        .and_then(|validation| validation.get("flaky"))
-    {
-        match serde_json::from_value::<Vec<FlakyValidation>>(handed.clone()) {
-            Ok(handed) => {
-                for record in handed {
-                    records.insert(record.command.clone(), record);
-                }
-            }
-            Err(error) => tracing::warn!("pr_open ignored malformed flaky evidence: {error}"),
-        }
-    }
-    let records = records
-        .into_values()
-        .filter(|record| {
-            record.valid()
-                && record.run_id == context.batch_id
-                && record.base_sha == base_sha
-                && record.tested_head == head
-        })
-        .collect::<Vec<_>>();
-    match super::body::render_flaky_section(&records) {
-        Some(section) => format!("{}\n\n{section}\n", body.trim_end()),
-        None => body,
-    }
 }
