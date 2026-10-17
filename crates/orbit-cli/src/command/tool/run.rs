@@ -49,7 +49,8 @@ pub struct ToolRunArgs {
     /// record array instead of the envelope's own top-level keys. Task
     /// writes (add/update/reject) return the record without append-heavy
     /// `comments` and `history`; naming those fields here requests them
-    /// from the tool.
+    /// from the tool. A present `audit_warning` is retained because it reports
+    /// a committed write whose audit row could not be saved.
     #[arg(long, value_delimiter = ',', conflicts_with = "full")]
     pub fields: Vec<String>,
     /// Return the tool's full unfiltered JSON output. This still expands
@@ -428,13 +429,17 @@ fn wrap_single_field_value(output: Value, fields: &[String]) -> Value {
 }
 
 fn filter_top_level_fields(value: Value, fields: &[String]) -> Value {
+    let mut retained_fields = fields.to_vec();
+    if !retained_fields.iter().any(|field| field == "audit_warning") {
+        retained_fields.push("audit_warning".to_string());
+    }
     match value {
-        Value::Object(map) => Value::Object(select_fields(map, fields)),
+        Value::Object(map) => Value::Object(select_fields(map, &retained_fields)),
         Value::Array(items) => Value::Array(
             items
                 .into_iter()
                 .map(|item| match item {
-                    Value::Object(map) => Value::Object(select_fields(map, fields)),
+                    Value::Object(map) => Value::Object(select_fields(map, &retained_fields)),
                     other => other,
                 })
                 .collect(),

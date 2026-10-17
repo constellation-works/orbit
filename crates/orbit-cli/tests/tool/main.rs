@@ -38,3 +38,4 @@ mod tool_input_hints;
 mod tool_lifecycle_cli;
 mod tool_list;
 mod tool_run_audit;
+mod tool_run_audit_warning;
