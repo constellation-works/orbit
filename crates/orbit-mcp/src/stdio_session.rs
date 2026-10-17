@@ -59,12 +59,11 @@ const LIFECYCLE_INTERVAL: Duration = Duration::from_secs(2);
 pub const LIFECYCLE_INTERVAL_ENV: &str = "ORBIT_TEST_MCP_LIFECYCLE_INTERVAL_MS";
 
 fn lifecycle_interval_from_env(value: Option<&str>, debug_build: bool) -> Duration {
-    if debug_build {
-        if let Some(milliseconds) = value.and_then(|raw| raw.parse::<u64>().ok()) {
-            if (20..=2_000).contains(&milliseconds) {
-                return Duration::from_millis(milliseconds);
-            }
-        }
+    if debug_build
+        && let Some(milliseconds) = value.and_then(|raw| raw.parse::<u64>().ok())
+        && (20..=2_000).contains(&milliseconds)
+    {
+        return Duration::from_millis(milliseconds);
     }
     LIFECYCLE_INTERVAL
 }
