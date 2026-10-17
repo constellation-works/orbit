@@ -2745,9 +2745,16 @@ fn a_known_red_handoff_the_owners_base_run_contradicts_ends_the_claim() {
 /// A base run that cannot finish within settlement's budget is cut once,
 /// then retries reuse its durable inconclusive outcome, including on a newly
 /// opened owner session. Partial failed-test output never admits a handoff.
+///
+/// The budget is a generous ceiling for reaching the base, which host load can
+/// stretch. The cut comes from the supervisor's clock once the stalled base
+/// reports it is running, so no wall time is waited out [ORB-16402].
 #[test]
 #[cfg(unix)]
 fn a_slow_known_red_base_run_converges_to_one_cut_over_settle_retries() {
+    use orbit_common::test_env::{SupervisorSeam, with_supervision_clock, with_supervisor_seam};
+    use std::{cell::Cell, rc::Rc, time::Instant};
+
     if !isolated(
         module_path!(),
         "a_slow_known_red_base_run_converges_to_one_cut_over_settle_retries",
@@ -2760,9 +2767,13 @@ fn a_slow_known_red_base_run_converges_to_one_cut_over_settle_retries() {
     let handoff = fixture.run_clean_pipeline("task_claimed_pr_pipeline");
     let leaf_runs = red.runs();
 
-    // No timing race or load: this FIFO has no writer. The base prints the
-    // claimed failure, then blocks until the supervisor cuts its process group.
+    // No timing race or load: the base prints the claimed failure and reports
+    // readiness, then blocks on a FIFO with no writer until the supervisor cuts
+    // its process group. The cut happens when the supervisor's clock passes the
+    // attempt's limit, which this test advances only at that readiness point.
+    let budget = Duration::from_secs(600);
     let fifo = red._dir.path().join("wait");
+    let ready = red._dir.path().join("ready");
     assert!(
         std::process::Command::new("mkfifo")
             .arg(&fifo)
@@ -2773,12 +2784,28 @@ fn a_slow_known_red_base_run_converges_to_one_cut_over_settle_retries() {
     std::fs::write(
         &red.script,
         format!(
-            "echo ran >> '{}'\necho 'test suite::broken ... FAILED'\nread ignored < '{}'\nexit 3\n",
+            "echo ran >> '{}'\necho 'test suite::broken ... FAILED'\ntouch '{}'\nread ignored < '{}'\nexit 3\n",
             red.runs.display(),
+            ready.display(),
             fifo.display(),
         ),
     )
     .unwrap();
+    let offset = Rc::new(Cell::new(Duration::ZERO));
+    let (clock_offset, wait_offset) = (Rc::clone(&offset), Rc::clone(&offset));
+    let seam = SupervisorSeam {
+        wait: Some(Box::new(move |child| {
+            if ready.exists() {
+                std::fs::remove_file(&ready).unwrap();
+                // Advancing the clock here takes effect on the supervisor's
+                // next deadline check, which follows this poll.
+                wait_offset.set(budget);
+                return Ok(None);
+            }
+            child.try_wait()
+        })),
+        ..SupervisorSeam::default()
+    };
     let settle = |owner: &OrbitRuntime| {
         owner
             .run_tool_with_context_and_role(
@@ -2807,11 +2834,19 @@ fn a_slow_known_red_base_run_converges_to_one_cut_over_settle_retries() {
         .wire
         .owner
         .clone()
-        .with_claim_known_red_budget(Duration::from_millis(500));
-    let error = settle(&owner);
+        .with_claim_known_red_budget(budget);
+    let error = with_supervision_clock(
+        move || Instant::now() + clock_offset.get(),
+        || with_supervisor_seam(seam, || settle(&owner)),
+    );
     assert!(
         error.contains("known_red_unverified") && error.contains("comparison deadline"),
         "{error}"
+    );
+    assert_eq!(
+        offset.get(),
+        budget,
+        "the stalled base reached readiness before its deadline cut"
     );
     assert_eq!(
         red.runs(),
@@ -2834,7 +2869,7 @@ fn a_slow_known_red_base_run_converges_to_one_cut_over_settle_retries() {
             OrbitRuntime::from_roots(&owner.paths().global_dir, &owner.paths().orbit_dir)
                 .unwrap()
                 .with_automation_machine_identity(Some(OWNER.to_string()))
-                .with_claim_known_red_budget(Duration::from_secs(30));
+                .with_claim_known_red_budget(budget);
         assert_eq!(settle(&reopened), error);
         assert_eq!(red.runs(), leaf_runs + 1, "settle retries reuse the cut");
     }
