@@ -133,7 +133,6 @@ fn save_failure(
     class: ProviderFailureClass,
     provider: &str,
     crew: &str,
-    host: ExecutionLocation,
 ) {
     save_run(
         workspace,
@@ -143,7 +142,7 @@ fn save_failure(
             finished_at,
             JobRunState::Failed,
             Some(crew),
-            host,
+            this_host(),
         ),
         None,
     );
@@ -320,7 +319,6 @@ fn unavailable_on_the_only_crew_withholds_and_creates_no_pilot_run() {
         ProviderFailureClass::Unavailable,
         "codex",
         "fixture",
-        this_host(),
     );
     let reason = assert_withheld(&workspace, now, &task.id);
     assert!(
@@ -344,7 +342,6 @@ fn an_expired_unavailable_hold_lets_the_pilot_resume() {
         ProviderFailureClass::Unavailable,
         "codex",
         "fixture",
-        this_host(),
     );
     assert_resumes(&workspace, now, &task.id);
 }
@@ -364,7 +361,6 @@ fn a_later_success_clears_unavailable_and_capacity() {
         ProviderFailureClass::Unavailable,
         "codex",
         "fixture",
-        this_host(),
     );
     save_success(&unavailable, "jrun-codex-ok", now, success_at, "fixture");
     assert_resumes(&unavailable, now, &task.id);
@@ -379,7 +375,6 @@ fn a_later_success_clears_unavailable_and_capacity() {
         ProviderFailureClass::Capacity,
         "codex",
         "fixture",
-        this_host(),
     );
     save_success(&capacity, "jrun-codex-ok", now, success_at, "fixture");
     assert_resumes(&capacity, now, &task.id);
@@ -397,7 +392,6 @@ fn an_auth_probe_recovery_clears_unavailable() {
         ProviderFailureClass::Unavailable,
         "codex",
         "fixture",
-        this_host(),
     );
     save_probe(&workspace, now, now - Duration::minutes(1), "codex");
     assert_resumes(&workspace, now, &task.id);
@@ -427,7 +421,6 @@ model = "fixture-b"
         ProviderFailureClass::Unavailable,
         "claude",
         "claude_a",
-        this_host(),
     );
     let reason = assert_withheld(&workspace, now, &task.id);
     assert!(
@@ -474,7 +467,6 @@ model = "fixture-free"
         ProviderFailureClass::Unavailable,
         "codex",
         "held_codex",
-        this_host(),
     );
     assert_resumes(&workspace, now, &task.id);
     let (model, draw) = low_draw(&workspace);
@@ -573,7 +565,6 @@ fn capacity_on_the_only_crew_withholds_and_a_probe_does_not_clear_it() {
         ProviderFailureClass::Capacity,
         "codex",
         "fixture",
-        this_host(),
     );
     save_probe(&workspace, now, now - Duration::minutes(1), "codex");
     let reason = assert_withheld(&workspace, now, &task.id);
@@ -597,7 +588,6 @@ fn an_expired_capacity_hold_lets_the_pilot_resume() {
         ProviderFailureClass::Capacity,
         "codex",
         "fixture",
-        this_host(),
     );
     assert_resumes(&workspace, now, &task.id);
 }
@@ -626,7 +616,6 @@ model = "fixture-b"
         ProviderFailureClass::Capacity,
         "claude",
         "claude_a",
-        this_host(),
     );
     assert_resumes(&workspace, now, &task.id);
     let (model, draw) = low_draw(&workspace);
@@ -650,15 +639,25 @@ fn another_hosts_failure_does_not_withhold() {
     let workspace = Workspace::new();
     let task = workspace.task("the other host lost its login");
     let now = Utc::now();
-    save_failure(
+    let finished = now - Duration::minutes(5);
+    save_run(
+        &workspace,
+        &finished_run(
+            "jrun-other-host",
+            now,
+            finished,
+            JobRunState::Failed,
+            Some("fixture"),
+            other_host(),
+        ),
+        None,
+    );
+    save_step(
         &workspace,
         "jrun-other-host",
-        now,
-        now - Duration::minutes(5),
+        finished,
         ProviderFailureClass::Unavailable,
         "codex",
-        "fixture",
-        other_host(),
     );
     assert_resumes(&workspace, now, &task.id);
 }
@@ -676,7 +675,6 @@ fn limit_and_refusal_failures_do_not_withhold_the_routine() {
             class,
             "codex",
             "fixture",
-            this_host(),
         );
         assert_resumes(&workspace, now, &task.id);
     }
