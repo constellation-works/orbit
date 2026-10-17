@@ -24,7 +24,7 @@ pub enum DeploymentGcClass {
     Deployment,
     /// A copy of a replaced executable in `<global>/bin/`.
     BinaryBackup,
-    /// A copy of the host store, `<global>/orbit.db.bak*`.
+    /// A copy of the host store, `<global>/orbit.db.bak*`, or one of its sidecars.
     StoreBackup,
 }
 
@@ -147,6 +147,7 @@ fn is_binary_backup(name: &str) -> bool {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod filesystem {
     use std::cmp::Reverse;
+    use std::collections::BTreeMap;
     use std::ffi::{CStr, CString, OsStr};
     use std::fs::File;
     use std::io::{self, Read};
@@ -177,10 +178,18 @@ mod filesystem {
     struct Candidate {
         class: DeploymentGcClass,
         parent: Parent,
+        /// Retention key: a store backup and its sidecars share this name.
         name: CString,
-        tally: Tally,
+        /// Measured paths sharing one retention decision, reported separately.
+        entries: Vec<(CString, Tally)>,
         /// Set when a rollback could still need this entry.
         pinned: Option<&'static str>,
+    }
+
+    impl Candidate {
+        fn newest(&self) -> Option<(i64, i64)> {
+            self.entries.iter().map(|(_, tally)| tally.newest).max()
+        }
     }
 
     struct Directories {
@@ -294,7 +303,7 @@ mod filesystem {
             candidates.push(Candidate {
                 class: DeploymentGcClass::BinaryBackup,
                 parent: Parent::Bin,
-                tally: walk(bin, &name, false)?,
+                entries: vec![(name.clone(), walk(bin, &name, false)?)],
                 name,
                 pinned: rollback.then_some("rollback_target"),
             });
@@ -327,7 +336,7 @@ mod filesystem {
             candidates.push(Candidate {
                 class: DeploymentGcClass::Deployment,
                 parent: Parent::Deployments,
-                tally: walk(deployments, &name, false)?,
+                entries: vec![(name.clone(), walk(deployments, &name, false)?)],
                 name,
                 pinned,
             });
@@ -365,14 +374,29 @@ mod filesystem {
     }
 
     fn store_backups(root: &OwnedFd, candidates: &mut Vec<Candidate>) -> Result<(), OrbitError> {
+        let mut backups: BTreeMap<CString, Vec<(CString, Tally)>> = BTreeMap::new();
         for name in names(root)? {
             if !name.to_bytes().starts_with(STORE_BACKUP_PREFIX.as_bytes()) {
                 continue;
             }
+            // SQLite sidecar suffixes are appended to the copied database's
+            // full name. Rank even an orphaned sidecar pair as a single set.
+            let bytes = name.to_bytes();
+            let backup = bytes
+                .strip_suffix(b"-wal")
+                .or_else(|| bytes.strip_suffix(b"-shm"))
+                .unwrap_or(bytes);
+            let backup = CString::new(backup)
+                .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+            let tally = walk(root, &name, false)?;
+            backups.entry(backup).or_default().push((name, tally));
+        }
+        for (name, mut entries) in backups {
+            entries.sort_by(|left, right| left.0.cmp(&right.0));
             candidates.push(Candidate {
                 class: DeploymentGcClass::StoreBackup,
                 parent: Parent::Root,
-                tally: walk(root, &name, false)?,
+                entries,
                 name,
                 pinned: None,
             });
@@ -388,9 +412,9 @@ mod filesystem {
         mut candidates: Vec<Candidate>,
     ) -> Result<(), OrbitError> {
         candidates.sort_by(|left, right| {
-            (left.class.rank(), Reverse(left.tally.newest), &left.name).cmp(&(
+            (left.class.rank(), Reverse(left.newest()), &left.name).cmp(&(
                 right.class.rank(),
-                Reverse(right.tally.newest),
+                Reverse(right.newest()),
                 &right.name,
             ))
         });
@@ -405,34 +429,35 @@ mod filesystem {
                 }
                 None => "beyond_retention",
             };
-            let bytes = candidate.tally.bytes;
-            let action = if reason == "beyond_retention" {
-                result.bytes_reclaimable = result.bytes_reclaimable.saturating_add(bytes);
-                selected.push(result.entries.len());
-                "would_remove"
-            } else {
-                result.bytes_kept = result.bytes_kept.saturating_add(bytes);
-                "kept"
-            };
-            result.entries.push(DeploymentGcEntry {
-                class: candidate.class,
-                path: entry_path(&result.root, candidate.parent, &candidate.name),
-                action,
-                reason,
-                bytes,
-                modified_at: modified_at(candidate.tally.newest),
-            });
+            for (name, tally) in &candidate.entries {
+                let bytes = tally.bytes;
+                let action = if reason == "beyond_retention" {
+                    result.bytes_reclaimable = result.bytes_reclaimable.saturating_add(bytes);
+                    selected.push((candidate.parent, name, result.entries.len()));
+                    "would_remove"
+                } else {
+                    result.bytes_kept = result.bytes_kept.saturating_add(bytes);
+                    "kept"
+                };
+                result.entries.push(DeploymentGcEntry {
+                    class: candidate.class,
+                    path: entry_path(&result.root, candidate.parent, name),
+                    action,
+                    reason,
+                    bytes,
+                    modified_at: modified_at(tally.newest),
+                });
+            }
         }
         if result.dry_run {
             return Ok(());
         }
-        for index in selected {
-            let candidate = &candidates[index];
-            let Some(parent) = directories.get(candidate.parent) else {
+        for (parent, name, index) in selected {
+            let Some(parent) = directories.get(parent) else {
                 continue;
             };
             let entry = &mut result.entries[index];
-            entry.bytes = walk(parent, &candidate.name, true)?.bytes;
+            entry.bytes = walk(parent, name, true)?.bytes;
             entry.action = "removed";
             result.entries_removed += 1;
             result.bytes_reclaimed = result.bytes_reclaimed.saturating_add(entry.bytes);
