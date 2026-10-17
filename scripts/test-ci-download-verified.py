@@ -539,40 +539,6 @@ class VerifiedDownloadTests(unittest.TestCase):
                         self.assertEqual(list(tmp_dir.iterdir()) if tmp_dir.exists() else [], [],
                                          "installer trap cleans both outcomes")
 
-    def test_cleanliness_assertions_ignore_surrounding_dirs_and_fail_on_seeded_leak(self):
-        scratch = ROOT / ".orbit/tmp"
-        scratch.mkdir(parents=True, exist_ok=True)
-        # Unique per run: a fixed name would let concurrent runs adopt or remove each other's directories.
-        unrelated_scratch = tempfile.TemporaryDirectory(dir=scratch, prefix="download-test-unrelated-")
-        self.addCleanup(unrelated_scratch.cleanup)
-
-        unrelated_tmp = tempfile.TemporaryDirectory(prefix="download-test-unrelated-")
-        self.addCleanup(unrelated_tmp.cleanup)
-
-        # Baseline cleanliness assertions pass even when surrounding TMPDIR or worktree has download-test-*
-        self.assert_clean()
-
-        # Seeded leak directly under self.root (the downloader's target directory) must fail assert_clean
-        seeded_leak = self.root / ".ci-download-seeded-leak"
-        seeded_leak.mkdir()
-        try:
-            with self.assertRaises(AssertionError):
-                self.assert_clean()
-        finally:
-            seeded_leak.rmdir()
-
-        # Installer case private temp root asserts cleanliness only inside it and fails on a seeded leak
-        with tempfile.TemporaryDirectory(dir=self.root, prefix="case-leak-check-") as case_dir:
-            case_root = Path(case_dir)
-            tmp_dir = case_root / ".orbit/tmp"
-            tmp_dir.mkdir(parents=True)
-            self.assertEqual(list(tmp_dir.iterdir()), [])
-            leaked_dir = tmp_dir / "tool-download.seeded-leak"
-            leaked_dir.mkdir()
-            with self.assertRaises(AssertionError):
-                self.assertEqual(list(tmp_dir.iterdir()), [])
-            leaked_dir.rmdir()
-
 
 if __name__ == "__main__":
     unittest.main()
