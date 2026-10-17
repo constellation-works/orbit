@@ -72,6 +72,7 @@ Review and commit the checkout files listed by `workspace init`, including MCP c
 |---|---|
 | Inspect a task or run | `orbit task show <ID>` · `orbit run show <RUN_ID>` |
 | Open the dashboard | `orbit web serve` (remote: `orbit web connect <host>`) |
+| Open the dashboard in a desktop window | Build the app in [`desktop/`](desktop/README.md) |
 | Pick the default crew (provider and model) | `orbit config set workflow.default_crew <crew>` |
 | Route tasks to crews by complexity | `orbit config set --global workflow.hard_complexity_crews '["opus"]'` ([more](#crews-and-complexity-routing)) |
 | Upgrade | `npm install -g @orbit-tools/cli@latest` (`orbit update --check` shows what's new) |

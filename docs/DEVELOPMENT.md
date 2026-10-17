@@ -15,6 +15,7 @@ The detailed rules behind [CONTRIBUTING.md](../CONTRIBUTING.md). Read the sectio
 | Writing a test that mutates state, spawns processes or submits runs | [Safe Mutable CLI Fixtures](#safe-mutable-cli-fixtures), [Testing & Coverage](#testing--coverage) |
 | Running a mutating `orbit` command by hand for QA, from a managed lane | [Manual QA from a managed lane](#manual-qa-from-a-managed-lane) |
 | Changing the dashboard or website | [Dashboard fixtures](#dashboard-http-integration-fixtures), [Browser checks](#browser-checks-on-a-prepared-host) |
+| Changing the desktop app in `desktop/` | [Desktop app](#desktop-app) |
 | Changing toolchains, platforms or dependencies | [MSRV](#toolchain-msrv), [Windows](#windows-compile-check), [Supply-chain](#supply-chain-cargo-deny), [Vendored JS](#vendored-dashboard-javascript) |
 
 ## Validation and CI
@@ -689,6 +690,10 @@ It checks release dates, merged-PR links, version and subsection anchors, keyboa
 ## MCP Apps compatibility prototype
 
 [The isolated reproduction and native desktop probe](qa/mcp-apps-probe.md) covers the Control Center, operator controls, rendered preview, routing boundaries and evidence template. Record automated protocol/bridge results and native desktop results separately.
+
+## Desktop app
+
+`desktop/` is the Tauri shell around the dashboard, a separate Cargo workspace (its own `[workspace]` table), not a member of the root one. The workspace gates (`make ci-fast`, `ci-test-affected`, `ci-lint`, `goldens`) never build it. Validate a change from `desktop/` with `cargo fmt --check` and `cargo clippy --locked --all-targets -- -D warnings`. The root `clippy.toml` applies there too. Then run the app with `cargo run` against your installed `orbit`. `cargo clippy` doesn't rebuild the executable, so build before a manual run. [`desktop.yml`](../.github/workflows/desktop.yml) runs the same checks on macOS and Linux for any change under `desktop/`. A manual run of that workflow also bundles unsigned packages. Process lifecycle, binary discovery and the security model are in [`desktop/README.md`](../desktop/README.md).
 
 ## Workspace-local Rust toolchains
 
