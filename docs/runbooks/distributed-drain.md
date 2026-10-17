@@ -138,16 +138,26 @@ travels in the handoff, and the owner checks the certificate against its own
 copy before it accepts, including the captured owner check list. The owner also
 verifies exact-run and exact-head validation logs using its own required
 commands; a command-list mismatch fails closed. A log reporting known red is
-accepted only after the owner's own run of a base in its captured base
-branch's history fails every test it names. Settlement gives all owner base
-comparisons one ten-minute deadline within the routed call's fifteen minutes.
+accepted only after a comparable base run fails every test it names. The
+owner's own run is comparable only when the follower was admitted on the same
+host OS as this owner. That OS is the validation environment the drain
+records, and a different OS is a different validation environment. The base
+must also be in the history of the base branch this owner captured at
+admission. Settlement gives all owner base comparisons one ten-minute deadline
+within the routed call's fifteen minutes.
 A cut or other inconclusive attempted run is retained separately from conclusive
 base results; retries reuse its refusal and partial failures never confirm the
 report. A later conclusive base result can replace that refusal; a moved base
-or different replay selection gets its own check. When the owner's own
-completed base run contradicts the report instead (passes the reported tests or
-fails without one), the owner releases the claim with a `known_red_contradicted`
-reason and the follower closes its settlement obsolete; no revoke is needed.
+or different replay selection gets its own check. When that same-OS base run
+contradicts the report (passes the reported tests or fails without one), the
+owner releases the claim with a `known_red_contradicted` reason and the
+follower closes its settlement obsolete; no revoke is needed. When the follower
+was admitted on a different OS, the owner does not read a cached result or
+start a base run for the report, and it does not release the claim as
+`known_red_contradicted` or return the task to the backlog. It accepts the
+follower's base evidence for that OS, records the known-red tests, and accepts
+the handoff. The pull request the leaf opened stays that delivery for review
+and landing, rather than sitting open while a later attempt starts without it.
 A follower that cannot resolve
 or run the captured crew stops pulling with `before_pr_reviewer_unavailable`
 rather than claiming work it cannot review. A local-only ship workspace with
