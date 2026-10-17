@@ -15,8 +15,9 @@
 //!   admitted within [`PROFILE_HISTORY_DAYS`].
 //! - **Per minute.** `alive` is the fraction still running, `cpu` the mean
 //!   cores and `mem` the 90th-percentile memory over the deliveries alive
-//!   then, each with its spread. The horizon is the first minute `alive`
-//!   falls below 0.1, capped at `horizon_cap_minutes`.
+//!   then, each with its spread, and the mean memory beside its percentile.
+//!   The horizon is the first minute `alive` falls below 0.1, capped at
+//!   `horizon_cap_minutes`.
 //!
 //! Profiles change only when a delivery finishes, so `ResourceProfileCache`
 //! keeps them across admission passes and rebuilds when a freshness probe
@@ -96,6 +97,9 @@ pub struct ProfileMinute {
     pub cpu_stddev: f64,
     /// 90th-percentile memory over the deliveries alive at this minute.
     pub memory_bytes: u64,
+    /// Mean memory over those deliveries. The forecast sums means and adds
+    /// the 90th percentiles' margins above them in quadrature.
+    pub memory_mean_bytes: f64,
     /// Standard deviation of that memory.
     pub memory_stddev_bytes: f64,
 }

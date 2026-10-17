@@ -327,6 +327,14 @@ fn the_forecast_scales_running_deliveries_by_survival_and_adds_reservations() {
         &[&[2.75, 1.25, 1.25][..], &tail].concat(),
         "cpu before the reservation",
     );
+    // x alone has a spread: 2 and 4 GiB at minute 1, so it is forecast at its
+    // 90th percentile, 4 GiB, not its 3 GiB mean; y holds 0.5 GiB.
+    let memory: Vec<f64> = before.memory.minutes.iter().map(|b| b / GIB_F).collect();
+    assert_series(
+        &memory,
+        &[&[4.5, 2.5, 2.5][..], &[0.5; 8]].concat(),
+        "memory GiB before the reservation",
+    );
 
     fixture.reserve_at(now, "ORB-r", "small");
     let forecast = fixture.forecast_at(now);

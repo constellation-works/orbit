@@ -412,6 +412,55 @@ fn candidates_admitted_in_one_pass_count_each_other() {
     assert_eq!(reserved, expected);
 }
 
+/// Memory admits against a high quantile of the deliveries' summed memory,
+/// not the sum of their 90th percentiles. Half of the `low` deliveries used
+/// 1 GiB and half 8 GiB: a 90th percentile of 8 GiB over a 4.5 GiB mean. The
+/// third candidate is forecast at 2 + 3 × 4.5 + √3 × 3.5 ≈ 21.6 GiB and fits
+/// under 24 GiB, where three 90th percentiles would make 26 GiB. The fourth
+/// makes 2 + 4 × 4.5 + √4 × 3.5 = 27 GiB and is refused for memory.
+fn memory_admits_against_a_quantile_of_the_sum_not_a_sum_of_p90s() {
+    let fixture = Fixture::new("enforce", "");
+    fixture.finished_delivery_using("low", &[0.5], GIB);
+    fixture.finished_delivery_using("low", &[0.5], 8 * GIB);
+    let tasks: Vec<String> = ["first", "second", "third", "fourth"]
+        .into_iter()
+        .zip([
+            TaskPriority::Critical,
+            TaskPriority::High,
+            TaskPriority::Medium,
+            TaskPriority::Low,
+        ])
+        .map(|(title, priority)| fixture.task(title, priority, TaskComplexity::Low))
+        .collect();
+    let drain = fixture.drain();
+
+    let pass = classify(&fixture.runtime, &drain, 5);
+    assert_eq!(admitted(&pass), tasks[..3].to_vec(), "{pass:#}");
+    let record = recorded(&fixture.runtime, &drain, &pass);
+    let [skip] = record.skipped.as_slice() else {
+        panic!("{record:#?}");
+    };
+    assert_eq!(skip.task_id, tasks[3]);
+    assert_eq!(skip.resource.as_deref(), Some("memory"));
+    assert_eq!(skip.detail, "memory 84% at +0m");
+
+    // The next admitter's forecast sums the three reservations the same way.
+    let reserved = fixture
+        .runtime
+        .admit_against_forecast(|forecast: &HostLoadForecast| {
+            Ok(ForecastDecision {
+                outcome: forecast.memory.minutes[0],
+                admitted: Vec::new(),
+            })
+        })
+        .unwrap();
+    let expected = (2.0 + 3.0 * 4.5 + 3f64.sqrt() * 3.5) * GIB as f64;
+    assert!(
+        (reserved - expected).abs() < 1.0,
+        "{reserved} != {expected}"
+    );
+}
+
 /// `shadow` admits what `off` admits for the same inputs, records the
 /// decisions `enforce` would have made, and reserves nothing. `off` builds
 /// no forecast and records no block.
@@ -1182,6 +1231,7 @@ crate::scenario_table!(
     enforce_skips_a_colliding_candidate_and_admits_a_lighter_one_behind_it_scenarios,
     enforce_skips_a_colliding_candidate_and_admits_a_lighter_one_behind_it,
     candidates_admitted_in_one_pass_count_each_other,
+    memory_admits_against_a_quantile_of_the_sum_not_a_sum_of_p90s,
     shadow_admits_as_off_and_records_what_enforce_would_do,
     per_run_mode_overrides_the_host_and_survives_reopen,
     the_ceiling_holds_before_gap_fit,

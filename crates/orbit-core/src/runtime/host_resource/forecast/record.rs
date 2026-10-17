@@ -3,9 +3,9 @@
 //! minutes.
 //!
 //! The recorded value counts what the pass actually admitted, each at
-//! `P(t) · alive(t)` as a reservation counts: the host load the forecast
-//! expects given what admission did, which is what the measured minute can
-//! confirm or refute.
+//! `P(t) · alive(t)` as a reservation counts, memory summed as the forecast
+//! sums it: the host load the forecast expects given what admission did,
+//! which is what the measured minute can confirm or refute.
 
 use std::sync::Arc;
 
@@ -13,6 +13,7 @@ use chrono::{DateTime, Utc};
 use orbit_store::contracts::AdmissionForecastPoint;
 
 use super::HostLoadForecast;
+use super::memory::MemorySum;
 use crate::runtime::host_resource::profile::{ProfileLookup, ProfileSet};
 
 /// Minutes after a pass at which its forecast is recorded. An offset past the
@@ -26,8 +27,8 @@ pub struct ForecastPoints {
     /// The host's size; `None` when it could not be read.
     pub cpu_count: Option<u32>,
     pub memory_total_bytes: Option<u64>,
-    /// `(offset, cores, bytes)`.
-    points: Vec<(u32, f64, f64)>,
+    /// `(offset, cores, memory)`.
+    points: Vec<(u32, f64, MemorySum)>,
     profiles: Arc<ProfileSet>,
 }
 
@@ -42,7 +43,7 @@ impl HostLoadForecast {
                 Some((
                     offset,
                     *self.cpu.minutes.get(minute)?,
-                    *self.memory.minutes.get(minute)?,
+                    *self.memory_sums.get(minute)?,
                 ))
             })
             .collect();
@@ -71,7 +72,7 @@ impl ForecastPoints {
                 continue;
             };
             *cores += minute.cpu_cores * minute.alive;
-            *bytes += minute.memory_bytes as f64 * minute.alive;
+            bytes.add_minute(minute, minute.alive);
         }
     }
 
@@ -83,7 +84,7 @@ impl ForecastPoints {
                 |(offset_minutes, cpu_cores, bytes)| AdmissionForecastPoint {
                     offset_minutes,
                     cpu_cores,
-                    memory_bytes: bytes.max(0.0).round() as u64,
+                    memory_bytes: bytes.bytes().max(0.0).round() as u64,
                 },
             )
             .collect()

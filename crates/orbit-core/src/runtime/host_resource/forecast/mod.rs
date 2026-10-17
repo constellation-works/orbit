@@ -19,6 +19,9 @@
 //! - **Baseline `B`** is the host's measured load now minus the running
 //!   deliveries' newest measured minutes, held flat. Unknown when the host
 //!   cannot be read, and then counted as zero.
+//! - **Memory** does not add the terms' 90th percentiles. It sums their
+//!   centers and adds their margins above those in quadrature, approximating
+//!   a high quantile of the summed memory (`memory.rs`).
 //!
 //! The running set, reservations and baseline are read inside the lock on
 //! every call and never cached: each drain is its own process, and only the
@@ -46,6 +49,7 @@ use super::profile::{ProfileKey, ProfileLookup, ProfilePeak, ProfileSet, Profile
 mod build;
 mod fit;
 mod host_load;
+mod memory;
 mod record;
 
 pub(crate) use build::build_forecast;
@@ -132,6 +136,10 @@ pub struct HostLoadForecast {
     pub reservations: Vec<ReservedAdmission>,
     pub cpu: ForecastSeries,
     pub memory: ForecastSeries,
+    /// `memory.minutes` before taking each minute's quantile, for adding
+    /// candidates to it.
+    #[serde(skip)]
+    pub(crate) memory_sums: Vec<memory::MemorySum>,
     /// The profiles the forecast used, for the caller's candidate lookups.
     #[serde(skip)]
     pub profiles: Arc<ProfileSet>,

@@ -335,9 +335,12 @@ For each minute `m` since admission, the profile holds:
 | `alive(m)` | fraction of deliveries still running at minute `m` |
 | `cpu(m)` | mean cores used at `m`, over the deliveries alive at `m` |
 | `mem(m)` | 90th-percentile memory at `m`, over the deliveries alive at `m` |
+| `mem_mean(m)` | mean memory at `m`, over the same deliveries |
 
 CPU uses the mean and memory a high percentile because the costs differ. Too
-much CPU only slows everyone down. Too much memory kills a process.
+much CPU only slows everyone down. Too much memory kills a process. The mean
+memory is kept beside the percentile so the forecast can sum several
+deliveries' memory without summing their percentiles (§4.1).
 
 `alive` gives the duration distribution. The candidate's **horizon** `H` is
 the minute at which `alive` falls below 0.1, the 90th-percentile duration,
@@ -430,6 +433,66 @@ and built only under the host admission lock (§5.2):
   minute, plus the running deliveries and reservations with the profile step
   that described each, and the profiles a caller looks candidates up in.
 
+### 4.1 Summed memory
+
+Read for memory as for CPU, `F` would add every delivery's 90th-percentile
+memory, forecasting a 90th percentile for all of them at once. The sum of
+high quantiles is far above the high quantile of the sum, and the gap grows
+with concurrency: on dk-server-1 on 2026-10-17, four running deliveries
+measured 4.4 GiB (9.4 GiB at most) where about 15.6 GiB was forecast for
+five or six, and the memory term refused work while the host had 24 GiB
+available. The memory term is therefore a high quantile of the summed
+memory instead:
+
+```
+F_mem(t) = B + Σ_i c_i(t) · w_i(t) + sqrt( Σ_i (e_i(t) · w_i(t))² )
+
+c_i = min(mem_mean_i, mem_i)      center
+e_i = mem_i − c_i                 the 90th percentile's margin above it
+w_i                               the term's survival weight in F
+```
+
+The sum runs over the running deliveries with a profile and every
+reservation, and, in gap fit, the candidate and those admitted before it in
+the pass. Held-flat deliveries and the baseline `B` are measured use with no
+margin. A pending pull's alternatives, of which exactly one runs, contribute
+the largest center and the largest margin among them at each minute.
+
+Margins of independent deliveries add in quadrature, as standard deviations
+do: `N` similar deliveries carry about `√N` margins above their summed
+centers, not `N`. Under a normal approximation, each margin is about
+1.28 standard deviations and so is the margin of the sum, which keeps the
+sum near its own 90th percentile. The aggregate is:
+
+- **Unchanged for one delivery.** With one term carrying a margin, `F_mem`
+  is that term's 90th percentile, exactly as before, so a single delivery
+  and its gap fit read today's profile value.
+- **Never below the largest single delivery's 90th percentile**, because
+  every other term adds a nonnegative center.
+- **Never above the sum of 90th percentiles**, since a root of summed
+  squares is at most the sum.
+
+**Why memory stays more conservative than CPU.** CPU sums means, so its
+forecast is expected load and a miss only slows deliveries down. Memory
+still counts every delivery's center plus a margin at least as large as the
+largest single delivery's, and it keeps the lower default threshold (75%
+against 90%). Deliveries that peak together, such as
+two validation builds landing in the same minute, are correlated, which
+quadrature assumes away; the margin, the threshold below the throttle's
+90% memory mark, and the throttle itself absorb that error.
+
+**Evaluation.** Implemented in `runtime/host_resource/forecast/memory.rs`
+and used by the forecast, gap fit (§5.1) and the recorded accuracy points
+(§8.1). It was replayed against the native macOS host's recorded
+forecast/actual pairs from 2026-10-13 to 2026-10-17 (1,539 pairs at +5m):
+the mean memory error at +5m fell from +0.15 GiB to −0.28 GiB, and the
+under-forecast share rose from 47.8% to 53.0%. That host's memory is
+dominated by load outside deliveries held flat in `B`, so its forecast was
+under nearly half the time with either aggregate. The Linux hosts, where
+delivery memory dominates and the sum-of-p90 forecast was under in 8% of
+minutes, are the cohort that decides whether the margin is wide enough; the
+accuracy report (§8.1) shows their under-forecast share per offset.
+
 ## 5. Admission
 
 ### 5.1 Gap fit
@@ -441,8 +504,11 @@ every `t` in `0 … H_c`:
 
 ```
 F_cpu(t) + P_c.cpu(t) · alive_c(t) ≤ admit_cpu_percent    × host cores
-F_mem(t) + P_c.mem(t) · alive_c(t) ≤ admit_memory_percent × host memory
+F_mem(t) ⊕ P_c.mem(t) · alive_c(t) ≤ admit_memory_percent × host memory
 ```
+
+where `⊕` adds the candidate's center and margin into the memory sum
+(§4.1) rather than its 90th percentile.
 
 When a candidate is admitted, its profile is added to `F` before the next
 candidate is checked. One pass can therefore admit several tasks, each
