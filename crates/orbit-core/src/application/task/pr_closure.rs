@@ -14,7 +14,11 @@
 //! since the task's next attempt opens its own pull request. It keeps every
 //! pull request a later run may still continue:
 //! - everything while a run or claim of the task is live, or cannot be read
-//!   (a leaf may still be landing one);
+//!   (a leaf may still be landing one). A resumed or orphan-adopted retry
+//!   does not rebind `job_run_id`. Resume restamps it only to the checkpoint
+//!   batch id, which already matches, so a live `task_pr_pipeline` run that
+//!   still carries the task counts even when the bound run is already
+//!   terminal;
 //! - everything when the task was last `blocked` before it was shelved (the
 //!   failure handoff's candidate) or a final-recovery requeue shelved it
 //!   (the published candidate), however often it moved between the shelves
@@ -49,11 +53,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_store::contracts::JobRunQuery;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     CANDIDATE_DISCARDED_EVENT, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskStatus,
     names_task_delivery_pull_request,
 };
+use orbit_types::workflow::JobRunState;
 use orbit_types::workflow::handoff::HandoffDelivery;
 
 use crate::OrbitRuntime;
@@ -252,6 +258,11 @@ impl OrbitRuntime {
     /// Why a run or an unsettled claim of `task` may still be delivering one
     /// of its pull requests, or `None` when nothing of the task is live. An
     /// unreadable answer counts as live, so nothing is decided on a guess.
+    ///
+    /// `job_run_id` is not the only live run. Resume and orphan adoption copy
+    /// the source input onto a new `task_pr_pipeline` run and restamp
+    /// `job_run_id` only onto the checkpoint batch id, which already matches
+    /// the terminal source, so the retry stays invisible to that binding.
     pub(super) fn live_task_delivery(&self, task: &Task) -> Option<String> {
         if let Some(run_id) = task.job_run_id.as_deref() {
             match self.stores().jobs().get_job_run(run_id) {
@@ -261,6 +272,30 @@ impl OrbitRuntime {
                 Ok(_) => {}
                 Err(_) => return Some(format!("its run {run_id} cannot be read")),
             }
+        }
+        // Pending, running and retrying are the live delivery states. Skipped
+        // is non-terminal but is not a delivery in progress.
+        match self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
+            job_id: Some("task_pr_pipeline".to_string()),
+            task_id: Some(task.id.clone()),
+            states: vec![
+                JobRunState::Pending,
+                JobRunState::Running,
+                JobRunState::Retrying,
+            ],
+            limit: Some(1),
+            include_steps: false,
+            ..JobRunQuery::default()
+        }) {
+            Ok(runs) => {
+                if let Some(run) = runs.first() {
+                    return Some(format!(
+                        "its task_pr_pipeline run {} is still {}",
+                        run.run_id, run.state
+                    ));
+                }
+            }
+            Err(_) => return Some("its task_pr_pipeline runs cannot be read".to_string()),
         }
         match self.stores().tasks().inspect_execution_claims() {
             Ok(claims) => claims

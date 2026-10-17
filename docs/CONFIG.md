@@ -1291,7 +1291,7 @@ A task keeps one open delivery PR. When a run's `pr_open` (or a failure handoff)
 
 An operator's or agent's move from active work back to `backlog` or `someday` (`orbit task update --status`, the dashboard, `orbit.task.update`) also closes the task's open Orbit-authored PRs, with a comment naming the move and its note. It keeps every PR a later run may still continue:
 
-- all of them while a run of the task is live or a claim on it is unsettled, or when either cannot be read, since a leaf may still be landing one; a move made then closes nothing, and only a later move from `backlog` to `someday` (or a terminal decision, or the task's next created PR) closes them;
+- all of them while a run of the task is live or a claim on it is unsettled, or when that cannot be read, since a leaf may still be landing one. A resumed or adopted `task_pr_pipeline` retry counts while it is live, even when the task's recorded run is still the finished source that retry continues. A move made then closes nothing, and only a later move from `backlog` to `someday` (or a terminal decision, or the task's next created PR) closes them;
 - all of them when the task was last `blocked` before it was shelved, since the next run resumes the failure handoff's candidate;
 - all of them when a final recovery requeued the task, since the next run resumes that published candidate;
 - the PR of the candidate the owner kept from the task's last claim, or all of them when that candidate cannot be read.

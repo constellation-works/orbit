@@ -19,6 +19,7 @@ use orbit_core::OrbitRuntime;
 use orbit_core::runtime::task_pr_forge::{ForgePullRequest, TaskPrForge};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::{ExternalRef, TaskStatus};
+use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -699,6 +700,83 @@ fn a_requeue_while_the_tasks_run_is_live_closes_nothing() {
     assert!(
         fx.forge.closed_numbers().is_empty(),
         "a live leaf may still be landing the PR"
+    );
+}
+
+#[test]
+fn a_requeue_while_a_resumed_retry_is_live_closes_nothing() {
+    let fx = Fixture::new();
+    let task_id = fx.add_task("Requeued under a resumed retry");
+    let other = fx.add_task("Unrelated task");
+    fx.seed_forge(&task_id, &other);
+    fx.record_prs(&task_id, &[11]);
+    fx.move_to_review(&task_id);
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        fx.runtime.sqlite_store().unwrap(),
+        fx.runtime.workspace_id().unwrap(),
+    );
+    let source = jobs
+        .insert_job_run(
+            "task_pr_pipeline",
+            1,
+            chrono::Utc::now(),
+            Some(json!({ "task_ids": [task_id] })),
+            None,
+        )
+        .unwrap();
+    assert!(
+        jobs.finalize_job_run(
+            &source.run_id,
+            JobRunState::Interrupted,
+            chrono::Utc::now(),
+            None,
+        )
+        .unwrap(),
+        "the source run the task stays bound to is terminal"
+    );
+    fx.runtime
+        .apply_task_automation_update(
+            &task_id,
+            TaskAutomationUpdate {
+                job_run_id: Some(source.run_id.clone()),
+                ..TaskAutomationUpdate::default()
+            },
+        )
+        .expect("bind the interrupted source");
+    let retry = jobs
+        .insert_job_run(
+            "task_pr_pipeline",
+            2,
+            chrono::Utc::now(),
+            Some(json!({ "task_ids": [task_id] })),
+            Some(source.run_id.clone()),
+        )
+        .unwrap();
+    jobs.mark_job_run_running(&retry.run_id, chrono::Utc::now(), std::process::id())
+        .unwrap();
+    assert_eq!(
+        retry.retry_source_run_id.as_deref(),
+        Some(source.run_id.as_str())
+    );
+    assert_eq!(
+        fx.runtime.get_task(&task_id).unwrap().job_run_id.as_deref(),
+        Some(source.run_id.as_str()),
+        "resume leaves the task bound to the terminal source"
+    );
+
+    fx.update(json!({ "id": task_id, "status": "backlog", "model": "codex" }));
+
+    assert_eq!(
+        fx.runtime.get_task(&task_id).unwrap().status,
+        TaskStatus::Backlog
+    );
+    assert!(
+        fx.forge.closed_numbers().is_empty(),
+        "a live retry may still be landing the PR"
+    );
+    assert!(
+        fx.forge.still_open().contains(&11),
+        "the landing PR stays open"
     );
 }
 
