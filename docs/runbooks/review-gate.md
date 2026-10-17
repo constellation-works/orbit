@@ -565,8 +565,8 @@ Identify the failed step from `orbit run show`, then act:
   findings comment and the "Before-landing review did not approve" comment.
   To keep the change, fix it on the PR branch and land it with an operator
   decision, or re-queue the task for a fresh run (a new lineage reviews the
-  new candidate). To drop it, reject the task; `pr.close_on_terminal` closes
-  the PR then. `push_lease_lost` means the PR branch moved after the review
+  new candidate, and the requeue closes this PR). To drop it, reject the
+  task; `pr.close_on_terminal` closes the PR then. `push_lease_lost` means the PR branch moved after the review
   settled: inspect who pushed before deciding. `review_repair_after_merge`
   means the pull request was merged at the head the review settled on while
   the repair was still unpublished. The comment names the preserved ref.

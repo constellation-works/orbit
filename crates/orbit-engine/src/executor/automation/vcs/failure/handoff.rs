@@ -15,7 +15,7 @@ use super::super::git::{
 };
 use super::super::handoff::rebase_in_progress;
 use super::super::interrupted_review::review_in_flight;
-use super::super::pr::open_or_reuse_unchecked;
+use super::super::pr::{close_earlier_task_pull_requests, open_or_reuse_unchecked};
 use super::super::push::push_batch_changes_inner;
 use super::conflict::{
     blocked_pr_body, conflicts_from_error, pipeline_step, prepared_base_sha, unmerged_paths,
@@ -416,6 +416,21 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
             ..TaskAutomationUpdate::default()
         },
     )?;
+    // A new `[BLOCKED]` PR now holds the task's newest candidate, so an
+    // earlier attempt's pull request would only sit open beside it. A reused
+    // one was published by this lineage, which closed the others then.
+    let closed_stale = if pr_created {
+        close_earlier_task_pull_requests(
+            host,
+            &workspace_path,
+            std::slice::from_ref(&task),
+            &pr_number,
+            pr_url.as_deref(),
+            &head,
+        )
+    } else {
+        json!([])
+    };
 
     Ok(json!({
         "phase": "failure_handoff",
@@ -437,6 +452,7 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         "pr_number": pr_number,
         "pr_url": pr_url,
         "pr_created": pr_created,
+        "closed_stale_pull_requests": closed_stale,
         "task_status": "blocked",
         "task_spec_digest": recorded_spec_digest(host, &task.id)?,
     }))
