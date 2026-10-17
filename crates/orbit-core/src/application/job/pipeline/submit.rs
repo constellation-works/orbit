@@ -277,47 +277,6 @@ impl OrbitRuntime {
         }
         self.submit_pipeline_run_with_trigger(workflow.job_id, input, None, actor, trigger)
     }
-    /// Submit a drain with a strict policy inherited by its leaf workers.
-    ///
-    /// [ORB-14117] `approve_proposed` lets every pass of this drain approve
-    /// qualifying `proposed` tasks into the backlog through the task-pilot
-    /// promotion boundary. Like `completion`, it is only ever raised by a
-    /// per-invocation operator flag.
-    ///
-    /// `auto_fix` (`--auto-fix`) authorizes the drain's PR leaves to repair
-    /// failed required checks and merge conflicts on their pull requests. It
-    /// is repair authority only; `completion` alone authorizes merging.
-    #[allow(clippy::too_many_arguments)]
-    pub fn submit_workspace_auto_run_with_containment(
-        &self,
-        for_seconds: Option<u64>,
-        max_active_leaf_runs: Option<u32>,
-        completion: crate::application::workflow::CompletionPolicy,
-        allowed_crews: &[String],
-        complexity_crews: &orbit_config::ComplexityCrewPools,
-        actor: Option<&str>,
-        claim_token: Option<&str>,
-        trigger: JobRunTrigger,
-        strict_containment: bool,
-        approve_proposed: bool,
-        auto_fix: bool,
-    ) -> Result<PipelineInvokeResult, OrbitError> {
-        self.submit_workspace_auto_run_with_mode(
-            for_seconds,
-            max_active_leaf_runs,
-            completion,
-            allowed_crews,
-            complexity_crews,
-            actor,
-            claim_token,
-            trigger,
-            strict_containment,
-            approve_proposed,
-            auto_fix,
-            None,
-        )
-    }
-
     /// Submit a local drain with a run-scoped forecast mode. Omission captures
     /// the host setting; explicit modes never edit configuration. All surfaces
     /// use this submission and the existing admission controller.
@@ -342,6 +301,15 @@ impl OrbitRuntime {
     /// a task's crew, or cancel work another invocation already has in flight.
     ///
     /// [ORB-13016] `trigger` is the submitting surface's provenance.
+    ///
+    /// [ORB-14117] `approve_proposed` lets every pass of this drain approve
+    /// qualifying `proposed` tasks into the backlog through the task-pilot
+    /// promotion boundary. Like `completion`, it is only ever raised by a
+    /// per-invocation operator flag.
+    ///
+    /// `auto_fix` (`--auto-fix`) authorizes the drain's PR leaves to repair
+    /// failed required checks and merge conflicts on their pull requests. It
+    /// is repair authority only; `completion` alone authorizes merging.
     #[allow(clippy::too_many_arguments)]
     pub fn submit_workspace_auto_run_with_mode(
         &self,
