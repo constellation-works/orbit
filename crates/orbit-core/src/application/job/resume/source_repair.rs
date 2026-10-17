@@ -6,6 +6,7 @@ mod identity;
 mod observation;
 mod publication;
 mod published_owner;
+mod resumed_recovery;
 mod successor;
 
 use chrono::Utc;
@@ -194,6 +195,11 @@ impl OrbitRuntime {
         let prefix = "source, task, scope or reservation changed before source application";
         if !self.source_successor_unchanged(binding)? {
             return Err(refuse(format!("{prefix}: newer execution changed")));
+        }
+        if !self.source_owner_unchanged(&source, binding)? {
+            return Err(refuse(format!(
+                "{prefix}: original checkpoint owner changed"
+            )));
         }
         if digest(
             &json!({"run":source,"steps":source.steps,"checkpoints":state,"definition":definition}),
@@ -663,7 +669,19 @@ impl OrbitRuntime {
                 "successful publication is superseded by a newer task binding",
             ));
         }
-        let superseded = if task.job_run_id.as_deref() != Some(source_id) {
+        // A generic resume leaves the task bound to the checkpoint owner, so a
+        // resumed source is that owner's continuation. Any other binding,
+        // including one naming the resumed run itself, grants it nothing.
+        let resumed_owner = self
+            .resumed_recovery(&source, task_id)?
+            .map(|resumed| resumed.owner.run_id);
+        if resumed_owner.is_some() && task.job_run_id != resumed_owner {
+            return Err(refuse(
+                "a resumed source's task must remain bound to its original checkpoint owner",
+            ));
+        }
+        let superseded = if resumed_owner.is_none() && task.job_run_id.as_deref() != Some(source_id)
+        {
             Some(self.observe_source_successor(&source, &task)?)
         } else {
             None

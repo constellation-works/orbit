@@ -5,7 +5,7 @@ tags: [operations, jobs, runs, recovery, debugging]
 paths: ["crates/orbit-core/src/application/job/**", "crates/orbit-cli/src/command/run/**", "crates/orbit-core/src/runtime/audit/run.rs"]
 related_features: [activity-job, auditability]
 related_artifacts: [ORB-10070, ORB-10496, ORB-10801]
-last_validated: 2026-10-12
+last_validated: 2026-10-17
 ---
 
 # Recover Stuck Job Runs
@@ -376,6 +376,17 @@ the checkpoint owner. Direct ownership still authorizes the original run.
 An unrelated run, a broken lineage, or a task re-claimed by a superseding run
 fails before Orbit commits, pushes, or updates the task.
 
+A resumed run's own final recovery can commit a repair and resume the commit
+step. Its receipt (exact before/after HEAD and worktree) is recorded in the
+resumed run's state, not the owner's. The commit step accepts that HEAD only
+when the receipt was recorded on a bounded same-job `retry_source_run_id` chain
+from the executing run to the checkpoint owner, and the task is still bound to
+that owner. Preparation, synchronization, native validation and configured
+review then run again on the repaired candidate, on the same branch and PR.
+A descendant of the repair, a copied receipt, or a run outside the lineage is
+refused with `worktree_head_changed`. A task bound to any other run is refused
+before the commit as well.
+
 Resume also refuses before it creates a run when a task the source names is
 bound to a different run, or to the same run id on another machine. The error
 names that binding (run id and machine). Checkpoints, the worktree, and the
@@ -570,6 +581,21 @@ remote lease; submission requires fresh validation and configured review and
 grants no merge approval. Source receipts stay unchanged. Completion-preservation
 receipts are a distinct contract and cannot substitute for blocked-publication
 evidence; a direct final-recovery requeue suppresses the terminal hook.
+
+A generic resume whose own final-recovery repair was refused at the commit
+boundary, and whose terminal hook then pushed that repair and opened or kept
+the PR, is recovered the same way: inspect the **stopped resumed run**, not its
+checkpoint owner. Inspection requires the task to remain bound to the owner
+and authenticates the resumed run's applied `resume` receipt for this task.
+The published head must be the receipt's exact repair, made from the owner's
+latest authenticated host candidate in the same worktree. The resumed run must
+not have passed its own commit boundary. Every run from it back to the owner
+must be a stopped run of the same job. The returned
+`binding.checkpoint_owner` names the owner and digests its run, steps,
+checkpoints and definition. Submit that binding as usual. A changed owner
+invalidates it before admission, and the admitted run refuses before source
+effects. The new run adopts the same branch and PR and revalidates the
+candidate from scratch. Source and owner receipts stay unchanged.
 
 An operator source-repair admission authorizes one attempt. Generic resume
 cannot restart that attempt. If a repair publishes a new head on the original

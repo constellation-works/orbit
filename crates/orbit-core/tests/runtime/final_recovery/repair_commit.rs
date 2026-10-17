@@ -12,7 +12,7 @@ use orbit_engine::{
 };
 use orbit_tools::ToolContext;
 use orbit_types::workflow::activity_job::JobV2;
-use orbit_types::workflow::{FinalRecoveryDecision, PipelineState, ReviewManifest};
+use orbit_types::workflow::{FinalRecoveryDecision, JobRunState, PipelineState, ReviewManifest};
 use serde_json::{Value, json};
 
 use super::super::review_gate_audit::Fixture;
@@ -96,6 +96,10 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
 
     fn read_run_state(&self, run: &str) -> Result<Option<PipelineState>, OrbitError> {
         self.fixture.runtime.read_run_state(run)
+    }
+
+    fn get_job_run(&self, run: &str) -> Result<Option<orbit_types::workflow::JobRun>, OrbitError> {
+        self.fixture.runtime.get_job_run(run)
     }
 
     fn required_validation_commands(&self) -> Vec<String> {
@@ -306,6 +310,30 @@ fn job(fixture: &Fixture, repair: &str) -> JobV2 {
     job
 }
 
+fn repair_host<'a>(fixture: &'a Fixture, repair: &'static str) -> RepairPipeline<'a> {
+    RepairPipeline {
+        fixture,
+        repair,
+        decisions: Mutex::new(0),
+        validation_heads: Mutex::new(Vec::new()),
+        admissions: Mutex::new(Vec::new()),
+        commits: Mutex::new(Vec::new()),
+        validations: Mutex::new(Vec::new()),
+    }
+}
+
+fn audit(fixture: &Fixture, run: &str) -> Arc<V2AuditWriter> {
+    V2AuditWriter::with_disk_sinks(
+        &fixture.repo.join(".orbit/tmp/audit"),
+        Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+        "ws_fixture",
+        run,
+        "fixture",
+        Some(&fixture.repo),
+    )
+    .unwrap()
+}
+
 fn run_pipeline<'a>(
     fixture: &'a Fixture,
     repair: &'static str,
@@ -314,24 +342,8 @@ fn run_pipeline<'a>(
     Result<orbit_engine::JobOutcome, DispatchError>,
 ) {
     let run = fixture.input["job_run_id"].as_str().unwrap();
-    let host = RepairPipeline {
-        fixture,
-        repair,
-        decisions: Mutex::new(0),
-        validation_heads: Mutex::new(Vec::new()),
-        admissions: Mutex::new(Vec::new()),
-        commits: Mutex::new(Vec::new()),
-        validations: Mutex::new(Vec::new()),
-    };
-    let audit = V2AuditWriter::with_disk_sinks(
-        &fixture.repo.join(".orbit/tmp/audit"),
-        Arc::new(orbit_store::Store::open_in_memory().unwrap()),
-        "ws_fixture",
-        run,
-        "fixture",
-        Some(&fixture.repo),
-    )
-    .unwrap();
+    let host = repair_host(fixture, repair);
+    let audit = audit(fixture, run);
     let input = fixture
         .runtime
         .get_job_run(run)
@@ -616,9 +628,234 @@ fn final_recovery_does_not_authorize_an_unrecorded_head_change() {
     }
 }
 
+/// Interrupt the original run after its commit and seed a generic resume from
+/// its checkpoints. The reused worktree checkpoint keeps naming the original
+/// batch, which therefore stays the commit step's checkpoint owner.
+fn interrupted_and_resumed(fixture: &Fixture) -> (PipelineState, String, PipelineState) {
+    let owner = fixture.input["job_run_id"].as_str().unwrap();
+    let committed = orbit_engine::execute_deterministic_action(
+        &fixture.runtime,
+        "git_commit",
+        &json!({}),
+        &fixture.input,
+        false,
+        &Default::default(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(committed["decision"], "performed");
+    let mut state = fixture.runtime.read_run_state(owner).unwrap().unwrap();
+    for (index, id, output) in [
+        (0, "worktree", fixture.input.clone()),
+        (1, "commit", committed),
+    ] {
+        state.record_step(index, JobRunState::Success, Some(output.clone()), None);
+        state.record_pipeline_output(id, output);
+    }
+    fixture.runtime.write_run_state(owner, &state).unwrap();
+    RuntimeHost::finalize_job_run(
+        &fixture.runtime,
+        owner,
+        JobRunState::Interrupted,
+        Utc::now(),
+        None,
+    )
+    .unwrap();
+    let record = fixture.runtime.get_job_run(owner).unwrap().unwrap();
+    let resumed = fixture
+        .runtime
+        .insert_job_run(
+            &record.job_id,
+            2,
+            Utc::now(),
+            record.input.clone(),
+            Some(owner.into()),
+        )
+        .unwrap()
+        .run_id
+        .to_string();
+    fixture
+        .runtime
+        .mark_job_run_running(&resumed, Utc::now(), std::process::id())
+        .unwrap();
+    let mut seeded = state.clone();
+    seeded.run_id = resumed.clone();
+    fixture.runtime.write_run_state(&resumed, &seeded).unwrap();
+    (state, resumed, seeded)
+}
+
+fn commit_as(fixture: &Fixture, run: Option<&str>) -> Result<Value, OrbitError> {
+    let mut input = fixture.input.clone();
+    if let Some(run) = run {
+        input["run_id"] = json!(run);
+    }
+    orbit_engine::execute_deterministic_action(
+        &fixture.runtime,
+        "git_commit",
+        &json!({}),
+        &input,
+        false,
+        &Default::default(),
+        None,
+    )
+    .map_err(|error| OrbitError::Execution(error.to_string()))
+}
+
+fn assert_head_refused(fixture: &Fixture, run: Option<&str>, case: &str) {
+    let error = commit_as(fixture, run).unwrap_err();
+    assert!(
+        error.to_string().contains("worktree_head_changed"),
+        "{case}: a moved HEAD needs this lineage's exact receipt: {error}"
+    );
+}
+
+fn resumed_final_recovery_repair_keeps_the_original_checkpoint_owner() {
+    let fixture = fixture();
+    let owner = fixture.input["job_run_id"].as_str().unwrap().to_string();
+    let (owner_state, resumed, seeded) = interrupted_and_resumed(&fixture);
+    let host = repair_host(&fixture, "committed");
+    let input = fixture
+        .runtime
+        .get_job_run(&resumed)
+        .unwrap()
+        .unwrap()
+        .input
+        .unwrap();
+    let outcome = execute_job_with_resume(
+        &job(&fixture, "committed"),
+        input,
+        &resumed,
+        audit(&fixture, &resumed),
+        &host,
+        Some(&seeded),
+    )
+    .unwrap();
+    assert!(
+        outcome.success,
+        "ORB-16313: the resumed run's own repair receipt admits its commit: {outcome:?}"
+    );
+    let state = fixture.runtime.read_run_state(&resumed).unwrap().unwrap();
+    let checkpoint = state.final_recovery.unwrap();
+    assert_eq!(checkpoint.key.run_id, resumed);
+    let repair = checkpoint.repair_commit.unwrap();
+    assert_eq!(repair.head_sha, git(&fixture, &["rev-parse", "HEAD"]));
+    let commits = host.commits.lock().unwrap();
+    assert_eq!(
+        commits.len(),
+        1,
+        "only the repair reruns the commit boundary"
+    );
+    assert_eq!(commits[0]["decision"], "already_committed");
+    let validations = host.validations.lock().unwrap();
+    assert_eq!(validations.len(), 2, "fresh validation for the repair head");
+    assert_eq!(validations[0]["tested_head"], repair.head_sha_before);
+    assert_eq!(validations[1]["tested_head"], repair.head_sha);
+    let admissions = host.admissions.lock().unwrap();
+    assert_eq!(
+        admissions.len(),
+        2,
+        "fresh configured review for the repair"
+    );
+    assert_ne!(admissions[0]["attempt_id"], admissions[1]["attempt_id"]);
+    assert_eq!(outcome.pipeline["review_gate_settle"]["gate"], "passed");
+    assert_eq!(
+        fixture.runtime.read_run_state(&owner).unwrap().unwrap(),
+        owner_state,
+        "the original owner's checkpoints stay immutable"
+    );
+    assert_eq!(
+        fixture
+            .runtime
+            .get_task(&fixture.task_id)
+            .unwrap()
+            .job_run_id
+            .as_deref(),
+        Some(owner.as_str()),
+        "no task binding is synthesized for the resumed run"
+    );
+
+    // The authenticated lineage accepts the exact repair; the original
+    // owner's state alone, which holds no receipt, still refuses it.
+    commit_as(&fixture, Some(&resumed)).unwrap();
+    assert_head_refused(&fixture, None, "original owner without a receipt");
+    let receipt = fixture.runtime.read_run_state(&resumed).unwrap().unwrap();
+    let record = fixture.runtime.get_job_run(&owner).unwrap().unwrap();
+    for (case, job_id, source) in [
+        ("unrelated run", record.job_id.as_str(), None),
+        ("other job lineage", "other_job", Some(owner.clone())),
+    ] {
+        let copy = fixture
+            .runtime
+            .insert_job_run(job_id, 2, Utc::now(), record.input.clone(), source)
+            .unwrap()
+            .run_id
+            .to_string();
+        let mut state = receipt.clone();
+        state.run_id = copy.clone();
+        fixture.runtime.write_run_state(&copy, &state).unwrap();
+        assert_head_refused(&fixture, Some(&copy), case);
+    }
+    for case in ["head", "before", "workspace", "key", "decision"] {
+        let mut state = receipt.clone();
+        let checkpoint = state.final_recovery.as_mut().unwrap();
+        let repair = checkpoint.repair_commit.as_mut().unwrap();
+        match case {
+            "head" => repair.head_sha = repair.head_sha_before.clone(),
+            "before" => repair.head_sha_before = "0".repeat(40),
+            "workspace" => repair.workspace_path = fixture.repo.join(".orbit"),
+            "key" => checkpoint.key.run_id = "jrun-foreign".into(),
+            "decision" => checkpoint.outcome = Some("escalated: refused".into()),
+            _ => unreachable!(),
+        }
+        fixture.runtime.write_run_state(&resumed, &state).unwrap();
+        assert_head_refused(&fixture, Some(&resumed), case);
+    }
+    fixture.runtime.write_run_state(&resumed, &receipt).unwrap();
+    for rebound in [resumed.as_str(), "jrun-foreign"] {
+        fixture
+            .runtime
+            .update_task_with_identity(
+                &fixture.task_id,
+                orbit_core::application::task::TaskUpdateParams {
+                    job_run_id: Some(Some(rebound.into())),
+                    ..Default::default()
+                },
+                Some("codex".into()),
+                None,
+            )
+            .unwrap();
+        // The batch no longer owns the task, so the commit refuses before
+        // any receipt can be consulted.
+        let error = commit_as(&fixture, Some(&resumed)).unwrap_err();
+        assert!(
+            error.to_string().contains("expected exactly one task"),
+            "a task rebound away from the owner gains no commit authority: {error}"
+        );
+    }
+    fixture
+        .runtime
+        .update_task_with_identity(
+            &fixture.task_id,
+            orbit_core::application::task::TaskUpdateParams {
+                job_run_id: Some(Some(owner.clone())),
+                ..Default::default()
+            },
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+    commit_as(&fixture, Some(&resumed)).unwrap();
+    git(
+        &fixture,
+        &["commit", "--allow-empty", "-m", "unrecorded descendant"],
+    );
+    assert_head_refused(&fixture, Some(&resumed), "descendant of the repair");
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     final_recovery_repair_commit_gets_a_fresh_before_pr_review_scenarios,
     final_recovery_repair_commit_gets_a_fresh_before_pr_review,
-    final_recovery_does_not_authorize_an_unrecorded_head_change
+    final_recovery_does_not_authorize_an_unrecorded_head_change,
+    resumed_final_recovery_repair_keeps_the_original_checkpoint_owner
 );
