@@ -717,7 +717,15 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   drain never fails over to its own store.
 - An owner that times out waiting on its task commit lock or its database
   answers `lock_busy`. A leaf's owner reads retry it twice before failing, and
-  a step it still fails releases the claim as `transient`. When these recur,
+  a step it still fails releases the claim as `transient`. The late delivery
+  steps `claim_validate` (`validate` and `pin_validation`), the base sync's
+  `git_rebase` and `pr_complete` retry any owner lock acquisition that lost
+  this way, on the owner itself or through a leaf's owner route, until the
+  step has waited 5 minutes in total (pauses of 1 s doubling to 15 s). A step
+  that retried records `owner_lock_wait` (`retries`, `waited_ms`, `cap_ms`) in
+  its output; one that still loses fails `transient`, and its message names
+  the holder. A worker's routed reads pass their claim fence in an ordinary
+  section, so they no longer queue the partition's admissions. When these recur,
   read the owner's `orbit.jsonl`: the `still waiting for advisory file lock`
   warning names each holder of the lock by pid, section and call site, and
   `advisory file lock held past its threshold` names a section that held it
@@ -727,10 +735,12 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   a bundle lock's, and the operation's `index freshness`, `index snapshot`,
   `index query`, `envelope stamp write`, `index repair`, `bundle read`,
   `envelope read` and `search docs read`. A claim mutation's admission
-  section splits into `claim receipt`, `claim authority`, `claim decision`
-  and `claim commit`, and any commit into `commit intent`, `commit prepare`,
-  `commit decision` (the SQLite transaction) and `commit apply` (the bundle
-  writes and their syncs). `operation` is whatever of the
+  section splits into `claim receipt`, `claim authority`, `claim decision`,
+  `claim deferred observations` and `claim commit` (a base update
+  reservation adds `base update scope`), and any commit into `commit
+  intent`, `commit prepare`, `commit decision` (the SQLite transaction) and
+  `commit apply` (the bundle writes and their syncs), within which `task
+  index update` is the generated index row. `operation` is whatever of the
   operation those steps leave over, and `unattributed` is time no step
   claimed. A section queued behind a waiting admission or recovery
   names it as `queued exclusive waiter`, followed by the holders that waiter

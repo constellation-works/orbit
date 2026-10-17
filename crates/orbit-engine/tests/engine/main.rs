@@ -31,6 +31,7 @@ mod forge_hold;
 mod git_fixture;
 mod handoff_landing;
 mod history_note;
+mod owner_lock_retry;
 mod pr_landing;
 #[cfg(unix)]
 mod pre_push_probe;

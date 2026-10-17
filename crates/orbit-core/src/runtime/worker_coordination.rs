@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use orbit_common::fs::lock_retry::{lock_busy_retry_active, retry_busy_acquisition};
 use orbit_common::{LOCK_BUSY_ERROR_CODE, OrbitError};
 use orbit_tools::OwnerCoordinator;
 use orbit_types::tool::{McpCapability, ToolSessionContext, WorkerInvocation};
@@ -273,11 +274,26 @@ impl OrbitRuntime {
             );
         }
         session.workspace = Some(bound.owner_destination.clone());
-        self.owner_coordinator
+        let coordinator = self
+            .owner_coordinator
             .as_ref()
-            .ok_or_else(|| OrbitError::PolicyDenied("owner destination unavailable".into()))?
-            .call(name, input, session)
-            .map_err(owner_route_failure)
+            .ok_or_else(|| OrbitError::PolicyDenied("owner destination unavailable".into()))?;
+        // A call the owner refused only because its task-commit lock stayed
+        // held decided nothing there; a claimed mutation also replays by its
+        // receipt. Inside a step that opted into lock-busy retry, the same
+        // call is sent again until the step's cap is spent [ORB-16373].
+        if !lock_busy_retry_active() {
+            return coordinator
+                .call(name, input, session)
+                .map_err(owner_route_failure);
+        }
+        retry_busy_acquisition(
+            || match coordinator.call(name, input.clone(), session.clone()) {
+                Err(error) if error.is_lock_busy() => Err(error),
+                result => Ok(result),
+            },
+        )
+        .map_err(owner_route_failure)
     }
 
     /// The host owns internal projections. Ordinary tool dispatch cannot

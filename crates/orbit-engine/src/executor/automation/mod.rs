@@ -1,6 +1,7 @@
 pub(crate) mod ci;
 mod dependabot;
 mod input;
+mod owner_lock;
 pub(crate) mod review;
 mod shell;
 mod task_update;
@@ -74,7 +75,10 @@ pub(crate) fn execute_engine_action<
         // ---- generic built-in actions ----
         EngineDeterministicAction::ClaimCandidateCarry => vcs::claim_candidate_carry(host, input),
         EngineDeterministicAction::ClaimHandoff => vcs::claim_handoff(host, input),
-        EngineDeterministicAction::ClaimValidate => vcs::claim_validate(host, input),
+        // [ORB-16373] Late delivery steps outlast a long owner lock hold.
+        EngineDeterministicAction::ClaimValidate => {
+            owner_lock::retrying_owner_lock(|| vcs::claim_validate(host, input))
+        }
         EngineDeterministicAction::CandidateResume => vcs::candidate_resume(host, input),
         EngineDeterministicAction::CandidateValidate => vcs::candidate_validate(host, input),
         EngineDeterministicAction::CollectCiEvidence => ci::collect_ci_evidence(host, input),
@@ -82,7 +86,9 @@ pub(crate) fn execute_engine_action<
             dependabot::collect_dependabot_alerts(host, input)
         }
         EngineDeterministicAction::GitCommit => vcs::git_commit(host, input),
-        EngineDeterministicAction::GitRebase => vcs::rebase_pr_branch(host, input),
+        EngineDeterministicAction::GitRebase => {
+            owner_lock::retrying_owner_lock(|| vcs::rebase_pr_branch(host, input))
+        }
         EngineDeterministicAction::LocalShell => {
             shell::local_shell(host, config, input, state_context)
         }
@@ -177,7 +183,9 @@ pub(crate) fn execute_engine_action<
         EngineDeterministicAction::PrPrepare => vcs::prepare_pr_handoff(host, input),
         EngineDeterministicAction::PrPromote => vcs::pr_promote(host, input),
         EngineDeterministicAction::HandoffLand => vcs::handoff_land(host, input),
-        EngineDeterministicAction::PrComplete => vcs::pr_complete(host, input),
+        EngineDeterministicAction::PrComplete => {
+            owner_lock::retrying_owner_lock(|| vcs::pr_complete(host, input))
+        }
     }
 }
 

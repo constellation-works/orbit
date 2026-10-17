@@ -378,3 +378,68 @@ fn a_section_held_past_its_threshold_reports_its_label_and_duration() {
         "{events:#?}"
     );
 }
+
+/// ORB-16373: a late delivery step lost its whole candidate when an
+/// admission held the owner's partition past one 30 s deadline. Inside a
+/// lock-busy retry scope an admission that arrives behind such a hold enters
+/// once the holder lets go and records the retry; outside a scope the same
+/// wait still fails at its first deadline.
+#[test]
+fn a_lock_busy_retry_scope_outlasts_a_partition_hold_past_one_deadline() {
+    use orbit_common::fs::lock_retry::{LockBusyRetryPolicy, with_lock_busy_retry};
+
+    struct ReleaseOnRetry(Mutex<Option<mpsc::Sender<()>>>);
+    impl<S: tracing::Subscriber> Layer<S> for ReleaseOnRetry {
+        fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
+            if event.metadata().target() == "orbit.common.fs.lock_retry"
+                && let Some(release) = self.0.lock().expect("release").take()
+            {
+                release.send(()).expect("release holder");
+            }
+        }
+    }
+
+    let (_root, boundary) = boundary(FileLockOptions {
+        timeout: Duration::from_millis(100),
+        ..contending()
+    });
+    let writer = Arc::clone(&boundary);
+    let (release, holder) = hold(move |held, release| {
+        writer
+            .with_admission(|| {
+                held.send(()).expect("signal held");
+                release.recv().expect("release");
+                Ok(())
+            })
+            .expect("holding admission");
+    });
+
+    let error = boundary
+        .with_admission(|| Ok(()))
+        .expect_err("outside a scope the admission fails at its deadline");
+    assert!(error.is_lock_busy(), "{error}");
+
+    // The holder lets go only once the waiter has lost an acquisition and
+    // said it is retrying, so the hold always spans a whole deadline.
+    let dispatch =
+        tracing::Dispatch::new(Registry::default().with(ReleaseOnRetry(Mutex::new(Some(release)))));
+    let (entered, record) = tracing::dispatcher::with_default(&dispatch, || {
+        with_lock_busy_retry(
+            LockBusyRetryPolicy {
+                cap: Duration::from_secs(60),
+                first_pause: Duration::from_millis(10),
+                longest_pause: Duration::from_millis(50),
+            },
+            || boundary.with_admission(|| Ok("entered")),
+        )
+    });
+    holder.join().expect("holder thread");
+    assert_eq!(
+        entered.expect("the admission enters after the hold"),
+        "entered"
+    );
+    assert!(
+        record.retries >= 1 && record.waited >= Duration::from_millis(100) && !record.exhausted,
+        "the scope records the retry that outlasted the hold: {record:?}"
+    );
+}

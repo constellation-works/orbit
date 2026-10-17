@@ -281,6 +281,16 @@ fn a_claim_mutation_section_decodes_its_own_claim_and_syncs_only_its_commit() {
         SECTIONS.with(|sections| sections.borrow().is_empty()),
         "a replayed mutation takes no exclusive section"
     );
+    // [ORB-16373] Every routed worker read passes the claim fence, which
+    // reads only and so no longer queues the partition's admissions.
+    owner
+        .boundary
+        .verify_worker_claim(&measured.worker())
+        .expect("the bound claim passes its fence");
+    assert!(
+        SECTIONS.with(|sections| sections.borrow().is_empty()),
+        "a worker read fence takes no exclusive section"
+    );
 
     let (released, release) = section_of(|| {
         owner.boundary.mutate_execution_claim(
@@ -469,5 +479,113 @@ fn a_reader_waits_out_a_slow_claim_commit_and_no_longer() {
         report.get("slowest_step").map(String::as_str),
         Some("commit apply"),
         "the report names the commit step the hold went to: {report:?}"
+    );
+}
+
+/// ORB-16373 measurement fixture, not a CI check: `THREADS` claimed leaves
+/// on one partition each bind, then interleave worker read fences with
+/// claim evidence writes, then release, all at once. Prints the admission
+/// sections' count and hold p50/p95/max, and each call kind's latency
+/// p50/p95, for the execution summary's before/after comparison:
+/// `cargo test -p orbit-store --lib admission_hold_percentiles -- --ignored --nocapture`.
+#[test]
+#[ignore = "measurement fixture; run explicitly with --ignored --nocapture"]
+#[allow(clippy::print_stderr)] // The fixture's whole output is its report.
+fn admission_hold_percentiles_under_concurrent_claim_mutations() {
+    use std::time::Instant;
+
+    const THREADS: usize = 8;
+    const ROUNDS: usize = 12;
+    const FENCES_PER_ROUND: usize = 3;
+
+    fn percentile(samples: &mut [Duration], at: f64) -> Duration {
+        samples.sort();
+        let index = ((samples.len() as f64 - 1.0) * at).round() as usize;
+        samples.get(index).copied().unwrap_or_default()
+    }
+
+    let owner = Owner::open(THREADS);
+    let admitted = (0..THREADS)
+        .map(|index| owner.admit(&format!("leaf-{index}")))
+        .collect::<Vec<_>>();
+    let barrier = std::sync::Barrier::new(THREADS);
+    let results = std::thread::scope(|scope| {
+        let handles = admitted
+            .iter()
+            .map(|leaf| {
+                let owner = &owner;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    SECTIONS.with(|sections| sections.borrow_mut().clear());
+                    let mut fences = Vec::new();
+                    let mut writes = Vec::new();
+                    barrier.wait();
+                    let started = Instant::now();
+                    leaf.bind(&owner.boundary);
+                    writes.push(started.elapsed());
+                    for round in 0..ROUNDS {
+                        for _ in 0..FENCES_PER_ROUND {
+                            let started = Instant::now();
+                            owner
+                                .boundary
+                                .verify_worker_claim(&leaf.worker())
+                                .expect("fence");
+                            fences.push(started.elapsed());
+                        }
+                        let started = Instant::now();
+                        owner
+                            .boundary
+                            .mutate_execution_claim(
+                                Some(&leaf.worker()),
+                                &format!("evidence-{round}"),
+                                &ClaimMutation::Evidence(ClaimEvidence {
+                                    comment: Some(format!("round {round}")),
+                                    ..Default::default()
+                                }),
+                            )
+                            .expect("evidence");
+                        writes.push(started.elapsed());
+                    }
+                    let sections = SECTIONS.with(|sections| sections.borrow().clone());
+                    (sections, fences, writes)
+                })
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("leaf thread"))
+            .collect::<Vec<_>>()
+    });
+
+    let mut holds = Vec::new();
+    let mut fences = Vec::new();
+    let mut writes = Vec::new();
+    for (sections, fence, write) in results {
+        holds.extend(
+            sections
+                .iter()
+                .filter(|cost| cost.kind == "admission")
+                .map(|cost| cost.held),
+        );
+        fences.extend(fence);
+        writes.extend(write);
+    }
+    let total: Duration = holds.iter().sum();
+    eprintln!(
+        "admission sections={} total_held_ms={} hold_p50_ms={:.2} hold_p95_ms={:.2} hold_max_ms={:.2}",
+        holds.len(),
+        total.as_millis(),
+        percentile(&mut holds, 0.5).as_secs_f64() * 1e3,
+        percentile(&mut holds, 0.95).as_secs_f64() * 1e3,
+        percentile(&mut holds, 1.0).as_secs_f64() * 1e3,
+    );
+    eprintln!(
+        "fence calls={} p50_ms={:.2} p95_ms={:.2}; claim writes={} p50_ms={:.2} p95_ms={:.2}",
+        fences.len(),
+        percentile(&mut fences, 0.5).as_secs_f64() * 1e3,
+        percentile(&mut fences, 0.95).as_secs_f64() * 1e3,
+        writes.len(),
+        percentile(&mut writes, 0.5).as_secs_f64() * 1e3,
+        percentile(&mut writes, 0.95).as_secs_f64() * 1e3,
     );
 }

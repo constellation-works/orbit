@@ -12,6 +12,7 @@ use orbit_common::fs::io::{
     FileLockOptions, atomic_write_text, create_private_dir_all, hold_step,
     with_exclusive_file_lock_options, with_shared_file_lock_options,
 };
+use orbit_common::fs::lock_retry::retry_busy_acquisition;
 use std::panic::Location;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -91,6 +92,31 @@ fn shared_section<T>(
         options.prefer_exclusive_waiters = false;
     }
     with_shared_file_lock_options(target, &section.label(), options, op)
+}
+
+/// Run `op` once `enter` has taken its section's locks. An entry that lost
+/// to a held lock before it reached `op` is made again while this thread's
+/// lock-busy retry scope has time left ([`retry_busy_acquisition`]), so a
+/// late delivery step outlasts a long hold instead of failing at the first
+/// deadline. Nothing ran under the lock, so the repeat decides nothing twice.
+/// A failure `op` itself returns is never retried here.
+fn entered<T>(
+    op: impl FnOnce() -> Result<T, OrbitError>,
+    mut enter: impl FnMut(&mut dyn FnMut() -> Result<T, OrbitError>) -> Result<T, OrbitError>,
+) -> Result<T, OrbitError> {
+    let mut op = Some(op);
+    retry_busy_acquisition(|| {
+        let result = enter(&mut || {
+            let op = op.take().ok_or_else(|| {
+                OrbitError::Store("boundary operation was already consumed".into())
+            })?;
+            op()
+        });
+        match result {
+            Err(error) if op.is_some() => Err(error),
+            result => Ok(result),
+        }
+    })
 }
 
 fn exclusive_section<T>(
@@ -302,8 +328,10 @@ impl TaskCommitBoundary {
         F: FnOnce() -> Result<T, OrbitError>,
     {
         let section = Section::here("ordinary");
-        self.shared(&self.host_lock_target(), section, || {
-            self.enter_ordinary_locked(section, op)
+        entered(op, |op| {
+            self.shared(&self.host_lock_target(), section, || {
+                self.enter_ordinary_locked(section, op)
+            })
         })
     }
 
@@ -380,8 +408,10 @@ impl TaskCommitBoundary {
         F: FnOnce() -> Result<T, OrbitError>,
     {
         let section = Section::here("admission");
-        self.shared(&self.host_lock_target(), section, || {
-            self.admission_locked(section, op)
+        entered(op, |op| {
+            self.shared(&self.host_lock_target(), section, || {
+                self.admission_locked(section, op)
+            })
         })
     }
 
@@ -404,8 +434,10 @@ impl TaskCommitBoundary {
                 "a host-wide admission cannot nest inside another boundary section".into(),
             ));
         }
-        self.exclusive(&self.host_lock_target(), section, || {
-            self.admission_locked(section, op)
+        entered(op, |op| {
+            self.exclusive(&self.host_lock_target(), section, || {
+                self.admission_locked(section, op)
+            })
         })
     }
 

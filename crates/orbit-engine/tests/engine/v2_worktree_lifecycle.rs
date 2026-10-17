@@ -2321,6 +2321,43 @@ fn discard_entry(at: chrono::DateTime<Utc>) -> TaskHistoryEntry {
 // pr_prepare + git_rebase
 // ---------------------------------------------------------------------------
 
+/// [ORB-16373] The base sync's rebase outlasts a hold of the owner's
+/// task-commit lock within its retry cap and records the wait; held past the
+/// cap, it fails `transient`, naming the holder, with the candidate intact.
+fn git_rebase_outlasts_an_owner_lock_hold_within_its_cap() {
+    use crate::owner_lock_retry::{
+        GENEROUS_CAP, LockHolder, SHORT_CAP, assert_transient_naming, assert_wait_recorded,
+        with_cap,
+    };
+    let lock_dir = TempDir::new().unwrap();
+
+    let capped = PreparedRebase::new("jrun-rebase-lock-capped", "candidate.txt", "base.txt");
+    *capped.host.owner_lock.lock().unwrap() = Some(lock_dir.path().to_path_buf());
+    let holder = LockHolder::spawn(lock_dir.path(), false);
+    let error = with_cap(SHORT_CAP, || capped.rebase())
+        .expect_err("a holder that outlasts the cap fails the rebase");
+    assert_transient_naming(&error, &holder);
+    assert_eq!(
+        capped.head(),
+        capped.candidate,
+        "a rebase that never reached the owner leaves the candidate as it was"
+    );
+    drop(holder);
+
+    let released = PreparedRebase::new("jrun-rebase-lock", "candidate.txt", "base.txt");
+    *released.host.owner_lock.lock().unwrap() = Some(lock_dir.path().to_path_buf());
+    let _holder = LockHolder::spawn(lock_dir.path(), true);
+    let rebased = with_cap(GENEROUS_CAP, || released.rebase())
+        .expect("the rebase completes once the holder lets go");
+    assert_eq!(rebased["decision"], "performed", "{rebased:#}");
+    assert!(is_ancestor(
+        &released.checkout.path,
+        &released.target,
+        "HEAD"
+    ));
+    assert_wait_recorded(&rebased);
+}
+
 fn git_rebase_decision_follows_the_checkout_state() {
     isolated("git_rebase_decision_follows_the_checkout_state", || {
         // A candidate that does not overlap the advanced base is rebased.
@@ -4274,6 +4311,9 @@ struct LifecycleHost {
     recovery_revocation: Mutex<Option<String>>,
     /// Deterministic race after host certification and before synchronization.
     preparation_hook: Mutex<Option<PreparationHook>>,
+    /// The directory of an owner task-commit lock every task read goes
+    /// through [ORB-16373].
+    owner_lock: Mutex<Option<PathBuf>>,
 }
 
 type Widening = (String, ContextWideningStep, String, Vec<String>);
@@ -4511,6 +4551,10 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
         Ok(())
     }
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
+        let owner_lock = self.owner_lock.lock().unwrap().clone();
+        if let Some(dir) = owner_lock {
+            crate::owner_lock_retry::through_owner_lock(&dir)?;
+        }
         self.tasks
             .lock()
             .unwrap()
@@ -5368,6 +5412,10 @@ fn worktree_contracts_6() {
             (
                 "git_rebase_decision_follows_the_checkout_state",
                 git_rebase_decision_follows_the_checkout_state,
+            ),
+            (
+                "git_rebase_outlasts_an_owner_lock_hold_within_its_cap",
+                git_rebase_outlasts_an_owner_lock_hold_within_its_cap,
             ),
             (
                 "git_rebase_rename_delete_conflicts_remain_for_recovery",

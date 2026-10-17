@@ -1302,6 +1302,26 @@ fn an_owner_lock_timeout_is_retried_and_never_settles_as_a_base_conflict() {
         "{message}"
     );
 
+    // [ORB-16373] Inside a late delivery step's lock-busy retry scope the
+    // owner route itself sends the call again, past more busy answers than
+    // the read's own bounded retries outlast, until the scope's cap.
+    owner.calls.store(0, Ordering::SeqCst);
+    owner.busy.store(4, Ordering::SeqCst);
+    let (task, record) = orbit_common::fs::lock_retry::with_lock_busy_retry(
+        orbit_common::fs::lock_retry::LockBusyRetryPolicy {
+            cap: Duration::from_secs(60),
+            first_pause: Duration::from_millis(1),
+            longest_pause: Duration::from_millis(5),
+        },
+        || bound.get_task(&claim.task_id),
+    );
+    assert_eq!(task.expect("routed past the busy owner").id, claim.task_id);
+    assert_eq!(
+        (owner.calls.load(Ordering::SeqCst), record.retries),
+        (5, 4),
+        "four busy answers are retried at the route, then the read"
+    );
+
     // The leaf stopped at synchronizing its committed candidate, where an
     // untyped failure settles as a base conflict.
     leaf_completed(&pair, &leaf, prepared());

@@ -35,7 +35,7 @@ pub use lock::{
     with_exclusive_file_lock_named_options, with_exclusive_file_lock_options,
     with_shared_file_lock, with_shared_file_lock_options,
 };
-pub(crate) use lock::{classify_lock_io, classify_or_wrap_lock_io};
+pub(crate) use lock::{classify_lock_io, classify_or_wrap_lock_io, holds_file_lock};
 #[cfg(any(unix, windows))]
 pub use private::create_dir_symlink;
 pub(crate) use private::{

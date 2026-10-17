@@ -31,6 +31,7 @@ const INTENT_STEP: &str = "commit intent";
 const PREPARE_STEP: &str = "commit prepare";
 const DECIDE_STEP: &str = "commit decision";
 const APPLY_STEP: &str = "commit apply";
+const INDEX_STEP: &str = "task index update";
 
 fn remove_file_if_present(path: &Path) -> Result<(), OrbitError> {
     match std::fs::remove_file(path) {
@@ -418,10 +419,13 @@ impl TaskCommitBoundary {
             .rewrite_envelope(&intent.task_id, &intent.envelope)?;
         self.store.finish_task_commit_journal(journal_id)?;
         self.clear_pending_marker()?;
-        if let Err(error) = self
-            .registry
-            .replace_task_index(&self.workspace_id, &intent.envelope)
-        {
+        // The generated index row stays inside the section: rows are
+        // replaced whole, so one written after release could overwrite a
+        // later commit's row for the same task with this older envelope.
+        if let Err(error) = hold_step(INDEX_STEP, || {
+            self.registry
+                .replace_task_index(&self.workspace_id, &intent.envelope)
+        }) {
             orbit_common::tracing::warn!(
                 target: "orbit.store.task_commit",
                 task_id = %intent.task_id,

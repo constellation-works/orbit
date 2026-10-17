@@ -18,6 +18,8 @@ const RECEIPT_STEP: &str = "claim receipt";
 const AUTHORITY_STEP: &str = "claim authority";
 const DECISION_STEP: &str = "claim decision";
 const COMMIT_STEP: &str = "claim commit";
+const DEFERRED_OBSERVATIONS_STEP: &str = "claim deferred observations";
+const BASE_UPDATE_SCOPE_STEP: &str = "base update scope";
 
 impl TaskCommitBoundary {
     /// Check native/landing authority and reserve a base update through the
@@ -29,11 +31,15 @@ impl TaskCommitBoundary {
     ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
         use orbit_types::workflow::{PrBaseUpdateAdmission, decide_pr_base_update};
         self.with_admission(|| {
-            let authority = self.claim_authority(auth, false)?;
-            self.check_base_update_scope(auth, &authority.state, request)?;
-            let history =
-                crate::repository::task::v2::task_history_from_events(authority.bundle.events);
-            let decision = decide_pr_base_update(&history, request);
+            let authority = hold_step(AUTHORITY_STEP, || self.claim_authority(auth, false))?;
+            hold_step(BASE_UPDATE_SCOPE_STEP, || {
+                self.check_base_update_scope(auth, &authority.state, request)
+            })?;
+            let decision = hold_step(DECISION_STEP, || {
+                let history =
+                    crate::repository::task::v2::task_history_from_events(authority.bundle.events);
+                decide_pr_base_update(&history, request)
+            });
             if matches!(decision, PrBaseUpdateAdmission::Reserved) {
                 let mutation = ClaimMutation::ReserveBaseUpdate(request.clone());
                 let mutation_id =
@@ -290,6 +296,12 @@ impl TaskCommitBoundary {
     /// later pull, or that is bound to another run, is refused as
     /// `stale_claim`, exactly as that worker's write would be. Reads the claim
     /// journal and the task bundle and records nothing.
+    ///
+    /// Every routed worker read passes this fence, so it runs in an ordinary
+    /// section: a claim commit holds the partition exclusively, so the fence
+    /// still sees no half-applied claim, but it no longer excludes the
+    /// partition's other readers and queues admissions behind each worker
+    /// read [ORB-16373].
     pub fn verify_worker_claim(&self, auth: &ClaimInvocation) -> Result<(), OrbitError> {
         if auth.operator
             || [&auth.task_id, &auth.claim_id, &auth.machine_id]
@@ -298,7 +310,7 @@ impl TaskCommitBoundary {
         {
             return Err(invalid("invalid claim invocation"));
         }
-        self.with_admission(|| {
+        self.enter_ordinary(|| {
             let authority = self.claim_authority(auth, false)?;
             if !matches!(
                 authority.claim.phase,
@@ -851,7 +863,13 @@ impl TaskCommitBoundary {
         // observations queued by the sweep. Once this mutation leaves the
         // task unprotected, land them in the same commit.
         if !state.claim.phase.protects_footprint() {
-            self.attach_deferred_branch_observations(&claim.task_id, &mut evidence, &mut effects)?;
+            hold_step(DEFERRED_OBSERVATIONS_STEP, || {
+                self.attach_deferred_branch_observations(
+                    &claim.task_id,
+                    &mut evidence,
+                    &mut effects,
+                )
+            })?;
         }
         let outcome = hold_step(COMMIT_STEP, || {
             self.commit_locked_effects(

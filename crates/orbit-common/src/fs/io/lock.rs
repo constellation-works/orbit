@@ -42,6 +42,11 @@ fn claim_lock_path(path: &Path) -> Option<HeldLockPath> {
     })
 }
 
+/// Whether this thread holds any advisory lock taken through this module.
+pub(crate) fn holds_file_lock() -> bool {
+    HELD_LOCK_PATHS.with(|held| !held.borrow().is_empty())
+}
+
 /// Run `op` while holding an exclusive advisory flock on a sibling lock
 /// file of `target_path` (`.<filename>.lock`). Creates the parent directory
 /// if missing. The lock is released when this function returns.
