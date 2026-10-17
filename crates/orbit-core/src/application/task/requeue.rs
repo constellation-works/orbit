@@ -352,7 +352,7 @@ impl OrbitRuntime {
                              {reason}",
                             binding.pull_request, binding.head_sha
                         ),
-                        resume.as_ref().map(|(entry, _)| entry.clone()),
+                        resume.as_ref().and_then(|(entry, _)| entry.clone()),
                         Vec::new(),
                     ),
                     None => (format!("requeued: {reason}"), None, Vec::new()),
@@ -438,12 +438,13 @@ impl OrbitRuntime {
 
     /// Authenticate what an operator requeue without a discard resumes: the
     /// failure handoff's publication when there is one, else nothing, refusing
-    /// exactly what the next admission would refuse.
+    /// exactly what the next admission would refuse. The preservation record
+    /// is `None` when the task already holds that same record.
     fn authenticate_operator_requeue(
         &self,
         task: &Task,
         receipt: Option<&HandoffReceipt>,
-    ) -> Result<Option<(TaskHistoryEntry, SourceRepairBinding)>, OrbitError> {
+    ) -> Result<Option<(Option<TaskHistoryEntry>, SourceRepairBinding)>, OrbitError> {
         let discard_hint = "requeue with --discard-candidate (MCP: discard_candidate=true) to \
                             close it and let the next run implement fresh";
         if let Some(receipt) = receipt {
@@ -457,14 +458,17 @@ impl OrbitRuntime {
             }
             // Every authentication refusal (an interrupted or timed-out
             // run, a newer execution, a foreign source, ...) has the same exit.
-            return self.failure_handoff_requeue_record(task).map(Some).map_err(
-                |error| match error {
-                    OrbitError::JobValidation(refusal) => OrbitError::InvalidInput(format!(
-                        "{refusal}. Nothing was changed. To {discard_hint}."
-                    )),
-                    error => error,
-                },
-            );
+            let authenticated =
+                self.failure_handoff_requeue_record(task)
+                    .and_then(|(entry, binding)| {
+                        Ok((self.preservation_to_append(task, entry)?, binding))
+                    });
+            return authenticated.map(Some).map_err(|error| match error {
+                OrbitError::JobValidation(refusal) => OrbitError::InvalidInput(format!(
+                    "{refusal}. Nothing was changed. To {discard_hint}."
+                )),
+                error => error,
+            });
         }
         if let Some(run_id) = task.job_run_id.as_deref()
             && self.run_published_through_pipeline(run_id)?

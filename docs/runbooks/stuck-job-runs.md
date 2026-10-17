@@ -526,7 +526,9 @@ to `backlog`. The decision is written only with that record: a discard, or a
 requeue with nothing published, leaves the run's escalation as its recorded
 outcome. Both records are written by `system`, because the next run trusts
 only Orbit's own records; the operator's name and reason are on the status
-change and its comment. The answer names the pull request, branch and head the
+change and its comment. A requeue after a re-block of the same stopped run
+finds that identical record already on the task and appends no second one; the
+`requeued` decision from the first requeue stands. The answer names the pull request, branch and head the
 next run resumes. That run re-authenticates the same receipt and adopts the
 branch without re-implementing (`resumed_carried`, `implement: false`). Commit,
 validation, review, push and landing run afresh on the same pull request, which
@@ -552,7 +554,12 @@ the same discard exit:
 - a task last delivered by an owner pull-request run, with no handoff receipt,
   that still has a pull request or preserved candidate on record, which its
   next run would refuse to start from. A claimed delivery keeps its own
-  candidate contract and is not refused this way.
+  candidate contract and is not refused this way;
+- a stopped run whose publication an earlier requeue already preserved on the
+  task, when the task has changed since in what its digest covers (its
+  meaning, required tools, crew or complexity). That record no longer
+  describes the task, and a second one would make the next run refuse, so use
+  discard.
 
 ### A task blocked on transient infrastructure
 

@@ -623,6 +623,49 @@ fn a_refused_publication_is_recorded_once() {
     );
 }
 
+/// An operator re-blocks the backlog task, as a human would.
+fn reblock(f: &Fixture) {
+    f.runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": f.task, "workspace": f.repo, "status": "blocked", "model": "claude"}),
+        )
+        .unwrap();
+    assert_eq!(status(f), TaskStatus::Blocked);
+}
+
+/// Requeue, re-block and requeue again onto the same stopped run: the second
+/// requeue appends no second preservation record, so the next run still
+/// admits the one candidate.
+fn a_repeated_operator_requeue_keeps_one_preservation_record() {
+    let (f, _) = escalated_handoff_fixture(None, None);
+    requeue(&f, false).unwrap();
+    assert_eq!(recorded(&f, "published_owner_requeued"), 1);
+    reblock(&f);
+    let answer = requeue(&f, false).unwrap();
+    assert_eq!(answer["resumes"]["pull_request"], "17");
+    assert_eq!(recorded(&f, "published_owner_requeued"), 1);
+    assert_next_run_resumes_the_published_candidate(&f);
+}
+
+/// A repeated requeue after the task changed refuses with the discard exit:
+/// the record on file describes the old task, which admission would refuse
+/// as changed, so the second requeue appends nothing.
+fn a_repeated_requeue_of_a_changed_task_is_refused_with_a_discard_exit() {
+    let (f, _) = escalated_handoff_fixture(None, None);
+    requeue(&f, false).unwrap();
+    reblock(&f);
+    f.runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": f.task, "workspace": f.repo, "title": "Retitled after the requeue", "model": "claude"}),
+        )
+        .unwrap();
+    let error = refused(&f, false, "changed task");
+    assert!(error.contains("--discard-candidate"), "{error}");
+    assert_eq!(recorded(&f, "published_owner_requeued"), 1);
+}
+
 /// A pull request on record that no handoff receipt binds is refused with
 /// the discard exit, as the next admission would refuse it.
 fn a_requeue_without_a_receipt_refuses_an_unbound_pull_request() {
@@ -654,5 +697,7 @@ crate::scenario_table!(
     a_human_word_on_a_transient_block_stands,
     automatic_authentication_failures_are_bounded,
     a_refused_publication_is_recorded_once,
-    a_requeue_without_a_receipt_refuses_an_unbound_pull_request
+    a_requeue_without_a_receipt_refuses_an_unbound_pull_request,
+    a_repeated_operator_requeue_keeps_one_preservation_record,
+    a_repeated_requeue_of_a_changed_task_is_refused_with_a_discard_exit
 );
