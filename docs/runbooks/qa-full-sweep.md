@@ -232,6 +232,18 @@ or interleaved reports, absent targets, incomplete rows, and any failing outer
 suite are refused, including a failure before a later successful target.
 The native recorder records both requested and executed arguments, replacing
 `--nocapture` with `--show-output` to preserve diagnostics in owned blocks.
+Prefixes such as `sandbox-exec -p '<profile>'` or `./scripts/build-budget.py --`
+are preserved. The recorder inserts or uses the libtest `--` separator after
+`cargo test` and its Cargo arguments, independently of any prefix delimiter;
+other existing libtest arguments remain intact. For example:
+
+```bash
+python3 scripts/test-qa-full-sweep.py \
+  --native-execution-dir .orbit/tmp/qa-native \
+  --record-native-command ./scripts/build-budget.py -- \
+  cargo test -p orbit-common --test test_env --locked
+```
+
 Fixture forwarders that bypass libtest capture frame their complete child stdout
 with `qa-child-output-begin/end: <owner>` under one stdout lock. Every frame must
 close and its owner must appear as a passing outer case. The child bytes remain

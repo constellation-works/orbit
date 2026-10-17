@@ -161,3 +161,21 @@ fn tasks_rail_count_reports_matching_total_across_pages_and_aggregate_view() {
         String::from_utf8_lossy(&result.stderr)
     );
 }
+
+#[test]
+fn hidden_dashboard_polls_lightly_prefixes_failures_and_notifies_only_after_opt_in() {
+    let result = std::process::Command::new("node")
+        .args([
+            "--experimental-vm-modules",
+            "tests/http_api/dashboard_background_polling.mjs",
+        ])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("node is required to execute the dashboard asset behavior fixture");
+    assert!(
+        result.status.success(),
+        "dashboard background polling behavior failed:\n{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}

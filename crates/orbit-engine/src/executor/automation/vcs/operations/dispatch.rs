@@ -40,6 +40,7 @@ pub(crate) fn run(operation: &str, input: &Value) -> Result<Value, OrbitError> {
         CI_COMMIT_JOBS => ci_commit_jobs(input),
         CI_JOB_LOG => ci_job_log(input),
         CI_RERUN_FAILED => ci_rerun_failed(input),
+        super::CI_CHECK_ANNOTATIONS => super::check_annotations::ci_check_annotations(input),
         other => Err(OrbitError::InvalidInput(format!(
             "unknown private automation VCS operation '{other}'"
         ))),
