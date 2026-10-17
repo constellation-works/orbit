@@ -1221,7 +1221,10 @@ one. From then on:
     stops for the one automatic repair, and the stop evidence carries the
     failed job, its signature and a log excerpt. A repair that is already
     spent stops in `review` instead. A base that has not moved, and is still
-    red, stops in `review` without a repair. The owner merges that head only
+    red, stops in `review` without a repair. `orbit run auto --auto-fix` uses
+    this same classification for that unmoved red base: it spends no repair
+    attempt, waits out its completion deadline, and stops with a base-red
+    reason. The owner merges that head only
     when it is a clean merge of the accepted candidate with a commit already
     on the landing branch.
     When the owner checkout has `origin`, adopting a newly observed updated

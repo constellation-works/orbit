@@ -99,7 +99,7 @@ use super::answers::{
 use super::auto_fix::{
     AutoFix, BlockedVerdict, LocalRepair, admit, adopt_published_repairs, blocked_verdict,
     landed_repair, publish_local_repair, record_landed_repair, record_published_repair,
-    repair_failed_checks, stopped,
+    red_base_wait, repair_failed_checks, stopped,
 };
 use super::delivery::{
     BlockedCheckWait, DeliveryEvidence, DeliveryPin, PrMergeState, UnreportedChecks,
@@ -519,6 +519,9 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         }
         let pending_required = matches!(state, PrMergeState::Pending);
         let mut infrastructure_wait = base_refresh_wait;
+        // Set only when this poll's failed checks are the unmoved base's.
+        // A later poll that is no longer that hold must not keep the reason.
+        let mut base_red_reason: Option<String> = None;
         if let Some(auto_fix) = auto_fix
             && !base_refresh_wait
             && matches!(
@@ -701,14 +704,20 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                             landed_refresh_attempted = true;
                             continue;
                         }
-                        return Err(repair_failed_checks(
-                            host,
-                            auto_fix,
-                            workspace_path,
-                            pr_number,
-                            &status,
-                            &failed,
-                        ));
+                        if let Some(reason) =
+                            red_base_wait(host, input, workspace_path, &status, &failed)
+                        {
+                            base_red_reason = Some(reason);
+                        } else {
+                            return Err(repair_failed_checks(
+                                host,
+                                auto_fix,
+                                workspace_path,
+                                pr_number,
+                                &status,
+                                &failed,
+                            ));
+                        }
                     }
                 }
             }
@@ -906,6 +915,9 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         }
 
         if waited_seconds >= max_wait_seconds {
+            if let Some(reason) = base_red_reason.as_deref() {
+                return Err(stopped(pr_number, reason));
+            }
             return Err(merge_wait_timeout(
                 pr_number,
                 waited_seconds,
@@ -920,6 +932,9 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         waited_seconds = waited_seconds.saturating_add(sleep_seconds);
 
         if waited_seconds >= max_wait_seconds {
+            if let Some(reason) = base_red_reason.as_deref() {
+                return Err(stopped(pr_number, reason));
+            }
             return Err(merge_wait_timeout(
                 pr_number,
                 waited_seconds,
