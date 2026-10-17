@@ -1,7 +1,7 @@
 //! The task review and lifecycle verbs: `reconcile_review`, `review_reset`,
-//! `retry_handoff`, `reject` and `delete`.
+//! `requeue`, `retry_handoff`, `reject` and `delete`.
 //!
-//! The two review verbs are operator commands on MCP and on the CLI, and
+//! The two review verbs and `requeue` are operator commands on MCP and on the CLI, and
 //! refuse an undeclared field, as their hand-written tools did. A managed
 //! run is refused before any field check by `orbit-tools`' surface table.
 //! `reconcile_review` multiplexes four actions behind `action`; on the CLI
@@ -235,6 +235,46 @@ pub(super) const REVIEW_RESET: TaskOperation = TaskOperation {
             "Explicitly adopt current configured review limits; default retains the captured limits",
             CliArgKind::flag("adopt-configured-budget"),
             "Adopt the current configured budget instead of the captured budget",
+        ),
+    ]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Refuse,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+};
+
+/// Requeue a blocked task onto the candidate its stopped run published.
+pub(super) const REQUEUE: TaskOperation = TaskOperation {
+    verb: TaskVerb::Requeue,
+    cli_path: &["requeue"],
+    tool_name: "orbit.task.requeue",
+    tool_description: "Return a blocked task to the backlog so its next run resumes the candidate and pull request its stopped run published, re-authenticating that publication exactly as automatic adoption does. Requires trusted operator authority; unavailable to managed runs. A changed task specification is refused with the option to set discard_candidate, which closes the published pull request and lets the next run implement fresh.",
+    cli_about: "Requeue a blocked task onto its published candidate",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[&[
+        HOST_PARAM,
+        WORKSPACE_PARAM,
+        required(both(
+            "id",
+            ParamType::String,
+            "Blocked task to requeue",
+            CliArgKind::Positional,
+            "Blocked task to requeue",
+        )),
+        required(free_text(both(
+            "reason",
+            ParamType::String,
+            "Required explanation retained in the task history",
+            CliArgKind::flag("reason"),
+            "Explanation recorded with the operator decision",
+        ))),
+        both(
+            "discard_candidate",
+            ParamType::Switch,
+            "Discard the published candidate, close its pull request and let the next run implement fresh",
+            CliArgKind::flag("discard-candidate"),
+            "Discard the published candidate and rerun from scratch",
         ),
     ]],
     at_least_one_of: &[],

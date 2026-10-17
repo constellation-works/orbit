@@ -11,7 +11,9 @@
 //! replacement, rather than this pass [ORB-15308]. Leaving done never closes
 //! anything either: the done transition already settled which PRs close, and
 //! archiving a done task must not close the landing it deliberately kept
-//! open.
+//! open. The one non-terminal closure is an operator requeue that discards
+//! the published candidate: its `[BLOCKED]` PR will never be resumed, so
+//! [`OrbitRuntime::close_discarded_candidate_pr`] closes exactly that PR.
 //!
 //! A PR qualifies only when all of these hold:
 //! - its head branch is `orbit/<TASK-ID>-…`;
@@ -136,6 +138,53 @@ impl OrbitRuntime {
             }
         }
         settled
+    }
+
+    /// Close the pull request whose candidate an operator discarded when
+    /// requeuing `task` to implement fresh. Only `number` is closed, and only
+    /// while it is open and qualifies exactly as a terminal decision's
+    /// closure would. Best effort like that pass: `Ok(false)` when nothing
+    /// qualified, `Err` when the forge could not be asked or refused.
+    pub(crate) fn close_discarded_candidate_pr(
+        &self,
+        task: &Task,
+        number: u64,
+        reason: &str,
+    ) -> Result<bool, OrbitError> {
+        let repo_root = self.context.paths().repo_root.clone();
+        let forge = self.task_pr_forge();
+        let Some(pr) = forge
+            .open_pull_requests(&repo_root)?
+            .into_iter()
+            .find(|pr| pr.number == number && names_task(pr, &task.id))
+        else {
+            return Ok(false);
+        };
+        let settings = self.context.settings().pr_settings();
+        let authors = if settings.delivery_authors.is_empty() {
+            vec![forge.authenticated_login(&repo_root)?.to_ascii_lowercase()]
+        } else {
+            settings.delivery_authors.clone()
+        };
+        if !authors.contains(&pr.author.to_ascii_lowercase())
+            && !self
+                .accepted_handoff_pull_requests(&task.id)
+                .contains(&number)
+        {
+            return Ok(false);
+        }
+        let comment = format!(
+            "Closed by Orbit: an operator discarded this candidate and requeued {} to implement \
+             fresh.\n\nReason: {}",
+            task.id,
+            reason.trim()
+        );
+        forge.close_pull_request(&repo_root, number, &comment)?;
+        self.record_session_event(OrbitEvent::TaskPullRequestClosed {
+            task_id: task.id.clone(),
+            pr_number: number,
+        });
+        Ok(true)
     }
 
     /// Delivery PR numbers of the follower handoffs this owner accepted for

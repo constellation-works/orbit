@@ -242,7 +242,7 @@ fn requeue(f: &mut Fixture) {
     assert!(f.state.failure_activity_checkpoint.is_none());
 }
 
-fn next(f: &Fixture) -> (JobRun, Value) {
+pub(super) fn next(f: &Fixture) -> (JobRun, Value) {
     let mut run = f
         .runtime
         .insert_job_run(

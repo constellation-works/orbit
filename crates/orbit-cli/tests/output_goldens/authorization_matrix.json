@@ -914,6 +914,19 @@
   },
   {
     "surface": "tool",
+    "operation": "orbit.task.requeue",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
     "operation": "orbit.task.retry_handoff",
     "required_any": [
       "operator"

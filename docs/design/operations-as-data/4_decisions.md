@@ -237,6 +237,14 @@ advertisement grants no execution authority. The retry reserves a durable receip
 for the existing handoff and uses normal owner landing, as specified in
 [owner handoff retry](../distributed-drain/specs/task-pull.md#owner-retry-of-an-authorized-handoff).
 
+Current surface addition (2026-10-16): `orbit.task.requeue` is advertised for
+operator discovery and governed by the operator capability, like
+`review_reset`. Managed agents are refused at the tool entry as well.
+Requeuing a blocked task supersedes its recorded escalation and preserves the
+publication its failure handoff made; the next run still re-authenticates that
+publication before adopting it, as described in
+[stuck job runs](../../runbooks/stuck-job-runs.md#requeue-a-failure-handoff-task-onto-its-published-candidate).
+
 ### Rejected alternatives
 
 - **Give the exposure declaration a second axis — "which surface advertises" versus "which capability may perform" — and derive chokepoint enforcement from the second** (ORB-10478 option 1). Rejected: there is no longer a second advertisement axis to split. `McpExposure` is gone and `mcp_scope` is a plain placement decision, so this would mean *introducing* a policy framework to unify two declarations that already have one enforcement point between them — speculative v2 machinery for a drift that a ten-line table catches.

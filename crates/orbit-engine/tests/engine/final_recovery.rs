@@ -22,6 +22,7 @@ use orbit_engine::{
 use orbit_types::workflow::activity_job::{ActivityV2, JobV2, V2AuditEventKind};
 use orbit_types::workflow::{
     FinalRecoveryCheckpoint, FinalRecoveryDecision, FinalRecoveryKey, JobRunState, PipelineState,
+    TransientInfrastructure,
 };
 use serde_json::{Value, json};
 
@@ -910,6 +911,64 @@ fn a_provider_authentication_failure_skips_final_recovery() {
     );
 }
 
+/// A delivery step that lost only to a busy lock or a locked store is blocked
+/// on that condition without an agent, so the cleared-infra requeue can
+/// bring it back; a validation failure whose output merely contains the same
+/// text is still the candidate's, and goes to the agent.
+fn transient_infrastructure_is_escalated_without_an_agent() {
+    for (message, class) in [
+        (
+            "execution failed: remote tool failed (lock_busy): task write lock is held",
+            TransientInfrastructure::LockBusy,
+        ),
+        (
+            "timed out after 30000ms acquiring task lock '/repo/.orbit/locks/T-1.lock'",
+            TransientInfrastructure::LockBusy,
+        ),
+        (
+            "store error: SQLite database '/repo/.orbit/orbit.db' remained locked during task update",
+            TransientInfrastructure::StoreLocked,
+        ),
+    ] {
+        let host = RecoveryHost::new([
+            ("work", vec![Reply::Diagnostic(message.into())]),
+            ("decide", vec![escalate()]),
+        ]);
+        let run = run(&pipeline(false), &host, None);
+
+        assert!(run.result.is_err(), "{message}");
+        assert_eq!(host.count("decide"), 0, "no agent judges it: {message}");
+        let applications = host.applications();
+        assert_eq!(applications.len(), 1, "{message}");
+        assert_eq!(applications[0].infrastructure, Some(class), "{message}");
+        assert!(
+            matches!(
+                applications[0].decision,
+                FinalRecoveryDecision::Escalate { .. }
+            ),
+            "{message}"
+        );
+        assert_eq!(host.count("handoff"), 1, "the candidate is published");
+        assert_eq!(run.attempts, [attempt("escalated", Some("escalate"))]);
+    }
+
+    let host = RecoveryHost::new([
+        (
+            "work",
+            vec![Reply::Diagnostic(
+                "required validation 'make test' did not pass on candidate head: \
+                 store error: database is locked"
+                    .into(),
+            )],
+        ),
+        ("decide", vec![escalate()]),
+    ]);
+    let run = run(&pipeline(false), &host, None);
+    assert!(run.result.is_err());
+    assert_eq!(host.count("decide"), 1, "the candidate's failure is judged");
+    assert_eq!(host.applications()[0].infrastructure, None);
+}
+
 fn an_empty_crew_pool_skips_final_recovery() {
     let host = RecoveryHost::new([("work", vec![Reply::Fail]), ("decide", vec![escalate()])])
         .with_empty_pool();
@@ -1520,6 +1579,10 @@ fn recovery_contracts_4() {
             (
                 "final_recovery_resume_checkpoints_the_latest_conflict_diagnostics",
                 final_recovery_resume_checkpoints_the_latest_conflict_diagnostics,
+            ),
+            (
+                "transient_infrastructure_is_escalated_without_an_agent",
+                transient_infrastructure_is_escalated_without_an_agent,
             ),
         ]);
     });

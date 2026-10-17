@@ -591,6 +591,15 @@ Identify the failed step from `orbit run show`, then act:
   step; it widens the selectors, recorded as a `context_files_widened` entry
   in task history. If a widened path is not in intent, record that on the
   task. Then re-queue it.
+- **A `[BLOCKED]` pull request whose candidate is sound** (the failure was
+  the environment or infrastructure, not the work): resume it rather than
+  re-implement it with
+  `orbit task requeue <task-id> --reason '<why it can continue>'`. The next
+  run adopts the same branch, head and pull request, then validates, reviews
+  and lands it afresh. A changed task specification is refused with
+  `--discard-candidate` as the exit, which closes that pull request and
+  reruns from scratch. See
+  [stuck job runs](./stuck-job-runs.md#requeue-a-failure-handoff-task-onto-its-published-candidate).
 - **`review_gate_admit` refused with `review_budget_exhausted`**: the
   candidate already had its one review (`review_candidate_reviewed`) or its
   reviewer spent `review.minutes` (`review_minutes_exhausted`). Renew it only

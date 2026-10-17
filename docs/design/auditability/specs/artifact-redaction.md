@@ -20,6 +20,7 @@ This is the author-facing inventory for the shipped artifact-write redactor. Red
 | `orbit.task.reject` | `note`, `comment` | - | `id` |
 | `orbit.task.reconcile_review` | `reason` | - | workspace, action, ids, request key, exact-match command, remediation commit |
 | `orbit.task.review_reset` | `reason` | - | workspace, task id, lineage key, `adopt_configured_budget` |
+| `orbit.task.requeue` | `reason` | - | workspace, task id, `discard_candidate` |
 | `orbit.friction.add` | `title`, `body`, `description` | - | `model`, `during_task`, tags |
 | `orbit.friction.update` | `title`, `body` | - | `id`, status, tags, `rehome_to`, `move`; a `rehome_to` move (also the CLI `orbit friction rehome`) copies a body that was already redacted when it was written |
 | `orbit.auto_task.add` / `orbit.auto_task.update` | `description`, `template.title`, `template.description`, `template.acceptance_criteria[]` | - | name, schedule, dedupe, template enums/tags |

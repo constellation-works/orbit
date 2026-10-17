@@ -1,4 +1,10 @@
 //! Publication survives a final-recovery requeue independently of failure handoff.
+//!
+//! Two publications are preserved this way: the run's own pipeline push and
+//! PR, which a final-recovery `requeue` keeps, and the `[BLOCKED]` PR a
+//! failure handoff published, which an operator or cleared-infra requeue of
+//! the blocked task keeps (`failure_handoff`). Both are re-authenticated in
+//! full from the immutable source when the next run adopts them.
 use super::*;
 use serde::{Deserialize, Serialize};
 
@@ -10,6 +16,23 @@ struct PreservedPublication {
     schema_version: u32,
     source_run_id: String,
     task_digest: String,
+    /// The publication is the source's failure-handoff PR, authenticated
+    /// from its handoff receipt rather than pipeline checkpoints.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    failure_handoff: bool,
+}
+
+fn preserved_entry(record: &PreservedPublication) -> Result<TaskHistoryEntry, OrbitError> {
+    Ok(TaskHistoryEntry {
+        at: Utc::now(),
+        by: "system".into(),
+        event: PRESERVED.into(),
+        note: Some(serde_json::to_string(record).map_err(|e| refuse(e.to_string()))?),
+        from_status: None,
+        to_status: None,
+        operation_id: None,
+        decision: None,
+    })
 }
 
 impl OrbitRuntime {
@@ -37,17 +60,72 @@ impl OrbitRuntime {
             schema_version: 1,
             source_run_id: run_id.into(),
             task_digest: task_digest(task)?,
+            failure_handoff: false,
         };
-        Ok(Some(TaskHistoryEntry {
-            at: Utc::now(),
-            by: "system".into(),
-            event: PRESERVED.into(),
-            note: Some(serde_json::to_string(&record).map_err(|e| refuse(e.to_string()))?),
-            from_status: None,
-            to_status: None,
-            operation_id: None,
-            decision: None,
-        }))
+        preserved_entry(&record).map(Some)
+    }
+
+    /// Authenticate the `[BLOCKED]` PR the failure handoff of `task`'s
+    /// current run published, exactly as the next run's adoption will, and
+    /// return the preservation record that lets that run resume it, with the
+    /// binding it resumes. Called under the task write lock by a requeue of
+    /// the blocked task; nothing is written here.
+    pub(crate) fn failure_handoff_requeue_record(
+        &self,
+        task: &Task,
+    ) -> Result<(TaskHistoryEntry, SourceRepairBinding), OrbitError> {
+        let source_id = task
+            .job_run_id
+            .as_deref()
+            .ok_or_else(|| refuse("the task has no run whose failure handoff it could resume"))?;
+        let source = self
+            .get_job_run_backend(source_id)?
+            .ok_or_else(|| refuse("the task's run is missing"))?;
+        self.owner_source_identity(&source, task)?;
+        let entries = self.get_task_history(&task.id)?;
+        if source.state != JobRunState::Failed
+            || source.finished_at.is_none()
+            || run_owner_liveness(&source) != RunOwnerLiveness::Stopped
+        {
+            return Err(refuse(
+                "the task's run is not a conclusively stopped failed delivery",
+            ));
+        }
+        if entries.iter().any(|e| {
+            e.event == orbit_types::task::CANDIDATE_DISCARDED_EVENT && e.at >= source.created_at
+        }) {
+            return Err(refuse("an operator discarded this run's candidate"));
+        }
+        // The same newest-execution rule the adopting run applies: nothing
+        // newer may stand between the task and this publication.
+        let newest = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
+            job_id: Some("task_pr_pipeline".into()),
+            task_id: Some(task.id.clone()),
+            limit: Some(1),
+            include_steps: false,
+            ..Default::default()
+        })?;
+        if newest.first().is_none_or(|run| run.run_id != source_id) {
+            return Err(refuse(
+                "newer execution makes publication association ambiguous",
+            ));
+        }
+        let state = self
+            .read_run_state(source_id)?
+            .ok_or_else(|| refuse("source checkpoints missing"))?;
+        if state.failure_activity_checkpoint.is_none() {
+            return Err(refuse("the run published no failure-handoff PR"));
+        }
+        let definition = self.source_repair_definition(&source)?;
+        let (_, _, binding) =
+            self.observe_handoff_publication(source, task.clone(), state, definition)?;
+        let record = PreservedPublication {
+            schema_version: 1,
+            source_run_id: source_id.into(),
+            task_digest: task_digest(task)?,
+            failure_handoff: true,
+        };
+        Ok((preserved_entry(&record)?, binding))
     }
 
     pub(super) fn owner_source_identity(
@@ -167,6 +245,26 @@ impl OrbitRuntime {
             .iter()
             .filter(|r| r.source_run_id == source_id)
             .collect::<Vec<_>>();
+        // An operator discarded this run's candidate and no requeue kept its
+        // publication: the next run implements fresh, which the generic
+        // candidate lookup does once it sees the discard. Only a stopped
+        // source may be left behind this way.
+        if matching.is_empty()
+            && let Some(stopped) = source.as_ref()
+            && entries.iter().any(|e| {
+                e.event == orbit_types::task::CANDIDATE_DISCARDED_EVENT
+                    && e.at >= stopped.created_at
+            })
+        {
+            if stopped.finished_at.is_none()
+                || run_owner_liveness(stopped) != RunOwnerLiveness::Stopped
+            {
+                return Err(refuse(
+                    "a discarded publication's source execution is still live",
+                ));
+            }
+            return Ok(None);
+        }
         if matching.is_empty() && !published {
             if !records.is_empty() || task.github_pr_number().is_some() {
                 return Err(refuse(
@@ -201,6 +299,18 @@ impl OrbitRuntime {
             return Err(refuse(
                 "published source is live, discarded, changed, or lacks an applied requeue",
             ));
+        }
+        if matching[0].failure_handoff {
+            let state = self
+                .read_run_state(source_id)?
+                .ok_or_else(|| refuse("source checkpoints missing"))?;
+            if state.failure_activity_checkpoint.is_none() {
+                return Err(refuse("preserved failure-handoff receipt disappeared"));
+            }
+            let definition = self.source_repair_definition(&source)?;
+            return self
+                .observe_handoff_publication(source, task, state, definition)
+                .map(|(_, _, binding)| Some(binding));
         }
         self.observe_published_source(source, task, false)
             .map(|(_, _, binding)| Some(binding))

@@ -180,7 +180,7 @@ fn prepare(
             }
             Ok(ListView::default())
         }
-        TaskVerb::ReviewReset | TaskVerb::ReconcileReview => {
+        TaskVerb::ReviewReset | TaskVerb::ReconcileReview | TaskVerb::Requeue => {
             input.shift_remove("host");
             input.insert("workspace".to_string(), json!(runtime.paths().repo_root));
             Ok(ListView::default())
@@ -406,6 +406,10 @@ fn render(
         TaskVerb::ReviewReset => {
             Ok(Payload::detail(value, super::review_reset::REVIEW_RESET_TEXT).into())
         }
+        TaskVerb::Requeue => {
+            let text = requeue_text(&value);
+            Ok(Payload::detail(value, text).into())
+        }
         TaskVerb::ReconcileReview => {
             let text = super::reconcile_review::reconciliation_text(&value);
             Ok(Payload::detail(value, text).into())
@@ -414,4 +418,32 @@ fn render(
             Ok(Payload::document(value).into())
         }
     }
+}
+
+/// `orbit task requeue`'s text: the task, what its next run resumes, and any
+/// pull request the discard closed or could not close.
+pub(crate) fn requeue_text(value: &Value) -> String {
+    let id = value.get("id").and_then(Value::as_str).unwrap_or("-");
+    let mut lines = vec![format!("Requeued {id} to backlog.")];
+    if let Some(resumes) = value.get("resumes").filter(|v| v.is_object()) {
+        let field = |key: &str| resumes.get(key).and_then(Value::as_str).unwrap_or("-");
+        lines.push(format!(
+            "Resumes pull request #{} on {} at {}.",
+            field("pull_request"),
+            field("branch"),
+            field("head_sha")
+        ));
+    }
+    if let Some(closed) = value.get("closed_pull_request").and_then(Value::as_str) {
+        lines.push(format!("Closed the discarded pull request #{closed}."));
+    }
+    if let Some(error) = value.get("close_error").and_then(Value::as_str) {
+        lines.push(format!(
+            "Could not close the discarded pull request: {error}"
+        ));
+    }
+    if let Some(next) = value.get("next_step").and_then(Value::as_str) {
+        lines.push(next.to_string());
+    }
+    lines.join("\n")
 }

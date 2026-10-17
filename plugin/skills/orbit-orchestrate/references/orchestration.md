@@ -423,9 +423,18 @@ orbit run show <run-id> --json
 orbit task update <task-id> --status backlog   # only once you know a rerun can succeed
 ```
 
-For blocks caused by a missing provider launcher, `orbit task recheck-blocked`
-reports whether the launcher now resolves. Its `--confirm` option requeues only
-the cleared launcher blocks; it leaves implementation failures blocked.
+A blocked task whose failure handoff published a `[BLOCKED]` PR is not moved
+with `--status backlog`: its next run would refuse the unauthenticated
+publication. An operator resumes that candidate with
+`orbit task requeue <task-id> --reason '<why>'` (MCP `orbit.task.requeue`); add
+`--discard-candidate` to close the PR and rerun fresh, which a changed task
+specification requires.
+
+For blocks caused by a missing provider launcher or by transient
+infrastructure (a busy lock, a locked task store), `orbit task recheck-blocked`
+reports whether the condition cleared. Its `--confirm` option requeues only
+the cleared blocks, a transient one onto its published candidate; it leaves
+implementation failures blocked.
 
 ## Retry a stopped owner landing
 

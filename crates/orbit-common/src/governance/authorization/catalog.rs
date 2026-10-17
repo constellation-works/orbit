@@ -335,6 +335,12 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "reconciliation produces the owner-held review and validation evidence that lets a changed merged head complete",
     },
     GovernedOperation {
+        id: "orbit.task.requeue",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "requeuing a blocked task overrides a recorded escalation and preserves its published candidate",
+    },
+    GovernedOperation {
         id: "orbit.task.review_reset",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],

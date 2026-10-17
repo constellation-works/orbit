@@ -484,6 +484,62 @@ worker's continuation
 through this check. No successful receipt is rewritten and no replacement PR is
 created by the continuation.
 
+## Requeue a failure-handoff task onto its published candidate
+
+A run whose failure handoff published a `[BLOCKED]` pull request leaves the
+task `blocked`. When the candidate is sound (the failure was the environment,
+not the work), requeue it as an operator decision:
+
+```bash
+orbit task requeue <task-id> --reason '<why this candidate can continue>'
+```
+
+The MCP equivalent is `orbit.task.requeue` with `id`, `reason` and optional
+`discard_candidate`; it needs operator authority and is unavailable inside a
+managed run. Do not move such a task with `orbit task update --status backlog`:
+its next run finds a publication it cannot authenticate and refuses to start.
+
+The requeue authenticates the handoff receipt before writing anything: the
+stopped run is this machine's own single-task delivery, conclusively stopped
+and still the task's newest execution, its candidate was not discarded, and
+the task specification is unchanged. It then records a `requeued` decision that
+supersedes the escalation, plus the publication-preservation record, and
+returns the task to `backlog`. The answer names the pull request, branch and
+head the next run resumes. That run re-authenticates the same receipt and
+adopts the branch without re-implementing (`resumed_carried`,
+`implement: false`). Commit, validation, review, push and landing run afresh on
+the same pull request. Its `[BLOCKED]` title is not rewritten.
+
+A refusal changes nothing. A specification edited since the publication is
+reported with its exit: `--discard-candidate` (MCP `discard_candidate: true`)
+records the discard, returns the task to `backlog`, and closes that pull
+request when it is open and Orbit's. The next run then implements fresh. A
+closure the forge refuses is reported in the answer, and the requeue stands.
+A run that published through its own push and `pr_open` steps with no
+handoff receipt is refused too; use explicit source repair (below) or discard.
+
+### A task blocked on transient infrastructure
+
+A deterministic delivery step that lost only to a busy lock (`lock_busy`, a
+file-lock timeout) or a locked task store did not judge the candidate. Final
+recovery classifies it without an agent, blocks the task with a
+`transient_infra_blocked` history entry, and the failure handoff still
+publishes the candidate. A required-validation failure is never classified
+this way, even when its output quotes the same text. `orbit task
+recheck-blocked` lists these blocks with their class, pull request, whether
+the probe passes now, and how many requeues they have taken. The probe checks
+that the task store takes an immediate write transaction and that the task's
+write lock is free.
+
+The owner's clock tick, and `orbit task recheck-blocked --confirm`, requeue a
+cleared block onto its candidate through the same records as the operator
+requeue, so the next run resumes the same pull request. Each publication (or,
+when nothing was published, each task) takes at most two such requeues. After
+that, or when its publication no longer authenticates, the task stays blocked
+for an operator `orbit task requeue`. A claimed worker that could not reach its
+owner (`owner_route_unavailable`) is not blocked this way: final recovery skips
+it and its claim is released.
+
 ## Explicit rework of a successful unmerged publication
 
 A successful owner PR run can still leave an acceptance criterion unmet, such

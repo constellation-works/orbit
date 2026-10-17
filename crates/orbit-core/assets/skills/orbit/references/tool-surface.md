@@ -49,8 +49,8 @@ orbit tool run orbit.task.update --input '{"id":"<task-id>","comment":"<progress
 ```
 
 The ID-routed tools are `orbit.task.show`, `update`, `reject`, `delete`,
-`artifact.get`, `artifact.put`, `review_reset` and `reconcile_review` (each
-under `orbit.task.`). Routing applies only where that tool is advertised and
+`artifact.get`, `artifact.put`, `review_reset`, `reconcile_review` and
+`requeue` (each under `orbit.task.`). Routing applies only where that tool is advertised and
 authorized. `orbit.task.add`, `list`, `eligible`, `lint`, `pull` and `locks*`
 keep workspace selection; search, friction and workflow-run tools do not route
 by task prefix. There is no fan-out search across hosts. Direct local/remote
@@ -125,6 +125,7 @@ migration are in [remote-access.md](../../orbit-setup/references/remote-access.m
 | Auto-tasks | `orbit_auto_task_add/list/update/mint`; `update` `enabled` enables or disables a definition | Those four are also CLI commands. `toggle`, `delete`, `show`, `restore`, `recover`, and `reset` are not on MCP (`orbit auto-task`, or `orbit tool run`); `delete` and `reset` need operator authority |
 | Routine enablement | `orbit_routine_control` with `action: "list"` or `"toggle"`; operator authority and explicit `workspace` required | `orbit routine list/show` reads definitions and state. MCP toggle needs the observed `expected_enabled` and `target` plus desired `enabled`; after a lost reply, observe state before retrying. `orbit routine pause/resume` controls the separate host-local pause. |
 | Review recovery | `orbit_task_reconcile_review` (`inspect`, `submit`, `status`, `accept_baseline`) and `orbit_task_review_reset`; operator-only and unavailable to managed runs | `orbit task reconcile-review` and `orbit task review-reset`. Reconciliation judges a recovered delivery's changed merged head; reset closes an open attempt and renews one selected lineage budget with a reason, preserving history. Inspect authoritative state after a lost reply. |
+| Blocked-task requeue | `orbit_task_requeue` (`id`, `reason`, optional `discard_candidate`); operator-only and unavailable to managed runs | `orbit task requeue <id> --reason <why> [--discard-candidate]`. Returns a blocked task to the backlog so its next run resumes the candidate and pull request its failure handoff published, after re-authenticating that publication. A changed task specification is refused; `discard_candidate` closes that pull request and reruns fresh. Nothing is written on a refusal. |
 | Host commands | `orbit_command_exec` when advertised and authorized | Explicit argv and an absolute working directory inside the selected workspace checkout (or a linked worktree under `.orbit/state/worktrees/`); never a shell string |
 | Host agent invocation | `orbit_agent_invoke` when advertised and authorized | `orbit run agent <prompt>`; returns a run ID, or the answer with `--wait` |
 | Distributed drain | Internal runtime protocol; no ordinary MCP tools | `orbit run auto --pull` uses a launch-selected owner route for probe, receipt lookup, task admission, bind and settle. These five operations have no public schemas, and public calls refuse both canonical and formerly advertised names; client names or initialize metadata cannot enable the route. Matching internal protocol support is required on both endpoints, with no public fallback. Use owner-side `orbit tool run orbit.drain.probe`, `orbit.drain.receipt.lookup` and `orbit.drain.claims` for supported diagnostics under the required identified/operator authority. Do not call pull, bind or settle by hand: admission and claim mutations retain machine/run fences. Handoff approval, revocation and recovery remain owner-dashboard actions. See [distributed-drain.md](setup/distributed-drain.md). |
