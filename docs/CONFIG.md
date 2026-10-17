@@ -201,6 +201,12 @@ these forecasts, including requests enforce held; `PULL_SENT` counts requests
 sent to the owner, including idle responses and failed attempts.
 `PULL_WOULD_HOLD` counts shadow requests enforce would have held because no
 kind of work fit (`forecast_no_headroom`), even if no claim returned.
+`ENFORCE_ADMITTED` counts the distinct tasks local enforce passes admitted,
+`GAP_HELD` the distinct tasks gap fit held (`fit_skipped`), and `PULL_HELD`
+the enforce requests held because no work fit. Those three stay on enforce
+passes; the shadow columns stay on shadow passes. JSON adds
+`enforce_admitted`, `gap_held` (the task ids) and `pull_held` without
+changing the existing shadow fields.
 `--since <RFC3339>`, `--drain <RUN>` and `--mode shadow|enforce` intersect to
 select a cohort; without filters the report uses all drains and modes from
 the last 30 days. Both output formats identify that selection and report

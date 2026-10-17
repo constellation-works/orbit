@@ -658,7 +658,8 @@ fn a_pass_gap_fit_refuses_entirely_polls() {
 /// `shadow` and `enforce` passes each record the forecast at the offsets
 /// inside the horizon (10 minutes here, so +5 and +10), counting what the
 /// pass admitted, with the pass's decisions; `off` records nothing. The
-/// accuracy report counts, per drain, what shadow would have held.
+/// accuracy report counts, per drain, what shadow would have held and what
+/// enforce admitted or held.
 fn shadow_and_enforce_passes_record_their_forecast_and_off_records_none() {
     let fixture = Fixture::new("off", "");
     fixture.finished_delivery("hard", &[1.0, 1.0, 1.0, 6.0, 1.0]);
@@ -722,6 +723,9 @@ fn shadow_and_enforce_passes_record_their_forecast_and_off_records_none() {
     assert_eq!(decisions.run_id, drain);
     assert_eq!((decisions.shadow_passes, decisions.enforce_passes), (1, 1));
     assert_eq!(decisions.admitted, 2);
+    assert_eq!(decisions.enforce_admitted, 1);
+    assert_eq!(decisions.gap_held, vec![heavy.clone()]);
+    assert_eq!(decisions.pull_held, 0);
     assert_eq!(decisions.would_hold, vec![heavy]);
     assert!(decisions.would_add.is_empty(), "{decisions:#?}");
     // No worker has measured the host yet, so nothing pairs.
