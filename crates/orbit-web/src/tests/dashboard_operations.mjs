@@ -3,6 +3,7 @@
 const { setHost, setWorkspace, setWindow, setMultiWorkspace, runHref, statusPill } = await import('./js/common.js');
 const { initOperations, fetchAndRenderOperations: fetchAndRenderOperationsPane, fetchAndRenderJobs, fetchAndRenderAutoDrainPane } = await import('./js/operations.js');
 const { drainReadinessFor } = await import('./js/drain-waits.js');
+const { setActiveTab } = await import('./js/router.js');
 // The Operations tab and the Tasks dock's Drain card refresh separately in the
 // app; the harness drives both so every panel's behaviour is asserted together.
 const fetchAndRenderOperations = async () => {
@@ -129,6 +130,10 @@ globalThis.fetch = async (path, options = {}) => {
     return fullStateError ? response({ error: 'full state unavailable' }, 500)
       : response({ state: { consumer: 'routine/one', members: { pending: { 'member-full': { fingerprint: 'full-input' } } } } });
   }
+  if (url.pathname === '/api/fleet/drains') return response({ items: [
+    { workspace_id: 'one', workspace_name: 'one', phase: 'draining', slots_used: 1, slots_ceiling: 4, eligible_count: 2, holds: [] },
+    { workspace_id: 'two', workspace_name: 'two', phase: 'idle', slots_used: 0, slots_ceiling: 4, eligible_count: 4, holds: [] },
+  ] });
   if (url.pathname === '/api/routines') return response({
     machine_name: 'fixture-host', cron_zone: { name: 'America/Los_Angeles', offset_seconds: -25200 }, controls_authorized: capabilities.routine_toggle.authorized, capabilities: { ...capabilities }, session_explanation: 'Session access: restart the dashboard server with explicit operator authority.',
     routines: [
@@ -191,7 +196,7 @@ globalThis.fetch = async (path, options = {}) => {
   return response({});
 };
 setWorkspace('one');
-initOperations({ getJobsSubtab: () => jobsSubtab, getOperationsSubtab: () => operationsSubtab, getWorkspaces: () => ['one', 'two'].map(id => ({ id, name: id, status: 'active' })) });
+initOperations({ selectFleetScope: () => setActiveTab('auto-drain'), getJobsSubtab: () => jobsSubtab, getOperationsSubtab: () => operationsSubtab, getWorkspaces: () => ['one', 'two'].map(id => ({ id, name: id, status: 'active' })) });
 await fetchAndRenderOperations();
 const mintedStatus = get('auto-tasks-body').querySelector('.pill');
 const taskStatus = statusPill('in-progress');
@@ -628,11 +633,11 @@ pullDrainStopped = false;
 pullDrainRunId = null;
 drainPhase = 'winding_down';
 
-// No concrete workspace: the card is read-only and fetches nothing.
+// No concrete workspace: the fleet is visible without workspace write controls.
 setWorkspace(null);
 const readinessRequests = requests.filter(r => r.path === '/api/workflows/auto/readiness').length;
 await fetchAndRenderOperations();
-assert(drainText().includes('All-workspace mode is read-only') && get('auto-drain-phase-label').textContent === 'Read-only' && get('auto-drain-start').hidden, 'aggregate mode is read-only and offers no Start');
+assert(get('auto-drain-body').querySelector('.fleet-drains') && get('auto-drain-phase-label').textContent === 'Fleet' && get('auto-drain-start').hidden, 'aggregate mode shows the fleet and offers no Start');
 assert(requests.filter(r => r.path === '/api/workflows/auto/readiness').length === readinessRequests, 'aggregate mode does not fetch readiness');
 setWorkspace('one');
 drainPhase = 'idle';
