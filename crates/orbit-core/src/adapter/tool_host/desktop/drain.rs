@@ -4,17 +4,25 @@ use crate::application::job::{DrainWorkerLimitRequest, SubmissionKind};
 use crate::application::workflow::MAX_DRAIN_WINDOW_SECONDS;
 use crate::{CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime};
 use orbit_common::OrbitError;
-use orbit_common::protocol::tool_input::{optional_string, required_string};
+use orbit_common::protocol::tool_input::{
+    optional_csv_or_string_list_alias, optional_string, optional_string_list_alias, required_string,
+};
 use orbit_types::workflow::JobRunTrigger;
 use serde_json::{Value, json};
 
-pub(super) fn readiness(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
+pub(super) fn readiness(
+    runtime: &OrbitRuntime,
+    input: &Value,
+    limit: usize,
+) -> Result<Value, OrbitError> {
+    let task_ids = optional_string_list_alias(input, &["task"])?.unwrap_or_default();
+    let concurrency = optional_u32(input, "concurrency")?;
+    let allowed_crews =
+        optional_csv_or_string_list_alias(input, &["allow_crew"])?.unwrap_or_default();
     // This is a bounded observational read, not a reconciliation tick.
-    let mut value = runtime.workspace_auto_readiness(&[], None, 50, &[])?;
+    let mut value =
+        runtime.workspace_auto_readiness(&task_ids, concurrency, limit, &allowed_crews)?;
     value["controls_authorized"] = json!(true);
-    // [ORB-13987] What `orbit doctor` reports as `validation-env`, before a
-    // start: required validation may not find the user's toolchain.
-    value["validation_env_warning"] = json!(runtime.validation_env_preflight_warning());
     Ok(value)
 }
 

@@ -581,6 +581,16 @@ Drain card follows the same rule: readiness reports `replica: true` and the
 approve-proposed window (`orbit run auto --approve-proposed`, or **Approve
 qualifying** in the owner's Drain card) on the owner.
 
+Readiness uses one shared snapshot across `orbit run readiness`, MCP
+`orbit.workflow.auto` with `action: "status"`, and
+`GET /api/workflows/auto/readiness`. MCP status accepts `task` (one id or a
+list), `concurrency`, `limit` (1–500, default 50), and `allow_crew` (configured
+crew names). HTTP accepts `task` and `allow_crew` as comma-separated query
+values, plus the same concurrency and limit. Omitted crew selection uses the
+live drain's restriction, if any. All three JSON responses include `replica`
+and `validation_env_warning` (null when no warning applies). CLI text prints
+that warning when present. Selection never reserves work or starts a drain.
+
 Every admission receipt captures the owner's
 `workflow.required_validation_commands` and `review.baseline_commands`, whether
 or not review is on. A claimed leaf validates against those captured gates,

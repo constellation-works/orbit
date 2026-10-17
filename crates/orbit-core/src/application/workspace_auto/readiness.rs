@@ -809,6 +809,15 @@ impl OrbitRuntime {
         limit: usize,
         allowed_crews: &[String],
     ) -> Result<Value, OrbitError> {
-        explain_workspace_auto_readiness(self, task_ids, max_active_leaf_runs, limit, allowed_crews)
+        let mut snapshot = explain_workspace_auto_readiness(
+            self,
+            task_ids,
+            max_active_leaf_runs,
+            limit,
+            allowed_crews,
+        )?;
+        snapshot["replica"] = json!(self.replica_owner_machine().is_some());
+        snapshot["validation_env_warning"] = json!(self.validation_env_preflight_warning());
+        Ok(snapshot)
     }
 }

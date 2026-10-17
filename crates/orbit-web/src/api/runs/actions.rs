@@ -361,6 +361,12 @@ pub(in crate::api) struct AutoDrainReadinessQuery {
     /// listing, so a task detail gets its own answer wherever it ranks.
     #[serde(default)]
     task: Option<String>,
+    /// Maximum tasks to explain, including an explicit selection (1-500).
+    #[serde(default)]
+    limit: Option<usize>,
+    /// Comma-separated configured crews to evaluate.
+    #[serde(default)]
+    allow_crew: Option<String>,
 }
 
 /// The explicit selection a `?task=` value names; empty when it is absent.
@@ -373,7 +379,7 @@ fn readiness_task_ids(raw: Option<&str>) -> Result<Vec<String>, String> {
         .collect()
 }
 
-/// `GET /workflows/auto/readiness?workspace=<id>[&concurrency=N][&task=<id>,…]`
+/// `GET /workflows/auto/readiness?workspace=<id>[&concurrency=N][&task=<id>,…][&limit=N][&allow_crew=<crew>,…]`
 /// — the read-only eligible/waiting snapshot for backlog-discovery
 /// auto-drain, projected straight from `OrbitRuntime::workspace_auto_readiness`
 /// (the same snapshot `orbit run readiness` prints) rather than a
@@ -388,23 +394,18 @@ pub(in crate::api) async fn auto_drain_readiness(
         Ok(ids) => ids,
         Err(message) => return bad_request(message),
     };
+    let allowed_crews = query
+        .allow_crew
+        .as_deref()
+        .map(orbit_common::protocol::tool_input::split_csv)
+        .unwrap_or_default();
     match blocking("auto-drain readiness", move || {
-        let mut payload = runtime.workspace_auto_readiness(
+        runtime.workspace_auto_readiness(
             &task_ids,
             query.concurrency,
-            AUTO_DRAIN_READINESS_LIMIT,
-            &[],
-        )?;
-        // A replica executes through a pull drain, which cannot approve
-        // proposed tasks or repair PRs (`--pull` conflicts with both flags), so the
-        // form withholds that opt-in there.
-        if let Some(object) = payload.as_object_mut() {
-            object.insert(
-                "replica".to_string(),
-                Value::Bool(runtime.replica_owner_machine().is_some()),
-            );
-        }
-        Ok(payload)
+            query.limit.unwrap_or(AUTO_DRAIN_READINESS_LIMIT),
+            &allowed_crews,
+        )
     })
     .await
     {
