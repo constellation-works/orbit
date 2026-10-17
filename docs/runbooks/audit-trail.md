@@ -4,8 +4,8 @@ summary: Query and interpret Orbit invocation, run, step, and activity audit his
 tags: [operations, audit, observability, debugging]
 paths: ["crates/orbit-core/src/runtime/audit/run.rs", "crates/orbit-core/src/runtime/audit/run_projection.rs", "crates/orbit-types/src/telemetry/audit_event.rs"]
 related_features: [auditability, activity-job]
-related_artifacts: [ORB-10014, ORB-10227, ORB-10228]
-last_validated: 2026-10-11
+related_artifacts: [ORB-10014, ORB-10227, ORB-10228, ORB-16383]
+last_validated: 2026-10-17
 ---
 
 # Inspect the Audit Trail
@@ -23,9 +23,16 @@ Audit events are stored in SQLite, not the JSONL process log. The global store
 - `v2_audit_events`: the run → step → activity envelope tree, keyed by `run_id`.
 
 Audit-write handling depends on the boundary. A CLI RAII guard that fails while unwinding
-warns without masking the command result. A tool implementation that succeeds but cannot
-persist its runtime audit row fails the tool call closed and does not surface a successful
-result ([ORB-10227]). A tool that already failed keeps its implementation error authoritative.
+warns without masking the command result. A tool that already failed keeps its implementation
+error authoritative. A tool that succeeds has already committed its mutation in its own
+store, which is not the global audit database, so the audit row cannot share that
+transaction. Dispatch retries the audit insert once through the store's busy timeout when
+the failure is a lock (`database is locked`). If the row still cannot be written, a
+mutating tool returns success with `audit_warning` naming the committed object
+(`committed.tool`, `committed.id`, `code` `audit_row_unpersisted`) instead of `store_error`.
+Reporting failure would not hide the committed change, and a caller that retries on the
+error creates a duplicate ([ORB-16383]; the earlier fail-closed report was [ORB-10227]).
+A read-only tool still returns its value and only logs the missing audit row.
 
 ## Query audit events
 

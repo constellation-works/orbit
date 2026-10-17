@@ -218,10 +218,10 @@ impl OrbitRuntime {
     /// caller's error. The decision itself is what the caller asked about, and
     /// on a denial the call is already being refused — turning an unwritable
     /// audit store into a *different* failure would only obscure why the
-    /// operation did not run. (This is the opposite trade from
-    /// `finalize_successful_dispatch`, which fails a *successful, committed*
-    /// mutation whose audit row is missing; there, silence would hide a
-    /// completed change.)
+    /// operation did not run. A committed tool mutation makes the other trade
+    /// in `finalize_successful_dispatch`: the call stays a success and names
+    /// the committed object in `audit_warning`, because an error would not
+    /// roll the mutation back.
     fn record_authorization_event(
         &self,
         operation_id: &str,
