@@ -414,6 +414,13 @@ fn transient_prerequisite_read_resumes_only_before_any_mutation() {
                     let (fx, host) = setup(row, NEW);
                     fs::write(fx.forge.join("fault-match"), matched).unwrap();
                     fs::write(fx.forge.join("fault-stderr"), stderr).unwrap();
+                    // Under auto-fix a blocked head's current-gates read makes the
+                    // same snapshot reads before absent-context recovery, and its
+                    // failure only leaves the wait unrefined. Inject the fault
+                    // into recovery's own read, the second one.
+                    if matches!(matched, "/status?" | "requiredStatusChecks") {
+                        fs::write(fx.forge.join("fault-nth"), "2").unwrap();
+                    }
                     if case == "merge_policy" {
                         // Already current and passing: the first read is the merge policy.
                         fs::write(fx.forge.join("base-applied"), "current").unwrap();
