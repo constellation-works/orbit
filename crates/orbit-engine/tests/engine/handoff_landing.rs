@@ -573,6 +573,9 @@ struct ForgeState {
     /// Provider observations for the bounded owner wait, independent of jobs.
     merge_states: std::collections::VecDeque<&'static str>,
     review_decision: Option<&'static str>,
+    /// [ORB-16185] A failed required `CodeQL` aggregate outside any workflow,
+    /// whose one failure annotation names this file.
+    aggregate: Option<&'static str>,
 }
 
 /// A forge whose pull request #42 carries the claimed candidate, with one
@@ -750,10 +753,19 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                     Some(_) => ("COMPLETED", "FAILURE"),
                 };
                 let merge_state = scripted_state.unwrap_or(match conclusion {
+                    _ if state.aggregate.is_some() => "BLOCKED",
                     "SUCCESS" => "CLEAN",
                     "" => "PENDING",
                     _ => "BLOCKED",
                 });
+                let mut rollup = vec![json!({
+                    "__typename": "CheckRun", "name": "clippy", "workflowName": "CI",
+                    "status": status, "conclusion": conclusion,
+                })];
+                if state.aggregate.is_some() {
+                    rollup.push(json!({"__typename": "CheckRun", "name": "CodeQL",
+                        "workflowName": "", "status": "COMPLETED", "conclusion": "FAILURE"}));
+                }
                 Ok(json!({"pull_request": {
                     "number": 42,
                     "url": "https://github.com/owner/repository/pull/42",
@@ -764,21 +776,52 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                     "mergeStateStatus": merge_state,
                     "reviewDecision": state.review_decision.unwrap_or(""),
                     "mergeCommit": state.merged.then(|| json!({"oid": "provider-merge"})),
-                    "statusCheckRollup": [{
-                        "__typename": "CheckRun", "name": "clippy", "workflowName": "CI",
-                        "status": status, "conclusion": conclusion,
-                    }],
+                    "statusCheckRollup": rollup,
                 }}))
             }
-            "pr.required_checks" => Ok(pending_policy(
-                &state.head,
-                if state.jobs.contains_key(&state.head) {
-                    "COMPLETED"
-                } else {
-                    "IN_PROGRESS"
-                },
-                true,
-            )),
+            "pr.required_checks" => {
+                let mut policy = pending_policy(
+                    &state.head,
+                    if state.jobs.contains_key(&state.head) {
+                        "COMPLETED"
+                    } else {
+                        "IN_PROGRESS"
+                    },
+                    true,
+                );
+                if state.aggregate.is_some() {
+                    policy
+                        .pointer_mut(
+                            "/pull_request/commits/nodes/0/commit/statusCheckRollup/contexts/nodes",
+                        )
+                        .and_then(Value::as_array_mut)
+                        .unwrap()
+                        .push(
+                            json!({"__typename":"CheckRun","name":"CodeQL","status":"COMPLETED",
+                            "conclusion":"FAILURE","isRequired":true,"databaseId":7001,
+                            "checkSuite":{"app":{"databaseId":57789},"workflowRun":null}}),
+                        );
+                }
+                Ok(policy)
+            }
+            "ci.check_annotations" => {
+                let path = state.aggregate.expect("an aggregate was scripted");
+                assert_eq!(
+                    (&input["check_run_id"], &input["app_id"], &input["head_sha"]),
+                    (&json!(7001), &json!(57789), &json!(state.head))
+                );
+                Ok(json!({
+                    "repository": "owner/repository", "pr": 42, "head_sha": state.head,
+                    "check_run": {"id": 7001, "name": "CodeQL", "app_id": 57789,
+                        "conclusion": "failure", "annotations_count": 1},
+                    "annotations": [{
+                        "path": path, "start_line": 1, "end_line": 1,
+                        "blob_href": format!("https://github.com/owner/repository/blob/{}/{path}", state.head),
+                        "annotation_level": "failure", "title": "Uncontrolled data used in path expression",
+                        "message": "This path depends on a user-provided value.",
+                    }],
+                }))
+            }
             "ci.commit_jobs" => {
                 let commit = input["commit"].as_str().unwrap();
                 if state
@@ -1872,6 +1915,61 @@ fn a_cached_branch_update_requires_a_fresh_landing_base() {
             assert_eq!(forge.steps().last(), Some(&HandoffLandingStep::Complete));
         },
     );
+}
+
+/// [ORB-16185] A required aggregate check outside any workflow fails with
+/// source annotations while its job-backed checks pass or fail for their
+/// own reasons. Annotations naming only files the candidate changed earn the
+/// one repair (none once spent); annotations on a file it did not change are
+/// inconclusive, and they stop the landing even beside a transient job
+/// failure that alone would have been rerun.
+#[test]
+fn a_required_aggregate_failure_is_classified_from_its_source_annotations() {
+    for (case, clippy, annotated, spent) in [
+        ("candidate", passed(1, 11), "work.txt", false),
+        ("spent", passed(1, 11), "work.txt", true),
+        ("base_file", passed(1, 11), "README.md", false),
+        (
+            "beside_transient",
+            failed(1, 11, NETWORK_FLAKE),
+            "README.md",
+            false,
+        ),
+    ] {
+        let sandbox = tempdir().unwrap();
+        let mut forge = FakeForge::new(sandbox.path(), false);
+        forge.context.automatic_repair_spent = spent;
+        let candidate = forge.context.candidate.candidate.commit.clone();
+        forge.job(&candidate, clippy);
+        forge.state.lock().unwrap().aggregate = Some(annotated);
+
+        land_with(&forge, json!({"max_wait_seconds": 0}))
+            .expect_err("a failed required aggregate stops the landing");
+
+        let repairable = case == "candidate";
+        assert_eq!(
+            forge.steps(),
+            vec![HandoffLandingStep::Stop { repairable }],
+            "{case}"
+        );
+        let reason: String = serde_json::from_str(&forge.last_evidence()).unwrap();
+        let class = if case == "candidate" || case == "spent" {
+            "classified `candidate`"
+        } else {
+            "classified `inconclusive`"
+        };
+        assert!(
+            reason.contains(class)
+                && reason.contains("check run 7001 of app 57789")
+                && reason.contains(&format!(
+                    "- {annotated}:1 [Uncontrolled data used in path expression]"
+                )),
+            "{case}: the stop carries the classification and the source annotations: {reason}"
+        );
+        assert!(forge.sent("ci.rerun_failed").is_empty(), "{case}");
+        assert!(forge.sent("pr.update_branch").is_empty(), "{case}");
+        assert!(forge.sent("pr.merge").is_empty(), "{case}");
+    }
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {

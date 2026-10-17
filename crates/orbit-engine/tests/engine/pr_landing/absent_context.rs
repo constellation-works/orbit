@@ -324,6 +324,47 @@ fn unsupported_or_unproven_emission_never_updates_or_repairs() {
     );
 }
 
+// Capture the action's causal error before a missing marker can obscure it.
+fn refresh_diagnostics(
+    fx: &Fixture,
+    host: &DeliveryHost,
+    mode: &str,
+    now: u64,
+    result: &Result<Value, OrbitError>,
+) -> String {
+    let reservations = orbit_types::workflow::pr_base_update_reservations(&host.history(TASK_ID))
+        .map(|rows| {
+            rows.into_iter()
+                .map(|row| {
+                    json!({
+                        "head": row.head_sha, "base": row.base_sha, "deadline_ms": row.deadline_ms,
+                        "execution": row.execution,
+                    })
+                })
+                .collect::<Vec<_>>()
+        });
+    let calls = fx.forge_calls();
+    let tail = calls
+        .iter()
+        .rev()
+        .take(16)
+        .rev()
+        .map(|call| call.chars().take(512).collect::<String>())
+        .collect::<Vec<_>>();
+    format!(
+        "mode={mode} now={now} action={} mutations={:?} reservation_marker={:?} reservations={reservations:?} provider_calls={} tail={tail:?} delay_entered={} delay_finished={}",
+        match result {
+            Ok(value) => value.to_string(),
+            Err(error) => error.to_string(),
+        },
+        fs::read_to_string(fx.forge.join("mutations")),
+        fs::read_to_string(fx.forge.join("base-reserved")),
+        calls.len(),
+        fx.forge.join("read-delay-entered").exists(),
+        fx.forge.join("read-delay-finished").exists(),
+    )
+}
+
 #[test]
 fn reserved_refresh_observes_lost_unapplied_and_pending_outcomes_without_another_write() {
     isolated(
@@ -342,10 +383,24 @@ fn reserved_refresh_observes_lost_unapplied_and_pending_outcomes_without_another
                 in_fresh_row(sandbox, |row| {
                     let (fx, host) = setup(row, NEW);
                     fs::write(fx.forge.join(mode), "control").unwrap();
+                    if mode == "no-apply" {
+                        fs::write(fx.forge.join("delay-read"), "control").unwrap();
+                    }
                     let mut input = fx.complete_input();
                     input["auto_fix"] = json!(true);
-                    input["max_wait_seconds"] = json!(1);
-                    for now in [1000, 1000, 3000] {
+                    // Reservation expiry is a logical-clock transition, not a
+                    // one-second allowance for native provider/Git processes.
+                    let started = 1_000;
+                    let wait_seconds = 30;
+                    let deadline = started + wait_seconds * 1_000;
+                    input["max_wait_seconds"] = json!(wait_seconds);
+                    input["poll_interval_seconds"] = json!(wait_seconds);
+                    let mut original_reservation = None;
+                    for (phase, now) in [
+                        ("initial", started),
+                        ("replay", started),
+                        ("expired resume", deadline + 1),
+                    ] {
                         let result = orbit_engine::test_support::with_prerequisite_clock(
                             move || now,
                             |_, _| {},
@@ -356,12 +411,48 @@ fn reserved_refresh_observes_lost_unapplied_and_pending_outcomes_without_another
                                 )
                             },
                         );
-                        assert!(result.is_err(), "{mode}: {result:?}");
-                        assert_eq!(
-                            fs::read_to_string(fx.forge.join("mutations")).unwrap(),
-                            "update\n",
-                            "one write across polls, replay and expired resume: {mode}"
+                        let diagnostics = format!(
+                            "phase={phase} {}",
+                            refresh_diagnostics(&fx, &host, mode, now, &result)
                         );
+                        assert!(result.is_err(), "{diagnostics}");
+                        assert_eq!(
+                            fs::read_to_string(fx.forge.join("mutations")).unwrap_or_else(
+                                |error| panic!("{diagnostics}; marker read: {error}")
+                            ),
+                            "update\n",
+                            "one write across polls, replay and expired resume: {diagnostics}"
+                        );
+                        let reservations = orbit_types::workflow::pr_base_update_reservations(
+                            &host.history(TASK_ID),
+                        )
+                        .unwrap_or_else(|error| panic!("{diagnostics}; reservation: {error}"));
+                        assert_eq!(reservations.len(), 1, "{diagnostics}");
+                        let reservation = &reservations[0];
+                        assert_eq!(reservation.deadline_ms, deadline, "{diagnostics}");
+                        if let Some(original) = &original_reservation {
+                            assert_eq!(
+                                reservation, original,
+                                "reservation cannot renew: {diagnostics}"
+                            );
+                        } else {
+                            original_reservation = Some(reservation.clone());
+                        }
+                        if phase == "expired resume" {
+                            assert!(
+                                result
+                                    .unwrap_err()
+                                    .to_string()
+                                    .contains("completion deadline expired"),
+                                "the original reservation deadline refuses resume: {diagnostics}"
+                            );
+                        }
+                        if mode == "no-apply" {
+                            assert!(
+                                fx.forge.join("read-delay-finished").exists(),
+                                "controlled slow read finishes before reservation: {diagnostics}"
+                            );
+                        }
                         assert!(
                             pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).is_empty(),
                             "no code agent: {mode}"
@@ -459,8 +550,14 @@ fn expired_refresh_still_settles_an_exact_existing_merge_without_another_provide
             let (fx, host) = setup(sandbox, NEW);
             let host = accepted_landing(&fx, host);
             fs::write(fx.forge.join("gates-pending"), "pending").unwrap();
-            let input =
-                json!({"handoff_id":"accepted-fixture","run_id":RUN_ID,"max_wait_seconds":1});
+            fs::write(fx.forge.join("delay-read"), "control").unwrap();
+            let started = 1_000;
+            let wait_seconds = 30;
+            let deadline = started + wait_seconds * 1_000;
+            let input = json!({
+                "handoff_id":"accepted-fixture","run_id":RUN_ID,
+                "max_wait_seconds":wait_seconds,"poll_interval_seconds":wait_seconds,
+            });
             let land = || {
                 execute_deterministic_action(
                     &host,
@@ -473,11 +570,28 @@ fn expired_refresh_still_settles_an_exact_existing_merge_without_another_provide
                 )
             };
             let first = orbit_engine::test_support::with_prerequisite_clock(
-                || 1000,
+                move || started,
                 |_, _| {},
                 || orbit_engine::test_support::with_vcs_retry_wait(|_| {}, land),
             );
-            assert!(first.is_err());
+            let diagnostics =
+                refresh_diagnostics(&fx, &host.host, "gates-pending", started, &first);
+            assert!(first.is_err(), "{diagnostics}");
+            assert_eq!(
+                fs::read_to_string(fx.forge.join("mutations"))
+                    .unwrap_or_else(|error| panic!("{diagnostics}; marker read: {error}")),
+                "update\n",
+                "the initial action reserved and requested the update: {diagnostics}"
+            );
+            let reservations =
+                orbit_types::workflow::pr_base_update_reservations(&host.host.history(TASK_ID))
+                    .unwrap_or_else(|error| panic!("{diagnostics}; reservation: {error}"));
+            assert_eq!(reservations.len(), 1, "{diagnostics}");
+            assert_eq!(reservations[0].deadline_ms, deadline, "{diagnostics}");
+            assert!(
+                fx.forge.join("read-delay-finished").exists(),
+                "controlled slow read finishes before reservation: {diagnostics}"
+            );
             // The fixture provider completes the already requested external work
             // after the owner's bounded wait. No claim/receipt is edited.
             fs::remove_file(fx.forge.join("gates-pending")).unwrap();
@@ -507,10 +621,13 @@ fn expired_refresh_still_settles_an_exact_existing_merge_without_another_provide
                 4096,
             )
             .unwrap();
-            assert!(merged.status.success());
-            let settled =
-                orbit_engine::test_support::with_prerequisite_clock(|| 3000, |_, _| {}, land)
-                    .unwrap();
+            assert!(merged.status.success(), "{diagnostics}; merge: {merged:?}");
+            let settled = orbit_engine::test_support::with_prerequisite_clock(
+                move || deadline + 1,
+                |_, _| {},
+                land,
+            )
+            .unwrap();
             assert_eq!(settled["phase"], "landed");
             assert_eq!(
                 fs::read_to_string(fx.forge.join("mutations")).unwrap(),

@@ -33,6 +33,20 @@ pub struct SourceRepairBinding {
     /// A stopped replacement attempt explicitly retained by this recovery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub superseded: Option<SourceRepairSuccessor>,
+    /// The original run whose worktree checkpoints a generic-resume source
+    /// reused, when that source's own final recovery committed the repair its
+    /// failure hook published. Absent for every other source shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint_owner: Option<SourceRepairOwner>,
+}
+
+/// Exact original checkpoint owner of a resumed source, bound immutably.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceRepairOwner {
+    pub run_id: String,
+    /// Digest of the owner's run, steps, checkpoints and definition.
+    pub digest: String,
 }
 
 /// Exact newer binding acknowledged when recovering an older publication.

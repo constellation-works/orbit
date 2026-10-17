@@ -110,12 +110,29 @@ impl GateContext {
             .unwrap_or_else(|| "main".to_string());
 
         let claim_id = claimed_leaf_claim(runtime, &run_id, &task_ids)?;
+        // A generic resume keeps the task bound to the run that created the
+        // reused worktree, which delivery steps name as `job_run_id`. Only a
+        // same-job retry descendant of that owner reviews on its behalf.
+        let checkpoint_owner = input
+            .get("job_run_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|owner| !owner.is_empty() && *owner != run_id);
+        let resumed_owner = match checkpoint_owner {
+            Some(owner) if claim_id.is_none() && resumes_owner(runtime, &run_id, owner)? => {
+                Some(owner)
+            }
+            _ => None,
+        };
         let mut tasks = Vec::with_capacity(task_ids.len());
         for task_id in &task_ids {
             // A claimed leaf reads the owner's task through its binding; the
             // claim, checked above, is what ties that task to this run.
             let task = runtime.get_task(task_id)?;
-            if claim_id.is_none() && task.job_run_id.as_deref() != Some(run_id.as_str()) {
+            if claim_id.is_none()
+                && task.job_run_id.as_deref() != Some(run_id.as_str())
+                && (resumed_owner.is_none() || task.job_run_id.as_deref() != resumed_owner)
+            {
                 return Err(OrbitError::Execution(format!(
                     "review gate: task '{task_id}' no longer belongs to run '{run_id}'"
                 )));
@@ -217,6 +234,31 @@ fn claimed_leaf_claim(
 /// Longest resume chain followed back to its first run; a longer chain keys
 /// the lineage on the oldest run reached.
 const MAX_RESUME_CHAIN: usize = 64;
+
+/// Whether `run_id` resumes `owner` through same-job `retry_source_run_id`
+/// links, within the bounded resume chain.
+fn resumes_owner(runtime: &OrbitRuntime, run_id: &str, owner: &str) -> Result<bool, OrbitError> {
+    let Some(mut current) = runtime.get_job_run_backend(run_id)? else {
+        return Ok(false);
+    };
+    let job_id = current.job_id.clone();
+    for _ in 0..MAX_RESUME_CHAIN {
+        let Some(source) = current.retry_source_run_id.clone() else {
+            return Ok(false);
+        };
+        let Some(parent) = runtime.get_job_run_backend(&source)? else {
+            return Ok(false);
+        };
+        if parent.job_id != job_id {
+            return Ok(false);
+        }
+        if parent.run_id == owner {
+            return Ok(true);
+        }
+        current = parent;
+    }
+    Ok(false)
+}
 
 /// The first run of the resume chain `run_id` belongs to. A missing source
 /// run ends the chain at the last run found.

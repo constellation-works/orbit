@@ -308,6 +308,7 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
                 && !tagged_descendant
                 && !head_matches_final_recovery(
                     host,
+                    input,
                     batch_id,
                     &task.id,
                     &workspace_path,

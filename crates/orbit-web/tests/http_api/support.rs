@@ -215,17 +215,30 @@ impl Fixture {
 
     /// A server whose `PATH` starts with `bin`, so its `ssh` is a stub there.
     pub(super) fn server_with_path(&self, operator: bool, bin: &Path) -> Server {
+        self.server_with_path_envs(operator, bin, &[])
+    }
+
+    /// [`Self::server_with_path`] plus environment the server child inherits.
+    pub(super) fn server_with_path_envs(
+        &self,
+        operator: bool,
+        bin: &Path,
+        extra: &[(&str, &std::ffi::OsStr)],
+    ) -> Server {
         let path = std::env::join_paths(std::iter::once(bin.to_path_buf()).chain(
             std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
         ))
         .unwrap();
+        let mut env = Vec::with_capacity(extra.len() + 1);
+        env.push(("PATH", path.as_os_str()));
+        env.extend_from_slice(extra);
         self.server_impl_with_env(
             operator,
             false,
             false,
             &self.path("process.log"),
             None,
-            &[("PATH", path.as_os_str())],
+            &env,
         )
     }
 

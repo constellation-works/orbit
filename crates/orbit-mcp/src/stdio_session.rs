@@ -52,6 +52,28 @@ pub const RESUME_ENV: &str = "ORBIT_MCP_RESUME";
 
 /// How often an idle session checks for a replacement or a pending switch.
 const LIFECYCLE_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Debug-build fixture only. Milliseconds between stdio lifecycle checks.
+/// Release builds keep the two-second budget whatever this says. Values
+/// outside 20ms..=2s are ignored so a fixture can only shorten the tick.
+pub const LIFECYCLE_INTERVAL_ENV: &str = "ORBIT_TEST_MCP_LIFECYCLE_INTERVAL_MS";
+
+fn lifecycle_interval_from_env(value: Option<&str>, debug_build: bool) -> Duration {
+    if debug_build
+        && let Some(milliseconds) = value.and_then(|raw| raw.parse::<u64>().ok())
+        && (20..=2_000).contains(&milliseconds)
+    {
+        return Duration::from_millis(milliseconds);
+    }
+    LIFECYCLE_INTERVAL
+}
+
+fn lifecycle_interval() -> Duration {
+    lifecycle_interval_from_env(
+        std::env::var(LIFECYCLE_INTERVAL_ENV).ok().as_deref(),
+        cfg!(debug_assertions),
+    )
+}
 /// A partial line longer than this is not handed over; the session keeps
 /// serving and retries at a later idle point.
 const MAX_CARRYOVER: usize = 32 * 1024;
@@ -317,7 +339,7 @@ async fn serve_handing_over(
     };
     let cancel = running.cancellation_token();
     let mut service = tokio::spawn(running.waiting());
-    let mut interval = tokio::time::interval(LIFECYCLE_INTERVAL);
+    let mut interval = tokio::time::interval(lifecycle_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {

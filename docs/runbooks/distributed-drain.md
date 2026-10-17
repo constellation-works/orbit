@@ -1226,6 +1226,16 @@ one. From then on:
     evidence carries the failed step's signature and log excerpt for the
     repair leaf.
 
+  A failed required check that no failed job answers, such as a provider
+  app's aggregate beside passing analysis jobs, is classified too, so a job
+  failure beside it never hides it. Its evidence is its own failure
+  annotations, read as `--auto-fix` reads them (see
+  [PR auto-fix repairs](../CONFIG.md#pr-auto-fix-repairs)). It is
+  **candidate** only when every annotated source file is one the candidate
+  changed from its base. Annotations on other files, or annotations that
+  cannot be read or validated, are **inconclusive**. A failed optional check
+  that no job answers keeps its previous handling.
+
   Each of the rerun, the branch update and the repair is spent once. A
   failure past that budget, or one the landing cannot classify (its jobs or
   log are unreadable), stops the landing with the task in `review` and the
