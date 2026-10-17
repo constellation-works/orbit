@@ -3781,9 +3781,9 @@ export function renderTasks(tasks, context) {
   }
 
   const filtered = filterTasks(tasks, context);
-  // Rows keep a fixed-width action column so titles and selects line up between
-  // groups; when no visible row has an action (a Done-only view) the whole
-  // column is dead space, so the list gives it back as one.
+  // Rows keep a fixed-width action column so actions line up between groups;
+  // when no visible row has an action (a Done-only view) the whole column is
+  // dead space, so the list gives it back as one.
   body.dataset.quickActions = filtered.some(hasQuickAction) ? "some" : "none";
   body.dataset.quickActionPair = String(filtered.some(task => task.status === "review" && pullRequestLink(task)));
   $("tasks-count").textContent = formatTaskCount(filtered.length, tasks.length, tasksMeta(context));
@@ -3946,8 +3946,12 @@ export function renderTasks(tasks, context) {
       }
     }
     if (rows.length === 0) groupNodes.push(buildFilteredEmpty(status));
+    // A card whose rows carry no action (Blocked) gives the action column
+    // back, so its crew and host columns sit at the card's right edge.
+    const noQuick = !group.some(hasQuickAction);
     groupNodes.forEach((node, index) => {
       node.dataset.group = status;
+      node.classList.toggle("no-quick", noQuick);
       node.classList.toggle("group-end", index === groupNodes.length - 1);
     });
     nodes.push(...groupNodes);
