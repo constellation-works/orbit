@@ -4,6 +4,7 @@ use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::plugin::{PluginProvenance, PluginSecretUpdateStatus};
 use crate::telemetry::audit_actor::{CanonicalActor, canonical_actor_for_role_label};
@@ -174,6 +175,50 @@ impl AuditEvent {
     pub fn actor(&self) -> CanonicalActor {
         canonical_actor_for_role_label(&self.role)
     }
+}
+
+/// The audit fields every JSON projection shares, under their wire names. Each
+/// surface appends only the keys it alone carries, so the shared keys keep one
+/// order and one encoding across the CLI and the dashboard API.
+pub fn audit_event_base_json(event: &AuditEvent) -> Value {
+    json!({
+        "id": event.id,
+        "execution_id": event.execution_id,
+        "timestamp": event.timestamp.to_rfc3339(),
+        "command": event.command,
+        "subcommand": event.subcommand,
+        "tool_name": event.tool_name,
+        "target_type": event.target_type,
+        "target_id": event.target_id,
+        "role": event.role,
+        "status": event.status.to_string(),
+        "exit_code": event.exit_code,
+        "duration_ms": event.duration_ms,
+        "working_directory": event.working_directory,
+        "arguments_json": event.arguments_json,
+        "stdout_truncated": event.stdout_truncated,
+        "stderr_truncated": event.stderr_truncated,
+        "error_message": event.error_message,
+        "host": event.host,
+        "pid": event.pid,
+        "session_id": event.session_id,
+        "workspace_id": event.workspace_id,
+        "caller_machine_id": event.caller_machine_id,
+        "caller_machine_name": event.caller_machine_name,
+        "process_machine_id": event.process_machine_id,
+        "process_machine_name": event.process_machine_name,
+        "transport": event.transport,
+        "trace_id": event.trace_id,
+        "caller_ip": event.caller_ip,
+        "effective_capabilities": event.effective_capabilities,
+        "origin_session_id": event.origin_session_id,
+        "mcp_call_id": event.mcp_call_id,
+        "lease_id": event.lease_id,
+        "task_id": event.task_id,
+        "job_run_id": event.job_run_id,
+        "activity_id": event.activity_id,
+        "step_index": event.step_index,
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
