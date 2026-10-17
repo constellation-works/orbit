@@ -24,6 +24,7 @@ pub mod agent_rules;
 mod diagnostics;
 mod doctor;
 pub mod hosts;
+pub mod log_format;
 pub mod mcp_clients;
 mod migrate;
 mod registry;
