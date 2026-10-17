@@ -9,6 +9,12 @@ base=$(cat "$forge/pr-base")
 export GIT_AUTHOR_NAME=Forge GIT_AUTHOR_EMAIL=forge@example.invalid
 export GIT_COMMITTER_NAME=Forge GIT_COMMITTER_EMAIL=forge@example.invalid
 printf '%s\n' "$*" >> "$forge/calls"
+# One injected provider failure: the first command naming fault-match.
+if [ -f "$forge/fault-match" ] && [ ! -f "$forge/fault-hit" ]; then
+    case "$*" in *"$(cat "$forge/fault-match")"*)
+        touch "$forge/fault-hit"; cat "$forge/fault-stderr" >&2; exit 1 ;;
+    esac
+fi
 head=$(git --git-dir="$remote" rev-parse "refs/heads/$branch")
 base_sha=$(git --git-dir="$remote" rev-parse "refs/heads/$base")
 repo="{\"id\":500,\"full_name\":\"$slug\",\"url\":\"https://api.github.com/repos/$slug\"}"
