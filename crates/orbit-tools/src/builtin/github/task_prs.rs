@@ -31,6 +31,22 @@ pub fn open_pull_requests() -> ExecRequest {
     )
 }
 
+/// Pull request `number` with its state and the fields an open one is
+/// matched by.
+pub fn view_pull_request(number: u64) -> ExecRequest {
+    super::gh_exec_request(
+        vec![
+            "pr".into(),
+            "view".into(),
+            number.to_string(),
+            "--json".into(),
+            format!("state,{OPEN_PR_FIELDS}"),
+        ],
+        None,
+        TIMEOUT_DEFAULT_MS,
+    )
+}
+
 /// The login `gh` is authenticated as.
 pub fn authenticated_login() -> ExecRequest {
     super::gh_exec_request(

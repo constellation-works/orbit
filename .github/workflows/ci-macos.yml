@@ -139,7 +139,14 @@ jobs:
       # Native ps must execute here: the nested-agent denial path is replayed
       # by the claim host, while this job asserts real orphan-group cleanup.
       - name: Run orphaned-fixture process tests
-        run: python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-common --test test_env --locked
+        run: |
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-common --locked --test common orphaned_fixture_children::
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-common --locked --test common durability_syncs::
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-common --locked --test common reexec_guard_rejects_missing_ignored_and_failed_children -- --exact
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-common --locked --test common inherited_authority_is_removed_from_a_child_command -- --exact
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-common --locked --test common a_fixture_overrun_names_its_phase_and_progress -- --exact
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-common --locked --test common a_fixture_that_keeps_advancing_outlives_its_stall_deadline -- --exact
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-common --locked --test common managed_run_env_is_absent_in_a_test_process_the_parent_exported_it_to -- --exact
 
       - name: Run macOS proc.spawn regressions
         run: |

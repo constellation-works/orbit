@@ -338,6 +338,7 @@ impl PullDrain<'_> {
                                     candidate: None,
                                     provider_limit: false,
                                     provider_refusal: false,
+                                    owner_busy: false,
                                 });
                                 record = self
                                     .record_settlement(&record, ClaimMutation::Release(evidence))?;

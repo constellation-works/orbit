@@ -12,20 +12,49 @@ use super::{BASE_MODIFIED_REFUSAL, DEFAULT_TIMEOUT_MS, SLOW_TIMEOUT_MS};
 /// condition was not what failed.
 const BASE_MODIFIED_REASON: &str = "Base branch was modified. Review and try the merge again.";
 
+/// Upper bound on pull requests one listing of every open pull request reads.
+const PR_LIST_OPEN_LIMIT: &str = "500";
+
+/// The pull requests on one head branch in `state`.
 pub(super) fn pr_list(input: &Value) -> Result<Value, OrbitError> {
     let head = required_string(input, "head")?;
     let state = optional_string(input, "state").unwrap_or("open");
+    list_pull_requests(
+        input,
+        &[
+            "--state",
+            state,
+            "--head",
+            head,
+            "--json",
+            "number,title,headRefName,author",
+        ],
+    )
+}
+
+/// Every open pull request with its body, which is how a run finds its
+/// tasks' earlier delivery pull requests. Bounded by [`PR_LIST_OPEN_LIMIT`].
+pub(super) fn pr_list_open(input: &Value) -> Result<Value, OrbitError> {
+    list_pull_requests(
+        input,
+        &[
+            "--state",
+            "open",
+            "--limit",
+            PR_LIST_OPEN_LIMIT,
+            "--json",
+            "number,title,headRefName,author,body",
+        ],
+    )
+}
+
+fn list_pull_requests(input: &Value, filters: &[&str]) -> Result<Value, OrbitError> {
     let workspace_path = required_string(input, "workspace_path")?;
-    let args = vec![
-        "pr".to_string(),
-        "list".to_string(),
-        "--state".to_string(),
-        state.to_string(),
-        "--head".to_string(),
-        head.to_string(),
-        "--json".to_string(),
-        "number,title,headRefName,author".to_string(),
-    ];
+    let args = ["pr", "list"]
+        .iter()
+        .chain(filters)
+        .map(|arg| (*arg).to_string())
+        .collect::<Vec<_>>();
     let result = execute_with_transient_retry(
         "gh",
         &args,

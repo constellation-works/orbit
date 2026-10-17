@@ -251,6 +251,10 @@ pub(in crate::executor::automation::vcs) struct PullRequestSummary {
     /// The head branch exactly as reported: an empty name is a branch that
     /// does not match, while an absent one is unreadable.
     pub(in crate::executor::automation::vcs) head_branch: Option<String>,
+    /// The author's login, when the listing reports one.
+    pub(in crate::executor::automation::vcs) author: Option<String>,
+    /// The description; only an unfiltered listing reads it.
+    pub(in crate::executor::automation::vcs) body: Option<String>,
 }
 
 impl PullRequestSummary {
@@ -273,6 +277,14 @@ impl PullRequestSummary {
                 number: pull_request.get("number").and_then(number_selector),
                 head_branch: pull_request
                     .get("headRefName")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                author: pull_request
+                    .pointer("/author/login")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                body: pull_request
+                    .get("body")
                     .and_then(Value::as_str)
                     .map(ToOwned::to_owned),
             })

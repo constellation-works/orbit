@@ -360,6 +360,8 @@ export function renderRunDetailMeta() {
   if (crews) wrap.appendChild(crews);
   const unsetEnv = buildUnsetEnvPass(run.env_pass_unset);
   if (unsetEnv) wrap.appendChild(unsetEnv);
+  const passWarning = buildPassWarning(run);
+  if (passWarning) wrap.appendChild(passWarning);
   const waiting = buildStillWaiting(run.drain_last_pass || null, run);
   if (waiting) wrap.appendChild(waiting);
   const children = buildChildDispatches(run);
@@ -563,9 +565,13 @@ function buildStillWaiting(pass, run = {}) {
   const excludedTotal = Math.max(pass.excluded_total || 0, excluded.length);
   if (queued === 0 && deferredTotal === 0 && excludedTotal === 0) return null;
   const panel = el("div", { class: "child-dispatch-panel still-waiting" });
-  const answered = pass.waiting_recorded_at ? ` (the owner answered ${fmtAbsTime(pass.waiting_recorded_at)})` : "";
-  const reasonTaskTotal = deferredTotal + excludedTotal;
   const pullDrain = run.job_id === "workspace_pull_pipeline";
+  // A local drain dates its lists only when it deferred a pass on a busy
+  // lock, which keeps the last completed pass's lists.
+  const answered = !pass.waiting_recorded_at ? ""
+    : pullDrain ? ` (the owner answered ${fmtAbsTime(pass.waiting_recorded_at)})`
+    : ` (as of the last completed pass at ${fmtAbsTime(pass.waiting_recorded_at)})`;
+  const reasonTaskTotal = deferredTotal + excludedTotal;
   const additionalAdmissible = pullDrain ? queued : Math.max(0, queued - deferredTotal);
   const additionalSummary = additionalAdmissible === 1
     ? "1 additional admissible task was not started and is not listed below"
@@ -602,6 +608,32 @@ function buildStillWaiting(pass, run = {}) {
       text: `idle: ${keptOff} backlog task(s) kept off this host for ${pass.consecutive_idle_passes} consecutive passes (${causes})`,
     }));
   }
+  return panel;
+}
+
+// A drain still live whose last admission pass failed: a local drain's pass
+// deferred on a busy lock (retried next pass), or a pull drain's failed pass.
+// A failed run reports the same error in its failure box instead, and a
+// cancelled or finished one has no next pass.
+// Mirrors the `Admission pass deferred:` / `Pull pass warning:` line of
+// `orbit run show`.
+function buildPassWarning(run) {
+  const pass = run.drain_last_pass;
+  if (!pass || !pass.last_pass_error || !LIVE_RUN_STATES.has(run.state)) return null;
+  const pullDrain = run.job_id === "workspace_pull_pipeline";
+  const failures = pass.consecutive_pass_failures || 0;
+  const what = pullDrain ? "Pull pass warning: " : "Admission pass deferred: ";
+  const count = pullDrain
+    ? `${failures} consecutive failed ${failures === 1 ? "pass" : "passes"}`
+    : `${failures} consecutive deferred ${failures === 1 ? "pass" : "passes"}; the next pass retries`;
+  const panel = el("div", { class: "child-dispatch-panel pass-warning" });
+  panel.appendChild(el("div", { class: "child-dispatch-notice" }, [
+    el("strong", { text: what }),
+    el("span", { text: `${count} (last pass ${fmtAbsTime(pass.recorded_at)})` }),
+  ]));
+  const message = el("pre", { class: "run-failure-message mono" });
+  appendLinkified(message, pass.last_pass_error, run.workspace_id || getWorkspace());
+  panel.appendChild(message);
   return panel;
 }
 

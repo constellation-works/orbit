@@ -1,6 +1,7 @@
 //! [ORB-15308] A re-claimed task whose earlier claim already opened a pull
 //! request republishes through that pull request, or closes it for the new
-//! one, and never leaves two open.
+//! one, and never leaves two open. A fresh attempt that resumes nothing
+//! closes the task's earlier open pull requests the same way.
 //!
 //! Each test drives the shipped `candidate_resume`, `git_push` and `pr_open`
 //! actions in order, as the claimed PR leaf runs them, through
@@ -20,7 +21,7 @@ use std::process::Command;
 
 use chrono::Utc;
 use orbit_common::{NotFoundKind, OrbitError, test_env};
-use orbit_engine::{TaskAutomationUpdate, execute_deterministic_action};
+use orbit_engine::{PrConfig, TaskAutomationUpdate, execute_deterministic_action};
 use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 
@@ -37,6 +38,71 @@ const EARLIER: &str = "orbit/T-REUSE-aaaaaaaa";
 /// The branch the re-claim's worktree starts on, named for its own run.
 const OURS: &str = "orbit/T-REUSE-bbbbbbbb";
 const PRIOR_PR: &str = "41";
+
+/// A fresh attempt of a re-admitted task: the earlier attempt's `[BLOCKED]`
+/// failure-handoff pull request #41 is still open, and the new run resumes
+/// no candidate, so nothing names #41 to it. Its `pr_open` opens the new pull
+/// request and closes #41 with a comment naming it, so the task has exactly
+/// one open pull request. A human's pull request on the task's branch prefix,
+/// another task's pull request and a merged one are left alone, and a retried
+/// `pr_open` closes nothing more.
+fn a_fresh_attempt_closes_the_tasks_earlier_open_pull_request() {
+    isolated(
+        "a_fresh_attempt_closes_the_tasks_earlier_open_pull_request",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            fx.describe_pr(PRIOR_PR, None, &format!("Blocked delivery of {TASK_ID}."));
+            fx.add_pr(
+                "50",
+                "orbit/T-REUSE-cccccccc",
+                "OPEN",
+                Some("someone"),
+                TASK_ID,
+            );
+            fx.add_pr("51", "orbit/T-OTHER-dddddddd", "OPEN", None, "T-OTHER");
+            fx.add_pr("52", "orbit/T-REUSE-eeeeeeee", "MERGED", None, TASK_ID);
+            let host = Host::closing_superseded(&fx.repo);
+
+            fs::write(fx.claim.join("fresh.txt"), "fresh attempt\n").unwrap();
+            git(&fx.claim, &["add", "fresh.txt"]);
+            git(&fx.claim, &["commit", "-q", "-m", "fresh attempt"]);
+            let pushed = action(&host, "git_push", &fx.push_input(OURS, &Value::Null)).unwrap();
+            assert_eq!(pushed["decision"], "performed_create", "{pushed}");
+
+            let opened = action(&host, "pr_open", &fx.open_input(OURS, &Value::Null)).unwrap();
+            assert_eq!(opened["decision"], "performed", "{opened}");
+            let replacement = opened["pr_number"].as_str().unwrap().to_string();
+            assert!(opened["superseded_pull_request"].is_null(), "{opened}");
+            let closed = opened["closed_stale_pull_requests"].as_array().unwrap();
+            assert_eq!(closed.len(), 1, "{opened}");
+            assert_eq!(closed[0]["number"], PRIOR_PR, "{opened}");
+            assert_eq!(closed[0]["decision"], "closed", "{opened}");
+            assert!(
+                !fx.pr_file(PRIOR_PR, "comment").is_empty(),
+                "the earlier pull request is closed with a comment"
+            );
+            let mut expected = vec!["50".to_string(), "51".to_string(), replacement];
+            expected.sort();
+            assert_eq!(
+                fx.open_prs(),
+                expected,
+                "only the task's earlier Orbit pull request is closed"
+            );
+            assert_eq!(fx.pr_file("52", "state"), "MERGED");
+            assert_eq!(
+                fx.remote_tip(EARLIER),
+                fx.earlier_head,
+                "the closed pull request's branch is kept"
+            );
+
+            let again = action(&host, "pr_open", &fx.open_input(OURS, &Value::Null)).unwrap();
+            assert_eq!(again["decision"], "reused", "{again}");
+            assert_eq!(again["closed_stale_pull_requests"], json!([]), "{again}");
+            let closes = fx.calls().iter().filter(|call| *call == "pr close").count();
+            assert_eq!(closes, 1, "{:?}", fx.calls());
+        },
+    );
+}
 
 /// The earlier claim pushed its candidate and opened #41, then failed in its
 /// before-landing review. The re-claim resumes it on a moved base: its
@@ -578,6 +644,25 @@ impl Fixture {
         })
     }
 
+    /// Gives a seeded pull request an author (when not Orbit's) and a body.
+    fn describe_pr(&self, number: &str, author: Option<&str>, body: &str) {
+        let dir = self.forge.join("prs").join(number);
+        if let Some(author) = author {
+            fs::write(dir.join("author"), author).unwrap();
+        }
+        fs::write(dir.join("body"), body).unwrap();
+    }
+
+    /// Seeds a pull request the earlier attempt did not open.
+    fn add_pr(&self, number: &str, head: &str, state: &str, author: Option<&str>, names: &str) {
+        let dir = self.forge.join("prs").join(number);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("head"), head).unwrap();
+        fs::write(dir.join("base"), BASE).unwrap();
+        fs::write(dir.join("state"), state).unwrap();
+        self.describe_pr(number, author, &format!("Delivery of {names}."));
+    }
+
     fn remote_tip(&self, branch: &str) -> String {
         git(
             &self.forge.join("remote.git"),
@@ -611,12 +696,23 @@ impl Fixture {
 /// The task the delivery actions read; everything else is the engine's own.
 struct Host {
     repo: PathBuf,
+    /// `pr.close_on_terminal`, which also closes a task's earlier delivery
+    /// pull requests when a run publishes its own.
+    close_superseded: bool,
 }
 
 impl Host {
     fn new(repo: &Path) -> Self {
         Self {
             repo: repo.to_path_buf(),
+            close_superseded: false,
+        }
+    }
+
+    fn closing_superseded(repo: &Path) -> Self {
+        Self {
+            close_superseded: true,
+            ..Self::new(repo)
         }
     }
 }
@@ -671,6 +767,13 @@ impl orbit_engine::test_support::NullRuntimeHost for Host {
     fn repo_root(&self) -> Result<String, OrbitError> {
         Ok(self.repo.to_string_lossy().into_owned())
     }
+
+    fn pr_config(&self) -> PrConfig {
+        PrConfig {
+            close_superseded: self.close_superseded,
+            ..PrConfig::default()
+        }
+    }
 }
 
 fn action(host: &Host, name: &str, input: &Value) -> Result<Value, OrbitError> {
@@ -689,7 +792,8 @@ fn path_str(path: &Path) -> &str {
 }
 
 /// The `gh` surface the provider adapter calls, over any number of pull
-/// requests: `prs/<number>/{head,base,state,comment}` under the forge.
+/// requests: `prs/<number>/{head,base,state,comment}` under the forge, with
+/// an optional `author` (else `orbit`) and single-line `body`.
 const FAKE_GH: &str = r#"#!/bin/sh
 set -eu
 forge='__FORGE__'
@@ -709,14 +813,20 @@ url() { printf 'https://github.com/orbit/test/pull/%s' "$1"; }
 
 case "$1 ${2:-}" in
     "pr list")
+        # With `--head`, the open pull requests on that branch; without it,
+        # every open one with its body.
         head=$(flag --head "$@")
         printf '['
         sep=
         for dir in "$forge"/prs/*; do
             [ "$(cat "$dir/state")" = OPEN ] || continue
-            [ "$(cat "$dir/head")" = "$head" ] || continue
-            printf '%s{"number":%s,"title":"Delivery","headRefName":"%s","author":{"login":"orbit"}}' \
-                "$sep" "${dir##*/}" "$head"
+            [ -z "$head" ] || [ "$(cat "$dir/head")" = "$head" ] || continue
+            author=orbit
+            [ ! -f "$dir/author" ] || author=$(cat "$dir/author")
+            body=
+            [ ! -f "$dir/body" ] || body=$(cat "$dir/body")
+            printf '%s{"number":%s,"title":"Delivery","headRefName":"%s","author":{"login":"%s"},"body":"%s"}' \
+                "$sep" "${dir##*/}" "$(cat "$dir/head")" "$author" "$body"
             sep=,
         done
         printf ']\n' ;;
@@ -872,6 +982,10 @@ fn published_lease_contracts_2() {
             (
                 "a_fast_forward_does_not_move_an_adopted_branch_rewound_after_observation",
                 a_fast_forward_does_not_move_an_adopted_branch_rewound_after_observation,
+            ),
+            (
+                "a_fresh_attempt_closes_the_tasks_earlier_open_pull_request",
+                a_fresh_attempt_closes_the_tasks_earlier_open_pull_request,
             ),
         ]);
     });

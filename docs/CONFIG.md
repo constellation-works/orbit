@@ -945,6 +945,15 @@ it requires an operator session and is unavailable on pull replicas. The receipt
 and persisted run input carry the chosen repair authority. This control uses the
 same watcher, crew pool and attempt ledger described below.
 
+A delivery leaf whose worker dies after it opened its pull request and
+promoted its task to `review` does not leave that pull request unwatched. The
+owner drain's next pass resumes the interrupted leaf from its checkpoints, once
+(a resumed attempt that dies again is left to an operator), when it holds the same `--complete` and `--auto-fix` grants
+the leaf was started with, so the watcher repairs the same pull request and
+head under the run's retry lineage and attempt ledger. The resumed run's crew
+comes from the leaf's own input, not the adopting drain's `--allow-crew`. See
+[adopting a dead leaf's pull request](runbooks/stuck-job-runs.md#a-delivery-leaf-that-died-after-opening-its-pull-request).
+
 The crew comes from the existing pool resolution, in this order:
 
 1. `--allow-crew` restricts which crews the draw may pick, as for every
@@ -1262,10 +1271,23 @@ At claim admission the owner captures `review.before_pr` and `review.before_land
 | Key | Default | What it does |
 |---|---|---|
 | `pr.task_url_template` | unset | URL template linking a task ID in PR descriptions. |
-| `pr.close_on_terminal` | `true` | When a task lands (`done`), is rejected or is archived, close its open Orbit-authored delivery and `[BLOCKED]` preservation PRs (rules below). `false` disables. |
+| `pr.close_on_terminal` | `true` | Close a task's open Orbit-authored delivery and `[BLOCKED]` preservation PRs when it lands (`done`), is rejected or archived, when an operator or agent moves it back to `backlog` or `someday`, and when a newer delivery attempt opens its own PR (rules below). `false` disables all of these. |
 | `pr.delivery_authors` | `[]` | Forge logins (case-insensitive) whose PRs count as Orbit-authored. Empty: the login `gh` is authenticated as on this machine. Add a follower's login if it opens PRs this owner has not accepted as a handoff. |
 
-`pr.close_on_terminal` closes a PR only if its head branch is `orbit/<TASK-ID>-…`, its body names the task, and it was opened by a `pr.delivery_authors` login or is the delivery PR of an accepted follower handoff. Human PRs and other tasks' PRs are never touched, and branches are never deleted. On `done` the landing PR stays open: any `#N` the done note names, or, when the note names none and the task leaves `review`, the PR it was reviewed through. The closing comment names the landing (the done note, such as `delivered by pull request #N merged as <sha>` or `already landed as <sha>`) or the state and reason. A new run, block or requeue closes nothing, so a re-run can resume from its `[BLOCKED]` PR. A task with no recorded PR makes no forge call, and a forge error is logged as a warning without failing the transition.
+`pr.close_on_terminal` closes a PR only if its head branch is `orbit/<TASK-ID>-…`, its body names the task, and it was opened by a `pr.delivery_authors` login or is the delivery PR of an accepted follower handoff. Human PRs and other tasks' PRs are never touched, and branches are never deleted. On `done` the landing PR stays open: any `#N` the done note names, or, when the note names none and the task leaves `review`, the PR it was reviewed through. The closing comment names the landing (the done note, such as `delivered by pull request #N merged as <sha>` or `already landed as <sha>`) or the state and reason. Starting a run or blocking a task closes nothing.
+
+A task keeps one open delivery PR. When a run's `pr_open` (or a failure handoff) creates a PR, it closes the task's other open PRs that pass the same three tests, commenting `Superseded by #N` with the new PR. Reusing an existing PR closes nothing more. Without `pr.delivery_authors`, the author test uses the author of the PR the run just created. If the run stops between creating its PR and closing the others, the others stay open until the task's next created PR, an attributed requeue or a terminal decision closes them; close them by hand meanwhile. One listing reads at most 500 open PRs, so in a repository with more, an earlier PR beyond that page stays open; the same cap applies to the terminal and requeue closures below. This is how a re-admitted task's earlier `[BLOCKED]` PR closes: the failure handoff keeps it open while the task is blocked and until the next attempt publishes. The step's `closed_stale_pull_requests` output lists each close; a failed close is listed there and the step still succeeds.
+
+An operator's or agent's move from active work back to `backlog` or `someday` (`orbit task update --status`, the dashboard, `orbit.task.update`) also closes the task's open Orbit-authored PRs, with a comment naming the move and its note. It keeps every PR a later run may still continue:
+
+- all of them while a run of the task is live or a claim on it is unsettled, or when either cannot be read, since a leaf may still be landing one; a move made then closes nothing, and only a later move from `backlog` to `someday` (or a terminal decision, or the task's next created PR) closes them;
+- all of them when the task was last `blocked` before it was shelved, since the next run resumes the failure handoff's candidate;
+- all of them when a final recovery requeued the task, since the next run resumes that published candidate;
+- the PR of the candidate the owner kept from the task's last claim, or all of them when that candidate cannot be read.
+
+The blocked and final-recovery exceptions hold however often the task moves between `backlog` and `someday` afterwards. `--discard-candidate` with the move drops every exception except a live run or claim. Moving from `someday` to `backlog`, or out of `done`, `rejected` or `archived` (including `--force`), closes nothing. Automation's own requeues and holds close nothing. Merged PRs are never touched.
+
+A task with no recorded PR makes no forge call. A forge error is logged as a warning and never fails the transition.
 
 ### Housekeeping
 

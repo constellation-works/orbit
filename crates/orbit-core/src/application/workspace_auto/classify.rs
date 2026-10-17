@@ -282,18 +282,28 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
         mut selection,
         record: admission_forecast,
         forecast,
+        reserved,
     } = match gap_fit_mode {
         None => GapFitPass {
             selection: select(None),
             record: None,
             forecast: None,
+            reserved: Vec::new(),
         },
         Some(mode) => {
             let can_admit = free_slots > 0 && !examined.is_empty();
             gap_fit_selection(runtime, action, input, mode, &pending, can_admit, &select)?
         }
     };
-    admit_through_section(runtime, action, &mut selection, &snapshot.task_lookup)?;
+    // [ORB-16376] `enforce` has already committed this wave's reservations.
+    // A pass that stops here admits nothing, so it gives them back: a pass
+    // deferred on a busy lock is retried, and every retry would otherwise
+    // stack another copy of the same reservations onto the host's forecast.
+    if let Err(error) =
+        admit_through_section(runtime, action, &mut selection, &snapshot.task_lookup)
+    {
+        return Err(release_unadmitted_reservations(runtime, &reserved, error));
+    }
     if let (Some(forecast), Some(record)) = (forecast, admission_forecast.as_ref()) {
         record_admission_forecast(
             runtime,
@@ -473,6 +483,90 @@ struct GapFitPass {
     record: Option<DrainAdmissionForecast>,
     /// The forecast the pass decided against, when it built one.
     forecast: Option<ForecastPoints>,
+    /// The `(workspace, task)` reservations `enforce` wrote for the wave.
+    reserved: Vec<(String, String)>,
+}
+
+/// Give back the reservations a pass wrote for a wave it then failed to
+/// admit, and return the pass's failure unchanged.
+///
+/// Reservations are released by task, which is how the host store keys them.
+/// A release that fails is logged and the pass's own failure still decides
+/// what happens: a pass that lost only to a busy lock is still deferred, so a
+/// contended host store does not end the drain on its first pass. The
+/// reservations it could not release only hold admission back, expire with
+/// the reservation TTL, and the deferral limit bounds how many such passes
+/// can stack them.
+fn release_unadmitted_reservations(
+    runtime: &OrbitRuntime,
+    reserved: &[(String, String)],
+    error: PassError,
+) -> PassError {
+    if reserved.is_empty() {
+        return error;
+    }
+    let keys: Vec<(&str, &str)> = reserved
+        .iter()
+        .map(|(workspace, task)| (workspace.as_str(), task.as_str()))
+        .collect();
+    if let Err(release_error) = release_reservations(runtime, &keys) {
+        tracing::warn!(
+            target: "orbit.core.job_run",
+            error = %error.reason(),
+            release_error = %release_error,
+            reservations = ?reserved,
+            "drain could not release the reservations of a wave it did not admit; they expire with their TTL"
+        );
+    }
+    error
+}
+
+fn release_reservations(
+    runtime: &OrbitRuntime,
+    keys: &[(&str, &str)],
+) -> Result<(), orbit_common::OrbitError> {
+    #[cfg(feature = "test-support")]
+    if let Some(error) = release_failure_hook::take() {
+        return Err(error);
+    }
+    runtime.release_admission_reservations(keys)
+}
+
+/// Fail the next reservation release on this thread, for a test that needs
+/// the release to lose to the host store while the pass's own failure stands.
+#[cfg(feature = "test-support")]
+pub(crate) mod release_failure_hook {
+    use std::cell::RefCell;
+
+    use orbit_common::OrbitError;
+
+    type Failure = Box<dyn FnOnce() -> OrbitError>;
+
+    thread_local! {
+        static HOOK: RefCell<Option<Failure>> = RefCell::new(None);
+    }
+
+    pub(super) fn take() -> Option<OrbitError> {
+        HOOK.with(|slot| slot.borrow_mut().take())
+            .map(|fail| fail())
+    }
+
+    /// Run `operation` with the first admission-reservation release a drain
+    /// pass attempts on this thread failing with `fail()`.
+    pub fn with_reservation_release_failure<T>(
+        fail: impl FnOnce() -> OrbitError + 'static,
+        operation: impl FnOnce() -> T,
+    ) -> T {
+        struct Clear;
+        impl Drop for Clear {
+            fn drop(&mut self) {
+                HOOK.with(|slot| *slot.borrow_mut() = None);
+            }
+        }
+        HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(fail)));
+        let _guard = Clear;
+        operation()
+    }
 }
 
 /// Select the wave with gap fit, under the host admission lock.
@@ -484,7 +578,9 @@ struct GapFitPass {
 /// admit nothing takes no lock and carries only the starvation guard's head.
 ///
 /// A candidate the pull admission section refuses afterwards keeps its
-/// reservation until it expires, which can only hold back admission.
+/// reservation until it expires, which can only hold back admission. A
+/// section that fails outright admits none of the wave, and the pass
+/// releases every reservation it wrote ([`release_unadmitted_reservations`]).
 fn gap_fit_selection(
     runtime: &OrbitRuntime,
     action: &str,
@@ -507,6 +603,7 @@ fn gap_fit_selection(
             selection: select(None),
             record: Some(head_wait.record_without_forecast(mode, pending)),
             forecast: None,
+            reserved: Vec::new(),
         });
     }
     let workspace_id = runtime
@@ -523,24 +620,31 @@ fn gap_fit_selection(
         );
         let selection = select(Some(&mut gap_fit));
         let (record, reservations) = gap_fit.finish(pending);
+        let admitted = match mode {
+            GapFitMode::Enforce => reservations,
+            GapFitMode::Shadow => Vec::new(),
+        };
+        let reserved = admitted
+            .iter()
+            .map(|request| (request.lookup.workspace_id.clone(), request.task_id.clone()))
+            .collect::<Vec<_>>();
         Ok(ForecastDecision {
-            outcome: (selection, record, forecast.accuracy_points()),
-            admitted: match mode {
-                GapFitMode::Enforce => reservations,
-                GapFitMode::Shadow => Vec::new(),
-            },
+            outcome: (selection, record, forecast.accuracy_points(), reserved),
+            admitted,
         })
     });
     match (mode, decided) {
-        (GapFitMode::Enforce, Ok((selection, record, forecast))) => Ok(GapFitPass {
+        (GapFitMode::Enforce, Ok((selection, record, forecast, reserved))) => Ok(GapFitPass {
             selection,
             record: Some(record),
             forecast: Some(forecast),
+            reserved,
         }),
-        (GapFitMode::Shadow, Ok((_, record, forecast))) => Ok(GapFitPass {
+        (GapFitMode::Shadow, Ok((_, record, forecast, _))) => Ok(GapFitPass {
             selection: select(None),
             record: Some(record),
             forecast: Some(forecast),
+            reserved: Vec::new(),
         }),
         (GapFitMode::Enforce, Err(error)) => Err(PassError::store(
             action,
@@ -557,6 +661,7 @@ fn gap_fit_selection(
                 selection: select(None),
                 record: None,
                 forecast: None,
+                reserved: Vec::new(),
             })
         }
     }

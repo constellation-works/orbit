@@ -9,10 +9,15 @@ base=$(cat "$forge/pr-base")
 export GIT_AUTHOR_NAME=Forge GIT_AUTHOR_EMAIL=forge@example.invalid
 export GIT_COMMITTER_NAME=Forge GIT_COMMITTER_EMAIL=forge@example.invalid
 printf '%s\n' "$*" >> "$forge/calls"
-# One injected provider failure: the first command naming fault-match.
+# One injected provider failure: the fault-nth (default first) command
+# naming fault-match.
 if [ -f "$forge/fault-match" ] && [ ! -f "$forge/fault-hit" ]; then
     case "$*" in *"$(cat "$forge/fault-match")"*)
-        touch "$forge/fault-hit"; cat "$forge/fault-stderr" >&2; exit 1 ;;
+        seen=$(($(cat "$forge/fault-seen" 2>/dev/null || echo 0) + 1))
+        echo "$seen" > "$forge/fault-seen"
+        if [ "$seen" -ge "$(cat "$forge/fault-nth" 2>/dev/null || echo 1)" ]; then
+            touch "$forge/fault-hit"; cat "$forge/fault-stderr" >&2; exit 1
+        fi ;;
     esac
 fi
 head=$(git --git-dir="$remote" rev-parse "refs/heads/$branch")

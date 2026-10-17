@@ -564,6 +564,7 @@ impl TaskCommitBoundary {
                         budget_exhausted: matches!(blocked, Some(Some(_))),
                         forge_unavailable: value.forge_hold.is_some(),
                         provider_limit: failure.provider_limit,
+                        owner_busy: failure.owner_busy,
                     });
                     state.settlement = Some(ClaimSettlementRecord::of(
                         ClaimSettlementKind::Release,

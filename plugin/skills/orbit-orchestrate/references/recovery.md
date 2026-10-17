@@ -103,8 +103,11 @@ claim. Orbit already keeps what it can. A claimed leaf's candidate stays with
 its released claim. A reviewer stopped mid-review leaves its uncommitted
 repair as a marked commit at `refs/orbit/candidates/<task>/<run>-review`.
 The attempt's report stays on the task. The task's next claim continues from
-those automatically. When you must decide what happens next, follow these
-steps:
+those automatically. An owner-local delivery leaf that died after opening its
+pull request, with its task in `review`, is resumed on that pull request once by
+the owner drain's next pass, when that drain holds the leaf's `--complete` and
+`--auto-fix` grants. When you
+must decide what happens next, follow these steps:
 
 1. **Diagnose with `orbit_agent_invoke`.** Run it on the host that owns the
    preserved worktree, with `cwd` set to that worktree (`orbit run show

@@ -23,6 +23,8 @@ pub(crate) const CANDIDATE_REF_PUSH: &str = "push.candidate_ref";
 /// The namespace a carried candidate ref lives under on `origin`.
 pub(crate) const CANDIDATE_REF_PREFIX: &str = "refs/orbit/candidates/";
 pub(crate) const PR_LIST: &str = "pr.list";
+/// Every open pull request, for closing a task's earlier delivery PRs.
+pub(crate) const PR_LIST_OPEN: &str = "pr.list_open";
 pub(crate) const PR_CREATE: &str = "pr.create";
 pub(crate) const PR_VIEW: &str = "pr.view";
 pub(crate) const PR_MERGE: &str = "pr.merge";

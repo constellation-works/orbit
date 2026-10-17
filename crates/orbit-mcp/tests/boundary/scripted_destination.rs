@@ -1,7 +1,7 @@
 //! Scripted destinations for the federated mux. The probe stands in for SSH
 //! so routing and lost-answer classification run without a live host.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use chrono::{TimeZone, Utc};
@@ -62,6 +62,9 @@ pub(crate) struct ScriptedProbe {
     outcomes: HashMap<String, Result<DestinationSnapshot, OrbitError>>,
     calls: HashMap<String, HashMap<String, ScriptedToolResult>>,
     call_log: Arc<Mutex<Vec<RoutedCall>>>,
+    /// Destinations whose `orbit` gives up on its locked store before it
+    /// answers a fresh session.
+    busy: HashSet<String>,
 }
 
 impl ScriptedProbe {
@@ -70,6 +73,7 @@ impl ScriptedProbe {
             outcomes: HashMap::new(),
             calls: HashMap::new(),
             call_log: Arc::new(Mutex::new(Vec::new())),
+            busy: HashSet::new(),
         }
     }
 
@@ -80,6 +84,13 @@ impl ScriptedProbe {
 
     pub(crate) fn refusing(mut self, machine_id: &str, error: OrbitError) -> Self {
         self.outcomes.insert(machine_id.to_string(), Err(error));
+        self
+    }
+
+    /// `machine_id` answers its probe, but a routed session finds its store
+    /// locked, as the session reports an `orbit` that exited on it.
+    pub(crate) fn store_locked(mut self, machine_id: &str) -> Self {
+        self.busy.insert(machine_id.to_string());
         self
     }
 
@@ -114,6 +125,18 @@ impl DestinationProbe for ScriptedProbe {
     }
 
     fn open_route(&self, destination: &Destination) -> Result<Box<dyn RoutedSession>, OrbitError> {
+        if self.busy.contains(&destination.machine_id) {
+            let message = "session ended before answering 'initialize'; ssh stderr: error: store \
+                           error: database is locked";
+            return Err(OrbitError::RemoteTool {
+                code: orbit_common::LOCK_BUSY_ERROR_CODE.to_string(),
+                message: format!("{}: {message}", destination.machine_id),
+                payload: serde_json::json!({
+                    "code": orbit_common::LOCK_BUSY_ERROR_CODE,
+                    "message": message,
+                }),
+            });
+        }
         match self.outcomes.get(&destination.machine_id) {
             Some(Err(error)) => Err(OrbitError::UnreachableDestination(error.to_string())),
             None => Err(OrbitError::UnreachableDestination(format!(

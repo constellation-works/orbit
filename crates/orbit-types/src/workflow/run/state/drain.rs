@@ -536,7 +536,9 @@ pub struct DrainAdmissionPass {
     /// window was open: the owner's probe refusal, a refused settlement
     /// (`settlement_refused`), the failure breaker (`circuit_open`), a host
     /// shutdown inside the hold horizon (`host_shutdown_scheduled`), or no
-    /// runnable crew (`no_runnable_crew`, `host_suppressed`). Set afresh each
+    /// runnable crew (`no_runnable_crew`, `host_suppressed`), or a bounded
+    /// backoff from an owner whose store stayed locked
+    /// (`owner_busy_backoff`). Set afresh each
     /// pass, never carried. Host pressure and degradation have their own
     /// fields. Pull drains only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -546,7 +548,9 @@ pub struct DrainAdmissionPass {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_pass_error: Option<String>,
     /// Consecutive failed pull passes, independent of failed claimed leaves,
-    /// or consecutive deferred local passes; a local drain fails at ten.
+    /// or consecutive deferred local passes; a local drain fails when this
+    /// reaches `TRANSIENT_PASS_FAILURE_LIMIT` (orbit-core's
+    /// `application::workspace_auto::classify`).
     #[serde(default)]
     pub consecutive_pass_failures: u32,
     /// Sticky warning state: new admissions stop, but settlements keep flowing.

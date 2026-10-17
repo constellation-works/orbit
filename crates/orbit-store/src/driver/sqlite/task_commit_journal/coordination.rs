@@ -24,6 +24,29 @@ impl Store {
         })
     }
 
+    /// Publish pure-SQL coordination rows in one transaction, each inserted
+    /// or, when its identity already exists, given the new payload.
+    pub(crate) fn upsert_sql_task_coordination_rows(
+        &self,
+        workspace: &str,
+        rows: &[TaskCoordinationRow],
+    ) -> Result<(), OrbitError> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            let now = crate::now_string();
+            for row in rows {
+                tx.tx.execute(
+                    "INSERT INTO task_coordination_rows(workspace_id,kind,row_id,payload_json,journal_id,created_at) VALUES (?1,?2,?3,?4,'sql-only',?5)
+                     ON CONFLICT(workspace_id,kind,row_id) DO UPDATE SET payload_json=excluded.payload_json",
+                    params![workspace, row.kind, row.row_id, row.payload_json, now],
+                ).map_err(sqlite_store_error)?;
+            }
+            Ok(())
+        })
+    }
+
     /// Replace a full receipt by a permanent tombstone under the repository
     /// boundary. A stale compactor cannot overwrite a different generation.
     pub(crate) fn replace_task_coordination_payload(

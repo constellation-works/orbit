@@ -351,6 +351,33 @@ export async function assertRunDetailPresentation(page, evidence) {
     || localWaitingText.includes('6 additional admissible tasks')) {
     throw new Error(`Local deferred tasks must be counted once in the run-detail banner: ${localWaitingText}`);
   }
+  // A running local drain whose last pass was deferred on a busy lock says
+  // so, and dates the lists it kept from its last completed pass.
+  const deferredPass = {
+    queued: 3, deferred: localDeferred, deferred_total: 3,
+    recorded_at: '2026-10-17T05:01:00Z', waiting_recorded_at: '2026-10-17T05:00:00Z',
+    last_pass_error_code: 'lock_busy', consecutive_pass_failures: 2,
+    last_pass_error: 'record pilot operator handoffs: timed out after 30000ms acquiring task commit boundary (held by pid 4242)',
+  };
+  await render({ state: 'running', job_id: 'workspace_auto_pipeline', drain_last_pass: deferredPass }, []);
+  const passWarning = await page.locator('#run-detail-meta .pass-warning').textContent();
+  if (!passWarning.includes('Admission pass deferred') || !passWarning.includes('2 consecutive deferred passes')
+    || !passWarning.includes('held by pid 4242')) {
+    throw new Error(`A running drain must show its deferred admission pass: ${passWarning}`);
+  }
+  const keptWaiting = await page.locator('#run-detail-meta .still-waiting .child-dispatch-notice').textContent();
+  if (keptWaiting.includes('the owner answered') || !keptWaiting.includes('as of the last completed pass at')) {
+    throw new Error(`A local drain's kept lists must be dated from its last completed pass: ${keptWaiting}`);
+  }
+  await render({ state: 'failed', job_id: 'workspace_auto_pipeline', drain_last_pass: deferredPass }, []);
+  if (await page.locator('#run-detail-meta .pass-warning').count()
+    || !(await page.locator('.run-failure-message').textContent()).includes('held by pid 4242')) {
+    throw new Error('A failed drain reports its last pass error in the failure box only');
+  }
+  await render({ state: 'cancelled', job_id: 'workspace_auto_pipeline', drain_last_pass: deferredPass }, []);
+  if (await page.locator('#run-detail-meta .pass-warning').count()) {
+    throw new Error('A cancelled drain has no next pass to retry');
+  }
 
   const childDispatches = ['success', 'cancelled', 'failed', null, 'running', 'success'].map((state, index) => ({
     child_run_id: `jrun-child-${index}`, job_name: 'task_auto_pipeline',

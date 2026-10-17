@@ -15,7 +15,8 @@ impl TaskCommitBoundary {
     /// release arrives after the follower built its next request. A cancel
     /// leaves unrelated work and reviewers eligible. Admission keeps every
     /// task from it once one release blames the host whatever crew runs
-    /// there. A release for a forge outage blames neither [ORB-14634].
+    /// there. A release for a forge outage blames neither [ORB-14634], nor
+    /// does one for the owner's own busy store.
     pub(in super::super) fn drain_releases(
         &self,
         machine_id: &str,
@@ -30,7 +31,9 @@ impl TaskCommitBoundary {
                 continue;
             }
             let Some(record) = state.release.filter(|record| {
-                record.class.suppresses_task_repull() && !record.forge_unavailable
+                record.class.suppresses_task_repull()
+                    && !record.forge_unavailable
+                    && !record.owner_busy
             }) else {
                 continue;
             };

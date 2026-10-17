@@ -75,8 +75,9 @@ pub(super) struct WaitingBacklog {
     /// Host resource pressure that held the last pass [ORB-13901].
     pub(super) resource_throttle: Option<ResourceThrottle>,
     pub(super) recorded_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// When the owner gave the answer the lists above report, for a pull
-    /// drain; unset for a local one, which classifies afresh each pass.
+    /// When the lists above were read: the owner's answer, for a pull drain;
+    /// for a local one, the last completed pass, set only while its latest
+    /// pass was deferred on a busy lock.
     pub(super) waiting_recorded_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Whether deferred tasks are included in `queued` (local pass semantics).
     pub(super) deferred_in_queued: bool,
@@ -256,13 +257,18 @@ impl WaitingBacklog {
         if !self.has_starved_tasks() {
             return Vec::new();
         }
+        // A pull drain's lists are the owner's last answer. A local drain
+        // dates them only when it deferred a pass on a busy lock, which keeps
+        // the last completed pass's lists.
         let answered = self
             .waiting_recorded_at
             .map(|answered| {
-                format!(
-                    " (the owner answered {})",
-                    answered.format("%Y-%m-%d %H:%M:%SZ")
-                )
+                let at = answered.format("%Y-%m-%d %H:%M:%SZ");
+                if self.deferred_in_queued {
+                    format!(" (as of the last completed pass at {at})")
+                } else {
+                    format!(" (the owner answered {at})")
+                }
             })
             .unwrap_or_default();
         let mut lines = vec![format!(

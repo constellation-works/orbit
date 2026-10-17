@@ -29,6 +29,20 @@ pub(in crate::executor::automation) fn pr_open<H: RuntimeHost + Sync + ?Sized>(
         Ok(mut output) => {
             output["superseded_pull_request"] =
                 supersede_prior_pull_request(host, &context.workspace_path, input, &output);
+            // A reused pull request was opened by this lineage, whose create
+            // already closed the tasks' other ones.
+            output["closed_stale_pull_requests"] = if output["pr_created"] == true {
+                close_earlier_task_pull_requests(
+                    host,
+                    &context.workspace_path,
+                    &context.tasks,
+                    output["pr_number"].as_str().unwrap_or_default(),
+                    output["pr_url"].as_str(),
+                    output["head"].as_str().unwrap_or_default(),
+                )
+            } else {
+                json!([])
+            };
             Ok(output)
         }
         Err(failure) => {
@@ -292,6 +306,138 @@ fn supersede_prior_pull_request<H: RuntimeHost + ?Sized>(
         }
         Err(error) => close_failed(&prior, number, error),
     }
+}
+
+/// Close every other open delivery pull request of the tasks this run
+/// published, once it created its own, so each task keeps only that one.
+///
+/// A fresh attempt of a re-admitted task opens its own pull request on a new
+/// branch, and the earlier attempt's, a `[BLOCKED]` failure-handoff one
+/// included, would otherwise stay open beside it with nothing watching it.
+/// Re-admission is what ends the failure handoff's hold on its pull request,
+/// so it is closed here too. A pull request qualifies only on the same terms
+/// a terminal decision closes one by: an `orbit/<TASK-ID>-…` head branch, a
+/// body naming the task, and an author among `pr.delivery_authors` (when
+/// that is empty, the author of the pull request this run published). Only
+/// open pull requests are listed, so a merged one is never touched, and
+/// branches are kept. `pr.close_on_terminal = false` turns this off. Best
+/// effort: a failed lookup or close is reported and logged, never a step
+/// failure.
+pub(in crate::executor::automation::vcs) fn close_earlier_task_pull_requests<
+    H: RuntimeHost + ?Sized,
+>(
+    host: &H,
+    workspace_path: &std::path::Path,
+    tasks: &[orbit_types::task::Task],
+    kept: &str,
+    kept_url: Option<&str>,
+    head: &str,
+) -> Value {
+    let config = host.pr_config();
+    if !config.close_superseded || kept.is_empty() || tasks.is_empty() {
+        return json!([]);
+    }
+    let listed = match host
+        .run_private_vcs_operation(
+            operations::PR_LIST_OPEN,
+            json!({ "workspace_path": workspace_path }),
+        )
+        .and_then(|response| PullRequestSummary::list_from_response(&response))
+    {
+        Ok(listed) => listed,
+        Err(error) => {
+            tracing::warn!(
+                pr = kept,
+                error = %error,
+                "could not list open pull requests to close the tasks' earlier ones"
+            );
+            return json!([{
+                "decision": "lookup_failed",
+                "detail": format!(
+                    "the tasks' earlier pull requests may still be open beside #{kept}: {error}"
+                ),
+            }]);
+        }
+    };
+    let authors = if config.delivery_authors.is_empty() {
+        listed
+            .iter()
+            .find(|pull_request| pull_request.number.as_deref() == Some(kept))
+            .and_then(|pull_request| pull_request.author.clone())
+            .into_iter()
+            .collect::<Vec<_>>()
+    } else {
+        config.delivery_authors.clone()
+    };
+    let authored = |author: Option<&str>| {
+        author.is_some_and(|author| {
+            authors
+                .iter()
+                .any(|delivery| delivery.eq_ignore_ascii_case(author))
+        })
+    };
+    let new_pr = kept_url.map_or_else(|| format!("#{kept}"), |url| format!("#{kept} ({url})"));
+    let mut outcomes = Vec::new();
+    for pull_request in &listed {
+        let (Some(number), Some(branch)) = (
+            pull_request.number.as_deref(),
+            pull_request.head_branch.as_deref(),
+        ) else {
+            continue;
+        };
+        if number == kept || !authored(pull_request.author.as_deref()) {
+            continue;
+        }
+        let body = pull_request.body.as_deref().unwrap_or_default();
+        let Some(task) = tasks.iter().find(|task| {
+            orbit_types::task::names_task_delivery_pull_request(branch, body, &task.id)
+        }) else {
+            continue;
+        };
+        let comment = format!(
+            "Superseded by {new_pr}.\n\nA newer delivery attempt of task {} published on \
+             `{head}`. Orbit closed this pull request so the task has one open pull request. \
+             The branch is kept.",
+            task.id
+        );
+        let (decision, detail) = match host.run_private_vcs_operation(
+            operations::PR_CLOSE,
+            json!({"pr": number, "comment": comment, "workspace_path": workspace_path}),
+        ) {
+            Ok(_) => {
+                tracing::info!(
+                    task_id = %task.id,
+                    closed = number,
+                    pr = kept,
+                    "closed a task's earlier delivery pull request for this run's"
+                );
+                ("closed", format!("superseded by {new_pr}"))
+            }
+            Err(error) => {
+                tracing::warn!(
+                    task_id = %task.id,
+                    stale = number,
+                    pr = kept,
+                    error = %error,
+                    "could not close a task's earlier delivery pull request"
+                );
+                (
+                    "close_failed",
+                    format!(
+                        "pull request #{number} is still open beside #{kept}; close it by hand: \
+                         {error}"
+                    ),
+                )
+            }
+        };
+        outcomes.push(json!({
+            "number": number,
+            "task_id": task.id,
+            "decision": decision,
+            "detail": detail,
+        }));
+    }
+    Value::Array(outcomes)
 }
 
 fn close_failed(prior: &str, number: &str, error: OrbitError) -> Value {
