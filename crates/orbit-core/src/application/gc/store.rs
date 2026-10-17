@@ -1,9 +1,10 @@
 //! Retention for the host store: audit rows and unreferenced audit blobs
-//! (`orbit gc audit`), and the pipeline state of old terminal runs with the
+//! (`orbit gc audit`), the pipeline state of old terminal runs with the
 //! host's per-minute resource history and admission forecasts
-//! (`orbit gc runs`).
+//! (`orbit gc runs`), and applied task commit journal rows
+//! (`orbit gc journal`).
 //!
-//! Both plan by default and delete only when asked. Deletes run in batches of
+//! Each plans by default and deletes only when asked. Deletes run in batches of
 //! [`RETENTION_BATCH_ROWS`], each its own short write transaction, with a
 //! pause between them so other writers are not starved while a long history
 //! is pruned. Neither runs `VACUUM`: freed pages stay on the freelist, which
@@ -15,8 +16,9 @@ use std::time::{Duration, Instant, SystemTime};
 use chrono::{DateTime, Utc};
 use orbit_common::storage::blob_sweep::{self, AuditBlobRoot, SweepEntry, SweepOutcome};
 use orbit_store::contracts::{
-    AuditRetentionTable, ResourceMinutesTable, ResourceUsageStoreBackend, RetentionIdSource,
-    RetentionSelection, RetentionWorkspaceScope, StoreRetentionBackend, StoreSpace,
+    AuditRetentionTable, JournalRetentionCandidates, ResourceMinutesTable,
+    ResourceUsageStoreBackend, RetentionIdSource, RetentionSelection, RetentionWorkspaceScope,
+    StoreRetentionBackend, StoreSpace,
 };
 use serde::Serialize;
 
@@ -133,6 +135,23 @@ pub struct RunGcReport {
     pub store: StoreSpaceReport,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct JournalGcReport {
+    pub apply: bool,
+    pub retention_days: u32,
+    pub cutoff: DateTime<Utc>,
+    /// Applied journal rows settled before the cutoff, less each task's
+    /// newest applied row.
+    pub rows: u64,
+    pub bytes: u64,
+    pub rows_removed: u64,
+    /// The read that selected the rows. It holds no write lock; each delete
+    /// batch names its rows by primary key.
+    pub selection_ms: u64,
+    pub writes: BatchReport,
+    pub store: StoreSpaceReport,
+}
+
 /// What retention could reclaim now, measured without the blob reference scan
 /// so `orbit doctor` stays cheap.
 #[derive(Debug, Clone, Serialize)]
@@ -155,6 +174,7 @@ pub struct StoreRetentionOverview {
 struct RetentionDays {
     audit: u32,
     runs: u32,
+    journal: u32,
 }
 
 /// One workspace plus the unregistered partitions this pass may also touch.
@@ -174,6 +194,7 @@ impl OrbitRuntime {
         Ok(RetentionDays {
             audit: config.snapshot.retention_audit_days,
             runs: config.snapshot.retention_runs_days,
+            journal: config.snapshot.retention_journal_days,
         })
     }
 
@@ -327,6 +348,56 @@ impl OrbitRuntime {
             state_bytes: bytes,
             runs_archived,
             resource_minutes,
+            writes,
+            store: store.store_space()?.into(),
+        })
+    }
+
+    /// Plan, or with `apply` perform, journal retention: delete this
+    /// workspace's applied task commit journal rows, and those of
+    /// unregistered workspace ids, settled before the cutoff, keeping each
+    /// task's newest applied row. Recovery replays only prepared and
+    /// committed rows, which are never selected; aborted rows stay too.
+    /// Another registered workspace keeps its own window. The rows are
+    /// selected once, by a read, then deleted by primary key in batches of
+    /// [`RETENTION_BATCH_ROWS`], so no write transaction scans the table.
+    /// `retention_days` overrides `retention.journal_days`.
+    pub fn gc_journal(
+        &self,
+        apply: bool,
+        retention_days: Option<u32>,
+    ) -> Result<JournalGcReport, OrbitError> {
+        let days = resolve_override(retention_days, self.retention_days()?.journal)?;
+        let cutoff = cutoff_for(days)?;
+        let store = self.sqlite_store()?;
+        let pass = self.retention_pass(RetentionIdSource::CommitJournal)?;
+        let workspace_scope = RetentionWorkspaceScope {
+            workspace_id: &pass.workspace_id,
+            legacy_ids: pass.legacy_ids.as_deref(),
+        };
+        let started = Instant::now();
+        let JournalRetentionCandidates { journal_ids, bytes } =
+            store.journal_retention_candidates(workspace_scope, cutoff)?;
+        let selection_ms = elapsed_ms(started);
+        let mut writes = BatchReport::default();
+        let mut rows_removed = 0;
+        if apply {
+            for (index, batch) in journal_ids.chunks(RETENTION_BATCH_ROWS).enumerate() {
+                if index > 0 {
+                    std::thread::sleep(BATCH_PAUSE);
+                }
+                rows_removed +=
+                    timed_batch(&mut writes, || store.delete_applied_journal_rows(batch))? as u64;
+            }
+        }
+        Ok(JournalGcReport {
+            apply,
+            retention_days: days,
+            cutoff,
+            rows: journal_ids.len() as u64,
+            bytes,
+            rows_removed,
+            selection_ms,
             writes,
             store: store.store_space()?.into(),
         })
@@ -545,15 +616,27 @@ fn run_batches(
 ) -> Result<u64, OrbitError> {
     let mut total = 0u64;
     loop {
-        let started = Instant::now();
-        let removed = batch()?;
-        let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        writes.batches += 1;
-        writes.max_batch_ms = writes.max_batch_ms.max(elapsed);
+        let removed = timed_batch(writes, &mut batch)?;
         total += removed as u64;
         if removed < RETENTION_BATCH_ROWS {
             return Ok(total);
         }
         std::thread::sleep(BATCH_PAUSE);
     }
+}
+
+/// Run one write transaction, recording its duration.
+fn timed_batch(
+    writes: &mut BatchReport,
+    batch: impl FnOnce() -> Result<usize, OrbitError>,
+) -> Result<usize, OrbitError> {
+    let started = Instant::now();
+    let removed = batch()?;
+    writes.batches += 1;
+    writes.max_batch_ms = writes.max_batch_ms.max(elapsed_ms(started));
+    Ok(removed)
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }

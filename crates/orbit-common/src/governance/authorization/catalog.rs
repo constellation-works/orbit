@@ -554,6 +554,12 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         allowed: &[McpCapability::Operator, McpCapability::Runner],
         rationale: "applying run retention permanently drops old runs' pipeline state",
     },
+    GovernedOperation {
+        id: "gc journal",
+        surface: OperationSurface::CliCommand,
+        allowed: &[McpCapability::Operator],
+        rationale: "applying journal retention permanently deletes applied task commit decisions",
+    },
     DASHBOARD_ROUTINE_TOGGLE,
     DASHBOARD_JOB_RUN,
     DASHBOARD_CLOCK_SERVICE,

@@ -13,14 +13,15 @@ use super::super::{
     ConfigSection, DEFAULT_WORKFLOW_BASE_BRANCH, SECURITY_ALERT_SEVERITIES,
 };
 use super::resolve::{
-    DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES, DEFAULT_STORE_WARN_BYTES, DEFAULT_WORKER_MEMORY_HIGH,
-    DEFAULT_WORKER_MEMORY_MAX, default_log_rotation, default_pass_list, normalize_logins,
-    normalize_pass_list, read_optional, resolve_bounded_minutes, resolve_build_output_env,
-    resolve_choice, resolve_cpu_light_leaves, resolve_distributed_completion,
-    resolve_host_shutdown_hold_minutes, resolve_machine_id, resolve_machine_name,
-    resolve_material_fields, resolve_memory_limit, resolve_non_empty, resolve_optional_choice,
-    resolve_optional_non_empty, resolve_percent, resolve_reclaim, resolve_retention_days,
-    resolve_task_prefix, resolve_validation_path_mode, resolve_worker_tasks_max,
+    DEFAULT_JOURNAL_RETENTION_DAYS, DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES, DEFAULT_RETENTION_DAYS,
+    DEFAULT_STORE_WARN_BYTES, DEFAULT_WORKER_MEMORY_HIGH, DEFAULT_WORKER_MEMORY_MAX,
+    default_log_rotation, default_pass_list, normalize_logins, normalize_pass_list, read_optional,
+    resolve_bounded_minutes, resolve_build_output_env, resolve_choice, resolve_cpu_light_leaves,
+    resolve_distributed_completion, resolve_host_shutdown_hold_minutes, resolve_machine_id,
+    resolve_machine_name, resolve_material_fields, resolve_memory_limit, resolve_non_empty,
+    resolve_optional_choice, resolve_optional_non_empty, resolve_percent, resolve_reclaim,
+    resolve_retention_days, resolve_task_prefix, resolve_validation_path_mode,
+    resolve_worker_tasks_max,
 };
 use crate::memory_limit::MemoryLimit;
 use crate::operation;
@@ -442,13 +443,19 @@ define_config_settings! {
         key: "retention.audit_days", value_type: "integer",
         description: "Days `orbit gc audit` keeps command and run audit rows; older rows, and the audit blobs no remaining row or pending write names, are reclaimable (1..=36500; default 60).",
         section: ConfigSection::Housekeeping, order: 100,
-        resolve: |raw: Option<u32>| resolve_retention_days(raw, "retention.audit_days"),
+        resolve: |raw: Option<u32>| resolve_retention_days(raw, "retention.audit_days", DEFAULT_RETENTION_DAYS),
     },
     retention_runs_days: u32 => u32 {
         key: "retention.runs_days", value_type: "integer",
         description: "Days after a terminal job run finishes before `orbit gc runs` may drop its pipeline state; the run row and its steps stay (1..=36500; default 60). On a large store, 14 reclaims much more run state than 60.",
         section: ConfigSection::Housekeeping, order: 110,
-        resolve: |raw: Option<u32>| resolve_retention_days(raw, "retention.runs_days"),
+        resolve: |raw: Option<u32>| resolve_retention_days(raw, "retention.runs_days", DEFAULT_RETENTION_DAYS),
+    },
+    retention_journal_days: u32 => u32 {
+        key: "retention.journal_days", value_type: "integer",
+        description: "Days after a task commit is applied before `orbit gc journal` may delete its commit journal row (1..=36500; default 14). Recovery replays only prepared and committed rows, so an applied row is history kept for diagnosis; prepared, committed and aborted rows, and each task's newest applied row, are never deleted.",
+        section: ConfigSection::Housekeeping, order: 112,
+        resolve: |raw: Option<u32>| resolve_retention_days(raw, "retention.journal_days", DEFAULT_JOURNAL_RETENTION_DAYS),
     },
     retention_store_warn_bytes: u64 => u64 {
         key: "retention.store_warn_bytes", value_type: "integer",

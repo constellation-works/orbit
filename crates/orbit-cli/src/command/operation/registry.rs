@@ -253,6 +253,7 @@ impl Commands {
                     }
                     GcTarget::Audit(args) => ("audit", args.apply, RuntimeNeed::Required),
                     GcTarget::Runs(args) => ("runs", args.apply, RuntimeNeed::Required),
+                    GcTarget::Journal(args) => ("journal", args.apply, RuntimeNeed::Required),
                 };
                 CommandOperation::new(
                     runtime_need,

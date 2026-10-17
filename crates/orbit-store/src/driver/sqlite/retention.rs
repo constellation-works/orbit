@@ -1,5 +1,5 @@
-//! Bounded audit and run-state retention, blob-reference scans and page
-//! accounting over the host store.
+//! Bounded audit, run-state and commit-journal retention, blob-reference
+//! scans and page accounting over the host store.
 //!
 //! Sizes come from `octet_length`, which reads a value's length from its
 //! record header instead of walking its overflow chain, so a plan over a
@@ -13,8 +13,8 @@ use rusqlite::{TransactionBehavior, params};
 
 use crate::Store;
 use crate::contracts::{
-    AuditRetentionTable, RetentionIdSource, RetentionSelection, RetentionWorkspaceScope,
-    StoreRetentionBackend, StoreSpace,
+    AuditRetentionTable, JournalRetentionCandidates, RetentionIdSource, RetentionSelection,
+    RetentionWorkspaceScope, StoreRetentionBackend, StoreSpace,
 };
 
 /// Rows read per blob-reference chunk. Each chunk is its own read, so a scan
@@ -49,6 +49,28 @@ fn archivable_runs_sql() -> String {
         archivable_states_sql()
     )
 }
+
+/// One workspace's prunable journal rows: applied before `?2`, less each
+/// task's newest applied row. The index on `(workspace_id, state, created_at)`
+/// finds the applied rows; one window pass ranks them per task, so the cost
+/// is a sort, not a scan per candidate. Sizes are computed before the window,
+/// so the sort carries an integer, never the intent text.
+const JOURNAL_CANDIDATES_SQL: &str = "\
+    SELECT journal_id, bytes FROM ( \
+        SELECT journal_id, \
+            COALESCE(applied_at, created_at) AS settled_at, \
+            octet_length(journal_id) + octet_length(workspace_id) + octet_length(task_id) \
+                + octet_length(state) + octet_length(intent_json) + octet_length(created_at) \
+                + COALESCE(octet_length(committed_at), 0) \
+                + COALESCE(octet_length(applied_at), 0) \
+                + COALESCE(octet_length(reservation_id), 0) AS bytes, \
+            ROW_NUMBER() OVER ( \
+                PARTITION BY task_id \
+                ORDER BY COALESCE(applied_at, created_at) DESC, journal_id DESC) AS recency \
+        FROM task_commit_journal \
+        WHERE workspace_id = ?1 AND state = 'applied') \
+    WHERE recency > 1 AND settled_at < ?2 \
+    ORDER BY settled_at, journal_id";
 
 impl StoreRetentionBackend for Store {
     fn distinct_workspace_ids(&self, source: RetentionIdSource) -> Result<Vec<String>, OrbitError> {
@@ -188,6 +210,50 @@ impl StoreRetentionBackend for Store {
         })
     }
 
+    fn journal_retention_candidates(
+        &self,
+        scope: RetentionWorkspaceScope<'_>,
+        cutoff: DateTime<Utc>,
+    ) -> Result<JournalRetentionCandidates, OrbitError> {
+        let conn = self.read()?;
+        let cutoff = cutoff.to_rfc3339();
+        let mut stmt = conn
+            .prepare(JOURNAL_CANDIDATES_SQL)
+            .map_err(sqlite_store_error)?;
+        let mut candidates = JournalRetentionCandidates::default();
+        for workspace_id in scope_ids(scope) {
+            let rows = stmt
+                .query_map(params![workspace_id, cutoff], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                })
+                .map_err(sqlite_store_error)?;
+            for row in rows {
+                let (journal_id, bytes) = row.map_err(sqlite_store_error)?;
+                candidates.journal_ids.push(journal_id);
+                candidates.bytes += u64::try_from(bytes).unwrap_or(0);
+            }
+        }
+        Ok(candidates)
+    }
+
+    fn delete_applied_journal_rows(&self, journal_ids: &[String]) -> Result<usize, OrbitError> {
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            let mut delete = tx
+                .tx
+                .prepare(
+                    "DELETE FROM task_commit_journal WHERE journal_id = ?1 AND state = 'applied'",
+                )
+                .map_err(sqlite_store_error)?;
+            let mut removed = 0;
+            for journal_id in journal_ids {
+                removed += delete
+                    .execute(params![journal_id])
+                    .map_err(sqlite_store_error)?;
+            }
+            Ok(removed)
+        })
+    }
+
     fn visit_blob_reference_text(
         &self,
         excluding: Option<(RetentionWorkspaceScope<'_>, DateTime<Utc>)>,
@@ -277,6 +343,7 @@ fn distinct_workspace_ids(
     let sql = match source {
         RetentionIdSource::RunAudit => "SELECT DISTINCT workspace_id FROM v2_audit_events",
         RetentionIdSource::JobRuns => "SELECT DISTINCT workspace_id FROM job_runs",
+        RetentionIdSource::CommitJournal => "SELECT DISTINCT workspace_id FROM task_commit_journal",
     };
     let mut stmt = conn.prepare(sql).map_err(sqlite_store_error)?;
     stmt.query_map([], |row| row.get::<_, String>(0))

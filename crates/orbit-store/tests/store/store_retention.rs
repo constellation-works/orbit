@@ -369,3 +369,248 @@ fn million_row_run_audit_prunes_in_sub_second_batches() {
         "one {BATCH_ROWS}-row retention batch held the write lock for {slowest:?} of CPU"
     );
 }
+
+fn insert_journal_row(
+    store: &Store,
+    workspace_id: &str,
+    journal_id: &str,
+    task_id: &str,
+    state: &str,
+    created_at: DateTime<Utc>,
+) {
+    let applied_at = (state == "applied").then(|| (created_at + TimeDelta::seconds(1)).to_rfc3339());
+    store
+        .connection()
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO task_commit_journal (journal_id, workspace_id, task_id, state, \
+                 intent_json, created_at, committed_at, applied_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)",
+            rusqlite::params![
+                journal_id,
+                workspace_id,
+                task_id,
+                state,
+                format!("{{\"task_id\":\"{task_id}\",\"pad\":\"{}\"}}", "x".repeat(512)),
+                created_at.to_rfc3339(),
+                applied_at
+            ],
+        )
+        .unwrap();
+}
+
+fn journal_ids(store: &Store, sql: &str) -> Vec<String> {
+    let connection = store.connection();
+    let conn = connection.lock().unwrap();
+    let mut stmt = conn.prepare(sql).unwrap();
+    stmt.query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+/// Applied journal rows settled before the cutoff go, oldest first, in
+/// batches by key. Each task keeps its newest applied row, and prepared,
+/// committed and aborted rows stay however old they are. Another registered
+/// workspace is out of scope; a legacy partition the caller names is in.
+#[test]
+fn journal_retention_removes_old_applied_rows_and_keeps_unsettled_and_newest() {
+    const TEST: &str = "journal_retention_removes_old_applied_rows_and_keeps_unsettled_and_newest";
+    let Some(root) = store_retention_isolated(TEST, Duration::from_secs(60)) else {
+        return;
+    };
+    let store = Store::open(&root.join("orbit.db")).unwrap();
+    let cutoff = Utc.with_ymd_and_hms(2026, 9, 1, 0, 0, 0).unwrap();
+    let days_before = |days: i64| cutoff - TimeDelta::days(days);
+    for (workspace_id, journal_id, task_id, state, created_at) in [
+        // Three old applied rows: the two older go, the newest stays.
+        ("ws_a", "a-t1-1", "T-1", "applied", days_before(30)),
+        ("ws_a", "a-t1-2", "T-1", "applied", days_before(20)),
+        ("ws_a", "a-t1-3", "T-1", "applied", days_before(10)),
+        // A lone old applied row is its task's newest.
+        ("ws_a", "a-t2-1", "T-2", "applied", days_before(30)),
+        // Old applied rows go once a newer one exists past the cutoff, which
+        // itself stays.
+        ("ws_a", "a-t3-1", "T-3", "applied", days_before(30)),
+        ("ws_a", "a-t3-2", "T-3", "applied", days_before(5)),
+        ("ws_a", "a-t3-3", "T-3", "applied", cutoff + TimeDelta::days(1)),
+        // Unsettled and aborted rows are never selected, however old.
+        ("ws_a", "a-t4-prepared", "T-4", "prepared", days_before(40)),
+        ("ws_a", "a-t4-committed", "T-4", "committed", days_before(40)),
+        ("ws_a", "a-t4-aborted", "T-4", "aborted", days_before(40)),
+        ("ws_a", "a-t4-1", "T-4", "applied", days_before(35)),
+        ("ws_a", "a-t4-2", "T-4", "applied", days_before(34)),
+        // Another registered workspace keeps its own window.
+        ("ws_b", "b-t1-1", "T-1", "applied", days_before(30)),
+        ("ws_b", "b-t1-2", "T-1", "applied", days_before(20)),
+        // A legacy partition the caller names is pruned like this one.
+        ("ws_old", "old-t1-1", "T-1", "applied", days_before(30)),
+        ("ws_old", "old-t1-2", "T-1", "applied", days_before(20)),
+    ] {
+        insert_journal_row(&store, workspace_id, journal_id, task_id, state, created_at);
+    }
+    assert_eq!(
+        store.distinct_workspace_ids(RetentionIdSource::CommitJournal).unwrap().len(),
+        3
+    );
+    let legacy = vec!["ws_old".to_string()];
+    let scope = RetentionWorkspaceScope {
+        workspace_id: "ws_a",
+        legacy_ids: Some(&legacy),
+    };
+
+    let plan = store.journal_retention_candidates(scope, cutoff).unwrap();
+    assert_eq!(
+        plan.journal_ids,
+        ["a-t4-1", "a-t1-1", "a-t3-1", "a-t1-2", "a-t3-2", "old-t1-1"],
+        "old applied rows except each task's newest, oldest first per workspace"
+    );
+    assert!(plan.bytes >= 6 * 512, "bytes cover the stored intents");
+    assert_eq!(
+        count(&store, "SELECT COUNT(*) FROM task_commit_journal"),
+        16,
+        "planning wrote nothing"
+    );
+
+    let mut batches = plan.journal_ids.chunks(4);
+    let (removed, _) = drain(|| {
+        batches
+            .next()
+            .map(|batch| store.delete_applied_journal_rows(batch).unwrap())
+            .unwrap_or(0)
+    });
+    assert_eq!(removed, 6);
+    assert_eq!(
+        store.delete_applied_journal_rows(&plan.journal_ids).unwrap(),
+        0,
+        "a repeated batch deletes nothing"
+    );
+    assert_eq!(
+        store.delete_applied_journal_rows(&["a-t4-committed".to_string()]).unwrap(),
+        0,
+        "a batch never deletes a row that is not applied"
+    );
+
+    assert_eq!(
+        journal_ids(
+            &store,
+            "SELECT journal_id FROM task_commit_journal ORDER BY journal_id"
+        ),
+        [
+            "a-t1-3",
+            "a-t2-1",
+            "a-t3-3",
+            "a-t4-2",
+            "a-t4-aborted",
+            "a-t4-committed",
+            "a-t4-prepared",
+            "b-t1-1",
+            "b-t1-2",
+            "old-t1-2",
+        ]
+    );
+    assert_eq!(
+        store.journal_retention_candidates(scope, cutoff).unwrap(),
+        JournalRetentionCandidates::default()
+    );
+}
+
+/// The first journal pass ranked rows with a correlated subquery per
+/// candidate, which took 60 s on 40,000 rows inside its write transaction.
+/// The selection must be one indexed read whose cost is a sort, and each
+/// 1,000-row delete batch must stay short.
+#[test]
+fn forty_thousand_row_journal_selects_once_and_deletes_in_short_batches() {
+    const TEST: &str = "forty_thousand_row_journal_selects_once_and_deletes_in_short_batches";
+    const ROWS: i64 = 40_000;
+    const TASKS: i64 = 397;
+    let Some(root) = store_retention_isolated(TEST, Duration::from_secs(300)) else {
+        return;
+    };
+    let store = Store::open(&root.join("orbit.db")).unwrap();
+    let cutoff = Utc.with_ymd_and_hms(2026, 9, 1, 0, 0, 0).unwrap();
+    let first = cutoff - TimeDelta::seconds(ROWS / 2);
+    let state_of = |i: i64| match i % 10 {
+        0 => "committed",
+        1 => "prepared",
+        2 => "aborted",
+        _ => "applied",
+    };
+    store
+        .connection()
+        .lock()
+        .unwrap()
+        .execute(
+            "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i + 1 < ?2) \
+             INSERT INTO task_commit_journal (journal_id, workspace_id, task_id, state, \
+                 intent_json, created_at, committed_at, applied_at) \
+             SELECT printf('commit-%06d', i), 'ws_a', 'T-' || (i % ?3), \
+                 CASE i % 10 WHEN 0 THEN 'committed' WHEN 1 THEN 'prepared' \
+                     WHEN 2 THEN 'aborted' ELSE 'applied' END, \
+                 '{\"pad\":\"' || hex(randomblob(256)) || '\"}', \
+                 strftime('%Y-%m-%dT%H:%M:%S+00:00', ?1, '+' || i || ' seconds'), NULL, \
+                 CASE WHEN i % 10 > 2 THEN \
+                     strftime('%Y-%m-%dT%H:%M:%S+00:00', ?1, '+' || (i + 1) || ' seconds') END \
+             FROM n",
+            rusqlite::params![first.format("%Y-%m-%d %H:%M:%S").to_string(), ROWS, TASKS],
+        )
+        .unwrap();
+    // The oracle: applied rows settled before the cutoff that are not their
+    // task's newest applied row.
+    let mut newest = std::collections::HashMap::new();
+    for i in (0..ROWS).filter(|i| state_of(*i) == "applied") {
+        newest.insert(i % TASKS, i);
+    }
+    let expected = (0..ROWS)
+        .filter(|i| state_of(*i) == "applied")
+        .filter(|i| first + TimeDelta::seconds(i + 1) < cutoff)
+        .filter(|i| newest[&(i % TASKS)] != *i)
+        .count();
+    assert!(expected > 10_000, "the fixture selects a large history");
+
+    let started = thread_cpu_time();
+    let plan = store
+        .journal_retention_candidates(workspace_only("ws_a"), cutoff)
+        .unwrap();
+    let selection = thread_cpu_time() - started;
+    assert_eq!(plan.journal_ids.len(), expected);
+    assert!(
+        selection < Duration::from_secs(5),
+        "selecting from {ROWS} journal rows took {selection:?} of CPU"
+    );
+
+    let mut batches = plan.journal_ids.chunks(BATCH_ROWS);
+    let (removed, slowest) = drain(|| {
+        batches
+            .next()
+            .map(|batch| store.delete_applied_journal_rows(batch).unwrap())
+            .unwrap_or(0)
+    });
+    assert_eq!(removed, expected);
+    assert!(
+        slowest < Duration::from_secs(1),
+        "one {BATCH_ROWS}-row journal batch held the write lock for {slowest:?} of CPU"
+    );
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM task_commit_journal WHERE state <> 'applied'"
+        ),
+        ROWS * 3 / 10,
+        "prepared, committed and aborted rows all stay"
+    );
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(DISTINCT task_id) FROM task_commit_journal WHERE state = 'applied'"
+        ),
+        TASKS,
+        "every task keeps an applied row"
+    );
+    assert!(store
+        .journal_retention_candidates(workspace_only("ws_a"), cutoff)
+        .unwrap()
+        .journal_ids
+        .is_empty());
+}

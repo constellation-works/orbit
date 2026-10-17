@@ -4,14 +4,18 @@
 //! a committed journal row and a dead lease, or no lease at all once a host
 //! crash has lost the lease's name. The partition must converge to the
 //! committed state, and nothing may use the half-applied bundle first.
+//! Journal retention must not take that committed row away.
 
 use std::time::Duration;
 
+use chrono::{TimeDelta, Utc};
 use orbit_common::fs::io::FileLockOptions;
 
 use super::super::apply::apply_fault::{self, Fault};
 use super::claim_section::Owner;
-use crate::contracts::ExecutionClaimPhase;
+use crate::contracts::{
+    ExecutionClaimPhase, RetentionWorkspaceScope, StoreRetentionBackend, TaskCommitJournalState,
+};
 use crate::repository::task::v2_bundle::COMMIT_LEASE_DIR;
 
 /// The partition's commit leases, by name.
@@ -157,5 +161,91 @@ fn opening_a_boundary_replays_a_decision_whose_lease_was_lost() {
     assert!(
         !appended(&owner, &task_id, before).is_empty(),
         "the replay applied the bind's history"
+    );
+}
+
+/// Criterion: journal retention deletes only applied decisions. A decision a
+/// dead committer left committed survives the pass however old it is, and
+/// the next read still replays it to the committed state.
+#[test]
+fn journal_retention_keeps_an_interrupted_decision_for_its_replay() {
+    let owner = Owner::open(2);
+    let settled = owner.admit("settled");
+    settled.bind(&owner.boundary);
+    let admitted = owner.admit("crash");
+    let task_id = admitted.claim.task_id.clone();
+    let before = history_len(&owner, &task_id);
+    apply_fault::set(Fault::BeforeApply);
+    admitted
+        .try_bind(&owner.boundary)
+        .expect_err("the committer dies before its apply");
+
+    // Age every row, the unsettled one oldest, so neither its age nor its
+    // recency protects it: only its state does.
+    let store = &owner.boundary.store;
+    let applied_at = (Utc::now() - TimeDelta::days(400)).to_rfc3339();
+    let unsettled_at = (Utc::now() - TimeDelta::days(500)).to_rfc3339();
+    store
+        .connection()
+        .lock()
+        .expect("store connection")
+        .execute(
+            "UPDATE task_commit_journal \
+             SET created_at = CASE WHEN state = 'applied' THEN ?1 ELSE ?2 END, \
+                 applied_at = CASE WHEN state = 'applied' THEN ?1 END",
+            [&applied_at, &unsettled_at],
+        )
+        .expect("age the journal");
+    let scope = RetentionWorkspaceScope {
+        workspace_id: owner.boundary.workspace_id(),
+        legacy_ids: None,
+    };
+    let plan = store
+        .journal_retention_candidates(scope, Utc::now())
+        .expect("plan");
+    assert!(
+        !plan.journal_ids.is_empty(),
+        "the settled claim's earlier decisions are selected"
+    );
+    assert_eq!(
+        store
+            .delete_applied_journal_rows(&plan.journal_ids)
+            .expect("prune"),
+        plan.journal_ids.len()
+    );
+    let unsettled = store
+        .unsettled_task_commit_journal(owner.boundary.workspace_id())
+        .expect("journal");
+    assert_eq!(unsettled.len(), 1, "the interrupted decision survives");
+    assert_eq!(unsettled[0].state, TaskCommitJournalState::Committed);
+    assert_eq!(unsettled[0].task_id, task_id);
+
+    // The next read replays it exactly as it would have without the pass.
+    assert!(
+        !appended(&owner, &task_id, before).is_empty(),
+        "the replay applied the bind's history"
+    );
+    let row = owner
+        .tasks
+        .get_task_row(&task_id, false)
+        .expect("read")
+        .expect("task");
+    assert_eq!(row.task.job_run_id.as_deref(), Some("leaf-crash"));
+    assert!(
+        store
+            .unsettled_task_commit_journal(owner.boundary.workspace_id())
+            .expect("journal")
+            .is_empty(),
+        "the replay settles the journal"
+    );
+    assert_eq!(
+        admitted.bind(&owner.boundary).phase,
+        ExecutionClaimPhase::Running,
+        "the claim's receipt replays the committed outcome"
+    );
+    assert_eq!(
+        settled.bind(&owner.boundary).phase,
+        ExecutionClaimPhase::Running,
+        "a claim whose decisions were pruned still replays its receipt"
     );
 }

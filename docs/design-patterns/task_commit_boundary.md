@@ -68,6 +68,11 @@ admission: either would wait behind the shared lock the pass itself holds.
 | Decide | **Commit point.** One SQLite transaction inserts reservations/coordination rows, checks and replaces lifecycle rows, releases the settling claim’s reservation, and flips the journal to `committed`. Then `task.yaml` is published without syncs, so lock-free envelope readers see the decided status | Decided: recovery replays the apply |
 | Apply | After the admission section has released the partition, still under the bundle lock and lease: truncate `events.jsonl` to the intent's recorded pre-apply length (nothing to do, and no sync, when it is already there), append its events in one write and one sync, replay summary/comments/artifact bytes and manifest, republish `task.yaml` durably, settle the row `applied`, update the registry index, then unname the lease and release the bundle | Still decided: the next entrant replays it again |
 
+Recovery reads only `prepared` and `committed` rows; an `applied` or `aborted` row is never read
+again. `orbit gc journal` deletes applied rows older than `retention.journal_days`, keeping each
+task's newest applied row. It selects candidates in one read and deletes them by key in short
+batches, and it never selects a row recovery would replay.
+
 Nothing infers the decision from bundle contents, and nothing tries to un-publish an envelope.
 Because no bundle file but `task.yaml` is touched before the apply, and that only after the
 commit point, a pre-commit failure has nothing to compensate beyond the journal row and the

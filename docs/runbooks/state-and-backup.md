@@ -82,7 +82,13 @@ Another registered workspace keeps its own window. `orbit gc runs --apply` drops
 state for terminal runs past the run window, including those unregistered ids, while
 keeping their run and step rows, and prunes the per-minute run and host resource history
 (`run_resource_minutes`, `host_resource_minutes`) and the admission forecasts checked
-against it (`admission_forecasts`) older than 30 days. The seeded `store_gc` routine is disabled by default,
+against it (`admission_forecasts`) older than 30 days. `orbit gc journal --apply` deletes
+applied rows of the task commit journal (`task_commit_journal`) older than
+`retention.journal_days` (default 14), for this workspace and unregistered ids. Recovery
+replays only prepared and committed rows, so those, aborted rows and each task's newest
+applied row stay. The journal grows fastest, at about 600 rows of about 80 KB a day, which
+is why its window is shorter than the others; the `store_gc` routine does not run it. The
+seeded `store_gc` routine is disabled by default,
 so cleanup happens only after an operator applies a GC command or enables that routine.
 `orbit doctor` warns when the store file exceeds `retention.store_warn_bytes` (default
 1 GiB) and that routine is not enabled. Freed pages stay in the file until `VACUUM`.
