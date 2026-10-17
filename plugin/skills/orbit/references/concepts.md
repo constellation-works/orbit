@@ -94,9 +94,11 @@ declared explicitly.
 
 **Routine** — a definition (`.orbit/routines/*.yaml`) pointing at a
 `job:<name>` target, with a retry and overlap policy. The trigger is cron, or
-a state predicate for task-pilot. Definitions are
-per-user checkout state and are evaluated by every host holding an owner
-checkout of that workspace.
+a state predicate (`preparation_eligible` for task-pilot,
+`finding_unverified` for finding-verification). Definitions are per-user
+checkout state. An owner checkout evaluates its routines. A replica checkout
+schedules only cron routines whose job is `worktree_gc_pipeline` or
+`store_gc_pipeline`.
 
 **Sweep** — the stateless tick. `orbit clock tick` (alias `orbit sweep`)
 evaluates due routines and auto-tasks on this host. An OS clock unit invokes
