@@ -6,8 +6,8 @@ use chrono::{Duration, Utc};
 use orbit_core::{JobRun, JobRunState};
 use orbit_types::task::ExecutionLocation;
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
-use orbit_types::workflow::{JobRunStep, JobTargetType};
-use serde_json::Value;
+use orbit_types::workflow::{ActivityCrewDraw, JobRunStep, JobTargetType, PipelineState};
+use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};
 
@@ -199,6 +199,88 @@ fn readiness_keeps_a_failure_that_an_overlapping_success_did_not_clear() {
     );
 }
 
+#[test]
+fn readiness_counts_recorded_draws_instead_of_the_task_crew() {
+    isolated(
+        "provider_auth::readiness_counts_recorded_draws_instead_of_the_task_crew",
+        || {
+            let fixture = claude_fixture();
+            let now = Utc::now();
+            save_failed(
+                &fixture,
+                "jrun-auth",
+                "dk-server-2",
+                now - Duration::minutes(10),
+                "provider_unavailable",
+                "[provider_unavailable] provider=claude token expired",
+            );
+            let server = fixture.server(false);
+            let uri = format!("/api/workflows/auto/readiness?workspace={WS}");
+            for (job, key) in [
+                ("task_pilot_pipeline", "workflow.low_complexity_crews"),
+                (
+                    "blocked_task_recovery_pipeline",
+                    "workflow.final_recovery_crews",
+                ),
+                ("finding_verification_pipeline", ""),
+            ] {
+                for drawn in [Some("codex_fixture"), None, Some("opus")] {
+                    let mut run = located(
+                        "dk-server-2",
+                        now - Duration::minutes(2),
+                        JobRunState::Success,
+                        Some("opus"),
+                    );
+                    run.run_id = format!("jrun-{job}");
+                    run.job_id = job.into();
+                    let mut state = PipelineState::new(run.run_id.clone(), job.into(), json!({}));
+                    if let Some(crew) = drawn {
+                        if key.is_empty() {
+                            state.pipeline = json!({
+                                "prepare": {"partitions": [{"crew": crew}]},
+                                "verdict_results": [{"tasks": []}],
+                            });
+                        } else {
+                            state.activity_crew_draws.insert(
+                                key.into(),
+                                ActivityCrewDraw {
+                                    crew: crew.into(),
+                                    source: key.into(),
+                                    eligible_pool: Vec::new(),
+                                },
+                            );
+                        }
+                    }
+                    fixture
+                        .runtime
+                        .sqlite_store()
+                        .unwrap()
+                        .upsert_job_run_for_workspace(
+                            &fixture.runtime.workspace_id().unwrap(),
+                            &run,
+                            Some(&state),
+                        )
+                        .unwrap();
+                    let readiness = json_ok(server.get(&uri));
+                    let standing = readiness["provider_auth_failures"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|item| item["host"] == "dk-server-2" && item["provider"] == "claude");
+                    assert_eq!(
+                        standing,
+                        drawn != Some("opus"),
+                        "{job} with draw {drawn:?} must clear only the drawn provider: {readiness}"
+                    );
+                    // Remove this success from the next case's seven-day projection.
+                    run.created_at = now - Duration::days(8);
+                    fixture.save_run(&run);
+                }
+            }
+        },
+    );
+}
+
 /// A fixture whose `opus` crew runs on claude, so runs that resolve to it
 /// count as claude runs.
 fn claude_fixture() -> Fixture {
@@ -209,6 +291,7 @@ fn claude_fixture() -> Fixture {
         "\n[workflow]\ndefault_crew = \"opus\"\n",
         "\n[crews.opus]\nprovider = \"claude\"\nmodel = \"opus\"\n",
     ));
+    global.push_str("\n[crews.codex_fixture]\nprovider = \"codex\"\nmodel = \"fixture\"\n");
     std::fs::write(global_path, global).unwrap();
     fixture
 }

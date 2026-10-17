@@ -174,7 +174,13 @@ pub(super) fn run_fan_out(
             Ok(o) => {
                 failed_count += 1;
                 collected.push(Value::Null);
-                if first_failure.is_none() {
+                let provider_failure = |message: Option<&str>| {
+                    orbit_types::workflow::ProviderFailureClass::of(None, message).is_some()
+                };
+                if first_failure.is_none()
+                    || (provider_failure(o.message.as_deref())
+                        && !provider_failure(first_failure.as_deref()))
+                {
                     first_failure.clone_from(&o.message);
                 }
                 errors.push(Value::String(o.message.unwrap_or_else(|| {
@@ -222,9 +228,9 @@ pub(super) fn run_fan_out(
     }
     record_pipeline(ctx, &step.id, collected_value.clone());
 
-    // A failed join keeps the first failing worker's own diagnostic, so the
-    // run's terminal error carries the provider marker or other cause that
-    // worker reported instead of the executor's generic fallback.
+    // A failed join prefers the first provider diagnostic, otherwise the
+    // first worker message. An ordinary failure earlier in the batch must
+    // not hide a provider failure and leave the next routine tick unheld.
     Ok(StepOutcome {
         success: block_ok,
         output: collected_value,

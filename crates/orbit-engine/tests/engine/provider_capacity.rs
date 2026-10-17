@@ -934,11 +934,65 @@ fn a_red_base_validation_failure_dispatches_no_recovery() {
     );
 }
 
+/// A provider failure in a later worker must survive an earlier work failure.
+fn fan_out_prefers_a_provider_failure_over_an_ordinary_failure() {
+    let fake = FakeProvider::new("codex", "", "", 1, "");
+    fs::write(&fake.path, r#"#!/bin/sh
+prompt=$(cat)
+case "$prompt" in
+  *provider-worker*)
+    echo '{"type":"turn.failed","error":{"message":"Selected model is at capacity. Please try a different model."}}'
+    exit 1
+    ;;
+  *)
+    echo '{"schemaVersion":1,"status":"failed","result":{},"error":{"code":"work_failed","message":"ordinary work failure"}}'
+    exit 0
+    ;;
+esac
+"#).unwrap();
+    let worktree = tempfile::tempdir().unwrap();
+    let host = CapacityHost::new(&fake.path, worktree.path());
+    let mut spec = agent_spec(Provider::Codex);
+    spec.instruction = "{{ input.label }}".into();
+    for labels in [
+        vec!["ordinary-worker", "provider-worker"],
+        vec!["provider-worker", "ordinary-worker"],
+    ] {
+        let job = load_job_asset(&json!({
+            "schemaVersion": 2, "kind": "Job", "metadata": {"name": "fanout_failure"},
+            "spec": {"state": "enabled", "kind": "workflow", "steps": [{
+                "id": "workers",
+                "fan_out": {"items": serde_json::to_string(&labels).unwrap(), "max_workers": 2, "worker": {
+                    "id": "worker", "spec": ActivityV2Spec::AgentLoop(spec.clone()),
+                    "default_input": {"label": "{{ item }}"},
+                }},
+                "fan_in": {"join": {"mode": "all"}, "errors": "worker_errors"},
+            }]},
+        }).to_string()).unwrap().spec;
+        let run = run_job(&job, &host, "mixed-failure");
+        let message = failure_message(&run.outcome);
+        assert!(
+            is_provider_capacity_exhausted(None, Some(&message)),
+            "a later provider failure must form a hold despite an earlier work failure: {message}"
+        );
+        let outcome = run.outcome.unwrap();
+        assert!(!outcome.success);
+        assert_eq!(
+            outcome.pipeline["worker_errors"].as_array().unwrap().len(),
+            2
+        );
+    }
+}
+
 /// Behavior-distinct rows share one bounded family process.
 #[test]
 fn provider_failure_contracts_1() {
     crate::git_fixture::isolated(module_path!(), "provider_failure_contracts_1", || {
         crate::git_fixture::run_scenarios(&[
+            (
+                "fan_out_prefers_a_provider_failure_over_an_ordinary_failure",
+                fan_out_prefers_a_provider_failure_over_an_ordinary_failure,
+            ),
             (
                 "capacity_is_typed_only_from_text_the_failed_provider_wrote",
                 capacity_is_typed_only_from_text_the_failed_provider_wrote,

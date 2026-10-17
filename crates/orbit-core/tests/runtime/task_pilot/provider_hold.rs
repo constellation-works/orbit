@@ -940,6 +940,120 @@ model = "fixture-c"
     );
 }
 
+/// Recovery and verification run agents on recorded draws, not the task crew.
+fn recovery_and_verification_count_their_recorded_draws() {
+    let config = r#"
+[workflow]
+default_crew = "codex_a"
+low_complexity_crews = ["codex_a", "codex_b"]
+[crews.codex_a]
+provider = "codex"
+model = "fixture-a"
+[crews.codex_b]
+provider = "codex"
+model = "fixture-b"
+[crews.claude_c]
+provider = "claude"
+model = "fixture-c"
+"#;
+    let now = Utc::now();
+    for job in [
+        "blocked_task_recovery_pipeline",
+        "finding_verification_pipeline",
+    ] {
+        let workspace = workspace_with(config);
+        let task = workspace.task("another provider's recovery does not clear this login");
+        save_failure(
+            &workspace,
+            "jrun-auth",
+            now,
+            now - Duration::minutes(10),
+            ProviderFailureClass::Unavailable,
+            "codex",
+            "codex_a",
+        );
+        let mut run = finished_run(
+            "jrun-drawn-success",
+            now,
+            now - Duration::minutes(2),
+            JobRunState::Success,
+            Some("codex_a"),
+            this_host(),
+        );
+        run.job_id = job.into();
+        let mut state = PipelineState::new(run.run_id.clone(), job.into(), json!({}));
+        if job == "blocked_task_recovery_pipeline" {
+            state.activity_crew_draws.insert(
+                "workflow.final_recovery_crews".into(),
+                ActivityCrewDraw {
+                    crew: "claude_c".into(),
+                    source: "fixture".into(),
+                    eligible_pool: Vec::new(),
+                },
+            );
+        } else {
+            state.pipeline = json!({
+                "prepare": {"partitions": [{"crew": "claude_c"}]},
+                "verdict_results": [{"tasks": []}],
+            });
+        }
+        save_run(&workspace, &run, Some(&state));
+        let reason = assert_withheld(&workspace, now, &task.id);
+        assert!(
+            reason.contains("provider_unavailable codex"),
+            "{job}: {reason}"
+        );
+    }
+
+    // Two codex verifier partitions and an unrelated claude filer. Capacity
+    // holds only the failed partition's crew, including in the escalation round.
+    for escalation in [false, true] {
+        let workspace = workspace_with(config);
+        let task = workspace.task("capacity belongs to the failed verifier partition");
+        let mut run = finished_run(
+            "jrun-verifier-capacity",
+            now,
+            now - Duration::minutes(5),
+            JobRunState::Failed,
+            Some("claude_c"),
+            this_host(),
+        );
+        run.job_id = "finding_verification_pipeline".into();
+        let message =
+            provider_failure_text(ProviderFailureClass::Capacity, "codex", "fixture failure");
+        let partitions = json!([{ "crew": "codex_a" }, { "crew": "codex_b" }]);
+        let mut state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
+        state.pipeline = if escalation {
+            json!({"prepare": {"partitions": [{"crew": "claude_c"}]},
+                "verdict_results": [{"tasks": []}],
+                "apply": {"escalation_prepared": {"partitions": partitions}},
+                "escalation_errors": [null, message]})
+        } else {
+            json!({"prepare": {"partitions": partitions}, "verdict_errors": [null, message]})
+        };
+        save_run(&workspace, &run, Some(&state));
+        save_step(
+            &workspace,
+            &run.run_id,
+            now - Duration::minutes(5),
+            ProviderFailureClass::Capacity,
+            "codex",
+        );
+        assert_resumes(&workspace, now, &task.id);
+        let (_, draw) = low_draw(&workspace);
+        assert_eq!(
+            draw.crew, "codex_a",
+            "only the failing verifier loses capacity: {}",
+            draw.source
+        );
+        assert!(
+            draw.source.contains("provider_capacity codex_b"),
+            "{}",
+            draw.source
+        );
+    }
+}
+
 /// A pilot admitted into debounce before the failure keeps its pending member.
 /// The hold that starts during the debounce must still stop its dispatch.
 fn a_hold_that_starts_during_debounce_withholds_the_pending_pilot() {
@@ -976,6 +1090,7 @@ crate::scenario_table!(
     a_success_started_before_the_failure_does_not_clear_it,
     a_pilot_that_fails_on_the_provider_login_withholds_the_next_tick,
     a_pilot_run_counts_as_the_crew_it_drew,
+    recovery_and_verification_count_their_recorded_draws,
     an_auth_probe_recovery_clears_unavailable,
     unavailable_holds_every_crew_of_the_provider,
     another_providers_crew_is_drawn_and_the_routine_still_admits,
