@@ -121,6 +121,8 @@ pub(super) struct CheckRecovery {
     handled: BTreeSet<u64>,
     /// The classification each action was taken on, for the evidence.
     actions: Vec<String>,
+    /// Latest required-check read during failure classification; diagnostics only.
+    pub(super) required_observation: Option<Value>,
 }
 
 impl CheckRecovery {

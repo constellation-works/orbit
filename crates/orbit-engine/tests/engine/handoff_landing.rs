@@ -253,8 +253,8 @@ fn a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts() {
             "baseRefName": context.candidate.base_branch,
             "headRefOid": context.candidate.candidate.commit,
             "mergeCommit": {"oid": "provider-merge"},
-            // Unknown to the typed answer; the evidence still quotes it.
-            "futureField": {"nested": [1, "x", null]},
+            // Arbitrary provider payload is excluded from persisted evidence.
+            "futureField": {"transcript": format!("ghp_{}", "a".repeat(36))},
         });
         status[field] = json!(replacement);
         let host = ReconciliationHost {
@@ -282,7 +282,14 @@ fn a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts() {
             HandoffLandingStep::Stop { repairable: false },
             "stale delivery evidence is not a base conflict a rebase repairs"
         );
-        let reason: String = serde_json::from_str(&updates[1].evidence).unwrap();
+        let stopped: Value = serde_json::from_str(&updates[1].evidence).unwrap();
+        assert_eq!(stopped["kind"], "owner_landing_refusal");
+        assert_eq!(
+            stopped["observation"]["required_checks"]["state"],
+            "not_collected"
+        );
+        assert!(updates[1].observed.is_none());
+        let reason = stopped["reason"]["value"].as_str().unwrap();
         assert!(
             reason.contains("delivery_evidence_stale")
                 && reason.contains(field)
@@ -292,17 +299,28 @@ fn a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts() {
         assert!(
             matches!(error, OrbitError::Execution(ref message) if message == &format!("handoff_land: {reason}"))
         );
+        let reconciled: Value = serde_json::from_str(&updates[0].evidence).unwrap();
+        assert_eq!(reconciled["reconciled"], "pull_request_merged");
+        assert_eq!(reconciled["pull_request"], 42);
+        assert_eq!(reconciled["delivery_error"]["value"], reason);
+        let observed_field = match field {
+            "headRefName" => "head_branch",
+            "baseRefName" => "base_branch",
+            "headRefOid" => "head",
+            _ => unreachable!(),
+        };
         assert_eq!(
-            updates[0].evidence,
-            json!({
-                "reconciled": "pull_request_merged",
-                "pull_request": 42,
-                "provider_state": host.status,
-                "delivery_error": reason,
-            })
-            .to_string(),
-            "reconciliation evidence quotes the provider's answer byte for byte"
+            reconciled["provider_state"][observed_field]["value"],
+            replacement
         );
+        assert_eq!(
+            stopped["observation"]["pr"][observed_field]["value"],
+            replacement
+        );
+        for update in &updates {
+            assert!(!update.evidence.contains("futureField"));
+            assert!(!update.evidence.contains(&format!("ghp_{}", "a".repeat(36))));
+        }
         assert!(
             host.handoff_landing_context("handoff-1")
                 .unwrap()
@@ -665,6 +683,11 @@ impl FakeForge {
             .unwrap()
             .evidence
             .clone()
+    }
+
+    fn stop_reason(&self) -> String {
+        let evidence: Value = serde_json::from_str(&self.last_evidence()).unwrap();
+        evidence["reason"]["value"].as_str().unwrap().to_owned()
     }
 
     fn job_json(job: &FakeJob) -> Value {
@@ -1203,6 +1226,11 @@ fn owner_landing_pending_evidence_never_extends_refusal_or_merge_authority() {
         || {
             for case in [
                 "optional",
+                "empty_contexts",
+                "null_contexts",
+                "missing_contexts",
+                "bounded_redacted",
+                "bounded_reason",
                 "optional_failed_required_pending",
                 "administrative",
                 "review",
@@ -1247,6 +1275,43 @@ fn owner_landing_pending_evidence_never_extends_refusal_or_merge_authority() {
                 let mut merges = false;
                 let mut reason = "cannot be merged";
                 match case {
+                    "empty_contexts" => {
+                        patch["statusCheckRollup"] = json!([]);
+                        policy["pull_request"]["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
+                            ["contexts"]["nodes"] = json!([]);
+                    }
+                    "null_contexts" | "missing_contexts" => {
+                        let commit = &mut policy["pull_request"]["commits"]["nodes"][0]["commit"];
+                        if case == "null_contexts" {
+                            commit["statusCheckRollup"] = Value::Null;
+                        } else {
+                            commit.as_object_mut().unwrap().remove("statusCheckRollup");
+                        }
+                    }
+                    "bounded_reason" => {
+                        patch["mergedAt"] =
+                            json!(format!("ghp_{}{}", "a".repeat(36), "界".repeat(5000)));
+                        reason = "contradictory";
+                    }
+                    "bounded_redacted" => {
+                        let secret = format!("ghp_{}", "a".repeat(36));
+                        patch["statusCheckRollup"] = json!(
+                            (0..40)
+                                .map(|_| json!({
+                                    "name":format!("{secret} {}", "界".repeat(800)),
+                                    "status":"COMPLETED", "conclusion":"SUCCESS"
+                                }))
+                                .collect::<Vec<_>>()
+                        );
+                        // Arbitrary raw payload must never enter persisted diagnostics.
+                        policy["transcript"] = json!("untrusted-raw-payload-sentinel");
+                        policy["pull_request"]["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
+                            ["contexts"]["nodes"] =
+                            json!((0..40).map(|_| json!({
+                            "name":format!("{secret} {}", "界".repeat(800)),
+                            "status":"COMPLETED", "conclusion":"SUCCESS", "isRequired":true
+                        })).collect::<Vec<_>>());
+                    }
                     "optional" => {
                         policy = pending_policy(&head, "IN_PROGRESS", false);
                         patch["statusCheckRollup"] = json!([{"name":"optional","status":"QUEUED"}]);
@@ -1422,6 +1487,143 @@ fn owner_landing_pending_evidence_never_extends_refusal_or_merge_authority() {
                             host.forge.steps(),
                             [HandoffLandingStep::Stop { repairable: false }],
                             "{case}"
+                        );
+                        let updates = host.forge.updates.lock().unwrap();
+                        let stopped = updates.last().unwrap();
+                        assert!(
+                            stopped.observed.is_none(),
+                            "diagnostics never carry candidate authority"
+                        );
+                        let evidence: Value = serde_json::from_str(&stopped.evidence).unwrap();
+                        assert_eq!(evidence["schema_version"], 1, "{case}: {evidence}");
+                        assert_eq!(evidence["kind"], "owner_landing_refusal");
+                        assert_eq!(evidence["repairable"], false);
+                        assert!(
+                            evidence["reason"]["value"]
+                                .as_str()
+                                .unwrap()
+                                .contains(reason)
+                        );
+                        assert_eq!(evidence["accepted"]["candidate"]["value"], head);
+                        assert_eq!(evidence["emission_proof"]["state"], "not_collected");
+                        assert_eq!(evidence["workflow_prerequisites"]["state"], "not_collected");
+                        let observation = &evidence["observation"];
+                        let required = &observation["required_checks"];
+                        match case {
+                            "empty_contexts" => {
+                                assert_eq!(observation["pr"]["rollup"]["original_count"], 0);
+                                assert_eq!(required["contexts"]["original_count"], 0);
+                                assert_eq!(required["outcome"], "parsed");
+                                assert_eq!(
+                                    observation["classification"]["value"],
+                                    "blocked: required reviews or checks are not satisfied"
+                                );
+                            }
+                            "null_contexts" | "missing_contexts" => {
+                                assert_eq!(required["outcome"], "parsed");
+                                assert_eq!(required["contexts"]["state"], "missing");
+                                assert_eq!(
+                                    required["rollup_state"],
+                                    if case == "null_contexts" {
+                                        "null"
+                                    } else {
+                                        "missing"
+                                    }
+                                );
+                            }
+                            "timeout" | "changing_checks_timeout" => {
+                                assert_eq!(required["outcome"], "parsed");
+                                assert_eq!(required["contexts"]["items"][0]["state"], "Pending");
+                                assert_eq!(observation["classification"]["value"], "pending");
+                            }
+                            "review" => {
+                                assert_eq!(observation["pr"]["review"]["value"], "REVIEW_REQUIRED");
+                                assert_eq!(required["state"], "not_collected");
+                            }
+                            "optional_failed_required_pending" => {
+                                assert_eq!(
+                                    observation["pr"]["rollup"]["items"][1]["state"],
+                                    "Failed"
+                                );
+                                assert_eq!(required["outcome"], "parsed");
+                            }
+                            "auth" => assert_eq!(required["outcome"], "read_error"),
+                            "missing_policy" | "truncated" => {
+                                assert_eq!(required["outcome"], "parse_error")
+                            }
+                            "foreign_policy" | "foreign_commit" | "missing_policy_head" => {
+                                assert_eq!(required["outcome"], "head_mismatch");
+                            }
+                            "unknown_check" => {
+                                assert_eq!(required["outcome"], "unreadable_state");
+                                assert_eq!(
+                                    required["contexts"]["items"][0]["provider_status"]["value"],
+                                    "UNRECOGNIZED"
+                                );
+                            }
+                            "unreadable_rollup" => {
+                                assert_eq!(observation["pr"]["rollup"]["state"], "null");
+                                assert_eq!(required["state"], "not_collected");
+                            }
+                            "bounded_reason" => {
+                                let reason = &evidence["reason"];
+                                assert_eq!(reason["truncated"], true);
+                                assert!(reason["original_chars"].as_u64().unwrap() > 5000);
+                                let human = reason["value"].as_str().unwrap();
+                                assert_eq!(human.chars().count(), 4096);
+                                assert!(
+                                    human.ends_with("landing needs an unambiguous merged state")
+                                );
+                                assert!(
+                                    !stopped
+                                        .evidence
+                                        .contains(&format!("ghp_{}", "a".repeat(36)))
+                                );
+                            }
+                            "bounded_redacted" => {
+                                assert!(
+                                    !stopped
+                                        .evidence
+                                        .contains(&format!("ghp_{}", "a".repeat(36)))
+                                );
+                                assert!(
+                                    !stopped.evidence.contains("untrusted-raw-payload-sentinel")
+                                );
+                                for entries in [&observation["pr"]["rollup"], &required["contexts"]]
+                                {
+                                    assert_eq!(entries["original_count"], 40);
+                                    assert_eq!(entries["truncated"], true);
+                                    assert_eq!(entries["items"].as_array().unwrap().len(), 32);
+                                    let name = &entries["items"][0]["name"];
+                                    assert_eq!(name["original_chars"], 841);
+                                    assert_eq!(name["truncated"], true);
+                                    assert_eq!(
+                                        name["value"].as_str().unwrap().chars().count(),
+                                        512
+                                    );
+                                }
+                                assert!(stopped.evidence.len() < 160_000);
+                            }
+                            _ => {}
+                        }
+                        assert_eq!(
+                            host.forge.sent("pr.required_checks").len(),
+                            match case {
+                                "review"
+                                | "review_failed"
+                                | "draft_failed"
+                                | "contradiction_failed"
+                                | "missing_state"
+                                | "changes_requested"
+                                | "unknown_review"
+                                | "unreadable_rollup"
+                                | "contradiction"
+                                | "bounded_reason" => 0,
+                                "timeout" | "changing_checks_timeout" => expected_waits,
+                                "head_changed" | "base_changed" => 1,
+                                _ => expected_waits + 1,
+                            },
+                            "{case}: diagnostic capture adds no required-check read"
                         );
                     }
                 }
@@ -1667,7 +1869,7 @@ fn an_inherited_failure_that_survives_the_branch_update_gets_one_repair() {
             vec![HandoffLandingStep::Stop { repairable }],
             "{label}"
         );
-        let reason: String = serde_json::from_str(&forge.last_evidence()).unwrap();
+        let reason = forge.stop_reason();
         assert!(
             reason.contains("CI / clippy")
                 && reason.contains(signature)
@@ -1727,7 +1929,7 @@ fn a_candidate_caused_check_failure_gets_one_repair_then_stops_in_review() {
             vec![HandoffLandingStep::Stop { repairable }],
             "repair spent: {repair_spent}, base ran: {base_ran}"
         );
-        let reason: String = serde_json::from_str(&forge.last_evidence()).unwrap();
+        let reason = forge.stop_reason();
         assert!(
             reason.contains("classified `candidate`")
                 && reason.contains("cannot find value `delivered` in this scope")
@@ -1771,7 +1973,7 @@ fn a_transient_check_failure_is_rerun_once_before_it_is_judged() {
                 forge.steps(),
                 vec![HandoffLandingStep::Stop { repairable: false }]
             );
-            let reason: String = serde_json::from_str(&forge.last_evidence()).unwrap();
+            let reason = forge.stop_reason();
             assert!(
                 reason.contains("classified `transient`") && reason.contains("one rerun"),
                 "{reason}"
@@ -1871,7 +2073,7 @@ fn a_check_failure_whose_evidence_cannot_be_read_spends_nothing() {
             vec![HandoffLandingStep::Stop { repairable: false }],
             "{case}: no automatic repair"
         );
-        let reason: String = serde_json::from_str(&forge.last_evidence()).unwrap();
+        let reason = forge.stop_reason();
         assert!(
             reason.contains(why) && reason.contains("stays in review"),
             "{case}: {reason}"
@@ -2062,7 +2264,7 @@ fn a_required_aggregate_failure_is_classified_from_its_source_annotations() {
             vec![HandoffLandingStep::Stop { repairable }],
             "{case}"
         );
-        let reason: String = serde_json::from_str(&forge.last_evidence()).unwrap();
+        let reason = forge.stop_reason();
         let class = if case == "candidate" || case == "spent" {
             "classified `candidate`"
         } else {

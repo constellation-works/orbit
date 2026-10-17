@@ -1326,6 +1326,34 @@ one. From then on:
   failure past that budget, or one the landing cannot classify (its jobs or
   log are unreadable), stops the landing with the task in `review` and the
   classification in the stop evidence (`orbit task show <task-id>`).
+  Owner PR refusals also retain a versioned JSON diagnostic in the existing
+  landing-attempt evidence string (`kind: owner_landing_refusal`,
+  `schema_version: 1`), alongside its safe human-readable `reason.value`.
+  Read it from the stopped attempt, whose attempt number and owner run bind it
+  to the accepted handoff; retrying the same handoff preserves that first
+  attempt's evidence. Older plain-string evidence remains valid.
+
+  The diagnostic records the accepted base/candidate, latest typed PR identity,
+  review and rollup, owner-owed contexts, final observed classification, and
+  whether the required-check read was collected, failed to read/parse, or
+  disagreed about the head. Its allowlisted required-check projection includes
+  the provider's `isRequired` observations, **not** a separately versioned
+  branch-policy snapshot. Missing, null, unreadable, unknown and collected-empty
+  observations must not be interpreted as passing checks.
+
+  Capture adds no provider requests. Only the latest status observation is
+  retained; `status_observations` counts the observations it replaces. Each
+  collection retains at most 32 entries with original count and truncation,
+  and observation strings are redacted before a 512-character limit with
+  original character count and truncation. The human reason has a separate
+  4,096-character limit, retaining its beginning and final disposition when
+  truncated. Arbitrary payloads, URL fields and transcript archives are excluded.
+  Workflow prerequisites and emission proof are explicitly `not_collected` by
+  this diagnostic, even if separate recovery work obtained its own evidence.
+  A later workflow/job timestamp therefore cannot prove what the initial API
+  returned or that a required check would eventually appear. These observations
+  grant no wait, repair or merge authority and do not change existing deadlines.
+
 - An older published head can also lack a currently required context while
   every reported check succeeded. With captured landing authority (or the
   owner's `auto_fix` completion authority), recovery can update the branch

@@ -60,9 +60,8 @@ pub struct PullRequestStatus {
     pub(crate) review_decision: ReviewDecision,
     /// `None` when the provider reported no readable rollup.
     pub(crate) status_checks: Option<Vec<StatusCheck>>,
-    /// The provider's answer as received, kept only so landing
-    /// reconciliation evidence can quote it byte for byte. No decision may
-    /// read it.
+    /// The provider's answer as received, for allowlisted diagnostic projection.
+    /// No decision may read it, and it must not be persisted wholesale.
     raw: Value,
 }
 
@@ -132,7 +131,7 @@ impl PullRequestStatus {
         }
     }
 
-    /// The provider's answer exactly as received, for evidence only.
+    /// The provider's answer exactly as received, for diagnostic projection only.
     pub(in crate::executor::automation::vcs) fn provider_state(&self) -> &Value {
         &self.raw
     }
@@ -188,7 +187,7 @@ pub(crate) enum CheckState {
 }
 
 impl StatusCheck {
-    fn parse(check: &Value) -> Self {
+    pub(super) fn parse(check: &Value) -> Self {
         let state = Self::classify(check);
         Self {
             name: reported(check.get("name").or_else(|| check.get("context"))),
@@ -512,6 +511,33 @@ impl RequiredChecks {
         })
     }
 
+    /// Retain an allowlisted observation alongside the existing parser result.
+    /// This diagnostic is never consulted by a decision or authorization.
+    pub(in crate::executor::automation::vcs) fn observe_response(
+        response: Result<Value, OrbitError>,
+        observation: &mut Value,
+    ) -> Result<Self, OrbitError> {
+        let answer = match response {
+            Ok(answer) => answer,
+            Err(error) => {
+                *observation = json!({"state":"read_failed", "outcome":"read_error",
+                    "error":super::diagnostics::text(&error.to_string())});
+                return Err(error);
+            }
+        };
+        *observation = super::diagnostics::required_response(&answer);
+        let parsed = Self::from_response(&answer);
+        observation["outcome"] = json!(if parsed.is_ok() {
+            "parsed"
+        } else {
+            "parse_error"
+        });
+        if let Err(error) = &parsed {
+            observation["error"] = super::diagnostics::text(&error.to_string());
+        }
+        parsed
+    }
+
     /// Whether the rollup entry `(workflow, name)` is required. A rollup
     /// entry without a workflow matches by name alone.
     pub(in crate::executor::automation::vcs) fn requires(
@@ -535,14 +561,25 @@ pub(in crate::executor::automation::vcs) fn read_required_checks<H: RuntimeHost 
     workspace_path: &Path,
     pr_number: &str,
 ) -> Result<RequiredChecks, OrbitError> {
+    read_required_checks_observed(host, workspace_path, pr_number, &mut Value::Null)
+}
+
+pub(in crate::executor::automation::vcs) fn read_required_checks_observed<
+    H: RuntimeHost + ?Sized,
+>(
+    host: &H,
+    workspace_path: &Path,
+    pr_number: &str,
+    observation: &mut Value,
+) -> Result<RequiredChecks, OrbitError> {
     let response = host.run_private_vcs_operation(
         operations::PR_REQUIRED_CHECKS,
         json!({
             "pr": pr_number,
             "workspace_path": workspace_path.to_string_lossy(),
         }),
-    )?;
-    RequiredChecks::from_response(&response)
+    );
+    RequiredChecks::observe_response(response, observation)
 }
 
 fn reported(value: Option<&Value>) -> Option<String> {
