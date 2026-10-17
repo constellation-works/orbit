@@ -12,18 +12,17 @@
 //! crew of the provider when the hold covers the whole provider. A probe does
 //! not clear capacity. Limit and refusal failures are not holds here.
 //!
-//! A run counts as the crew it ran as: its `resolved_crew`, except that a
-//! `task_pilot_pipeline` run counts as the crew its pilots drew from the low
-//! pool. A pilot's own provider failure reaches its run record because a
-//! failed fan-out keeps the failing worker's message.
+//! Readiness and holds share recorded crew attribution: pilots and blocked
+//! recovery use their frozen draws, finding verification uses its dispatched
+//! partitions, and ordinary jobs use `resolved_crew`. A pilot's own provider
+//! failure reaches its run because a failed fan-out prefers a provider message.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{JobRunOrder, JobRunQuery};
 use orbit_types::identity::Crew;
-use orbit_types::task::TaskComplexity;
 use orbit_types::workflow::{
     JobRun, JobRunState, PipelineState, ProviderFailureClass, failed_provider,
 };
@@ -33,18 +32,12 @@ use super::auth_failures::{
     SCAN_LIMIT, bounded_query, canonical_provider, clearing_at, host_of, run_at,
 };
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::complexity_crews_key;
 use crate::runtime::task::provider_hold::base_backoff;
 
 /// How far back a failure or the success that clears it is read. The longest
 /// base backoff honoured here is 30 minutes; the extra half hour keeps a
 /// failure whose row was created slightly before it finished.
 const LOOKBACK: Duration = Duration::hours(1);
-
-/// The job the task-pilot routine starts. Its `resolved_crew` names the
-/// batch's task crews, but its agent work runs as the crew it froze under
-/// `workflow.low_complexity_crews`, so that draw is the crew it ran as.
-const PILOT_JOB: &str = "task_pilot_pipeline";
 
 /// One standing unavailable or capacity hold on this host.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,28 +133,20 @@ impl OrbitRuntime {
             .into_iter()
             .filter(|run| on_this_host(run, &aliases, &fallback))
             .collect::<Vec<_>>();
-        let pilot_crews =
-            self.pilot_drawn_crews(failures.iter().map(|(run, ..)| run).chain(successes.iter()))?;
-        let ran_as = |run: &JobRun| -> Option<String> {
-            if run.job_id == PILOT_JOB {
-                pilot_crews.get(&run.run_id).cloned()
-            } else {
-                run.resolved_crew.clone()
-            }
-        };
+        let crews =
+            self.recorded_run_crews(failures.iter().map(|(run, ..)| run).chain(successes.iter()))?;
 
         let mut provider_success: BTreeMap<String, DateTime<Utc>> = BTreeMap::new();
         let mut crew_success: BTreeMap<(String, String), DateTime<Utc>> = BTreeMap::new();
         for run in &successes {
-            let Some(crew_name) = ran_as(run) else {
-                continue;
-            };
-            let Some(provider) = self.provider_of_crew(&crew_name) else {
-                continue;
-            };
-            let at = clearing_at(run);
-            note_later(&mut provider_success, provider.clone(), at);
-            note_later(&mut crew_success, (provider, crew_name), at);
+            for crew_name in crews.crews(run, None) {
+                let Some(provider) = self.provider_of_crew(&crew_name) else {
+                    continue;
+                };
+                let at = clearing_at(run);
+                note_later(&mut provider_success, provider.clone(), at);
+                note_later(&mut crew_success, (provider, crew_name), at);
+            }
         }
         // A pull drain is long-lived: its row is created when the window
         // opens, and a probe records `recovered_at` on that same row later.
@@ -178,31 +163,40 @@ impl OrbitRuntime {
 
         let mut open: BTreeMap<(String, String, Option<String>), OpenFailure> = BTreeMap::new();
         for (run, class, message, at) in &failures {
-            let Some(failure) =
-                self.open_failure(run, *class, message.as_deref(), *at, ran_as(run))
-            else {
-                continue;
+            let assignments = crews.crews(run, message.as_deref());
+            // A named provider still forms a provider-wide hold when its
+            // recorded assignment is missing, rather than blaming the task crew.
+            let assignments = if assignments.is_empty() {
+                vec![None]
+            } else {
+                assignments.into_iter().map(Some).collect()
             };
-            if hold_cleared(&failure, &provider_success, &crew_success, &provider_probe) {
-                continue;
-            }
-            let key = (
-                failure.class.as_str().to_string(),
-                failure.provider.clone(),
-                failure.crew.clone(),
-            );
-            match open.get_mut(&key) {
-                Some(existing)
-                    if failure.at > existing.at
-                        || (failure.at == existing.at
-                            && failure.run_id.as_str() > existing.run_id.as_str()) =>
-                {
-                    existing.at = failure.at;
-                    existing.run_id = failure.run_id.clone();
+            for crew in assignments {
+                let Some(failure) = self.open_failure(run, *class, message.as_deref(), *at, crew)
+                else {
+                    continue;
+                };
+                if hold_cleared(&failure, &provider_success, &crew_success, &provider_probe) {
+                    continue;
                 }
-                Some(_) => {}
-                None => {
-                    open.insert(key, failure);
+                let key = (
+                    failure.class.as_str().to_string(),
+                    failure.provider.clone(),
+                    failure.crew.clone(),
+                );
+                match open.get_mut(&key) {
+                    Some(existing)
+                        if failure.at > existing.at
+                            || (failure.at == existing.at
+                                && failure.run_id.as_str() > existing.run_id.as_str()) =>
+                    {
+                        existing.at = failure.at;
+                        existing.run_id = failure.run_id.clone();
+                    }
+                    Some(_) => {}
+                    None => {
+                        open.insert(key, failure);
+                    }
                 }
             }
         }
@@ -226,32 +220,6 @@ impl OrbitRuntime {
                 .then(left.run_id.cmp(&right.run_id))
         });
         Ok(holds)
-    }
-
-    /// The crew each listed pilot run froze for its pilots, read in one
-    /// batch. A pilot run with no draw on record ran as no known crew.
-    fn pilot_drawn_crews<'a>(
-        &self,
-        runs: impl Iterator<Item = &'a JobRun>,
-    ) -> Result<HashMap<String, String>, OrbitError> {
-        let ids = runs
-            .filter(|run| run.job_id == PILOT_JOB)
-            .map(|run| run.run_id.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        if ids.is_empty() {
-            return Ok(HashMap::new());
-        }
-        let key = complexity_crews_key(TaskComplexity::Low);
-        Ok(self
-            .read_run_states(&ids)?
-            .into_iter()
-            .filter_map(|(run_id, state)| {
-                let crew = state?.activity_crew_draws.get(&key)?.crew.clone();
-                Some((run_id, crew))
-            })
-            .collect())
     }
 
     /// A failure scoped the way a host hold is: unavailability covers every
