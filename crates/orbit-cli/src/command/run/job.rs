@@ -207,10 +207,11 @@ impl Execute for JobResumeArgs {
     }
 }
 
-/// CLI adapter for the shared run projection.
+/// CLI adapter for the shared run projection used by run history.
 ///
-/// The CLI has historically exposed the claimed worker PID; the web API does
-/// not. Keep that contract difference at this presentation boundary.
+/// History keeps the historical contract of exposing only the claimed worker
+/// PID. `orbit run show` adds the submitted input and start-time token beside
+/// it; list projections stay on this narrower shape.
 pub(crate) fn cli_job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
     let evidence = Vec::new();
     let mut value = job_run_to_json_with_activity_provenance(run, state, &evidence);
@@ -231,7 +232,11 @@ pub(crate) fn cli_job_run_to_json_with_activity_provenance(
         .activity_invocation_evidence(&run.run_id)
         .unwrap_or_default();
     let mut value = job_run_to_json_with_activity_provenance(run, state, &evidence);
+    // Same worker identity and submitted input the HTTP run detail and MCP
+    // run show already carry. History uses [`cli_job_run_to_json`] and does not.
+    value["input"] = json!(run.input);
     value["pid"] = json!(run.pid);
+    value["pid_start_time"] = json!(run.pid_start_time);
     value
 }
 

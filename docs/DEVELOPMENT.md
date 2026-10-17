@@ -132,6 +132,16 @@ cleanup remain real. Build-slot fixtures use the existing CLI supervision clock
 only after a real wrapper heartbeat proves the queue interval. This removes
 host-speed assumptions without extending timeout or cleanup budgets.
 
+A debug `orbit` or dashboard child does not see those thread-local hooks.
+Three deadlines in that child read an environment variable only when the
+binary is built with debug assertions, and a release build ignores it:
+`ORBIT_TEST_HOST_FORWARD_ATTACH_TIMEOUT_MS` (host-forward attach budget),
+`ORBIT_TEST_MCP_LIFECYCLE_INTERVAL_MS` (stdio lifecycle tick), and
+`ORBIT_TEST_PIPELINE_WAIT_VIRTUAL=1` (a pipeline wait adds each poll to its
+elapsed time instead of sleeping, and does not wake on a reaped worker).
+The quiet-deadline child fixture injects its bound through
+`run_child_test_within`. The real child and the real reap stay in place.
+
 `make ci-test-affected` (`scripts/ci-test-affected.py`) reads Cargo metadata without compiling. It selects every crate with changed paths plus all transitive reverse workspace dependents (dev, build, renamed, optional and target-specific edges), then runs their library, binary and integration test targets with nextest (Cargo if nextest is missing) and Cargo doctests, under the shared [build-budget admission](runbooks/build-budget.md). A change under `crates/orbit-core/` selects `orbit-core`, `orbit-cmd`, `orbit-web` and `orbit-cli`.
 
 - **Diff:** committed, staged, unstaged and non-ignored untracked paths; a move selects both crates.

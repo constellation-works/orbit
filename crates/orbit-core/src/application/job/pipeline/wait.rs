@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, PoisonError};
 
 use super::*;
@@ -6,6 +7,14 @@ const PIPELINE_WAIT_DEFAULT_TIMEOUT_SECONDS: u64 = 3600;
 const PIPELINE_WAIT_MAX_TIMEOUT_SECONDS: u64 = 21600;
 const PIPELINE_WAIT_DEFAULT_POLL_SECONDS: u64 = 5;
 pub(super) const PIPELINE_WAIT_MIN_POLL_SECONDS: u64 = 1;
+
+/// Set to `1` in a debug build to make a pipeline wait add each poll to its
+/// elapsed time and return, instead of sleeping.
+///
+/// Release builds ignore it. The virtual clock does not wake when a worker is
+/// reaped, so set it only on a deadline that must expire while the run is
+/// still active. A wait that should observe completion keeps the real clock.
+pub(crate) const PIPELINE_WAIT_VIRTUAL_ENV: &str = "ORBIT_TEST_PIPELINE_WAIT_VIRTUAL";
 
 pub(crate) trait PipelineWaitClock {
     fn elapsed(&self) -> Duration;
@@ -16,10 +25,18 @@ pub(crate) trait PipelineWaitClock {
 
 struct SystemPipelineWaitClock {
     started_at: Instant,
+    /// Milliseconds the virtual clock has advanced. Absent unless
+    /// [`PIPELINE_WAIT_VIRTUAL_ENV`] is `1` in a debug build.
+    #[cfg(debug_assertions)]
+    virtual_millis: Option<AtomicU64>,
 }
 
 impl PipelineWaitClock for SystemPipelineWaitClock {
     fn elapsed(&self) -> Duration {
+        #[cfg(debug_assertions)]
+        if let Some(virtual_millis) = &self.virtual_millis {
+            return Duration::from_millis(virtual_millis.load(Ordering::Relaxed));
+        }
         self.started_at.elapsed()
     }
 
@@ -29,7 +46,24 @@ impl PipelineWaitClock for SystemPipelineWaitClock {
             wait(duration);
             return;
         }
+        #[cfg(debug_assertions)]
+        if let Some(virtual_millis) = &self.virtual_millis {
+            let added = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+            virtual_millis.fetch_add(added, Ordering::Relaxed);
+            return;
+        }
         sleep_until_worker_exit(exits_seen, duration);
+    }
+}
+
+fn system_pipeline_wait_clock() -> SystemPipelineWaitClock {
+    SystemPipelineWaitClock {
+        started_at: Instant::now(),
+        #[cfg(debug_assertions)]
+        virtual_millis: match std::env::var(PIPELINE_WAIT_VIRTUAL_ENV).ok().as_deref() {
+            Some("1") => Some(AtomicU64::new(0)),
+            _ => None,
+        },
     }
 }
 
@@ -127,9 +161,7 @@ impl OrbitRuntime {
             timeout_seconds,
             poll_interval_seconds,
             actor,
-            &SystemPipelineWaitClock {
-                started_at: Instant::now(),
-            },
+            &system_pipeline_wait_clock(),
         )
     }
 

@@ -26,6 +26,8 @@ mod publication;
 mod published_owner;
 #[path = "source_repair/replay.rs"]
 mod replay;
+#[path = "source_repair/resumed_recovery.rs"]
+mod resumed_recovery;
 #[path = "source_repair/reviewers.rs"]
 mod reviewers;
 use completion::mutation::{

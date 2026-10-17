@@ -13,14 +13,14 @@
 //
 // The public exports (setActiveTab, navigateToRun, initTabs) are thin wrappers over
 // impls that close over the injected ctx (set once via initRouter).
-// Hash routes, subtab clicks, back/forward navigation and dashboard polling
-// are owned here, so polling can pause while a tab is hidden
-// and retry failed refreshes without competing with active dashboard use.
+// Hash routes, subtab clicks and back/forward navigation are owned here; the
+// router starts dashboard polling (polling.js) once the first route is shown.
 //
 // Also exports parseHashRoute for symmetry (used only internally today).
 
 import { el, isAggregateView, renderPanelPlaceholder, getWindow, setWindow, setWorkspace, parseDashboardWindow, persistScopeToUrl, syncWindowSelectors, notifyScopeChange } from './common.js';
 import { renderRuns } from './runs.js';
+import { initBackgroundNotifications, setDashboardTitle, startDashboardPolling } from './polling.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -148,8 +148,6 @@ const KNOWLEDGE_SUBTABS = ["frictions"];
 // `--scope` equivalents, and `keys` is the settable-key reference. `hosts` is
 // the serving host's registered remote hosts [ORB-14451].
 const CONFIG_SUBTABS = ["effective", "workspace-file", "global-file", "crews", "keys", "system", "hosts"];
-const REFRESH_INTERVAL_MS = 30_000;
-const MAX_REFRESH_INTERVAL_MS = 5 * 60_000;
 
 function parseHashRoute(raw) {
   const trimmed = String(raw || "").replace(/^#/, "");
@@ -385,7 +383,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   if (crumb) crumb.textContent = destination;
   // Browser tabs and history entries read as this page's title, so name the
   // destination there too instead of every entry saying "orbit".
-  document.title = `${destination} · orbit`;
+  setDashboardTitle(`${destination} · orbit`);
   document.body.classList.toggle("operations-active", top === "operations" || top === "config");
   // ORB-10972: a destination's subtabs show in the rail only while it is
   // open, so the remembered-subtab highlight never reads as a second
@@ -537,53 +535,6 @@ function navigateToRunImpl(ctx, runId, workspaceId = null) {
   setActiveTabImpl(ctx, `runs/${encodeURIComponent(runId)}`);
 }
 
-// A one-shot timer avoids overlapping refreshes: the next poll is scheduled
-// only after the current refresh settles. Hidden tabs have no pending timer;
-// becoming visible starts exactly one refresh and resumes the normal cadence.
-function startDashboardPolling(ctx) {
-  let timer = null;
-  let interval = REFRESH_INTERVAL_MS;
-
-  const clearScheduledRefresh = () => {
-    if (timer !== null) {
-      clearTimeout(timer);
-      timer = null;
-    }
-  };
-
-  const scheduleRefresh = () => {
-    if (document.hidden || timer !== null) return;
-    timer = setTimeout(runRefresh, interval);
-    // Node-based dashboard tests should not be kept alive by a browser poll.
-    // Browsers return a numeric timer handle, so this is a no-op in production.
-    if (typeof timer === "object" && typeof timer.unref === "function") timer.unref();
-  };
-
-  const runRefresh = () => {
-    timer = null;
-    if (document.hidden) return;
-    Promise.resolve(ctx.refreshDashboard())
-      .then((succeeded) => {
-        if (succeeded === true) interval = REFRESH_INTERVAL_MS;
-        if (succeeded === false) interval = Math.min(interval * 2, MAX_REFRESH_INTERVAL_MS);
-      })
-      .catch(() => {
-        interval = Math.min(interval * 2, MAX_REFRESH_INTERVAL_MS);
-      })
-      .finally(scheduleRefresh);
-  };
-
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden) {
-      clearScheduledRefresh();
-      return;
-    }
-    runRefresh();
-  });
-
-  runRefresh();
-}
-
 function initTabsImpl(ctx) {
   $("skip-link")?.addEventListener("click", (event) => {
     const main = activePaneMain();
@@ -684,7 +635,8 @@ function initTabsImpl(ctx) {
     refresh: false,
     updateHash: false,
   });
-  startDashboardPolling(ctx);
+  initBackgroundNotifications();
+  startDashboardPolling(() => ctx.refreshDashboard());
 }
 
 // Public named exports (the stable import surface for app.js and future modules).
