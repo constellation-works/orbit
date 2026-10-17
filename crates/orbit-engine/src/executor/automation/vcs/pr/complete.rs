@@ -997,12 +997,14 @@ fn re_review_on_conflict(input: &Value) -> bool {
 }
 
 /// Whether the PR reports `BLOCKED` itself, rather than another state
-/// completion also refuses (`BEHIND`, `DRAFT`), which auto-fix never repairs.
+/// completion also refuses (`BEHIND`, `DRAFT`, or an explicit draft), which
+/// auto-fix never repairs.
 fn is_blocked_merge_state(status: &PullRequestStatus) -> bool {
-    status
-        .merge_state_status
-        .as_deref()
-        .is_some_and(|state| state.eq_ignore_ascii_case("BLOCKED"))
+    !status.is_draft
+        && status
+            .merge_state_status
+            .as_deref()
+            .is_some_and(|state| state.eq_ignore_ascii_case("BLOCKED"))
 }
 
 /// Admit an auto-fix repair of the conflict on the pull request's head

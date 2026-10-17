@@ -320,6 +320,15 @@ pub(in crate::executor::automation::vcs) fn classify_pr_state(
         return PrMergeState::Closed;
     }
 
+    // [ORB-16342] GitHub can report a draft with a merge state other than
+    // DRAFT, including BLOCKED, UNKNOWN and CLEAN. Completion used to request
+    // a merge from those states and spend recovery on HTTP 405. An explicit
+    // draft is refused before that match. The DRAFT arm below still covers an
+    // answer that omits `isDraft`.
+    if pull_request.is_draft {
+        return PrMergeState::Blocked("the pull request is still a draft".into());
+    }
+
     let merge_state = pull_request
         .merge_state_status
         .as_deref()
@@ -466,7 +475,10 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
 ) -> Result<PrMergeState, String> {
     unreported.last = UnreportedWait::None;
     let state = classify_pr_state(status);
-    if status.merge_state_status.as_deref() != Some("BLOCKED")
+    // A draft is already refused. Refining BLOCKED into a check wait would
+    // hand it to auto-merge or repair [ORB-16342].
+    if status.is_draft
+        || status.merge_state_status.as_deref() != Some("BLOCKED")
         || !matches!(state, PrMergeState::Blocked(_))
     {
         return Ok(state);
