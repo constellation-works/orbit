@@ -1,7 +1,8 @@
 //! `orbit run profiles` through the real CLI: the per-profile table, the full
-//! per-minute series under `--json`, the no-diff build flag naming the
-//! deliveries behind it, and `--accuracy` pairing recorded admission
-//! forecasts with the measured host minutes.
+//! per-minute series under `--json` without deliveries whose CPU accounting
+//! is superseded, the no-diff build flag naming the deliveries behind it, and
+//! `--accuracy` pairing recorded admission forecasts with the measured host
+//! minutes.
 
 use std::fs;
 use std::path::PathBuf;
@@ -84,6 +85,29 @@ impl Fixture {
         hours_ago: i64,
         cores: &[f64],
     ) {
+        self.delivery_with_accounting(
+            run_id,
+            task_id,
+            class,
+            complexity,
+            hours_ago,
+            cores,
+            "linux-cgroup-v1",
+        );
+    }
+
+    /// [`Self::delivery`] with its minutes stamped `cpu_accounting`.
+    #[allow(clippy::too_many_arguments)]
+    fn delivery_with_accounting(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        class: &str,
+        complexity: &str,
+        hours_ago: i64,
+        cores: &[f64],
+        cpu_accounting: &str,
+    ) {
         let db = Connection::open(self.home.join(".orbit/orbit.db")).unwrap();
         let admitted = Utc::now() - chrono::Duration::hours(hours_ago);
         let stamp = |minutes: i64| {
@@ -113,7 +137,7 @@ impl Fixture {
                     stamp(0),
                     cpu,
                     GIB,
-                    "linux-cgroup-v1"
+                    cpu_accounting
                 ],
             )
             .unwrap();
@@ -400,6 +424,17 @@ fn profiles_report_tabulates_profiles_emits_series_and_flags_building_no_diff_wo
 
     fixture.delivery("jrun-a", "ORB-1", "change", "hard", 5, &[2.0, 2.0, 2.0]);
     fixture.delivery("jrun-b", "ORB-2", "change", "hard", 4, &[2.0, 2.0, 2.0]);
+    // Superseded macOS accounting that missed reaped descendants stays out
+    // of the profile it would otherwise join.
+    fixture.delivery_with_accounting(
+        "jrun-own-only",
+        "ORB-4",
+        "change",
+        "hard",
+        2,
+        &[9.0, 9.0, 9.0],
+        "macos-mach-ns-v1",
+    );
     fixture.delivery(
         "jrun-review",
         "ORB-3",
@@ -417,7 +452,10 @@ fn profiles_report_tabulates_profiles_emits_series_and_flags_building_no_diff_wo
         .find(|profile| profile["key"]["work_class"] == "change")
         .unwrap();
     assert_eq!(change["key"]["complexity"], "hard");
-    assert_eq!(change["delivery_count"], 2);
+    assert_eq!(
+        change["delivery_count"], 2,
+        "the own-only macOS delivery is excluded: {change:#}"
+    );
     assert_eq!(change["sparse"], true);
     assert_eq!(change["horizon_minutes"], 3);
     let series = change["series"].as_array().unwrap();

@@ -5,6 +5,8 @@
 //! a later `orbit tool run` (or MCP server) decide it is still the process the
 //! host launched as a plugin backend, or a descendant of one.
 
+use std::collections::HashMap;
+
 /// A live process as the kernel names it: pid plus start time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ProcessStartKey {
@@ -117,18 +119,176 @@ fn darwin_start_and_parent(pid: u32) -> Option<(u64, u32)> {
 /// One live process in a worker's tree, named so a reused pid is not the
 /// process sampled last time.
 ///
-/// CPU time is this process's own user and system time. It does not include
-/// children it has waited for: adding those on top of the children's own
-/// samples would count the same work twice when a child exits.
+/// Own CPU time and the CPU time of reaped children are kept apart. A child
+/// that a snapshot saw alive reappears in its parent's reaped total once it
+/// is waited for, so summing both naively counts it twice; [`TreeCpuAccount`]
+/// combines them without that.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProcessTreeProcess {
     pub key: ProcessStartKey,
+    /// The tree member that listed this process as its child; `None` for the
+    /// root.
+    pub parent: Option<ProcessStartKey>,
     /// Own user plus system CPU time, in nanoseconds.
     pub cpu_time_ns: u64,
+    /// User plus system CPU time of the children this process has waited
+    /// for, in nanoseconds. A reaped child brings what it had itself reaped,
+    /// so this covers every waited-for descendant (`ri_child_user_time` plus
+    /// `ri_child_system_time`).
+    pub reaped_cpu_time_ns: u64,
     /// Non-reclaimable physical footprint (`ri_phys_footprint`), in bytes.
     /// Resident size counts file-backed and shared pages, which overstates
     /// the tree the way `memory.current` does on Linux.
     pub phys_footprint: u64,
+}
+
+/// CPU charged to a process tree across snapshots, including descendants
+/// that ran and were reaped between them.
+///
+/// A process's total is its own CPU plus the CPU of the children it has
+/// reaped. A process in both snapshots is charged the growth of its total,
+/// and a newcomer its whole total. A descendant that started and was reaped
+/// between snapshots therefore arrives through its parent's reaped total
+/// even though no snapshot saw it. The first snapshot is a baseline and
+/// charges nothing.
+///
+/// A descendant that a snapshot did see arrives the same way when reaped, so
+/// its last observed total was already charged. Each one that leaves the
+/// tree is asked of the kernel (`locate`):
+///
+/// - Gone, or its pid now names another process: it exited. Its last
+///   observed total, plus whatever it was still owed, becomes owed by the
+///   member that listed it. If that member left by exiting too, the debt
+///   climbs to the nearest ancestor still in the tree, because a reaped
+///   process's total carries what it had reaped. Growth of the owing
+///   member's reaped total settles the debt instead of being charged, so the
+///   walk reading a parent before its child's reap only shifts the charge to
+///   a later snapshot.
+/// - Alive under the same parent: the walk missed it. It stays tracked, so
+///   it is neither charged again nor written off.
+/// - Alive under another parent: it was reparented away. What it ran here
+///   stays charged, and nothing in the tree will reap it, so it creates no
+///   debt. Debt it was owed is dropped with it.
+///
+/// Debt is held per owner and only for a process that exited inside the
+/// tree, so a process reparented away never offsets unrelated work. A
+/// descendant that is reparented and exits within one sample interval reads
+/// as exited, and its last observed total stays owed by an ancestor that will
+/// never reap it. That undercounts by at most that one total.
+#[derive(Debug, Default)]
+pub struct TreeCpuAccount {
+    tracked: HashMap<ProcessStartKey, Tracked>,
+    baseline: bool,
+    cumulative_ns: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Tracked {
+    parent: Option<ProcessStartKey>,
+    total_ns: u64,
+    reaped_ns: u64,
+    /// Last observed totals of descendants that exited under this process
+    /// and that its reaped total has not absorbed yet.
+    owed_ns: u64,
+}
+
+impl TreeCpuAccount {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Charge one snapshot and return the nanoseconds it added. `locate`
+    /// reads a pid's current start key and parent pid, as
+    /// [`process_start_and_parent`] does, for the processes that left.
+    pub fn observe(
+        &mut self,
+        current: &[ProcessTreeProcess],
+        mut locate: impl FnMut(u32) -> Option<(ProcessStartKey, u32)>,
+    ) -> u64 {
+        let mut previous = std::mem::take(&mut self.tracked);
+        let mut next: HashMap<ProcessStartKey, Tracked> = current
+            .iter()
+            .map(|process| {
+                let owed_ns = previous
+                    .get(&process.key)
+                    .map_or(0, |before| before.owed_ns);
+                let tracked = Tracked {
+                    parent: process.parent,
+                    total_ns: process
+                        .cpu_time_ns
+                        .saturating_add(process.reaped_cpu_time_ns),
+                    reaped_ns: process.reaped_cpu_time_ns,
+                    owed_ns,
+                };
+                (process.key, tracked)
+            })
+            .collect();
+
+        let departed: Vec<ProcessStartKey> = previous
+            .keys()
+            .filter(|key| !next.contains_key(key))
+            .copied()
+            .collect();
+        let mut exited = HashMap::new();
+        for key in departed {
+            let Some(tracked) = previous.remove(&key) else {
+                continue;
+            };
+            match locate(key.pid) {
+                Some((now, ppid)) if now == key => {
+                    if tracked.parent.is_some_and(|parent| parent.pid == ppid) {
+                        next.insert(key, tracked);
+                    }
+                }
+                _ => {
+                    exited.insert(key, tracked);
+                }
+            }
+        }
+        for tracked in exited.values() {
+            let owed = tracked.total_ns.saturating_add(tracked.owed_ns);
+            let mut parent = tracked.parent;
+            // Each hop moves to an exited ancestor; the bound only guards
+            // against a malformed parent chain.
+            for _ in 0..=exited.len() {
+                let Some(key) = parent else { break };
+                if let Some(owner) = next.get_mut(&key) {
+                    owner.owed_ns = owner.owed_ns.saturating_add(owed);
+                    break;
+                }
+                parent = exited.get(&key).and_then(|ancestor| ancestor.parent);
+            }
+        }
+
+        let mut charged = 0u64;
+        for process in current {
+            let Some(now) = next.get_mut(&process.key) else {
+                continue;
+            };
+            let (grown, reaped) = match previous.get(&process.key) {
+                Some(before) => (
+                    now.total_ns.saturating_sub(before.total_ns),
+                    now.reaped_ns.saturating_sub(before.reaped_ns),
+                ),
+                None => (now.total_ns, now.reaped_ns),
+            };
+            let settled = now.owed_ns.min(reaped);
+            now.owed_ns -= settled;
+            charged = charged.saturating_add(grown.saturating_sub(settled));
+        }
+        self.tracked = next;
+        if !self.baseline {
+            self.baseline = true;
+            return 0;
+        }
+        self.cumulative_ns = self.cumulative_ns.saturating_add(charged);
+        charged
+    }
+
+    /// Nanoseconds charged since the baseline.
+    pub fn cumulative_ns(&self) -> u64 {
+        self.cumulative_ns
+    }
 }
 
 /// The live process tree rooted at `root`, including `root`.
@@ -179,7 +339,7 @@ pub(super) mod darwin_tree {
         let mut queue = VecDeque::from([(root, None::<(ProcessStartKey, u32)>)]);
         while let Some((pid, owner)) = queue.pop_front() {
             let is_root = owner.is_none();
-            let (process, parent) = match read_process(pid) {
+            let (mut process, parent) = match read_process(pid) {
                 Ok(read) => read,
                 Err(ReadError::Gone) if !is_root => continue,
                 Err(ReadError::Gone | ReadError::Unreadable) => return None,
@@ -197,6 +357,7 @@ pub(super) mod darwin_tree {
                     Err(ReadError::Unreadable) => return None,
                 }
             }
+            process.parent = owner.map(|(owner, _)| owner);
             found.push(process);
             let children = match child_pids(pid) {
                 Ok(children) => children,
@@ -227,10 +388,10 @@ pub(super) mod darwin_tree {
     pub(in crate::process) fn read_process_with(
         pid: u32,
         mut read_start: impl FnMut(u32) -> Result<(u64, u32), ReadError>,
-        mut read_rusage: impl FnMut(u32) -> Result<(u64, u64), ReadError>,
+        mut read_rusage: impl FnMut(u32) -> Result<(u64, u64, u64), ReadError>,
     ) -> Result<(ProcessTreeProcess, u32), ReadError> {
         let before = read_start(pid)?;
-        let (cpu_time_ns, phys_footprint) = read_rusage(pid)?;
+        let (cpu_time_ns, reaped_cpu_time_ns, phys_footprint) = read_rusage(pid)?;
         // Bind usage to one identity across both calls. Reparenting means the
         // process left the tree while measured and is omitted like an exit.
         if read_start(pid)? != before {
@@ -242,7 +403,9 @@ pub(super) mod darwin_tree {
                     pid,
                     starttime: before.0,
                 },
+                parent: None,
                 cpu_time_ns,
+                reaped_cpu_time_ns,
                 phys_footprint,
             },
             before.1,
@@ -274,9 +437,10 @@ pub(super) mod darwin_tree {
         Ok((starttime, info.pbi_ppid))
     }
 
-    /// Own CPU time and physical footprint. `ri_child_*` is excluded: it
-    /// repeats CPU already sampled from children that have been waited for.
-    fn read_rusage(pid: u32) -> Result<(u64, u64), ReadError> {
+    /// Own CPU time, reaped children's CPU time and physical footprint. The
+    /// `ri_child_*` counters accumulate the children's `ri_user_time` and
+    /// `ri_system_time`, so they share the own counters' Mach units.
+    fn read_rusage(pid: u32) -> Result<(u64, u64, u64), ReadError> {
         let mut info = MaybeUninit::<libc::rusage_info_v4>::zeroed();
         clear_errno();
         // Safety: `info` is a writable `rusage_info_v4`. `proc_pid_rusage`
@@ -294,8 +458,10 @@ pub(super) mod darwin_tree {
         }
         // Safety: a zero return writes the flavor's structure.
         let info = unsafe { info.assume_init() };
+        let timebase = read_timebase();
         Ok((
-            own_cpu_ns(info.ri_user_time, info.ri_system_time, read_timebase())?,
+            mach_cpu_ns(info.ri_user_time, info.ri_system_time, timebase)?,
+            mach_cpu_ns(info.ri_child_user_time, info.ri_child_system_time, timebase)?,
             info.ri_phys_footprint,
         ))
     }
@@ -318,10 +484,11 @@ pub(super) mod darwin_tree {
         }
     }
 
-    /// Convert only own user/system absolute ticks. Widen before both addition
-    /// and multiplication, then truncate sub-nanoseconds once. An unavailable
-    /// timebase or an unrepresentable result invalidates the sample.
-    pub(in crate::process) fn own_cpu_ns(
+    /// Convert a user/system pair of absolute ticks. Widen before both
+    /// addition and multiplication, then truncate sub-nanoseconds once. An
+    /// unavailable timebase or an unrepresentable result invalidates the
+    /// sample.
+    pub(in crate::process) fn mach_cpu_ns(
         user: u64,
         system: u64,
         timebase: Option<(u32, u32)>,
