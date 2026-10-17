@@ -16,9 +16,13 @@
 //!   not exist yet. One stops counting once a delivery run naming its task is
 //!   created in its workspace, or [`RESERVATION_TTL_MINUTES`] after it was
 //!   written, when dispatch failed.
-//! - **Baseline `B`** is the host's measured load now minus the running
-//!   deliveries' newest measured minutes, held flat. Unknown when the host
-//!   cannot be read, and then counted as zero.
+//! - **Baseline `B`** is the host's load that is not from deliveries, held
+//!   flat. It is measured over the newest recorded host minute whose
+//!   overlapping run minutes are all recorded, minus what those runs used in
+//!   it, and floored by the live reading over a window a short spike barely
+//!   moves; with no such minute it is the live reading minus the running
+//!   deliveries' current use, as before. See `baseline.rs`. Unknown when the
+//!   host cannot be read, and then counted as zero.
 //!
 //! The running set, reservations and baseline are read inside the lock on
 //! every call and never cached: each drain is its own process, and only the
@@ -43,6 +47,7 @@ use serde::Serialize;
 
 use super::profile::{ProfileKey, ProfileLookup, ProfilePeak, ProfileSet, ProfileSource};
 
+mod baseline;
 mod build;
 mod fit;
 mod host_load;
@@ -57,6 +62,9 @@ pub use record::{ACCURACY_OFFSETS, ForecastPoints};
 /// forecast.
 pub const RESERVATION_TTL_MINUTES: i64 = 5;
 
+/// Minutes of host and run resource history the baseline reads.
+pub(crate) const BASELINE_HISTORY_MINUTES: i64 = 5;
+
 /// A pull request's mutually exclusive profile alternatives share this key.
 pub(crate) fn pending_pull_reservation_id(request_id: &str) -> String {
     format!("pending:{request_id}")
@@ -68,10 +76,21 @@ pub struct HostLoad {
     /// Busy cores from `/proc/stat` ticks; `None` when no ticks passed since
     /// the previous reading.
     pub cpu_cores: Option<f64>,
+    /// Busy cores over the trailing minute or more; `None` until the probe
+    /// holds a reading that old.
+    pub sustained_cpu: Option<SustainedCpu>,
     pub cpu_count: u32,
     /// `MemTotal - MemAvailable`.
     pub memory_bytes: u64,
     pub memory_total_bytes: u64,
+}
+
+/// Busy cores over a window of one to two minutes ending now.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct SustainedCpu {
+    /// The window's start.
+    pub since: DateTime<Utc>,
+    pub cores: f64,
 }
 
 /// One resource's forecast.
@@ -128,6 +147,9 @@ pub struct HostLoadForecast {
     pub horizon_minutes: u32,
     /// The host's measured load now; `None` when it cannot be read.
     pub host: Option<HostLoad>,
+    /// The recorded host minute the baseline was measured over; `None` when
+    /// it came from the live reading alone.
+    pub baseline_minute: Option<DateTime<Utc>>,
     pub running: Vec<RunningDelivery>,
     pub reservations: Vec<ReservedAdmission>,
     pub cpu: ForecastSeries,
