@@ -33,7 +33,7 @@ use crate::contracts::{
 
 impl Store {
     /// Lists every job run created in `[since, until)` for one workspace,
-    /// projected to `(job_id, state, created_at)`.
+    /// projected to `(run_id, job_id, state, created_at)`.
     ///
     /// Unlike [`Store::list_job_runs_for_workspace`], this does not read step
     /// rows, input payloads, or model attribution — a reliability window can
@@ -58,7 +58,7 @@ impl Store {
         let mut stmt = conn
             .prepare(
                 r#"
-                SELECT job_id, state, created_at
+                SELECT run_id, job_id, state, created_at
                 FROM job_runs
                 WHERE workspace_id = ?1 AND created_at >= ?2 AND created_at < ?3
                 ORDER BY created_at DESC, run_id ASC
@@ -75,9 +75,10 @@ impl Store {
                 params![workspace_id, since.to_rfc3339(), until.to_rfc3339(), probe,],
                 |row| {
                     Ok(JobRunOutcomeFact {
-                        job_id: row.get(0)?,
-                        state: row.get(1)?,
-                        created_at: crate::parse_timestamp(&row.get::<_, String>(2)?)?,
+                        run_id: row.get(0)?,
+                        job_id: row.get(1)?,
+                        state: row.get(2)?,
+                        created_at: crate::parse_timestamp(&row.get::<_, String>(3)?)?,
                     })
                 },
             )

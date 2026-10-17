@@ -33,11 +33,26 @@
 //! deliberate operator action, so counting it as a failure would make manual
 //! intervention look like breakage. `skipped` never ran.
 //!
-//! Because five of the seven outcomes sit outside the denominator,
-//! `succeeded + failed` does **not** equal the run count in general. Callers
-//! render [`OutcomeCounts::settled`] as the `n` and report the excluded
+//! Because five of the seven outcomes sit outside the denominator, and a
+//! wrapper that failed only because its child failed is rolled out of
+//! `failed` into [`OutcomeCounts::cascaded`], `succeeded + failed` does
+//! **not** equal the run count in general. Callers render
+//! [`OutcomeCounts::settled`] as the `n` and report the excluded and cascaded
 //! buckets separately; [`OutcomeCounts::total`] is kept so the gap is visible
-//! rather than implied away.
+//! rather than implied away. `total = settled + excluded + cascaded`.
+//!
+//! # Wrapper echoes
+//!
+//! A failed, timed-out, or interrupted run whose pipeline state records a
+//! `root_cause.leaf_run_id` failed in `pipeline_success_guard` because that
+//! leaf failed. Those runs are one delivery. The failure count is the number
+//! of distinct leaves; a run with no recorded root cause is its own leaf.
+//! The representative of a leaf is that run when it is in the window, and
+//! otherwise the latest echo, so a leaf that settled on another host still
+//! counts once. Every other echo is [`OutcomeCounts::cascaded`] and sits
+//! outside both the numerator and the denominator. The same fold feeds the
+//! by-job rows, the over-time series, and, by summing those already-folded
+//! workspace counts, the fleet totals.
 //!
 //! # Recovery attribution
 //!
@@ -66,6 +81,11 @@ const MAX_JOB_RUN_FACTS: usize = 200_000;
 /// Denominator below which a rate is flagged [`Rate::low_sample`]. Callers
 /// mark or withhold such cells instead of rendering a confident percentage.
 pub const MIN_CONFIDENT_SAMPLE: u64 = 20;
+
+/// What the failure-rate denominator counts. The UI renders this verbatim, so
+/// the wrapper roll-up is part of the number rather than only a code comment.
+const FAILURE_DENOMINATOR_LABEL: &str = "settled deliveries (success + one count per failed \
+     delivery; wrapper echoes rolled into the leaf)";
 
 /// Bucket width for the over-time breakdown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -160,7 +180,13 @@ pub struct OutcomeCounts {
     /// Every run in scope, including the ones outside the denominator.
     pub total: u64,
     pub succeeded: u64,
+    /// Distinct failed deliveries. A wrapper that only echoes a child is not
+    /// counted here; it is counted in [`Self::cascaded`].
     pub failed: u64,
+    /// Wrapper runs that failed only because a child failed. Rolled into that
+    /// child's [`Self::failed`] count and omitted from [`Self::settled`] and
+    /// [`Self::excluded`], so `total = settled + excluded + cascaded`.
+    pub cascaded: u64,
     pub cancelled: u64,
     pub skipped: u64,
     pub held: u64,
@@ -182,11 +208,17 @@ impl OutcomeCounts {
         }
     }
 
-    /// Runs that reached an outcome the failure rate is defined over.
+    fn record_cascaded(&mut self) {
+        self.total += 1;
+        self.cascaded += 1;
+    }
+
+    /// Runs the failure rate is defined over.
     ///
-    /// This is the rate's `n`. It is smaller than [`OutcomeCounts::total`]
-    /// whenever runs were cancelled, skipped, held, still in flight, or in a state
-    /// this build cannot parse.
+    /// This is the rate's `n`: successes plus one count per failed delivery.
+    /// It is smaller than [`OutcomeCounts::total`] whenever runs were
+    /// cancelled, skipped, held, still in flight, unrecognized, or rolled up
+    /// as wrapper echoes.
     pub fn settled(&self) -> u64 {
         self.succeeded + self.failed
     }
@@ -198,11 +230,7 @@ impl OutcomeCounts {
 
     /// Failure rate over settled runs, or `None` when nothing settled.
     pub fn failure_rate(&self) -> Rate {
-        Rate::new(
-            self.failed,
-            self.settled(),
-            "settled runs (success + failed)",
-        )
+        Rate::new(self.failed, self.settled(), FAILURE_DENOMINATOR_LABEL)
     }
 }
 
@@ -345,7 +373,8 @@ impl OrbitRuntime {
             window.until,
             MAX_JOB_RUN_FACTS,
         )?;
-        let job_runs = aggregate_job_runs(&facts.facts, window, facts.truncated);
+        let echoed_leaves = self.failure_echoes(&facts.facts)?;
+        let job_runs = aggregate_job_runs(&facts.facts, window, facts.truncated, &echoed_leaves);
 
         let counts =
             store.count_invocations_by_activity(&workspace_id, window.since, window.until)?;
@@ -381,32 +410,70 @@ impl OrbitRuntime {
         }
         Ok(roles)
     }
+
+    /// `run_id -> leaf_run_id` for failed runs that recorded a root cause.
+    ///
+    /// One batch read of the failed ids only. Runs that failed on their own,
+    /// and runs whose stored state is missing or unreadable, are absent: they
+    /// stay their own leaf.
+    fn failure_echoes(
+        &self,
+        facts: &[JobRunOutcomeFact],
+    ) -> Result<BTreeMap<String, String>, OrbitError> {
+        let failed_ids = facts
+            .iter()
+            .filter(|fact| RunOutcome::classify(&fact.state) == RunOutcome::Failed)
+            .map(|fact| fact.run_id.clone())
+            .collect::<Vec<_>>();
+        if failed_ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let mut echoed = BTreeMap::new();
+        for (run_id, state) in self.read_run_states(&failed_ids)? {
+            let Some(cause) = state.and_then(|state| state.root_cause) else {
+                continue;
+            };
+            if cause.leaf_run_id.is_empty() || cause.leaf_run_id == run_id {
+                continue;
+            }
+            echoed.insert(run_id, cause.leaf_run_id);
+        }
+        Ok(echoed)
+    }
 }
 
-/// Buckets and totals the per-run facts. Pure, so it is exercised directly by
-/// unit tests without a store.
+/// Buckets and totals the per-run facts.
+///
+/// `echoed_leaves` maps a failed run id to the leaf it echoes. A failed run
+/// absent from the map is its own leaf. Facts are otherwise unchanged: the
+/// store projection stays identifiers, state, and a timestamp.
 pub fn aggregate_job_runs(
     facts: &[JobRunOutcomeFact],
     window: &ReliabilityWindow,
     truncated: bool,
+    echoed_leaves: &BTreeMap<String, String>,
 ) -> JobRunReliability {
     let mut overall = OutcomeCounts::default();
     let mut by_job: BTreeMap<String, OutcomeCounts> = BTreeMap::new();
     let mut by_bucket: BTreeMap<DateTime<Utc>, OutcomeCounts> = BTreeMap::new();
     let mut observed_states: BTreeMap<String, u64> = BTreeMap::new();
+    let representative = failure_representatives(facts, echoed_leaves);
 
-    for fact in facts {
-        let outcome = RunOutcome::classify(&fact.state);
-        overall.record(outcome);
-        by_job
-            .entry(fact.job_id.clone())
-            .or_default()
-            .record(outcome);
-        by_bucket
-            .entry(window.bucket.floor(fact.created_at))
-            .or_default()
-            .record(outcome);
+    for (index, fact) in facts.iter().enumerate() {
         *observed_states.entry(fact.state.clone()).or_default() += 1;
+        let outcome = RunOutcome::classify(&fact.state);
+        if outcome == RunOutcome::Failed && !representative[index] {
+            record_cascaded(&mut overall, &mut by_job, &mut by_bucket, window, fact);
+        } else {
+            record_outcome(
+                &mut overall,
+                &mut by_job,
+                &mut by_bucket,
+                window,
+                fact,
+                outcome,
+            );
+        }
     }
 
     let mut job_rows = by_job
@@ -428,6 +495,95 @@ pub fn aggregate_job_runs(
         observed_states,
         truncated,
     }
+}
+
+/// True for the one failed run that represents each delivery.
+///
+/// The leaf itself represents the delivery when it is in `facts`. Otherwise
+/// the latest echo does, so a leaf outside this store still counts once and
+/// the extra echoes stay cascaded. Ties break on run id.
+fn failure_representatives(
+    facts: &[JobRunOutcomeFact],
+    echoed_leaves: &BTreeMap<String, String>,
+) -> Vec<bool> {
+    let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (index, fact) in facts.iter().enumerate() {
+        if RunOutcome::classify(&fact.state) != RunOutcome::Failed {
+            continue;
+        }
+        let key = failure_key(&fact.run_id, echoed_leaves);
+        groups.entry(key).or_default().push(index);
+    }
+    let mut representative = vec![false; facts.len()];
+    for (key, indexes) in groups {
+        let chosen = indexes
+            .iter()
+            .copied()
+            .find(|index| facts[*index].run_id == key)
+            .or_else(|| {
+                indexes.iter().copied().max_by(|left, right| {
+                    facts[*left]
+                        .created_at
+                        .cmp(&facts[*right].created_at)
+                        .then_with(|| facts[*right].run_id.cmp(&facts[*left].run_id))
+                })
+            });
+        if let Some(chosen) = chosen {
+            representative[chosen] = true;
+        }
+    }
+    representative
+}
+
+/// Follows recorded echoes to the leaf, stopping on a cycle or a run that
+/// failed on its own.
+fn failure_key(run_id: &str, echoed_leaves: &BTreeMap<String, String>) -> String {
+    let mut key = run_id.to_string();
+    let mut seen = BTreeSet::new();
+    while let Some(next) = echoed_leaves.get(&key) {
+        if next.is_empty() || !seen.insert(key.clone()) {
+            break;
+        }
+        key = next.clone();
+    }
+    key
+}
+
+fn record_outcome(
+    overall: &mut OutcomeCounts,
+    by_job: &mut BTreeMap<String, OutcomeCounts>,
+    by_bucket: &mut BTreeMap<DateTime<Utc>, OutcomeCounts>,
+    window: &ReliabilityWindow,
+    fact: &JobRunOutcomeFact,
+    outcome: RunOutcome,
+) {
+    overall.record(outcome);
+    by_job
+        .entry(fact.job_id.clone())
+        .or_default()
+        .record(outcome);
+    by_bucket
+        .entry(window.bucket.floor(fact.created_at))
+        .or_default()
+        .record(outcome);
+}
+
+fn record_cascaded(
+    overall: &mut OutcomeCounts,
+    by_job: &mut BTreeMap<String, OutcomeCounts>,
+    by_bucket: &mut BTreeMap<DateTime<Utc>, OutcomeCounts>,
+    window: &ReliabilityWindow,
+    fact: &JobRunOutcomeFact,
+) {
+    overall.record_cascaded();
+    by_job
+        .entry(fact.job_id.clone())
+        .or_default()
+        .record_cascaded();
+    by_bucket
+        .entry(window.bucket.floor(fact.created_at))
+        .or_default()
+        .record_cascaded();
 }
 
 /// Materializes every bucket in the window, including empty ones, so the
