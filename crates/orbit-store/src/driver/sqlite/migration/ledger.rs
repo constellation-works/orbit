@@ -535,12 +535,21 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_worker_cpu_accounting,
     },
+    // ORB-16379: the crews this host's provider was unavailable for. A new
+    // table only, which an older binary never reads, so drains on older
+    // binaries keep writing.
+    Migration {
+        version: 52,
+        name: "provider_crew_outages",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_provider_crew_outages,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 51;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 52;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

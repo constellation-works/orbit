@@ -652,7 +652,11 @@ owns delivery:
   task (every crew of the refusing provider, 24 h base backoff); its own admission draws another
   provider's crew or defers the task with `provider_backoff`. The owner's pull admission defers
   (`deferred_conflicts`) any held task an executor would run as an excluded crew, its own or the
-  executor's default. `environment` and `owner_route`
+  executor's default. A hold placed because a provider was unavailable on the owner
+  (`[provider_unavailable]` on an owner-local run, [ORB-16379]) names the owner's machine and
+  excludes nothing from another executor, whose login is its own; capacity, limit and refusal
+  holds exclude on every executor. The owner's own outage records keep only its local drain off
+  the crew. `environment` and `owner_route`
   are the host's own failures: they suppress the host for the window (`crews.host_suppressed`),
   so the drain requests nothing more whatever crew a task names, and the owner holds every task
   from that drain run. A busy owner is not: a leaf whose owner call lost to the owner's own

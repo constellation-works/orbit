@@ -94,6 +94,7 @@ mod rebased_landing;
 mod recovery;
 mod settlement;
 mod single_pass;
+mod unavailable_hold;
 mod waiting;
 mod window_extension;
 mod worktree_gc;

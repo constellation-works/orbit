@@ -9,7 +9,7 @@ use orbit_types::task::{
 };
 use orbit_types::telemetry::{AuditEvent, ProviderLimitObservation};
 use orbit_types::tool::StoredTool;
-use orbit_types::workflow::ExecutorDef;
+use orbit_types::workflow::{ExecutorDef, ProviderCrewOutage};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -636,6 +636,8 @@ pub trait FrictionStoreBackend: Send + Sync {
 
 /// [ORB-14695] This host's provider usage limits, kept in the host-global
 /// database because a limit belongs to the provider login on this host.
+/// [ORB-16379] So does a crew outage: a crew this host's provider was
+/// unavailable for.
 pub trait ProviderLimitStoreBackend: Send + Sync {
     /// Record `observation` as the latest for its provider, model scope and
     /// window, unless a newer one is stored. Concurrent drains write the same
@@ -648,6 +650,14 @@ pub trait ProviderLimitStoreBackend: Send + Sync {
     /// The latest observation per provider, model scope and window, newest
     /// first.
     fn provider_limits(&self) -> Result<Vec<ProviderLimitObservation>, OrbitError>;
+    /// [ORB-16379] Record `outage` for its provider and crew, unless the
+    /// stored one lasts at least as long. Returns whether it was stored.
+    fn record_provider_crew_outage(&self, outage: &ProviderCrewOutage) -> Result<bool, OrbitError>;
+    /// [ORB-16379] Every crew outage lasting past `now`.
+    fn provider_crew_outages(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<ProviderCrewOutage>, OrbitError>;
 }
 
 pub trait InvocationStoreBackend: Send + Sync {

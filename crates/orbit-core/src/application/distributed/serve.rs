@@ -735,7 +735,7 @@ impl crate::OrbitRuntime {
             // executor that would run it as an excluded crew: its own, or the
             // executor's default for a task naming none. Another executor, or
             // this owner's own draw, takes it on a crew the hold leaves.
-            if let Some(why) = self.pull_provider_hold(task, request) {
+            if let Some(why) = self.pull_provider_hold(task, request, machine_id) {
                 admission_holds.entry(task.id.clone()).or_insert(why);
             }
         }
@@ -787,8 +787,15 @@ impl crate::OrbitRuntime {
 
     /// Why a standing provider hold keeps `task` from the executor `request`
     /// comes from, or `None` when the crew it would run as is not excluded.
-    fn pull_provider_hold(&self, task: &Task, request: &AdmissionRequest) -> Option<String> {
-        let hold = self.admission_provider_hold(task)?;
+    /// [ORB-16379] The hold is read as the executor's `machine` sees it: an
+    /// unavailable hold placed on another host excludes nothing there.
+    fn pull_provider_hold(
+        &self,
+        task: &Task,
+        request: &AdmissionRequest,
+        machine: Option<&str>,
+    ) -> Option<String> {
+        let hold = self.provider_hold_on(task, machine)?;
         let crew = task
             .crew
             .as_deref()

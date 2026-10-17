@@ -615,7 +615,11 @@ Every existing gate still applies, and gap fit only removes candidates:
 - the drain's maximum concurrency;
 - conflicts between tasks admitted together;
 - the footprint guard;
-- provider limits and crew exclusions.
+- provider limits and crew exclusions, including this host's crew outages: one
+  local leaf failing `provider_unavailable` keeps every later candidate off that
+  crew on this host until its backoff ends ([ORB-16379]), so a pass with an
+  expired login draws another pool crew or waits instead of failing each queued
+  task on it in turn.
 
 **The resource throttle stays the backstop.** When it holds, nothing is
 admitted, whatever the forecast says. This is what makes it safe to admit

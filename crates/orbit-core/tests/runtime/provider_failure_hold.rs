@@ -103,13 +103,20 @@ pub(super) struct Fixture {
 }
 
 pub(super) fn fixture(config: &str) -> Fixture {
+    fixture_on(config, None)
+}
+
+/// [`fixture`] on a host registered as `machine`, when one is given.
+fn fixture_on(config: &str, machine: Option<&str>) -> Fixture {
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let repo = root.path().join("repo");
     std::fs::create_dir_all(&global).unwrap();
     std::fs::create_dir_all(repo.join(".orbit")).unwrap();
     std::fs::write(repo.join(".orbit/config.toml"), config).unwrap();
-    let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
+        .unwrap()
+        .with_automation_machine_identity(machine.map(ToOwned::to_owned));
     let jobs = orbit_store::compose::workspace_job_run_store(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
@@ -470,6 +477,73 @@ fn a_providerless_failure_with_no_crew_to_exclude_defers_until_not_before() {
     assert!(fx.admitted(&task, &[]), "the hold has lapsed");
 }
 
+/// [ORB-16379] The 2026-10-17 incident: this host's login expired, and each
+/// queued task of the crew failed on it in turn before it was held. One
+/// unavailable failure now records the crew's outage on this host, so the
+/// drain's next admission draws every task, not only the held one, onto
+/// another pool crew, even once the held task has left the backlog. When the
+/// pool has no other crew left, the task waits out the backoff.
+fn an_unavailable_login_keeps_this_host_off_the_crew_for_every_task() {
+    let fx = fixture_on(CODEX_ONLY, Some("hm_this_host"));
+    let held = fx.task("sol");
+    let queued = fx.task("sol");
+    let run = fx.admit(&held, "sol");
+    fx.fail(
+        &run,
+        &step_failure(
+            ProviderFailureClass::Unavailable,
+            "codex provider authentication failure (HTTP 401): OAuth session expired",
+        ),
+    );
+    let hold = fx.last_hold(&held);
+    assert_eq!(hold.excluded_crews, ["sol"], "{hold:?}");
+    assert_eq!(
+        hold.machine.as_deref(),
+        Some("hm_this_host"),
+        "the hold names the host whose login failed: {hold:?}"
+    );
+
+    // The queued task, which never ran, is drawn onto the pool's other crew.
+    assert_eq!(fx.exclusion(&queued, &["sol"])["crew"], "luna");
+    assert!(fx.admitted(&queued, &["luna"]));
+
+    // The held task leaves the backlog; a later task still avoids the crew.
+    fx.runtime
+        .apply_task_automation_update(
+            &held,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::InProgress),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let later = fx.task("sol");
+    assert_eq!(
+        fx.exclusion(&later, &["sol"])["crew"],
+        "luna",
+        "the outage outlives the held task's status"
+    );
+
+    // The pool's other crew fails the same way: nothing is left to draw.
+    let second = fx.admit(&queued, "luna");
+    fx.fail(
+        &second,
+        &step_failure(
+            ProviderFailureClass::Unavailable,
+            "codex provider authentication failure (HTTP 401): OAuth session expired",
+        ),
+    );
+    assert!(!fx.admitted(&later, &[]), "the task waits out the backoff");
+    let deferred = fx.exclusion(&later, &[]);
+    assert_eq!(deferred["reason"], "provider_backoff", "{deferred}");
+    assert!(
+        deferred["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("provider_unavailable")),
+        "{deferred}"
+    );
+}
+
 /// The incident end to end: a fake Codex emits its content-filter frames, the
 /// engine types the failure and skips final recovery, Core holds the task
 /// with every Codex crew excluded, and the next admission draws the Claude
@@ -711,5 +785,6 @@ crate::scenario_table!(
     capacity_and_unavailability_hold_the_task_with_the_run_crew_excluded_scenarios,
     capacity_and_unavailability_hold_the_task_with_the_run_crew_excluded,
     a_hold_that_excludes_every_crew_defers_the_task_until_not_before,
-    a_providerless_failure_with_no_crew_to_exclude_defers_until_not_before
+    a_providerless_failure_with_no_crew_to_exclude_defers_until_not_before,
+    an_unavailable_login_keeps_this_host_off_the_crew_for_every_task
 );

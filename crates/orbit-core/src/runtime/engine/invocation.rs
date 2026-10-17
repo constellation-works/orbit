@@ -10,6 +10,7 @@ use orbit_store::contracts::{
     ProviderLedgerEntry, TaskInvocationMetrics, TaskListFilter, ToolInvocationMetrics,
 };
 use orbit_types::telemetry::{ProviderLimitObservation, TokenUsage};
+use orbit_types::workflow::ProviderCrewOutage;
 use serde::{Deserialize, Serialize};
 
 use crate::OrbitRuntime;
@@ -299,6 +300,32 @@ impl OrbitRuntime {
     /// window this host observed, newest first.
     pub fn provider_limits(&self) -> Result<Vec<ProviderLimitObservation>, OrbitError> {
         self.context.stores().host.provider_limit.provider_limits()
+    }
+
+    /// [ORB-16379] Records a crew this host's provider was unavailable for,
+    /// unless a stored outage of the crew lasts at least as long. Returns
+    /// whether it was stored.
+    pub fn record_provider_crew_outage(
+        &self,
+        outage: &ProviderCrewOutage,
+    ) -> Result<bool, OrbitError> {
+        self.context
+            .stores()
+            .host
+            .provider_limit
+            .record_provider_crew_outage(outage)
+    }
+
+    /// [ORB-16379] This host's crew outages lasting past `now`.
+    pub(crate) fn provider_crew_outages(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<ProviderCrewOutage>, OrbitError> {
+        self.context
+            .stores()
+            .host
+            .provider_limit
+            .provider_crew_outages(now)
     }
 
     /// [ORB-14699] The provider's invocations since `since`, oldest first,
