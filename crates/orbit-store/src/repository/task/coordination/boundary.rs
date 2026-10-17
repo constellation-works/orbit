@@ -1,6 +1,7 @@
 //! Entering the boundary: construction and journal binding, the ordinary
 //! (shared) and admission (exclusive) sections, and per-thread boundary depth.
 
+use super::apply::ApplyScope;
 use super::{
     COORDINATION_LOCK_FILE, COORDINATION_LOCK_LABEL, REQUIRED_MARKER_FILE, TaskCommitBoundary,
 };
@@ -201,6 +202,7 @@ impl TaskCommitBoundary {
             .try_exists()?
         {
             boundary.verify_journal_binding()?;
+            boundary.recover_unowned_commits()?;
             return Ok(boundary);
         }
         boundary.exclusive(
@@ -219,6 +221,7 @@ impl TaskCommitBoundary {
                 Ok(())
             },
         )?;
+        boundary.recover_unowned_commits()?;
         Ok(boundary)
     }
 
@@ -315,16 +318,16 @@ impl TaskCommitBoundary {
         let mut op = Some(op);
         loop {
             let result = self.shared(&self.lock_target(), section, || {
-                // A live commit holds the partition exclusively until it has
-                // cleared its marker, so a marker this read still sees once it
-                // gets in belongs to an interrupted commit. Drop the shared
-                // acquisition before taking recovery exclusive. Checking first
-                // and entering after made a reader that met a live commit wait
-                // for the partition twice, the second time behind any writer
-                // that had queued meanwhile (ORB-15797).
-                if !BoundaryDepth::active(&self.partition_dir)
-                    && self.pending_marker_path().try_exists()?
-                {
+                // A live committer holds its lease's lock until it has
+                // applied, and an older version's held the partition
+                // exclusively until it cleared its marker, so a free lease or
+                // a marker this read still sees once it gets in belongs to an
+                // interrupted commit. Drop the shared acquisition before
+                // taking recovery exclusive. Checking first and entering
+                // after made a reader that met a live commit wait for the
+                // partition twice, the second time behind any writer that had
+                // queued meanwhile (ORB-15797).
+                if !BoundaryDepth::active(&self.partition_dir) && self.interrupted_commit()? {
                     return Ok(None);
                 }
                 let _depth = BoundaryDepth::enter(&self.partition_dir);
@@ -365,7 +368,9 @@ impl TaskCommitBoundary {
     /// commit itself run inside `op`, so nothing an ordinary write could
     /// change moves underneath the decision. Calling
     /// [`Self::commit_task_transition`] inside `op` re-enters the same
-    /// acquisition.
+    /// acquisition. The bundle apply of each commit `op` decides runs after
+    /// the section has released the partition, still under the task's bundle
+    /// lock, before this returns.
     ///
     /// The host lock is held shared, as an ordinary section holds it, so
     /// ordinary sections in every other partition keep running while this
@@ -380,9 +385,11 @@ impl TaskCommitBoundary {
         F: FnOnce() -> Result<T, OrbitError>,
     {
         let section = Section::here("admission");
-        self.shared(&self.host_lock_target(), section, || {
+        let applies = ApplyScope::open(&self.partition_dir);
+        let result = self.shared(&self.host_lock_target(), section, || {
             self.admission_locked(section, op)
-        })
+        });
+        applies.finish(self, result)
     }
 
     /// [`Self::with_admission`] that also excludes every other partition's
@@ -404,9 +411,11 @@ impl TaskCommitBoundary {
                 "a host-wide admission cannot nest inside another boundary section".into(),
             ));
         }
-        self.exclusive(&self.host_lock_target(), section, || {
+        let applies = ApplyScope::open(&self.partition_dir);
+        let result = self.exclusive(&self.host_lock_target(), section, || {
             self.admission_locked(section, op)
-        })
+        });
+        applies.finish(self, result)
     }
 
     fn admission_locked<T>(

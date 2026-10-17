@@ -13,7 +13,8 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
 use super::io::{
-    classify_lock_io, classify_or_wrap_lock_io, create_private_dir_all, open_private_file,
+    classify_lock_io, classify_or_wrap_lock_io, create_new_private_file, create_private_dir_all,
+    open_private_file,
 };
 
 /// Default upper bound for an advisory file-lock acquisition.
@@ -503,6 +504,140 @@ fn warn_for_unclaimed_refusal(lock_path: &Path, label: &str, elapsed: Duration) 
         waited_ms = duration_millis(elapsed),
         "advisory file lock refused with no holder recorded; treating as contention",
     );
+}
+
+/// What [`probe_file_lock`] found at a lock path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileLockProbe {
+    /// Nothing is named there.
+    Absent,
+    /// Some open file description holds the lock.
+    Held,
+    /// The file is there and nobody holds its lock.
+    Free,
+}
+
+/// Whether anyone holds an advisory lock on the file at the exact
+/// `lock_path`, without waiting, creating it, or writing holder metadata.
+///
+/// For a file whose lock is its owner's liveness: an owner that locks it
+/// before naming it, and unnames it before unlocking it, is alive exactly
+/// while a probe finds it [`FileLockProbe::Held`]. A process that dies
+/// releases its locks, so a file still named but [`FileLockProbe::Free`]
+/// outlived its owner. A probe that loses a race with that owner unnaming the
+/// file reports it absent, not free. A descriptor a forked child inherited
+/// holds the lock until the child execs, which only delays `Free`.
+pub fn probe_file_lock(lock_path: &Path) -> io::Result<FileLockProbe> {
+    // A file renamed over this name since the open is another owner's; look
+    // again, a bounded number of times, then call it held.
+    for _ in 0..3 {
+        let file = match File::open(lock_path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(FileLockProbe::Absent);
+            }
+            Err(error) => return Err(error),
+        };
+        match FileExt::try_lock_shared(&file) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                return Ok(FileLockProbe::Held);
+            }
+            Err(error) => return Err(error),
+        }
+        if same_file_still_named(&file, lock_path)? {
+            return Ok(FileLockProbe::Free);
+        }
+    }
+    Ok(FileLockProbe::Held)
+}
+
+#[cfg(unix)]
+fn same_file_still_named(file: &File, path: &Path) -> io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+    let opened = file.metadata()?;
+    match std::fs::symlink_metadata(path) {
+        Ok(named) => Ok(named.dev() == opened.dev() && named.ino() == opened.ino()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(not(unix))]
+fn same_file_still_named(_file: &File, path: &Path) -> io::Result<bool> {
+    path.try_exists()
+}
+
+/// A file whose name says some work is in progress and whose exclusive lock
+/// says the process doing it is still alive.
+///
+/// [`probe_file_lock`] tells them apart: `Held` while its owner runs, `Free`
+/// once the owner died with the work unfinished, since the kernel drops a
+/// dead process's locks but not its files. Releasing unnames the lease
+/// before unlocking it, so a finished owner never leaves a free lease behind.
+/// Dropping one without releasing it leaves exactly that: a dead lease,
+/// which is how a failed owner hands its work to recovery.
+///
+/// The name is not made durable. A dead process leaves it behind, but a host
+/// crash may not, so work that must survive one keeps its own durable record.
+#[must_use = "a lease dropped without `release` is left behind as a dead lease"]
+#[derive(Debug)]
+pub struct LeaseFile {
+    path: PathBuf,
+    file: File,
+}
+
+static LEASE_STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+impl LeaseFile {
+    /// Name a lease at `path`, locked by this process, creating the parent
+    /// directory if it is missing. A lease already named at `path` is
+    /// replaced, so the caller must keep other owners of `path` out.
+    pub fn acquire(path: &Path) -> io::Result<Self> {
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("lease path '{}' has no parent directory", path.display()),
+            ));
+        };
+        if !parent.try_exists()? {
+            create_private_dir_all(parent)?;
+        }
+        // Lock the file before it carries the lease's name, so no probe can
+        // ever find this owner's lease free.
+        let staged = parent.join(format!(
+            ".{}.{}-{}.staged",
+            name.to_string_lossy(),
+            std::process::id(),
+            LEASE_STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let file = create_new_private_file(&staged)?;
+        let named =
+            FileExt::try_lock_exclusive(&file).and_then(|()| std::fs::rename(&staged, path));
+        if let Err(error) = named {
+            let _ = std::fs::remove_file(&staged);
+            return Err(error);
+        }
+        Ok(Self {
+            path: path.to_path_buf(),
+            file,
+        })
+    }
+
+    /// Where this lease is named.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Unname the lease, then unlock it.
+    pub fn release(self) -> io::Result<()> {
+        let removed = match std::fs::remove_file(&self.path) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        };
+        drop(self.file);
+        removed
+    }
 }
 
 pub(crate) fn acquire_shared_file_lock(
