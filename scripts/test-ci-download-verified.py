@@ -8,12 +8,17 @@ import io
 import json
 import os
 from pathlib import Path
+import select
+import shlex
+import shutil
+import signal
 import subprocess
 import ssl
 import sys
 import tarfile
 import tempfile
 import threading
+import time
 import unittest
 
 import yaml
@@ -36,6 +41,15 @@ history = json.loads(calls.read_text()) if calls.exists() else []
 history.append(args)
 rows = json.loads((root / "responses.json").read_text())
 row = rows[min(len(history) - 1, len(rows) - 1)]
+
+# A silent delay longer than the old outer caps must still answer. A row that
+# never answers writes nothing; the test's hang wait, not a short cap, stops it.
+if row.get("never_answers"):
+    time.sleep(86400)
+    sys.exit(0)
+delay = row.get("delay_seconds") or 0
+if delay:
+    time.sleep(float(delay))
 
 def signal(stage):
     if "DOWNLOAD_READY_FD" in os.environ:
@@ -200,6 +214,151 @@ def response(exit_code=0, http="200", body=BODY, **extra):
     return row
 
 
+# The old outer caps were 3s, 5s, 8s and 10s. A correct run on a busy host
+# crossed them. Output refreshes the quiet window, so a slow child is not a
+# hang. Silence with no exit is. 120s is the saturated-host fixture step
+# deadline; no correct local fixture run approaches it. 300s stops a child
+# that writes forever. 12s is longer than every removed cap.
+HANG_QUIET_SECONDS = 120
+HANG_ABSOLUTE_SECONDS = 300
+SLOW_FIXTURE_SECONDS = 12
+
+
+def _kill_group(proc):
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            return
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        proc.wait(timeout=5)
+
+
+def _read_chunk(stream):
+    try:
+        chunk = os.read(stream.fileno(), 65536)
+    except BlockingIOError:
+        return b"", False
+    except OSError:
+        return b"", True
+    if not chunk:
+        return b"", True
+    return chunk, False
+
+
+def _take(stream, bucket):
+    progressed = False
+    while True:
+        chunk, eof = _read_chunk(stream)
+        if chunk:
+            bucket.append(chunk)
+            progressed = True
+        if eof or not chunk:
+            return progressed, eof
+
+
+def run_step(argv, *, step, env=None, cwd=None, text=False, check=False, hang_quiet=None):
+    """Run argv until it exits.
+
+    A fixed wall-clock cap failed correct fixture runs when the host was slow.
+    The quiet window refreshes whenever the child writes. Silence with no exit,
+    or a run that reaches the absolute ceiling, is a hang and names `step`.
+    """
+    if hang_quiet is None:
+        quiet_budget = HANG_QUIET_SECONDS
+        absolute_budget = HANG_ABSOLUTE_SECONDS
+    else:
+        quiet_budget = hang_quiet
+        absolute_budget = hang_quiet
+    proc = subprocess.Popen(
+        argv,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+        start_new_session=True,
+    )
+    stdout_chunks = []
+    stderr_chunks = []
+    streams = [proc.stdout, proc.stderr]
+    started = time.monotonic()
+    quiet_deadline = started + quiet_budget
+    absolute_deadline = started + absolute_budget
+    try:
+        for stream in streams:
+            os.set_blocking(stream.fileno(), False)
+        while proc.poll() is None or streams:
+            now = time.monotonic()
+            if proc.poll() is None and (now >= quiet_deadline or now >= absolute_deadline):
+                _kill_group(proc)
+                for stream in list(streams):
+                    bucket = stdout_chunks if stream is proc.stdout else stderr_chunks
+                    _take(stream, bucket)
+                detail = b"".join(stderr_chunks).decode("utf-8", errors="replace")[-2000:]
+                raise AssertionError(f"hung step: {step}\n{detail}".rstrip())
+            if not streams:
+                if proc.poll() is not None:
+                    break
+                remaining = min(quiet_deadline, absolute_deadline) - time.monotonic()
+                if remaining > 0:
+                    time.sleep(min(0.25, remaining))
+                continue
+            timeout = max(0, min(quiet_deadline, absolute_deadline) - time.monotonic())
+            try:
+                readable, _, _ = select.select(streams, [], [], min(timeout, 0.25))
+            except InterruptedError:
+                continue
+            if not readable and proc.poll() is not None:
+                for stream in list(streams):
+                    bucket = stdout_chunks if stream is proc.stdout else stderr_chunks
+                    progressed, eof = _take(stream, bucket)
+                    if progressed:
+                        quiet_deadline = time.monotonic() + quiet_budget
+                    if eof:
+                        streams.remove(stream)
+                        stream.close()
+                continue
+            for stream in readable:
+                bucket = stdout_chunks if stream is proc.stdout else stderr_chunks
+                progressed, eof = _take(stream, bucket)
+                if progressed:
+                    quiet_deadline = time.monotonic() + quiet_budget
+                if eof:
+                    streams.remove(stream)
+                    stream.close()
+        returncode = proc.wait()
+    finally:
+        for stream in (proc.stdout, proc.stderr):
+            try:
+                stream.close()
+            except OSError:
+                pass
+        if proc.poll() is None:
+            _kill_group(proc)
+    stdout = b"".join(stdout_chunks)
+    stderr = b"".join(stderr_chunks)
+    if text:
+        stdout = stdout.decode("utf-8", errors="replace")
+        stderr = stderr.decode("utf-8", errors="replace")
+    result = subprocess.CompletedProcess(argv, returncode, stdout, stderr)
+    if check and returncode != 0:
+        raise subprocess.CalledProcessError(returncode, argv, stdout, stderr)
+    return result
+
+
 class VerifiedDownloadTests(unittest.TestCase):
     def setUp(self):
         scratch = ROOT / ".orbit/tmp"
@@ -223,7 +382,8 @@ class VerifiedDownloadTests(unittest.TestCase):
     def calls(self):
         return json.loads((self.root / "calls.json").read_text())
 
-    def invoke(self, *, budget=60, digest=None, url=URL, deadline=False, stage="R"):
+    def invoke(self, *, budget=60, digest=None, url=URL, deadline=False, stage="R",
+               hang_quiet=None, step="verified download"):
         env = self.env
         if deadline:
             launcher = self.bin / "python3"
@@ -233,9 +393,9 @@ class VerifiedDownloadTests(unittest.TestCase):
             clock.write_text("0.000000\n")
             env = dict(env, DOWNLOAD_EXPECT_READY=stage,
                        ORBIT_CI_DOWNLOAD_FAKE_CLOCK=str(clock))
-        return subprocess.run([str(HELPER), url, digest or hashlib.sha256(BODY).hexdigest(),
-                               str(self.destination), "--budget-seconds", str(budget)],
-                              env=env, text=True, capture_output=True, timeout=8)
+        return run_step([str(HELPER), url, digest or hashlib.sha256(BODY).hexdigest(),
+                         str(self.destination), "--budget-seconds", str(budget)],
+                        env=env, text=True, step=step, hang_quiet=hang_quiet)
 
     def deadline_events(self, *, active_limit=2):
         events = json.loads((self.root / "deadline-events.json").read_text())
@@ -402,28 +562,47 @@ class VerifiedDownloadTests(unittest.TestCase):
         self.assertNotIn("--insecure", args)
         self.assertLessEqual(float(args[args.index("--max-time") + 1]), 20)
 
+    def _historical_single_attempt(self, *, hang_quiet=None):
+        # Historical public installer boundary: a single GET before checksum.
+        return run_step(["bash", "-euc", 'curl -LsSf "$URL" -o "$ARCHIVE"\n'
+                         'echo "$SHA  $ARCHIVE" | sha256sum -c -'],
+                        env=dict(self.env, URL=URL, ARCHIVE=str(self.destination),
+                                 SHA=hashlib.sha256(BODY).hexdigest()),
+                        step="historical single-attempt curl", hang_quiet=hang_quiet)
+
     def test_old_single_attempt_cannot_recover_the_same_dns_fixture(self):
         self.configure([response(6, "000"), response()])
-        # Historical public installer boundary: a single GET before checksum.
-        result = subprocess.run(["bash", "-euc", 'curl -LsSf "$URL" -o "$ARCHIVE"\n'
-                                 'echo "$SHA  $ARCHIVE" | sha256sum -c -'],
-                                env=dict(self.env, URL=URL, ARCHIVE=str(self.destination),
-                                         SHA=hashlib.sha256(BODY).hexdigest()),
-                                capture_output=True, timeout=3)
+        result = self._historical_single_attempt()
         self.assertEqual(result.returncode, 6)
         self.assertEqual(len(self.calls()), 1)
 
-    def test_real_curl_tls_http_partial_and_redirect_boundaries(self):
+    def _openssl_certificate(self, *, env=None, hang_quiet=None):
         cert, key = self.root / "cert.pem", self.root / "key.pem"
         config = self.root / "cert.cnf"
         # Config extensions work with both OpenSSL and macOS LibreSSL; avoid
         # depending on the newer openssl req -addext command-line option.
         config.write_text("[req]\ndistinguished_name=dn\n[dn]\nCN=127.0.0.1\n"
                           "[fixture]\nsubjectAltName=IP:127.0.0.1\nbasicConstraints=critical,CA:TRUE\n")
-        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-                        "-keyout", str(key), "-out", str(cert), "-days", "1",
-                        "-subj", "/CN=127.0.0.1", "-config", str(config), "-extensions", "fixture"],
-                       check=True, capture_output=True, timeout=10)
+        run_step(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                  "-keyout", str(key), "-out", str(cert), "-days", "1",
+                  "-subj", "/CN=127.0.0.1", "-config", str(config), "-extensions", "fixture"],
+                 check=True, env=env, step="openssl fixture certificate", hang_quiet=hang_quiet)
+        return cert, key
+
+    def _openssl_shim_env(self, sleep_seconds):
+        real = shutil.which("openssl")
+        self.assertIsNotNone(real, "openssl is required")
+        shim_dir = self.root / f"openssl-shim-{sleep_seconds}"
+        shim_dir.mkdir()
+        shim = shim_dir / "openssl"
+        shim.write_text("#!/bin/sh\n"
+                        f"sleep {int(sleep_seconds)}\n"
+                        f"exec {shlex.quote(real)} \"$@\"\n")
+        shim.chmod(0o755)
+        return dict(os.environ, PATH=f"{shim_dir}{os.pathsep}{os.environ['PATH']}")
+
+    def test_real_curl_tls_http_partial_and_redirect_boundaries(self):
+        cert, key = self._openssl_certificate()
         requests = []
         statuses = []
 
@@ -493,51 +672,105 @@ class VerifiedDownloadTests(unittest.TestCase):
             server.server_close()
             thread.join()
 
-    def test_actual_linux_install_steps_verify_extract_and_refuse_invalid_archives_or_versions(self):
+    def _workflow_steps(self):
         workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-        steps = {step.get("name"): step for step in workflow["jobs"]["ci"]["steps"]}
+        return {step.get("name"): step for step in workflow["jobs"]["ci"]["steps"]}
+
+    def _ensure_cargo_shim(self):
+        cargo = self.bin / "cargo"
+        if cargo.exists():
+            return
+        # Execute workflow source in an isolated checkout; public helper is real.
+        cargo.write_text('#!/usr/bin/env bash\nsub="$1"; shift\nexec "$CARGO_HOME/bin/cargo-$sub" "$@"\n')
+        cargo.chmod(0o755)
+
+    def _install_case(self, steps, tool, prefix, member, mode, *, hang_quiet=None,
+                      delay_seconds=None, never_answers=False):
+        self._ensure_cargo_shim()
+        with tempfile.TemporaryDirectory(dir=self.root, prefix=f"case-{tool}-{mode}-") as case_dir:
+            case_root = Path(case_dir)
+            scripts = case_root / "scripts"
+            scripts.mkdir()
+            (scripts / HELPER.name).symlink_to(HELPER)
+            cargo_home = case_root / "cargo"
+            version = {"version": "9.9.9", "version-prefix": "1.2.34"}.get(mode, "1.2.3")
+            stream = io.BytesIO()
+            with tarfile.open(fileobj=stream, mode="w:gz") as archive:
+                content = f"#!/bin/sh\necho '{tool} {version}'\n".encode()
+                info = tarfile.TarInfo(member)
+                info.size, info.mode = len(content), 0o755
+                archive.addfile(info, io.BytesIO(content))
+            body = b"not an archive" if mode == "archive" else stream.getvalue()
+            digest = hashlib.sha256(b"bad" if mode == "digest" else body).hexdigest()
+            extra = {}
+            if delay_seconds:
+                extra["delay_seconds"] = delay_seconds
+            if never_answers:
+                extra["never_answers"] = True
+            self.configure([response(body=body, **extra)])
+            env = dict(self.env, CARGO_HOME=str(cargo_home),
+                       PATH=f"{self.bin}:{cargo_home / 'bin'}:{os.environ['PATH']}",
+                       TMPDIR=str(case_root))
+            env.update({f"{prefix}_VERSION": "1.2.3", f"{prefix}_LINUX_SHA256": digest})
+            result = run_step(["bash", "-euo", "pipefail", "-c", steps[f"Install {tool}"]["run"]],
+                              cwd=case_root, env=env, text=True,
+                              step=f"Install {tool}", hang_quiet=hang_quiet)
+            self.assertEqual(result.returncode == 0, mode == "valid", result.stderr)
+            self.assertEqual(len(self.calls()), 1, "never retry extraction, digest or version failures")
+            # Archive member basename is the installed binary (rg for ripgrep).
+            installed = cargo_home / "bin" / Path(member).name
+            if mode in ("digest", "archive"):
+                self.assertFalse(installed.exists(), "unverified bytes must never be installed")
+            tmp_dir = case_root / ".orbit/tmp"
+            self.assertEqual(list(tmp_dir.iterdir()) if tmp_dir.exists() else [], [],
+                             "installer trap cleans both outcomes")
+
+    def test_actual_linux_install_steps_verify_extract_and_refuse_invalid_archives_or_versions(self):
+        steps = self._workflow_steps()
         tools = [("cargo-nextest", "NEXTEST", "cargo-nextest"),
                  ("cargo-deny", "CARGO_DENY", "cargo-deny-1.2.3-x86_64-unknown-linux-musl/cargo-deny"),
                  ("uv", "UV", "uv-x86_64-unknown-linux-gnu/uv"),
                  ("ripgrep", "RIPGREP", "ripgrep-1.2.3-x86_64-unknown-linux-musl/rg")]
-        # Execute workflow source in an isolated checkout; public helper is real.
-        cargo = self.bin / "cargo"
-        cargo.write_text('#!/usr/bin/env bash\nsub="$1"; shift\nexec "$CARGO_HOME/bin/cargo-$sub" "$@"\n')
-        cargo.chmod(0o755)
         for tool, prefix, member in tools:
             for mode in ("valid", "digest", "archive", "version", "version-prefix"):
                 with self.subTest(tool=tool, mode=mode):
-                    with tempfile.TemporaryDirectory(dir=self.root, prefix=f"case-{tool}-{mode}-") as case_dir:
-                        case_root = Path(case_dir)
-                        scripts = case_root / "scripts"
-                        scripts.mkdir()
-                        (scripts / HELPER.name).symlink_to(HELPER)
-                        cargo_home = case_root / "cargo"
-                        version = {"version": "9.9.9", "version-prefix": "1.2.34"}.get(mode, "1.2.3")
-                        stream = io.BytesIO()
-                        with tarfile.open(fileobj=stream, mode="w:gz") as archive:
-                            content = f"#!/bin/sh\necho '{tool} {version}'\n".encode()
-                            info = tarfile.TarInfo(member)
-                            info.size, info.mode = len(content), 0o755
-                            archive.addfile(info, io.BytesIO(content))
-                        body = b"not an archive" if mode == "archive" else stream.getvalue()
-                        digest = hashlib.sha256(b"bad" if mode == "digest" else body).hexdigest()
-                        self.configure([response(body=body)])
-                        env = dict(self.env, CARGO_HOME=str(cargo_home),
-                                   PATH=f"{self.bin}:{cargo_home / 'bin'}:{os.environ['PATH']}",
-                                   TMPDIR=str(case_root))
-                        env.update({f"{prefix}_VERSION": "1.2.3", f"{prefix}_LINUX_SHA256": digest})
-                        result = subprocess.run(["bash", "-euo", "pipefail", "-c", steps[f"Install {tool}"]["run"]],
-                                                cwd=case_root, env=env, capture_output=True, text=True, timeout=5)
-                        self.assertEqual(result.returncode == 0, mode == "valid", result.stderr)
-                        self.assertEqual(len(self.calls()), 1, "never retry extraction, digest or version failures")
-                        # Archive member basename is the installed binary (rg for ripgrep).
-                        installed = cargo_home / "bin" / Path(member).name
-                        if mode in ("digest", "archive"):
-                            self.assertFalse(installed.exists(), "unverified bytes must never be installed")
-                        tmp_dir = case_root / ".orbit/tmp"
-                        self.assertEqual(list(tmp_dir.iterdir()) if tmp_dir.exists() else [], [],
-                                         "installer trap cleans both outcomes")
+                    self._install_case(steps, tool, prefix, member, mode)
+
+    def test_silent_hang_names_the_step(self):
+        # Short ceiling: startup slowness still reports the hung step, and the
+        # suite does not wait out the production ceiling.
+        self.configure([response(never_answers=True)])
+        with self.subTest(step="verified download"):
+            with self.assertRaisesRegex(AssertionError, r"hung step: verified download"):
+                self.invoke(hang_quiet=2)
+        with self.subTest(step="historical single-attempt curl"):
+            with self.assertRaisesRegex(AssertionError, r"hung step: historical single-attempt curl"):
+                self._historical_single_attempt(hang_quiet=2)
+        with self.subTest(step="openssl fixture certificate"):
+            with self.assertRaisesRegex(AssertionError, r"hung step: openssl fixture certificate"):
+                self._openssl_certificate(env=self._openssl_shim_env(30), hang_quiet=2)
+        with self.subTest(step="Install cargo-nextest"):
+            with self.assertRaisesRegex(AssertionError, r"hung step: Install cargo-nextest"):
+                self._install_case(self._workflow_steps(), "cargo-nextest", "NEXTEST",
+                                   "cargo-nextest", "valid", hang_quiet=2, never_answers=True)
+
+    def test_deterministic_slowdown_beyond_legacy_caps_still_passes(self):
+        with self.subTest(step="verified download"):
+            self.configure([response(delay_seconds=SLOW_FIXTURE_SECONDS)])
+            result = self.invoke()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(self.destination.read_bytes(), BODY)
+        with self.subTest(step="historical single-attempt curl"):
+            self.configure([response(6, "000", delay_seconds=SLOW_FIXTURE_SECONDS)])
+            result = self._historical_single_attempt()
+            self.assertEqual(result.returncode, 6)
+            self.assertEqual(len(self.calls()), 1)
+        with self.subTest(step="openssl fixture certificate"):
+            cert, _key = self._openssl_certificate(env=self._openssl_shim_env(SLOW_FIXTURE_SECONDS))
+            self.assertGreater(cert.stat().st_size, 0)
+        with self.subTest(step="Install cargo-nextest"):
+            self._install_case(self._workflow_steps(), "cargo-nextest", "NEXTEST", "cargo-nextest",
+                               "valid", delay_seconds=SLOW_FIXTURE_SECONDS)
 
 
 if __name__ == "__main__":
