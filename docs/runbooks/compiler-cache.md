@@ -257,6 +257,17 @@ scripts/test-compiler-cache.sh
 ORBIT_COMPILER_CACHE_REQUIRE_NS=1 scripts/test-compiler-cache-namespaces.sh
 ```
 
+On a control failure, the namespace script prints the stage, participant names
+(C/D, or E for warm reuse), exact exit statuses, and each participant's stdout
+and stderr before removing its temporary files. Each stream is limited to
+4096 payload bytes: oversized logs retain the first and last 2048 bytes, with
+an explicit omitted-byte count. The labels include original byte counts;
+successful peers retain their output and cache statistics too. Diagnostics
+add no compilation or waits to a successful live run. The companion
+`scripts/test-compiler-cache.sh` drives deterministic failures through the namespace
+entrypoint with transport fixtures; those checks cover diagnostic bounds and
+cleanup, while the live namespace run remains required for cache isolation.
+
 When the cache is disabled, that namespace script prints one line,
 `test-compiler-cache-namespaces: not applicable: host compiler cache is disabled (...)`,
 and exits 0 before probing namespaces. The reason is `ORBIT_COMPILER_CACHE=0`,
