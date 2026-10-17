@@ -18,9 +18,10 @@
 //!
 //! A review-filed task's selectors are the review's evidence [ORB-15285]. On
 //! a `selectors` assessment apply keeps every one the pilot omitted that
-//! still resolves at the pinned source, in the filed order, so re-assessment
-//! cannot narrow it and an unchanged scope is not rewritten. Only an
-//! operator's `orbit.task.update` narrows it.
+//! still resolves at the pinned source, in the filed order, unless the pilot
+//! explicitly records a verified read-only drop with its inspection reason.
+//! Unexplained omissions stay protected; proposed change targets and operator
+//! creation grants cannot be overridden by drop records.
 //!
 //! A typed host finding routes the task in the same commit [ORB-15278]: a
 //! `required_os` finding naming one OS adds its `os:` tag to a task that
@@ -57,7 +58,8 @@ pub(crate) use apply::apply;
 pub(super) use assessment::member_ready;
 use assessment::{
     normalize_evidence_gaps, required_machine, required_os, retained_review_evidence, review_filed,
-    routing_os, unauthorized_missing_targets, validate_after_selectors, validate_recommendations,
+    reviewed_evidence_drops, routing_os, unauthorized_missing_targets, validate_after_selectors,
+    validate_recommendations,
 };
 pub(crate) use blockers::{normalize_pilot_self_blockers, pilot_blocker_task_ids};
 pub(crate) use drain_promotion::{
@@ -142,6 +144,10 @@ pub(super) const CONTEXT_REAUTHORIZATION_REQUIRED: &str = "context_reauthorizati
 /// Assessment field apply attaches: a review-filed task's evidence selectors
 /// the pilot omitted and apply kept.
 pub(super) const CONTEXT_EVIDENCE_RETAINED: &str = "context_evidence_retained";
+
+/// Optional agent-proposed selector/reason records, validated before review
+/// evidence can leave the lock footprint and persisted in the assessment.
+pub(super) const CONTEXT_EVIDENCE_DROPPED: &str = "context_evidence_dropped";
 
 /// Assessment field apply attaches when it rewrote a model formatting slip
 /// (today a scalar or missing `evidence_gaps`) instead of rejecting it.

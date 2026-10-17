@@ -103,15 +103,18 @@ ordinary entry using its own `context_files`, and sequencing is expressed with d
   creation intent task-pilot honours; it never affects admission. Admission, reservation,
   status locks and task reads share `runtime/task/mod.rs::declared_context_files` [ORB-12490].
 - A task filed by a review (tagged `code-review`, `delivery-code-review`, `qa-full-sweep`,
-  `qa-sweep` or `security-review`) carries its evidence as selectors: every cited source path plus the
-  regression-test location. Task-pilot may add modification targets to it but never drops one of
-  those selectors that still resolves at the pinned source; apply keeps any the pilot omitted, in
-  the filed order, and reports them as `context_evidence_retained`, so re-assessment does not
-  rewrite the scope [ORB-15285]. The evidence stays in `context_files` and so in the lock
-  surface: a finding's evidence names the files its repair is likely to edit, the review templates
-  bound it to the cited paths, and the per-complexity over-attachment finding counts retained
-  selectors. A selector that no longer resolves is dropped and reported like any other missing
-  target, and an operator `orbit.task.update` that narrows the scope is respected.
+  `qa-sweep` or `security-review`) keeps selectors the finding names as substantive change
+  targets. Read-only evidence belongs in the description, not the lock footprint; incidental
+  shared-reference edits such as a line in `docs/CONFIG.md` also stay out, while the implementer
+  still updates affected docs in the same PR and auto-fix resolves textual merges. Task-pilot
+  may drop a selector it verifies needs no substantive change by recording its exact selector
+  and inspection reason in `context_evidence_dropped`. Apply accepts those records only for
+  omitted, resolving review selectors, never proposed targets or operator creation grants,
+  and persists them with the assessment audit. Unexplained omissions still retain filed order
+  as `context_evidence_retained`, preserving the silent-omission guard [ORB-15285]. Retained
+  selectors count toward the over-attachment finding. A selector that no longer resolves is
+  dropped and reported like any other missing target, and an operator `orbit.task.update`
+  that narrows the scope is respected.
   The canonical workspace-root selector `dir:.` resolves to the pinned commit's root tree.
   Proposed selectors, evidence retention and missing-target inspection share that lookup;
   they never infer its kind from the mutable checkout. Parent and absolute anchors, symlink

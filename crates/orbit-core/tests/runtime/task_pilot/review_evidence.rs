@@ -1,8 +1,7 @@
-//! A review-filed task's selectors are the review's evidence: a pilot that
-//! proposes only its modification targets cannot erase them, re-assessment
-//! does not rewrite the scope, and the over-attachment finding still fires
-//! for a swept proposal. Fixtures drive the real prepare and apply actions
-//! against a real store and a real repository, in isolated children.
+//! Review evidence leaves the footprint only with an explicit inspection
+//! reason. Unexplained omissions survive reassessment, and over-attachment
+//! findings still fire for swept proposals. Fixtures drive the real prepare
+//! and apply actions against a real store and repository in isolated children.
 
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{Task, TaskStatus};
@@ -49,6 +48,16 @@ impl Workspace {
     }
 
     fn assess(&self, prepared: &Value, after: &[&str], complexity: &str) -> Value {
+        self.assess_with_drops(prepared, after, complexity, json!([]))
+    }
+
+    fn assess_with_drops(
+        &self,
+        prepared: &Value,
+        after: &[&str],
+        complexity: &str,
+        drops: Value,
+    ) -> Value {
         let task_id = prepared["task_ids"][0].clone();
         self.action(
             "apply_task_pilot_results",
@@ -59,6 +68,7 @@ impl Workspace {
                     "partition_index": 0, "task_ids": [task_id],
                     "tasks": [{
                         "task_id": task_id, "context_files_after": after,
+                        "context_evidence_dropped": drops,
                         "disposition": "selectors", "recommended_crew": "fixture",
                         "recommended_complexity": complexity, "confidence": "high",
                         "assessment_rationale": "The cited sources contain the defect.",
@@ -245,7 +255,7 @@ fn review_evidence_survives_narrowing_reassessment_and_replay() {
         owned(&[&FILED[..], &[EXTRA]].concat())
     );
 
-    // Only an operator narrows it, and the next pilot keeps that decision.
+    // An operator can narrow it without a pilot drop record.
     workspace
         .runtime
         .update_task_with_identity(
@@ -262,6 +272,79 @@ fn review_evidence_survives_narrowing_reassessment_and_replay() {
     let respected = workspace.assess(&prepared, &[ADMISSION], "medium");
     assert_eq!(outcome(&respected)["outcome"], "applied", "{respected}");
     assert_eq!(workspace.scope(&task.id), NARROWED);
+}
+
+fn verified_read_only_evidence_can_leave_the_lock_while_change_targets_remain() {
+    let workspace = Workspace::new();
+    workspace.commit_files(&FILED);
+    let task = workspace.filed_task("duplicate alert", &["delivery-code-review"], &FILED);
+    let task = workspace.runtime.update_task_with_identity(
+        &task.id,
+        TaskUpdateParams {
+            description: Some(format!(
+                "Change {ADMISSION} and {SWEEP_TEST}. Read-only evidence: {DUPLICATES}, {FILING}, {CODE_GROUPS}."
+            )),
+            ..Default::default()
+        },
+        Some("codex".into()),
+        Some("fixture-model".into()),
+    ).unwrap();
+    let prepared = workspace.prepare(&[&task.id]);
+    let drops = json!([
+        {"selector": DUPLICATES, "reason": "Verified the duplicate caller is read-only evidence; repair is in admission."},
+        {"selector": FILING, "reason": "Verified filing only supplies evidence and requires no change."},
+        {"selector": CODE_GROUPS, "reason": "Verified grouping is only consulted; the finding targets admission and its regression test."},
+    ]);
+    let applied = workspace.assess_with_drops(&prepared, &NARROWED, "medium", drops.clone());
+    assert_eq!(outcome(&applied)["outcome"], "applied", "{applied}");
+    assert_eq!(
+        workspace.scope(&task.id),
+        NARROWED,
+        "verified read-only evidence must not reserve locks"
+    );
+    assert!(
+        applied["tasks"][0]
+            .get("context_evidence_retained")
+            .is_none()
+    );
+    assert_eq!(applied["tasks"][0]["context_evidence_dropped"], drops);
+    let current = workspace.runtime.get_task(&task.id).unwrap();
+    assert_eq!(
+        current.description, task.description,
+        "evidence remains in the finding description"
+    );
+    let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
+    let audit: Value =
+        serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
+    assert_eq!(
+        audit["assessment"]["context_evidence_dropped"], drops,
+        "drop reasons must be durable"
+    );
+    let replayed = workspace.assess_with_drops(&prepared, &NARROWED, "medium", drops);
+    assert_eq!(
+        outcome(&replayed)["outcome"],
+        "already_applied",
+        "{replayed}"
+    );
+}
+
+fn invalid_evidence_drop_records_cannot_narrow_the_scope() {
+    let workspace = Workspace::new();
+    workspace.commit_files(&[&FILED[..], &[EXTRA]].concat());
+    let task = workspace.filed_task("duplicate alert", &["code-review"], &FILED);
+    let prepared = workspace.prepare(&[&task.id]);
+    for drops in [
+        json!({"selector": DUPLICATES, "reason": "read only"}),
+        json!([{"selector": DUPLICATES}]),
+        json!([{"selector": DUPLICATES, "reason": "  "}]),
+        json!([{"selector": EXTRA, "reason": "not in the finding"}]),
+        json!([{"selector": ADMISSION, "reason": "conflicts with an explicit change target"}]),
+        json!([{"selector": DUPLICATES, "reason": "read only"}, {"selector": DUPLICATES, "reason": "duplicate"}]),
+    ] {
+        let applied = workspace.assess_with_drops(&prepared, &NARROWED, "medium", drops);
+        assert_eq!(outcome(&applied)["outcome"], "invalid", "{applied}");
+        assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), task);
+    }
 }
 
 fn evidence_that_no_longer_resolves_is_dropped_and_reported() {
@@ -354,6 +437,8 @@ crate::scenario_table!(
     omitted_root_is_retained_as_review_evidence_and_is_never_missing,
     root_assessments_preserve_pinned_path_confinement_and_kind_checks,
     review_evidence_survives_narrowing_reassessment_and_replay,
+    verified_read_only_evidence_can_leave_the_lock_while_change_targets_remain,
+    invalid_evidence_drop_records_cannot_narrow_the_scope,
     evidence_that_no_longer_resolves_is_dropped_and_reported,
     a_task_no_review_filed_keeps_the_pilot_narrowing,
     a_swept_proposal_is_applied_with_an_over_attachment_finding
