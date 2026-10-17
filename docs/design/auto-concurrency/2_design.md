@@ -801,7 +801,7 @@ Limitations:
 | `orbit run show` | Implemented: an `Admission:` line from the recorded pass, e.g. `forecast — skipped heavy candidate (cpu 94% at +6m)`, with candidate titles, shadow decisions labelled hypothetical, and a protected head named by the starvation guard; a `Stuck head:` line while that head is stuck (§5.3). After an idle pass, it names the last built forecast's timestamp, decisions and peaks, and says the current pass built none. JSON preserves `pipeline_state.drain_last_pass.admission_forecast` and retains built history in `pipeline_state.drain_last_forecast`. |
 | `orbit run readiness` | Implemented: the last pass's host forecast peaks, headroom below the current admission thresholds, each judged candidate's profile source and wait, and a stuck head (§5.3). JSON adds `capacity.admission_forecast` and `tasks[].admission_forecast` for the current pass, plus `capacity.last_admission_forecast` for retained built history. Idle passes show that history without changing eligibility; without either recorded block, output is unchanged. See [observing admission](../../CONFIG.md#machineauto_concurrency--host-forecast-admission). |
 | `orbit run profiles` | Implemented: the profiles per workspace, work class and complexity: deliveries (sparse below `min_profile_deliveries`), horizon, peak CPU and memory and when they occur, and the CPU and memory spread. Flags no-diff profiles with build-like load and names the deliveries behind each flag (§3.2). `--json` for the full series |
-| `orbit run profiles --accuracy` | Implemented (§8.1): composable forecast-time `--since`, exact `--drain` and recorded `--mode` cohorts; mature measured pairs, pending and missing counts per offset, with missing split into unsampled (no delivery live) and gap (delivery live, no host row); shadow decisions and enforce admissions, gap-fit holds and pull holds per drain. `--json` includes the effective selection and raw pairs |
+| `orbit run profiles --accuracy` | Implemented (§8.1): composable forecast-time `--since`, exact `--drain` and recorded `--mode` cohorts; mature measured pairs, pending and missing counts per offset, with missing split into unsampled (no delivery live), partial (a delivery overlapped the minute but none saw it whole) and gap (a delivery ran for the whole minute and wrote no host row); shadow decisions and enforce admissions, gap-fit holds and pull holds per drain. `--json` includes the effective selection and raw pairs |
 | Per-drain mode | Implemented for local drains: CLI `--auto-concurrency off|shadow|enforce`, registered MCP `orbit.workflow.auto` start `auto_concurrency`, and dashboard HTTP start `auto_concurrency` all use Core submission. At durable admission, explicit or configured mode is captured in `input.auto_concurrency` with `input.auto_concurrency_source`, retained on resume/restart. The loop forwards it to the existing classifier; thresholds, profiles, throttle, ceilings and accuracy lineage remain host policy. Stop/resize and explicit pull overrides are refused before effects. |
 | Dashboard | Implemented: an operator launch choice of inherited host mode, off, shadow or enforce. The form reads current inherited host mode from readiness, sends the actual option, and shows the receipt's durable effective mode; the live window shows its captured mode. The Drain card shows the recorded forecast from readiness: its time, CPU and memory peaks against the current admit thresholds, headroom, admitted tasks with their profile source, and a candidate enforce held. A pass that built none says `no forecast this pass` and shows `last_admission_forecast` when readiness has one. Shadow decisions are labelled hypothetical. Forecast curves against measured load with running tasks stacked remain future work. |
 
@@ -885,18 +885,25 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   every point. Until `minute_at + 1 minute <= report_at`, the point is
   **pending**, even if a partial measured row already exists. After that
   boundary it is **missing** if no row exists, otherwise **paired**.
-  `missing` is `unsampled` plus `gap`. `unsampled` is an ended minute with
-  no host row and no delivery run live: host minutes are written only by
-  delivery workers, so an idle drain's forecast has nothing to pair with.
-  `gap` is an ended minute with no host row while a delivery worker was
-  live, from its `started_at` until its `finished_at`. The drain's own run
-  and a run that never started are not deliveries. A run that finishes
+  `missing` is `unsampled` plus `partial` plus `gap`. `unsampled` is an ended
+  minute with no host row and no delivery run live: host minutes are written
+  only by delivery workers, so an idle drain's forecast has nothing to pair
+  with. `partial` is an ended minute with no host row that a delivery
+  overlapped, but that no delivery was running for the whole of. The sampler
+  writes a host row only for a minute a worker saw whole — already running
+  before the minute began, and still running when it ended — so the minute
+  a delivery starts in and the minute it finishes in are partial unless
+  another worker covered them whole. That is not a sampling defect. `gap`
+  is an ended minute with no host row while a delivery was running for the
+  whole minute, so the sampler should have written a row. The drain's own
+  run and a run that never started are not deliveries. A run that finishes
   exactly as the minute starts, or starts exactly as the minute ends, does
   not cover it. A live delivery in a paired or still-pending minute does
   not move that point. Per offset, paired + pending + missing equals the
   selected recorded point count; the compatible `unmeasured` field is
   pending + missing. Text keeps `PAIRS`, `PENDING`, `MISSING` and the error
-  columns, and adds `UNSAMPLED` and `GAP`. JSON adds `unsampled` and `gap`.
+  columns, and adds `UNSAMPLED`, `PARTIAL` and `GAP`. JSON adds `unsampled`,
+  `partial` and `gap`.
   A completed minute with a row is usable regardless of sample count; this
   report does not certify sampling completeness.
 - **Errors**, per offset and for CPU (cores) and memory (bytes): the mean
@@ -920,7 +927,7 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   both time bounds, drain and mode (`all` when unrestricted). JSON retains
   `since`, `forecasts`, `offsets`, `drains` and `pairs`, adding `report_at`,
   effective `selection` (`since`, `drain`, `mode`; null means unrestricted),
-  and per-offset `pending`, `missing`, `unsampled` and `gap`. Empty cohorts have zero counts,
+  and per-offset `pending`, `missing`, `unsampled`, `partial` and `gap`. Empty cohorts have zero counts,
   empty pairs and drains, and null error summaries. Invalid timestamps,
   modes, empty drain ids and a since later than report time are rejected;
   selectors require `--accuracy`. Rows are pruned with the resource history

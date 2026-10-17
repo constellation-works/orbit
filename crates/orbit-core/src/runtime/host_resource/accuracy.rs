@@ -6,7 +6,9 @@
 //!   `forecast_at`, truncated to the minute, plus `n`. A point whose minute
 //!   has not fully ended at report time is pending, even with a partial
 //!   measurement. Ended minutes without a row are missing: `unsampled` when
-//!   no delivery worker was live in that minute, and `gap` when one was.
+//!   no delivery worker overlapped that minute, `partial` when one did but
+//!   none of them saw the minute whole, and `gap` when one was running for
+//!   the whole minute.
 //!   Pending and missing both count as unmeasured; only ended, measured
 //!   minutes contribute error pairs.
 //! - **Error** is forecast minus measured, so a negative error is an
@@ -82,12 +84,18 @@ pub struct OffsetAccuracy {
     pub unmeasured: u64,
     /// Target minutes not fully ended at report time, including partial rows.
     pub pending: u64,
-    /// Ended target minutes with no measured row. The sum of [`Self::unsampled`]
-    /// and [`Self::gap`].
+    /// Ended target minutes with no measured row. The sum of [`Self::unsampled`],
+    /// [`Self::partial`] and [`Self::gap`].
     pub missing: u64,
     /// Ended target minutes with no host row and no delivery run live.
     pub unsampled: u64,
-    /// Ended target minutes with a delivery run live but no host row.
+    /// Ended target minutes a delivery overlapped, but none saw whole.
+    ///
+    /// The sampler writes a host row only for a minute a worker saw whole, so
+    /// the minute a delivery starts or finishes in is partial unless another
+    /// worker covered it. That is not a sampling defect.
+    pub partial: u64,
+    /// Ended target minutes a delivery ran all the way across, with no host row.
     pub gap: u64,
     /// In cores.
     pub cpu: ErrorSummary,
@@ -166,7 +174,8 @@ pub struct DrainShadowDecisions {
 /// The report over preselected `records` against the host's measured `minutes`.
 ///
 /// `deliveries` are the workers that could have sampled the host. An ended
-/// minute with no row is a `gap` when one of them was live during it, and
+/// minute with no row is a `gap` when one of them was running for the whole
+/// minute, `partial` when one overlapped it but none saw it whole, and
 /// `unsampled` otherwise. A drain that only recorded forecasts is not a
 /// delivery.
 pub(crate) fn forecast_accuracy(
@@ -183,6 +192,7 @@ pub(crate) fn forecast_accuracy(
     let mut pairs = Vec::new();
     let mut pending: BTreeMap<u32, u64> = BTreeMap::new();
     let mut unsampled: BTreeMap<u32, u64> = BTreeMap::new();
+    let mut partial: BTreeMap<u32, u64> = BTreeMap::new();
     let mut gap: BTreeMap<u32, u64> = BTreeMap::new();
     for record in records {
         let start = record
@@ -196,13 +206,10 @@ pub(crate) fn forecast_accuracy(
                 continue;
             }
             let Some(host) = measured.get(&minute_at) else {
-                let bucket = if deliveries
-                    .iter()
-                    .any(|delivery| delivery_covers(delivery, minute_at))
-                {
-                    &mut gap
-                } else {
-                    &mut unsampled
+                let bucket = match classify_missing(deliveries, minute_at) {
+                    MissingMinute::Gap => &mut gap,
+                    MissingMinute::Partial => &mut partial,
+                    MissingMinute::Unsampled => &mut unsampled,
                 };
                 *bucket.entry(point.offset_minutes).or_default() += 1;
                 continue;
@@ -226,6 +233,7 @@ pub(crate) fn forecast_accuracy(
     offsets.extend(pairs.iter().map(|pair| pair.offset_minutes));
     offsets.extend(pending.keys().copied());
     offsets.extend(unsampled.keys().copied());
+    offsets.extend(partial.keys().copied());
     offsets.extend(gap.keys().copied());
     let offsets = offsets
         .into_iter()
@@ -236,8 +244,9 @@ pub(crate) fn forecast_accuracy(
                 .collect();
             let pending = pending.get(&offset).copied().unwrap_or(0);
             let unsampled = unsampled.get(&offset).copied().unwrap_or(0);
+            let partial = partial.get(&offset).copied().unwrap_or(0);
             let gap = gap.get(&offset).copied().unwrap_or(0);
-            let missing = unsampled + gap;
+            let missing = unsampled + partial + gap;
             OffsetAccuracy {
                 offset_minutes: offset,
                 paired: at_offset.len() as u64,
@@ -245,6 +254,7 @@ pub(crate) fn forecast_accuracy(
                 pending,
                 missing,
                 unsampled,
+                partial,
                 gap,
                 cpu: summarize(&at_offset, |pair| {
                     (pair.forecast_cpu_cores, pair.measured_cpu_cores)
@@ -279,6 +289,51 @@ fn delivery_covers(delivery: &DeliveryRunInterval, minute_at: DateTime<Utc>) -> 
         && delivery
             .finished_at
             .is_none_or(|finished| finished > minute_at)
+}
+
+/// An ended minute with no host row.
+enum MissingMinute {
+    /// No delivery overlapped the minute.
+    Unsampled,
+    /// A delivery overlapped the minute, but none saw it whole.
+    Partial,
+    /// A delivery was running for the whole minute.
+    Gap,
+}
+
+/// Classify an ended minute that has no host row.
+///
+/// A worker can offer a host row only for a minute it saw whole: it was
+/// already running before the minute began, and it was still running when
+/// the minute ended. The minute it starts in, and the minute it finishes
+/// in, stay unrecorded on purpose.
+fn classify_missing(deliveries: &[DeliveryRunInterval], minute_at: DateTime<Utc>) -> MissingMinute {
+    let end = minute_at + Duration::minutes(1);
+    let mut overlapped = false;
+    for delivery in deliveries {
+        if !delivery_covers(delivery, minute_at) {
+            continue;
+        }
+        if delivery_observed_whole(delivery, minute_at, end) {
+            return MissingMinute::Gap;
+        }
+        overlapped = true;
+    }
+    if overlapped {
+        MissingMinute::Partial
+    } else {
+        MissingMinute::Unsampled
+    }
+}
+
+/// Whether `delivery` was already running before `minute_at` and was still
+/// running at `end`, so the sampler could have recorded that minute whole.
+fn delivery_observed_whole(
+    delivery: &DeliveryRunInterval,
+    minute_at: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> bool {
+    delivery.started_at < minute_at && delivery.finished_at.is_none_or(|finished| finished >= end)
 }
 
 fn summarize(
