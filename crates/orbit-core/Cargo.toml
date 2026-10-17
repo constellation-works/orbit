@@ -32,6 +32,7 @@ orbit-search = { path = "../orbit-search" }
 orbit-engine = { path = "../orbit-engine" }
 orbit-exec = { path = "../orbit-exec" }
 orbit-policy = { path = "../orbit-policy" }
+orbit-registry = { path = "../orbit-registry" }
 orbit-store = { path = "../orbit-store" }
 orbit-tools = { path = "../orbit-tools" }
 rusqlite.workspace = true

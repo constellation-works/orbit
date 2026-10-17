@@ -162,7 +162,9 @@ impl Execute for DeploymentGcArgs {
 #[derive(Args)]
 #[command(
     after_help = "Without --apply this only reports. The command audit (`audit_events`) is \
-                  host-wide; run audit rows and blobs are this workspace's. A blob is kept while \
+                  host-wide. Run audit rows are this workspace's, plus rows whose workspace id is \
+                  no longer registered; another registered workspace keeps its own window. Blobs \
+                  are this workspace's. A blob is kept while \
                   any remaining run audit row, run step or pipeline state names it, while a \
                   pending-publication marker newer than the cutoff names it, and for 24 hours \
                   after it was last written. Deletes run in batches of 1,000 rows, each its own \
@@ -218,7 +220,9 @@ impl Execute for AuditGcArgs {
 #[derive(Args)]
 #[command(
     after_help = "Without --apply this only reports. Only success, failed, timeout, cancelled and \
-                  interrupted runs of this workspace are selected; a held run, which review \
+                  interrupted runs of this workspace, and of workspace ids that are no longer \
+                  registered, are selected; another registered workspace keeps its own window. A \
+                  held run, which review \
                   evidence can still resume, and every non-terminal run are never touched. The \
                   run row, its steps and its summary stay, so `orbit run show` and run history \
                   keep working, and `archived_at` records when the state was dropped. The \

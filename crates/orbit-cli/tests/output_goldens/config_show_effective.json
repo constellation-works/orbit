@@ -237,6 +237,12 @@
       "path": null,
       "shadowed_by": []
     },
+    "retention.store_warn_bytes": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "review.baseline_commands": {
       "scope": "built-in",
       "state": "default",
