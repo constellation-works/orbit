@@ -1,5 +1,6 @@
 //! Drain readiness shows every provider reading's age and the authentication
-//! failures a later success of that provider on that host has not cleared.
+//! failures that no success of that provider on that host has cleared. A
+//! success clears a failure only when it started after the failure.
 
 use chrono::{Duration, Utc};
 use orbit_core::{JobRun, JobRunState};
@@ -17,15 +18,7 @@ fn readiness_shows_stale_readings_and_clears_a_host_auth_failure_after_success()
     isolated(
         "provider_auth::readiness_shows_stale_readings_and_clears_a_host_auth_failure_after_success",
         || {
-            let fixture = Fixture::new();
-            let global_path = fixture.global.join("config.toml");
-            let mut global = std::fs::read_to_string(&global_path).unwrap();
-            global.push_str(concat!(
-                "\n[workflow]\ndefault_crew = \"opus\"\n",
-                "\n[crews.opus]\nprovider = \"claude\"\nmodel = \"opus\"\n",
-            ));
-            std::fs::write(global_path, global).unwrap();
-
+            let fixture = claude_fixture();
             let now = Utc::now();
             fixture
                 .runtime
@@ -118,6 +111,7 @@ fn readiness_shows_stale_readings_and_clears_a_host_auth_failure_after_success()
                 "jrun-auth-cleared",
                 "dk-server-2",
                 now - Duration::seconds(30),
+                now - Duration::seconds(30),
             );
             let after = json_ok(server.get(&uri));
             assert!(
@@ -142,6 +136,81 @@ fn readiness_shows_stale_readings_and_clears_a_host_auth_failure_after_success()
             assert_reading(&after["provider_limits"], "claude", false, 0);
         },
     );
+}
+
+#[test]
+fn readiness_keeps_a_failure_that_an_overlapping_success_did_not_clear() {
+    isolated(
+        "provider_auth::readiness_keeps_a_failure_that_an_overlapping_success_did_not_clear",
+        || {
+            let fixture = claude_fixture();
+            let now = Utc::now();
+            save_failed(
+                &fixture,
+                "jrun-auth",
+                "dk-server-2",
+                now - Duration::minutes(10),
+                "provider_unavailable",
+                "[provider_unavailable] provider=claude token expired",
+            );
+            // Started before the failure and finished after it: the run was
+            // already using the credentials that then failed, so it does not
+            // show that the login works now.
+            save_success(
+                &fixture,
+                "jrun-overlap",
+                "dk-server-2",
+                now - Duration::minutes(15),
+                now - Duration::minutes(5),
+            );
+
+            let server = fixture.server(false);
+            let uri = format!("/api/workflows/auto/readiness?workspace={WS}");
+            let overlapped = json_ok(server.get(&uri));
+            let auth = auth_item(
+                &overlapped["provider_auth_failures"],
+                "dk-server-2",
+                "claude",
+            );
+            assert_eq!(
+                run_ids(auth),
+                vec!["jrun-auth".to_string()],
+                "a success that started before the failure leaves it standing: {auth}"
+            );
+
+            save_success(
+                &fixture,
+                "jrun-after",
+                "dk-server-2",
+                now - Duration::minutes(2),
+                now - Duration::minutes(1),
+            );
+            let cleared = json_ok(server.get(&uri));
+            assert!(
+                !cleared["provider_auth_failures"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|item| item["host"] == "dk-server-2" && item["provider"] == "claude"),
+                "a success that started after the failure clears it: {}",
+                cleared["provider_auth_failures"]
+            );
+        },
+    );
+}
+
+/// A fixture whose `opus` crew runs on claude, so runs that resolve to it
+/// count as claude runs.
+fn claude_fixture() -> Fixture {
+    let fixture = Fixture::new();
+    let global_path = fixture.global.join("config.toml");
+    let mut global = std::fs::read_to_string(&global_path).unwrap();
+    global.push_str(concat!(
+        "\n[workflow]\ndefault_crew = \"opus\"\n",
+        "\n[crews.opus]\nprovider = \"claude\"\nmodel = \"opus\"\n",
+    ));
+    std::fs::write(global_path, global).unwrap();
+    fixture
 }
 
 fn reading(
@@ -233,8 +302,15 @@ fn save_failed(
         .unwrap();
 }
 
-fn save_success(fixture: &Fixture, run_id: &str, host: &str, at: chrono::DateTime<Utc>) {
-    let mut run = located(host, at, JobRunState::Success, Some("opus"));
+fn save_success(
+    fixture: &Fixture,
+    run_id: &str,
+    host: &str,
+    started: chrono::DateTime<Utc>,
+    finished: chrono::DateTime<Utc>,
+) {
+    let mut run = located(host, started, JobRunState::Success, Some("opus"));
+    run.finished_at = Some(finished);
     run.run_id = run_id.into();
     fixture.save_run(&run);
 }
