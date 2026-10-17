@@ -903,8 +903,10 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   released for a `transient` failure other than a forge outage, with the
   task, class and reason) or `provider_limit` (this host's latest reading of
   the crew's provider usage window is at or over its threshold, written
-  `(provider_limit until <time>)` before the reading; it lifts at `until`
-  within the same drain, see
+  `(provider_limit until <time>)` before the reading and `reading from host
+  <machine-id>` after it; it lifts at `until` within the same drain. These
+  readings come from the executor's local store, independently of the owner's
+  login and usage limits. See
   [provider usage limits](../CONFIG.md#provider-usage-limits)). Each iteration's output carries
   the same window as `crews`. Auth exclusions also list provider, host, failure time, error class,
   re-login hint, credential source and next probe time (`auth_exclusions`).
