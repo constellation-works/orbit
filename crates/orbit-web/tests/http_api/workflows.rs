@@ -1112,6 +1112,65 @@ fn auto_readiness_reports_authorization_and_replica_for_the_start_form() {
     );
 }
 
+/// Readiness keeps the shell PATH warning across warm reads and server restarts.
+#[test]
+#[cfg(unix)]
+fn auto_readiness_reuses_the_validation_warning_without_profiles() {
+    isolated(
+        "workflows::auto_readiness_reuses_the_validation_warning_without_profiles",
+        || {
+            let fixture = Fixture::new();
+            let home = fixture.global.parent().unwrap();
+            let marker = home.join("login-probes");
+            for name in [".bash_profile", ".profile", ".zprofile"] {
+                std::fs::write(home.join(name),
+                    "printf 'probe\\n' >> \"$HOME/login-probes\"\nexport PATH=\"$HOME/login-tools:/usr/bin:/bin\"\n"
+                ).unwrap();
+            }
+            std::fs::create_dir_all(home.join(".config/fish")).unwrap();
+            std::fs::write(home.join(".config/fish/config.fish"),
+                "printf 'probe\\n' >> \"$HOME/login-probes\"\nset -gx PATH \"$HOME/login-tools\" /usr/bin /bin\n"
+            ).unwrap();
+            let configure = |mode: &str| {
+                std::fs::write(fixture.work.join("config.toml"), format!(
+                    "[workflow]\nrequired_validation_commands = [\"make check\"]\n[workflow.validation_env]\npath = [\"/usr/bin\", \"/bin\"]\npath_mode = \"{mode}\"\n"
+                )).unwrap();
+            };
+            configure("replace");
+            let uri = format!("/api/workflows/auto/readiness?workspace={WS}");
+            let first = {
+                let server = fixture.server(false);
+                let first = json_ok(server.get(&uri));
+                assert!(
+                    first["validation_env_warning"]
+                        .as_str()
+                        .unwrap()
+                        .contains(home.join("login-tools").to_str().unwrap()),
+                    "{first}"
+                );
+                let warm = json_ok(server.get(&uri));
+                assert_eq!(
+                    warm["validation_env_warning"],
+                    first["validation_env_warning"]
+                );
+                assert_eq!(std::fs::read_to_string(&marker).unwrap().lines().count(), 1);
+                first
+            };
+            // Cross-process reuse also prevents a cold probe after a web restart.
+            let restarted = json_ok(fixture.server(false).get(&uri));
+            assert_eq!(
+                restarted["validation_env_warning"],
+                first["validation_env_warning"]
+            );
+            assert_eq!(std::fs::read_to_string(&marker).unwrap().lines().count(), 1);
+            configure("prepend");
+            let kept = json_ok(fixture.server(false).get(&uri));
+            assert!(kept["validation_env_warning"].is_null(), "{kept}");
+            assert_eq!(std::fs::read_to_string(&marker).unwrap().lines().count(), 2);
+        },
+    );
+}
+
 /// A task ready for admission but for what the test arranges: criteria, a
 /// plan, an assessed complexity and one existing file it locks.
 fn readiness_task(

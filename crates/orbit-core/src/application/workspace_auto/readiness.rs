@@ -823,7 +823,7 @@ impl OrbitRuntime {
             allowed_crews,
         )?;
         snapshot["replica"] = json!(self.replica_owner_machine().is_some());
-        snapshot["validation_env_warning"] = json!(self.validation_env_preflight_warning());
+        snapshot["validation_env_warning"] = json!(self.readiness_validation_env_warning());
         Ok(snapshot)
     }
 }
