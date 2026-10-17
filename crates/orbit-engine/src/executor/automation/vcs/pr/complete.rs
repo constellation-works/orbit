@@ -381,9 +381,20 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         }
     }
 
+    // [ORB-16307] The cumulative budget an observation retry must still fit.
+    let observation_budget = (max_wait_seconds > 0).then_some(completion_deadline_ms);
+
     loop {
         waited_seconds = waited_seconds
             .max(waited_before.saturating_add(completion_started.elapsed().as_secs()));
+        // Every flag is set immediately before a `continue` or at the end of
+        // an iteration, so this covers every read made in the iteration.
+        // Durable write-ahead provenance covers mutations inside it.
+        let mutated = merge_requested
+            || auto_merge_requested
+            || conflict_refresh_attempted
+            || landed_refresh_attempted;
+        let observed = |error| observation_failure(host, input, mutated, observation_budget, error);
         let status = if max_wait_seconds == 0 {
             read_pr_status(host, Path::new(workspace_path), pr_number)
         } else {
@@ -394,25 +405,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 completion_deadline_ms,
             )
         }
-        .map_err(|error| {
-            // Only a failed read before any mutation is eligible. Unknown merge
-            // replies, repairs and rebases keep their existing reconciliation path.
-            if !merge_requested
-                && !auto_merge_requested
-                && !conflict_refresh_attempted
-                && !landed_refresh_attempted
-                && completion_history_is_read_only(host, input).unwrap_or(false)
-                && (super::super::operations::is_transient_github_failure(&error.to_string())
-                    || error
-                        .to_string()
-                        .to_ascii_lowercase()
-                        .contains("tls handshake"))
-            {
-                OrbitError::Execution(format!("completion_observation_unavailable: {error}"))
-            } else {
-                error
-            }
-        })?;
+        .map_err(observed)?;
         let mut state = classify_pr_state(&status);
         let mut base_refresh_wait = false;
         if let Some(auto_fix) = auto_fix {
@@ -436,7 +429,9 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                     completion_deadline_ms,
                     false,
                     None,
-                )? {
+                )
+                .map_err(observed)?
+                {
                     super::super::base_refresh::RefreshStep::Changed => continue,
                     super::super::base_refresh::RefreshStep::Wait => base_refresh_wait = true,
                     super::super::base_refresh::RefreshStep::Adopted { waiting } => {
@@ -487,7 +482,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
             },
             completion_deadline_ms,
         )
-        .map_err(|reason| stopped(pr_number, &reason))?;
+        .map_err(|reason| observed(stopped(pr_number, &reason)))?;
         if !base_refresh_wait
             && !base_adopted
             && matches!(state, PrMergeState::Blocked(_))
@@ -503,7 +498,9 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 completion_deadline_ms,
                 true,
                 None,
-            )? {
+            )
+            .map_err(observed)?
+            {
                 super::super::base_refresh::RefreshStep::Changed => continue,
                 super::super::base_refresh::RefreshStep::Wait
                 | super::super::base_refresh::RefreshStep::Adopted { waiting: true } => {
@@ -548,7 +545,8 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                                 .saturating_mul(1000)
                         )
                     ),
-                )?,
+                )
+                .map_err(observed)?,
                 super::infrastructure::InfrastructureStep::Wait
             );
         }
@@ -791,7 +789,8 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                         workspace_path,
                         pr_number,
                         &mut merge_capabilities,
-                    )?;
+                    )
+                    .map_err(observed)?;
                     let condition = merge_condition_sha(
                         if base_adopted {
                             None
@@ -873,7 +872,8 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                         workspace_path,
                         pr_number,
                         &mut merge_capabilities,
-                    )?;
+                    )
+                    .map_err(observed)?;
                     if capabilities.auto_merge_allowed {
                         request_merge(
                             host,
@@ -1170,6 +1170,34 @@ fn rebase_conflicting_pr_branch<H: RuntimeHost + ?Sized>(
         )?;
     }
     Ok(rebased)
+}
+
+/// [ORB-16307] A failed authenticated read made before any completion mutation:
+/// the PR status, required-check and merge-policy reads, and the base-refresh
+/// and infrastructure prerequisite reads. Only a transport failure within the
+/// cumulative budget, with neither a mutation in this invocation nor durable
+/// repair or mutation provenance, becomes `completion_observation_unavailable`,
+/// which the host may resume only after authenticating the unchanged prefix.
+/// Every other failure keeps its own error and recovery path.
+fn observation_failure<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    mutated: bool,
+    deadline_ms: Option<u64>,
+    error: OrbitError,
+) -> OrbitError {
+    let within_budget = deadline_ms.is_none_or(|deadline| {
+        super::super::completion_deadline::now_ms().is_ok_and(|now| now < deadline)
+    });
+    if !mutated
+        && within_budget
+        && super::super::operations::is_transient_observation_failure(&error.to_string())
+        && completion_history_is_read_only(host, input).unwrap_or(false)
+    {
+        OrbitError::Execution(format!("completion_observation_unavailable: {error}"))
+    } else {
+        error
+    }
 }
 
 /// Read reservations after pre-observation repair adoption/publication as well
