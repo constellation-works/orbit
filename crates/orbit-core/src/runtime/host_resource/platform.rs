@@ -234,13 +234,21 @@ pub(super) fn with_mach_host<T>(sample: impl FnOnce(libc::mach_port_t) -> T) -> 
 /// Used and total physical memory bytes, shared by throttle and utilization.
 /// Free includes speculative pages; inactive is treated as reclaimable.
 /// Purgeable overlaps active/inactive and is not subtracted again.
+///
+/// `host_statistics64` sets the count to the `vm_statistics64` revision it
+/// filled. That can be shorter than userspace `HOST_VM_INFO64_COUNT`: macOS
+/// 26.6 fills 62 integers of the header's 104. `free_count` and
+/// `inactive_count` are in every revision, so a successful count that covers
+/// `inactive_count` and fits this buffer is a real reading. A failed call
+/// stays unknown.
 #[cfg(target_os = "macos")]
 #[allow(deprecated)]
 pub(super) fn host_memory_bytes(host: libc::mach_port_t) -> Option<(u64, u64)> {
     use std::mem::{MaybeUninit, size_of};
     let mut vm = MaybeUninit::<libc::vm_statistics64>::zeroed();
     let mut vm_count = libc::HOST_VM_INFO64_COUNT;
-    // SAFETY: the buffer/count follow the vm_statistics64 ABI.
+    // SAFETY: the buffer/count follow the vm_statistics64 ABI. The kernel
+    // writes at most `vm_count` integers and reports how many it filled.
     let vm_result = unsafe {
         libc::host_statistics64(
             host,
@@ -263,8 +271,13 @@ pub(super) fn host_memory_bytes(host: libc::mach_port_t) -> Option<(u64, u64)> {
     };
     // SAFETY: sysconf with this constant has no pointer arguments.
     let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    // Integer length of the prefix through `inactive_count`.
+    let inactive_count_ints = (std::mem::offset_of!(libc::vm_statistics64, inactive_count)
+        / size_of::<libc::integer_t>()
+        + 1) as libc::mach_msg_type_number_t;
     if vm_result != libc::KERN_SUCCESS
-        || vm_count != libc::HOST_VM_INFO64_COUNT
+        || vm_count < inactive_count_ints
+        || vm_count > libc::HOST_VM_INFO64_COUNT
         || total_result != 0
         || length != size_of::<u64>()
         || total == 0
@@ -272,7 +285,9 @@ pub(super) fn host_memory_bytes(host: libc::mach_port_t) -> Option<(u64, u64)> {
     {
         return None;
     }
-    // SAFETY: host_statistics64 returned all requested fields.
+    // SAFETY: the buffer was zeroed, the call succeeded, and `vm_count` covers
+    // `inactive_count` without exceeding the buffer. Later revision fields stay
+    // zero and this function does not read them.
     let vm = unsafe { vm.assume_init() };
     let available = (u64::from(vm.free_count) + u64::from(vm.inactive_count))
         .saturating_mul(page_size as u64)
