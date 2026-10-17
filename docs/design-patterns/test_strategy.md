@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Boundary-First Testing: integration, golden and e2e by default; unit tests by exception"
-last_validated: 2026-10-14
+last_validated: 2026-10-16
 ---
 # Boundary-First Testing
 
@@ -31,6 +31,15 @@ For each consolidation or retirement, record the invariant and important failure
 
 Table-driven cases may amortize setup, but each row must remain isolated where needed and print its identity before running. Sharing fixtures must preserve authority scrubbing, state isolation, process ownership and cleanup. A smaller number of carriers with the same expensive work is not a runtime improvement, and a carrier that hangs or hides the failing row is a quality regression.
 
+Fixture templates follow these rules:
+
+- **Profile first.** Each runtime scenario row prints `scenario: <row> row elapsed <seconds>`. The parent prints `child elapsed` for each child it runs, which includes process startup. A separate-process family has one child per row, and any other table runs as one `<module>::*` child.
+- **What a template may replace.** Only setup whose result is the same for every row. One example is a migrated `orbit.db`; the schema migrations dominate a first runtime open. Another is the Git commands that build a checkout and its bare remote. A template may be built once per test process and copied into each row.
+- **A private copy for each row.** The template is held in memory as a tree (`tests/runtime/fixture_template.rs`) and written as a byte copy into the row's own root. It is never a shared path, handle, hard link or symlink, so nothing is left on disk to clean up.
+- **No per-row identity.** A template carries no workspace registration, checkout path or other identity that differs per row. Each absolute path it records is rewritten to point at the row's copy. The runtime still opens and bootstraps each root itself.
+- **A public isolation control.** Each template has a control table. One row writes into its copy. A later row in the same child process then proves its own copy is unchanged.
+- **Child processes stay.** The 2026-10-17 profile measured child startup at about 1% of the delivery and distributed-drain row time. Families that install process-wide substitutions therefore keep one child per row.
+
 The distributed no-diff read fixtures prepare unrelated media through a public
 owner update before claim admission. This avoids encoding and persisting a
 large worker replay receipt solely for read-fixture setup. Each case retains
@@ -42,7 +51,15 @@ authority remain covered by the claim-mutation and claimed-review fixtures.
 
 The signed-release update fixtures share throwaway signing material while keeping each installation, trust file, manifest and signature isolated. Release verification does not require fresh random RSA primes for every row. Their hanging-probe case synchronizes with the real child before the supervisor's initial clock sample and checks that timeout reaps it without acquiring admission or replacing the installation. A fixture clock must keep advancing after readiness: a single fixed jump can become the initial sample when the child starts early, leaving the timeout unable to expire.
 
+The reserved base-refresh completion fixture and accepted-handoff expiry fixture give native provider/Git subprocesses a finite 30-second allowance and advance their scoped prerequisite clocks beyond the persisted reservation deadline for expired resume. Poll waits use the existing no-wait hook. The completion fixture's eight isolated outcome rows preserve the same reservation and exactly one provider update across initial execution, replay and expiry; the handoff fixture proves the initial update and reservation before externally completing the merge and settling after expiry. Diagnostics retain the action error, bounded provider-call tail and reservation state before reading mutation markers. One two-second provider read in each fixture's unapplied or pending row is a controlled regression case for the former one-second subprocess allowance, not a retry or a host-load simulation.
+
+Some suite waits are deadlines inside a debug `orbit` or dashboard child, where a thread-local clock does not apply. Those children read a debug-only environment variable and ignore it in a release build: `ORBIT_TEST_HOST_FORWARD_ATTACH_TIMEOUT_MS` shortens only the host-forward attach budget, `ORBIT_TEST_MCP_LIFECYCLE_INTERVAL_MS` shortens only the stdio lifecycle tick, and `ORBIT_TEST_PIPELINE_WAIT_VIRTUAL=1` advances a pipeline wait by each poll instead of sleeping. Each one still runs the real child and the real reap. The quiet-deadline fixture injects its bound through `run_child_test_within` and keeps the child's progress loop long enough that silence would still kill it.
+
 Use timings and failure evidence to find the actual bottleneck: runner setup, compilation, linting, test execution, fixture startup, serial groups or teardown. Compare the same source selection, runner/build settings and cache conditions; retain failed and slow runs as evidence. Measure the full hosted job after changes as well as focused before/after costs. Fix flakes and hangs at their cause. Retries, artificial sleeps, hidden skips, weaker assertions, zero-test selections and omitted required checks cannot satisfy the budget.
+
+The Check job's nextest phase runs on a 4-vCPU runner with every slot busy. Comparing per-test durations on fast and slow runners of that size showed that about a fifth of slot time does not scale with CPU speed: those tests wait on timers, deadlines, or child processes, so a core can sit idle while the slot stays taken. `scripts/cpu-utilisation.sh` reads the aggregate `cpu` line of `/proc/stat` immediately before and after that phase and prints one `cpu-util:` line to the job log. Busy time is user + nice + system + irq + softirq + steal. Idle and iowait are their own percentages of the counter delta, followed by the elapsed seconds and the `cpuN` count. A missing file, a counter that does not move, or a counter that steps backwards prints `unavailable` and leaves the test command's exit status unchanged.
+
+`.config/nextest.toml` profile `ci` sets `test-threads` to 6 and `retries` to 0. Six is two extra slots on the 4-vCPU runner: enough to overlap that wait-bound fraction, and short of doubling the CPU-bound tests. The profile inherits the default profile, so the group caps stay `stateful-runtime` 1, `task-contracts` 4, and `mcp-contracts` 8. `scripts/ci-guardrails.sh` and the Linux sandbox gate select it with `--profile ci`. A local run that does not pass `--profile ci` keeps the default profile, whose thread count is the logical CPU count. `NEXTEST_TEST_THREADS`, including the value `scripts/build-budget.py` exports from the host `test-threads` file, still overrides the profile.
 
 The recurring `test-quality-audit` creates evidence-backed proposed tasks for critical coverage gaps, weak assertions, duplication, flaky or slow fixtures and regressions against this budget. It searches existing tasks before filing, links each finding to the audit, and records concrete acceptance criteria. The audit leaves a durable report even when no new finding is confirmed; it does not treat a quota of findings or deletions as success.
 

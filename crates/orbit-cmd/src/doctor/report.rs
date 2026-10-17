@@ -265,9 +265,10 @@ fn provider_limit_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
 
 /// [ORB-14698] One `provider-limits:<provider>` row per provider an enabled
 /// crew uses, from the host's provider-limit view: `warning` while a reading
-/// gates it (window, use, reset and skipped crews), `ok` below its threshold,
-/// and `info` for a provider that reports no usage, whose limits Orbit learns
-/// only from failures. The system and review lanes are not gated, so one
+/// gates it (window, use, reset and skipped crews), `ok` below its threshold
+/// or when `provider:off` has turned the gate off (the row says gating is
+/// off), and `info` for a provider that reports no usage, whose limits Orbit
+/// learns only from failures. The system and review lanes are not gated, so one
 /// whose crew's provider is gated gets its own warning. Each row comes with
 /// the provider it concerns; `None` for a row about every provider.
 pub fn provider_limit_findings(
@@ -317,7 +318,28 @@ pub fn provider_limit_findings(
                     gated.join("; "),
                     Some(
                         "Admission draws these crews again after the reset. To run closer to \
-                         the limit, raise `workflow.provider_limit_overrides` for this provider.",
+                         the limit, raise `workflow.provider_limit_overrides` for this provider, \
+                         or set it to `off` to record readings without gating.",
+                    ),
+                )
+            } else if provider.threshold.is_off() {
+                let described = readings
+                    .iter()
+                    .map(|reading| reading.describe(now))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let message = if described.is_empty() {
+                    format!("{}: gating is off", provider.provider)
+                } else {
+                    format!("{}: gating is off: {described}", provider.provider)
+                };
+                row(
+                    check_name,
+                    WorkspaceDoctorStatus::Ok,
+                    message,
+                    Some(
+                        "Readings are still recorded. A run that fails on a usage limit still \
+                         holds the task. Remove this provider's `off` override to gate again.",
                     ),
                 )
             } else if !provider.reports_usage && readings.is_empty() {
@@ -472,14 +494,11 @@ fn clock_unit_row(global_root: &std::path::Path) -> WorkspaceDoctorResult {
             if !matches!(
                 inspection.verdict,
                 orbit_core::application::routines::ClockUnitVerdict::NoUnitInstalled
-            ) && let Ok(status) = orbit_core::application::routines::clock_status(global_root)
-                && let Some(issue) = status.health_issue
-            {
-                if row.status != WorkspaceDoctorStatus::Error {
-                    row.status = WorkspaceDoctorStatus::Warning;
-                }
-                row.message.push_str(&format!("; {issue}"));
-                row.remediation = Some("Inspect `orbit clock status` and the sweep service log, then run `orbit clock repair`.".into());
+            ) {
+                // A matching unit file does not mean the timer is armed.
+                // `orbit clock status` treats an operator pause as healthy;
+                // this row does not, because sweeps are not running.
+                apply_clock_manager_readiness(&mut row, global_root);
             }
             add_clock_hold(&mut row, global_root);
             row
@@ -495,6 +514,61 @@ fn clock_unit_row(global_root: &std::path::Path) -> WorkspaceDoctorResult {
             ),
         },
     }
+}
+
+/// Fold native timer readiness into a clock-unit row that already has a unit.
+fn apply_clock_manager_readiness(row: &mut WorkspaceDoctorResult, global_root: &std::path::Path) {
+    use orbit_core::application::routines::{clock_status, doctor_clock_not_running_issue};
+
+    let status = match clock_status(global_root) {
+        Ok(status) => status,
+        Err(error) => {
+            note_clock_enable(
+                row,
+                &format!("could not verify the sweep timer is enabled and active: {error}"),
+            );
+            return;
+        }
+    };
+    if let Some(issue) = status.health_issue.clone() {
+        if row.status != WorkspaceDoctorStatus::Error {
+            row.status = WorkspaceDoctorStatus::Warning;
+        }
+        row.message.push_str(&format!("; {issue}"));
+        if !issue.contains("orbit clock enable") {
+            row.remediation = Some(
+                "Inspect `orbit clock status` and the sweep service log, then run `orbit clock repair`."
+                    .into(),
+            );
+        }
+    }
+    if let Some(issue) = doctor_clock_not_running_issue(&status, global_root) {
+        if row.message.contains("orbit clock enable") {
+            if row.status != WorkspaceDoctorStatus::Error {
+                row.status = WorkspaceDoctorStatus::Warning;
+            }
+            ensure_clock_enable_remediation(row);
+        } else {
+            note_clock_enable(row, &issue);
+        }
+    }
+}
+
+fn note_clock_enable(row: &mut WorkspaceDoctorResult, issue: &str) {
+    if row.status != WorkspaceDoctorStatus::Error {
+        row.status = WorkspaceDoctorStatus::Warning;
+    }
+    row.message.push_str(&format!("; {issue}"));
+    ensure_clock_enable_remediation(row);
+}
+
+fn ensure_clock_enable_remediation(row: &mut WorkspaceDoctorResult) {
+    const FIX: &str = "Run `orbit clock enable` to enable the sweep clock and verify it is active.";
+    row.remediation = Some(match row.remediation.take() {
+        Some(existing) if existing.contains("orbit clock enable") => existing,
+        Some(existing) => format!("{existing} {FIX}"),
+        None => FIX.to_string(),
+    });
 }
 
 /// Clock ticks upgrade admission refused since the clock last ran

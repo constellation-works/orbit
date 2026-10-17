@@ -98,6 +98,10 @@ function fixture(url) {
         : terminalRuns;
       return list(runs);
     }
+    // Fleet-wide in-flight runs: the rail asks for one item, the total counts all.
+    case '/api/job-runs/all': return url.searchParams.get('state') === 'active'
+      ? { items: [{ run_id: 'live-fleet', job_id: 'fixture', state: 'running', workspace_id: 'one' }], total: 22, limit: 1, truncated: true }
+      : [];
     case '/api/audit': auditQueries.push(url.searchParams); return url.searchParams.has('before')
       ? [{ id: 8999 }]
       : [{ id: 9000 }];
@@ -329,6 +333,7 @@ check(!aggregateDrainIndicator.hidden && aggregateDrainIndicator.textContent.inc
 check(aggregateDrainIndicator.getAttribute('aria-label').includes('Select a workspace'), 'aggregate drain indicator explains how to inspect live status');
 check(readinessReads === selectedWorkspaceReadinessReads, 'aggregate view does not fetch one workspace drain status as if it were global');
 check(crewReads === selectedWorkspaceCrewReads, 'aggregate view does not request a workspace crew registry');
+check(text('rail-count-jobs') === '22', `aggregate Jobs rail shows the fleet total, not the one-item page: ${text('rail-count-jobs')}`);
 liveDrain = false;
 // The run exists in workspace two. Switching to All workspaces on its detail
 // page must replace the content with a scope prompt and issue no unscoped reads.
@@ -775,7 +780,7 @@ const summaryBeforeHostHang = summaryReads;
 const toolCallsBeforeHostHang = summaryToolCalls();
 await runPoll();
 const liveTimers = () => scheduledPolls.filter(entry => !entry.handle.cancelled);
-const polls = liveTimers().filter(entry => String(entry.fn).includes('refreshDashboard'));
+const polls = liveTimers().filter(entry => entry.fn.name === 'runRefresh');
 check(hungHostSignals.length >= 1 && hungHostSignals.every(signal => signal && !signal.aborted), 'host request stays unanswered and carries an abort signal');
 check(summaryReads > summaryBeforeHostHang && summaryToolCalls() !== toolCallsBeforeHostHang, 'other panels refresh while host resources never answer');
 check(!text('meta-text').includes('fetching') && node('conn-status').className.includes('green'), 'hung host request does not leave the dashboard fetching');

@@ -746,7 +746,10 @@ pub(super) fn unpack_zip(
         let mut entry = archive
             .by_index(index)
             .map_err(|error| OrbitError::Io(format!("unpack {source_name}: {error}")))?;
-        let name = entry.name().to_string();
+        let name = entry
+            .name()
+            .map_err(|error| OrbitError::Io(format!("unpack {source_name}: {error}")))?
+            .to_string();
         let member = PathBuf::from(&name);
         if name.contains('\\') {
             return Err(OrbitError::InvalidInput(format!(

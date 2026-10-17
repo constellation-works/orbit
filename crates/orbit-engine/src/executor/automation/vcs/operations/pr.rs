@@ -504,7 +504,7 @@ pub(super) fn pr_status(input: &Value) -> Result<Value, OrbitError> {
         "view".to_string(),
         selector.to_string(),
         "--json".to_string(),
-        "number,state,mergedAt,mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,headRefName,headRefOid,baseRefName,mergeCommit,url,autoMergeRequest".to_string(),
+        "number,state,isDraft,mergedAt,mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,headRefName,headRefOid,baseRefName,mergeCommit,url,autoMergeRequest".to_string(),
     ];
     let result = if input.get("deadline_ms").is_some() {
         super::super::completion_deadline::Deadline::from_input(input)?.execute(
@@ -533,7 +533,8 @@ pub(super) fn pr_status(input: &Value) -> Result<Value, OrbitError> {
 /// Which checks on a PR's head commit branch protection requires.
 ///
 /// `gh pr view --json statusCheckRollup` does not say, so this asks the
-/// GraphQL API for each rollup context's `isRequired` against the PR. The
+/// GraphQL API for each rollup context's `isRequired` against the PR, with a
+/// check run's own and its app's identity. The
 /// answer carries the head commit it describes; the reader in `pr/answers.rs`
 /// refuses one that is truncated or names another head.
 pub(super) fn pr_required_checks(input: &Value) -> Result<Value, OrbitError> {
@@ -547,8 +548,8 @@ pub(super) fn pr_required_checks(input: &Value) -> Result<Value, OrbitError> {
     let query = "query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){\
         pullRequest(number:$pr){headRefOid commits(last:1){nodes{commit{oid \
         statusCheckRollup{contexts(first:100){pageInfo{hasNextPage} nodes{__typename \
-        ... on CheckRun{name status conclusion isRequired(pullRequestNumber:$pr) \
-        checkSuite{workflowRun{workflow{name}}}} \
+        ... on CheckRun{databaseId name status conclusion isRequired(pullRequestNumber:$pr) \
+        checkSuite{app{databaseId} workflowRun{workflow{name}}}} \
         ... on StatusContext{context state isRequired(pullRequestNumber:$pr)}}}}}}}}}}";
     let args = vec![
         "api".to_string(),

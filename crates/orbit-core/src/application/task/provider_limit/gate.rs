@@ -5,10 +5,12 @@
 //! window (`runtime::engine::invocation`). A reading gates the crews of its
 //! provider — or, when it names a model, only the crews on that model — while
 //! it is live and either exhausted or used at or above the provider's
-//! `workflow.provider_limit_*` threshold. It is live until the reset it
-//! reported; one with no reset lives for its window's length, or an hour when
-//! that is unknown, and an exhausted error reading with no reset for the first
-//! backoff a usage-limit hold uses. Nothing has to probe the provider again:
+//! `workflow.provider_limit_*` threshold. An override of `provider:off`
+//! records and shows the reading and gates nothing. A reading is live until
+//! the reset it reported; one with no reset lives for its window's length, or
+//! an hour when that is unknown, and an exhausted error reading with no reset
+//! for the first backoff a usage-limit hold uses. Nothing has to probe the
+//! provider again:
 //! the next admission pass after that simply draws the crew again.
 //!
 //! Limited crews are removed from a task's draw before it is made. A task
@@ -24,7 +26,7 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_config::{ProviderLimitExplicitCrews, ProviderLimitPolicy};
+use orbit_config::{ProviderLimitExplicitCrews, ProviderLimitPolicy, ProviderLimitThreshold};
 use orbit_types::identity::Crew;
 use orbit_types::task::Task;
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
@@ -68,7 +70,13 @@ impl ProviderLimit {
         if until <= now {
             return None;
         }
-        let threshold = policy.threshold(&observation.provider);
+        // `off` is the operator's way to keep using a provider whose plan
+        // window is exhausted while paid credits remain. The reading stays
+        // in the store; this gate simply does not act on it.
+        let ProviderLimitThreshold::Percent(threshold) = policy.threshold(&observation.provider)
+        else {
+            return None;
+        };
         reading_at_limit(observation, threshold).then(|| Self {
             provider: observation.provider.clone(),
             model: observation.model.clone(),

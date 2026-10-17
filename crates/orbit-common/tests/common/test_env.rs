@@ -235,6 +235,7 @@ mod orphaned_fixture_children {
 
     const DIR_ENV: &str = "ORBIT_ORPHAN_FIXTURE_DIR";
     const CHATTY_SECS_ENV: &str = "ORBIT_CHATTY_CHILD_SECS";
+    const CHATTY_MILLIS_ENV: &str = "ORBIT_CHATTY_CHILD_MILLIS";
     /// Long enough that a survivor is unmistakable, short enough that a failed
     /// run does not leave processes for long.
     const SURVIVOR_SECS: &str = "120";
@@ -407,17 +408,20 @@ mod orphaned_fixture_children {
     fn a_child_that_keeps_printing_outlives_its_quiet_deadline() {
         let dir = tempfile::tempdir().unwrap();
         let mut command = reexec("chatty_child_entry", dir.path());
-        command.env(CHATTY_SECS_ENV, "8");
+        // Twenty times the print gap, so a host that wakes the child late
+        // still counts as progress. The run itself is longer than `quiet`.
+        let quiet = Duration::from_millis(300);
+        command.env(CHATTY_MILLIS_ENV, "600");
         let started = Instant::now();
         let output = run_child_test_within(
             &mut command,
             "orphaned_fixture_children::chatty_child_entry",
             dir.path(),
-            Duration::from_secs(4),
+            quiet,
             Duration::from_secs(120),
         );
         assert!(
-            started.elapsed() > Duration::from_secs(4),
+            started.elapsed() > quiet,
             "child ran past the quiet deadline"
         );
         assert_child_test_passed(
@@ -455,15 +459,26 @@ mod orphaned_fixture_children {
         );
     }
 
-    /// Prints a progress line every 200 ms for `CHATTY_SECS_ENV` seconds.
+    /// Prints progress often enough to reset a quiet deadline, for
+    /// `CHATTY_MILLIS_ENV` milliseconds or else `CHATTY_SECS_ENV` seconds.
     #[test]
     #[ignore = "re-executed by the child progress regressions"]
     fn chatty_child_entry() {
-        let secs: u64 = std::env::var(CHATTY_SECS_ENV).unwrap().parse().unwrap();
+        let budget = match std::env::var(CHATTY_MILLIS_ENV) {
+            Ok(milliseconds) => Duration::from_millis(milliseconds.parse().expect("chatty millis")),
+            Err(_) => Duration::from_secs(std::env::var(CHATTY_SECS_ENV).unwrap().parse().unwrap()),
+        };
+        // A sub-second run prints every 15 ms so a few hundred milliseconds
+        // of quiet still sees progress. Longer runs keep the 200 ms gap.
+        let pace = if budget < Duration::from_secs(1) {
+            Duration::from_millis(15)
+        } else {
+            Duration::from_millis(200)
+        };
         let started = Instant::now();
-        while started.elapsed() < Duration::from_secs(secs) {
+        while started.elapsed() < budget {
             let _ = writeln!(std::io::stderr(), "chatty progress");
-            std::thread::sleep(Duration::from_millis(200));
+            std::thread::sleep(pace);
         }
     }
 

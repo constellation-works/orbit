@@ -81,9 +81,23 @@ token or cache deletion workflow is needed. A cache miss builds normally.
 Rust source files are deliberately absent from the archive identity: Cargo still
 decides freshness and sccache hashes compiler inputs, including source contents,
 flags and compiler identity. No source mtimes are restored and no validation is
-skipped on an archive hit. Production Clippy, all-targets Clippy, executed tests,
-doctests, documentation and native sandbox controls remain required. Clippy
-analysis itself remains unsupported by sccache. Hosted CI requires the existing
+skipped on an archive hit. Production Clippy, executed tests, doctests,
+documentation and native sandbox controls remain required. The CI guardrails
+job no longer runs a separate all-targets Clippy phase. Its workspace test
+list-build (`scripts/check-ci-macos.sh --workspace-build`) compiles
+`--lib --bins --tests --examples` with `RUSTC_WORKSPACE_WRAPPER=clippy-driver`
+and the same flags that pass used: `-D warnings` while allowing
+`clippy::disallowed_methods`. `clippy-driver` splits `CLIPPY_ARGS` on
+`__CLIPPY_HACKERY__`, which is how `cargo clippy` joins those arguments. A
+space-separated value is one rustc argument and does not apply the flags.
+`make ci-lint` is unchanged and still runs production Clippy and
+`cargo clippy --all-targets`, because that gate does not build the test
+binaries. Clippy analysis itself remains unsupported by sccache. Cargo invokes
+the configured rustc wrapper for dependencies, and chains that wrapper in
+front of `clippy-driver` for workspace members. sccache records the
+clippy-driver calls as non-cacheable and still executes them, so the lint
+runs on every such build; dependency rustc invocations can still hit. Hosted
+CI requires the existing
 enabled-cache namespace control to execute with real Bubblewrap namespaces;
 worker-sandbox deferral is not evidence of native correctness. Keep the four
 native delivery gates (`make ci-fast`, `make ci-lint`, `make goldens`,
@@ -399,8 +413,10 @@ build-budget admission, toolchain environment and candidate/base/tree evidence
 bindings are unchanged. Baseline result schema 9 includes the workspace output
 bindings in a new versioned cache key so earlier results cannot certify the new execution contract; old records
 are retained at their earlier keys. These targets are rebuildable host state;
-configuration does not delete old output or shared caches. The Linux collector
-retains its run attribution and scratch lease controls; other platforms retain
+configuration does not delete old output or shared caches. Native Linux and macOS
+collectors preserve run attribution, base-cache locks and scratch leases. macOS
+uses readable no-follow directory descriptors and descriptor-bound permission
+restoration; unreadable or unprovable targets are refused. Other platforms retain
 output for operator maintenance. The first validation
 in each source namespace pays for a fresh build; dependencies still use the
 compiler cache. Sandboxed builds continue using their own warm targets.
@@ -463,7 +479,7 @@ remap the provider agent cwd.
 
 | Workload | What sccache 0.17.0 does | What to do |
 | --- | --- | --- |
-| `cargo clippy` analysis (`clippy-driver`) | Tiny-fixture smoke: 0 cacheable compile requests; reasons include `missing output_dir` and `multiple input files`. That is the clippy-driver invocation, not every rustc the phase may spawn. | Do not advertise `cargo check` hits as caching clippy-driver itself. rustc dependency compilations on a representative graph may still reuse the disk cache during a Clippy run. Keep bounded `CARGO_BUILD_JOBS`. Opt out with `ORBIT_COMPILER_CACHE=0` if wrapper overhead is noise. |
+| `cargo clippy` analysis (`clippy-driver`) | Tiny-fixture smoke: 0 cacheable compile requests; reasons include `missing output_dir` and `multiple input files`. That is the clippy-driver invocation, not every rustc the phase may spawn. The CI list-build chains this wrapper in front of `clippy-driver` the same way. | Do not advertise `cargo check` hits as caching clippy-driver itself. rustc dependency compilations on a representative graph may still reuse the disk cache during a Clippy run or the folded test build. Keep bounded `CARGO_BUILD_JOBS`. Opt out with `ORBIT_COMPILER_CACHE=0` if wrapper overhead is noise. |
 | Incremental (`CARGO_INCREMENTAL=1` / `-C incremental`) | Pinned sccache `0.17.0` **rejects** the invocation (`incremental compilation is prohibited: Unset CARGO_INCREMENTAL to continue`) instead of compiling uncached. | Keep `CARGO_INCREMENTAL=0` on workers. To run incremental rustc, set `ORBIT_COMPILER_CACHE=0`. |
 | Cache cold fill | Extra wrapper/daemon/hash work; measured slower than uncached `ORBIT_COMPILER_CACHE=0` on the same crate | Expected. Judge effectiveness on a *warm* second worktree vs uncached, not vs cold fill. |
 | Tiny crates | Daemon startup can dominate wall time | Hits without a wall-clock drop are not a win. |

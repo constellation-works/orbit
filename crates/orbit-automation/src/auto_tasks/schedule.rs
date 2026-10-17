@@ -124,7 +124,8 @@ fn decide_cron(
         DueDecision::Fire { slot, .. } => Ok(AutoTaskDueDecision::Fire {
             slot: slot.with_timezone(&Utc).to_rfc3339(),
         }),
-        DueDecision::NotDue => Ok(AutoTaskDueDecision::NotDue),
+        // Auto-tasks always use catch-up. A skip record cannot occur here.
+        DueDecision::RecordSkip { .. } | DueDecision::NotDue => Ok(AutoTaskDueDecision::NotDue),
     }
 }
 

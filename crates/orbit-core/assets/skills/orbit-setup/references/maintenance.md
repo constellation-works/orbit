@@ -117,17 +117,23 @@ the removed paths.
 
 With `workflow.validation_env.build_output_env` configured, required validation
 binds the workspace's output variables to host-owned output under
-`.orbit/state/host-validation-targets/`, outside the checkout. The Linux collector
-keeps the same layout and lineage for historical output; an empty mapping allocates
-nothing and never deletes old output. Other platforms retain configured output for
-operator maintenance. GC attributes
+`.orbit/state/host-validation-targets/`, outside the checkout. Native Linux and macOS
+collectors keep the same layout and lineage for historical output; an empty mapping
+allocates nothing and never deletes old output. Other platforms retain configured
+output for operator maintenance. Darwin uses readable no-follow directory handles
+and `fchmod` on held descriptors; unreadable directories or unprovable identities
+refuse reclamation rather than relaxing permissions for measurement. GC attributes
 each target to the runs whose recorded worktree path it was built for, and
 reclaims it once they are terminal with no live worker and the checkout is gone
 (or its kept output is being reclaimed). A scratch checkout's target (base
 rerun, host evidence, recovery) is reclaimed only through its base-cache lock
 or lease record, while GC holds that lock; a held lock reports
 `skipped:host_target_in_use`. Targets with no such record stay
-`skipped:unattributed_host_target`.
+`skipped:unattributed_host_target`. The existing worktree-GC routine and pipeline
+use the same collector. Platform support does not authorize production deletion,
+resume paused routines or change schedules; validate disposable native fixtures
+and obtain the required review before rollout. Byte reports measure logical output,
+not physical disk headroom.
 
 ## Diagnose and repair
 
@@ -317,6 +323,24 @@ same command is idempotent and finishes partial convergence; `needs_recovery`
 (exit 4) carries the exact retry command in `local_candidate.retry_command`.
 See the upgrades runbook for the full procedure.
 
+### Reclaim what deploys leave behind
+
+Build directories under `~/.orbit/deployments/`, older executable copies in
+`~/.orbit/bin/` (`orbit.bak-*`, `orbit.before-*`, `*.stale-*` and similar) and
+`~/.orbit/orbit.db.bak*` store copies are not removed by any other GC class.
+Once the upgrade is verified:
+
+```sh
+orbit gc deployments            # report each entry, its bytes and whether it is kept
+orbit gc deployments --confirm  # remove what the report lists as would_remove
+```
+
+Each class keeps its newest `--keep` entries (default 2). `orbit.previous`, and
+any deployment whose candidate manifest names the installed or rollback
+executable's digest, are always kept and do not count toward `--keep`. Links are
+unlinked, never followed. The upgrades runbook's "Reclaim old deployments and
+backups" section has the full rule.
+
 ## Database and layout upgrades
 
 ```bash
@@ -378,7 +402,9 @@ sqlite3 ~/.orbit/orbit.db 'VACUUM;'
 
 `orbit doctor` reports what is reclaimable now (`store-retention`). To run both
 sweeps daily, enable the seeded `store-gc` routine ([automation.md](automation.md)).
-On a replica checkout it is owner-only and never fires.
+On a replica checkout the same cron routine runs against that host's own store
+and does not call the owner. Enable it there when this machine is the only
+place those rows live. A delivery- or state-triggered copy stays owner-only.
 
 ## Logs
 

@@ -1187,10 +1187,10 @@ function runFailureHash(run) {
   return failure ? `${failure.stepId}|${failure.excerpt}` : "";
 }
 
-// Runs of one task's pipelines share a group; a task with a single such run in
-// the list stays a plain row. Groups sit where their first run sorts. Only the
-// loaded page is grouped: a triplet split across Load more pages folds once its
-// other runs arrive.
+// Runs of one task's pipelines share a group per attempt; an attempt with a
+// single such run in the list stays a plain row. Groups sit where their first
+// run sorts. Only the loaded page is grouped: a triplet split across Load more
+// pages folds once its other runs arrive.
 function groupRunsForDisplay(sorted) {
   const entries = [];
   const groups = new Map();
@@ -1209,7 +1209,39 @@ function groupRunsForDisplay(sorted) {
     }
     group.runs.push(run);
   }
-  return entries.map((entry) => (entry.runs && entry.runs.length === 1 ? { run: entry.runs[0] } : entry));
+  return entries
+    .flatMap((entry) => (entry.runs ? splitAttempts(entry) : [entry]))
+    .map((entry) => (entry.runs && entry.runs.length === 1 ? { run: entry.runs[0] } : entry));
+}
+
+// The listed run that dispatched this one, or "" when none of `byId` did.
+function listedParentId(run, byId) {
+  const parent = run.parent_run_id;
+  return parent && byId.has(parent) ? parent : "";
+}
+
+// One task's runs, split per attempt: the run that started it (the one no
+// listed run dispatched) and every listed run it dispatched below it. A
+// payload without dispatch lineage (an older host) keeps one task group.
+function splitAttempts(group) {
+  if (!group.runs.some((run) => run && "parent_run_id" in run)) return [group];
+  const byId = new Map(group.runs.map((run) => [run.run_id, run]));
+  const rootOf = (run) => {
+    const seen = new Set();
+    let current = run;
+    while (listedParentId(current, byId) && !seen.has(current.run_id)) {
+      seen.add(current.run_id);
+      current = byId.get(current.parent_run_id);
+    }
+    return current.run_id;
+  };
+  const attempts = new Map();
+  for (const run of group.runs) {
+    const root = rootOf(run);
+    if (!attempts.has(root)) attempts.set(root, { key: `${group.key}:${root}`, runs: [], lineage: true });
+    attempts.get(root).runs.push(run);
+  }
+  return [...attempts.values()];
 }
 
 function runGroupState(runs) {
@@ -1217,7 +1249,36 @@ function runGroupState(runs) {
   return GROUP_STATE_PRIORITY.find((state) => states.has(state)) || runs[0].state;
 }
 
-function runGroupRow(group, attributed) {
+// The failure a group's Failed at names. With dispatch lineage that is the
+// run that failed on its own (no recorded root cause), not a parent whose
+// success guard echoed it; a leaf outside the group is looked up in the
+// listed runs, else named from the recorded root cause alone. Without
+// lineage it is the first failed run.
+function groupFailure(group, failed, listed) {
+  if (!failed.length) return null;
+  if (!group.lineage) return { run: failed[0] };
+  const own = failed.find((run) => !run.root_cause);
+  if (own) return { run: own };
+  const cause = failed[0].root_cause;
+  const workspace = failed[0].workspace_id || "";
+  const leaf = listed.find((run) => run.run_id === cause.leaf_run_id && (run.workspace_id || "") === workspace && runIsResumable(run));
+  return leaf ? { run: leaf } : { cause };
+}
+
+function rootCauseFailedAtCell(cause) {
+  const cell = el("span", { class: "run-failed-at" });
+  if (cause.step) cell.appendChild(el("span", { class: "run-failed-step", text: cause.step }));
+  if (cause.code) cell.appendChild(el("span", { class: "run-failed-excerpt", text: cause.code }));
+  if (!cause.step && !cause.code) {
+    cell.classList.add("empty");
+    cell.textContent = "no error recorded";
+  }
+  cell.title = [`Leaf run: ${cause.leaf_run_id}`, cause.step && `Step: ${cause.step}`, cause.code && `Code: ${cause.code}`]
+    .filter(Boolean).join("\n");
+  return cell;
+}
+
+function runGroupRow(group, attributed, listed) {
   const { runs, key } = group;
   const expanded = expandedRunGroups.has(key);
   const first = runs[0];
@@ -1233,8 +1294,13 @@ function runGroupRow(group, attributed) {
     text: `${expanded ? "▾" : "▸"} ${runs.length} pipeline runs`,
     title: `${expanded ? "Hide" : "Show"} ${jobNames}`,
   });
-  const failedAt = failed.length ? runFailedAtCell(failed[0], { withJob: true }) : el("span", { class: "run-failed-at" });
-  if (failed.length > 1) failedAt.title = failed.map((run) => `${run.job_id}\n${runFailure(run).title}`).join("\n\n");
+  const failure = groupFailure(group, failed, listed);
+  let failedAt = el("span", { class: "run-failed-at" });
+  if (failure && failure.run) failedAt = runFailedAtCell(failure.run, { withJob: true });
+  else if (failure) failedAt = rootCauseFailedAtCell(failure.cause);
+  const explained = failure && failure.run ? [failure.run, ...failed.filter((run) => run !== failure.run)] : failed;
+  if (explained.length > 1) failedAt.title = explained.map((run) => `${run.job_id}\n${runFailure(run).title}`).join("\n\n");
+  const failureHash = failure ? (failure.run ? `${runIdentity(failure.run)}:${runFailureHash(failure.run)}` : JSON.stringify(failure.cause)) : "";
   const row = el("div", {
     class: `runs-row runs-group${attributed ? " workspace-attributed" : ""}`,
     title: `${runs.length} pipeline runs for this task: ${jobNames}`,
@@ -1252,7 +1318,7 @@ function runGroupRow(group, attributed) {
     el("span", { class: "run-actions" }),
   ]);
   row.dataset.key = `group-${key}`;
-  row.dataset.hash = `group-${key}-${expanded}-${ts}-${denials}-${toolFails}-${JSON.stringify(first.tasks)}-${runs.map((run) => `${runIdentity(run)}:${run.state}:${runFailureHash(run)}`).join("|")}`;
+  row.dataset.hash = `group-${key}-${expanded}-${ts}-${denials}-${toolFails}-${JSON.stringify(first.tasks)}-${runs.map((run) => `${runIdentity(run)}:${run.state}:${runFailureHash(run)}`).join("|")}-${failureHash}`;
   row.style.cursor = "pointer";
   makeRowDisclosure(row, toggle, {
     expanded,
@@ -1399,7 +1465,7 @@ export function renderRuns(runs) {
       frag.appendChild(runRow(entry.run, attributed, body));
       continue;
     }
-    frag.appendChild(runGroupRow(entry, attributed));
+    frag.appendChild(runGroupRow(entry, attributed, top));
     if (expandedRunGroups.has(entry.key)) {
       for (const r of entry.runs) frag.appendChild(runRow(r, attributed, body, { child: true }));
     }

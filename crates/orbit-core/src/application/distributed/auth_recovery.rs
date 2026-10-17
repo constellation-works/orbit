@@ -229,7 +229,7 @@ impl OrbitRuntime {
     }
 }
 
-fn relogin_hint(provider: &str) -> String {
+pub(crate) fn relogin_hint(provider: &str) -> String {
     match provider {
         "claude" => "Run `claude auth login`, or renew `claude setup-token` and pass CLAUDE_CODE_OAUTH_TOKEN in [execution.env].pass.".into(),
         "codex" => "Run `codex login`.".into(),

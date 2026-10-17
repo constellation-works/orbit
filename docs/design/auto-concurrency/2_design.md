@@ -1,8 +1,8 @@
 ---
 title: Auto-concurrency — Design
 owner: claude
-last_updated: 2026-10-12
-last_validated: 2026-10-12
+last_updated: 2026-10-17
+last_validated: 2026-10-17
 status: Draft
 feature: auto-concurrency
 doc_role: design
@@ -27,8 +27,8 @@ related_artifacts: [ORB-15757, ORB-15774]
 > local admission, §6 pull admission, the `drain_last_pass`, `orbit run show`,
 > `orbit run readiness` and `orbit run profiles --accuracy` rows of §7 the
 > record and diagnostics a local pass exposes, and §8.1 the accuracy report.
-> The per-drain mode controls of §7 are implemented; its dashboard forecast
-> curves remain proposed.
+> The per-drain mode controls of §7 are implemented. The dashboard Drain card
+> shows that recorded forecast; its curves against measured load remain proposed.
 
 This doc covers what admission does today (§1) and the proposal:
 
@@ -335,9 +335,12 @@ For each minute `m` since admission, the profile holds:
 | `alive(m)` | fraction of deliveries still running at minute `m` |
 | `cpu(m)` | mean cores used at `m`, over the deliveries alive at `m` |
 | `mem(m)` | 90th-percentile memory at `m`, over the deliveries alive at `m` |
+| `mem_mean(m)`, `mem_sd(m)` | mean and standard deviation of that memory |
 
 CPU uses the mean and memory a high percentile because the costs differ. Too
-much CPU only slows everyone down. Too much memory kills a process.
+much CPU only slows everyone down. Too much memory kills a process. The
+memory mean and spread let the forecast sum several deliveries' memory as a
+quantile of the sum (§4.1) rather than adding their percentiles.
 
 `alive` gives the duration distribution. The candidate's **horizon** `H` is
 the minute at which `alive` falls below 0.1, the 90th-percentile duration,
@@ -405,9 +408,12 @@ F(t) = B + Σ over running deliveries i of P_i(a_i + t) · alive_i(a_i + t) / al
   included.
 - **Reservations.** An admission that has been decided but whose run does not
   exist yet is a reservation (§5.2). It is counted from `t = 0`.
+- **Memory sums as a quantile.** For memory, the sum over profiled
+  deliveries and reservations is a high quantile of their summed memory, not
+  the sum of their 90th percentiles (§4.1).
 
-Implemented in `runtime/host_resource/forecast/` (`build.rs`, `host_load.rs`)
-and built only under the host admission lock (§5.2):
+Implemented in `runtime/host_resource/forecast/` (`build.rs`, `host_load.rs`,
+`memory.rs`) and built only under the host admission lock (§5.2):
 
 - **Running set.** Live (`pending`, `running`, `retrying`) runs of the
   delivery jobs (`runtime/host_resource/delivery.rs`) in every workspace,
@@ -430,6 +436,57 @@ and built only under the host admission lock (§5.2):
   minute, plus the running deliveries and reservations with the profile step
   that described each, and the profiles a caller looks candidates up in.
 
+### 4.1 Summed memory
+
+Each delivery's `mem(m)` is its own 90th percentile. Adding those for `N`
+deliveries forecasts the case where every one of them is at its 90th
+percentile at once, which is far rarer than one in ten, so the over-statement
+grows with `N`. On dk-server-1 on 2026-10-17, four deliveries measured
+4.4 GiB on average and 9.4 GiB at most, against a sum of percentiles of about
+15.6 GiB for five or six, and admission was held at `admit_memory_percent`
+with 24 GiB available.
+
+At minute `t`, each profiled delivery or reservation `i`, still running with
+chance `s_i` (`alive_i(a_i + t) / alive_i(a_i)` for a running delivery,
+`alive_r(t)` for a reservation or candidate), contributes its percentile
+`p_i = mem_i · s_i`, its mean `μ_i = mem_mean_i · s_i`, and the variance of
+"running with chance `s_i`, then drawn from that minute's deliveries":
+`v_i = s_i · mem_sd_i² + s_i · (1 − s_i) · mem_mean_i²`. Treating the
+deliveries' memory as independent, their sum is about normal, and
+
+```
+F_mem(t) = B + held flat + clamp(Σ μ_i + z · sqrt(Σ v_i), max p_i, Σ p_i)
+```
+
+with `z = 1.645`, the sum's 95th percentile, in whole bytes. The clamp keeps
+one delivery at exactly its 90th-percentile profile value, never puts `N`
+deliveries below the largest of them, and never forecasts more than the sum
+of percentiles did. The baseline and deliveries held at their measured use
+stay exact. A pending pull counts, at each minute, the alternative with the
+most `p_i` as one delivery (§5.2).
+
+**Why memory stays more conservative than CPU.** CPU sums each delivery's
+mean, `Σ cpu_i · s_i`: an over-forecast only slows everyone down. Memory sums
+to a high quantile, at least the largest single delivery's 90th percentile,
+because too much memory kills a process. The quantile sits `z` standard
+deviations of the sum above its mean, so wider profiles forecast more, and
+the term `s_i · (1 − s_i) · mem_mean_i²` adds the chance that a delivery
+expected to have finished is still running.
+
+**Evaluation.** Chosen by replaying the recorded forecast/actual pairs of
+dk-server-1's store (`orbit run profiles --accuracy`) on 2026-10-17: each
+recorded point kept its baseline and other terms, and the sum of the
+replayed profiled deliveries' percentiles was swapped for the quantile. The
+replay rebuilt profiles from the deliveries finished before each forecast
+and reconstructed the recorded forecasts with a median residual of
+−0.09 GiB. In the enforce cohort, the only one with two or more profiled
+deliveries in a forecast, the +5m mean memory over-forecast fell from
++6.34 GiB to +4.01 GiB, its worst from +18.5 GiB to +9.8 GiB, and
+under-forecast minutes stayed at 8.3%. `z = 1.282`, the sum's 90th
+percentile, under-forecast 8.7% at +5m but 14.7% at +10m against 10.0%.
+The earlier shadow cohort rarely had two profiled deliveries at once and
+barely moves: +1.01 GiB and 25.0% under at +5m, before and after.
+
 ## 5. Admission
 
 ### 5.1 Gap fit
@@ -441,8 +498,11 @@ every `t` in `0 … H_c`:
 
 ```
 F_cpu(t) + P_c.cpu(t) · alive_c(t) ≤ admit_cpu_percent    × host cores
-F_mem(t) + P_c.mem(t) · alive_c(t) ≤ admit_memory_percent × host memory
+F_mem(t) with P_c in its summed quantile ≤ admit_memory_percent × host memory
 ```
+
+The candidate joins the memory quantile of §4.1 as one more delivery with
+`s_c = alive_c(t)`; alone, it is `P_c.mem(t) · alive_c(t)`.
 
 When a candidate is admitted, its profile is added to `F` before the next
 candidate is checked. One pass can therefore admit several tasks, each
@@ -544,9 +604,11 @@ Implemented as `OrbitRuntime::admit_against_forecast`, over the store's
   was created at or after the reservation. Rows older than five minutes are
   deleted when the next lock is taken. A pending pull holds the alternatives
   in its final admissible set under one `pending:<request_id>` key. Its CPU
-  and memory contributions are the maximum at each minute across those
-  alternatives, not their sum: exactly one task can be granted. This covers
-  different CPU and memory peaks without assuming one profile dominates both.
+  contribution is the maximum at each minute across those alternatives, and
+  its memory the alternative with the most 90th-percentile memory at that
+  minute, counted as one delivery in the quantile (§4.1), not their sum:
+  exactly one task can be granted. This covers different CPU and memory
+  peaks without assuming one profile dominates both.
 - **Exchange and release.** The store can remove reservation keys, read the
   remaining load and write replacements in one host transaction. A returned
   claim replaces its pending key with the task's precise key before creating
@@ -695,9 +757,9 @@ Limitations:
 | `orbit run show` | Implemented: an `Admission:` line from the recorded pass, e.g. `forecast — skipped heavy candidate (cpu 94% at +6m)`, with candidate titles, shadow decisions labelled hypothetical, and a protected head named by the starvation guard; a `Stuck head:` line while that head is stuck (§5.3). After an idle pass, it names the last built forecast's timestamp, decisions and peaks, and says the current pass built none. JSON preserves `pipeline_state.drain_last_pass.admission_forecast` and retains built history in `pipeline_state.drain_last_forecast`. |
 | `orbit run readiness` | Implemented: the last pass's host forecast peaks, headroom below the current admission thresholds, each judged candidate's profile source and wait, and a stuck head (§5.3). JSON adds `capacity.admission_forecast` and `tasks[].admission_forecast` for the current pass, plus `capacity.last_admission_forecast` for retained built history. Idle passes show that history without changing eligibility; without either recorded block, output is unchanged. See [observing admission](../../CONFIG.md#machineauto_concurrency--host-forecast-admission). |
 | `orbit run profiles` | Implemented: the profiles per workspace, work class and complexity: deliveries (sparse below `min_profile_deliveries`), horizon, peak CPU and memory and when they occur, and the CPU and memory spread. Flags no-diff profiles with build-like load and names the deliveries behind each flag (§3.2). `--json` for the full series |
-| `orbit run profiles --accuracy` | Implemented (§8.1): composable forecast-time `--since`, exact `--drain` and recorded `--mode` cohorts; mature measured pairs, pending and missing counts per offset; shadow decisions per drain. `--json` includes the effective selection and raw pairs |
+| `orbit run profiles --accuracy` | Implemented (§8.1): composable forecast-time `--since`, exact `--drain` and recorded `--mode` cohorts; mature measured pairs, pending and missing counts per offset, with missing split into unsampled (no delivery live) and gap (delivery live, no host row); shadow decisions and enforce admissions, gap-fit holds and pull holds per drain. `--json` includes the effective selection and raw pairs |
 | Per-drain mode | Implemented for local drains: CLI `--auto-concurrency off|shadow|enforce`, registered MCP `orbit.workflow.auto` start `auto_concurrency`, and dashboard HTTP start `auto_concurrency` all use Core submission. At durable admission, explicit or configured mode is captured in `input.auto_concurrency` with `input.auto_concurrency_source`, retained on resume/restart. The loop forwards it to the existing classifier; thresholds, profiles, throttle, ceilings and accuracy lineage remain host policy. Stop/resize and explicit pull overrides are refused before effects. |
-| Dashboard | Implemented: an operator launch choice of inherited host mode, off, shadow or enforce. The form reads current inherited host mode from readiness, sends the actual option, and shows the receipt's durable effective mode; the live window shows its captured mode. Forecast curves against measured load with running tasks stacked remain future work. |
+| Dashboard | Implemented: an operator launch choice of inherited host mode, off, shadow or enforce. The form reads current inherited host mode from readiness, sends the actual option, and shows the receipt's durable effective mode; the live window shows its captured mode. The Drain card shows the recorded forecast from readiness: its time, CPU and memory peaks against the current admit thresholds, headroom, admitted tasks with their profile source, and a candidate enforce held. A pass that built none says `no forecast this pass` and shows `last_admission_forecast` when readiness has one. Shadow decisions are labelled hypothetical. Forecast curves against measured load with running tasks stacked remain future work. |
 
 `max_active_leaf_runs` keeps its meaning: the operator's ceiling, enforced
 first.
@@ -768,7 +830,7 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   every pass with `mode = off`, records nothing. Recording is best effort,
   like `drain_last_pass`.
 - **What is forecast.** The recorded value is `F(t)` plus each task the
-  pass actually admitted, at `P(t) · alive(t)` as a reservation counts: the
+  pass actually admitted, counted as a reservation counts: the
   load the forecast expects given what admission did. Under `shadow` that is
   the `off` wave, not the gap-fit wave. A baseline that could not be read
   counts as zero, as it did for admission.
@@ -778,17 +840,33 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   `report_at` snapshot bounds the forecasts and determines maturity for
   every point. Until `minute_at + 1 minute <= report_at`, the point is
   **pending**, even if a partial measured row already exists. After that
-  boundary it is **missing** if no row exists, otherwise **paired**. Per
-  offset, paired + pending + missing equals the selected recorded point
-  count; the compatible `unmeasured` field is pending + missing. A completed
-  minute with a row is usable regardless of sample count; this report does
-  not certify sampling completeness.
+  boundary it is **missing** if no row exists, otherwise **paired**.
+  `missing` is `unsampled` plus `gap`. `unsampled` is an ended minute with
+  no host row and no delivery run live: host minutes are written only by
+  delivery workers, so an idle drain's forecast has nothing to pair with.
+  `gap` is an ended minute with no host row while a delivery worker was
+  live, from its `started_at` until its `finished_at`. The drain's own run
+  and a run that never started are not deliveries. A run that finishes
+  exactly as the minute starts, or starts exactly as the minute ends, does
+  not cover it. A live delivery in a paired or still-pending minute does
+  not move that point. Per offset, paired + pending + missing equals the
+  selected recorded point count; the compatible `unmeasured` field is
+  pending + missing. Text keeps `PAIRS`, `PENDING`, `MISSING` and the error
+  columns, and adds `UNSAMPLED` and `GAP`. JSON adds `unsampled` and `gap`.
+  A completed minute with a row is usable regardless of sample count; this
+  report does not certify sampling completeness.
 - **Errors**, per offset and for CPU (cores) and memory (bytes): the mean
   and mean absolute error of forecast minus measured, the share of pairs
   under-forecast, and the worst miss with its minute and drain.
 - **Shadow decisions**, per drain, over its `shadow` passes: the distinct
   tasks it admitted, those gap fit would have held, and those gap fit would
-  have admitted in a pass that did not. `enforce` passes are counted only.
+  have admitted in a pass that did not. Those columns stay on shadow passes.
+- **Enforce decisions**, per drain, over its local `enforce` passes: the
+  distinct tasks it admitted (`ENFORCE_ADMITTED` / `enforce_admitted`) and
+  the distinct tasks gap fit held (`GAP_HELD` / `gap_held`, from
+  `fit_skipped`). A task held on one pass and admitted on another counts in
+  both. Enforce pull requests held because no work fit are `PULL_HELD` /
+  `pull_held`. Existing shadow JSON fields are unchanged.
 - **Selection and retention.** Without filters the report reads all drains
   and recorded modes over the last 30 days. Optional `--since` selects
   forecasts at or after an RFC3339 timestamp; `--drain` matches an exact
@@ -798,7 +876,7 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   both time bounds, drain and mode (`all` when unrestricted). JSON retains
   `since`, `forecasts`, `offsets`, `drains` and `pairs`, adding `report_at`,
   effective `selection` (`since`, `drain`, `mode`; null means unrestricted),
-  and per-offset `pending` and `missing`. Empty cohorts have zero counts,
+  and per-offset `pending`, `missing`, `unsampled` and `gap`. Empty cohorts have zero counts,
   empty pairs and drains, and null error summaries. Invalid timestamps,
   modes, empty drain ids and a since later than report time are rejected;
   selectors require `--accuracy`. Rows are pruned with the resource history
@@ -824,19 +902,24 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   `PULL_REQUESTS` counts pull forecasts, `PULL_SENT` counts requests sent
   (including idle or failed attempts), and `PULL_WOULD_HOLD` counts shadow
   requests enforce would have held, including ones that returned no claim.
-  Pull request counts are separate from the distinct local-task
-  `WOULD_HOLD` and `WOULD_ADD` sets.
+  `PULL_HELD` counts the same `forecast_no_headroom` outcome on enforce
+  requests. Pull request counts are separate from the distinct local-task
+  `WOULD_HOLD`, `WOULD_ADD` and `GAP_HELD` sets.
 
 ## 9. Concerns & Honest Limitations
 
 - **Averaging blurs spikes.** Tasks of one class and complexity differ in
   length, so the validation build lands at different minutes. A per-minute average of
   misaligned spikes is a lower, wider hump. The forecast then underestimates
-  peaks and overestimates how long moderate load lasts. The 90th percentile
+  peaks and overestimates how long moderate load lasts. The high quantile
   for memory and the throttle backstop absorb part of this. Profiles aligned
   to pipeline steps instead of minutes would fix it
   ([3_vision.md §1](./3_vision.md#1-open-questions), question 1). The
   profiles report in step 2 shows how bad it is before anything enforces.
+- **Summed memory assumes independence.** The quantile of §4.1 treats
+  deliveries' memory as independent. Deliveries that peak together, such as
+  validation builds started in the same minute, can exceed it; the floor at
+  the largest single percentile and the throttle backstop bound the miss.
 - **Labels are coarse.** Complexity is set at filing or by the task pilot,
   and is sometimes wrong. A code change filed without its real size, or a
   task that writes code while tagged `no-diff-expected`, carries the wrong

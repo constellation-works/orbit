@@ -75,10 +75,11 @@ Workspaces opt into managed host output through
 Required validation and host evidence then build into
 `<primary-repository>/.orbit/state/host-validation-targets/<sha256(canonical-checkout)>`,
 outside the checkout ([host build isolation](compiler-cache.md#host-validation-builds-apart)).
-The descriptor-bound collector below runs on Linux. The layout and canonical source
-keys remain compatible with historical implicit Cargo output; disabling bindings
-does not orphan or erase old output, leases or cache locks. Non-Linux configured
-output uses the same isolation layout but remains for operator maintenance.
+The descriptor-bound collector below runs on native Linux and macOS. The layout
+and canonical source keys remain compatible with historical implicit Cargo output;
+disabling bindings does not orphan or erase old output, leases or cache locks.
+Other platforms use the same isolation layout but retain output for operator
+maintenance; their collector is unsupported.
 Removing a run's worktree does not remove that directory. Each sweep
 re-derives every recorded run's worktree path with the runner's own rule
 (the managed worktree root resolved, the worktree name appended) and hashes
@@ -107,7 +108,16 @@ inode) it measured. Owner access is restored and entries are unlinked through
 each directory's own handle, so a component replaced after the check cannot
 redirect a permission change or a delete outside the target: a substituted
 target fails as `failed:` and is left untouched. Symlinks inside are unlinked,
-not followed.
+not followed. Linux holds directories with `O_PATH` and restores access through
+its held `/proc/self/fd` inode. macOS opens readable directories with
+`O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC` and restores owner access
+with `fchmod` on that descriptor. It never uses a checked path or `/dev/fd`
+for permission changes. Unreadable or unsearchable directories, ACL refusals,
+identity changes and measurement failures refuse reclamation (`failed:` with
+zero reclaimed bytes); GC does not relax permissions to make measurement pass.
+The byte count is the measured logical entry size, including directory entries,
+not a claim about physical disk space or APFS headroom. A failure after partial
+removal reports zero rather than claiming a completed reclamation.
 
 Base reruns, host-evidence and recovery checkouts are detached scratch
 checkouts that no run record names, removed after use. Their targets are
@@ -139,6 +149,15 @@ inventoried. Admission's prefilter also selects terminal runs with an
 attributed host target, so admission reclaims them oldest first. Sources,
 branches, refs, task artifacts, logs and other caches are never touched.
 `detail` names the checkout each attributed target was built for.
+
+The existing `worktree_gc_pipeline` and worktree-GC routine use this collector;
+no additional cleanup routine is needed. Native fixture coverage exercises dry-run,
+explicit confirmation, routine dispatch and a repeated routine pass, retaining
+active, kept-source, unattributed and leased output. Support does not authorize
+production cleanup or change a paused routine, retention floor or schedule.
+Use action-time operator approval for production maintenance. Validate and review
+native platform evidence before rollout; fixture results establish behavior, not
+reclaimed production capacity.
 
 ## Dirty worktrees of settled tasks
 

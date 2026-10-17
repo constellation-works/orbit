@@ -269,6 +269,7 @@ fn profile(
                 cpu_cores: mean(&cpu),
                 cpu_stddev: stddev(&cpu),
                 memory_bytes: percentile(&memory, MEMORY_PERCENTILE),
+                memory_mean_bytes: mean(&memory_f),
                 memory_stddev_bytes: stddev(&memory_f),
             }
         })
@@ -317,16 +318,6 @@ fn profile(
         .iter()
         .map(|minute| minute.cpu_cores * minute.alive)
         .sum();
-    let memory_means: Vec<f64> = (0..before_horizon.len())
-        .map(|minute| {
-            let alive: Vec<f64> = window
-                .iter()
-                .filter(|d| d.minutes() > minute)
-                .map(|d| d.memory[minute] as f64)
-                .collect();
-            mean(&alive)
-        })
-        .collect();
     let cpu_spread = ratio(
         before_horizon.iter().map(|minute| minute.cpu_stddev).sum(),
         before_horizon.iter().map(|minute| minute.cpu_cores).sum(),
@@ -336,7 +327,10 @@ fn profile(
             .iter()
             .map(|minute| minute.memory_stddev_bytes)
             .sum(),
-        memory_means.iter().sum(),
+        before_horizon
+            .iter()
+            .map(|minute| minute.memory_mean_bytes)
+            .sum(),
     );
     let build_like = if base_class == BaseClass::NoDiff {
         window

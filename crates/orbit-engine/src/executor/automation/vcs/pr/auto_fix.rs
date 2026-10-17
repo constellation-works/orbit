@@ -15,7 +15,15 @@
 //!   not the blocker); none required, or an unreadable answer, stops. The
 //!   required failures' jobs and logs are read on the exact head the rollup
 //!   reports ([`head_check_evidence`]); a check no job answers, an unreadable
-//!   job or log, or a runner or network failure stops without an agent.
+//!   job or log, or a runner or network failure stops without an agent. A
+//!   required check run outside a workflow (a provider app's aggregate) is
+//!   repaired only from its authenticated source failure annotations, which
+//!   are retained with the task before the repair is admitted [ORB-16185].
+//!   A failure the landing classifies as inherited from the base commit, while
+//!   that base branch has not moved past it, spends no repair attempt
+//!   ([`red_base_wait`]): the watcher keeps polling until the completion
+//!   deadline and then stops with a base-red reason. A candidate-caused
+//!   failure is still admitted from the same budget.
 //!
 //! An optional-only failure first passes the narrowly evidenced prerequisite
 //! recovery in `infrastructure`: one durable rerun, no crew or source repair.
@@ -56,9 +64,9 @@ use super::super::freshness::{commit_sha, remote_branch_sha};
 use super::super::git::{
     base_sync_mode_from_input, git_command_success, git_output, resolve_worktree_start_point,
 };
-use super::super::landing_checks::{HeadCheckEvidence, head_check_evidence};
+use super::super::landing_checks::{HeadCheckEvidence, head_check_evidence, unmoved_red_base};
 use super::super::push::push_batch_changes;
-use super::answers::{CheckState, PullRequestStatus, read_required_checks};
+use super::answers::{CheckState, PullRequestStatus, RequiredChecks, read_required_checks};
 use super::delivery::{DeliveryPin, blocked_checks};
 
 /// Polls a `BLOCKED` head with no failed and no running check is waited on
@@ -299,6 +307,38 @@ pub(super) fn check_repair_handoff(
     ))
 }
 
+/// A required failure the base's own job already fails the same way, while
+/// the base branch has not moved past that commit.
+///
+/// `Some(reason)` waits for the base and spends no repair attempt. `None`
+/// keeps the ordinary repair path, including a candidate-caused failure and
+/// any git state or evidence this classification could not read, such as a
+/// head object that is not local.
+pub(super) fn red_base_wait<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    workspace_path: &str,
+    status: &PullRequestStatus,
+    failed: &[(Option<String>, String)],
+) -> Option<String> {
+    let head = status.head_sha.as_deref()?;
+    let base_name = input_string_field(input, "base")?;
+    let workspace = Path::new(workspace_path);
+    let base_ref = resolve_worktree_start_point(
+        workspace,
+        &base_name,
+        base_sync_mode_from_input(input).ok()?,
+    )
+    .ok()?;
+    let tip = commit_sha(workspace, &base_ref).ok()?;
+    let base = git_output(workspace, &["merge-base", head, &tip]).ok()?;
+    // An unreadable answer is not itself a red base. The repair read still
+    // stops when the head evidence is missing.
+    unmoved_red_base(host, workspace, head, &base, &tip, failed)
+        .ok()
+        .flatten()
+}
+
 /// Read the failed checks on the pinned head and admit their repair. Returns
 /// the hand-off failure once admitted, or the stop.
 pub(super) fn repair_failed_checks<H: RuntimeHost + ?Sized>(
@@ -312,14 +352,34 @@ pub(super) fn repair_failed_checks<H: RuntimeHost + ?Sized>(
     let Some(head_sha) = status.head_sha.as_deref() else {
         return stopped(pr_number, "the pull request reported no head commit");
     };
-    let failed = match required_failures(host, workspace_path, pr_number, head_sha, failed) {
-        Ok(failed) => failed,
-        Err(reason) => return stopped(pr_number, &reason),
-    };
-    let evidence = match head_check_evidence(host, Path::new(workspace_path), head_sha, &failed) {
-        HeadCheckEvidence::Repair(evidence) => evidence,
+    let (failed, required) =
+        match required_failures(host, workspace_path, pr_number, head_sha, failed) {
+            Ok(found) => found,
+            Err(reason) => return stopped(pr_number, &reason),
+        };
+    let (evidence, annotations) = match head_check_evidence(
+        host,
+        Path::new(workspace_path),
+        pr_number,
+        head_sha,
+        &failed,
+        &required,
+    ) {
+        HeadCheckEvidence::Repair {
+            evidence,
+            annotations,
+        } => (evidence, annotations),
         HeadCheckEvidence::Stop(reason) => return stopped(pr_number, &reason),
     };
+    if !annotations.is_empty()
+        && let Err(error) =
+            record_check_annotations(host, auto_fix, pr_number, head_sha, annotations)
+    {
+        return stopped(
+            pr_number,
+            &format!("the check annotations a repair would rely on were not retained: {error}"),
+        );
+    }
     match admit(
         host,
         auto_fix,
@@ -345,7 +405,7 @@ pub(super) fn landed_repair<H: RuntimeHost + ?Sized>(
 ) -> Option<Value> {
     let workspace = Path::new(workspace_path);
     let head = status.head_sha.as_deref()?;
-    let failed = required_failures(host, workspace_path, pr_number, head, failed).ok()?;
+    let (failed, _) = required_failures(host, workspace_path, pr_number, head, failed).ok()?;
     let base = input_string_field(input, "base")?;
     let base_ref =
         resolve_worktree_start_point(workspace, &base, base_sync_mode_from_input(input).ok()?)
@@ -364,7 +424,37 @@ pub(super) fn record_landed_repair<H: RuntimeHost + ?Sized>(
     let head = evidence["failed_head"]
         .as_str()
         .ok_or_else(|| stopped("", "missing failed head"))?;
-    let path = format!("auto-fix/{}/landed-{head}.json", auto_fix.run_id);
+    retain(
+        host,
+        auto_fix,
+        &format!("auto-fix/{}/landed-{head}.json", auto_fix.run_id),
+        evidence,
+    )
+}
+
+/// Retain the authenticated check annotations a repair of `head` relies on,
+/// before it is admitted. A repeated read of the same head replaces them.
+fn record_check_annotations<H: RuntimeHost + ?Sized>(
+    host: &H,
+    auto_fix: &AutoFix,
+    pr_number: &str,
+    head: &str,
+    annotations: Vec<Value>,
+) -> Result<(), OrbitError> {
+    retain(
+        host,
+        auto_fix,
+        &format!("auto-fix/{}/check-annotations-{head}.json", auto_fix.run_id),
+        &json!({"pr": pr_number, "failed_head": head, "checks": annotations}),
+    )
+}
+
+fn retain<H: RuntimeHost + ?Sized>(
+    host: &H,
+    auto_fix: &AutoFix,
+    path: &str,
+    evidence: &Value,
+) -> Result<(), OrbitError> {
     let owner_run = host
         .get_task(auto_fix.primary_task()?)?
         .job_run_id
@@ -373,23 +463,27 @@ pub(super) fn record_landed_repair<H: RuntimeHost + ?Sized>(
     host.attach_task_validation_log(
         auto_fix.primary_task()?,
         &owner_run,
-        &path,
+        path,
         serde_json::to_vec(&evidence).map_err(|error| OrbitError::Execution(error.to_string()))?,
     )
 }
+
+/// The required failures on a head, with the head-bound read naming them.
+type RequiredFailures = (Vec<(Option<String>, String)>, RequiredChecks);
 
 /// The failed checks branch protection requires on `head_sha`. The rollup
 /// does not say which checks are required, and a `BLOCKED` state can come
 /// from a rule the rollup does not show, so an optional failure beside it
 /// would otherwise read as the blocker. Nothing required failing, or an
-/// answer that cannot show it, is a stop.
+/// answer that cannot show it, is a stop. The head-bound read is returned
+/// with the failures, for the identities of the required checks.
 fn required_failures<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &str,
     pr_number: &str,
     head_sha: &str,
     failed: &[(Option<String>, String)],
-) -> Result<Vec<(Option<String>, String)>, String> {
+) -> Result<RequiredFailures, String> {
     let required = read_required_checks(host, Path::new(workspace_path), pr_number)
         .map_err(|error| format!("its required checks could not be read: {error}"))?;
     if required.head_sha != head_sha {
@@ -406,7 +500,7 @@ fn required_failures<H: RuntimeHost + ?Sized>(
     if failed.is_empty() {
         return Err("only optional checks failed; the merge is blocked by something else".into());
     }
-    Ok(failed)
+    Ok((failed, required))
 }
 
 /// Pin the contiguous heads this execution or its authenticated retry

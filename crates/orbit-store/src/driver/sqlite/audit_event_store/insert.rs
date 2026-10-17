@@ -59,7 +59,7 @@ impl Store {
     ) -> Result<(), OrbitError> {
         let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-
+        arm_audit_busy_timeout(&conn)?;
         insert_audit_event_record_on_connection(&conn, params, AuditInvocationFields::default())
     }
 
@@ -73,9 +73,23 @@ impl Store {
     ) -> Result<(), OrbitError> {
         let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-
+        arm_audit_busy_timeout(&conn)?;
         insert_audit_event_record_on_connection(&conn, params, invocation)
     }
+}
+
+/// Wait the store's normal busy timeout before this insert reports
+/// `database is locked`.
+///
+/// The connection is shared with writers that briefly set `busy_timeout` to
+/// zero and restore it before releasing the mutex. Re-arming the default here
+/// covers a restore that did not run, so an audit insert lost to a lock waits
+/// instead of failing the moment it is attempted.
+fn arm_audit_busy_timeout(conn: &Connection) -> Result<(), OrbitError> {
+    conn.busy_timeout(Duration::from_millis(u64::from(
+        orbit_common::storage::sqlite::DEFAULT_BUSY_TIMEOUT_MS,
+    )))
+    .map_err(sqlite_store_error)
 }
 
 /// Resolve the configured audit database through its existing parent and

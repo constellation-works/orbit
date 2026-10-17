@@ -48,6 +48,8 @@ mod pagination;
 mod plugins;
 #[path = "http_api/projections.rs"]
 mod projections;
+#[path = "http_api/provider_auth.rs"]
+mod provider_auth;
 #[path = "http_api/reliability.rs"]
 mod reliability;
 #[path = "http_api/runs.rs"]

@@ -12,8 +12,13 @@ use std::process::Stdio;
 use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 
-use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use chrono::{DateTime, SecondsFormat, Utc};
+use orbit_core::application::task::{
+    FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, TaskAddParams,
+    TaskUpdateParams,
+};
 use orbit_core::{OrbitRuntime, TaskComplexity};
+use orbit_engine::{RuntimeHost, TaskAutomationUpdate, blocked_workflow_failure_update};
 use serde_json::{Value, json};
 
 use crate::git_repo;
@@ -285,6 +290,95 @@ fn task_show_projections_match_the_owning_host() {
         .unwrap_or_else(|| panic!("readiness field line: {text}"));
     let shown: Value = serde_json::from_str(value).expect("full readiness object");
     assert_eq!(&shown, readiness, "{args:?}");
+}
+
+/// A run-blocked task with a recorded final-recovery decision. The decision
+/// does not replace the workflow-failure block `next_step` reads.
+fn block_with_final_recovery(runtime: &OrbitRuntime, repo: &Path, id: &str, run_id: &str) {
+    runtime
+        .apply_task_automation_update(
+            id,
+            TaskAutomationUpdate {
+                job_run_id: Some(run_id.into()),
+                ..blocked_workflow_failure_update(
+                    "task_pr_pipeline",
+                    run_id,
+                    Some("STEP_FAILED"),
+                    Some("step `implement` completed with success=false"),
+                )
+            },
+        )
+        .unwrap();
+    let task = runtime.get_task(id).unwrap();
+    let observed = runtime.final_recovery_revision(&task).unwrap();
+    let outcome = runtime
+        .apply_final_recovery(
+            &FinalRecoveryRequest {
+                task_id: id.to_string(),
+                run_id: run_id.to_string(),
+                observed,
+                repo_root: repo.to_path_buf(),
+                base_ref: "main".into(),
+                completion: FinalRecoveryCompletion::Review,
+                requeue_bound: Default::default(),
+            },
+            Some(&json!({
+                "decision": "escalate",
+                "diagnosis": "the failure needs an operator",
+                "human_action": "move the task back to backlog after fixing the cause",
+            })),
+        )
+        .unwrap();
+    assert_eq!(outcome, FinalRecoveryOutcome::Escalated { reason: None });
+}
+
+fn guidance_lines(id: &str, run_id: &str, at: &str) -> (String, String) {
+    let formatted = DateTime::parse_from_rfc3339(at)
+        .unwrap()
+        .with_timezone(&Utc)
+        .to_rfc3339_opts(SecondsFormat::Secs, true);
+    (
+        format!(
+            "Next: run {run_id} cannot be resumed; move the task back to backlog with `orbit task update {id} --status backlog` to run it again"
+        ),
+        format!("Final Recovery: escalate (escalated) by run {run_id} at {formatted}"),
+    )
+}
+
+/// Routed `orbit task show` text prints the same `Next:` and `Final Recovery:`
+/// words as the local CLI, and its JSON carries both objects.
+fn routed_task_show_prints_the_same_blocked_guidance() {
+    let routed = Routed::new();
+    let id = add_task(&routed.remote_runtime, "blocked on bravo");
+    let run_id = "jrun-routed-guidance";
+    block_with_final_recovery(&routed.remote_runtime, &routed.bravo.repo(), &id, run_id);
+    let shown = routed.json(&["task", "show", &id, "--json"]);
+    assert_eq!(shown["host"]["name"], "bravo");
+    assert_eq!(
+        shown["next_step"],
+        json!({
+            "run_id": run_id,
+            "resume_command": null,
+            "requeue_command": format!("orbit task update {id} --status backlog"),
+        })
+    );
+    assert_eq!(shown["final_recovery"]["decision"], "escalate");
+    assert_eq!(shown["final_recovery"]["outcome"], "escalated");
+    assert_eq!(shown["final_recovery"]["run_id"], run_id);
+    let output = routed
+        .fleet
+        .orbit_ok(&routed.fleet.local_repo, &["task", "show", &id]);
+    let text = String::from_utf8(output.stdout).expect("routed task show is UTF-8");
+    let (next_line, recovery_line) =
+        guidance_lines(&id, run_id, shown["final_recovery"]["at"].as_str().unwrap());
+    assert!(
+        text.lines().any(|line| line == next_line),
+        "routed show Next: line:\n{text}"
+    );
+    assert!(
+        text.lines().any(|line| line == recovery_line),
+        "routed show Final Recovery: line:\n{text}"
+    );
 }
 
 fn cli_task_ids_route_to_the_host_their_prefix_names() {
@@ -1114,6 +1208,10 @@ fn host_routing_contracts_0() {
         (
             "a_routed_call_carries_the_callers_authority_and_no_more",
             a_routed_call_carries_the_callers_authority_and_no_more as fn(),
+        ),
+        (
+            "routed_task_show_prints_the_same_blocked_guidance",
+            routed_task_show_prints_the_same_blocked_guidance as fn(),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");

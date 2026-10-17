@@ -99,11 +99,11 @@ use super::answers::{
 use super::auto_fix::{
     AutoFix, BlockedVerdict, LocalRepair, admit, adopt_published_repairs, blocked_verdict,
     landed_repair, publish_local_repair, record_landed_repair, record_published_repair,
-    repair_failed_checks, stopped,
+    red_base_wait, repair_failed_checks, stopped,
 };
 use super::delivery::{
-    BlockedCheckWait, DeliveryEvidence, DeliveryPin, PrMergeState, checked_pr_state,
-    classify_pr_state,
+    BlockedCheckWait, DeliveryEvidence, DeliveryPin, PrMergeState, UnreportedChecks,
+    checked_pr_state, classify_pr_state,
 };
 use super::head_lag::HeadLag;
 use super::merge::{MergeStrategy, PermittedMerge, resolve_permitted_merge};
@@ -330,8 +330,14 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         }
         _ => completion_deadline_ms,
     };
-    let remaining_seconds =
-        completion_deadline_ms.saturating_sub(super::super::completion_deadline::now_ms()?) / 1000;
+    // Round the remaining budget up: only whole seconds already spent count
+    // as waited, matching the `as_secs()` elapsed reads in the loop. Rounding
+    // down charged a full second for the milliseconds between setting the
+    // deadline and reading it back, reporting and consuming a wait that never
+    // happened.
+    let remaining_seconds = completion_deadline_ms
+        .saturating_sub(super::super::completion_deadline::now_ms()?)
+        .div_ceil(1000);
     let mut waited_seconds = max_wait_seconds.saturating_sub(remaining_seconds);
 
     let waited_before = waited_seconds;
@@ -357,6 +363,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     let watch_only = auto_fix.is_some_and(AutoFix::watch_only);
     // Polls of a BLOCKED head that showed no failed and no running check.
     let mut unsettled_polls = 0_u32;
+    let mut unreported = UnreportedChecks::new();
     if let Some(auto_fix) = auto_fix {
         // An earlier round of this run may have published a repaired head,
         // and the executor may have committed a check repair since.
@@ -381,9 +388,20 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         }
     }
 
+    // [ORB-16307] The cumulative budget an observation retry must still fit.
+    let observation_budget = (max_wait_seconds > 0).then_some(completion_deadline_ms);
+
     loop {
         waited_seconds = waited_seconds
             .max(waited_before.saturating_add(completion_started.elapsed().as_secs()));
+        // Every flag is set immediately before a `continue` or at the end of
+        // an iteration, so this covers every read made in the iteration.
+        // Durable write-ahead provenance covers mutations inside it.
+        let mutated = merge_requested
+            || auto_merge_requested
+            || conflict_refresh_attempted
+            || landed_refresh_attempted;
+        let observed = |error| observation_failure(host, input, mutated, observation_budget, error);
         let status = if max_wait_seconds == 0 {
             read_pr_status(host, Path::new(workspace_path), pr_number)
         } else {
@@ -394,25 +412,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 completion_deadline_ms,
             )
         }
-        .map_err(|error| {
-            // Only a failed read before any mutation is eligible. Unknown merge
-            // replies, repairs and rebases keep their existing reconciliation path.
-            if !merge_requested
-                && !auto_merge_requested
-                && !conflict_refresh_attempted
-                && !landed_refresh_attempted
-                && completion_history_is_read_only(host, input).unwrap_or(false)
-                && (super::super::operations::is_transient_github_failure(&error.to_string())
-                    || error
-                        .to_string()
-                        .to_ascii_lowercase()
-                        .contains("tls handshake"))
-            {
-                OrbitError::Execution(format!("completion_observation_unavailable: {error}"))
-            } else {
-                error
-            }
-        })?;
+        .map_err(observed)?;
         let mut state = classify_pr_state(&status);
         let mut base_refresh_wait = false;
         if let Some(auto_fix) = auto_fix {
@@ -436,7 +436,9 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                     completion_deadline_ms,
                     false,
                     None,
-                )? {
+                )
+                .map_err(observed)?
+                {
                     super::super::base_refresh::RefreshStep::Changed => continue,
                     super::super::base_refresh::RefreshStep::Wait => base_refresh_wait = true,
                     super::super::base_refresh::RefreshStep::Adopted { waiting } => {
@@ -485,12 +487,13 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
             } else {
                 BlockedCheckWait::Owner(&[])
             },
+            &mut unreported,
             completion_deadline_ms,
         )
-        .map_err(|reason| stopped(pr_number, &reason))?;
+        .map_err(|reason| observed(stopped(pr_number, &reason)))?;
         if !base_refresh_wait
             && !base_adopted
-            && matches!(state, PrMergeState::Blocked(_))
+            && (matches!(state, PrMergeState::Blocked(_)) || unreported.awaiting_policy_checks())
             && let (Some(auto_fix), Some(candidate)) = (auto_fix, base_candidate.as_ref())
         {
             match super::super::base_refresh::recover(
@@ -503,7 +506,9 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 completion_deadline_ms,
                 true,
                 None,
-            )? {
+            )
+            .map_err(observed)?
+            {
                 super::super::base_refresh::RefreshStep::Changed => continue,
                 super::super::base_refresh::RefreshStep::Wait
                 | super::super::base_refresh::RefreshStep::Adopted { waiting: true } => {
@@ -514,6 +519,9 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         }
         let pending_required = matches!(state, PrMergeState::Pending);
         let mut infrastructure_wait = base_refresh_wait;
+        // Set only when this poll's failed checks are the unmoved base's.
+        // A later poll that is no longer that hold must not keep the reason.
+        let mut base_red_reason: Option<String> = None;
         if let Some(auto_fix) = auto_fix
             && !base_refresh_wait
             && matches!(
@@ -548,7 +556,8 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                                 .saturating_mul(1000)
                         )
                     ),
-                )?,
+                )
+                .map_err(observed)?,
                 super::infrastructure::InfrastructureStep::Wait
             );
         }
@@ -695,14 +704,20 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                             landed_refresh_attempted = true;
                             continue;
                         }
-                        return Err(repair_failed_checks(
-                            host,
-                            auto_fix,
-                            workspace_path,
-                            pr_number,
-                            &status,
-                            &failed,
-                        ));
+                        if let Some(reason) =
+                            red_base_wait(host, input, workspace_path, &status, &failed)
+                        {
+                            base_red_reason = Some(reason);
+                        } else {
+                            return Err(repair_failed_checks(
+                                host,
+                                auto_fix,
+                                workspace_path,
+                                pr_number,
+                                &status,
+                                &failed,
+                            ));
+                        }
                     }
                 }
             }
@@ -791,7 +806,8 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                         workspace_path,
                         pr_number,
                         &mut merge_capabilities,
-                    )?;
+                    )
+                    .map_err(observed)?;
                     let condition = merge_condition_sha(
                         if base_adopted {
                             None
@@ -873,7 +889,8 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                         workspace_path,
                         pr_number,
                         &mut merge_capabilities,
-                    )?;
+                    )
+                    .map_err(observed)?;
                     if capabilities.auto_merge_allowed {
                         request_merge(
                             host,
@@ -898,11 +915,15 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         }
 
         if waited_seconds >= max_wait_seconds {
+            if let Some(reason) = base_red_reason.as_deref() {
+                return Err(stopped(pr_number, reason));
+            }
             return Err(merge_wait_timeout(
                 pr_number,
                 waited_seconds,
                 max_wait_seconds,
                 base_race.as_deref(),
+                &unreported,
             ));
         }
         let remaining_seconds = max_wait_seconds.saturating_sub(waited_seconds);
@@ -911,11 +932,15 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         waited_seconds = waited_seconds.saturating_add(sleep_seconds);
 
         if waited_seconds >= max_wait_seconds {
+            if let Some(reason) = base_red_reason.as_deref() {
+                return Err(stopped(pr_number, reason));
+            }
             return Err(merge_wait_timeout(
                 pr_number,
                 waited_seconds,
                 max_wait_seconds,
                 base_race.as_deref(),
+                &unreported,
             ));
         }
     }
@@ -926,13 +951,16 @@ fn merge_wait_timeout(
     waited_seconds: u64,
     max_wait_seconds: u64,
     base_race: Option<&str>,
+    unreported: &UnreportedChecks,
 ) -> OrbitError {
     let base_race = base_race
         .map(|race| format!(" after {race}"))
         .unwrap_or_default();
+    let unreported = unreported.timeout_note();
     OrbitError::Execution(format!(
         "pr_complete: timed out after {waited_seconds}s waiting for pull request \
-         #{pr_number} to merge (budget {max_wait_seconds}s){base_race}; the task stays in review"
+         #{pr_number} to merge (budget {max_wait_seconds}s){base_race}{unreported}; the task \
+         stays in review"
     ))
 }
 
@@ -990,12 +1018,14 @@ fn re_review_on_conflict(input: &Value) -> bool {
 }
 
 /// Whether the PR reports `BLOCKED` itself, rather than another state
-/// completion also refuses (`BEHIND`, `DRAFT`), which auto-fix never repairs.
+/// completion also refuses (`BEHIND`, `DRAFT`, or an explicit draft), which
+/// auto-fix never repairs.
 fn is_blocked_merge_state(status: &PullRequestStatus) -> bool {
-    status
-        .merge_state_status
-        .as_deref()
-        .is_some_and(|state| state.eq_ignore_ascii_case("BLOCKED"))
+    !status.is_draft
+        && status
+            .merge_state_status
+            .as_deref()
+            .is_some_and(|state| state.eq_ignore_ascii_case("BLOCKED"))
 }
 
 /// Admit an auto-fix repair of the conflict on the pull request's head
@@ -1170,6 +1200,34 @@ fn rebase_conflicting_pr_branch<H: RuntimeHost + ?Sized>(
         )?;
     }
     Ok(rebased)
+}
+
+/// [ORB-16307] A failed authenticated read made before any completion mutation:
+/// the PR status, required-check and merge-policy reads, and the base-refresh
+/// and infrastructure prerequisite reads. Only a transport failure within the
+/// cumulative budget, with neither a mutation in this invocation nor durable
+/// repair or mutation provenance, becomes `completion_observation_unavailable`,
+/// which the host may resume only after authenticating the unchanged prefix.
+/// Every other failure keeps its own error and recovery path.
+fn observation_failure<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    mutated: bool,
+    deadline_ms: Option<u64>,
+    error: OrbitError,
+) -> OrbitError {
+    let within_budget = deadline_ms.is_none_or(|deadline| {
+        super::super::completion_deadline::now_ms().is_ok_and(|now| now < deadline)
+    });
+    if !mutated
+        && within_budget
+        && super::super::operations::is_transient_observation_failure(&error.to_string())
+        && completion_history_is_read_only(host, input).unwrap_or(false)
+    {
+        OrbitError::Execution(format!("completion_observation_unavailable: {error}"))
+    } else {
+        error
+    }
 }
 
 /// Read reservations after pre-observation repair adoption/publication as well

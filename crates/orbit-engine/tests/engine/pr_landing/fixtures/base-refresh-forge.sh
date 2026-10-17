@@ -9,6 +9,12 @@ base=$(cat "$forge/pr-base")
 export GIT_AUTHOR_NAME=Forge GIT_AUTHOR_EMAIL=forge@example.invalid
 export GIT_COMMITTER_NAME=Forge GIT_COMMITTER_EMAIL=forge@example.invalid
 printf '%s\n' "$*" >> "$forge/calls"
+# One injected provider failure: the first command naming fault-match.
+if [ -f "$forge/fault-match" ] && [ ! -f "$forge/fault-hit" ]; then
+    case "$*" in *"$(cat "$forge/fault-match")"*)
+        touch "$forge/fault-hit"; cat "$forge/fault-stderr" >&2; exit 1 ;;
+    esac
+fi
 head=$(git --git-dir="$remote" rev-parse "refs/heads/$branch")
 base_sha=$(git --git-dir="$remote" rev-parse "refs/heads/$base")
 repo="{\"id\":500,\"full_name\":\"$slug\",\"url\":\"https://api.github.com/repos/$slug\"}"
@@ -58,7 +64,15 @@ case "$1 ${2:-}" in
             *merge*|*Merge*) echo '{"data":{"repository":{"nameWithOwner":"'"$slug"'","mergeCommitAllowed":true,"squashMergeAllowed":true,"rebaseMergeAllowed":false,"autoMergeAllowed":false,"pullRequest":{"baseRefName":"'"$base"'","baseRef":{"branchProtectionRule":{"requiresLinearHistory":false}}}}}}' ;;
             *) echo "unknown graphql $*" >&2; exit 2 ;;
         esac ;;
-    'api repos/{owner}/{repo}') printf '%s\n' "$repo" ;;
+    'api repos/{owner}/{repo}')
+        # One controlled read delay, never synthetic host load. The former
+        # one-second allowance timed out here before reservation or mutation.
+        if [ -f "$forge/delay-read" ] && [ ! -f "$forge/read-delay-entered" ]; then
+            touch "$forge/read-delay-entered"
+            sleep 2
+            touch "$forge/read-delay-finished"
+        fi
+        printf '%s\n' "$repo" ;;
     'api repos/{owner}/{repo}/pulls/42')
         if [ -f "$forge/changed_head" ]; then head=$(printf '%040d' 1); fi
         printf '{"number":42,"state":"open","merged":false,"head":{"sha":"%s","ref":"%s","repo":%s},"base":{"sha":"%s","ref":"%s","repo":%s}}\n' "$head" "$branch" "$repo" "$base_sha" "$base" "$repo" ;;
@@ -111,9 +125,10 @@ case "$1 ${2:-}" in
                 fi
                 if [ -f "$forge/policy-after" ] && [ -f "$forge/base-applied" ]; then echo '[{"type":"required_status_checks","ruleset_id":56,"ruleset_source":"orbit/test","ruleset_source_type":"Repository","parameters":{"required_status_checks":[{"context":"Protected (rust)","integration_id":900}]}}]'; exit; fi
                 if [ -f "$forge/foreign_app" ]; then echo '[{"type":"required_status_checks","ruleset_id":55,"ruleset_source":"orbit/test","ruleset_source_type":"Repository","parameters":{"required_status_checks":[{"context":"Protected (rust)","integration_id":901}]}}]'; exit; fi
-                if [ -f "$forge/changed_policy" ]; then
-                    count=$(cat "$forge/policy-reads" 2>/dev/null || echo 0); count=$((count + 1)); echo "$count" > "$forge/policy-reads"
-                    if [ "$count" -gt 1 ]; then echo '[{"type":"required_status_checks","ruleset_id":56,"ruleset_source":"orbit/test","ruleset_source_type":"Repository","parameters":{"required_status_checks":[{"context":"Protected (rust)","integration_id":900}]}}]'; exit; fi
+                # Policy changes once the update is durably reserved, however
+                # many current-gates reads preceded the emission evidence.
+                if [ -f "$forge/changed_policy" ] && [ -f "$forge/base-reserved" ]; then
+                    echo '[{"type":"required_status_checks","ruleset_id":56,"ruleset_source":"orbit/test","ruleset_source_type":"Repository","parameters":{"required_status_checks":[{"context":"Protected (rust)","integration_id":900}]}}]'; exit
                 fi
                 echo '[{"type":"required_status_checks","ruleset_id":55,"ruleset_source":"'"$slug"'","ruleset_source_type":"Repository","parameters":{"required_status_checks":[{"context":"Protected (rust)","integration_id":900}]}}]' ;;
             *'/check-runs?'*)

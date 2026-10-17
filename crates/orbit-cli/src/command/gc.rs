@@ -1,6 +1,8 @@
 //! Out-of-band garbage collection for resources left behind by terminal runs.
 
+use clap::builder::TypedValueParser;
 use clap::{Args, Subcommand};
+use orbit_core::application::gc::DEFAULT_DEPLOYMENT_KEEP;
 use orbit_core::{OrbitError, OrbitRuntime};
 
 use crate::command::{Block, CommandOut, Execute, Payload};
@@ -27,6 +29,9 @@ pub enum GcTarget {
     Worktrees(WorktreeGcArgs),
     /// Reclaim this workspace checkout's scratch contents when no job runs are active
     Tmp(TmpGcArgs),
+    /// Remove deployment directories, executable backups and store backups in the Orbit home
+    /// beyond the newest of each, always keeping the rollback executable
+    Deployments(DeploymentGcArgs),
     /// Prune audit rows older than `retention.audit_days` and the audit blobs no remaining row names
     Audit(AuditGcArgs),
     /// Drop the pipeline state of terminal runs older than `retention.runs_days`, keeping their run and step rows
@@ -38,6 +43,7 @@ impl Execute for GcTarget {
         match self {
             Self::Worktrees(args) => args.execute(runtime),
             Self::Tmp(args) => args.execute(runtime),
+            Self::Deployments(args) => args.execute(runtime),
             Self::Audit(args) => args.execute(runtime),
             Self::Runs(args) => args.execute(runtime),
         }
@@ -81,6 +87,73 @@ impl Execute for TmpGcArgs {
         lines.push(format!(
             "entries_removed={} total_bytes_reclaimable={} total_bytes_reclaimed={}",
             result.entries_removed, result.bytes_reclaimable, result.bytes_reclaimed,
+        ));
+        Ok(Payload::blocks(doc, vec![Block::text(lines.join("\n"))]).into())
+    }
+}
+
+#[derive(Args)]
+#[command(
+    after_help = "Without --confirm this only reports. Three classes are counted separately: \
+                  top-level entries of ~/.orbit/deployments, copies of replaced executables in \
+                  ~/.orbit/bin (names with a .bak, .before-, .pre-, .stale or -stale- marker), \
+                  and store copies named ~/.orbit/orbit.db.bak*. Each class keeps its newest \
+                  entries by the newest modification time inside them. The installed \
+                  executable and every <executable>.previous rollback copy are never removed, \
+                  nor is a deployment whose orbit-local-candidate manifest names the bytes of \
+                  the installed or rollback executable; those do not count toward --keep. \
+                  Links are removed, never followed.\n\nExamples:\n  orbit gc deployments\n  \
+                  orbit gc deployments --keep 1 --confirm --json"
+)]
+pub struct DeploymentGcArgs {
+    /// Remove what the report lists; without this flag the command only reports
+    #[arg(long, visible_alias = "yes", conflicts_with = "dry_run")]
+    pub confirm: bool,
+
+    /// Explicitly request the default non-destructive mode
+    #[arg(long, conflicts_with = "confirm")]
+    pub dry_run: bool,
+
+    /// Newest entries to keep in each class, besides the rollback-pinned ones
+    #[arg(
+        long,
+        value_name = "N",
+        default_value_t = DEFAULT_DEPLOYMENT_KEEP,
+        value_parser = clap::value_parser!(u16).range(1..).map(usize::from)
+    )]
+    pub keep: usize,
+}
+
+impl Execute for DeploymentGcArgs {
+    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        let result = runtime.gc_deployments(self.confirm, self.keep)?;
+        let doc = serde_json::to_value(&result).map_err(|error| {
+            OrbitError::Execution(format!("failed to serialize deployment GC report: {error}"))
+        })?;
+        let mut lines: Vec<_> = result
+            .entries
+            .iter()
+            .map(|entry| {
+                format!(
+                    "class={} path={} action={} reason={} bytes={} modified_at={}",
+                    entry.class.as_str(),
+                    entry.path.display(),
+                    entry.action,
+                    entry.reason,
+                    entry.bytes,
+                    entry.modified_at.as_deref().unwrap_or("-"),
+                )
+            })
+            .collect();
+        lines.push(format!(
+            "mode={} keep={} entries_removed={} total_bytes_reclaimable={} \
+             total_bytes_reclaimed={} total_bytes_kept={}",
+            if result.dry_run { "plan" } else { "confirm" },
+            result.keep,
+            result.entries_removed,
+            result.bytes_reclaimable,
+            result.bytes_reclaimed,
+            result.bytes_kept,
         ));
         Ok(Payload::blocks(doc, vec![Block::text(lines.join("\n"))]).into())
     }

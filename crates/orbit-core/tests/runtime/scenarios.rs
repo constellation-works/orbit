@@ -17,7 +17,9 @@ pub(super) fn run(module: &str, table: &str, rows: &[Scenario]) {
                 // Report the active row even if its assertion panics.
                 use std::io::Write;
                 writeln!(std::io::stderr(), "scenario: {module}::{name}").expect("row identity");
+                let started = std::time::Instant::now();
                 scenario();
+                report_elapsed(&format!("{module}::{name}"), "row", started);
                 orbit_common::test_env::record_scenario_pass(name);
             }
             return;
@@ -26,7 +28,9 @@ pub(super) fn run(module: &str, table: &str, rows: &[Scenario]) {
             .iter()
             .find(|(name, _)| *name == selected)
             .expect("the selected row belongs to this table");
+        let started = std::time::Instant::now();
         scenario();
+        report_elapsed(&format!("{module}::{selected}"), "row", started);
         orbit_common::test_env::record_scenario_pass(&selected);
         return;
     }
@@ -62,6 +66,7 @@ pub(super) fn run(module: &str, table: &str, rows: &[Scenario]) {
             std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
         ))
         .expect("scenario PATH");
+        let started = std::time::Instant::now();
         let mut command = Command::new(std::env::current_exe().expect("test binary"));
         orbit_common::test_env::clear_inherited_authority(|key| {
             command.env_remove(key);
@@ -97,7 +102,20 @@ pub(super) fn run(module: &str, table: &str, rows: &[Scenario]) {
         std::io::stderr()
             .write_all(&output.stderr)
             .expect("row stderr");
+        // Process startup is the gap between this and the child's row lines.
+        report_elapsed(&exact_row, "child", started);
     }
+}
+
+/// Print a row's elapsed time so a run's output profiles its fixture cost.
+fn report_elapsed(row: &str, scope: &str, started: std::time::Instant) {
+    use std::io::Write;
+    let elapsed = started.elapsed().as_secs_f64();
+    writeln!(
+        std::io::stderr(),
+        "scenario: {row} {scope} elapsed {elapsed:.3}s"
+    )
+    .expect("row timing");
 }
 
 /// A row owns all runtimes it creates. On return/unwind, restore the child's

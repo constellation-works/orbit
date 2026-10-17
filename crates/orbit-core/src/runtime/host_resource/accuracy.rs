@@ -5,8 +5,10 @@
 //!   the `host_resource_minutes` row of the minute starting at
 //!   `forecast_at`, truncated to the minute, plus `n`. A point whose minute
 //!   has not fully ended at report time is pending, even with a partial
-//!   measurement. Ended minutes without a row are missing. Both count as
-//!   unmeasured; only ended, measured minutes contribute error pairs.
+//!   measurement. Ended minutes without a row are missing: `unsampled` when
+//!   no delivery worker was live in that minute, and `gap` when one was.
+//!   Pending and missing both count as unmeasured; only ended, measured
+//!   minutes contribute error pairs.
 //! - **Error** is forecast minus measured, so a negative error is an
 //!   under-forecast: the host carried more than admission expected.
 //! - **Shadow decisions.** Per drain, over its `shadow` passes: the tasks
@@ -15,11 +17,16 @@
 //!   per drain, however many passes it appeared in. Pull drains separately
 //!   count request forecasts, requests sent, and shadow requests enforce
 //!   would have held because no work fit, even without a returned claim.
+//! - **Enforce decisions.** Per drain, over its local `enforce` passes: the
+//!   distinct tasks the pass admitted, and the distinct tasks gap fit held
+//!   (`fit_skipped`). A task held on one pass and admitted on another counts
+//!   in both. Pull drains separately count enforce requests held because no
+//!   work fit. Shadow columns stay on shadow passes only.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Duration, DurationRound, Utc};
-use orbit_store::contracts::{AdmissionForecastRecord, HostResourceMinute};
+use orbit_store::contracts::{AdmissionForecastRecord, DeliveryRunInterval, HostResourceMinute};
 use serde::Serialize;
 
 use super::forecast::ACCURACY_OFFSETS;
@@ -75,8 +82,13 @@ pub struct OffsetAccuracy {
     pub unmeasured: u64,
     /// Target minutes not fully ended at report time, including partial rows.
     pub pending: u64,
-    /// Ended target minutes with no measured row.
+    /// Ended target minutes with no measured row. The sum of [`Self::unsampled`]
+    /// and [`Self::gap`].
     pub missing: u64,
+    /// Ended target minutes with no host row and no delivery run live.
+    pub unsampled: u64,
+    /// Ended target minutes with a delivery run live but no host row.
+    pub gap: u64,
     /// In cores.
     pub cpu: ErrorSummary,
     /// In bytes.
@@ -124,7 +136,7 @@ pub struct ForecastPair {
     pub measured_memory_bytes: u64,
 }
 
-/// One drain's shadow decisions against what it admitted.
+/// One drain's shadow and enforce decisions against what it admitted.
 #[derive(Debug, Clone, Serialize)]
 pub struct DrainShadowDecisions {
     pub workspace_id: String,
@@ -133,22 +145,34 @@ pub struct DrainShadowDecisions {
     pub enforce_passes: u64,
     /// Tasks the drain admitted during its shadow passes.
     pub admitted: u64,
-    /// Admitted while gap fit would have held them.
+    /// Admitted while gap fit would have held them. Shadow passes only.
     pub would_hold: Vec<String>,
-    /// Gap fit would have admitted them in a pass that did not.
+    /// Gap fit would have admitted them in a pass that did not. Shadow only.
     pub would_add: Vec<String>,
+    /// Distinct tasks local enforce passes admitted.
+    pub enforce_admitted: u64,
+    /// Distinct tasks gap fit held on local enforce passes (`fit_skipped`).
+    pub gap_held: Vec<String>,
     /// Pull request forecasts, including ones enforce held.
     pub pull_requests: u64,
     /// Requests actually sent to the owner, in either mode.
     pub pull_sent: u64,
     /// Shadow requests enforce would have held (`forecast_no_headroom`).
     pub pull_would_hold: u64,
+    /// Enforce pull requests held because no work fit (`forecast_no_headroom`).
+    pub pull_held: u64,
 }
 
 /// The report over preselected `records` against the host's measured `minutes`.
+///
+/// `deliveries` are the workers that could have sampled the host. An ended
+/// minute with no row is a `gap` when one of them was live during it, and
+/// `unsampled` otherwise. A drain that only recorded forecasts is not a
+/// delivery.
 pub(crate) fn forecast_accuracy(
     records: &[AdmissionForecastRecord],
     minutes: &[HostResourceMinute],
+    deliveries: &[DeliveryRunInterval],
     selection: AccuracySelection,
     report_at: DateTime<Utc>,
 ) -> ForecastAccuracy {
@@ -158,7 +182,8 @@ pub(crate) fn forecast_accuracy(
         .collect();
     let mut pairs = Vec::new();
     let mut pending: BTreeMap<u32, u64> = BTreeMap::new();
-    let mut missing: BTreeMap<u32, u64> = BTreeMap::new();
+    let mut unsampled: BTreeMap<u32, u64> = BTreeMap::new();
+    let mut gap: BTreeMap<u32, u64> = BTreeMap::new();
     for record in records {
         let start = record
             .forecast_at
@@ -171,7 +196,15 @@ pub(crate) fn forecast_accuracy(
                 continue;
             }
             let Some(host) = measured.get(&minute_at) else {
-                *missing.entry(point.offset_minutes).or_default() += 1;
+                let bucket = if deliveries
+                    .iter()
+                    .any(|delivery| delivery_covers(delivery, minute_at))
+                {
+                    &mut gap
+                } else {
+                    &mut unsampled
+                };
+                *bucket.entry(point.offset_minutes).or_default() += 1;
                 continue;
             };
             pairs.push(ForecastPair {
@@ -192,7 +225,8 @@ pub(crate) fn forecast_accuracy(
     let mut offsets: BTreeSet<u32> = ACCURACY_OFFSETS.into_iter().collect();
     offsets.extend(pairs.iter().map(|pair| pair.offset_minutes));
     offsets.extend(pending.keys().copied());
-    offsets.extend(missing.keys().copied());
+    offsets.extend(unsampled.keys().copied());
+    offsets.extend(gap.keys().copied());
     let offsets = offsets
         .into_iter()
         .map(|offset| {
@@ -201,13 +235,17 @@ pub(crate) fn forecast_accuracy(
                 .filter(|pair| pair.offset_minutes == offset)
                 .collect();
             let pending = pending.get(&offset).copied().unwrap_or(0);
-            let missing = missing.get(&offset).copied().unwrap_or(0);
+            let unsampled = unsampled.get(&offset).copied().unwrap_or(0);
+            let gap = gap.get(&offset).copied().unwrap_or(0);
+            let missing = unsampled + gap;
             OffsetAccuracy {
                 offset_minutes: offset,
                 paired: at_offset.len() as u64,
                 unmeasured: pending + missing,
                 pending,
                 missing,
+                unsampled,
+                gap,
                 cpu: summarize(&at_offset, |pair| {
                     (pair.forecast_cpu_cores, pair.measured_cpu_cores)
                 }),
@@ -230,6 +268,17 @@ pub(crate) fn forecast_accuracy(
         drains: shadow_decisions(records),
         pairs,
     }
+}
+
+/// A delivery covers a minute when it had started before the minute ended
+/// and had not finished before the minute started. Finishing exactly at
+/// `minute_at`, or starting exactly as the minute ends, does not cover it.
+fn delivery_covers(delivery: &DeliveryRunInterval, minute_at: DateTime<Utc>) -> bool {
+    let end = minute_at + Duration::minutes(1);
+    delivery.started_at < end
+        && delivery
+            .finished_at
+            .is_none_or(|finished| finished > minute_at)
 }
 
 fn summarize(
@@ -283,9 +332,12 @@ fn shadow_decisions(records: &[AdmissionForecastRecord]) -> Vec<DrainShadowDecis
         admitted: BTreeSet<String>,
         would_hold: BTreeSet<String>,
         would_add: BTreeSet<String>,
+        enforce_admitted: BTreeSet<String>,
+        gap_held: BTreeSet<String>,
         pull_requests: u64,
         pull_sent: u64,
         pull_would_hold: u64,
+        pull_held: u64,
     }
     let mut drains: BTreeMap<(&str, &str), Drain> = BTreeMap::new();
     for record in records {
@@ -301,11 +353,16 @@ fn shadow_decisions(records: &[AdmissionForecastRecord]) -> Vec<DrainShadowDecis
                 drain.pull_would_hold += u64::from(pull.forecast_no_headroom);
             } else {
                 drain.enforce_passes += 1;
+                drain.pull_held += u64::from(pull.forecast_no_headroom);
             }
             continue;
         }
         if record.mode != SHADOW {
             drain.enforce_passes += 1;
+            drain
+                .enforce_admitted
+                .extend(record.admitted.iter().cloned());
+            drain.gap_held.extend(record.fit_skipped.iter().cloned());
             continue;
         }
         drain.shadow_passes += 1;
@@ -331,9 +388,12 @@ fn shadow_decisions(records: &[AdmissionForecastRecord]) -> Vec<DrainShadowDecis
             admitted: drain.admitted.len() as u64,
             would_hold: drain.would_hold.into_iter().collect(),
             would_add: drain.would_add.into_iter().collect(),
+            enforce_admitted: drain.enforce_admitted.len() as u64,
+            gap_held: drain.gap_held.into_iter().collect(),
             pull_requests: drain.pull_requests,
             pull_sent: drain.pull_sent,
             pull_would_hold: drain.pull_would_hold,
+            pull_held: drain.pull_held,
         })
         .collect()
 }

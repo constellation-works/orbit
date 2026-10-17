@@ -21,11 +21,16 @@ Three things must all be true for a routine to fire:
 
 The workspace itself opts in by being registered: the tick loads definitions
 from every registered, active checkout on the host, and there is no config key
-to set. A **replica** checkout fires only its `worktree-gc` routine, which
-reclaims that host's claimed-leaf worktrees after asking the owner whether each
-task settled. Its other routines are listed as `owner-only` with the owner
-machine named and never fire there. Auto-tasks are not evaluated there, and the
-auto-task panel disables toggle and manual mint with the owner machine named.
+to set. A **replica** checkout fires only its host-local `worktree-gc` and
+`store-gc` routines, and only on a cron trigger. Worktree GC reclaims that
+host's claimed-leaf worktrees after asking the owner whether each task
+settled. Store GC prunes this host's own store for that workspace (command
+audit and resource history are host-wide; run audit and terminal pipeline
+state are this workspace's) and does not call the owner. Every other routine,
+and a delivery- or state-triggered copy of either job, is listed as
+`owner-only` with the owner machine named and never fires there. Auto-tasks
+are not evaluated there, and the auto-task panel disables toggle and manual
+mint with the owner machine named.
 
 ## Turning the scheduler on
 
@@ -110,7 +115,10 @@ two at a time. The `final_recovery` agent proposes `complete_no_diff`,
 applier acts on it. Each decision is a task comment with the run id. An
 escalation names the failed run's worktree and its changed paths when it
 still exists, since that is where unfinished work stays.
-`orbit task show` prints the last one, and `orbit doctor` lists tasks still
+Every task show prints the last one: local and routed `orbit task show` text
+(`Final Recovery:`), `orbit.task.show`, and the dashboard task detail
+(`final_recovery`, with `run_id`, `decision`, `outcome` and `at`). A task list
+does not. `orbit doctor` lists tasks still
 blocked after one in its `blocked-task-recovery` row.
 
 It leaves a block alone when someone other than Orbit's automation has
@@ -311,7 +319,8 @@ orbit --workspace <name> clock tick --dry-run  # restrict to one workspace
 
 The global `--workspace` selector narrows a sweep — dry-run or live — to one
 registered workspace's routines; without it the pass covers every registered
-owner checkout on the host.
+checkout on the host. A replica checkout contributes only its cron worktree-GC
+and store-GC routines.
 
 ## Observe and control
 
