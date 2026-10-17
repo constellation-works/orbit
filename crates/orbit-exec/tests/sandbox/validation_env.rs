@@ -97,6 +97,7 @@ impl Host {
     }
 }
 
+#[cfg(unix)]
 fn executable(path: &Path, body: &str) {
     fs::write(path, body).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
@@ -687,6 +688,7 @@ fn startup_failures_are_recorded_and_cached() {
 
 /// Doctor's candidate enumeration follows executable PATH order while
 /// ignoring non-executable files, duplicate entries and symlink aliases.
+#[cfg(unix)]
 #[test]
 fn tool_locations_distinguish_shadowed_executables_from_aliases() {
     let host = Host::new();
@@ -719,6 +721,7 @@ fn tool_locations_distinguish_shadowed_executables_from_aliases() {
 
 /// An interactive probe that exits 42 falls back to login-only resolution, and
 /// the reason carries the exit status.
+#[cfg(unix)]
 #[test]
 fn an_interactive_probe_exiting_42_falls_back_with_its_status_as_the_reason() {
     let dir = tempfile::tempdir().expect("tempdir");

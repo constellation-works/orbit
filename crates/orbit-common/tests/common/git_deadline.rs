@@ -5,6 +5,7 @@
 /// Set in the re-executed child to the directory holding the stub `git`.
 const STUB_DIR_VAR: &str = "ORBIT_TEST_HUNG_GIT_DIR";
 
+#[cfg(unix)]
 #[test]
 fn hung_git_times_out_and_leaves_no_child() {
     const TEST: &str = "hung_git_times_out_and_leaves_no_child";

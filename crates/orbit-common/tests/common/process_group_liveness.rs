@@ -181,6 +181,7 @@ fn completed_ownership_and_unsafe_group_ids_never_signal_live_peers() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn bounded_timeout_reaps_a_child_that_moves_into_the_callers_group() {
     use std::io::{Read, Write};
