@@ -272,3 +272,242 @@ pub(crate) fn prerequisite_read_after_mutation_provenance_never_resumes() {
         TaskStatus::Done
     );
 }
+
+/// Substitute `gh` for one completion observation. `required` starts BLOCKED so
+/// the required-checks query runs; `merge` starts CLEAN so the first provider
+/// read after status is the merge-capability query. `kind` fails that read once.
+fn observation_forge(f: &Fixture, mode: &str, kind: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let root = f._root.path();
+    let calls = root.join("observation-calls");
+    let lost = root.join("lost-read");
+    let merged = root.join("merged");
+    let file = |name: &str, value: Value| {
+        let path = root.join(name);
+        std::fs::write(&path, value.to_string()).unwrap();
+        path
+    };
+    let head = &f.head;
+    let mut answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
+    answer["isDraft"] = json!(false);
+    answer["mergeStateStatus"] = json!("BLOCKED");
+    answer["statusCheckRollup"] = json!([
+        {"name":"native","status":"COMPLETED","conclusion":"SUCCESS"}
+    ]);
+    let blocked = file("observation-blocked.json", answer.clone());
+    answer["mergeStateStatus"] = json!("CLEAN");
+    let clean = file("observation-clean.json", answer.clone());
+    answer["state"] = json!("MERGED");
+    answer["mergeCommit"] = json!({"oid":head});
+    answer["mergedAt"] = json!("2026-10-17T12:00:00Z");
+    let landed = file("observation-merged.json", answer);
+    let required = file(
+        "observation-required.json",
+        json!({"data":{"repository":{"pullRequest":{"headRefOid":head,"commits":{"nodes":[{"commit":{
+            "oid":head,"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[
+                {"__typename":"CheckRun","name":"native","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true}
+            ]}}
+        }}]}}}}}),
+    );
+    let cat = |path: &PathBuf| format!("cat '{}'", path.display());
+    let gh = root.join("bin/gh");
+    std::fs::write(
+        &gh,
+        format!(
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> '{calls}'
+fault_read() {{
+    if [ -f '{lost}' ]; then
+        return 1
+    fi
+    touch '{lost}'
+    case '{kind}' in
+        tls)
+            echo 'Get "https://api.github.com/repos/owner/repository/commits/abc/status?per_page=100": tls: handshake timeout' >&2
+            exit 1 ;;
+        http500)
+            echo 'gh: HTTP 500' >&2
+            exit 1 ;;
+        forbidden)
+            echo 'gh: Resource not accessible by integration (HTTP 403)' >&2
+            exit 1 ;;
+        credentials)
+            echo 'gh: Bad credentials (HTTP 401)' >&2
+            exit 1 ;;
+        malformed)
+            printf '%s\n' 'not-json'
+            exit 0 ;;
+        *) echo "unknown fault {kind}" >&2; exit 98 ;;
+    esac
+}}
+case "$*" in
+ 'pr view'*)
+    if [ -f '{merged}' ]; then {landed}
+    elif [ -f '{lost}' ] || [ '{mode}' = merge ]; then {clean}
+    else {blocked}
+    fi ;;
+ 'repo view'*) echo '{{"nameWithOwner":"owner/repository"}}' ;;
+ 'api graphql'*'isRequired(pullRequestNumber'*)
+    if [ '{mode}' = required ]; then fault_read || true; fi
+    {required} ;;
+ 'api graphql'*autoMergeAllowed*)
+    if [ '{mode}' = merge ]; then fault_read || true; fi
+    echo '{{"data":{{"repository":{{"autoMergeAllowed":false,"mergeCommitAllowed":true,"rebaseMergeAllowed":false,"squashMergeAllowed":false,"pullRequest":{{"baseRefName":"main","baseRef":{{"branchProtectionRule":null}}}}}}}}}}' ;;
+ 'api repos/{{owner}}/{{repo}}/pulls/17/merge'*) touch '{merged}'; printf '{{"merged":true,"sha":"{head}"}}' ;;
+ *) echo "unknown gh $*" >&2; exit 99 ;;
+esac
+"#,
+            calls = calls.display(),
+            lost = lost.display(),
+            kind = kind,
+            merged = merged.display(),
+            landed = cat(&landed),
+            mode = mode,
+            clean = cat(&clean),
+            blocked = cat(&blocked),
+            required = cat(&required),
+            head = head,
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    calls
+}
+
+fn assert_resumed_merge(
+    f: &Fixture,
+    checkout: &PathBuf,
+    calls: PathBuf,
+    token: &str,
+    reread: bool,
+) {
+    let state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    let outcome = run_tail(f).unwrap();
+    assert!(outcome.success, "{outcome:?}");
+    let requests = std::fs::read_to_string(calls).unwrap();
+    let requests = requests.lines().collect::<Vec<_>>();
+    let failed = requests
+        .iter()
+        .position(|line| line.contains(token))
+        .unwrap_or_else(|| panic!("the {token} read ran: {requests:#?}"));
+    let next_view = requests[failed + 1..]
+        .iter()
+        .position(|line| line.starts_with("pr view"))
+        .unwrap_or_else(|| panic!("fresh observation after the failed read: {requests:#?}"));
+    let fresh = failed + 1 + next_view;
+    assert!(
+        !requests[failed + 1..fresh]
+            .iter()
+            .any(|line| line.contains(token) || line.contains("/pulls/17/merge")),
+        "the failed read is not retried in-process and does not count as passing checks: {requests:#?}"
+    );
+    let later = requests[fresh..]
+        .iter()
+        .filter(|line| line.contains(token))
+        .count();
+    assert_eq!(
+        later,
+        usize::from(reread),
+        "the resumed completion reads the provider again only when that read is still required: {requests:#?}"
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|line| line.contains("/pulls/17/merge"))
+            .count(),
+        1,
+        "one merge after the fresh observation"
+    );
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().status,
+        TaskStatus::Done
+    );
+    assert_eq!(git(checkout, &["rev-parse", "HEAD"]), f.head);
+    assert_eq!(
+        std::fs::read_to_string(f._root.path().join("pushes"))
+            .unwrap()
+            .lines()
+            .count(),
+        1,
+        "completion never pushes"
+    );
+    let after = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    for (index, output) in &state.step_outputs {
+        assert_eq!(after.step_output(*index), Some(output), "immutable prefix");
+    }
+    let recovery = after.final_recovery.unwrap();
+    assert!(matches!(
+        recovery.decision,
+        Some(orbit_types::workflow::FinalRecoveryDecision::Resume { .. })
+    ));
+    assert!(state.completion_deadlines.is_empty());
+    assert_eq!(
+        after.completion_deadlines.len(),
+        1,
+        "the resumed observation keeps the first attempt's cumulative budget"
+    );
+    assert_eq!(
+        f.runtime
+            .get_task_history(&f.task)
+            .unwrap()
+            .iter()
+            .filter(|row| row.event == orbit_types::workflow::PR_COMPLETION_MUTATION_STARTED_EVENT)
+            .count(),
+        1,
+        "only the resumed merge is a completion mutation"
+    );
+}
+
+/// [ORB-16340] A REST TLS handshake timeout on the required-checks read, and an
+/// HTTP 5xx on the merge-capability read, resume only that completion.
+pub(crate) fn transient_required_check_and_merge_capability_reads_resume_completion() {
+    for (mode, kind, token, reread) in [
+        ("required", "tls", "isRequired(pullRequestNumber", false),
+        ("merge", "http500", "autoMergeAllowed", true),
+    ] {
+        let (mut f, checkout) = fixture();
+        configure_review(&mut f, &checkout);
+        let calls = observation_forge(&f, mode, kind);
+        assert_resumed_merge(&f, &checkout, calls, token, reread);
+    }
+}
+
+/// Auth, permission, other permanent 4xx answers, and a malformed provider
+/// body stay terminal. None of them resumes completion or merges.
+pub(crate) fn permanent_required_check_and_merge_capability_answers_do_not_resume() {
+    for (mode, kind, token) in [
+        ("required", "forbidden", "isRequired(pullRequestNumber"),
+        ("merge", "credentials", "autoMergeAllowed"),
+        ("required", "malformed", "isRequired(pullRequestNumber"),
+    ] {
+        let (mut f, checkout) = fixture();
+        configure_review(&mut f, &checkout);
+        let calls = observation_forge(&f, mode, kind);
+        assert!(run_tail(&f).is_err(), "{kind} on {mode} resumed completion");
+        let requests = std::fs::read_to_string(calls).unwrap();
+        assert!(
+            requests.contains(token),
+            "{kind} never reached {token}: {requests}"
+        );
+        assert!(
+            !requests.contains("/pulls/17/merge"),
+            "{kind} merged: {requests}"
+        );
+        assert!(
+            !matches!(
+                f.runtime
+                    .read_run_state(&f.source.run_id)
+                    .unwrap()
+                    .unwrap()
+                    .final_recovery
+                    .and_then(|recovery| recovery.decision),
+                Some(orbit_types::workflow::FinalRecoveryDecision::Resume { .. })
+            ),
+            "{kind} was classified as a read-only observation retry"
+        );
+        assert_ne!(
+            f.runtime.get_task(&f.task).unwrap().status,
+            TaskStatus::Done
+        );
+    }
+}

@@ -49,31 +49,48 @@ pub(super) fn execute_with_transient_retry(
 }
 
 /// True when a private automation VCS failure looks like a transient GitHub
-/// gateway or GraphQL failure (502/503/504, a request timeout, or GitHub's
-/// generic "Something went wrong while executing your query" response) rather
-/// than a permanent failure such as auth, an unknown head, or an invalid
-/// selector. Permanent failures must fail on the first attempt.
+/// gateway, REST transport, or GraphQL failure: any three-digit HTTP 5xx, a
+/// TLS handshake timeout (`net/http: TLS handshake timeout` or
+/// `tls: handshake timeout`) even when the URL is not GraphQL, a request
+/// timeout, or GitHub's generic "Something went wrong while executing your
+/// query" response. Permanent failures such as auth, an unknown head, or an
+/// invalid selector must fail on the first attempt. [ORB-16340]
 pub(in crate::executor::automation::vcs) fn is_transient_github_failure(message: &str) -> bool {
     let text = message.to_ascii_lowercase();
-    text.contains("http 502")
-        || text.contains("http 503")
-        || text.contains("http 504")
+    transient_http_5xx(&text)
         || text.contains("we couldn't respond to your request in time")
         || (text.contains("graphql")
             && text.contains("something went wrong while executing your query"))
         || (text.contains("graphql") && text.contains("timeout"))
+        || text.contains("tls handshake timeout")
+        || text.contains("tls: handshake timeout")
 }
 
-/// True when a failed read-only provider observation is a transport failure:
-/// a transient answer as above, or a TLS handshake timeout. A credential,
-/// permission, permanent HTTP, malformed-answer or deadline diagnostic
-/// anywhere in the message disqualifies it, as does unreadable, truncated or
-/// changed prerequisite evidence.
+/// `HTTP 500` through `HTTP 599`. A longer token (`http 5000`) and a URL
+/// (`https://`) do not match.
+fn transient_http_5xx(text: &str) -> bool {
+    text.match_indices("http ").any(|(index, prefix)| {
+        let status = &text[index + prefix.len()..];
+        let bytes = status.as_bytes();
+        bytes.len() >= 3
+            && bytes[0] == b'5'
+            && bytes[1].is_ascii_digit()
+            && bytes[2].is_ascii_digit()
+            && bytes.get(3).is_none_or(|byte| !byte.is_ascii_digit())
+    })
+}
+
+/// True when a failed read-only provider observation is a transport failure.
+/// A credential, permission, permanent HTTP, malformed-answer or deadline
+/// diagnostic anywhere in the message disqualifies it, as does unreadable,
+/// truncated or changed prerequisite evidence. TLS and HTTP 5xx recognition
+/// lives in [`is_transient_github_failure`], so a REST handshake timeout is
+/// not limited to the completion-observation wrapper.
 pub(in crate::executor::automation::vcs) fn is_transient_observation_failure(
     message: &str,
 ) -> bool {
     let text = message.to_ascii_lowercase();
-    (is_transient_github_failure(&text) || text.contains("tls handshake timeout"))
+    is_transient_github_failure(&text)
         && ![
             "http 400",
             "http 401",
