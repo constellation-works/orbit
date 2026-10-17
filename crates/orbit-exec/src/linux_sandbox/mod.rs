@@ -5,7 +5,8 @@
 //! write confinement, not a general read-policy implementation. It has two
 //! read boundaries, both masks emitted after policy mounts: the fixed
 //! well-known credential locations (`~/.ssh`, `~/.aws`, `~/.config/gh`, cargo
-//! publish tokens, ...) that the macOS profile also denies, shared through
+//! publish tokens, and the default Linux browser profile roots) that the macOS
+//! profile also denies, shared through
 //! [`crate::credential_paths`], and an explicit caller-named mask of
 //! directories hidden behind a read-only stand-in (see [`LinuxBwrapMask`]).
 //! Linux additionally masks `/run/user/<uid>` and an absolute

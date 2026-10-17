@@ -180,7 +180,15 @@ look ready.
 The Linux boundary enforces writes from the resolved policy. It leaves host filesystem
 reads and host network access available, so it does not provide worktree-only reads or
 policy-gated network egress. Well-known credential locations are masked inside the
-sandbox. Existing per-user runtime directories (`/run/user/<uid>` and absolute
+sandbox, including the default Linux browser profile roots `~/.config/google-chrome`,
+`~/.config/chromium`, `~/.config/BraveSoftware/Brave-Browser` and
+`~/.mozilla/firefox`. A browser root that does not exist at launch is skipped.
+`XDG_CONFIG_HOME` overrides (any config home other than `~/.config`), Firefox
+profiles outside `~/.mozilla/firefox` (snap and flatpak included), snap copies
+of Chrome or Chromium, channel directories, other browsers, and an explicit
+user-data directory are not masked. `~/.local/chromium-deps` stays readable.
+See [SECURITY.md](../../SECURITY.md) for the full bound. Existing per-user
+runtime directories (`/run/user/<uid>` and absolute
 `XDG_RUNTIME_DIR`) are also hidden, so session D-Bus, systemd user-manager,
 SSH-agent and GPG-agent sockets there cannot be reached by the worker or its
 children. Policy grants inside those directories refuse the launch. Providers
