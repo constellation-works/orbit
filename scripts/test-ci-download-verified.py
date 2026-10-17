@@ -386,12 +386,15 @@ class VerifiedDownloadTests(unittest.TestCase):
                hang_quiet=None, step="verified download"):
         env = self.env
         if deadline:
-            launcher = self.bin / "python3"
+            deadline_bin = self.root / "deadline-bin"
+            deadline_bin.mkdir(exist_ok=True)
+            launcher = deadline_bin / "python3"
             launcher.write_text(f"#!{sys.executable}\n" + DEADLINE_PYTHON)
             launcher.chmod(0o755)
             clock = self.root / "fake-clock"
             clock.write_text("0.000000\n")
-            env = dict(env, DOWNLOAD_EXPECT_READY=stage,
+            env = dict(env, PATH=f"{deadline_bin}:{env['PATH']}",
+                       DOWNLOAD_EXPECT_READY=stage,
                        ORBIT_CI_DOWNLOAD_FAKE_CLOCK=str(clock))
         return run_step([str(HELPER), url, digest or hashlib.sha256(BODY).hexdigest(),
                          str(self.destination), "--budget-seconds", str(budget)],
@@ -464,7 +467,9 @@ class VerifiedDownloadTests(unittest.TestCase):
                 self.assert_clean()
         self.configure([response()])
         self.destination.write_bytes(BODY)
-        self.assertNotEqual(self.invoke().returncode, 0)
+        result = self.invoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("destination already exists; refusing stale bytes", result.stderr)
         self.assertEqual(self.calls(), [], "an existing archive must not bypass verification")
         self.assertEqual(self.destination.read_bytes(), BODY)
 
