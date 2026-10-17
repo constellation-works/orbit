@@ -3,11 +3,14 @@ use orbit_common::fs::io::hold_step;
 use orbit_common::security::release::sha256_hex;
 use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_types::task::TaskStatus;
-use orbit_types::workflow::ReviewGateHistoryNote;
+use orbit_types::workflow::{ClaimFailureClass, ReviewGateHistoryNote};
 
 use super::super::TaskCommitBoundary;
 use super::super::landing::LandingStop;
-use super::codec::{CLAIM, RECEIPT, RELEASE_BUDGET, RELEASE_BUDGET_WINDOW_HOURS, STATE};
+use super::codec::{
+    CLAIM, OWNER_BUSY_RELEASE_ALLOWANCE, RECEIPT, RELEASE_BUDGET, RELEASE_BUDGET_WINDOW_HOURS,
+    STATE,
+};
 use super::releases::release_budget_comment;
 use super::{ClaimAuthority, MutationReceipt, decode, decode_state, encode, invalid, row};
 use crate::contracts::*;
@@ -544,10 +547,25 @@ impl TaskCommitBoundary {
                         return Err(invalid("claim release requires a reason"));
                     };
                     let released_at = Utc::now();
+                    // A busy owner exempts a release only for a `transient`
+                    // failure, and only for the task's first few such releases
+                    // in the budget window; any other is an ordinary release.
+                    let failure = match &value.failure {
+                        Some(failure) if failure.owner_busy => {
+                            let exempt = failure.class == ClaimFailureClass::Transient
+                                && self.owner_busy_releases(&claim.task_id, released_at)?.len()
+                                    < OWNER_BUSY_RELEASE_ALLOWANCE;
+                            Some(ClaimFailure {
+                                owner_busy: exempt,
+                                ..failure.clone()
+                            })
+                        }
+                        failure => failure.clone(),
+                    };
                     // [ORB-14257] A typed failure releases only when its class
                     // does not block and the task's release budget allows it. A
                     // provider usage limit is not counted [ORB-14695].
-                    let blocked = match &value.failure {
+                    let blocked = match &failure {
                         Some(failure) if failure.class.blocks() => Some(None),
                         Some(failure) if failure.budgeted() => {
                             let earlier = self.budgeted_releases(&claim.task_id, released_at)?;
@@ -557,7 +575,7 @@ impl TaskCommitBoundary {
                         }
                         _ => None,
                     };
-                    state.release = value.failure.as_ref().map(|failure| ClaimReleaseRecord {
+                    state.release = failure.as_ref().map(|failure| ClaimReleaseRecord {
                         class: failure.class,
                         reason: failure.reason.clone(),
                         released_at: released_at.to_rfc3339(),

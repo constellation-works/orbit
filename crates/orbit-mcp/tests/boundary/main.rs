@@ -7,6 +7,8 @@
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[cfg(unix)]
+mod busy_owner_route;
 mod capability;
 mod dep_boundary;
 mod federated_routing;

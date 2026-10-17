@@ -264,6 +264,29 @@ impl TaskCommitBoundary {
         task_id: &str,
         now: chrono::DateTime<Utc>,
     ) -> Result<Vec<ClaimReleaseRecord>, OrbitError> {
+        self.releases_in_budget_window(task_id, now, ClaimReleaseRecord::budgeted)
+    }
+
+    /// The releases of `task_id` inside its release-budget window at `now`
+    /// that a busy owner exempted from the budget, oldest first
+    /// ([`super::codec::OWNER_BUSY_RELEASE_ALLOWANCE`]).
+    pub(super) fn owner_busy_releases(
+        &self,
+        task_id: &str,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<Vec<ClaimReleaseRecord>, OrbitError> {
+        self.releases_in_budget_window(task_id, now, |record| record.owner_busy)
+    }
+
+    /// The releases of `task_id` that `keep` selects, inside the budget window
+    /// at `now` and after the last release that exhausted the budget, oldest
+    /// first.
+    fn releases_in_budget_window(
+        &self,
+        task_id: &str,
+        now: chrono::DateTime<Utc>,
+        keep: impl Fn(&ClaimReleaseRecord) -> bool,
+    ) -> Result<Vec<ClaimReleaseRecord>, OrbitError> {
         let at = |record: &ClaimReleaseRecord| {
             chrono::DateTime::parse_from_rfc3339(&record.released_at)
                 .map(|at| at.with_timezone(&Utc))
@@ -275,7 +298,9 @@ impl TaskCommitBoundary {
             if state.claim.task_id != task_id {
                 continue;
             }
-            if let Some(record) = state.release.filter(ClaimReleaseRecord::budgeted) {
+            if let Some(record) = state.release
+                && (record.budget_exhausted || keep(&record))
+            {
                 releases.push((at(&record)?, record));
             }
         }

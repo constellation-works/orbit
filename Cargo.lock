@@ -1985,6 +1985,7 @@ dependencies = [
  "orbit-tools",
  "orbit-types",
  "rmcp",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",

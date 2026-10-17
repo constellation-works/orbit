@@ -520,15 +520,25 @@ impl DestinationSession {
     /// The failure of a session that ended before a request with no effect
     /// was answered — nothing on the destination ran.
     ///
-    /// It is an unreachable host, unless the destination's own diagnostic
-    /// says its store stayed locked: Orbit on that host started and gave up
-    /// waiting for its database, which is how a busy owner fails a fresh
-    /// session. That host was reached and decided nothing, so the failure is
-    /// typed as the destination's `lock_busy` answer. A caller may retry it
-    /// briefly, and a follower drain does not hold the busy owner against the
-    /// executing host as it would an owner it cannot reach.
+    /// It is an unreachable host, unless Orbit on that host exited on its
+    /// own locked store: ssh carried the remote command's exit (not its own
+    /// 255), and the remote `orbit`'s final error — the last stderr line,
+    /// which `orbit` writes as `error: <error>` when a command fails — is a
+    /// lock-wait failure ([`orbit_common::is_lock_busy_message`]). That is
+    /// how a busy owner fails a fresh session. Warnings `orbit` traced
+    /// earlier on the stream, and ssh's own diagnostics, are not read. That
+    /// host was reached and decided nothing, so the failure is typed as the
+    /// destination's `lock_busy` answer. A caller may retry it briefly, and a
+    /// follower drain does not hold the busy owner against the executing
+    /// host as it would an owner it cannot reach.
     fn ended_unanswered(&mut self, reason: String) -> OrbitError {
-        let busy = reports_store_contention(self.stderr.settled());
+        let exit = self.exit_code();
+        let busy = exit.is_some_and(|code| code != SSH_FAILURE_EXIT)
+            && self
+                .stderr
+                .last_line()
+                .strip_prefix(ORBIT_ERROR_PREFIX)
+                .is_some_and(orbit_common::is_lock_busy_message);
         let reason = self.ended(reason);
         if !busy {
             return unreachable(&self.destination, reason);
@@ -537,6 +547,21 @@ impl DestinationSession {
             code: LOCK_BUSY_ERROR_CODE.to_string(),
             message: format!("{}: {reason}", self.destination.machine_id),
             payload: json!({ "code": LOCK_BUSY_ERROR_CODE, "message": reason }),
+        }
+    }
+
+    /// The session process's exit code once it has ended, waiting briefly;
+    /// `None` while it still runs or when a signal ended it.
+    fn exit_code(&mut self) -> Option<i32> {
+        let deadline = Instant::now() + STDERR_SETTLE_GRACE;
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(status)) => return status.code(),
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Ok(None) | Err(_) => return None,
+            }
         }
     }
 
@@ -619,6 +644,8 @@ struct StderrTail {
     /// The kept bytes, delivered once the stream closes.
     pending: Option<Receiver<Vec<u8>>>,
     tail: String,
+    /// The stream's last non-empty line, whole.
+    last_line: String,
 }
 
 impl StderrTail {
@@ -627,6 +654,7 @@ impl StderrTail {
             return Self {
                 pending: None,
                 tail: String::new(),
+                last_line: String::new(),
             };
         };
         let (sender, pending) = sync_channel(1);
@@ -650,6 +678,7 @@ impl StderrTail {
         Self {
             pending: Some(pending),
             tail: String::new(),
+            last_line: String::new(),
         }
     }
 
@@ -662,35 +691,45 @@ impl StderrTail {
             && let Ok(bytes) = pending.recv_timeout(STDERR_SETTLE_GRACE)
         {
             self.tail = quote_tail(&bytes);
+            self.last_line = stderr_lines(&bytes).pop().unwrap_or_default();
         }
         &self.tail
     }
+
+    /// The stream's last non-empty line, control characters dropped; empty
+    /// when it carried none or stayed open.
+    fn last_line(&mut self) -> &str {
+        self.settled();
+        &self.last_line
+    }
 }
 
-/// Whether a destination's stderr reports that Orbit there lost to its own
-/// lock-wait deadline: a SQLite store that stayed locked or busy, or an
-/// advisory file lock it timed out acquiring. The stream comes from another
-/// process, so its text is the only evidence available.
-fn reports_store_contention(stderr: &str) -> bool {
-    let stderr = stderr.to_ascii_lowercase();
-    stderr.contains("database is locked")
-        || stderr.contains("database is busy")
-        || stderr.contains("remained locked during")
-        || (stderr.contains("ms acquiring") && stderr.contains(" lock '"))
-}
+/// ssh's exit status for its own failure — a refused or dropped connection,
+/// an authentication failure — as opposed to the remote command's.
+const SSH_FAILURE_EXIT: i32 = 255;
 
-fn quote_tail(bytes: &[u8]) -> String {
-    let text = String::from_utf8_lossy(bytes);
-    let lines = text
+/// How a failed `orbit` command reports its error on stderr, as its last line.
+const ORBIT_ERROR_PREFIX: &str = "error: ";
+
+/// A stderr stream's non-empty lines, trimmed and with control characters
+/// dropped, because the text came from another host and ends up on a
+/// terminal.
+fn stderr_lines(bytes: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(bytes)
         .lines()
         .map(|line| {
             line.chars()
                 .filter(|character| !character.is_control())
                 .collect::<String>()
+                .trim()
+                .to_string()
         })
-        .map(|line| line.trim().to_string())
         .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+fn quote_tail(bytes: &[u8]) -> String {
+    let lines = stderr_lines(bytes);
     let quoted = lines[lines.len().saturating_sub(STDERR_TAIL_LINES)..].join(" | ");
     let skip = quoted.chars().count().saturating_sub(STDERR_TAIL_CHARS);
     quoted.chars().skip(skip).collect()

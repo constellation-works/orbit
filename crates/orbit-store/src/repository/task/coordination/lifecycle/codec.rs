@@ -16,6 +16,15 @@ pub(super) const FRICTION: &str = "distributed-claim-friction-v1";
 pub(super) const RELEASE_BUDGET: usize = 2;
 pub(super) const RELEASE_BUDGET_WINDOW_HOURS: i64 = 24;
 
+/// `transient` releases for the owner's own busy store
+/// (`ClaimFailure::owner_busy`) a task takes within
+/// [`RELEASE_BUDGET_WINDOW_HOURS`] outside its release budget. Each follower
+/// drain suppresses its host after a few busy episodes, but a task can still
+/// cycle across drains and followers while the owner stays busy; past this
+/// many, a busy release counts against the budget like any other `transient`
+/// one, and holds the task from the drain that released it.
+pub(super) const OWNER_BUSY_RELEASE_ALLOWANCE: usize = 3;
+
 pub(in super::super) fn invalid(message: &str) -> OrbitError {
     OrbitError::InvalidInput(message.into())
 }
