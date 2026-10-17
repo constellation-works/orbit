@@ -152,7 +152,9 @@ impl AllJobRunsState {
 /// Run ids are workspace-local, so every item carries its workspace identity.
 /// Unavailable sources remain in the response instead of being represented as
 /// an empty workspace, allowing the dashboard to distinguish partial data from
-/// a genuine zero-run result.
+/// a genuine zero-run result. `total` sums every available workspace's
+/// matching runs, independent of `limit`, so a count (the Jobs rail) can ask
+/// for a one-item page.
 ///
 /// Each per-workspace query already asks the store to order and truncate by
 /// [`JobRunOrder::Recency`] — the same `run_timestamp` this handler later
@@ -200,7 +202,7 @@ pub(super) fn all_job_runs_json(
     let pinned = state.pin();
     let mut candidates = Vec::new();
     let mut unavailable = Vec::new();
-    let mut source_truncated = false;
+    let mut total = 0_u64;
 
     for entry in pinned.entries() {
         if !entry.active {
@@ -222,8 +224,14 @@ pub(super) fn all_job_runs_json(
                 continue;
             }
         };
-        match workspace_job_runs(&runtime, limit, state_filter, scope) {
-            Ok(runs) => {
+        let page = workspace_job_runs(&runtime, limit, state_filter, scope).and_then(|runs| {
+            Ok((
+                runs,
+                workspace_job_run_count(&runtime, state_filter, scope)?,
+            ))
+        });
+        match page {
+            Ok((runs, count)) => {
                 let titles = match super::run_tasks::task_titles(&runtime, &runs) {
                     Ok(titles) => titles,
                     Err(error) => {
@@ -235,7 +243,7 @@ pub(super) fn all_job_runs_json(
                         continue;
                     }
                 };
-                source_truncated |= runs.len() == limit;
+                total = total.saturating_add(count);
                 candidates.extend(runs.into_iter().map(|run| {
                     let mut value = job_run_to_json(&run, None);
                     super::run_tasks::add_tasks(&mut value, &run, &titles);
@@ -258,8 +266,8 @@ pub(super) fn all_job_runs_json(
                 .then_with(|| left.run_id.cmp(&right.run_id))
         },
     );
-    let truncated = source_truncated || candidates.len() > limit;
     candidates.truncate(limit);
+    let truncated = total > candidates.len() as u64;
     let items = candidates
         .into_iter()
         .map(|(_, workspace_id, workspace_name, mut value)| {
@@ -275,6 +283,7 @@ pub(super) fn all_job_runs_json(
         "items": items,
         "limit": limit,
         "state": state_filter.label(),
+        "total": total,
         "truncated": truncated,
         "unavailable": unavailable,
     })
@@ -307,6 +316,33 @@ fn workspace_job_runs(
         runs.extend(list(Some(run_state))?);
     }
     Ok(runs)
+}
+
+/// How many runs in one workspace match the filter, independent of `limit`.
+fn workspace_job_run_count(
+    runtime: &OrbitRuntime,
+    state_filter: AllJobRunsState,
+    scope: &JobRunScope,
+) -> Result<u64, orbit_core::OrbitError> {
+    let count = |state| {
+        runtime.count_job_runs_observed(JobRunListParams {
+            job_id: scope.job_id.clone(),
+            task_id: scope.task_id.clone(),
+            state,
+            since: scope.since,
+            ..Default::default()
+        })
+    };
+    let states: &[JobRunState] = match state_filter {
+        AllJobRunsState::All => return count(None),
+        AllJobRunsState::Failed => &FAILED_RUN_STATES,
+        AllJobRunsState::Active => &[JobRunState::Pending, JobRunState::Running],
+    };
+    let mut total = 0_u64;
+    for &run_state in states {
+        total = total.saturating_add(count(Some(run_state))?);
+    }
+    Ok(total)
 }
 
 fn run_timestamp(run: &JobRun) -> DateTime<Utc> {

@@ -204,6 +204,7 @@ fn persistent_client_hands_over_to_a_local_candidate_update() {
             "--workspace",
             "ws_mcp-roundtrip",
         ])
+        .env(orbit_mcp::LIFECYCLE_INTERVAL_ENV, "50")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -585,6 +586,7 @@ fn a_replaced_mcp_server_defers_handover_until_a_large_partial_request_completes
             "--workspace",
             "ws_mcp-roundtrip",
         ])
+        .env(orbit_mcp::LIFECYCLE_INTERVAL_ENV, "50")
         .env("RUST_LOG", "orbit.mcp.handover=debug")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

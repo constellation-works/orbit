@@ -70,6 +70,7 @@ use tempfile::TempDir;
 mod absent_context;
 pub(super) use absent_context::adopted_policy_cases;
 mod auto_fix;
+mod check_annotations;
 mod flaky;
 mod infrastructure;
 #[cfg(target_os = "linux")]
@@ -7978,6 +7979,15 @@ status() {
             observed=failure
         fi
     fi
+    # A provider app's required aggregate fails beside its passing analysis
+    # job; the mixed form also fails the workflow check `test`.
+    case "$observed" in source_aggregate|source_aggregate_mixed)
+        if [ "$(git --git-dir="$remote" show "$(head_sha):src/contract" )" = fixed ]; then
+            observed=success
+        else
+            observed="${observed#source_}_failure"
+        fi ;;
+    esac
     state=OPEN
     reported_head=$(head_sha)
     if [ -f "$forge/heads" ]; then
@@ -8000,6 +8010,10 @@ status() {
         pending) merge_state=BLOCKED; rollup=$(check pending) ;;
         success) merge_state=CLEAN; rollup=$(check success) ;;
         failure) merge_state=BLOCKED; rollup=$(check failure) ;;
+        aggregate_failure|aggregate_mixed_failure)
+            merge_state=BLOCKED
+            rollup='{"__typename":"CheckRun","name":"CodeQL","workflowName":"","status":"COMPLETED","conclusion":"FAILURE"},{"__typename":"CheckRun","name":"Analyze (rust)","workflowName":"CodeQL","status":"COMPLETED","conclusion":"SUCCESS"}'
+            [ "$observed" = aggregate_failure ] || rollup="$rollup,$(check failure)" ;;
         prerequisite)
             merge_state=BLOCKED
             rollup='{"__typename":"CheckRun","name":"Read state","workflowName":"Guarded CI","status":"COMPLETED","conclusion":"FAILURE"}'
