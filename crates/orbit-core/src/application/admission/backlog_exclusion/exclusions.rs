@@ -1,7 +1,7 @@
-use orbit_engine::DispatchError;
 use orbit_types::task::{ReadinessGap, ReadinessStage, Task, TaskOsRequirement, readiness_gaps};
 
 use super::super::auto_admission::{DeferralReason, DeferredAdmission};
+use super::super::pass_error::PassError;
 use super::{BacklogTaskConflict, BacklogTaskExclusion, BacklogTaskExclusionReason};
 use crate::OrbitRuntime;
 use crate::application::task::PilotAdmissionHold;
@@ -106,13 +106,10 @@ pub(super) fn pilot_finding_exclusion(
     runtime: &OrbitRuntime,
     action: &str,
     task: &Task,
-) -> Result<Option<BacklogTaskExclusion>, DispatchError> {
-    let hold = runtime.pilot_admission_hold(&task.id).map_err(|error| {
-        DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: format!("read pilot findings: {error}"),
-        }
-    })?;
+) -> Result<Option<BacklogTaskExclusion>, PassError> {
+    let hold = runtime
+        .pilot_admission_hold(&task.id)
+        .map_err(|error| PassError::store(action, "read pilot findings", error))?;
     Ok(hold.and_then(|hold| {
         let (reason, detail) = match hold {
             PilotAdmissionHold::HostOperational(hold) => (

@@ -33,7 +33,7 @@ pub use clock::{
     load_clock_settings, probe_program_version, save_clock_settings, set_clock_cadence,
     set_clock_enabled,
 };
-pub use due::{DueDecision, due_decision, parse_cron};
+pub use due::{DueDecision, due_decision, minimum_cron_interval, parse_cron};
 pub use loader::{
     DiscoveredWorkspaces, HostRoutines, LoadedRoutine, OwnerOnlyRoutine, REPLICA_LOCAL_ROUTINE_JOB,
     RetiredRoutine, RoutineCollection, RoutineLoadError, RoutineOrigin, RoutineWorkspaceProvider,

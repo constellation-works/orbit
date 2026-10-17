@@ -560,7 +560,7 @@ define_config_settings! {
     },
     workflow_provider_limit_overrides: Vec<String> => Vec<String> {
         key: "workflow.provider_limit_overrides", value_type: "array<string>",
-        description: "Per-provider thresholds replacing `workflow.provider_limit_max_used_pct`, each `provider:percent` with a percent in 1..=100 and each provider named once; aliases such as `anthropic` resolve to their provider.",
+        description: "Per-provider thresholds replacing `workflow.provider_limit_max_used_pct`, each `provider:percent` (a percent in 1..=100) or `provider:off` (record readings without gating admission), each provider named once; aliases such as `anthropic` resolve to their provider.",
         section: ConfigSection::Delivery, order: 107,
         resolve: |raw: Option<Vec<String>>| crate::provider_limit::admit_overrides(raw),
     },

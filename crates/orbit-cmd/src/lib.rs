@@ -20,6 +20,10 @@
 //! seeding) invoke remain in `orbit_core::adapter::command`; see
 //! `ARCHITECTURE.md` for the boundary.
 
+// A bare `cargo test` from a managed-run shell must match one from a clean shell.
+#[cfg(test)]
+orbit_common::isolate_test_process!();
+
 pub mod agent_rules;
 mod diagnostics;
 mod doctor;

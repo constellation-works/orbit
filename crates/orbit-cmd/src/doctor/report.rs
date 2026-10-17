@@ -265,9 +265,10 @@ fn provider_limit_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
 
 /// [ORB-14698] One `provider-limits:<provider>` row per provider an enabled
 /// crew uses, from the host's provider-limit view: `warning` while a reading
-/// gates it (window, use, reset and skipped crews), `ok` below its threshold,
-/// and `info` for a provider that reports no usage, whose limits Orbit learns
-/// only from failures. The system and review lanes are not gated, so one
+/// gates it (window, use, reset and skipped crews), `ok` below its threshold
+/// or when `provider:off` has turned the gate off (the row says gating is
+/// off), and `info` for a provider that reports no usage, whose limits Orbit
+/// learns only from failures. The system and review lanes are not gated, so one
 /// whose crew's provider is gated gets its own warning. Each row comes with
 /// the provider it concerns; `None` for a row about every provider.
 pub fn provider_limit_findings(
@@ -317,7 +318,28 @@ pub fn provider_limit_findings(
                     gated.join("; "),
                     Some(
                         "Admission draws these crews again after the reset. To run closer to \
-                         the limit, raise `workflow.provider_limit_overrides` for this provider.",
+                         the limit, raise `workflow.provider_limit_overrides` for this provider, \
+                         or set it to `off` to record readings without gating.",
+                    ),
+                )
+            } else if provider.threshold.is_off() {
+                let described = readings
+                    .iter()
+                    .map(|reading| reading.describe(now))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let message = if described.is_empty() {
+                    format!("{}: gating is off", provider.provider)
+                } else {
+                    format!("{}: gating is off: {described}", provider.provider)
+                };
+                row(
+                    check_name,
+                    WorkspaceDoctorStatus::Ok,
+                    message,
+                    Some(
+                        "Readings are still recorded. A run that fails on a usage limit still \
+                         holds the task. Remove this provider's `off` override to gate again.",
                     ),
                 )
             } else if !provider.reports_usage && readings.is_empty() {

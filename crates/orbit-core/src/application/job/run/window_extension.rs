@@ -121,8 +121,9 @@ impl OrbitRuntime {
         let request_id = audit_execution_id("window_extend");
         let outcome = self.apply_drain_window_extension(request, &request_id);
         match &outcome {
-            Ok(change) => self.record_extension_completion(
-                request.run_id,
+            Ok(change) => self.record_drain_control_completion(
+                EXTEND_COMPLETION_AUDIT,
+                Some(request.run_id),
                 &request_id,
                 change.outcome.as_str(),
                 json!({
@@ -134,8 +135,9 @@ impl OrbitRuntime {
                 }),
                 None,
             )?,
-            Err(error) => self.record_extension_completion(
-                request.run_id,
+            Err(error) => self.record_drain_control_completion(
+                EXTEND_COMPLETION_AUDIT,
+                Some(request.run_id),
                 &request_id,
                 "rejected",
                 json!({ "for_seconds": request.for_seconds }),
@@ -339,39 +341,6 @@ impl OrbitRuntime {
                 "requested_at": Utc::now().to_rfc3339(),
             }),
             None,
-        )
-    }
-
-    fn record_extension_completion(
-        &self,
-        run_id: &str,
-        request_id: &str,
-        outcome: &str,
-        detail: Value,
-        error: Option<String>,
-    ) -> Result<(), OrbitError> {
-        let mut arguments = json!({
-            "request_id": request_id,
-            "run_id": run_id,
-            "outcome": outcome,
-            "completed_at": Utc::now().to_rfc3339(),
-        });
-        if let (Some(target), Some(detail)) = (arguments.as_object_mut(), detail.as_object()) {
-            for (key, value) in detail {
-                target.insert(key.clone(), value.clone());
-            }
-        }
-        self.record_pipeline_audit(
-            EXTEND_COMPLETION_AUDIT,
-            Some(run_id),
-            None,
-            if outcome == "rejected" {
-                AuditEventStatus::Failure
-            } else {
-                AuditEventStatus::Success
-            },
-            arguments,
-            error,
         )
     }
 }

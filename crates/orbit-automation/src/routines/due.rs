@@ -15,7 +15,7 @@
 //! render the second; the scheduler acts on the first. They disagree exactly
 //! when a missed slot is pending, and that disagreement is correct.
 
-use chrono::{DateTime, Duration, TimeZone, Timelike};
+use chrono::{DateTime, Duration, Local, TimeZone, Timelike, Utc};
 use croner::Cron;
 use orbit_common::OrbitError;
 use orbit_types::workflow::MissedRunPolicy;
@@ -54,6 +54,27 @@ pub enum DueDecision<Tz: TimeZone> {
         /// Whether this is a make-up fire rather than a natural one.
         is_catch_up: bool,
     },
+    /// The latest missed slot under `missed_run: skip`. Nothing is dispatched
+    /// for it. The sweep records this slot and the older unconsumed ones.
+    RecordSkip {
+        /// The scheduled slot that fell outside the natural-slot grace.
+        slot: DateTime<Tz>,
+    },
+}
+
+/// Detail stored on a fire when `missed_run: skip` consumes a slot without
+/// dispatching. Stable so `orbit routine list --json` and run history can
+/// show why the slot was skipped.
+pub const MISSED_SLOT_SKIP_DETAIL: &str = "missed_run: skip";
+
+/// Slots the sweep may record for one `missed_run: skip` pass. Due math stays
+/// O(1); this walk is capped by the caller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissedSlotWalk<Tz: TimeZone> {
+    /// Qualifying slots, oldest first, at most the requested limit.
+    pub slots: Vec<DateTime<Tz>>,
+    /// Another qualifying slot remains after `slots`.
+    pub more: bool,
 }
 
 /// Pin a scheduled occurrence to its minute (seconds and sub-seconds
@@ -97,6 +118,35 @@ pub fn next_occurrence<Tz: TimeZone>(
     // already lies in a later minute than `now`, so dropping its sub-minute
     // component cannot pull it back to or before `now`.
     Ok(truncate_to_minute(next))
+}
+
+/// Shortest gap between consecutive occurrences, sampled from the schedule
+/// after `origin`.
+///
+/// The gap from `origin` itself to the next slot is not an interval (an
+/// arbitrary clock falls in the middle of a period). Weekday and monthly
+/// crons contribute their shortest sampled gap, so a Mon–Fri hourly routine
+/// measures one hour rather than the weekend.
+pub fn minimum_cron_interval(cron: &Cron, origin: DateTime<Utc>) -> Result<Duration, OrbitError> {
+    const SAMPLE: usize = 16;
+    let mut previous = next_occurrence(cron, &origin.with_timezone(&Local))?.with_timezone(&Utc);
+    let mut shortest: Option<Duration> = None;
+    for _ in 0..SAMPLE {
+        let next = next_occurrence(cron, &previous.with_timezone(&Local))?.with_timezone(&Utc);
+        let gap = next.signed_duration_since(previous);
+        if gap <= Duration::zero() {
+            return Err(OrbitError::InvalidInput(
+                "cron occurrence did not advance while measuring its interval".to_string(),
+            ));
+        }
+        shortest = Some(match shortest {
+            Some(current) if current <= gap => current,
+            _ => gap,
+        });
+        previous = next;
+    }
+    shortest
+        .ok_or_else(|| OrbitError::InvalidInput("cron interval could not be measured".to_string()))
 }
 
 /// Decide whether a routine is due.
@@ -160,9 +210,55 @@ pub fn due_decision_with_grace<Tz: TimeZone>(
             slot: previous,
             is_catch_up: true,
         }),
-        // Wait for the next natural slot. The cursor is left untouched:
-        // correctness only needs slots to be after `lower_bound`, so an
-        // unconsumed missed slot simply never fires.
-        MissedRunPolicy::Skip => Ok(DueDecision::NotDue),
+        // The latest missed slot. Recording the gap is the sweep's job and
+        // stays outside this O(1) decision.
+        MissedRunPolicy::Skip => Ok(DueDecision::RecordSkip { slot: previous }),
     }
+}
+
+/// Slots strictly after `lower_bound` and at or before `through` (when
+/// `include_through`) that are already outside `natural_slot_grace`, oldest
+/// first. At most `limit` slots. [`MissedSlotWalk::more`] is set when another
+/// qualifying slot remains, so a caller can avoid jumping the cursor past it.
+pub fn missed_slots_through<Tz: TimeZone>(
+    cron: &Cron,
+    lower_bound: &DateTime<Tz>,
+    through: &DateTime<Tz>,
+    now: &DateTime<Tz>,
+    natural_slot_grace: Duration,
+    include_through: bool,
+    limit: usize,
+) -> Result<MissedSlotWalk<Tz>, OrbitError> {
+    let mut cursor = lower_bound.clone();
+    let mut slots = Vec::new();
+    let mut more = false;
+    if limit == 0 {
+        return Ok(MissedSlotWalk { slots, more });
+    }
+    loop {
+        let next = cron.find_next_occurrence(&cursor, false).map_err(|error| {
+            OrbitError::InvalidInput(format!("cron evaluation failed: {error}"))
+        })?;
+        let next = truncate_to_minute(next);
+        if next <= cursor {
+            return Err(OrbitError::InvalidInput(
+                "cron occurrence did not advance while recording missed slots".to_string(),
+            ));
+        }
+        let past_through = next > *through || (next == *through && !include_through);
+        if past_through {
+            break;
+        }
+        let age = now.clone().signed_duration_since(next.clone());
+        if age <= natural_slot_grace {
+            break;
+        }
+        if slots.len() == limit {
+            more = true;
+            break;
+        }
+        slots.push(next.clone());
+        cursor = next;
+    }
+    Ok(MissedSlotWalk { slots, more })
 }

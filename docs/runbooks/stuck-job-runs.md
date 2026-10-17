@@ -451,6 +451,16 @@ attempt by retrying completion in the same worker. It keeps the published commit
 SHA, PR and successful checkpoints; it does not reimplement, recommit or repush the
 candidate, or restart hosted CI. Final recovery must be enabled for the run.
 
+An eligible lookup is one of completion's authenticated reads made before any
+mutation: the PR status, required-check and merge-policy reads, and the
+base-refresh and missing-prerequisite evidence reads, such as a commit's combined
+status. Only a transport failure qualifies: a GitHub 502/503/504 or GraphQL
+timeout answer, or a TLS handshake timeout. Invalid or truncated evidence, a
+changed head, base, policy or identity, a credential, permission,
+administrative-rule or other permanent refusal, and an exhausted completion
+deadline keep their ordinary failure. A failed read never counts as passing
+required checks; the resumed completion reads them again.
+
 The host first authenticates the successful commit, preparation, synchronization,
 push and PR chain, exact clean checkout, current task ownership, remote branch
 lease and unchanged remote base. Native validation must have captured the same
@@ -748,7 +758,15 @@ repair: the wait lifts by itself at the next admission pass after the reset.
 To run it sooner, give the pool an unlimited member, set the task's `crew` to
 a crew on another provider, or raise the threshold
 (`workflow.provider_limit_max_used_pct`, or `workflow.provider_limit_overrides`
-for that provider). An explicitly crewed task waits by default; with
+for that provider). To keep using a provider whose plan window is exhausted
+while paid credits remain, set that provider's override to `off`
+(`["codex:off"]`). Readings stay recorded and shown: readiness JSON lists
+them with `threshold` `off` and `gated` false, and `orbit doctor`'s
+`provider-limits:<provider>` row says gating is off. No reading then limits
+a crew. A later run that actually fails on a usage limit still records the
+task's provider failure hold, which is the signal that paid credits have run
+out. Removing the `off` entry gates the same readings again. An explicitly
+crewed task waits by default; with
 `workflow.provider_limit_explicit_crews = "pool"` it is drawn from its
 complexity pool instead. See
 [CONFIG.md](../CONFIG.md#provider-usage-limits).

@@ -51,3 +51,12 @@ max-threads = 8
 [[profile.default.overrides]]
 filter = 'package(orbit-cli) & binary(mcp)'
 test-group = 'mcp-contracts'
+
+# Check-job only. GitHub's ubuntu runner has 4 vCPUs and keeps every nextest
+# slot busy, while about a fifth of slot time does not scale with CPU speed
+# (timers, deadlines, child waits). Two extra slots overlap that wait.
+# Inherits the default profile, including the group caps above. Local runs
+# stay on default unless they pass --profile ci. retries stays 0.
+[profile.ci]
+test-threads = 6
+retries = 0

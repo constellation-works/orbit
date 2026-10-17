@@ -1,51 +1,15 @@
 use orbit_core::AuditEvent;
+use orbit_types::telemetry::audit_event_base_json;
 use serde_json::{Value, json};
 
 use crate::output::color::{Domain, cell};
 use crate::output::table::{Column, Table};
 
 pub(super) fn audit_event_to_json(event: &AuditEvent) -> Value {
-    let mut value = json!({
-        "id": event.id,
-        "execution_id": event.execution_id,
-        "timestamp": event.timestamp.to_rfc3339(),
-        "command": event.command,
-        "subcommand": event.subcommand,
-        "tool_name": event.tool_name,
-        "target_type": event.target_type,
-        "target_id": event.target_id,
-        "role": event.role,
-        "status": event.status.to_string(),
-        "exit_code": event.exit_code,
-        "duration_ms": event.duration_ms,
-        "working_directory": event.working_directory,
-        "arguments_json": event.arguments_json,
-        "stdout_truncated": event.stdout_truncated,
-        "stderr_truncated": event.stderr_truncated,
-        "error_message": event.error_message,
-        "host": event.host,
-        "pid": event.pid,
-        "session_id": event.session_id,
-        "workspace_id": event.workspace_id,
-        "caller_machine_id": event.caller_machine_id,
-        "caller_machine_name": event.caller_machine_name,
-        "process_machine_id": event.process_machine_id,
-        "process_machine_name": event.process_machine_name,
-        "transport": event.transport,
-        "trace_id": event.trace_id,
-        "caller_ip": event.caller_ip,
-        "effective_capabilities": event.effective_capabilities,
-        "origin_session_id": event.origin_session_id,
-        "mcp_call_id": event.mcp_call_id,
-        "lease_id": event.lease_id,
-        "task_id": event.task_id,
-        "job_run_id": event.job_run_id,
-        "activity_id": event.activity_id,
-        "step_index": event.step_index,
-        // ORB-10890: named `self_reported_*` rather than `actor` precisely so
-        // a consumer cannot mistake it for the authenticated `role` above.
-        "self_reported_actor": event.self_reported_actor,
-    });
+    let mut value = audit_event_base_json(event);
+    // ORB-10890: named `self_reported_*` rather than `actor` precisely so
+    // a consumer cannot mistake it for the authenticated `role` above.
+    value["self_reported_actor"] = json!(event.self_reported_actor);
     value["plugin"] = json!(event.plugin);
     value["plugin_secrets"] = json!(event.plugin_secrets);
     value["plugin_secret_updates"] = json!(event.plugin_secret_updates);

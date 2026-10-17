@@ -715,6 +715,15 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   receipt for is closed (`Refused`) and its slot returned.
 - An unreachable owner is reported in the iteration output and retried; the
   drain never fails over to its own store.
+- The owner's own drain survives the same waits. An admission pass that
+  times out on the task commit lock or the database (`lock_busy`) admits
+  nothing, records `last_pass_error_code: lock_busy` with the lock error,
+  which names the holder's pid and section, on
+  `pipeline_state.drain_last_pass`, and waits the drain's poll interval
+  before the next pass retries; `orbit run show` reads `Admission pass
+  deferred: consecutive_failures=N`. Ten deferred passes in a row fail the
+  drain with that error, and any completed pass resets the count. Other
+  admission failures still fail the drain at once.
 - An owner that times out waiting on its task commit lock or its database
   answers `lock_busy`. So does an owner whose `orbit` exits on its locked store
   before it answers the follower's SSH session (`session ended before answering
@@ -1232,7 +1241,10 @@ one. From then on:
     stops for the one automatic repair, and the stop evidence carries the
     failed job, its signature and a log excerpt. A repair that is already
     spent stops in `review` instead. A base that has not moved, and is still
-    red, stops in `review` without a repair. The owner merges that head only
+    red, stops in `review` without a repair. `orbit run auto --auto-fix` uses
+    this same classification for that unmoved red base: it spends no repair
+    attempt, waits out its completion deadline, and stops with a base-red
+    reason. The owner merges that head only
     when it is a clean merge of the accepted candidate with a commit already
     on the landing branch.
     When the owner checkout has `origin`, adopting a newly observed updated

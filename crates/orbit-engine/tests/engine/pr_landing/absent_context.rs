@@ -309,7 +309,14 @@ fn unsupported_or_unproven_emission_never_updates_or_repairs() {
                         input["published_head_sha"] = json!(fx.head());
                         input["reviewed_head_sha"] = json!(fx.head());
                     }
-                    assert!(action(&host, "pr_complete", &input).is_err(), "{case}");
+                    let failure = action(&host, "pr_complete", &input).unwrap_err();
+                    assert!(
+                        !failure
+                            .to_string()
+                            .contains("completion_observation_unavailable:"),
+                        "unproven, changed or refused evidence is never a resumable read: \
+                         {case}: {failure}"
+                    );
                     assert!(
                         !fx.forge.join("mutations").exists(),
                         "no update/merge: {case}"
@@ -363,6 +370,132 @@ fn refresh_diagnostics(
         fx.forge.join("read-delay-entered").exists(),
         fx.forge.join("read-delay-finished").exists(),
     )
+}
+
+/// [ORB-16307] Only a transport failure of an authenticated read made before
+/// any mutation, within the cumulative budget, is a resumable completion
+/// observation. Permanent or credential refusals, an exhausted budget and
+/// durable mutation provenance keep their own failure.
+#[test]
+fn transient_prerequisite_read_resumes_only_before_any_mutation() {
+    const TLS: &str = "Get \"https://api.github.com/graphql\": net/http: TLS handshake timeout";
+    isolated(
+        "absent_context::transient_prerequisite_read_resumes_only_before_any_mutation",
+        |sandbox| {
+            for (case, matched, stderr, resumable) in [
+                ("emission_status", "/status?", TLS, true),
+                (
+                    "emission_gateway",
+                    "/status?",
+                    "gh: Service Unavailable (HTTP 503)",
+                    true,
+                ),
+                ("emission_policy", "requiredStatusChecks", TLS, true),
+                ("required_checks", "statusCheckRollup", TLS, true),
+                ("merge_policy", "autoMergeAllowed", TLS, true),
+                (
+                    "forbidden",
+                    "/status?",
+                    "gh: Resource not accessible by integration (HTTP 403)",
+                    false,
+                ),
+                (
+                    "credentials",
+                    "/status?",
+                    "gh: Bad credentials (HTTP 401)",
+                    false,
+                ),
+                ("not_found", "/status?", "gh: Not Found (HTTP 404)", false),
+                ("expired_budget", "/status?", TLS, false),
+                ("unknown_merge_outcome", "/status?", TLS, false),
+                ("after_base_update", "autoMergeAllowed", TLS, false),
+            ] {
+                in_fresh_row(sandbox, |row| {
+                    let (fx, host) = setup(row, NEW);
+                    fs::write(fx.forge.join("fault-match"), matched).unwrap();
+                    fs::write(fx.forge.join("fault-stderr"), stderr).unwrap();
+                    if case == "merge_policy" {
+                        // Already current and passing: the first read is the merge policy.
+                        fs::write(fx.forge.join("base-applied"), "current").unwrap();
+                    }
+                    if case == "unknown_merge_outcome" {
+                        RuntimeHost::apply_task_automation_update(
+                            &host,
+                            TASK_ID,
+                            TaskAutomationUpdate {
+                                append_history: vec![TaskHistoryEntry {
+                                    at: Utc::now(),
+                                    by: "system".into(),
+                                    event:
+                                        orbit_types::workflow::PR_COMPLETION_MUTATION_STARTED_EVENT
+                                            .into(),
+                                    note: Some("{}".into()),
+                                    from_status: None,
+                                    to_status: None,
+                                    operation_id: None,
+                                    decision: None,
+                                }],
+                                ..Default::default()
+                            },
+                        )
+                        .unwrap();
+                    }
+                    let mut input = fx.complete_input();
+                    input["auto_fix"] = json!(true);
+                    input["max_wait_seconds"] = json!(600);
+                    let hit = fx.forge.join("fault-hit");
+                    let failure = orbit_engine::test_support::with_prerequisite_clock(
+                        move || {
+                            let now = u64::try_from(
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_millis(),
+                            )
+                            .unwrap();
+                            // The budget runs out while the failed read is outstanding.
+                            if case == "expired_budget" && hit.exists() {
+                                now + 601_000
+                            } else {
+                                now
+                            }
+                        },
+                        |_, _| {},
+                        || action(&host, "pr_complete", &input),
+                    )
+                    .unwrap_err()
+                    .to_string();
+                    assert!(
+                        fx.forge.join("fault-hit").exists(),
+                        "{case}: the injected read ran: {failure}"
+                    );
+                    assert_eq!(
+                        failure.contains("completion_observation_unavailable:"),
+                        resumable,
+                        "{case}: {failure}"
+                    );
+                    let mutations =
+                        fs::read_to_string(fx.forge.join("mutations")).unwrap_or_default();
+                    let reservations = host
+                        .history(TASK_ID)
+                        .iter()
+                        .filter(|row| row.event == "pr_base_update_reserved")
+                        .count();
+                    if case == "after_base_update" {
+                        assert_eq!(mutations, "update\n", "{case}");
+                        assert_eq!(reservations, 1, "{case}");
+                    } else {
+                        assert_eq!(mutations, "", "{case}: no update or merge");
+                        assert_eq!(reservations, 0, "{case}");
+                    }
+                    assert!(
+                        pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).is_empty(),
+                        "{case}: no source agent"
+                    );
+                });
+            }
+        },
+    );
 }
 
 #[test]

@@ -108,7 +108,8 @@ sys.exit(row.get("exit", 0))
 # This test-only python3 launcher executes the public helper's stdin unchanged.
 # The helper's fake clock, not this launcher, decides backoff and the watchdog.
 # Readiness is still an explicit fixture stage so cancellation barriers record
-# the same ordering. Ordinary regressions do not install this launcher.
+# the same ordering. Cases that need no backoff or deadline keep the real python3
+# and never install this launcher.
 DEADLINE_PYTHON = r'''
 import builtins, json, os, subprocess, sys, time
 from pathlib import Path
@@ -236,14 +237,20 @@ class VerifiedDownloadTests(unittest.TestCase):
                                str(self.destination), "--budget-seconds", str(budget)],
                               env=env, text=True, capture_output=True, timeout=8)
 
-    def deadline_events(self):
+    def deadline_events(self, *, active_limit=2):
         events = json.loads((self.root / "deadline-events.json").read_text())
         summary = json.loads((self.root / "deadline-summary.json").read_text())
-        self.assertLess(summary["active_seconds"], 2, summary)
+        self.assertLess(summary["active_seconds"], active_limit, summary)
         for event in events:
             if "pid" in event:
                 self.assertTrue(event["reaped"], event)
         return events
+
+    def backoffs(self, *, active_limit=2):
+        # Backoff sleeps run on the virtual clock, so the delays are recorded
+        # rather than waited out.
+        return [event["backoff"] for event in self.deadline_events(active_limit=active_limit)
+                if "backoff" in event]
 
     def assert_clean(self):
         self.assertEqual(list(self.root.glob(".ci-download-*")), [], "attempt bytes must be cleaned")
@@ -254,11 +261,12 @@ class VerifiedDownloadTests(unittest.TestCase):
         for code, status in rows:
             with self.subTest(curl_exit=code, http=status):
                 self.configure([response(code, status, body=b"partial old bytes"), response()])
-                result = self.invoke()
+                result = self.invoke(deadline=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(self.destination.read_bytes(), BODY)
                 calls = self.calls()
                 self.assertEqual(len(calls), 2)
+                self.assertEqual(self.backoffs(), [1])
                 self.assertNotEqual(calls[0][calls[0].index("--output") + 1],
                                     calls[1][calls[1].index("--output") + 1])
                 self.assertIn(f"curl_exit={code}", result.stderr)
@@ -289,7 +297,7 @@ class VerifiedDownloadTests(unittest.TestCase):
                      [response(6, "000"), response(body=None)]):
             with self.subTest(rows=rows):
                 self.configure(rows)
-                result = self.invoke()
+                result = self.invoke(deadline=True)
                 self.assertNotEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(len(self.calls()), len(rows))
                 self.assertFalse(self.destination.exists())
@@ -312,9 +320,10 @@ class VerifiedDownloadTests(unittest.TestCase):
 
     def test_attempt_and_wall_bounds_stop_and_reap_transport(self):
         self.configure([response(6, "000")])
-        result = self.invoke()
+        result = self.invoke(deadline=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(len(self.calls()), 3)
+        self.assertEqual(self.backoffs(active_limit=4), [1, 2])
         self.assertIn("attempt limit exhausted", result.stderr)
         self.assertFalse(self.destination.exists())
         self.assert_clean()
@@ -489,41 +498,82 @@ class VerifiedDownloadTests(unittest.TestCase):
         steps = {step.get("name"): step for step in workflow["jobs"]["ci"]["steps"]}
         tools = [("cargo-nextest", "NEXTEST", "cargo-nextest"),
                  ("cargo-deny", "CARGO_DENY", "cargo-deny-1.2.3-x86_64-unknown-linux-musl/cargo-deny"),
-                 ("uv", "UV", "uv-x86_64-unknown-linux-gnu/uv")]
+                 ("uv", "UV", "uv-x86_64-unknown-linux-gnu/uv"),
+                 ("ripgrep", "RIPGREP", "ripgrep-1.2.3-x86_64-unknown-linux-musl/rg")]
         # Execute workflow source in an isolated checkout; public helper is real.
-        scripts = self.root / "scripts"
-        scripts.mkdir()
-        (scripts / HELPER.name).symlink_to(HELPER)
         cargo = self.bin / "cargo"
         cargo.write_text('#!/usr/bin/env bash\nsub="$1"; shift\nexec "$CARGO_HOME/bin/cargo-$sub" "$@"\n')
         cargo.chmod(0o755)
-        cargo_home = self.root / "cargo"
         for tool, prefix, member in tools:
             for mode in ("valid", "digest", "archive", "version", "version-prefix"):
                 with self.subTest(tool=tool, mode=mode):
-                    version = {"version": "9.9.9", "version-prefix": "1.2.34"}.get(mode, "1.2.3")
-                    stream = io.BytesIO()
-                    with tarfile.open(fileobj=stream, mode="w:gz") as archive:
-                        content = f"#!/bin/sh\necho '{tool} {version}'\n".encode()
-                        info = tarfile.TarInfo(member)
-                        info.size, info.mode = len(content), 0o755
-                        archive.addfile(info, io.BytesIO(content))
-                    body = b"not an archive" if mode == "archive" else stream.getvalue()
-                    digest = hashlib.sha256(b"bad" if mode == "digest" else body).hexdigest()
-                    self.configure([response(body=body)])
-                    installed = cargo_home / "bin" / tool
-                    if installed.exists():
-                        installed.unlink()
-                    env = dict(self.env, CARGO_HOME=str(cargo_home),
-                               PATH=f"{self.bin}:{cargo_home / 'bin'}:{os.environ['PATH']}")
-                    env.update({f"{prefix}_VERSION": "1.2.3", f"{prefix}_LINUX_SHA256": digest})
-                    result = subprocess.run(["bash", "-euo", "pipefail", "-c", steps[f"Install {tool}"]["run"]],
-                                            cwd=self.root, env=env, capture_output=True, text=True, timeout=5)
-                    self.assertEqual(result.returncode == 0, mode == "valid", result.stderr)
-                    self.assertEqual(len(self.calls()), 1, "never retry extraction, digest or version failures")
-                    if mode in ("digest", "archive"):
-                        self.assertFalse(installed.exists(), "unverified bytes must never be installed")
-                    self.assertEqual(list((self.root / ".orbit/tmp").iterdir()), [], "installer trap cleans both outcomes")
+                    with tempfile.TemporaryDirectory(dir=self.root, prefix=f"case-{tool}-{mode}-") as case_dir:
+                        case_root = Path(case_dir)
+                        scripts = case_root / "scripts"
+                        scripts.mkdir()
+                        (scripts / HELPER.name).symlink_to(HELPER)
+                        cargo_home = case_root / "cargo"
+                        version = {"version": "9.9.9", "version-prefix": "1.2.34"}.get(mode, "1.2.3")
+                        stream = io.BytesIO()
+                        with tarfile.open(fileobj=stream, mode="w:gz") as archive:
+                            content = f"#!/bin/sh\necho '{tool} {version}'\n".encode()
+                            info = tarfile.TarInfo(member)
+                            info.size, info.mode = len(content), 0o755
+                            archive.addfile(info, io.BytesIO(content))
+                        body = b"not an archive" if mode == "archive" else stream.getvalue()
+                        digest = hashlib.sha256(b"bad" if mode == "digest" else body).hexdigest()
+                        self.configure([response(body=body)])
+                        env = dict(self.env, CARGO_HOME=str(cargo_home),
+                                   PATH=f"{self.bin}:{cargo_home / 'bin'}:{os.environ['PATH']}",
+                                   TMPDIR=str(case_root))
+                        env.update({f"{prefix}_VERSION": "1.2.3", f"{prefix}_LINUX_SHA256": digest})
+                        result = subprocess.run(["bash", "-euo", "pipefail", "-c", steps[f"Install {tool}"]["run"]],
+                                                cwd=case_root, env=env, capture_output=True, text=True, timeout=5)
+                        self.assertEqual(result.returncode == 0, mode == "valid", result.stderr)
+                        self.assertEqual(len(self.calls()), 1, "never retry extraction, digest or version failures")
+                        # Archive member basename is the installed binary (rg for ripgrep).
+                        installed = cargo_home / "bin" / Path(member).name
+                        if mode in ("digest", "archive"):
+                            self.assertFalse(installed.exists(), "unverified bytes must never be installed")
+                        tmp_dir = case_root / ".orbit/tmp"
+                        self.assertEqual(list(tmp_dir.iterdir()) if tmp_dir.exists() else [], [],
+                                         "installer trap cleans both outcomes")
+
+    def test_cleanliness_assertions_ignore_surrounding_dirs_and_fail_on_seeded_leak(self):
+        scratch = ROOT / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        unrelated_scratch = scratch / "download-test-unrelated-worktree"
+        unrelated_scratch.mkdir(exist_ok=True)
+        self.addCleanup(lambda: unrelated_scratch.rmdir() if unrelated_scratch.exists() else None)
+
+        system_tmp = Path(tempfile.gettempdir())
+        unrelated_tmp = system_tmp / "download-test-unrelated-tmp"
+        unrelated_tmp.mkdir(exist_ok=True)
+        self.addCleanup(lambda: unrelated_tmp.rmdir() if unrelated_tmp.exists() else None)
+
+        # Baseline cleanliness assertions pass even when surrounding TMPDIR or worktree has download-test-*
+        self.assert_clean()
+
+        # Seeded leak directly under self.root (the downloader's target directory) must fail assert_clean
+        seeded_leak = self.root / ".ci-download-seeded-leak"
+        seeded_leak.mkdir()
+        try:
+            with self.assertRaises(AssertionError):
+                self.assert_clean()
+        finally:
+            seeded_leak.rmdir()
+
+        # Installer case private temp root asserts cleanliness only inside it and fails on a seeded leak
+        with tempfile.TemporaryDirectory(dir=self.root, prefix="case-leak-check-") as case_dir:
+            case_root = Path(case_dir)
+            tmp_dir = case_root / ".orbit/tmp"
+            tmp_dir.mkdir(parents=True)
+            self.assertEqual(list(tmp_dir.iterdir()), [])
+            leaked_dir = tmp_dir / "tool-download.seeded-leak"
+            leaked_dir.mkdir()
+            with self.assertRaises(AssertionError):
+                self.assertEqual(list(tmp_dir.iterdir()), [])
+            leaked_dir.rmdir()
 
 
 if __name__ == "__main__":

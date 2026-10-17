@@ -124,13 +124,20 @@ if [[ "$fast" == false ]]; then
   # --tests` artifacts the nextest pass below runs, instead of a per-crate
   # `cargo test -p` build that resolves features differently and recompiles
   # the workspace chain a second time. [DANI-10428]
+  # The list-build lints lib, bins, tests and examples with the former
+  # all-targets flags (see check-ci-macos.sh). That replaces the separate
+  # clippy-all-targets phase, which re-checked the same crates after this
+  # compile. Production clippy stays its own pass: it is the only one that
+  # denies clippy::disallowed_methods, so test-only channels stay exempt on
+  # the folded build. make ci-lint still runs a separate all-targets clippy
+  # because that gate does not build test binaries.
   run_phase workflow-test-list-build "$repo_root/scripts/check-ci-macos.sh" --workspace-build
-  # Production must reject unbounded channels. Existing test-only channels
-  # remain exempt in the all-targets pass.
   run_phase clippy-production cargo clippy --workspace --lib --bins -- -D warnings -D clippy::disallowed_methods
-  run_phase clippy-all-targets cargo clippy --workspace --all-targets -- -D warnings -A clippy::disallowed_methods
   if cargo nextest --version >/dev/null 2>&1; then
-    run_phase workspace-tests cargo nextest run --no-fail-fast \
+    # Profile ci raises test-threads above the 4-vCPU runner default.
+    # The sampler prints one cpu-util line and keeps nextest's exit status.
+    run_phase workspace-tests "$repo_root/scripts/cpu-utilisation.sh" --label nextest -- \
+      cargo nextest run --profile ci --no-fail-fast \
       --success-output immediate \
       --workspace --lib --bins --tests
   else
@@ -281,6 +288,7 @@ guard_phase_started=$SECONDS
   run_guard "$repo_root/scripts/test-validate-agent-plugin.sh"
   run_guard "$repo_root/scripts/test-make-install.py"
   run_guard "$repo_root/scripts/test-cross-revision-check.sh"
+  run_guard "$repo_root/scripts/test-cpu-utilisation.py"
   drain_pool
   exit "$failed"
 ) >"$guard_logs/pool.out" 2>"$guard_logs/pool.err" &

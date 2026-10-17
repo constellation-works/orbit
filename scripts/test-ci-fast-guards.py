@@ -88,6 +88,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fixture_libtest
 with open(os.environ["GUARD_TEST_LOG"], "a") as log:
     log.write(json.dumps(sys.argv[1:]) + "\\n")
+env_log = os.environ.get("GUARD_TEST_ENV_LOG")
+if env_log:
+    with open(env_log, "a") as log:
+        log.write(json.dumps({"argv": sys.argv[1:],
+                              "RUSTC_WORKSPACE_WRAPPER": os.environ.get("RUSTC_WORKSPACE_WRAPPER"),
+                              "CLIPPY_ARGS": os.environ.get("CLIPPY_ARGS")}) + "\\n")
 if sys.argv[1] == "metadata":
     print(open(os.environ["GUARD_TEST_METADATA"]).read())
 elif sys.argv[1] == "test" and "--message-format" in sys.argv:
@@ -163,6 +169,9 @@ else:
         shutil.copy2(SCRIPTS / "check-ci-macos.sh", self.scripts / "check-ci-macos.sh")
         # The pool sizes itself from the real budget query, so keep the real script.
         shutil.copy2(SCRIPTS / "build-budget.py", self.scripts / "build-budget.py")
+        # The full run wraps nextest in the real sampler. A stub would swallow
+        # the cargo invocation the assertions below observe.
+        shutil.copy2(SCRIPTS / "cpu-utilisation.sh", self.scripts / "cpu-utilisation.sh")
         workflows = self.root / ".github/workflows"
         workflows.mkdir(parents=True, exist_ok=True)
         (self.root / "Cargo.toml").touch()
@@ -341,8 +350,26 @@ exec {shlex.quote(sys.executable)} "$@"
         self.assert_self_tests(True)
         phases = re.findall(r"ci-guardrails-phase: (\S+) wall_seconds=\d+ exit=(\d+)", result.stderr)
         self.assertIn(("clippy-production", "0"), phases)
+        self.assertNotIn("clippy-all-targets", [name for name, _exit in phases])
         self.assertIn(("workspace-tests", "0"), phases)
         self.assertIn(("repository-guards", "0"), phases)
+        self.assertRegex(
+            result.stderr,
+            r"cpu-util: label=nextest (busy_pct=\d+\.\d+ idle_pct=\d+\.\d+ "
+            r"iowait_pct=\d+\.\d+|unavailable=(unchanged|decreased|proc_stat))",
+        )
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertIn(
+            ["clippy", "--workspace", "--lib", "--bins", "--", "-D", "warnings",
+             "-D", "clippy::disallowed_methods"],
+            calls,
+        )
+        self.assertFalse(any("--all-targets" in call for call in calls))
+        self.assertIn(
+            ["nextest", "run", "--profile", "ci", "--no-fail-fast",
+             "--success-output", "immediate", "--workspace", "--lib", "--bins", "--tests"],
+            calls,
+        )
         # A real command failure must keep its status and timing in the final
         # diagnostic tail, and must not be followed by tests.
         original = (self.bin / "cargo").read_text()
@@ -650,11 +677,28 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         # build (the artifacts the nextest pass reuses), never from a
         # per-package `cargo test -p` build. [DANI-10428]
         self.prepare_ci()
+        env_log = self.root / "cargo-env.log"
+        self.env["GUARD_TEST_ENV_LOG"] = str(env_log)
         result = self.run_guard("ci-guardrails.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        self.assertIn(["test", "--workspace", "--lib", "--bins", "--tests", "--locked", "--no-run",
-                       "--message-format", "json"], calls)
+        folded = ["test", "--workspace", "--lib", "--bins", "--tests", "--examples", "--locked",
+                  "--no-run", "--message-format", "json"]
+        self.assertIn(folded, calls)
+        observed = [json.loads(line) for line in env_log.read_text().splitlines()]
+        self.assertEqual(
+            [row for row in observed if row["argv"] == folded],
+            [{
+                "argv": folded,
+                "RUSTC_WORKSPACE_WRAPPER": "clippy-driver",
+                "CLIPPY_ARGS": (
+                    "-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__"
+                    "-A__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__"
+                ),
+            }],
+        )
+        self.assertTrue(all(row["RUSTC_WORKSPACE_WRAPPER"] is None
+                            for row in observed if row["argv"][:1] == ["metadata"]))
         self.assertIn(["fixture-test-bin", "--list", "fixture_test"], calls)
         self.assertNotIn("-p", [argument for call in calls for argument in call])
 

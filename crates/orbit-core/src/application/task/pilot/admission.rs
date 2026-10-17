@@ -668,6 +668,35 @@ impl OrbitRuntime {
             })
     }
 
+    /// Whether `hold`'s operator handoff is already in the task's history,
+    /// from plain reads. Every drain pass runs the backlog sweep below, and
+    /// almost every hold it meets was recorded by an earlier pass; checking
+    /// first keeps those passes from taking the task's write lock, and the
+    /// task-store sections under it, only to find nothing to write. The
+    /// locked write re-checks, so a hold this misses is still recorded once.
+    fn pilot_operator_handoff_recorded(
+        &self,
+        task_id: &str,
+        hold: &PilotAdmissionHold,
+    ) -> Result<bool, OrbitError> {
+        let comments = self.get_task_comments(task_id)?;
+        let Some(operation_id) = comments
+            .iter()
+            .rev()
+            .filter(|comment| comment.by == "task-pilot")
+            .find_map(|comment| Some(comment.receipt()?.operation_id))
+        else {
+            return Ok(false);
+        };
+        let Some((event, _)) = hold.operator_handoff(operation_id) else {
+            return Ok(true);
+        };
+        Ok(self
+            .get_task_history(task_id)?
+            .iter()
+            .any(|entry| entry.event == event.event && entry.note == event.note))
+    }
+
     pub(crate) fn record_backlog_pilot_operator_handoffs(&self) -> Result<(), OrbitError> {
         for task in
             self.list_tasks_filtered(Some(TaskStatus::Backlog), None, None, None, None, None)?
@@ -676,6 +705,7 @@ impl OrbitRuntime {
                 hold @ (PilotAdmissionHold::OperatorValidation(_)
                 | PilotAdmissionHold::HostOperational(_)),
             ) = self.pilot_admission_hold(&task.id)?
+                && !self.pilot_operator_handoff_recorded(&task.id, &hold)?
             {
                 self.record_pilot_operator_handoff(&task.id, &hold)?;
             }

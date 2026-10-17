@@ -181,7 +181,8 @@ impl OrbitRuntime {
         self.record_stop_request(&request_id, request, drain_job_id, coordinators.len())?;
 
         if coordinators.is_empty() {
-            self.record_stop_completion(
+            self.record_drain_control_completion(
+                STOP_COMPLETION_AUDIT,
                 None,
                 &request_id,
                 "idle",
@@ -200,7 +201,8 @@ impl OrbitRuntime {
         for run in coordinators {
             match self.apply_stop_to_coordinator(&run, request) {
                 Ok(change) => {
-                    self.record_stop_completion(
+                    self.record_drain_control_completion(
+                        STOP_COMPLETION_AUDIT,
                         Some(&change.run_id),
                         &request_id,
                         change.outcome.as_str(),
@@ -222,7 +224,8 @@ impl OrbitRuntime {
                     changes.push(change);
                 }
                 Err(error) => {
-                    self.record_stop_completion(
+                    self.record_drain_control_completion(
+                        STOP_COMPLETION_AUDIT,
                         Some(&run.run_id),
                         &request_id,
                         "rejected",
@@ -435,39 +438,6 @@ impl OrbitRuntime {
                 "requested_at": chrono::Utc::now().to_rfc3339(),
             }),
             None,
-        )
-    }
-
-    fn record_stop_completion(
-        &self,
-        run_id: Option<&str>,
-        request_id: &str,
-        outcome: &str,
-        detail: Value,
-        error: Option<String>,
-    ) -> Result<(), OrbitError> {
-        let mut arguments = json!({
-            "request_id": request_id,
-            "run_id": run_id,
-            "outcome": outcome,
-            "completed_at": chrono::Utc::now().to_rfc3339(),
-        });
-        if let (Some(target), Some(detail)) = (arguments.as_object_mut(), detail.as_object()) {
-            for (key, value) in detail {
-                target.insert(key.clone(), value.clone());
-            }
-        }
-        self.record_pipeline_audit(
-            STOP_COMPLETION_AUDIT,
-            run_id,
-            None,
-            if outcome == "rejected" {
-                AuditEventStatus::Failure
-            } else {
-                AuditEventStatus::Success
-            },
-            arguments,
-            error,
         )
     }
 }

@@ -13,6 +13,7 @@ mod workflow_read;
 pub(crate) use dispatch::run;
 pub(super) use process::{
     GITHUB_TRANSIENT_ATTEMPTS, GITHUB_TRANSIENT_RETRY_DELAY, is_transient_github_failure,
+    is_transient_observation_failure,
 };
 pub(crate) use push_retry::valid_candidate_ref;
 

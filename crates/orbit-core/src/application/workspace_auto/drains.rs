@@ -1,10 +1,10 @@
 use orbit_common::OrbitError;
-use orbit_engine::DispatchError;
 use orbit_store::contracts::{DrainLeafOccupancy, JobRunQuery};
 use orbit_types::workflow::{DrainAdmissionsStop, DrainWorkerLimit, PipelineState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::admission::pass_error::PassError;
 use crate::application::distributed::PULL_DRAIN_JOB;
 
 /// The job that ships loose leaves. Its live runs are read for two things at
@@ -247,19 +247,18 @@ pub(crate) struct LiveLeafRun {
 pub(super) fn live_leaf_runs(
     runtime: &OrbitRuntime,
     action: &str,
-) -> Result<Vec<LiveLeafRun>, DispatchError> {
+) -> Result<Vec<LiveLeafRun>, PassError> {
     // Reconcile first, unscoped: occupancy now counts every live leaf
     // definition (`task_pr_pipeline`, `task_local_pipeline`, and the claimed
     // pair), not just wrappers. One orphaned `running` row — a worker killed
     // by a reboot or an OOM — would occupy a slot forever, and the drain
     // would keep shipping at a quietly lower parallelism, which is exactly
     // the kind of thing nobody notices [ORB-12649].
-    runtime.reconcile_stale_job_runs(None).map_err(|err| {
-        DispatchError::action_failed(action, format!("reconcile stale job runs: {err}"))
-    })?;
-    read_live_leaf_runs(runtime).map_err(|error| {
-        DispatchError::action_failed(action, format!("list live {LEAF_JOB_NAME} runs: {error}"))
-    })
+    runtime
+        .reconcile_stale_job_runs(None)
+        .map_err(|error| PassError::store(action, "reconcile stale job runs", error))?;
+    read_live_leaf_runs(runtime)
+        .map_err(|error| PassError::store(action, format!("list live {LEAF_JOB_NAME} runs"), error))
 }
 
 /// The one capacity reading legacy and pull admission share [ORB-12617].
