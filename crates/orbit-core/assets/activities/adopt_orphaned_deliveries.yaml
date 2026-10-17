@@ -1,0 +1,43 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: adopt_orphaned_deliveries
+spec:
+  type: deterministic
+  description: >
+    Resume each owner-local delivery leaf (`task_pr_pipeline`) whose worker
+    died after it opened its pull request, so landing review, completion and
+    auto-fix continue on that pull request instead of waiting for an
+    operator. A leaf qualifies when it was interrupted within the last 24
+    hours (not by an upgrade, which the clock resumes), is not a claimed
+    execution, has no retry yet, its pull request is still open on the head
+    branch it opened it on, every task it carries still waits on it (in
+    `review`, or `blocked` by the interruption), this drain holds the
+    `completion` and `auto_fix` authority the leaf was started with, and the
+    ordinary checkpoint resume accepts it. At most as many leaves are resumed
+    as the drain has free slots; a stopped drain resumes none. Each adoption
+    or final skip is decided once and audited.
+  input_schema_json:
+    type: object
+    properties:
+      max_active_leaf_runs:
+        type: number
+        minimum: 1
+      completion:
+        type: string
+      auto_fix:
+        type: boolean
+  output_schema_json:
+    type: object
+    required: [adopted, skipped]
+    properties:
+      adopted:
+        type: array
+        items:
+          type: object
+      skipped:
+        type: array
+        items:
+          type: object
+  action: adopt_orphaned_deliveries
+  config: {}

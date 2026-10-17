@@ -54,6 +54,9 @@ pub struct PullRequestStatus {
     /// The provider-reported merge timestamp, when one exists.
     pub merged_at: Option<String>,
     pub(crate) merge_state_status: Option<String>,
+    /// Explicit provider `isDraft: true`. Absent, false, or any other value
+    /// is not a draft, so an older answer that omits the field stays ready.
+    pub(crate) is_draft: bool,
     pub(crate) review_decision: ReviewDecision,
     /// `None` when the provider reported no readable rollup.
     pub(crate) status_checks: Option<Vec<StatusCheck>>,
@@ -113,6 +116,7 @@ impl PullRequestStatus {
             merge_commit: reported(pull_request.pointer("/mergeCommit/oid")),
             merged_at: text("mergedAt"),
             merge_state_status: exact("mergeStateStatus"),
+            is_draft: pull_request.get("isDraft") == Some(&Value::Bool(true)),
             exact_head_branch: exact("headRefName"),
             exact_head_sha: exact("headRefOid"),
             exact_merge_commit: pull_request
@@ -247,6 +251,10 @@ pub(in crate::executor::automation::vcs) struct PullRequestSummary {
     /// The head branch exactly as reported: an empty name is a branch that
     /// does not match, while an absent one is unreadable.
     pub(in crate::executor::automation::vcs) head_branch: Option<String>,
+    /// The author's login, when the listing reports one.
+    pub(in crate::executor::automation::vcs) author: Option<String>,
+    /// The description; only an unfiltered listing reads it.
+    pub(in crate::executor::automation::vcs) body: Option<String>,
 }
 
 impl PullRequestSummary {
@@ -269,6 +277,14 @@ impl PullRequestSummary {
                 number: pull_request.get("number").and_then(number_selector),
                 head_branch: pull_request
                     .get("headRefName")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                author: pull_request
+                    .pointer("/author/login")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                body: pull_request
+                    .get("body")
                     .and_then(Value::as_str)
                     .map(ToOwned::to_owned),
             })

@@ -1181,6 +1181,95 @@ fn pr_open_preserves_provider_number_representations() {
     );
 }
 
+/// [ORB-16342] A draft pull request stops completion before any merge
+/// request, even when GitHub reports `BLOCKED` or `UNKNOWN` instead of
+/// `DRAFT`. A ready pull request (`isDraft` false) still merges.
+#[test]
+#[allow(clippy::print_stderr)] // Name the draft or ready case in isolated child failure output.
+fn a_draft_pull_request_stops_completion_before_any_merge_request() {
+    isolated(
+        "a_draft_pull_request_stops_completion_before_any_merge_request",
+        |sandbox| {
+            for merge_state in ["BLOCKED", "UNKNOWN"] {
+                eprintln!("scenario: draft {merge_state}");
+                let fx = Fixture::new(sandbox);
+                fx.script_checks(&["success"]);
+                fs::write(fx.forge.join("draft-merge-state"), merge_state).unwrap();
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                action(
+                    &host,
+                    "pr_open",
+                    &fx.open_input(&fx.candidate, &fx.base_sha),
+                )
+                .unwrap_or_else(|error| panic!("{merge_state}: open: {error}"));
+                host.set_status(TASK_ID, TaskStatus::Review);
+                let mut input = fx.complete_input();
+                input["max_wait_seconds"] = json!(0);
+
+                let error = action(&host, "pr_complete", &input)
+                    .expect_err("a draft pull request must not be merged");
+
+                let error = error.to_string();
+                assert!(
+                    error.contains("still a draft"),
+                    "{merge_state}: completion must name the draft: {error}"
+                );
+                assert!(
+                    !error.contains("could not request"),
+                    "{merge_state}: completion must stop before the merge request: {error}"
+                );
+                assert!(
+                    fx.merge_requests().is_empty(),
+                    "{merge_state}: no merge request"
+                );
+                assert_eq!(
+                    fx.status_reads(),
+                    1,
+                    "{merge_state}: refused on the first status read"
+                );
+                assert_eq!(
+                    fx.forge_state("merged"),
+                    None,
+                    "{merge_state}: PR stays open"
+                );
+                assert_eq!(
+                    fx.remote_tip(BASE),
+                    fx.base_sha,
+                    "{merge_state}: the remote base is untouched"
+                );
+                assert!(
+                    host.landings().is_empty(),
+                    "{merge_state}: no landing recorded"
+                );
+                assert_eq!(host.status(TASK_ID), TaskStatus::Review, "{merge_state}");
+            }
+
+            eprintln!("scenario: ready");
+            let fx = Fixture::new(sandbox);
+            fx.script_checks(&["success"]);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            action(
+                &host,
+                "pr_open",
+                &fx.open_input(&fx.candidate, &fx.base_sha),
+            )
+            .expect("open the ready pull request");
+            host.set_status(TASK_ID, TaskStatus::Review);
+
+            let completed = action(&host, "pr_complete", &fx.complete_input())
+                .expect("a ready pull request still completes");
+
+            assert_eq!(completed["merge"]["merged"], true);
+            assert_eq!(
+                fx.merge_requests(),
+                vec![format!("sha={} merge_method=squash", fx.candidate)],
+                "exactly one merge of the ready pull request"
+            );
+            assert_eq!(host.status(TASK_ID), TaskStatus::Done);
+        },
+    );
+}
+
 /// A required check that fails, before or after a wait, or an outstanding
 /// required review, refuses completion before any merge request. The PR stays
 /// open, the remote base does not move, and the task stays in `review`.
@@ -1465,8 +1554,20 @@ fn a_base_modified_merge_refusal_retries_the_same_candidate_on_fresh_evidence() 
                     fx.complete_ungated_input()
                 };
 
-                let completed = action(&host, "pr_complete", &input)
-                    .unwrap_or_else(|error| panic!("{case}: {error}"));
+                // Every completion clock read advances one millisecond, so the
+                // deadline is always read back after a millisecond boundary.
+                // CI crossed that boundary by chance and reported a sixth
+                // waited second that no poll spent.
+                let clock = std::rc::Rc::new(std::cell::Cell::new(1_000_u64));
+                let completed = orbit_engine::test_support::with_prerequisite_clock(
+                    move || {
+                        clock.set(clock.get() + 1);
+                        clock.get()
+                    },
+                    |_, _| {},
+                    || action(&host, "pr_complete", &input),
+                )
+                .unwrap_or_else(|error| panic!("{case}: {error}"));
 
                 let condition = format!("sha={} merge_method=squash", fx.candidate);
                 assert_eq!(
@@ -7874,10 +7975,19 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
         operation: &str,
         input: Value,
     ) -> Result<Value, OrbitError> {
-        if matches!(
-            operation,
-            "ci.job_log" | "ci.commit_jobs" | "ci.prerequisite_evidence"
-        ) && let Some(answer) = self.scripted.lock().unwrap().get(operation).cloned()
+        if operation == "ci.commit_jobs"
+            && let Some(answer) = self.scripted.lock().unwrap().get(operation).cloned()
+        {
+            let commit = input.get("commit").and_then(Value::as_str).unwrap_or("");
+            // A head-only script does not describe the base tip. An inherited
+            // red base is planted through the substitute `gh`.
+            if commit == git(&self.repo, &["rev-parse", BASE]) {
+                return Ok(json!({"commit": commit, "jobs": []}));
+            }
+            return Ok(answer);
+        }
+        if matches!(operation, "ci.job_log" | "ci.prerequisite_evidence")
+            && let Some(answer) = self.scripted.lock().unwrap().get(operation).cloned()
         {
             return Ok(answer);
         }
@@ -8033,6 +8143,9 @@ check() {
 }
 
 status() {
+    # 1 when this `pr view` asked for isDraft. A draft fixture refuses to
+    # answer otherwise, so dropping the field fails the regression.
+    draft_field=${1:-0}
     pr_head=$(cat "$forge/pr-head")
     pr_base=$(cat "$forge/pr-base")
     if [ -f "$forge/merged" ]; then
@@ -8044,7 +8157,7 @@ status() {
         if [ -f "$forge/merged-head" ]; then
             merged_head=$(cat "$forge/merged-head")
         fi
-        printf '{"number":42,"state":"MERGED","mergedAt":"2026-10-03T00:00:00Z","mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","reviewDecision":"","statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":{"oid":"%s"},"url":"%s"}\n' \
+        printf '{"number":42,"state":"MERGED","isDraft":false,"mergedAt":"2026-10-03T00:00:00Z","mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","reviewDecision":"","statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":{"oid":"%s"},"url":"%s"}\n' \
             "$(check success)" "$pr_head" "$merged_head" "$pr_base" "$(cat "$forge/merged")" "$url"
         return
     fi
@@ -8112,8 +8225,23 @@ status() {
         *) echo "fake gh: unknown check state '$observed'" >&2; exit 2 ;;
     esac
     if [ -f "$forge/review-decision" ]; then review=$(cat "$forge/review-decision"); fi
-    printf '{"number":42,"state":"%s","mergedAt":%s,"mergeable":"MERGEABLE","mergeStateStatus":"%s","reviewDecision":"%s","statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":null,"url":"%s"}\n' \
-        "$state" "$merged_at" "$merge_state" "$review" "$rollup" "$pr_head" "$reported_head" "$pr_base" "$url"
+    # [ORB-16342] An explicit draft whose merge state is not DRAFT. The file
+    # names that merge state. Ready pull requests omit it and report false.
+    is_draft=false
+    if [ -f "$forge/draft-merge-state" ]; then
+        if [ "$draft_field" != 1 ]; then
+            echo "fake gh: isDraft was not requested" >&2
+            exit 2
+        fi
+        is_draft=true
+        merge_state=$(cat "$forge/draft-merge-state")
+        case "$merge_state" in
+            BLOCKED|UNKNOWN) ;;
+            *) echo "fake gh: unknown draft merge state '$merge_state'" >&2; exit 2 ;;
+        esac
+    fi
+    printf '{"number":42,"state":"%s","isDraft":%s,"mergedAt":%s,"mergeable":"MERGEABLE","mergeStateStatus":"%s","reviewDecision":"%s","statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":null,"url":"%s"}\n' \
+        "$state" "$is_draft" "$merged_at" "$merge_state" "$review" "$rollup" "$pr_head" "$reported_head" "$pr_base" "$url"
 }
 
 create() {
@@ -8160,6 +8288,67 @@ refuse() {
     printf '{"message":"%s","documentation_url":"https://docs.github.com/rest/pulls/pulls#merge-a-pull-request","status":"%s"}\n' "$2" "$1"
     printf 'gh: %s (HTTP %s)\n' "$2" "$1" >&2
     exit 1
+}
+
+# Jobs and logs planted per commit under `$forge/commit-ci/<sha>/`.
+commit_ci_api() {
+    if [ ! -d "$forge/commit-ci" ]; then
+        echo "fake gh: unsupported call: $*" >&2
+        exit 2
+    fi
+    path="${4:-}"
+    case "$path" in
+        repos/*/actions/runs)
+            sha=""
+            for arg in "$@"; do
+                case "$arg" in
+                    head_sha=*) sha=${arg#head_sha=} ;;
+                esac
+            done
+            if [ -n "$sha" ] && [ -f "$forge/commit-ci/$sha/runs.json" ]; then
+                cat "$forge/commit-ci/$sha/runs.json"
+            else
+                echo '{"workflow_runs":[]}'
+            fi
+            ;;
+        repos/*/actions/runs/*/jobs)
+            run=$(basename "$(dirname "$path")")
+            found=""
+            for dir in "$forge/commit-ci"/*; do
+                [ -f "$dir/run_id" ] || continue
+                if [ "$(cat "$dir/run_id")" = "$run" ]; then
+                    found=$dir
+                    break
+                fi
+            done
+            if [ -z "$found" ]; then
+                echo "fake gh: no jobs for run $run" >&2
+                exit 2
+            fi
+            cat "$found/jobs.json"
+            ;;
+        *)
+            echo "fake gh: unsupported call: $*" >&2
+            exit 2
+            ;;
+    esac
+}
+
+commit_ci_log() {
+    if [ ! -d "$forge/commit-ci" ]; then
+        echo "fake gh: unsupported call: $*" >&2
+        exit 2
+    fi
+    run="${3:-}"
+    for dir in "$forge/commit-ci"/*; do
+        [ -f "$dir/run_id" ] || continue
+        if [ "$(cat "$dir/run_id")" = "$run" ]; then
+            cat "$dir/log"
+            return
+        fi
+    done
+    echo "fake gh: no log for run $run" >&2
+    exit 2
 }
 
 # Advance a remote branch by one commit, as another writer would.
@@ -8253,7 +8442,19 @@ if [ -f "$forge/failed-command-log" ]; then
         "run view") cat "$forge/failed-command-log"; exit ;;
         "api --method")
             case "${4:-}" in
-                'repos/{owner}/{repo}/actions/runs') echo '{"workflow_runs":[{"id":10,"name":"CI"}]}'; exit ;;
+                'repos/{owner}/{repo}/actions/runs')
+                    sha=""
+                    for arg in "$@"; do
+                        case "$arg" in
+                            head_sha=*) sha=${arg#head_sha=} ;;
+                        esac
+                    done
+                    if [ "$sha" = "$(head_sha)" ]; then
+                        echo '{"workflow_runs":[{"id":10,"name":"CI"}]}'
+                    else
+                        echo '{"workflow_runs":[]}'
+                    fi
+                    exit ;;
                 'repos/{owner}/{repo}/actions/runs/10/jobs') cat "$forge/failed-command-jobs"; exit ;;
             esac ;;
     esac
@@ -8341,7 +8542,10 @@ case "$1 ${2:-}" in
     "pr create") create "$@" ;;
     "pr view")
         case "$*" in
-            *mergeStateStatus*) status ;;
+            *mergeStateStatus*)
+                draft_field=0
+                case "$*" in *isDraft*) draft_field=1 ;; esac
+                status "$draft_field" ;;
             *) printf '{"number":%s,"title":"Landing","body":"","headRefName":"%s","files":[],"commits":[],"url":"%s"}\n' "$number_json" "$(cat "$forge/pr-head")" "$url" ;;
         esac ;;
     "repo view") echo '{"nameWithOwner":"orbit/test"}' ;;
@@ -8370,6 +8574,8 @@ case "$1 ${2:-}" in
         [ ! -f "$forge/merge-methods-disallowed" ] || allowed=false
         printf '{"data":{"repository":{"autoMergeAllowed":true,"mergeCommitAllowed":false,"rebaseMergeAllowed":%s,"squashMergeAllowed":%s,"pullRequest":{"baseRefName":"%s","baseRef":{"branchProtectionRule":{"requiresLinearHistory":true}}}}}}\n' "$allowed" "$allowed" "$(cat "$forge/pr-base")" ;;
     "api repos/{owner}/{repo}/pulls/42/merge") merge "$@" ;;
+    "api --method") commit_ci_api "$@" ;;
+    "run view") commit_ci_log "$@" ;;
     *) echo "fake gh: unsupported call: $*" >&2; exit 2 ;;
 esac
 "#;

@@ -57,6 +57,10 @@ impl SourceCheckout {
         git(&repo, &["config", "user.email", "fixture@example.com"]);
         git(&repo, &["config", "user.name", "Fixture"]);
         git(&repo, &["config", "commit.gpgsign", "false"]);
+        // Commit, rebase and the remote's receive-pack otherwise detach a
+        // `git maintenance run --auto` that is still taking and dropping its
+        // lock under `objects/` when the template is captured.
+        git(&repo, &["config", "maintenance.auto", "false"]);
         std::fs::write(repo.join(".gitignore"), ".orbit/\n").unwrap();
         std::fs::write(repo.join("source.txt"), "base\n").unwrap();
         git(&repo, &["add", "."]);
@@ -65,6 +69,7 @@ impl SourceCheckout {
         let remote = root.path().join("origin.git");
         std::fs::create_dir_all(&remote).unwrap();
         git(&remote, &["init", "--bare", "-q"]);
+        git(&remote, &["config", "maintenance.auto", "false"]);
         git(
             &repo,
             &[

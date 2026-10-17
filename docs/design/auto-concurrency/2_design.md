@@ -1,8 +1,8 @@
 ---
 title: Auto-concurrency — Design
 owner: claude
-last_updated: 2026-10-12
-last_validated: 2026-10-12
+last_updated: 2026-10-17
+last_validated: 2026-10-17
 status: Draft
 feature: auto-concurrency
 doc_role: design
@@ -27,8 +27,8 @@ related_artifacts: [ORB-15757, ORB-15774]
 > local admission, §6 pull admission, the `drain_last_pass`, `orbit run show`,
 > `orbit run readiness` and `orbit run profiles --accuracy` rows of §7 the
 > record and diagnostics a local pass exposes, and §8.1 the accuracy report.
-> The per-drain mode controls of §7 are implemented; its dashboard forecast
-> curves remain proposed.
+> The per-drain mode controls of §7 are implemented. The dashboard Drain card
+> shows that recorded forecast; its curves against measured load remain proposed.
 
 This doc covers what admission does today (§1) and the proposal:
 
@@ -215,8 +215,8 @@ insert for that minute wins. Busy and total tick deltas are split across
 wall-clock boundaries by the same elapsed-time rule as worker CPU, including
 intervals spanning multiple minutes. The initial host minute is omitted unless
 a preceding reading covers its beginning; the final partial minute is omitted.
-Profiles do not need it. It is the ground truth
-for checking the forecast (§8).
+Profiles do not need it. It is the forecast baseline's settled
+minute (§4) and the ground truth for checking the forecast (§8).
 
 On macOS the reader uses `host_statistics(HOST_CPU_LOAD_INFO)` for the
 host-wide user, system, idle and nice tick counters. Each 32-bit counter's
@@ -399,9 +399,12 @@ F(t) = B + Σ over running deliveries i of P_i(a_i + t) · alive_i(a_i + t) / al
   `P_i`. Its expected load at `a_i + t` is scaled by the chance it is still
   running then, given it is running now. A delivery older than its profile's
   last minute contributes its current measured use, held flat.
-- **Baseline `B`.** The host's measured load now, minus the sum of running
-  deliveries' measured use now. That leaves the load that isn't from tasks,
-  such as an IDE or a manual build, and it is held flat over the horizon.
+- **Baseline `B`.** The load that isn't from tasks, such as an IDE or a
+  manual build, held flat over the horizon. The host and the deliveries are
+  measured over the same window: the newest recorded host minute minus what
+  the runs used in that minute, floored by the live reading over the
+  trailing minute. Only with no recent host minute is it the live reading
+  minus the deliveries' measured use now.
 - **Host-wide.** The sum runs over live leaves of **every** workspace on the
   host: the `job_runs` table without the workspace filter. Pinned drains,
   explicit `orbit run ship` deliveries and before-landing reviews are all
@@ -424,13 +427,54 @@ Implemented in `runtime/host_resource/forecast/` (`build.rs`, `host_load.rs`,
   of its live runs' newest minutes.
 - **Flat tail.** A delivery past its profile's last minute, or with no
   profile at all, contributes its current use at every minute.
-- **Baseline.** CPU is busy cores over the interval since the previous
-  native tick reading, at least 250 ms for Linux/proc fixtures or 1.1 s for
-  macOS; the first call waits before taking the lock. Memory uses the shared
-  native accounting described in §2. `B`
-  never goes below zero. An unreadable host, or a CPU reading with no ticks
-  since the previous one, leaves that baseline unknown, and the series counts
-  it as zero.
+- **Baseline** (`baseline.rs`). The lock also reads the last
+  `BASELINE_HISTORY_MINUTES` (5) of `host_resource_minutes` and of every
+  workspace's `run_resource_minutes`, with each run's `finished_at`.
+  - *Settled minute.* The newest recorded host minute that ended at most
+    3 minutes ago and that every still-recording run covers: each live run's
+    newest minute reaches its end, and no live run without a minute had
+    started by then. A run is still recording while its newest minute ended,
+    or it started without one, within the last 90 s; past that its next
+    minute is not waited for. From the minute's CPU mean and memory peak,
+    every run minute overlapping it, live or finished, is subtracted in
+    proportion to the seconds it covered. A run minute covers from its start
+    for its sample count times the 5 s sample interval, at most 60 s, and
+    never past its run's `finished_at`: a run at 4 cores that ended 5 s into
+    its last minute subtracts about 0.3 cores for that minute, not 3.3. A
+    250 ms spike in the live reading does not move this value.
+  - *Live floor.* So load that began after the settled minute is not
+    invisible, `B` is the larger of the settled value and a live value. CPU
+    uses the probe's sustained reading: busy cores since the newest reading
+    it keeps that is 60 to 120 s old (one is kept every 5 s or more), minus
+    the run minutes over that window, each live run's newest minute extended
+    to now. A spike moves it by its length over the window's, 250 ms in 60 s
+    at most. It needs a reading that old in the same process, so a drain that
+    admits at least every two minutes has one, and a one-off command does
+    not: there `B` is the settled value. Memory uses the live reading minus
+    the running deliveries' current use. The settled minute ends at most
+    about two minutes before now, the bound on how late `B` sees new load
+    with no floor.
+  - *No settled minute.* No worker recorded one lately (with no delivery
+    running, or without worker containment on Linux), or a run blocks every
+    recent one: `B` is the live reading over the probe's short window, at
+    least 250 ms for Linux/proc fixtures or 1.1 s for macOS, minus the
+    running deliveries' current use, as before. The first call waits before
+    taking the lock.
+  - *Delivery with no minute yet.* Its profile is added in full while the
+    live reading already holds its startup load. The live values subtract its
+    profile's expected use at its age: over the part of the sustained window
+    it was running, else in proportion to the share of its first minute that
+    has elapsed, so one created a moment ago subtracts almost nothing. Where
+    a settled minute exists it ended before such a delivery started, so the
+    subtraction can at most bring `B` down to the settled value: it is capped
+    at what the host grew by since. A run that never records (no containment)
+    stays in the settled value, as an unmeasured load.
+
+  Memory uses the shared native accounting described in §2. `B` never goes
+  below zero. An unreadable host, or no settled minute with a CPU reading
+  that saw no ticks since the previous one, leaves that baseline unknown, and
+  the series counts it as zero. The forecast reports the host minute `B` was
+  measured over as `baseline_minute`.
 - **Output.** `HostLoadForecast`: the CPU (cores) and memory (bytes) series
   for `t = 0 … horizon_cap_minutes`, each with its baseline and its peak and
   minute, plus the running deliveries and reservations with the profile step
@@ -757,9 +801,9 @@ Limitations:
 | `orbit run show` | Implemented: an `Admission:` line from the recorded pass, e.g. `forecast — skipped heavy candidate (cpu 94% at +6m)`, with candidate titles, shadow decisions labelled hypothetical, and a protected head named by the starvation guard; a `Stuck head:` line while that head is stuck (§5.3). After an idle pass, it names the last built forecast's timestamp, decisions and peaks, and says the current pass built none. JSON preserves `pipeline_state.drain_last_pass.admission_forecast` and retains built history in `pipeline_state.drain_last_forecast`. |
 | `orbit run readiness` | Implemented: the last pass's host forecast peaks, headroom below the current admission thresholds, each judged candidate's profile source and wait, and a stuck head (§5.3). JSON adds `capacity.admission_forecast` and `tasks[].admission_forecast` for the current pass, plus `capacity.last_admission_forecast` for retained built history. Idle passes show that history without changing eligibility; without either recorded block, output is unchanged. See [observing admission](../../CONFIG.md#machineauto_concurrency--host-forecast-admission). |
 | `orbit run profiles` | Implemented: the profiles per workspace, work class and complexity: deliveries (sparse below `min_profile_deliveries`), horizon, peak CPU and memory and when they occur, and the CPU and memory spread. Flags no-diff profiles with build-like load and names the deliveries behind each flag (§3.2). `--json` for the full series |
-| `orbit run profiles --accuracy` | Implemented (§8.1): composable forecast-time `--since`, exact `--drain` and recorded `--mode` cohorts; mature measured pairs, pending and missing counts per offset; shadow decisions and enforce admissions, gap-fit holds and pull holds per drain. `--json` includes the effective selection and raw pairs |
+| `orbit run profiles --accuracy` | Implemented (§8.1): composable forecast-time `--since`, exact `--drain` and recorded `--mode` cohorts; mature measured pairs, pending and missing counts per offset, with missing split into unsampled (no delivery live) and gap (delivery live, no host row); shadow decisions and enforce admissions, gap-fit holds and pull holds per drain. `--json` includes the effective selection and raw pairs |
 | Per-drain mode | Implemented for local drains: CLI `--auto-concurrency off|shadow|enforce`, registered MCP `orbit.workflow.auto` start `auto_concurrency`, and dashboard HTTP start `auto_concurrency` all use Core submission. At durable admission, explicit or configured mode is captured in `input.auto_concurrency` with `input.auto_concurrency_source`, retained on resume/restart. The loop forwards it to the existing classifier; thresholds, profiles, throttle, ceilings and accuracy lineage remain host policy. Stop/resize and explicit pull overrides are refused before effects. |
-| Dashboard | Implemented: an operator launch choice of inherited host mode, off, shadow or enforce. The form reads current inherited host mode from readiness, sends the actual option, and shows the receipt's durable effective mode; the live window shows its captured mode. Forecast curves against measured load with running tasks stacked remain future work. |
+| Dashboard | Implemented: an operator launch choice of inherited host mode, off, shadow or enforce. The form reads current inherited host mode from readiness, sends the actual option, and shows the receipt's durable effective mode; the live window shows its captured mode. The Drain card shows the recorded forecast from readiness: its time, CPU and memory peaks against the current admit thresholds, headroom, admitted tasks with their profile source, and a candidate enforce held. A pass that built none says `no forecast this pass` and shows `last_admission_forecast` when readiness has one. Shadow decisions are labelled hypothetical. Forecast curves against measured load with running tasks stacked remain future work. |
 
 `max_active_leaf_runs` keeps its meaning: the operator's ceiling, enforced
 first.
@@ -840,11 +884,21 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   `report_at` snapshot bounds the forecasts and determines maturity for
   every point. Until `minute_at + 1 minute <= report_at`, the point is
   **pending**, even if a partial measured row already exists. After that
-  boundary it is **missing** if no row exists, otherwise **paired**. Per
-  offset, paired + pending + missing equals the selected recorded point
-  count; the compatible `unmeasured` field is pending + missing. A completed
-  minute with a row is usable regardless of sample count; this report does
-  not certify sampling completeness.
+  boundary it is **missing** if no row exists, otherwise **paired**.
+  `missing` is `unsampled` plus `gap`. `unsampled` is an ended minute with
+  no host row and no delivery run live: host minutes are written only by
+  delivery workers, so an idle drain's forecast has nothing to pair with.
+  `gap` is an ended minute with no host row while a delivery worker was
+  live, from its `started_at` until its `finished_at`. The drain's own run
+  and a run that never started are not deliveries. A run that finishes
+  exactly as the minute starts, or starts exactly as the minute ends, does
+  not cover it. A live delivery in a paired or still-pending minute does
+  not move that point. Per offset, paired + pending + missing equals the
+  selected recorded point count; the compatible `unmeasured` field is
+  pending + missing. Text keeps `PAIRS`, `PENDING`, `MISSING` and the error
+  columns, and adds `UNSAMPLED` and `GAP`. JSON adds `unsampled` and `gap`.
+  A completed minute with a row is usable regardless of sample count; this
+  report does not certify sampling completeness.
 - **Errors**, per offset and for CPU (cores) and memory (bytes): the mean
   and mean absolute error of forecast minus measured, the share of pairs
   under-forecast, and the worst miss with its minute and drain.
@@ -866,7 +920,7 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   both time bounds, drain and mode (`all` when unrestricted). JSON retains
   `since`, `forecasts`, `offsets`, `drains` and `pairs`, adding `report_at`,
   effective `selection` (`since`, `drain`, `mode`; null means unrestricted),
-  and per-offset `pending` and `missing`. Empty cohorts have zero counts,
+  and per-offset `pending`, `missing`, `unsampled` and `gap`. Empty cohorts have zero counts,
   empty pairs and drains, and null error summaries. Invalid timestamps,
   modes, empty drain ids and a since later than report time are rejected;
   selectors require `--accuracy`. Rows are pruned with the resource history

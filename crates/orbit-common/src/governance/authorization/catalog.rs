@@ -536,6 +536,13 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "collection permanently deletes workspace scratch contents",
     },
     GovernedOperation {
+        id: "gc deployments",
+        surface: OperationSurface::CliCommand,
+        allowed: &[McpCapability::Operator],
+        rationale: "collection permanently deletes deployment directories and executable and \
+                    store backups from the Orbit home",
+    },
+    GovernedOperation {
         id: "gc audit",
         surface: OperationSurface::CliCommand,
         allowed: &[McpCapability::Operator],

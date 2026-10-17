@@ -3,7 +3,7 @@
 //! tick deadline and `overlap: forbid` with an interrupted source run
 //! [ORB-10597].
 
-use chrono::{DateTime, Duration, TimeZone, Utc};
+use chrono::{DateTime, Duration, TimeZone, Timelike, Utc};
 use orbit_automation::routines::loader::{LoadedRoutine, RoutineCollection, RoutineOrigin};
 use orbit_automation::routines::sweep::{
     RoutineDispatch, RunOwnerLiveness, SweepOptions, run_sweep_core,
@@ -282,18 +282,33 @@ fn interrupted_run_that_genuinely_stopped_releases_the_forbid_slot() {
 /// bound every genuinely in-flight run already lives under.
 #[test]
 fn interrupted_run_with_unprobeable_owner_is_reclaimed_at_the_policy_timeout() {
+    if super::isolated(
+        "routine_sweep::interrupted_run_with_unprobeable_owner_is_reclaimed_at_the_policy_timeout",
+    ) {
+        return;
+    }
     let (store, dispatch, coll, slot) = interrupted_forbid_fixture(RunOwnerLiveness::Unknown);
 
     // Past the routine's 10-minute policy timeout, measured from the fire's
-    // real-clock `created_at`.
-    let reports = run_sweep_core(
-        &store,
-        &coll,
-        &dispatch,
-        SweepOptions::default(),
-        Utc::now() + Duration::minutes(20),
-    )
-    .unwrap();
+    // real-clock `created_at`. The seeded slot is months behind that clock.
+    // A `missed_run: skip` gap that long is recorded in bounded batches before
+    // the next dispatch, so move the cursor next to `now` and let this pass
+    // show the timeout release itself.
+    let now = Utc::now() + Duration::minutes(20);
+    let recent = now
+        - Duration::seconds(i64::from(now.second()))
+        - Duration::nanoseconds(i64::from(now.nanosecond()))
+        - Duration::minutes(1);
+    store
+        .connection()
+        .lock()
+        .expect("store")
+        .execute(
+            "UPDATE routine_cursors SET last_slot = ?1 WHERE routine_name = 'job'",
+            [recent.to_rfc3339()],
+        )
+        .expect("move cursor near now");
+    let reports = run_sweep_core(&store, &coll, &dispatch, SweepOptions::default(), now).unwrap();
 
     assert_eq!(reports[0].action, "fired");
     let seeded = fires(&store, "job")
@@ -301,4 +316,400 @@ fn interrupted_run_with_unprobeable_owner_is_reclaimed_at_the_policy_timeout() {
         .find(|fire| fire.slot == slot)
         .unwrap();
     assert_eq!(seeded.state, RoutineFireState::TimedOut);
+}
+
+fn routine_spec(
+    name: &str,
+    cron: &str,
+    missed_run: &str,
+    overlap: &str,
+    job: &str,
+    retries: (u32, u32),
+    timeout_minutes: u32,
+) -> LoadedRoutine {
+    let (retries_max, backoff_minutes) = retries;
+    let yaml = format!(
+        "schemaVersion: 1\n\
+         name: {name}\n\
+         enabled: true\n\
+         trigger:\n  cron: \"{cron}\"\n  missed_run: {missed_run}\n\
+         target: job:{job}\n\
+         policy:\n  timeout_minutes: {timeout_minutes}\n  overlap: {overlap}\n  \
+         retries: {{ max: {retries_max}, backoff_minutes: {backoff_minutes} }}\n"
+    );
+    LoadedRoutine {
+        definition: parse_routine_yaml(&yaml).expect("valid routine yaml"),
+        origin: RoutineOrigin::Workspace,
+        source_workspace: "polaris".to_string(),
+        source_orbit_dir: PathBuf::from(SOURCE_DIR),
+        path: PathBuf::from(format!("{SOURCE_DIR}/routines/{name}.yaml")),
+    }
+}
+
+fn claim(
+    store: &Store,
+    name: &str,
+    slot: DateTime<Utc>,
+    state: RoutineFireState,
+    detail: Option<&str>,
+) {
+    let slot = slot.to_rfc3339();
+    store
+        .routine_record_fire_intent(&RoutineFireIntentParams {
+            routine_name: name.to_string(),
+            slot: slot.clone(),
+            attempt: 1,
+            source_workspace: "polaris".to_string(),
+        })
+        .expect("claim slot");
+    if state == RoutineFireState::Dispatched {
+        store
+            .routine_mark_fire_dispatched(name, &slot, 1, "live")
+            .expect("dispatch");
+        return;
+    }
+    store
+        .routine_mark_fire_outcome(name, &slot, 1, state, detail)
+        .expect("outcome");
+}
+
+/// A catch-up routine dispatches the latest missed slot once. A sibling that
+/// kept `missed_run: skip`, even on the same job, records each missed slot
+/// and does not dispatch.
+#[test]
+fn catch_up_once_fires_one_makeup_and_skip_records_each_missed_slot() {
+    // Cron is host-local. The child pins UTC so the asserted slots stay stable.
+    if super::isolated(
+        "routine_sweep::catch_up_once_fires_one_makeup_and_skip_records_each_missed_slot",
+    ) {
+        return;
+    }
+    let store = Store::open_in_memory().expect("in-memory store");
+    let catch_up = routine_spec(
+        "worktree-gc",
+        "0 * * * *",
+        "catch_up_once",
+        "forbid",
+        "worktree_gc_pipeline",
+        (0, 1),
+        30,
+    );
+    let skip = routine_spec(
+        "operator-skip",
+        "0 * * * *",
+        "skip",
+        "forbid",
+        "worktree_gc_pipeline",
+        (0, 1),
+        30,
+    );
+    let baseline = ts(2026, 10, 14, 20, 0, 0).to_rfc3339();
+    for name in ["worktree-gc", "operator-skip"] {
+        store
+            .routine_record_baseline(name, &baseline)
+            .expect("baseline");
+    }
+    let dispatch = FakeDispatch::default();
+    let now = ts(2026, 10, 15, 18, 30, 0);
+    let reports = run_sweep_core(
+        &store,
+        &collection(vec![catch_up, skip]),
+        &dispatch,
+        SweepOptions::default(),
+        now,
+    )
+    .unwrap();
+    assert_eq!(
+        dispatch.submit_count(),
+        1,
+        "one make-up, not one per missed hour"
+    );
+    let gc = reports
+        .iter()
+        .find(|report| report.routine == "worktree-gc")
+        .unwrap();
+    assert_eq!(gc.action, "fired");
+    assert_eq!(
+        gc.slot.as_deref(),
+        Some(ts(2026, 10, 15, 18, 0, 0).to_rfc3339().as_str())
+    );
+    let skipped = reports
+        .iter()
+        .find(|report| report.routine == "operator-skip")
+        .unwrap();
+    assert_eq!(skipped.action, "skipped");
+    assert_eq!(skipped.reason.as_deref(), Some("missed_run: skip"));
+    let gc_fires = fires(&store, "worktree-gc");
+    assert_eq!(gc_fires.len(), 1);
+    assert!(
+        gc_fires
+            .iter()
+            .all(|fire| fire.state != RoutineFireState::Skipped)
+    );
+    let skip_fires = fires(&store, "operator-skip");
+    assert_eq!(
+        skip_fires.len(),
+        22,
+        "every missed hour from 21:00 through 18:00"
+    );
+    assert!(skip_fires.iter().all(|fire| {
+        fire.state == RoutineFireState::Skipped
+            && fire.detail.as_deref() == Some("missed_run: skip")
+    }));
+
+    let catch_up = routine_spec(
+        "worktree-gc",
+        "0 * * * *",
+        "catch_up_once",
+        "forbid",
+        "worktree_gc_pipeline",
+        (0, 1),
+        30,
+    );
+    let skip = routine_spec(
+        "operator-skip",
+        "0 * * * *",
+        "skip",
+        "forbid",
+        "worktree_gc_pipeline",
+        (0, 1),
+        30,
+    );
+    let again = run_sweep_core(
+        &store,
+        &collection(vec![catch_up, skip]),
+        &dispatch,
+        SweepOptions::default(),
+        now,
+    )
+    .unwrap();
+    assert_eq!(dispatch.submit_count(), 1);
+    assert!(again.iter().all(|report| report.action != "fired"));
+    assert_eq!(fires(&store, "operator-skip").len(), 22);
+}
+
+/// A forbid routine whose fire is still running does not start another one
+/// when newer skipped rows, or several later slots, would otherwise look due.
+#[test]
+fn overlap_forbid_holds_across_newer_skipped_slots() {
+    if super::isolated("routine_sweep::overlap_forbid_holds_across_newer_skipped_slots") {
+        return;
+    }
+    let store = Store::open_in_memory().expect("in-memory store");
+    let job = routine_spec(
+        "ship",
+        "* * * * *",
+        "skip",
+        "forbid",
+        "workspace_ship_pipeline",
+        (0, 1),
+        120,
+    );
+    store
+        .routine_record_baseline("ship", &ts(2026, 1, 1, 0, 0, 0).to_rfc3339())
+        .unwrap();
+    claim(
+        &store,
+        "ship",
+        ts(2026, 1, 1, 0, 5, 0),
+        RoutineFireState::Dispatched,
+        None,
+    );
+    for minute in [6, 7] {
+        claim(
+            &store,
+            "ship",
+            ts(2026, 1, 1, 0, minute, 0),
+            RoutineFireState::Skipped,
+            Some("missed_run: skip"),
+        );
+    }
+    let dispatch = FakeDispatch::default();
+    dispatch
+        .states
+        .borrow_mut()
+        .insert("live".into(), JobRunState::Running);
+    dispatch
+        .liveness
+        .borrow_mut()
+        .insert("live".into(), RunOwnerLiveness::Alive);
+    let before = fires(&store, "ship").len();
+    let reports = run_sweep_core(
+        &store,
+        &collection(vec![job]),
+        &dispatch,
+        SweepOptions::default(),
+        ts(2026, 1, 1, 0, 20, 0),
+    )
+    .unwrap();
+    assert_eq!(dispatch.submit_count(), 0);
+    assert_eq!(reports[0].reason.as_deref(), Some("overlap_in_flight"));
+    assert_eq!(fires(&store, "ship").len(), before);
+    assert_eq!(
+        fires(&store, "ship")
+            .into_iter()
+            .filter(|fire| !fire.state.is_terminal())
+            .count(),
+        1
+    );
+}
+
+/// Skip rows newer than a failed fire must not consume the retry budget's view
+/// of that fire, and a later gap must not record more skips while the retry
+/// is still owed.
+#[test]
+fn failed_fire_with_retry_budget_survives_skipped_slots() {
+    if super::isolated("routine_sweep::failed_fire_with_retry_budget_survives_skipped_slots") {
+        return;
+    }
+    let store = Store::open_in_memory().expect("in-memory store");
+    let job = routine_spec("hourly", "0 * * * *", "skip", "forbid", "noop", (2, 1), 30);
+    store
+        .routine_record_baseline("hourly", &ts(2026, 1, 1, 0, 0, 0).to_rfc3339())
+        .unwrap();
+    let failed_slot = ts(2026, 1, 1, 0, 0, 0);
+    claim(
+        &store,
+        "hourly",
+        failed_slot,
+        RoutineFireState::Failed,
+        Some("dispatch failed"),
+    );
+    for hour in [1, 2, 3] {
+        claim(
+            &store,
+            "hourly",
+            ts(2026, 1, 1, hour, 0, 0),
+            RoutineFireState::Skipped,
+            Some("missed_run: skip"),
+        );
+    }
+    store
+        .connection()
+        .lock()
+        .expect("store")
+        .execute(
+            "UPDATE routine_fires SET updated_at = '2026-01-01T00:10:00+00:00' \
+             WHERE routine_name = 'hourly' AND state = 'failed'",
+            [],
+        )
+        .expect("backdate failure");
+    let dispatch = FakeDispatch::default();
+    let reports = run_sweep_core(
+        &store,
+        &collection(vec![job]),
+        &dispatch,
+        SweepOptions::default(),
+        ts(2026, 1, 1, 3, 30, 0),
+    )
+    .unwrap();
+    assert_eq!(reports[0].action, "retry_fired");
+    assert_eq!(dispatch.submit_count(), 1);
+    assert_eq!(
+        store
+            .routine_cursor("hourly")
+            .unwrap()
+            .unwrap()
+            .last_slot
+            .as_deref(),
+        Some(ts(2026, 1, 1, 3, 0, 0).to_rfc3339().as_str()),
+        "retrying an older slot must not rewind the cursor"
+    );
+    let retry = fires(&store, "hourly")
+        .into_iter()
+        .find(|fire| fire.slot == failed_slot.to_rfc3339() && fire.attempt == 2)
+        .unwrap();
+    assert_eq!(retry.state, RoutineFireState::Dispatched);
+
+    let store = Store::open_in_memory().expect("in-memory store");
+    let job = routine_spec("hourly", "0 * * * *", "skip", "forbid", "noop", (2, 30), 30);
+    store
+        .routine_record_baseline("hourly", &ts(2026, 1, 1, 0, 0, 0).to_rfc3339())
+        .unwrap();
+    claim(
+        &store,
+        "hourly",
+        ts(2026, 1, 1, 0, 0, 0),
+        RoutineFireState::Failed,
+        Some("dispatch failed"),
+    );
+    store
+        .connection()
+        .lock()
+        .expect("store")
+        .execute(
+            "UPDATE routine_fires SET updated_at = '2026-01-01T03:20:00+00:00' \
+             WHERE routine_name = 'hourly' AND state = 'failed'",
+            [],
+        )
+        .expect("keep the failure inside its backoff");
+    let dispatch = FakeDispatch::default();
+    let reports = run_sweep_core(
+        &store,
+        &collection(vec![job]),
+        &dispatch,
+        SweepOptions::default(),
+        ts(2026, 1, 1, 3, 30, 0),
+    )
+    .unwrap();
+    assert_eq!(dispatch.submit_count(), 0);
+    assert_eq!(reports[0].action, "skipped");
+    assert_eq!(reports[0].reason.as_deref(), Some("not_due"));
+    assert_eq!(
+        fires(&store, "hourly").len(),
+        1,
+        "no skip row while a retry is owed"
+    );
+}
+
+/// A long gap is recorded oldest-first in a bounded batch. The natural slot
+/// waits until that batch has caught the cursor up.
+#[test]
+fn skip_records_a_bounded_batch_before_the_next_natural_fire() {
+    if super::isolated("routine_sweep::skip_records_a_bounded_batch_before_the_next_natural_fire") {
+        return;
+    }
+    let store = Store::open_in_memory().expect("in-memory store");
+    let first = routine_spec("minute", "* * * * *", "skip", "allow", "noop", (0, 1), 30);
+    store
+        .routine_record_baseline("minute", &ts(2026, 1, 1, 0, 0, 0).to_rfc3339())
+        .unwrap();
+    let dispatch = FakeDispatch::default();
+    let now = ts(2026, 1, 1, 2, 0, 30);
+    let reports = run_sweep_core(
+        &store,
+        &collection(vec![first]),
+        &dispatch,
+        SweepOptions::default(),
+        now,
+    )
+    .unwrap();
+    assert_eq!(dispatch.submit_count(), 0);
+    assert_eq!(reports[0].reason.as_deref(), Some("missed_run: skip"));
+    assert_eq!(store.routine_recent_fires("minute", 80).unwrap().len(), 64);
+    assert_eq!(
+        store
+            .routine_cursor("minute")
+            .unwrap()
+            .unwrap()
+            .last_slot
+            .as_deref(),
+        Some(ts(2026, 1, 1, 1, 4, 0).to_rfc3339().as_str())
+    );
+
+    let second = routine_spec("minute", "* * * * *", "skip", "allow", "noop", (0, 1), 30);
+    let reports = run_sweep_core(
+        &store,
+        &collection(vec![second]),
+        &dispatch,
+        SweepOptions::default(),
+        now,
+    )
+    .unwrap();
+    assert_eq!(dispatch.submit_count(), 1);
+    assert_eq!(reports[0].action, "fired");
+    assert_eq!(
+        reports[0].slot.as_deref(),
+        Some(ts(2026, 1, 1, 2, 0, 0).to_rfc3339().as_str())
+    );
 }

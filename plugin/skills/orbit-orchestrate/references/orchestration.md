@@ -139,6 +139,13 @@ a ceiling of N, it admits at most N-K new tasks (zero when K exceeds N).
 new work. The `Leaves:` outcomes remain those of the displayed coordinator's
 own children; inherited work is not counted as its success or failure.
 
+An admission pass that times out on a busy task-store lock (`lock_busy`) is
+skipped, not fatal: `run show` reads `Admission pass deferred:
+consecutive_failures=N last_pass_error=...`, naming the lock's holder, and
+the next pass retries after the poll interval. Ten in a row fail the drain
+with that error; find the holder in `orbit.jsonl` before restarting it. Any
+other admission error still fails the drain at once.
+
 A drain's own `State: success` says the coordinator ran, not that its leaves
 shipped: it dispatches them detached. Read the `Leaves:` line on `orbit run
 show <drain-run-id>` (JSON: `drain_summary`) for admitted / succeeded / failed

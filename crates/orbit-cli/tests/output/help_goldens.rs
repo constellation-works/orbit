@@ -29,6 +29,7 @@ const CASES: &[(&[&str], &str)] = &[
     (&["search", "reindex"], "search-reindex.txt"),
     (&["gc"], "gc/root.txt"),
     (&["gc", "audit"], "gc/audit.txt"),
+    (&["gc", "deployments"], "gc/deployments.txt"),
     (&["gc", "runs"], "gc/runs.txt"),
     (&["gc", "tmp"], "gc/tmp.txt"),
     (&["gc", "worktrees"], "gc/worktrees.txt"),

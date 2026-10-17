@@ -460,6 +460,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 state,
                 PrMergeState::Closed | PrMergeState::Contradictory(_) | PrMergeState::Conflict
             ) || behind_base(&status)
+                || status.is_draft
                 || status.merge_state_status.as_deref() == Some("DRAFT") =>
             {
                 None

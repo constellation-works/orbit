@@ -8,7 +8,8 @@ description: >
 enabled: false
 trigger:
   cron: "35 * * * *"
-  missed_run: skip
+  # One make-up pass after a gap. Skip would drop every missed hourly slot.
+  missed_run: catch_up_once
 target: job:worktree_gc_pipeline
 policy:
   timeout_minutes: 30

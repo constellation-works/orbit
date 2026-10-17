@@ -176,7 +176,10 @@ Field semantics:
   load warning naming the file for one release, then rejected as an unknown key.
 - **`trigger.cron`** — when the routine is due. `missed_run` governs fires that fall in a
   window when the host was asleep or powered off: `catch_up_once` fires a single make-up run
-  on the next sweep (never one per missed slot); `skip` waits for the next natural slot.
+  on the next sweep (never one per missed slot); `skip` waits for the next natural slot and
+  records each missed past-grace slot as a skipped fire whose detail is `missed_run: skip`
+  (`orbit routine list --json` shows it on `last_fire.detail`, and `orbit routine show` shows
+  it in recent fires). The seeded worktree-gc routine uses `catch_up_once`.
 - **`target`** — a `job:<name>` reference resolved through the source workspace's job
   catalog at load time. Unresolvable targets are load-time errors. `activity:<name>` is
   reserved and rejected at parse time with wrapping guidance: run dispatch is job-shaped
@@ -329,6 +332,8 @@ optional `trigger.state.freshness` block [ORB-13638]. Auto-task definitions
 are evaluated by the tick directly; there is no seeded auto-task scheduler routine. The definition's
 `enabled` field is the opt-in: changing it to `true` deliberately grants that scheduled
 capability in the workspace.
+
+`worktree_gc.yaml` uses `missed_run: catch_up_once`, so a gap in that hourly backstop runs one make-up GC instead of dropping the slots. Other seeded routines keep their own `missed_run` policy.
 
 The files under `crates/orbit-core/assets/routines/retired/` are provenance shapes of retired defaults, not seeds: `orbit workspace sync` compares a workspace definition with them to tell an Orbit-seeded copy from an operator's.
 
@@ -675,8 +680,15 @@ Per pass:
    missed slot; `missed_run` policy decides gaps. A slot is "natural" for two configured
    clock-cadence intervals after its scheduled time: the default 60s clock therefore keeps
    the existing 120s grace, while a configured 300s clock keeps a slot natural for 600s.
-   This admits one delayed or missed poll without turning genuine downtime into a `skip`
-   fire.
+   This admits one delayed or missed poll without recording that slot as missed. Past that
+   grace, `skip` records each unconsumed slot (oldest first, at most 64 per tick) as a
+   skipped fire with detail `missed_run: skip` and does not dispatch. A longer gap continues
+   on the next tick; the cursor does not jump past a slot this pass did not record, so a
+   newer natural slot waits until the recorded batch catches up. `catch_up_once` dispatches
+   one make-up for the latest slot and writes no skip rows. Skip rows are not recorded while
+   any fire is unfinished or a failed fire still has retry budget. `overlap: forbid` holds
+   on any unfinished fire (`intent` or `dispatched`), not only the newest row, so a later
+   skipped slot cannot hide a run that is still going.
 6. For each due cron routine: check `overlap` against in-flight fires, record the fire intent
    (idempotency key: routine name + scheduled slot + attempt, transactionally with the
    cursor advance), then dispatch the target via `submit_pipeline_run` in the routine's
@@ -904,11 +916,13 @@ on each owner; delivery/state admission still requires the consumer's owner mach
   can skip or double a slot exactly as classic cron does. The idempotency key (name + slot)
   prevents double *fires* for the same slot but cannot invent a skipped slot.
 - **`catch_up_once` collapses history.** After a week of laptop sleep, a nightly routine
-  fires once, not seven times. This is the intended semantic for every currently envisioned
-  routine (commits, reindexing), but it is a lossy default; a count-preserving mode would
-  be a new `missed_run` variant.
+  fires once, not seven times. This is the intended semantic for make-up work (the seeded
+  worktree-gc routine included), but it is a lossy default; a count-preserving mode would
+  be a new `missed_run` variant. `skip` does not replay the gap either: it records each
+  missed slot with a reason and dispatches nothing until the next natural slot.
 - **Cron overlap recovery is on the dispatcher.** `overlap: forbid` depends on
-  accurate in-flight bookkeeping; a crashed sweep that recorded a fire intent but died
+  accurate in-flight bookkeeping and looks for any unfinished fire, not only the newest
+  row. A crashed sweep that recorded a fire intent but died
   before dispatch leaves a stale in-flight entry. The outcome-sync step reclaims intents
   and dispatches older than `policy.timeout_minutes` (marking them `error` / `timed_out`);
   the consumed slot is not re-fired — the idempotency key holds. The two failure paths are

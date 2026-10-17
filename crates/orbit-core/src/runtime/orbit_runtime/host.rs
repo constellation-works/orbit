@@ -17,8 +17,8 @@ use crate::runtime::host_resource::accuracy::{
 };
 use crate::runtime::host_resource::delivery::delivery_jobs;
 use crate::runtime::host_resource::forecast::{
-    AdmissionReservationRequest, ForecastDecision, HostLoadForecast, HostLoadProbe,
-    RESERVATION_TTL_MINUTES, build_forecast,
+    AdmissionReservationRequest, BASELINE_HISTORY_MINUTES, ForecastDecision, HostLoadForecast,
+    HostLoadProbe, RESERVATION_TTL_MINUTES, build_forecast,
 };
 use crate::runtime::host_resource::profile::{
     ProfileBounds, ProfileLookup, ProfileMatch, ProfileSet,
@@ -203,11 +203,24 @@ impl OrbitRuntime {
                     .as_ref()
                     .is_none_or(|mode| mode == &record.mode)
         });
-        let minutes = match records.first() {
-            Some(first) => store.host_resource_minutes(first.forecast_at - Duration::minutes(1))?,
-            None => Vec::new(),
+        let (minutes, deliveries) = match records.first() {
+            Some(first) => {
+                let lower = first.forecast_at - Duration::minutes(1);
+                let jobs = delivery_jobs();
+                (
+                    store.host_resource_minutes(lower)?,
+                    store.delivery_runs_overlapping(&jobs, lower, report_at)?,
+                )
+            }
+            None => (Vec::new(), Vec::new()),
         };
-        Ok(forecast_accuracy(&records, &minutes, selection, report_at))
+        Ok(forecast_accuracy(
+            &records,
+            &minutes,
+            &deliveries,
+            selection,
+            report_at,
+        ))
     }
 
     /// Read the host's load from `<proc_root>/{stat,meminfo}` instead of
@@ -266,6 +279,7 @@ impl OrbitRuntime {
             now,
             delivery_jobs: &jobs,
             reservations_expire_before: now - Duration::minutes(RESERVATION_TTL_MINUTES),
+            resource_minutes_since: Some(now - Duration::minutes(BASELINE_HISTORY_MINUTES)),
         };
         let mut decide = Some(decide);
         let mut outcome = None;
@@ -276,7 +290,7 @@ impl OrbitRuntime {
             let forecast = build_forecast(
                 load,
                 Arc::clone(&profiles),
-                self.host_load.measure(),
+                self.host_load.measure(now),
                 horizon,
                 now,
             );
@@ -298,6 +312,7 @@ impl OrbitRuntime {
                 now,
                 delivery_jobs: &[],
                 reservations_expire_before: now - Duration::minutes(RESERVATION_TTL_MINUTES),
+                resource_minutes_since: None,
             },
             remove,
             &mut |_| Ok(Vec::new()),

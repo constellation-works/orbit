@@ -329,6 +329,7 @@ impl crate::OrbitRuntime {
                 candidate: None,
                 provider_limit: false,
                 provider_refusal: false,
+                owner_busy: false,
             }),
             ..ClaimEvidence::default()
         };

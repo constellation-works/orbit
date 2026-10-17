@@ -36,6 +36,10 @@ use completion::mutation::{
     enabled_completion_refuses_repair_and_mutation_provenance,
     expired_completion_budget_never_merges,
 };
+use completion::prerequisite::{
+    later_prerequisite_read_failure_resumes_only_completion,
+    prerequisite_read_after_mutation_provenance_never_resumes,
+};
 use completion::{
     changed_base_gets_fresh_native_validation, completion_reuse_refuses_drift,
     concurrent_and_lost_admission_keep_one_completion_budget,
@@ -844,5 +848,7 @@ crate::scenario_table!(
     configured_review_requires_unchanged_host_certificate,
     refused_receipts_stop_before_agent_or_republication,
     enabled_completion_refuses_repair_and_mutation_provenance,
-    expired_completion_budget_never_merges
+    expired_completion_budget_never_merges,
+    later_prerequisite_read_failure_resumes_only_completion,
+    prerequisite_read_after_mutation_provenance_never_resumes
 );

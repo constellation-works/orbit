@@ -85,6 +85,7 @@ mod no_diff;
 mod ordering;
 #[cfg(unix)]
 mod orphaned_supervisor;
+mod owner_busy;
 mod owner_gates;
 mod partial_candidate;
 mod pilot;

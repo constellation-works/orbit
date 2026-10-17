@@ -5,9 +5,10 @@ metadata:
 spec:
   type: deterministic
   description: >
-    Discover an existing pull request for a prepared branch or create it once.
-    Commit, base synchronization, push, and task promotion are separate job
-    checkpoints.
+    Discover an existing pull request for a prepared branch or create it once;
+    a created one closes the task's earlier open delivery pull requests so
+    each task has one. Commit, base synchronization, push, and task promotion are
+    separate job checkpoints.
   input_schema_json:
     type: object
     properties:
@@ -104,5 +105,17 @@ spec:
           through another pull request: its `number`, a `decision`
           (`closed`, `not_open`, `other_branch` or `close_failed`) and a
           `detail`. Null when there was none or this run reused it.
+      closed_stale_pull_requests:
+        type: array
+        description: >
+          The task's other open delivery pull requests this run closed after
+          it created its own, so the task has one open pull request (a reused
+          pull request closes nothing), each with its `number`, `task_id`,
+          a `decision` (`closed` or `close_failed`) and a `detail`; one
+          `lookup_failed` entry when the open pull requests could not be
+          listed. Only pull requests on the task's `orbit/<task>-` branches
+          whose body names the task and whose author is a configured delivery
+          author (else this pull request's author) qualify. Empty when
+          `pr.close_on_terminal` is off. A failed close is not a step failure.
   action: pr_open
   config: {}

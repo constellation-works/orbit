@@ -81,8 +81,11 @@ still applies.
   has the checkout registered and its clock on. To keep it off one machine,
   `orbit routine pause` it there; `enabled: false` in the file retires it. A
   `state` trigger runs only on the machine it names in `owner_machine`.
-- **Missed slots collapse.** After a sleep, `missed_run: skip` waits for the
-  next slot and `catch_up_once` fires one make-up run.
+- **Missed slots collapse.** After a sleep, `missed_run: skip` records each
+  missed slot with a reason and waits for the next one. `catch_up_once` fires
+  one make-up run. The seeded worktree-gc routine uses `catch_up_once`.
+  `orbit doctor` warns when an enabled routine's last success is older than
+  three times its schedule interval.
 - **No overlap.** A fire is skipped while the previous one is still running,
   for up to `timeout_minutes`.
 - **Seeded disabled.** `orbit workspace init` writes task pilot, ship sweep,

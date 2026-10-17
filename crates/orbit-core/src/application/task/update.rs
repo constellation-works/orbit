@@ -305,6 +305,14 @@ impl OrbitRuntime {
         // The lock hook takes `FnMut` because it is a trait object, but the
         // body must run exactly once and consumes its inputs; `take()` makes
         // both facts explicit rather than forcing the params to be cloneable.
+        // An operator's or agent's own move back to backlog or someday may
+        // also close the task's undelivered PRs; Orbit's own holds and
+        // requeues keep them for the run that continues the candidate.
+        let attributed_requeue = matches!(
+            context.status_authority,
+            StatusAuthority::Lifecycle | StatusAuthority::Forced
+        ) && !context.system_writer;
+        let discarded = params.discard_candidate;
         let mut inputs = Some((params, context));
         let mut updated: Option<LockedTaskUpdate> = None;
         self.stores().tasks().with_task_write_lock(id, &mut || {
@@ -327,6 +335,14 @@ impl OrbitRuntime {
         self.record_resolves_side_effects(previous_status, &updated);
         // So does the forge round trip that closes the task's PRs.
         self.close_task_prs_after_transition(previous_status, &updated, status_note.as_deref());
+        if attributed_requeue {
+            self.close_task_prs_after_requeue(
+                previous_status,
+                &updated,
+                status_note.as_deref(),
+                discarded,
+            );
+        }
         Ok(updated)
     }
 

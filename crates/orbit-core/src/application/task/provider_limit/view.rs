@@ -18,6 +18,8 @@ use orbit_types::telemetry::{
 use orbit_types::workflow::Provider;
 use serde::{Deserialize, Serialize};
 
+use orbit_config::ProviderLimitThreshold;
+
 use super::gate::{reading_at_limit, reading_covers, reading_lifetime};
 use super::ledger::PARTIAL_NOTE;
 use crate::OrbitRuntime;
@@ -55,9 +57,10 @@ pub struct ProviderLimitReading {
     /// Whether the reading undercounts: a `usd` budget read from the ledger
     /// leaves out invocations that recorded no cost.
     pub partial: bool,
-    /// The used percent at or above which the provider's crews are skipped
-    /// (`workflow.provider_limit_*`).
-    pub threshold: u8,
+    /// The used percent at or above which the provider's crews are skipped,
+    /// or `off` when `workflow.provider_limit_overrides` turns that gate off.
+    /// JSON is the number, or the string `off`.
+    pub threshold: ProviderLimitThreshold,
     /// Whether the reading keeps the crews it covers out of delivery
     /// admission now.
     pub gated: bool,
@@ -87,15 +90,23 @@ impl ProviderLimitReading {
     }
 
     /// `claude five_hour 93% >= 90% until 15:00Z` for a gated reading,
-    /// `claude five_hour 40% (limit 90%)` otherwise. The reset is written
-    /// as a time of day when it falls on `now`'s UTC date.
+    /// `claude five_hour 40% (limit 90%)` below a percent threshold, and
+    /// `codex primary 100% (gating off)` when the provider's gate is off.
+    /// The reset is written as a time of day when it falls on `now`'s UTC date.
     #[must_use]
     pub fn describe(&self, now: DateTime<Utc>) -> String {
         let label = self.label();
+        let reported = self.used_percent.map_or_else(
+            || "usage not reported".to_string(),
+            |used| format!("{used}%"),
+        );
+        let ProviderLimitThreshold::Percent(threshold) = self.threshold else {
+            return format!("{label} {reported}{} (gating off)", self.partial_note());
+        };
         if self.gated {
             let usage = match self.used_percent {
-                Some(used) if used >= f64::from(self.threshold) => {
-                    format!("{used}% >= {}%", self.threshold)
+                Some(used) if used >= f64::from(threshold) => {
+                    format!("{used}% >= {threshold}%")
                 }
                 Some(used) => format!("exhausted at {used}%"),
                 None => "exhausted".to_string(),
@@ -106,18 +117,13 @@ impl ProviderLimitReading {
                 short_time(self.until, now)
             );
         }
-        let usage = self.used_percent.map_or_else(
-            || "usage not reported".to_string(),
-            |used| format!("{used}%"),
-        );
         if self.gating {
             format!(
-                "{label} {usage}{} (limit {}%)",
-                self.partial_note(),
-                self.threshold
+                "{label} {reported}{} (limit {threshold}%)",
+                self.partial_note()
             )
         } else {
-            format!("{label} {usage} (overage window; never gates)")
+            format!("{label} {reported} (overage window; never gates)")
         }
     }
 
@@ -150,7 +156,8 @@ pub struct ProviderUsageStatus {
     /// Whether the provider reports its usage windows after a run. One that
     /// does not is read only from a limit failure.
     pub reports_usage: bool,
-    pub threshold: u8,
+    /// The provider's gate: a percent, or `off`. JSON is the number or `"off"`.
+    pub threshold: ProviderLimitThreshold,
     /// Whether any live reading gates it now.
     pub gated: bool,
     /// Its enabled configured crews.
@@ -167,7 +174,8 @@ pub struct CrewProviderLimit {
     pub used_percent: Option<f64>,
     pub exhausted: bool,
     pub resets_at: Option<DateTime<Utc>>,
-    pub threshold: u8,
+    /// The crew's provider gate: a percent, or `off`. JSON is the number or `"off"`.
+    pub threshold: ProviderLimitThreshold,
     /// Whether admission skips the crew now.
     pub gated: bool,
     pub until: DateTime<Utc>,
@@ -221,6 +229,12 @@ impl ProviderLimitsView {
                     return None;
                 }
                 let threshold = policy.threshold(&observation.provider);
+                let gated = match threshold {
+                    ProviderLimitThreshold::Off => false,
+                    ProviderLimitThreshold::Percent(percent) => {
+                        observation.gating && reading_at_limit(observation, percent)
+                    }
+                };
                 Some(ProviderLimitReading {
                     provider: canonical_provider(&observation.provider),
                     scope: observation.model.clone(),
@@ -235,7 +249,7 @@ impl ProviderLimitsView {
                     gating: observation.gating,
                     partial: observation.partial,
                     threshold,
-                    gated: observation.gating && reading_at_limit(observation, threshold),
+                    gated,
                     until,
                     crews: crews
                         .iter()

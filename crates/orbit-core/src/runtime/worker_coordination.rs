@@ -317,8 +317,11 @@ pub(crate) fn check_worker_host_input(input: &Value, host_call: bool) -> Result<
 /// of its candidate. A call the owner could not serve only because a lock
 /// stayed held is typed transient the same way [ORB-15088], so a step it
 /// fails — a rebase onto a moved base included — never settles as the
-/// candidate's failure or as a base conflict. The variant is kept; a refusal,
-/// an ambiguous outcome and a local error are left as they are.
+/// candidate's failure or as a base conflict. It also carries the
+/// owner-busy marker, so the release a claimed leaf settles with blames
+/// neither its host nor its crew and the drain backs off instead. The variant
+/// is kept; a refusal, an ambiguous outcome and a local error are left as
+/// they are.
 fn owner_route_failure(error: OrbitError) -> OrbitError {
     let typed = |message: String| {
         format!(
@@ -340,8 +343,9 @@ fn owner_route_failure(error: OrbitError) -> OrbitError {
         } if code == LOCK_BUSY_ERROR_CODE => OrbitError::RemoteTool {
             code,
             message: format!(
-                "{} {message}",
-                orbit_types::workflow::TRANSIENT_FAILURE_MARKER
+                "{} {} {message}",
+                orbit_types::workflow::TRANSIENT_FAILURE_MARKER,
+                orbit_types::workflow::OWNER_BUSY_MARKER
             ),
             payload,
         },

@@ -1,7 +1,8 @@
 //! Deterministic routine evaluation, retry and overlap coordination.
 
 use super::due::{
-    DueDecision, due_decision_with_grace, natural_slot_grace_for_cadence, parse_cron,
+    DueDecision, MISSED_SLOT_SKIP_DETAIL, MissedSlotWalk, due_decision_with_grace,
+    missed_slots_through, natural_slot_grace_for_cadence, parse_cron,
 };
 use super::loader::{LoadedRoutine, RoutineCollection, RoutineLoadError};
 use chrono::{DateTime, Duration, Local, Utc};
@@ -9,7 +10,7 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::{
     RoutineFireIntentParams, RoutineFireRecord, RoutineFireState, RoutineStoreBackend,
 };
-use orbit_types::workflow::{JobRunState, OverlapPolicy};
+use orbit_types::workflow::{JobRunState, MissedRunPolicy, OverlapPolicy};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
@@ -17,6 +18,11 @@ use std::time::Instant;
 /// Cooperative budget for a host scheduler tick. The native manager supplies
 /// an independent hard ceiling for an operation that never returns.
 pub const TICK_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// How many missed `skip` slots one tick records. Due math stays O(1); the
+/// cursor must not jump past a slot this pass did not record, so a longer
+/// gap continues on the next tick before a newer natural slot can fire.
+const MISSED_SLOT_RECORD_LIMIT: usize = 64;
 
 /// Core-supplied owner facts, independent of persisted run status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -292,14 +298,43 @@ fn sweep_routine(
     let lower_bound = parse_rfc3339(lower_bound_raw)?.with_timezone(&Local);
 
     let natural_slot_grace = natural_slot_grace_for_cadence(options.sweep_cadence_seconds)?;
-    match due_decision_with_grace(
+    let decision = due_decision_with_grace(
         &cron,
         definition.trigger.missed_run,
         &lower_bound,
         &now_local,
         natural_slot_grace,
-    )? {
-        DueDecision::Fire { slot, .. } => {
+    )?;
+    // Skip rows are terminal and sort ahead of an older in-flight or failed
+    // fire. Recording them while either is outstanding hides that fire from a
+    // latest-row check, so do not write them until both are clear. A new due
+    // fire still takes precedence over a retry and is handled below.
+    let suppress_skips = store.routine_blocking_fire(name)?.is_some()
+        || retryable_failure(store, routine)?.is_some();
+
+    match decision {
+        DueDecision::Fire { slot, is_catch_up } => {
+            if definition.trigger.missed_run == MissedRunPolicy::Skip
+                && !is_catch_up
+                && !suppress_skips
+            {
+                let walk = record_missed_slots(
+                    store,
+                    routine,
+                    &SkipWindow {
+                        cron: &cron,
+                        lower_bound: &lower_bound,
+                        through: &slot,
+                        now_local: &now_local,
+                        natural_slot_grace,
+                        include_through: false,
+                    },
+                    options.dry_run,
+                )?;
+                if walk.more {
+                    return Ok(missed_skip_report(routine, &walk));
+                }
+            }
             let slot_utc = slot.with_timezone(&Utc).to_rfc3339();
             fire(
                 store,
@@ -312,6 +347,46 @@ fn sweep_routine(
                     options,
                 },
             )
+        }
+        DueDecision::RecordSkip { slot } => {
+            if suppress_skips {
+                if definition.policy.overlap == OverlapPolicy::Forbid
+                    && store.routine_blocking_fire(name)?.is_some()
+                {
+                    return Ok(RoutineSweepReport {
+                        slot: Some(slot.with_timezone(&Utc).to_rfc3339()),
+                        ..skipped(routine, "overlap_in_flight")
+                    });
+                }
+                if let Some(retry) = retry_candidate(store, routine, now_utc)? {
+                    return fire(
+                        store,
+                        routine,
+                        dispatch,
+                        FireRequest {
+                            slot: &retry.slot,
+                            attempt: retry.attempt + 1,
+                            fired_action: "retry_fired",
+                            options,
+                        },
+                    );
+                }
+                return Ok(skipped(routine, "not_due"));
+            }
+            let walk = record_missed_slots(
+                store,
+                routine,
+                &SkipWindow {
+                    cron: &cron,
+                    lower_bound: &lower_bound,
+                    through: &slot,
+                    now_local: &now_local,
+                    natural_slot_grace,
+                    include_through: true,
+                },
+                options.dry_run,
+            )?;
+            Ok(missed_skip_report(routine, &walk))
         }
         DueDecision::NotDue => {
             // No new slot: a most-recent fire that failed (run-level) or
@@ -335,26 +410,89 @@ fn sweep_routine(
     }
 }
 
-/// The most recent fire, when it failed with retry budget left and the fixed
-/// backoff has elapsed.
-///
-/// Retryable means `Failed` — a run-level failure *or* a synchronous dispatch
-/// failure: `fire` records a `submit_pipeline_run` that returns
-/// `Err` as `Failed` (not `Error`) precisely because nothing dispatched, so it
-/// is unambiguously safe to re-dispatch under the same slot. `Error` is
-/// reserved for the *ambiguous* case — a crashed sweep's stale intent reclaimed
-/// by the outcome sync, where a worker may have partially started — and stays
-/// terminal so a make-up fire never races an orphaned run.
-fn retry_candidate(
+/// Bounds for one `missed_run: skip` recording pass.
+struct SkipWindow<'a> {
+    cron: &'a croner::Cron,
+    lower_bound: &'a DateTime<Local>,
+    through: &'a DateTime<Local>,
+    now_local: &'a DateTime<Local>,
+    natural_slot_grace: Duration,
+    include_through: bool,
+}
+
+/// Record past-grace slots in `(lower_bound, through]`, oldest first.
+fn record_missed_slots(
     store: &dyn RoutineStoreBackend,
     routine: &LoadedRoutine,
-    now_utc: DateTime<Utc>,
+    window: &SkipWindow<'_>,
+    dry_run: bool,
+) -> Result<MissedSlotWalk<Local>, OrbitError> {
+    let walk = missed_slots_through(
+        window.cron,
+        window.lower_bound,
+        window.through,
+        window.now_local,
+        window.natural_slot_grace,
+        window.include_through,
+        MISSED_SLOT_RECORD_LIMIT,
+    )?;
+    if dry_run {
+        return Ok(walk);
+    }
+    for slot in &walk.slots {
+        let slot_utc = slot.with_timezone(&Utc).to_rfc3339();
+        let claimed = store.routine_record_fire_intent(&RoutineFireIntentParams {
+            routine_name: routine.definition.name.clone(),
+            slot: slot_utc.clone(),
+            attempt: 1,
+            source_workspace: routine.source_workspace.clone(),
+        })?;
+        if !claimed {
+            continue;
+        }
+        store.routine_mark_fire_outcome(
+            &routine.definition.name,
+            &slot_utc,
+            1,
+            RoutineFireState::Skipped,
+            Some(MISSED_SLOT_SKIP_DETAIL),
+        )?;
+    }
+    Ok(walk)
+}
+
+fn missed_skip_report(routine: &LoadedRoutine, walk: &MissedSlotWalk<Local>) -> RoutineSweepReport {
+    let slot = walk
+        .slots
+        .last()
+        .map(|slot| slot.with_timezone(&Utc).to_rfc3339());
+    RoutineSweepReport {
+        slot,
+        ..skipped(routine, MISSED_SLOT_SKIP_DETAIL)
+    }
+}
+
+/// A failed fire that still has retry budget, ignoring backoff.
+///
+/// Retryable means `Failed` — a run-level failure *or* a synchronous dispatch
+/// failure: `fire` records a `submit_pipeline_run` that returns `Err` as
+/// `Failed` (not `Error`) precisely because nothing dispatched, so it is
+/// unambiguously safe to re-dispatch under the same slot. `Error` is reserved
+/// for the ambiguous case — a crashed sweep's stale intent reclaimed by the
+/// outcome sync, where a worker may have partially started — and stays
+/// terminal so a make-up fire never races an orphaned run.
+///
+/// Skipped rows are not failures: a newer skip must not hide this row, and
+/// must not be written while it still exists.
+fn retryable_failure(
+    store: &dyn RoutineStoreBackend,
+    routine: &LoadedRoutine,
 ) -> Result<Option<RoutineFireRecord>, OrbitError> {
     let retries = routine.definition.policy.retries;
     if retries.max == 0 {
         return Ok(None);
     }
-    let Some(latest) = store.routine_latest_fire(&routine.definition.name)? else {
+    let Some(latest) = store.routine_latest_non_skip_fire(&routine.definition.name)? else {
         return Ok(None);
     };
     if latest.state != RoutineFireState::Failed {
@@ -364,9 +502,24 @@ fn retry_candidate(
     if latest.attempt > retries.max {
         return Ok(None);
     }
+    Ok(Some(latest))
+}
+
+/// The most recent failed fire whose retry backoff has elapsed.
+fn retry_candidate(
+    store: &dyn RoutineStoreBackend,
+    routine: &LoadedRoutine,
+    now_utc: DateTime<Utc>,
+) -> Result<Option<RoutineFireRecord>, OrbitError> {
+    let Some(latest) = retryable_failure(store, routine)? else {
+        return Ok(None);
+    };
     let failed_at = parse_rfc3339(&latest.updated_at)?;
     if now_utc.signed_duration_since(failed_at)
-        < duration_from_minutes(retries.backoff_minutes, "policy.retries.backoff_minutes")?
+        < duration_from_minutes(
+            routine.definition.policy.retries.backoff_minutes,
+            "policy.retries.backoff_minutes",
+        )?
     {
         return Ok(None);
     }
@@ -396,8 +549,7 @@ fn fire(
     let name = &definition.name;
 
     if definition.policy.overlap == OverlapPolicy::Forbid
-        && let Some(latest) = store.routine_latest_fire(name)?
-        && !latest.state.is_terminal()
+        && store.routine_blocking_fire(name)?.is_some()
     {
         // Stale in-flight entries past the policy timeout were already
         // reclaimed by the outcome sync at the top of the pass, so anything

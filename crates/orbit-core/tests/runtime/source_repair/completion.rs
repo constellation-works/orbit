@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 #[path = "completion/mutation.rs"]
 pub(super) mod mutation;
+#[path = "completion/prerequisite.rs"]
+pub(super) mod prerequisite;
 
 fn fixture() -> (Fixture, PathBuf) {
     fixture_with_auto_fix(true)

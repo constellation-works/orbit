@@ -5,6 +5,7 @@ use orbit_types::task::{EpicHierarchyNode, has_epic_tag, inherited_only_epic_roo
 use orbit_types::workflow::ShipMode;
 use serde_json::Value;
 
+use super::super::pass_error::PassError;
 use super::super::unknown_footprint::{FootprintGuard, FootprintWave, whole_tree_holder};
 use super::exclusions::{
     clears_complexity_gate, footprint_exclusion, host_os_exclusion,
@@ -299,11 +300,7 @@ pub(crate) fn allowlist_from_input(
 pub(super) fn active_pilot_preparations(
     runtime: &OrbitRuntime,
     action: &str,
-) -> Result<BTreeMap<String, std::collections::BTreeSet<String>>, DispatchError> {
-    crate::application::automation::preparation::active_task_pilot_preparations(runtime).map_err(
-        |error| DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: format!("read active pilot preparations: {error}"),
-        },
-    )
+) -> Result<BTreeMap<String, std::collections::BTreeSet<String>>, PassError> {
+    crate::application::automation::preparation::active_task_pilot_preparations(runtime)
+        .map_err(|error| PassError::store(action, "read active pilot preparations", error))
 }

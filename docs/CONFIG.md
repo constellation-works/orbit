@@ -187,6 +187,7 @@ shows its historical decisions without changing current eligibility. A shadow sk
 eligibility. These are recorded observations, not a fresh fit or a reservation:
 `forecast_at` dates them, and the next pass or changed configuration can change
 the answer. Without a recorded forecast, the readiness response is unchanged.
+The dashboard Drain card shows the same snapshot: forecast time, CPU and memory peaks against the admit thresholds, headroom, each admitted task with its profile source, and a candidate enforce held. A pass with no forecast says `no forecast this pass` and shows `capacity.last_admission_forecast` when one was retained. Shadow decisions are labelled hypothetical.
 
 `orbit run profiles --accuracy` checks the forecast itself. Each local drain
 pass under `shadow` or `enforce` that built a forecast records it at +5, +10,
@@ -212,8 +213,10 @@ select a cohort; without filters the report uses all drains and modes from
 the last 30 days. Both output formats identify that selection and report
 time. Only fully ended target minutes with measurements form error pairs.
 `pending` counts future/incomplete minutes, even with a partial measured row;
-`missing` counts ended minutes with no row. The compatible `unmeasured` count
-is their sum. `--json` adds the raw pairs and effective selection. A selected
+`missing` counts ended minutes with no row. `missing` splits into `unsampled`
+(no delivery run was live in that minute, so an idle drain had nothing to
+pair with) and `gap` (a delivery run was live but wrote no host row). The
+compatible `unmeasured` count is pending plus missing. `--json` adds the raw pairs and effective selection. A selected
 drain/time range does not attest source, build-budget or threshold settings:
 those are not stored in forecast rows. Per-task profiles remain a separate
 population whose sparsity and spread still limit confidence. See the
@@ -270,7 +273,7 @@ provider_limit_explicit_crews = "wait"
 | `workflow.xhard_complexity_crews` | `[]` | The same, for `xhard`. |
 | `workflow.final_recovery_crews` | `["sol:100", "opus:20"]` | Weighted pool for the final-recovery activity; `[]` disables it. See [final recovery pool](#final-recovery-pool). |
 | `workflow.provider_limit_max_used_pct` | `90` | Admission skips a crew while a live usage window of its provider or model is exhausted or used at or above this percent (`1`–`100`; `100` skips only on exhaustion). See [provider usage limits](#provider-usage-limits). |
-| `workflow.provider_limit_overrides` | `[]` | Per-provider thresholds replacing the one above, each `provider:percent` (`["claude:80", "grok:100"]`): one entry per provider, percent `1`–`100`, an alias such as `anthropic` stored as its provider. |
+| `workflow.provider_limit_overrides` | `[]` | Per-provider thresholds replacing the one above, each `provider:percent` (`["claude:80", "grok:100"]`) or `provider:off` (`["codex:off"]`, record readings without gating admission). One entry per provider, percent `1`–`100`, an alias such as `anthropic` stored as its provider. |
 | `workflow.provider_limit_budgets` | `[]` | Rolling budgets for providers that report no usage, each `provider:<amount><usd\|tokens>/<n><h\|d>` (`["grok:30usd/5h"]`). See [budgets](#budgets-for-providers-that-report-no-usage). |
 | `workflow.provider_limit_explicit_crews` | `wait` | A task whose explicit crew is limited: `wait` keeps it in the backlog; `pool` draws from the unlimited members of its complexity pool. |
 | `workflow.auto_ship` | `false` | Opt this workspace in to `orbit run ship-sweep`, the cross-workspace unattended ship command (skipped with `auto_ship_disabled` while `false`). The seeded `ship-sweep` routine ignores this key; its `enabled:` flag is its only switch. Neither grants `--complete` or `--approve-proposed`, and a `no-auto-approve` task is never auto-approved by either flag's drain or the CI sweep. |
@@ -866,12 +869,14 @@ A hold learns of a limit only after a run fails on it. Delivery admission also r
 ```toml
 [workflow]
 provider_limit_max_used_pct = 90            # default
-provider_limit_overrides = ["claude:80", "grok:100"]
+provider_limit_overrides = ["claude:80", "grok:100", "codex:off"]
 provider_limit_budgets = ["grok:30usd/5h"]  # none by default
 provider_limit_explicit_crews = "wait"      # or "pool"
 ```
 
 **Limited crews.** A crew is limited while a live, gating reading of its provider is exhausted or at or above the provider's threshold (its `provider_limit_overrides` entry, else `provider_limit_max_used_pct`). A reading that names a model (Claude's `seven_day_opus`) limits only crews whose model contains it, case-insensitively; any other reading limits every crew of the provider (aliases included). At `100` only an exhausted window gates (99% gates nothing). An overage window (`gating` off) never gates.
+
+**Gate off.** `provider:off` (for example `codex:off`) turns that provider's pre-dispatch gate off. Every live reading is still recorded and shown, with `threshold` `off` and `gated` false. No reading of that provider — an event reading, a usage-limit failure observation, or a ledger budget reading — limits a crew at admission, in a drain or ship draw, or in the pull window. `orbit doctor`'s `provider-limits:<provider>` row says gating is off, and the dashboard marks the reading the same way. A run that then fails on a usage limit still records the task's provider failure hold: `off` disables only the pre-dispatch gate. Removing the entry gates the same readings again at `provider_limit_max_used_pct`. `off` is not a percent, so it does not change [`provider_limit_budgets`](#budgets-for-providers-that-report-no-usage) arithmetic.
 
 **Lapse.** A reading counts until its `resets_at`. Without one it counts for its window's length (60 minutes when that is unknown), or, for an exhausted error reading, for the first usage-limit backoff, 30 minutes. The crew is eligible again at the next admission pass, with no provider probe.
 
@@ -888,17 +893,17 @@ A redrawn task's `crew_selection.source` names the limit. A task left with no un
 
 **Surfaces** all share admission's view of live readings (liveness, threshold, crew rules), so none shows a crew runnable while admission skips it.
 
-- `orbit run readiness`: a `Provider limits:` line per gated reading (`claude five_hour 93% >= 90% until 15:00Z: opus, sonnet skipped`; a reset on another UTC day includes its date) and each waiting task's detail. `--json` has a top-level `provider_limits` array of every live reading: `provider`, `scope` (the model a reading names, else `null`), `window`, `used_percent`, `exhausted`, `resets_at`, `source`, `observed_at`, `age_seconds` (never negative), `stale` (true when `observed_at` is an earlier UTC date than the snapshot), `gating`, `partial`, `threshold`, `gated`, `until` and `crews` (enabled crews covered). `provider_auth_failures` lists each host and provider with a `provider_unavailable` authentication failure in the last 7 days (at most 200 recent failures and 200 recent successes) that a later successful run of that provider on that host has not cleared. Each item is `host`, `provider`, `runs` (`run_id`, `at`, oldest first) and `fix_command` (the executor's auth-probe hint, else the provider's re-login command). A failure or success outside that window is not part of the projection.
+- `orbit run readiness`: a `Provider limits:` line per gated reading (`claude five_hour 93% >= 90% until 15:00Z: opus, sonnet skipped`; a reset on another UTC day includes its date) and each waiting task's detail. `--json` has a top-level `provider_limits` array of every live reading: `provider`, `scope` (the model a reading names, else `null`), `window`, `used_percent`, `exhausted`, `resets_at`, `source`, `observed_at`, `age_seconds` (never negative), `stale` (true when `observed_at` is an earlier UTC date than the snapshot), `gating`, `partial`, `threshold` (a percent, or the string `off` when that provider's gate is off), `gated` (false for every reading of a provider set to `off`), `until` and `crews` (enabled crews covered). `provider_auth_failures` lists each host and provider with a `provider_unavailable` authentication failure in the last 7 days (at most 200 recent failures and 200 recent successes) that a later successful run of that provider on that host has not cleared. Each item is `host`, `provider`, `runs` (`run_id`, `at`, oldest first) and `fix_command` (the executor's auth-probe hint, else the provider's re-login command). A failure or success outside that window is not part of the projection.
 - `orbit run show <pull-drain>`: `excluded <crew> (provider_limit until <time>): <reading>; reading from host <machine-id>` (`unregistered` when the runtime has no machine identity).
-- `orbit doctor`: one `provider-limits:<provider>` row per provider an enabled crew uses (a provider with no usage windows and no budget, which is every provider but Codex and Claude, shows `info`; a budgeted one shows its `ledger` reading, such as `grok 5h budget 67%`), plus a `provider-limits:operation.review_crew` warning when that ungated lane uses a gated provider. Row semantics: [health checks](runbooks/health-checks.md#run-orbit-doctor). `orbit doctor providers` shows the same per executor (`LIMITS` column, `provider_limits` in `--json`).
-- Dashboard: the Settings › Crews Limit column (tightest window, used percent, reset, `gated` badge); the Drain card names gated readings, lists every live reading with its age (`today` on the observation's UTC date, otherwise how long ago) and a stale marker when `stale` is set, lists each standing `provider_auth_failures` item with its host, provider, run links and fix command, and lists tasks waiting with `provider_limit`.
+- `orbit doctor`: one `provider-limits:<provider>` row per provider an enabled crew uses (a provider with no usage windows and no budget, which is every provider but Codex and Claude, shows `info`; a budgeted one shows its `ledger` reading, such as `grok 5h budget 67%`; a provider set to `off` says gating is off and lists its readings), plus a `provider-limits:operation.review_crew` warning when that ungated lane uses a gated provider. Row semantics: [health checks](runbooks/health-checks.md#run-orbit-doctor). `orbit doctor providers` shows the same per executor (`LIMITS` column, `provider_limits` in `--json`).
+- Dashboard: the Settings › Crews Limit column (tightest window, used percent, reset, `gated` badge, or `gating off` when the provider's gate is off); the Drain card names gated readings, lists every live reading with its age (`today` on the observation's UTC date, otherwise how long ago) and a stale marker when `stale` is set (a reading whose gate is off is marked `gating off`), lists each standing `provider_auth_failures` item with its host, provider, run links and fix command, and lists tasks waiting with `provider_limit`.
 
 #### Budgets for providers that report no usage
 
 Grok, Antigravity and Gemini don't report how close an account is to its limit; Orbit learns it only from the failure. `provider_limit_budgets` declares the operator's allowance per rolling window so Orbit gates the provider before it runs out.
 
 - **Format.** `provider:<amount><unit>/<window>`: a positive amount in `usd` or whole `tokens`, a window of `<n>h` or `<n>d` up to 31 days, each provider once (`xai` is stored as `grok`). No defaults. Load and `orbit config set` reject a malformed entry.
-- **Reading** (source `ledger`, account-wide): this host's spend on the provider in the trailing window ÷ the amount, gated at the provider's threshold. `usd` sums each invocation's reported cost; `tokens` sums input plus output tokens from the invocation ledger. Its reset is the earliest moment enough old spend ages out to drop below the threshold (at `100`, below the budget).
+- **Reading** (source `ledger`, account-wide): this host's spend on the provider in the trailing window ÷ the amount, gated at the provider's threshold. `usd` sums each invocation's reported cost; `tokens` sums input plus output tokens from the invocation ledger. Its reset is the earliest moment enough old spend ages out to drop below the threshold (at `100`, below the budget). `provider:off` does not change this arithmetic: the reset stays on `provider_limit_max_used_pct`, because `off` is not a percent. The reading is still shown, with `threshold` `off` and `gated` false, and it does not limit crews.
 - **Partial.** A `usd` reading where some invocation recorded no cost is `partial` (`"partial": true`; surfaces note `partial: some invocations report no cost`), and its spend is a lower bound.
 - **Precedence.** A live provider-reported reading or limit failure for the provider wins; the ledger applies again when it lapses. The ledger reading is computed on each read, never stored.
 - **Attribution.** An invocation counts for the provider it ran on. Older invocations are attributed by agent name, so an earlier Antigravity run, recorded under its model's family, does not count toward an `antigravity` budget.
@@ -940,6 +945,13 @@ it requires an operator session and is unavailable on pull replicas. The receipt
 and persisted run input carry the chosen repair authority. This control uses the
 same watcher, crew pool and attempt ledger described below.
 
+A delivery leaf whose worker dies after it opened its pull request does not
+leave that pull request unwatched. The owner drain's next pass resumes the
+interrupted leaf from its checkpoints when it holds the same `--complete` and
+`--auto-fix` grants the leaf was started with, so the watcher repairs the same
+pull request and head under the run's retry lineage and attempt ledger. See
+[adopting a dead leaf's pull request](runbooks/stuck-job-runs.md#a-delivery-leaf-that-died-after-opening-its-pull-request).
+
 The crew comes from the existing pool resolution, in this order:
 
 1. `--allow-crew` restricts which crews the draw may pick, as for every
@@ -966,8 +978,13 @@ existing recovery activities, final validation and push do the repair:
   required failure still takes precedence over pending checks. Review gates and
   unreadable or stale evidence still stop the watcher. A failed required check
   whose job log shows a code failure is repaired, with that head's failed step,
-  error signature and log excerpt as evidence. A conflict is rebased onto the
-  current base by PR conflict recovery.
+  error signature and log excerpt as evidence. When that same signature already
+  fails on the base commit and the base branch has not moved past it, the
+  watcher admits no repair: it waits for the base within the completion
+  deadline and then stops with a base-red reason. That classification is the
+  landing's, not a second copy. A failure the base does not fail the same way
+  is still repaired, and the three-attempt budget is unchanged. A conflict is
+  rebased onto the current base by PR conflict recovery.
 - A failed required check run that no workflow produced (a provider app's
   aggregate result, such as a code-scanning check beside passing analysis jobs)
   is repaired only from its own failure annotations. The watcher reads them
@@ -1252,10 +1269,23 @@ At claim admission the owner captures `review.before_pr` and `review.before_land
 | Key | Default | What it does |
 |---|---|---|
 | `pr.task_url_template` | unset | URL template linking a task ID in PR descriptions. |
-| `pr.close_on_terminal` | `true` | When a task lands (`done`), is rejected or is archived, close its open Orbit-authored delivery and `[BLOCKED]` preservation PRs (rules below). `false` disables. |
+| `pr.close_on_terminal` | `true` | Close a task's open Orbit-authored delivery and `[BLOCKED]` preservation PRs when it lands (`done`), is rejected or archived, when an operator or agent moves it back to `backlog` or `someday`, and when a newer delivery attempt opens its own PR (rules below). `false` disables all of these. |
 | `pr.delivery_authors` | `[]` | Forge logins (case-insensitive) whose PRs count as Orbit-authored. Empty: the login `gh` is authenticated as on this machine. Add a follower's login if it opens PRs this owner has not accepted as a handoff. |
 
-`pr.close_on_terminal` closes a PR only if its head branch is `orbit/<TASK-ID>-…`, its body names the task, and it was opened by a `pr.delivery_authors` login or is the delivery PR of an accepted follower handoff. Human PRs and other tasks' PRs are never touched, and branches are never deleted. On `done` the landing PR stays open: any `#N` the done note names, or, when the note names none and the task leaves `review`, the PR it was reviewed through. The closing comment names the landing (the done note, such as `delivered by pull request #N merged as <sha>` or `already landed as <sha>`) or the state and reason. A new run, block or requeue closes nothing, so a re-run can resume from its `[BLOCKED]` PR. A task with no recorded PR makes no forge call, and a forge error is logged as a warning without failing the transition.
+`pr.close_on_terminal` closes a PR only if its head branch is `orbit/<TASK-ID>-…`, its body names the task, and it was opened by a `pr.delivery_authors` login or is the delivery PR of an accepted follower handoff. Human PRs and other tasks' PRs are never touched, and branches are never deleted. On `done` the landing PR stays open: any `#N` the done note names, or, when the note names none and the task leaves `review`, the PR it was reviewed through. The closing comment names the landing (the done note, such as `delivered by pull request #N merged as <sha>` or `already landed as <sha>`) or the state and reason. Starting a run or blocking a task closes nothing.
+
+A task keeps one open delivery PR. When a run's `pr_open` (or a failure handoff) creates a PR, it closes the task's other open PRs that pass the same three tests, commenting `Superseded by #N` with the new PR. Reusing an existing PR closes nothing more. Without `pr.delivery_authors`, the author test uses the author of the PR the run just created. This is how a re-admitted task's earlier `[BLOCKED]` PR closes: the failure handoff keeps it open while the task is blocked and until the next attempt publishes. The step's `closed_stale_pull_requests` output lists each close; a failed close is listed there and the step still succeeds.
+
+An operator's or agent's move back to `backlog` or `someday` (`orbit task update --status`, the dashboard, `orbit.task.update`) also closes the task's open Orbit-authored PRs, with a comment naming the move and its note. It keeps every PR a later run may still continue:
+
+- all of them while a run of the task is live or a claim on it is unsettled, since a leaf may still be landing one;
+- the `[BLOCKED]` PR when the task leaves `blocked`, since the next run resumes that candidate;
+- the PRs of a candidate a final recovery requeued;
+- the PR of the candidate the owner kept from the task's last claim.
+
+`--discard-candidate` with the move drops all of these exceptions except a live run or claim. Automation's own requeues and holds close nothing. Merged PRs are never touched.
+
+A task with no recorded PR makes no forge call. A forge error is logged as a warning and never fails the transition.
 
 ### Housekeeping
 
