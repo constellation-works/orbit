@@ -423,6 +423,9 @@ enum UnreportedWait {
 /// seconds before the provider queues its first check run.
 pub(in crate::executor::automation::vcs) struct UnreportedChecks {
     last: UnreportedWait,
+    /// Latest required-check observation; diagnostic only, never authority.
+    pub(in crate::executor::automation::vcs) required_observation: Value,
+    policy_observation: Value,
     /// Observations waited on while branch policy was unreadable.
     unsettled_polls: u32,
 }
@@ -431,6 +434,8 @@ impl UnreportedChecks {
     pub(in crate::executor::automation::vcs) fn new() -> Self {
         Self {
             last: UnreportedWait::None,
+            required_observation: json!({"state":"not_collected"}),
+            policy_observation: json!({"state":"not_collected"}),
             unsettled_polls: 0,
         }
     }
@@ -439,6 +444,13 @@ impl UnreportedChecks {
     /// Absent-context recovery may still diagnose such a head.
     pub(in crate::executor::automation::vcs) fn awaiting_policy_checks(&self) -> bool {
         matches!(self.last, UnreportedWait::Missing(_))
+    }
+
+    /// The existing branch-policy refinement, if it ran. This retains only
+    /// what this wait already parsed; it is not a policy payload or emission proof.
+    pub(in crate::executor::automation::vcs) fn diagnostic(&self) -> Value {
+        json!({"awaiting_policy_checks":self.awaiting_policy_checks(),
+            "policy_read":self.policy_observation})
     }
 
     /// What a wait that ends here was still waiting for, for its stop reason.
@@ -474,6 +486,8 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
     deadline_ms: u64,
 ) -> Result<PrMergeState, String> {
     unreported.last = UnreportedWait::None;
+    unreported.required_observation = json!({"state":"not_collected"});
+    unreported.policy_observation = json!({"state":"not_collected"});
     let state = classify_pr_state(status);
     // A draft is already refused. Refining BLOCKED into a check wait would
     // hand it to auto-merge or repair [ORB-16342].
@@ -499,23 +513,21 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
         }
         BlockedCheckWait::AutoFix => &[],
     };
-    let required = host
-        .run_private_vcs_operation(
-            operations::PR_REQUIRED_CHECKS,
-            json!({
-                "pr":pr,"workspace_path":workspace.to_string_lossy(),"deadline_ms":deadline_ms,
-            }),
-        )
-        .and_then(|answer| RequiredChecks::from_response(&answer));
-    let required = match required {
-        Ok(required) => required,
-        Err(error) => return Err(format!("required-check evidence is unavailable: {error}")),
-    };
+    let response = host.run_private_vcs_operation(
+        operations::PR_REQUIRED_CHECKS,
+        json!({
+            "pr":pr,"workspace_path":workspace.to_string_lossy(),"deadline_ms":deadline_ms,
+        }),
+    );
+    let required = RequiredChecks::observe_response(response, &mut unreported.required_observation)
+        .map_err(|error| format!("required-check evidence is unavailable: {error}"))?;
     if status.head_sha.as_deref() != Some(required.head_sha.as_str())
         || required.reported_head_sha.as_deref() != Some(required.head_sha.as_str())
     {
+        unreported.required_observation["outcome"] = json!("head_mismatch");
         return Err("required-check evidence does not identify the current head".into());
     }
+    unreported.required_observation["head_matches"] = json!(true);
     let mut pending = false;
     for check in &required.checks {
         match check.state {
@@ -527,7 +539,10 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
                     check.name.as_deref().unwrap_or_default()
                 )));
             }
-            None => return Err("required-check evidence is unreadable".into()),
+            None => {
+                unreported.required_observation["outcome"] = json!("unreadable_state");
+                return Err("required-check evidence is unreadable".into());
+            }
         }
     }
     pending |= checks.iter().any(|check| {
@@ -551,7 +566,13 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
     {
         return Ok(state);
     }
-    match unreported_required_checks(host, workspace, pr, status, deadline_ms) {
+    let missing = unreported_required_checks(host, workspace, pr, status, deadline_ms);
+    unreported.policy_observation = match &missing {
+        Ok(names) => json!({"state":"collected", "missing_checks":
+            super::diagnostics::collection(names, |name| super::diagnostics::text(name))}),
+        Err(why) => json!({"state":"unreadable", "reason":super::diagnostics::text(why)}),
+    };
+    match missing {
         Ok(missing) if missing.is_empty() => Ok(state),
         Ok(missing) => {
             unreported.last = UnreportedWait::Missing(missing);

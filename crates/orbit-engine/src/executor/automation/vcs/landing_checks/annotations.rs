@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 
 use super::super::git::git_output;
 use super::super::operations;
-use super::super::pr::{RequiredChecks, read_required_checks};
+use super::super::pr::{RequiredChecks, read_required_checks_observed};
 use crate::context::{HandoffLandingContext, RuntimeHost};
 
 /// Annotations an evidence text lists before it summarizes the rest.
@@ -229,7 +229,7 @@ pub(super) fn unanswered_required<H: RuntimeHost + ?Sized>(
     pr: &str,
     head: &str,
     unanswered: &[&(Option<String>, String)],
-    recovery: &super::CheckRecovery,
+    recovery: &mut super::CheckRecovery,
 ) -> Vec<super::FailedJob> {
     let workspace = &context.workspace_path;
     let inconclusive = |label: String, why: String| super::FailedJob {
@@ -242,9 +242,18 @@ pub(super) fn unanswered_required<H: RuntimeHost + ?Sized>(
         excerpt: String::new(),
         tip_passes: false,
     };
-    let required = match read_required_checks(host, workspace, pr) {
-        Ok(required) if required.head_sha == head => required,
+    let observation = recovery.required_observation.insert(Value::Null);
+    let required = match read_required_checks_observed(host, workspace, pr, observation) {
+        Ok(required) if required.head_sha == head => {
+            let matches = required.reported_head_sha.as_deref() == Some(head);
+            observation["head_matches"] = json!(matches);
+            if !matches {
+                observation["outcome"] = json!("head_mismatch");
+            }
+            required
+        }
         Ok(required) => {
+            observation["outcome"] = json!("head_mismatch");
             return vec![inconclusive(
                 "required checks".into(),
                 format!(
