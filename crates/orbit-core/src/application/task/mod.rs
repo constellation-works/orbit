@@ -10,6 +10,7 @@ pub(crate) mod contention;
 mod context_repair;
 mod context_widening;
 mod desktop;
+mod external_merge;
 mod proposed;
 pub use proposed::ProposedTaskInput;
 mod provider_hold;
@@ -97,12 +98,16 @@ pub use screened::{ScreenedTaskWrite, TaskUpdateAuthority, TaskWriteScreen};
 pub use transient_infra::TransientInfraBlockedTask;
 pub(crate) use validation_tools::positive_validation_tools;
 
+pub use external_merge::ExternalMergeSettlement;
 pub(crate) use helpers::{SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution};
+pub use lifecycle::{
+    EXTERNAL_MERGE_SETTLED_EVENT, task_status_transition_allowed,
+    task_status_transition_required_field,
+};
 pub(crate) use lifecycle::{
     ensure_completion_run_stopped, ensure_task_has_execution_plan,
     in_progress_transition_requires_plan, is_operator_rescue_close,
 };
-pub use lifecycle::{task_status_transition_allowed, task_status_transition_required_field};
 pub(crate) use paths::context_workspace_root;
 pub(crate) use update::admit_agent_artifact;
 

@@ -13,6 +13,7 @@ use super::import::TaskImportArgs;
 use super::publication::TaskPublicationCommand;
 use super::recheck_blocked::TaskRecheckBlockedArgs;
 use super::reindex::TaskReindexArgs;
+use super::settle_merged::TaskSettleMergedArgs;
 
 /// Grouped `orbit task` help, rendered the same way `orbit run` and the root
 /// command render theirs: a hand-rolled template, because clap's derive has no
@@ -46,6 +47,8 @@ Health:
   requeue      Requeue a blocked task onto its published candidate
   recheck-blocked
                Requeue tasks whose infrastructure block has cleared
+  settle-merged
+               Settle tasks whose delivery pull request merged outside Orbit
 
 Bundles:
   export       Export task bundles to a portable tar.zst archive
@@ -96,6 +99,9 @@ pub enum TaskSubcommand {
     /// Re-check tasks blocked by a missing provider launcher or transient
     /// infrastructure; `--confirm` returns the cleared ones to backlog
     RecheckBlocked(TaskRecheckBlockedArgs),
+    /// Settle tasks to done whose delivery pull request was merged outside
+    /// Orbit
+    SettleMerged(TaskSettleMergedArgs),
     /// Export task bundles to a portable tar.zst archive
     Export(TaskExportArgs),
     /// Import task bundles from a tar.zst archive
@@ -113,6 +119,7 @@ impl Execute for TaskSubcommand {
             TaskSubcommand::Operation(invocation) => invocation.execute(runtime),
             TaskSubcommand::Flow(args) => args.execute(runtime),
             TaskSubcommand::RecheckBlocked(args) => args.execute(runtime),
+            TaskSubcommand::SettleMerged(args) => args.execute(runtime),
             TaskSubcommand::Export(args) => args.execute(runtime),
             TaskSubcommand::Import(args) => args.execute(runtime),
             TaskSubcommand::Publication(command) => command.execute(runtime),
