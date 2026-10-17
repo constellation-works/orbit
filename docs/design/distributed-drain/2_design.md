@@ -939,9 +939,12 @@ A failed pull request check, owed or not, is classified from its failed-step log
 error signature [ORB-15956]: `inherited` (the signature also fails on the candidate's base, or the
 same job passes on the moved landing tip) updates the pull request branch from the landing branch
 once; `transient` (the network or runner rule the validation gates rerun on) reruns the failed jobs
-once; `candidate` is a repairable stop whose evidence carries the signature and log excerpt. Past
-that budget, or when the jobs or log are unreadable, the landing stops in `review` with the
-classification. A branch-updated head is merged only when it is a two-parent merge of the accepted
+once; `candidate` is a repairable stop whose evidence carries the failed job, its signature and a log
+excerpt. An `inherited` failure that still fails after that one update, on a base tip where the same
+job passes, is the candidate's and takes that same repairable stop [ORB-16322]; when the automatic
+repair is already spent, it stops in `review`. An unmoved red base, an inconclusive read, and a
+failure past the one-update or one-rerun budget stop in `review` with the classification and spend
+nothing further. A branch-updated head is merged only when it is a two-parent merge of the accepted
 candidate and a commit on the landing branch whose tree equals their clean `merge-tree`; the
 accepted candidate and its evidence stay the validated commit. A claimed leaf whose required
 command failed on a red base that the follower has since recorded green releases `baseline_red`
@@ -1338,5 +1341,6 @@ Acceptance criteria, not reported as passing.
 - [ORB-15285] — kept a review-filed task's evidence selectors through task-pilot assessments that propose only modification targets.
 - [ORB-15705] — pruned settled claims' mutation receipts 7 days after their last mutation, keeping claim and lifecycle rows as the namespace that refuses a late replay.
 - [ORB-15956] — classified a landing's failed pull request check as inherited, transient or candidate, each with a one-time recovery, and let a red base recorded green release without a hold.
+- [ORB-16322] — handed an inherited check that still fails after the one branch update, on a base tip where the same job passes, to that same one automatic repair.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
