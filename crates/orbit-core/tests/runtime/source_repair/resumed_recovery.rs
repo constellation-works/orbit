@@ -162,6 +162,10 @@ fn resumed_fixture() -> Resumed {
         },
         resume_step_index: Some(1),
         repair_commit: Some(FinalRecoveryRepairCommit {
+            // Same spelling production `observe_repair_commit` stores. The
+            // fixture root comes from `bulk_root`, so this still matches the
+            // checkpoint after `worktree remove` drops the directory
+            // authentication would otherwise canonicalize.
             workspace_path: checkout.canonicalize().unwrap(),
             head_sha_before: owner_head.clone(),
             head_sha: repair.clone(),

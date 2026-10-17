@@ -23,6 +23,21 @@ pub(super) fn git(repo: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().into()
 }
 
+/// Bulk-write temp parent spelled the way `std::fs::canonicalize` spells it.
+///
+/// `bulk_write_temp_dir` keeps the tmpfs but returns the path it was given.
+/// macOS `TMPDIR` is under `/var`, a symlink to `/private/var`. On Linux the
+/// same helper returns `/dev/shm` when the process temp is not a tmpfs, and
+/// `/dev/shm` is often a symlink to `/run/shm`. Receipt authentication stores
+/// the canonical checkout, then compares it again after the worktree is gone.
+/// Canonicalize fails on the missing directory and falls back to the spelling
+/// worktree setup recorded, so a symlinked parent refuses a receipt that names
+/// the same directory. Creating the root here makes those spellings agree.
+fn bulk_root() -> PathBuf {
+    let dir = orbit_common::test_env::bulk_write_temp_dir();
+    std::fs::canonicalize(&dir).unwrap_or(dir)
+}
+
 /// The published, rebased candidate every fixture starts from: a checkout
 /// and the bare remote its origin URL is rewritten to, with the commits the
 /// host's checkpoints name. It is built once per branch in a process and
@@ -50,7 +65,7 @@ impl SourceCheckout {
     }
 
     fn build(branch: &str) -> Self {
-        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+        let root = TempDir::new_in(bulk_root()).unwrap();
         let repo = root.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
         git(&repo, &["init", "-q", "-b", "main"]);
@@ -205,7 +220,7 @@ impl Fixture {
         command: &str,
     ) -> Self {
         let command = serde_json::to_string(command).unwrap();
-        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+        let root = TempDir::new_in(bulk_root()).unwrap();
         let repo = root.path().join("repo");
         let global = root.path().join("global");
         std::fs::create_dir_all(repo.join(".orbit")).unwrap();
