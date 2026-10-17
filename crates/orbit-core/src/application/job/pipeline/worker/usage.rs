@@ -153,10 +153,16 @@ impl RunResourceSampler {
 
     /// A sampler that reads the process tree `read` returns. The same minute
     /// rows as [`Self::new`]. `read` returning `None` skips that sample.
+    /// `locate` reads where a process that left the tree went, as
+    /// `process_start_and_parent` does.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_process_tree(
         store: Arc<dyn ResourceUsageStoreBackend>,
         read: impl FnMut() -> Option<Vec<orbit_common::process::ancestry::ProcessTreeProcess>>
+        + Send
+        + 'static,
+        locate: impl FnMut(u32) -> Option<(orbit_common::process::ancestry::ProcessStartKey, u32)>
         + Send
         + 'static,
         proc_root: PathBuf,
@@ -167,7 +173,7 @@ impl RunResourceSampler {
     ) -> Self {
         Self::assemble(
             store,
-            ResourceSource::Tree(TreeSampler::new(read)),
+            ResourceSource::Tree(TreeSampler::new(read, locate)),
             proc_root,
             workspace_id,
             run_id,
@@ -509,6 +515,7 @@ impl OrbitRuntime {
         ResourceSamplerThread::spawn(RunResourceSampler::from_process_tree(
             store,
             || orbit_common::process::ancestry::process_tree(std::process::id()),
+            orbit_common::process::ancestry::process_start_and_parent,
             PathBuf::from("/proc"),
             workspace_id,
             run.run_id.clone(),

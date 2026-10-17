@@ -1,6 +1,7 @@
 //! Process-tree sampling: interval CPU stays non-negative when a child
-//! leaves, an unreadable tree writes nothing, and a real macOS tree is what
-//! the minute row records.
+//! leaves, a reaped descendant is charged once, a descendant reaped outside
+//! the tree does not hide later work, an unreadable tree writes nothing, and
+//! a real macOS tree is what the minute row records.
 
 use std::collections::VecDeque;
 #[cfg(target_os = "macos")]
@@ -31,8 +32,44 @@ fn process(pid: u32, started: u64, cpu_ns: u64, bytes: u64) -> ProcessTreeProces
             pid,
             starttime: started,
         },
+        parent: None,
         cpu_time_ns: cpu_ns,
+        reaped_cpu_time_ns: 0,
         phys_footprint: bytes,
+    }
+}
+
+fn reaped(process: ProcessTreeProcess, reaped_ns: u64) -> ProcessTreeProcess {
+    ProcessTreeProcess {
+        reaped_cpu_time_ns: reaped_ns,
+        ..process
+    }
+}
+
+fn under(process: ProcessTreeProcess, parent: &ProcessTreeProcess) -> ProcessTreeProcess {
+    ProcessTreeProcess {
+        parent: Some(parent.key),
+        ..process
+    }
+}
+
+/// Where a process that left the tree went: `(pid, start, parent pid)` for
+/// each one still alive. Every other pid reads as exited.
+fn alive(processes: &[(u32, u64, u32)]) -> impl FnMut(u32) -> Option<(ProcessStartKey, u32)> {
+    let processes = processes.to_vec();
+    move |pid| {
+        processes
+            .iter()
+            .find(|(alive, _, _)| *alive == pid)
+            .map(|(pid, starttime, ppid)| {
+                (
+                    ProcessStartKey {
+                        pid: *pid,
+                        starttime: *starttime,
+                    },
+                    *ppid,
+                )
+            })
     }
 }
 
@@ -72,11 +109,21 @@ fn recorded(
     script: Vec<Option<Vec<ProcessTreeProcess>>>,
     at_seconds: &[i64],
 ) -> Vec<RunResourceMinute> {
+    recorded_with(script, at_seconds, alive(&[]))
+}
+
+/// [`recorded`] where `locate` says where each process that left went.
+fn recorded_with(
+    script: Vec<Option<Vec<ProcessTreeProcess>>>,
+    at_seconds: &[i64],
+    locate: impl FnMut(u32) -> Option<(ProcessStartKey, u32)> + Send + 'static,
+) -> Vec<RunResourceMinute> {
     let fixture = Fixture::new();
     let mut queue = VecDeque::from(script);
     let mut sampler = RunResourceSampler::from_process_tree(
         Arc::clone(&fixture.store) as Arc<dyn ResourceUsageStoreBackend>,
         move || queue.pop_front().unwrap_or(None),
+        locate,
         fixture.proc_root.clone(),
         "ws_test".into(),
         "jrun-tree".into(),
@@ -109,32 +156,150 @@ fn cores_of(rows: &[RunResourceMinute]) -> f64 {
 
 /// A child that exits, a pid that is reused, and a counter that steps
 /// backwards must not make the minute negative or replace it with a
-/// lifetime total. A process that appears contributes its full CPU time.
+/// lifetime total. A process that appears contributes its full CPU time,
+/// and a descendant reaped between samples is charged through its parent.
 #[test]
 fn tree_intervals_charge_deltas_and_new_processes_only() {
     // 5s of wall. CPU figures below are chosen so cores land on dyadic
     // values: 1_250_000 usec / 5_000_000 usec = 0.25, and twice that is 0.5.
     let parent = |cpu_ns, bytes| process(1, 10, cpu_ns, bytes);
-    let child = |cpu_ns, bytes| process(2, 20, cpu_ns, bytes);
-    let reused = |cpu_ns| process(2, 21, cpu_ns, 10);
+    let child = |cpu_ns, bytes| under(process(2, 20, cpu_ns, bytes), &parent(0, 0));
+    let reused = |cpu_ns| under(process(2, 21, cpu_ns, 10), &parent(0, 0));
 
+    // The child ran 0.5 s more after the first sample, then the parent
+    // (0.75 s of its own) reaped it: only that tail and the parent's growth
+    // are new.
     let exited = recorded(
         vec![
             Some(vec![
                 parent(10_000_000_000, 1_000),
                 child(8_000_000_000, 50_000_000),
             ]),
-            Some(vec![parent(11_250_000_000, 1_000)]),
+            Some(vec![reaped(parent(10_750_000_000, 1_000), 8_500_000_000)]),
         ],
         &[0, 5],
     );
     assert!(
         (cores_of(&exited) - 0.25).abs() < 1e-9,
-        "the exited child's lifetime must not be subtracted or recounted: {exited:#?}"
+        "the reaped child's sampled lifetime must not be charged again: {exited:#?}"
     );
     assert_eq!(
         exited[0].memory_bytes, 50_001_000,
         "memory is the peak of the tree, including the child while it was alive"
+    );
+
+    let unseen = recorded(
+        vec![
+            Some(vec![parent(1_000_000_000, 100)]),
+            Some(vec![reaped(parent(1_000_000_000, 100), 1_250_000_000)]),
+        ],
+        &[0, 5],
+    );
+    assert!(
+        (cores_of(&unseen) - 0.25).abs() < 1e-9,
+        "a descendant that ran and was reaped between samples counts through its parent: {unseen:#?}"
+    );
+
+    // The walk read the parent before the child was reaped, then missed the
+    // child: its reap lands one sample later and is still charged once.
+    let late_reap = recorded(
+        vec![
+            Some(vec![parent(1_000_000_000, 100), child(4_000_000_000, 10)]),
+            Some(vec![parent(1_000_000_000, 100)]),
+            Some(vec![reaped(parent(1_000_000_000, 100), 6_500_000_000)]),
+        ],
+        &[0, 5, 10],
+    );
+    assert!(
+        (cores_of(&late_reap) - 0.25).abs() < 1e-9,
+        "a reap seen one sample after the child left is its 2.5 s tail: {late_reap:#?}"
+    );
+
+    // A child reaped by a grandchild-reaping parent that the root then
+    // reaps, each reap landing a sample after the departure, owes its whole
+    // subtree to the root until the root's reaped total absorbs it. Later
+    // growth is charged in full.
+    let grandchild = |cpu_ns| under(process(3, 30, cpu_ns, 10), &child(0, 0));
+    let nested = recorded(
+        vec![
+            Some(vec![
+                parent(0, 100),
+                child(1_000_000_000, 10),
+                grandchild(2_000_000_000),
+            ]),
+            Some(vec![parent(0, 100), child(1_000_000_000, 10)]),
+            Some(vec![parent(0, 100)]),
+            Some(vec![reaped(parent(0, 100), 3_000_000_000)]),
+            Some(vec![reaped(parent(5_000_000_000, 100), 3_000_000_000)]),
+        ],
+        &[0, 5, 10, 15, 20],
+    );
+    assert!(
+        (cores_of(&nested) - 0.25).abs() < 1e-9,
+        "nested reaps across samples charge only the root's 5 s of new work: {nested:#?}"
+    );
+
+    // A killed build: the shell under the root dies and the root reaps it,
+    // but the build the shell never waited for is reaped outside the tree.
+    // Its debt climbs through the shell to the root and lapses after the
+    // root's next sighting, whether the shell's reap lands in the snapshot
+    // it left or the next one. The root's later short-lived commands are
+    // charged in full instead of paying a debt nothing will absorb.
+    let shell = |cpu_ns| under(process(2, 20, cpu_ns, 10), &parent(0, 0));
+    let build = |cpu_ns| under(process(3, 30, cpu_ns, 10), &shell(0));
+    for shell_reap_seen_late in [false, true] {
+        let shell_reap_seen = if shell_reap_seen_late { 0 } else { 500_000_000 };
+        let killed = recorded(
+            vec![
+                Some(vec![
+                    parent(0, 100),
+                    shell(500_000_000),
+                    build(100_000_000_000),
+                ]),
+                Some(vec![reaped(parent(0, 100), shell_reap_seen)]),
+                Some(vec![reaped(parent(0, 100), 500_000_000)]),
+                Some(vec![reaped(parent(0, 100), 3_000_000_000)]),
+                Some(vec![reaped(parent(0, 100), 5_500_000_000)]),
+            ],
+            &[0, 5, 10, 15, 20],
+        );
+        assert!(
+            (cores_of(&killed) - 0.25).abs() < 1e-9,
+            "an orphaned build's debt must not absorb the root's later 5 s of reaped commands (shell reap late: {shell_reap_seen_late}): {killed:#?}"
+        );
+    }
+
+    // A child that is reparented away was charged while it ran here and
+    // will be reaped elsewhere, so it must not offset the parent's growth.
+    let reparented = recorded_with(
+        vec![
+            Some(vec![parent(1_000_000_000, 100), child(4_000_000_000, 10)]),
+            Some(vec![parent(1_000_000_000, 100)]),
+            Some(vec![parent(3_500_000_000, 100)]),
+            Some(vec![parent(6_000_000_000, 100)]),
+        ],
+        &[0, 5, 10, 15],
+        alive(&[(2, 20, 4_242)]),
+    );
+    assert!(
+        (cores_of(&reparented) - 5.0 / 15.0).abs() < 1e-9,
+        "a reparented child owes nothing: {reparented:#?}"
+    );
+
+    // A child the walk missed while it was still the parent's is neither
+    // written off nor charged again when it is seen once more.
+    let missed = recorded_with(
+        vec![
+            Some(vec![parent(1_000_000_000, 100), child(4_000_000_000, 10)]),
+            Some(vec![parent(1_000_000_000, 100)]),
+            Some(vec![parent(1_000_000_000, 100), child(6_500_000_000, 10)]),
+        ],
+        &[0, 5, 10],
+        alive(&[(2, 20, 1)]),
+    );
+    assert!(
+        (cores_of(&missed) - 0.25).abs() < 1e-9,
+        "a missed child is charged only its 2.5 s of growth: {missed:#?}"
     );
 
     let appeared = recorded(
@@ -153,10 +318,14 @@ fn tree_intervals_charge_deltas_and_new_processes_only() {
     );
     assert_eq!(appeared[0].memory_bytes, 4_100);
 
+    // The parent reaped the old child before its pid was reused.
     let replaced = recorded(
         vec![
-            Some(vec![child(9_000_000_000, 80)]),
-            Some(vec![reused(2_500_000_000)]),
+            Some(vec![parent(1_000_000_000, 0), child(9_000_000_000, 80)]),
+            Some(vec![
+                reaped(parent(1_000_000_000, 0), 9_000_000_000),
+                reused(2_500_000_000),
+            ]),
         ],
         &[0, 5],
     );
@@ -223,6 +392,7 @@ fn macos_worker_records_a_spawned_child_tree() {
     let mut sampler = RunResourceSampler::from_process_tree(
         Arc::clone(&fixture.store) as Arc<dyn ResourceUsageStoreBackend>,
         || orbit_common::process::ancestry::process_tree(std::process::id()),
+        orbit_common::process::ancestry::process_start_and_parent,
         fixture.proc_root.clone(),
         "ws_test".into(),
         "jrun-live".into(),
@@ -308,7 +478,7 @@ fn macos_worker_records_a_spawned_child_tree() {
     assert_eq!(
         rows[0].cpu_accounting.as_deref(),
         Some(orbit_store::contracts::CPU_ACCOUNTING_MACOS),
-        "native worker minutes carry corrected Mach accounting provenance"
+        "native worker minutes carry reaped-descendant Mach accounting provenance"
     );
     let newcomer_usec = newcomer_cpu_ns as f64 / 1_000.0;
     assert!(
