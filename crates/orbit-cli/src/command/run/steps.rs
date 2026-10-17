@@ -118,19 +118,6 @@ fn step_not_found(run_id: &str, step_id: &str) -> OrbitError {
     ))
 }
 
-pub(crate) fn filtered_steps<'a>(
-    run: &'a JobRun,
-    step_id: Option<&str>,
-) -> Result<Vec<&'a JobRunStep>, OrbitError> {
-    match step_id {
-        Some(step_id) => Ok(vec![
-            find_stored_run_step(run, step_id)
-                .ok_or_else(|| step_not_found(&run.run_id, step_id))?,
-        ]),
-        None => Ok(run.steps.iter().collect()),
-    }
-}
-
 pub(crate) fn resolve_step_filter(
     run: &JobRun,
     audit_steps: &[RunAuditStep],
@@ -153,14 +140,6 @@ pub(crate) fn resolve_step_filter(
     }
 
     Err(step_not_found(&run.run_id, step_id))
-}
-
-pub(crate) fn run_header_text(run: &JobRun) -> String {
-    run_header_text_with_state(run, None)
-}
-
-pub(crate) fn run_header_text_with_state(run: &JobRun, state: Option<&PipelineState>) -> String {
-    run_header_text_with_lock_holders(run, state, &LockHolders::new())
 }
 
 pub(crate) fn run_header_text_with_lock_holders(
@@ -413,20 +392,4 @@ pub(crate) fn step_record_payload(
 
 pub(crate) fn run_step_record_to_json(step: &RunStepRecord) -> Value {
     step.to_json()
-}
-
-pub(crate) fn legacy_step_to_json(step: &JobRunStep) -> Value {
-    json!({
-        "step_index": step.step_index,
-        "target_id": step.target_id,
-        "target_type": step.target_type.to_string(),
-        "state": step.state.to_string(),
-        "started_at": step.started_at.map(|t| t.to_rfc3339()),
-        "finished_at": step.finished_at.map(|t| t.to_rfc3339()),
-        "duration_ms": step.duration_ms,
-        "lock_wait_ms": step.lock_wait_ms,
-        "exit_code": step.exit_code,
-        "error_code": step.error_code,
-        "error_message": step.error_message,
-    })
 }

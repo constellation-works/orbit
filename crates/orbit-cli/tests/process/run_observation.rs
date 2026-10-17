@@ -459,9 +459,7 @@ impl Fixture {
         let output = self.orbit().args(args).output().expect("spawn orbit");
         assert!(!output.status.success(), "{args:?} unexpectedly succeeded");
         let stderr = String::from_utf8_lossy(&output.stderr);
-        // Legacy `orbit logs` prints a deprecation line ahead of the error.
-        let start = stderr.find('{').unwrap_or(0);
-        serde_json::from_str(&stderr[start..])
+        serde_json::from_str(&stderr)
             .unwrap_or_else(|_| panic!("{args:?} stderr is not one JSON error: {stderr}"))
     }
 }
@@ -869,7 +867,6 @@ fn default_run_reads_still_reconcile_stale_runs() {
 
 /// An explicit run lookup reports why the stored run is unreadable instead
 /// of claiming it does not exist; only a run with no row is `not_found`.
-/// Legacy `orbit logs` follows the same rule.
 fn explicit_run_lookup_preserves_store_errors() {
     const MISSING: &str = "jrun-20260920-9999";
     let fixture = Fixture::init();
@@ -888,7 +885,6 @@ fn explicit_run_lookup_preserves_store_errors() {
             vec!["run", "logs", run_id, "--no-reconcile", "--json"],
             vec!["run", "events", run_id, "--no-reconcile", "--json"],
             vec!["run", "trace", run_id, "--json"],
-            vec!["logs", run_id, "--json"],
         ]
     };
     for args in lookups(FAILED) {

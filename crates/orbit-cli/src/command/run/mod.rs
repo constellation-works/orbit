@@ -10,7 +10,6 @@ mod extend;
 mod format;
 mod history;
 pub mod job;
-pub mod legacy_logs;
 mod lock_holders;
 mod logs;
 mod profiles;
@@ -28,5 +27,5 @@ mod worktree_gc;
 
 pub use command::{RunCommand, RunSubcommand};
 pub use job::{JobReplayArgs, JobResumeArgs, JobRunArgs, JobRunPipelineWorkerArgs};
-pub(crate) use show::{legacy_logs_summary_payload, run_show_payload};
+pub(crate) use show::run_show_payload;
 pub(crate) use steps::RunRead;

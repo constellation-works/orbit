@@ -17,10 +17,9 @@ use super::format::{RunRootCause, format_backlog_exclusion_lines, format_root_ca
 use super::job::cli_job_run_to_json_with_activity_provenance;
 use super::lock_holders::waiting_lock_holders;
 use super::steps::{
-    RunDisplaySteps, RunRead, RunStepRecord, StepSource, activity_provenance_lines, filtered_steps,
-    legacy_step_to_json, resolve_run, resolve_run_step, run_display_steps, run_header_text,
-    run_header_text_with_lock_holders, run_step_record_to_json, step_record_payload,
-    step_summary_table,
+    RunDisplaySteps, RunRead, StepSource, activity_provenance_lines, resolve_run, resolve_run_step,
+    run_display_steps, run_header_text_with_lock_holders, run_step_record_to_json,
+    step_record_payload, step_summary_table,
 };
 
 /// `CatalogReferenceLayer::layer` for a definition this binary ships.
@@ -830,33 +829,4 @@ fn live_provider_process_lines(processes: &[RunProviderProcess]) -> String {
             lines
         })
         .collect()
-}
-
-pub(crate) fn legacy_logs_summary_payload(
-    runtime: &OrbitRuntime,
-    run_id: &str,
-    step_id: Option<&str>,
-) -> CommandOut {
-    let run = runtime.show_job_run(run_id)?;
-    let steps = filtered_steps(&run, step_id)?;
-
-    let values = steps
-        .iter()
-        .map(|step| legacy_step_to_json(step))
-        .collect::<Vec<_>>();
-    let records = steps
-        .iter()
-        .map(|step| RunStepRecord::from_job_step(step))
-        .collect::<Vec<_>>();
-
-    let mut header = run_header_text(&run);
-    header.push('\n');
-    Ok(Payload::blocks(
-        Value::Array(values),
-        vec![
-            Block::text(header),
-            Block::table(step_summary_table(&records)),
-        ],
-    )
-    .into())
 }
