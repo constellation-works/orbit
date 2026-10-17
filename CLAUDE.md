@@ -6,6 +6,7 @@ Loaded as both `AGENTS.md` and `CLAUDE.md`.
 
 - Work only on authorized scope. In a managed activity, leave commits and delivery transitions to the pipeline. Neither implementation nor a PR request authorizes merging.
 - Don't invent task IDs — get them from `orbit.task.add`. Don't edit task files directly — use `orbit.task.update`.
+- When filing or preparing a task, don't list `docs/CONFIG.md` in `context_files`. Most config and admission work touches it, so its file lock serializes otherwise independent tasks. Still update it in the same PR when the change affects what it documents.
 - Don't add cross-crate dependencies without updating [`ARCHITECTURE.md`](ARCHITECTURE.md).
 - Historical ADRs are not an authority; don't cite them. Judge from current code, tests, and requirements.
 - Don't touch `CHANGELOG.md` during tasks; it is compiled at release time ([`RELEASING.md`](RELEASING.md)).
