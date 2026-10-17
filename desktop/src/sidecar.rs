@@ -40,6 +40,8 @@ const MAX_LOG_BYTES: u64 = 8 * 1024 * 1024;
 pub(crate) enum Control {
     /// Start again now instead of waiting out the backoff.
     Retry,
+    /// Stop the running server and start a new one.
+    Restart,
     /// The app is exiting.
     Shutdown,
 }
@@ -84,6 +86,15 @@ impl Sidecar {
         let _ = self.control.try_send(Control::Retry);
     }
 
+    pub(crate) fn restart(&self) {
+        let _ = self.control.try_send(Control::Restart);
+    }
+
+    /// Address of the running dashboard server, if one is ready.
+    pub(crate) fn dashboard(&self) -> Option<Url> {
+        lock(&self.dashboard).clone()
+    }
+
     /// Record which page the window is loading. The webview's own URL is
     /// unset until its first load, so it is never queried.
     pub(crate) fn page_loading(&self, url: &Url) {
@@ -120,7 +131,7 @@ impl Sidecar {
         }
     }
 
-    fn is_shutting_down(&self) -> bool {
+    pub(crate) fn is_shutting_down(&self) -> bool {
         self.shutting_down.load(Ordering::SeqCst)
     }
 }
@@ -128,6 +139,7 @@ impl Sidecar {
 /// How one server attempt ended.
 enum Outcome {
     Shutdown,
+    Restart,
     Stopped { ran_for: Duration, message: String },
 }
 
@@ -154,6 +166,11 @@ pub(crate) fn supervise(app: AppHandle, sidecar: Arc<Sidecar>, control: Receiver
             }
             Ok(binary) => match run_server(&app, &sidecar, &control, &binary) {
                 Outcome::Shutdown => return,
+                Outcome::Restart => {
+                    failures = 0;
+                    show_home(&app, &sidecar);
+                    continue;
+                }
                 Outcome::Stopped { ran_for, message } => {
                     failures = if ran_for >= HEALTHY_RUN {
                         0
@@ -281,6 +298,17 @@ fn run_server(
         match control.recv_timeout(POLL) {
             Ok(Control::Shutdown) | Err(RecvTimeoutError::Disconnected) => {
                 return Outcome::Shutdown;
+            }
+            Ok(Control::Restart) => {
+                *lock(&sidecar.dashboard) = None;
+                if let Some(mut child) = lock(&sidecar.child).take() {
+                    stop_child(&mut child);
+                }
+                return if sidecar.is_shutting_down() {
+                    Outcome::Shutdown
+                } else {
+                    Outcome::Restart
+                };
             }
             Ok(Control::Retry) | Err(RecvTimeoutError::Timeout) => {}
         }
