@@ -1279,14 +1279,17 @@ const ACTIVITY_SAMPLE_KIND = "cli_invocation_activity";
 
 // The supervisor samples a running agent every interval its output grows, and
 // each sample repeats the newest assistant message. Fold each consecutive run
-// of samples that carry one message into a single row. A sample whose output
-// tail held no message keeps the previous one, as the run projection reads it.
+// of samples from one identified invocation that carry one message into a row.
+// A sample whose output tail held no message keeps that invocation's previous
+// one. Without a parent identity, legacy samples remain separate rows.
 function groupRunEvents(events) {
   const groups = [];
   for (const ev of events) {
     const last = groups[groups.length - 1];
     const head = last?.events[0];
     if (head && ev.body_kind === ACTIVITY_SAMPLE_KIND && head.body_kind === ACTIVITY_SAMPLE_KIND
+        && ev.parent_event_id && ev.parent_event_id === head.parent_event_id
+        && ev.agent_identity === head.agent_identity
         && ev.provider === head.provider
         && (ev.latest_message == null || ev.latest_message === last.message)) {
       last.events.push(ev);
