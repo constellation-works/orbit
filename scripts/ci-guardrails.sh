@@ -130,7 +130,10 @@ if [[ "$fast" == false ]]; then
   run_phase clippy-production cargo clippy --workspace --lib --bins -- -D warnings -D clippy::disallowed_methods
   run_phase clippy-all-targets cargo clippy --workspace --all-targets -- -D warnings -A clippy::disallowed_methods
   if cargo nextest --version >/dev/null 2>&1; then
-    run_phase workspace-tests cargo nextest run --no-fail-fast \
+    # Profile ci raises test-threads above the 4-vCPU runner default.
+    # The sampler prints one cpu-util line and keeps nextest's exit status.
+    run_phase workspace-tests "$repo_root/scripts/cpu-utilisation.sh" --label nextest -- \
+      cargo nextest run --profile ci --no-fail-fast \
       --success-output immediate \
       --workspace --lib --bins --tests
   else
@@ -281,6 +284,7 @@ guard_phase_started=$SECONDS
   run_guard "$repo_root/scripts/test-validate-agent-plugin.sh"
   run_guard "$repo_root/scripts/test-make-install.py"
   run_guard "$repo_root/scripts/test-cross-revision-check.sh"
+  run_guard "$repo_root/scripts/test-cpu-utilisation.py"
   drain_pool
   exit "$failed"
 ) >"$guard_logs/pool.out" 2>"$guard_logs/pool.err" &
