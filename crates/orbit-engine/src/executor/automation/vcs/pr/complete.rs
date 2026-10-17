@@ -714,7 +714,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                             continue;
                         }
                         if let Some(reason) =
-                            red_base_wait(host, input, workspace_path, &status, &failed)
+                            red_base_wait(host, input, workspace_path, pr_number, &status, &failed)
                         {
                             base_red_reason = Some(reason);
                         } else {

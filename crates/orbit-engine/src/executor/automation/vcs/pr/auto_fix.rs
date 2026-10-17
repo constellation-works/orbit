@@ -319,15 +319,19 @@ pub(super) fn check_repair_handoff(
 /// keeps the ordinary repair path, including a candidate-caused failure, a
 /// moved tip whose same job has concluded, and any git state or evidence
 /// this classification could not read, such as a head object that is not
-/// local.
+/// local. Only required failures take part in the hold.
 pub(super) fn red_base_wait<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
     workspace_path: &str,
+    pr_number: &str,
     status: &PullRequestStatus,
     failed: &[(Option<String>, String)],
 ) -> Option<String> {
     let head = status.head_sha.as_deref()?;
+    // [ORB-16416] An optional failure that no job answers would otherwise
+    // switch the hold off for a required inherited failure beside it.
+    let (failed, _) = required_failures(host, workspace_path, pr_number, head, failed).ok()?;
     let base_name = input_string_field(input, "base")?;
     let workspace = Path::new(workspace_path);
     let base_ref = resolve_worktree_start_point(
@@ -340,7 +344,7 @@ pub(super) fn red_base_wait<H: RuntimeHost + ?Sized>(
     let base = git_output(workspace, &["merge-base", head, &tip]).ok()?;
     // An unreadable answer is not itself a red base. The repair read still
     // stops when the head evidence is missing.
-    unmoved_red_base(host, workspace, head, &base, &tip, failed)
+    unmoved_red_base(host, workspace, head, &base, &tip, &failed)
         .ok()
         .flatten()
 }

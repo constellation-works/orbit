@@ -1912,16 +1912,23 @@ fn plant_open_commit_ci(fx: &Fixture, sha: &str, run_id: u64) {
 }
 
 /// An unmoved base whose own job fails the same way spends no repair attempt
-/// and stops base-red at the completion deadline. A failure the base does not
-/// fail that way is still admitted from the same budget, and so is a red base
-/// on a provider-side head the workspace never fetched: git state the check
-/// cannot read is not a base-red hold and must not end the watch.
+/// and stops base-red at the completion deadline, and an optional check that
+/// also fails beside it, with no job of its own, does not end that hold. A
+/// failure the base does not fail that way is still admitted from the same
+/// budget, and so is a red base on a provider-side head the workspace never
+/// fetched: git state the check cannot read is not a base-red hold and must
+/// not end the watch.
 #[test]
 fn auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure() {
     isolated(
         "auto_fix::auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure",
         |sandbox| {
-            for case in ["red_base", "candidate", "unfetched_head"] {
+            for case in [
+                "red_base",
+                "red_base_beside_optional",
+                "candidate",
+                "unfetched_head",
+            ] {
                 in_fresh_row(sandbox, |row| {
                     let fx = Fixture::new(row);
                     let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
@@ -1990,7 +1997,14 @@ fn auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure() {
                         },
                         shared,
                     );
-                    fx.script_checks(&["failure"]);
+                    // The optional `coverage` failure rides in the same rollup
+                    // as the required `test` failure and has no job to read.
+                    let rollup = if case == "red_base_beside_optional" {
+                        "mixed_failure"
+                    } else {
+                        "failure"
+                    };
+                    fx.script_checks(&[rollup]);
                     let mut input = fx.complete_ungated_input();
                     if case == "unfetched_head" {
                         // No published pin, so the provider's head is the one
@@ -2007,7 +2021,7 @@ fn auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure() {
                         .to_string();
                     let attempts = pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER);
                     let polls = fx.status_reads() - reads_before;
-                    if case == "red_base" {
+                    if case.starts_with("red_base") {
                         assert!(
                             error.contains("auto_fix_stopped")
                                 && error.contains("base_red")
