@@ -932,9 +932,9 @@ fn attach_unpersisted_audit_warning(tool_name: &str, value: Value, err: &OrbitEr
         Some(id) => format!(
             "tool '{tool_name}' committed '{id}' but its audit row could not be persisted: {err}"
         ),
-        None => format!(
-            "tool '{tool_name}' committed but its audit row could not be persisted: {err}"
-        ),
+        None => {
+            format!("tool '{tool_name}' committed but its audit row could not be persisted: {err}")
+        }
     };
     let warning = json!({
         "code": "audit_row_unpersisted",
