@@ -20,8 +20,8 @@ use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
 
 use super::super::TaskCommitBoundary;
+use super::super::apply::slow_apply;
 use super::super::boundary::section_probe::{SECTIONS, SectionCost};
-use super::super::commit::slow_apply;
 use crate::Store;
 use crate::compose::workspace_coordinated_backends;
 use crate::contracts::*;
@@ -35,25 +35,31 @@ const MACHINE: &str = "machine-a";
 const HELD_PAST_THRESHOLD: &str = "advisory file lock held past its threshold";
 
 /// One owner partition: its commit boundary and a task store inside it.
-struct Owner {
-    root: TempDir,
-    boundary: Arc<TaskCommitBoundary>,
-    tasks: Arc<TaskV2Store>,
+pub(super) struct Owner {
+    pub(super) root: TempDir,
+    pub(super) boundary: Arc<TaskCommitBoundary>,
+    pub(super) tasks: Arc<TaskV2Store>,
     repo: PathBuf,
     orbit_dir: PathBuf,
 }
 
 /// One admitted claim and the invocation its unbound leaf acts under.
-struct Admitted {
+pub(super) struct Admitted {
     request_id: String,
-    claim: ExecutionClaim,
+    pub(super) claim: ExecutionClaim,
     ship: AdmissionShipContract,
 }
 
 impl Owner {
     /// A partition holding `tasks` backlog tasks with disjoint footprints.
-    fn open(tasks: usize) -> Self {
-        let root = tempfile::tempdir_in(test_env::bulk_write_temp_dir()).expect("tempdir");
+    pub(super) fn open(tasks: usize) -> Self {
+        Self::open_in(
+            tempfile::tempdir_in(test_env::bulk_write_temp_dir()).expect("tempdir"),
+            tasks,
+        )
+    }
+
+    fn open_in(root: TempDir, tasks: usize) -> Self {
         let registry =
             TaskRegistryStore::open(&task_registry_path(root.path())).expect("open registry");
         let repo = root.path().join(PARTITION);
@@ -124,7 +130,7 @@ impl Owner {
     }
 
     /// A second handle on this partition's boundary under `options`.
-    fn boundary_with(&self, options: FileLockOptions) -> TaskCommitBoundary {
+    pub(super) fn boundary_with(&self, options: FileLockOptions) -> TaskCommitBoundary {
         TaskCommitBoundary::new(
             Store::open(&self.root.path().join("state.sqlite")).expect("open store"),
             TaskRegistryStore::open(&task_registry_path(self.root.path())).expect("open registry"),
@@ -134,7 +140,7 @@ impl Owner {
         .with_lock_options(options)
     }
 
-    fn admit(&self, request_id: &str) -> Admitted {
+    pub(super) fn admit(&self, request_id: &str) -> Admitted {
         let request = request(request_id);
         let lookup = self
             .boundary
@@ -190,17 +196,22 @@ impl Admitted {
         )
     }
 
-    fn bind(&self, boundary: &TaskCommitBoundary) -> ClaimMutationResult {
-        boundary
-            .mutate_execution_claim(
-                Some(&self.unbound()),
-                "bind",
-                &ClaimMutation::Bind {
-                    run: self.run(),
-                    ship: self.ship.clone(),
-                },
-            )
-            .expect("bind")
+    pub(super) fn bind(&self, boundary: &TaskCommitBoundary) -> ClaimMutationResult {
+        self.try_bind(boundary).expect("bind")
+    }
+
+    pub(super) fn try_bind(
+        &self,
+        boundary: &TaskCommitBoundary,
+    ) -> Result<ClaimMutationResult, orbit_common::OrbitError> {
+        boundary.mutate_execution_claim(
+            Some(&self.unbound()),
+            "bind",
+            &ClaimMutation::Bind {
+                run: self.run(),
+                ship: self.ship.clone(),
+            },
+        )
     }
 }
 
@@ -320,11 +331,6 @@ fn a_claim_mutation_section_decodes_its_own_claim_and_syncs_only_its_commit() {
 
 type Events = Arc<Mutex<Vec<BTreeMap<String, String>>>>;
 
-/// Every lock diagnostic emitted on this thread while `op` runs, as fields.
-fn lock_events<T>(op: impl FnOnce() -> T) -> (T, Vec<BTreeMap<String, String>>) {
-    lock_events_observed(op, |_| {})
-}
-
 /// Observe diagnostics synchronously on the calling thread, including a
 /// refused acquisition before the reader can return from `get_task`.
 fn lock_events_observed<T>(
@@ -366,17 +372,15 @@ fn lock_events_observed<T>(
 /// Only a hang guard for channel handshakes and lock acquisition, not a
 /// reader-performance assertion.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
-/// Let the channel-held apply step accumulate diagnostic time before the
-/// reader's contention warning; this is not a bound on reader completion.
-const CONTENTION_WARN_AFTER: Duration = Duration::from_millis(200);
 const WAITING_FOR_LOCK: &str = "still waiting for advisory file lock; a holder may be hung";
 
-/// Criterion: a `get_task` reader that arrives while a claim commit holds
-/// the partition cannot return until that commit releases, and the
-/// commit's hold report names the commit step that held it, not the
-/// section's whole operation.
+/// [ORB-16389] Criterion: a claim commit's apply runs after its admission
+/// section has released the partition. While a slow apply holds the task's
+/// bundle, another admission in the partition decides and an envelope read
+/// already sees the decided bind, but a full task read waits on the bundle
+/// lock and returns the whole bind, never a half-applied one.
 #[test]
-fn a_reader_waits_out_a_slow_claim_commit_and_no_longer() {
+fn a_slow_claim_apply_holds_its_bundle_and_not_its_partition() {
     let owner = Owner::open(1);
     let admitted = owner.admit("slow");
     let task_id = admitted.claim.task_id.clone();
@@ -387,19 +391,26 @@ fn a_reader_waits_out_a_slow_claim_commit_and_no_longer() {
         warn_held_after: Some(Duration::ZERO),
         prefer_exclusive_waiters: true,
     });
-    let reader_boundary = Arc::new(owner.boundary_with(FileLockOptions {
+    let other = Arc::new(owner.boundary_with(FileLockOptions {
         timeout: HANDSHAKE_TIMEOUT,
-        warn_after: CONTENTION_WARN_AFTER,
+        warn_after: HANDSHAKE_TIMEOUT,
         record_shared_holders: true,
         warn_held_after: None,
         prefer_exclusive_waiters: true,
     }));
-    let reader_tasks = TaskV2Store::with_commit_boundary(
+    let reader_tasks = Arc::new(TaskV2Store::with_commit_boundary(
         TaskRegistryStore::open(&task_registry_path(owner.root.path())).expect("open registry"),
         PARTITION.into(),
-        reader_boundary,
-    );
+        Arc::clone(&other),
+    ));
+    let history_before = reader_tasks
+        .get_task_row(&task_id, false)
+        .expect("read")
+        .expect("task")
+        .history
+        .len();
 
+    let (released_tx, released) = mpsc::channel();
     let (applying_tx, applying) = mpsc::channel();
     let (release_tx, release) = mpsc::channel();
     let committer = std::thread::spawn(move || {
@@ -409,66 +420,244 @@ fn a_reader_waits_out_a_slow_claim_commit_and_no_longer() {
                 .recv_timeout(HANDSHAKE_TIMEOUT)
                 .expect("release the apply after the reader contends");
         });
-        lock_events(|| admitted.bind(&writer))
-    });
-    applying
-        .recv_timeout(HANDSHAKE_TIMEOUT)
-        .expect("the commit reaches its apply step");
-    let (waiting_tx, waiting) = mpsc::channel();
-    let (read_tx, read) = mpsc::channel();
-    let reader = std::thread::spawn(move || {
-        let (task, _) = lock_events_observed(
-            || TaskStoreBackend::get_task(&reader_tasks, &task_id),
+        lock_events_observed(
+            || admitted.bind(&writer),
             move |event| {
-                if event.get("message").map(String::as_str) == Some(WAITING_FOR_LOCK)
+                if event.get("message").map(String::as_str) == Some(HELD_PAST_THRESHOLD)
                     && event
                         .get("lock_path")
                         .is_some_and(|path| path.ends_with("/.task-commit.lock"))
                 {
-                    waiting_tx.send(()).expect("signal reader contention");
+                    let _ = released_tx.send(());
                 }
             },
-        );
-        read_tx.send(task).expect("return the read result");
+        )
     });
-    // The writer cannot leave apply even if the reader is descheduled before
-    // entering get_task. A lock refusal, not a queued start message, proves
-    // the reader reached the held partition.
+    applying
+        .recv_timeout(HANDSHAKE_TIMEOUT)
+        .expect("the commit reaches its apply");
+    released
+        .try_recv()
+        .expect("the admission section released the partition before its apply");
+
+    // The partition admits another decision while the apply is held.
+    other
+        .with_admission(|| Ok(()))
+        .expect("an admission passes a held apply");
+    let envelopes = reader_tasks
+        .task_envelopes_for_ids(&[task_id.clone()].into())
+        .expect("envelope read");
+    assert_eq!(
+        envelopes[0].job_run_id.as_deref(),
+        Some("leaf-slow"),
+        "an envelope read sees the decided bind before its apply finishes"
+    );
+
+    let (waiting_tx, waiting) = mpsc::channel();
+    let (read_tx, read) = mpsc::channel();
+    let reader = {
+        let reader_tasks = Arc::clone(&reader_tasks);
+        let bundle_lock = format!("/.{task_id}.bundle.lock");
+        std::thread::spawn(move || {
+            let (task, _) = lock_events_observed(
+                || reader_tasks.get_task_row(&task_id, false),
+                move |event| {
+                    if event.get("message").map(String::as_str) == Some(WAITING_FOR_LOCK)
+                        && event
+                            .get("lock_path")
+                            .is_some_and(|path| path.ends_with(&bundle_lock))
+                    {
+                        waiting_tx.send(()).expect("signal reader contention");
+                    }
+                },
+            );
+            read_tx.send(task).expect("return the read result");
+        })
+    };
+    // A lock warning, not a queued start message, proves the reader reached
+    // the held bundle.
     waiting
         .recv_timeout(HANDSHAKE_TIMEOUT)
-        .expect("get_task waits for the held partition");
+        .expect("a full read waits for the held bundle");
     assert!(
         matches!(read.try_recv(), Err(mpsc::TryRecvError::Empty)),
-        "a reader cannot finish while the bind is half-applied"
+        "a full reader cannot finish while the bind is half-applied"
     );
     release_tx.send(()).expect("release the writer");
-    let task = read
+    let row = read
         .recv_timeout(HANDSHAKE_TIMEOUT)
         .expect("reader completes after release")
         .expect("read")
         .expect("task");
     reader.join().expect("reader thread");
-    let (bound, events) = committer.join().expect("committer thread");
+    let (bound, _) = committer.join().expect("committer thread");
 
     assert_eq!(bound.phase, ExecutionClaimPhase::Running);
     assert_eq!(
-        task.job_run_id.as_deref(),
+        row.task.job_run_id.as_deref(),
         Some("leaf-slow"),
-        "the reader sees the committed bind, never a half-applied one"
+        "the reader sees the committed bind"
     );
+    assert!(
+        row.history.len() > history_before,
+        "the reader sees the bind's history with its envelope: {:?}",
+        row.history
+    );
+}
 
-    let report = events
-        .iter()
-        .find(|event| {
-            event.get("message").map(String::as_str) == Some(HELD_PAST_THRESHOLD)
-                && event
-                    .get("lock_path")
-                    .is_some_and(|path| path.ends_with("/.task-commit.lock"))
+/// Writers in the hold-time fixture, each mutating only its own claims.
+const HOLD_WRITERS: usize = 4;
+const HOLD_CLAIMS_PER_WRITER: usize = 2;
+const HOLD_ROUNDS: usize = 10;
+
+/// A directory on a real disk for the hold-time fixture: tmpfs syncs cost
+/// nothing, so a hold measured there says nothing about a busy disk.
+/// `ORBIT_HOLD_FIXTURE_DIR` overrides the default, the workspace `target/`.
+fn hold_fixture_dir() -> PathBuf {
+    let dir = std::env::var_os("ORBIT_HOLD_FIXTURE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+            manifest
+                .ancestors()
+                .nth(2)
+                .unwrap_or(manifest)
+                .join("target")
+        });
+    orbit_common::fs::io::create_private_dir_all(&dir).expect("create fixture dir");
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let path = std::ffi::CString::new(dir.as_os_str().as_bytes()).expect("path");
+        let mut stat = std::mem::MaybeUninit::<libc::statfs>::zeroed();
+        // Safety: `statfs` reads the NUL-terminated path and fills only the
+        // struct it is handed; a zero return means it did.
+        assert_eq!(unsafe { libc::statfs(path.as_ptr(), stat.as_mut_ptr()) }, 0);
+        assert_ne!(
+            unsafe { stat.assume_init() }.f_type,
+            libc::TMPFS_MAGIC,
+            "the hold-time fixture needs a real disk, not tmpfs: {}",
+            dir.display()
+        );
+    }
+    dir
+}
+
+fn percentile(sorted: &[Duration], fraction: f64) -> Duration {
+    let rank = ((sorted.len() as f64 * fraction).ceil() as usize).clamp(1, sorted.len());
+    sorted[rank - 1]
+}
+
+/// [ORB-16389] Criterion 1, measured on demand: concurrent claim mutations
+/// on a real disk, with every durability sync real, so each writer's syncs
+/// are the others' fsync load. Reports the exclusive admission sections'
+/// hold p50/p95 beside the mutations' own latency. Before the apply moved out
+/// of the section the holds were p50 ~24 ms, p95 ~26-29 ms on an ext4 disk;
+/// after, p50 ~1.2-1.3 ms and p95 ~1.5-1.9 ms. Run it explicitly:
+/// `cargo test -p orbit-store --lib exclusive_claim_sections_stay_short -- --ignored --nocapture`.
+#[test]
+#[ignore = "measurement on a real disk with real syncs; run explicitly"]
+#[allow(
+    clippy::print_stderr,
+    reason = "the measurement's report is its output"
+)]
+fn exclusive_claim_sections_stay_short_under_concurrent_durable_mutations() {
+    let _durable = test_env::require_durable_syncs();
+    let owner = Owner::open_in(
+        tempfile::tempdir_in(hold_fixture_dir()).expect("tempdir"),
+        HOLD_WRITERS * HOLD_CLAIMS_PER_WRITER,
+    );
+    let mut claims = (0..HOLD_WRITERS * HOLD_CLAIMS_PER_WRITER)
+        .map(|index| {
+            let admitted = owner.admit(&format!("hold-{index}"));
+            admitted.bind(&owner.boundary);
+            admitted
         })
-        .unwrap_or_else(|| panic!("a partition hold report in {events:#?}"));
+        .collect::<Vec<_>>();
+    let barrier = Arc::new(std::sync::Barrier::new(HOLD_WRITERS));
+    let writers = (0..HOLD_WRITERS)
+        .map(|_| {
+            let mine = claims.split_off(claims.len() - HOLD_CLAIMS_PER_WRITER);
+            let boundary = Arc::clone(&owner.boundary);
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                SECTIONS.with(|sections| sections.borrow_mut().clear());
+                barrier.wait();
+                let mut latencies = Vec::new();
+                for round in 0..HOLD_ROUNDS {
+                    for claim in &mine {
+                        let started = std::time::Instant::now();
+                        let result = boundary
+                            .mutate_execution_claim(
+                                Some(&claim.worker()),
+                                &format!("evidence-{round}"),
+                                &ClaimMutation::Evidence(ClaimEvidence {
+                                    summary: Some(format!("summary after round {round}")),
+                                    comment: Some(format!("progress in round {round}")),
+                                    ..Default::default()
+                                }),
+                            )
+                            .expect("evidence");
+                        latencies.push(started.elapsed());
+                        assert_eq!(result.phase, ExecutionClaimPhase::Running);
+                    }
+                }
+                let holds = SECTIONS.with(|sections| sections.borrow().clone());
+                (mine, holds, latencies)
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut holds = Vec::new();
+    let mut syncs = Vec::new();
+    let mut latencies = Vec::new();
+    for writer in writers {
+        let (mine, sections, mutation) = writer.join().expect("writer thread");
+        for claim in &mine {
+            let bundle = owner
+                .boundary
+                .bundle_store
+                .read_bundle_lightweight(&claim.claim.task_id)
+                .expect("read bundle");
+            assert_eq!(
+                bundle.comments.len(),
+                HOLD_ROUNDS,
+                "every committed comment landed on {}",
+                claim.claim.task_id
+            );
+            assert_eq!(
+                bundle.execution_summary.trim(),
+                format!("summary after round {}", HOLD_ROUNDS - 1)
+            );
+        }
+        let admissions = sections
+            .iter()
+            .filter(|section| section.kind == "admission");
+        syncs.extend(admissions.clone().map(|section| section.durability_syncs));
+        holds.extend(admissions.map(|section| section.held));
+        latencies.extend(mutation);
+    }
     assert_eq!(
-        report.get("slowest_step").map(String::as_str),
-        Some("commit apply"),
-        "the report names the commit step the hold went to: {report:?}"
+        holds.len(),
+        HOLD_WRITERS * HOLD_CLAIMS_PER_WRITER * HOLD_ROUNDS,
+        "one exclusive section per mutation"
+    );
+    holds.sort();
+    latencies.sort();
+    let (hold_p50, hold_p95) = (percentile(&holds, 0.5), percentile(&holds, 0.95));
+    let mutation_p50 = percentile(&latencies, 0.5);
+    syncs.sort_unstable();
+    assert_eq!(
+        syncs.last(),
+        Some(&0),
+        "a claim mutation's admission section leaves every durability sync to its apply, \
+         which runs after the section"
+    );
+    eprintln!(
+        "exclusive admission hold over {} sections: p50 {hold_p50:?}, p95 {hold_p95:?}, \
+         durability syncs {}..={}; mutation latency p50 {mutation_p50:?}, p95 {:?}",
+        holds.len(),
+        syncs[0],
+        syncs[syncs.len() - 1],
+        percentile(&latencies, 0.95),
     );
 }

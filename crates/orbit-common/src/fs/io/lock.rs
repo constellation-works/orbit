@@ -179,6 +179,74 @@ where
     op()
 }
 
+/// An exclusive advisory lock held for as long as the guard
+/// [`hold_exclusive_file_lock_options`] returns, rather than for one closure.
+///
+/// For a holder that must release an enclosing lock and keep this one: the
+/// closure helpers can only release locks in the reverse order they took them.
+/// The guard is keyed and re-entrant exactly like
+/// [`with_exclusive_file_lock_options`], so while it lives nested lock calls
+/// on the same target on this thread run under it. The re-entrancy record is
+/// per thread, so the guard is not `Send`.
+#[must_use = "the advisory lock is released as soon as the guard is dropped"]
+pub struct HeldFileLock {
+    // Declared before `held`, so the lock is released before this thread
+    // stops recording it as held, as the closure helpers do.
+    lock: Option<crate::fs::file_lock::FileLockGuard>,
+    held: Option<HeldLockPath>,
+    not_send: std::marker::PhantomData<*const ()>,
+}
+
+impl HeldFileLock {
+    /// Whether this thread already held the lock when the guard was taken,
+    /// so dropping the guard releases nothing.
+    pub fn is_reentry(&self) -> bool {
+        self.held.is_none()
+    }
+}
+
+impl std::fmt::Debug for HeldFileLock {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HeldFileLock")
+            .field("lock", &self.lock)
+            .field("reentry", &self.is_reentry())
+            .finish()
+    }
+}
+
+/// Take the exclusive lock [`with_exclusive_file_lock_options`] takes for
+/// `target_path`, held until the returned guard drops. A request made while
+/// this thread already holds that lock returns a guard that releases nothing.
+pub fn hold_exclusive_file_lock_options(
+    target_path: &Path,
+    label: &str,
+    options: FileLockOptions,
+) -> io::Result<HeldFileLock> {
+    let parent = target_path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("cannot determine parent for '{}'", target_path.display()),
+        )
+    })?;
+    // Created before resolving, for the reason the closure helper gives.
+    create_private_dir_all(parent).map_err(|e| classify_lock_io(parent, e))?;
+    let lock_path = resolved_lock_path(target_path, LockFileNaming::DotPrefixedSibling)?;
+    let Some(held) = claim_lock_path(&lock_path) else {
+        return Ok(HeldFileLock {
+            lock: None,
+            held: None,
+            not_send: std::marker::PhantomData,
+        });
+    };
+    let lock = acquire_exclusive_file_lock(&lock_path, label, options)?;
+    Ok(HeldFileLock {
+        lock: Some(lock),
+        held: Some(held),
+        not_send: std::marker::PhantomData,
+    })
+}
+
 /// Run `op` while holding a *shared* advisory flock on the same sibling lock
 /// file [`with_exclusive_file_lock`] uses, so readers exclude writers of that
 /// target while staying concurrent with each other.

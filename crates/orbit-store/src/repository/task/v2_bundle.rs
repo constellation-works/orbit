@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{
-    atomic_write_text, hold_step, sync_parent_dir, with_exclusive_file_lock, with_shared_file_lock,
+    FileLockOptions, FileLockProbe, HeldFileLock, atomic_write_text, atomic_write_text_volatile,
+    hold_exclusive_file_lock_options, hold_step, probe_file_lock, sync_parent_dir,
+    with_exclusive_file_lock, with_shared_file_lock,
 };
 use orbit_types::task::{
     ArtifactManifestV2, TASK_ARTIFACT_MANIFEST_FILE_NAME, TASK_ARTIFACTS_DIR_NAME,
@@ -31,6 +33,47 @@ use crate::fs::yaml::write_yaml_durable_with;
 const BUNDLE_READ_STEP: &str = "bundle read";
 const ENVELOPE_READ_STEP: &str = "envelope read";
 const SEARCH_DOCS_READ_STEP: &str = "search docs read";
+
+/// Directory beside a partition's bundles holding one lease per task whose
+/// coordinated commit has prepared and not yet settled. Its committer holds
+/// the lease's lock, inside the task's bundle lock, for the whole commit.
+pub(crate) const COMMIT_LEASE_DIR: &str = ".task-commit-applying";
+
+/// The commit lease for the task whose bundle is `bundle_dir`.
+pub(crate) fn commit_lease_path(bundle_dir: &Path) -> Option<PathBuf> {
+    Some(
+        bundle_dir
+            .parent()?
+            .join(COMMIT_LEASE_DIR)
+            .join(bundle_dir.file_name()?),
+    )
+}
+
+/// Refuse a bundle whose coordinated commit died between its decision and
+/// its apply. Its committer held the bundle lock for as long as it held the
+/// lease, so a lease nobody holds, seen under that bundle lock, outlived it:
+/// reading would show a half-applied transition, and writing would add rows
+/// the commit's replay then truncates. The partition replays the commit the
+/// next time any section enters it, so the caller can retry.
+fn refuse_interrupted_commit(bundle_dir: &Path) -> Result<(), OrbitError> {
+    let Some(lease) = commit_lease_path(bundle_dir) else {
+        return Ok(());
+    };
+    match probe_file_lock(&lease).map_err(|err| OrbitError::from_write_io(&lease, err))? {
+        FileLockProbe::Free => Err(OrbitError::Store(format!(
+            "task bundle '{}' has an interrupted commit awaiting replay; retry once its \
+             partition has recovered",
+            bundle_dir.display()
+        ))),
+        FileLockProbe::Absent | FileLockProbe::Held => Ok(()),
+    }
+}
+
+/// This task's exclusive bundle lock, held until the guard drops. See
+/// [`TaskBundleStoreV2::hold_bundle_write_lock`].
+pub(crate) struct BundleWriteHold {
+    _lock: HeldFileLock,
+}
 
 fn sync_parent_path(path: &Path) -> Result<(), OrbitError> {
     let parent = path.parent().ok_or_else(|| {
@@ -86,14 +129,51 @@ impl TaskBundleStoreV2 {
     where
         F: FnOnce() -> Result<T, OrbitError>,
     {
+        let _hold = self.hold_bundle_write_lock(task_id)?;
+        op()
+    }
+
+    /// [`Self::with_bundle_write_lock`]'s lock, held until the returned guard
+    /// drops, for a coordinated commit that keeps the bundle after it
+    /// releases its partition. A bundle whose earlier commit was interrupted
+    /// is refused until its partition replays that commit.
+    pub(crate) fn hold_bundle_write_lock(
+        &self,
+        task_id: &str,
+    ) -> Result<BundleWriteHold, OrbitError> {
+        let hold = self.hold_bundle_lock_for_write(task_id)?;
+        if !hold._lock.is_reentry() {
+            refuse_interrupted_commit(&self.bundle_path(task_id)?)?;
+        }
+        Ok(hold)
+    }
+
+    /// The write lock a commit replay takes: the one bundle writer admitted
+    /// past an interrupted commit, since it is that commit's settlement.
+    pub(crate) fn with_bundle_replay_lock<T, F>(
+        &self,
+        task_id: &str,
+        op: F,
+    ) -> Result<T, OrbitError>
+    where
+        F: FnOnce() -> Result<T, OrbitError>,
+    {
+        let _hold = self.hold_bundle_lock_for_write(task_id)?;
+        op()
+    }
+
+    fn hold_bundle_lock_for_write(&self, task_id: &str) -> Result<BundleWriteHold, OrbitError> {
         let bundle_dir = self.bundle_path(task_id)?;
-        with_exclusive_file_lock(&bundle_lock_target(&bundle_dir), "task artifact v2", || {
-            // A queued writer may resume after deletion. Check under the
-            // stable lock before any helper can create parent directories.
-            read_envelope_at(&bundle_dir)?;
-            recover_pending_write(&bundle_dir)?;
-            op()
-        })
+        let lock = hold_exclusive_file_lock_options(
+            &bundle_lock_target(&bundle_dir),
+            "task artifact v2",
+            FileLockOptions::default(),
+        )?;
+        // A queued writer may resume after deletion. Check under the stable
+        // lock before any helper can create parent directories.
+        read_envelope_at(&bundle_dir)?;
+        recover_pending_write(&bundle_dir)?;
+        Ok(BundleWriteHold { _lock: lock })
     }
 
     /// Run `op` while holding this task's shared bundle lock.
@@ -108,6 +188,7 @@ impl TaskBundleStoreV2 {
         let bundle_dir = self.bundle_path(task_id)?;
         with_shared_file_lock(&bundle_lock_target(&bundle_dir), "task artifact v2", || {
             read_envelope_at(&bundle_dir)?;
+            refuse_interrupted_commit(&bundle_dir)?;
             op()
         })
     }
@@ -392,14 +473,26 @@ impl TaskBundleStoreV2 {
         task_id: &str,
         envelope: &TaskEnvelopeV2,
     ) -> Result<(), OrbitError> {
-        if envelope.id != task_id {
-            return Err(OrbitError::InvalidInput(format!(
-                "task envelope id '{}' does not match target task id '{task_id}'",
-                envelope.id
-            )));
-        }
-        envelope.validate()?;
+        validate_envelope_for(task_id, envelope)?;
         publish_envelope(&self.envelope_path(task_id)?, envelope)
+    }
+
+    /// Show `envelope` to readers at once, without its durability syncs. For
+    /// a coordinated commit's decided transition, whose journal replays it
+    /// durably if the volatile copy is lost; [`Self::rewrite_envelope`]
+    /// makes it durable before the journal settles.
+    pub(crate) fn publish_envelope_volatile(
+        &self,
+        task_id: &str,
+        envelope: &TaskEnvelopeV2,
+    ) -> Result<(), OrbitError> {
+        validate_envelope_for(task_id, envelope)?;
+        let path = self.envelope_path(task_id)?;
+        let yaml = crate::fs::yaml::serialize_yaml_with(envelope, |err| {
+            OrbitError::Store(err.to_string())
+        })?;
+        atomic_write_text_volatile(&path, &yaml)
+            .map_err(|err| OrbitError::from_write_io(&path, err))
     }
 
     pub(crate) fn rewrite_artifact_manifest(
@@ -479,6 +572,16 @@ pub(crate) fn deletion_path(bundle_dir: &Path) -> PathBuf {
     bundle_dir.with_extension("deleted")
 }
 
+fn validate_envelope_for(task_id: &str, envelope: &TaskEnvelopeV2) -> Result<(), OrbitError> {
+    if envelope.id != task_id {
+        return Err(OrbitError::InvalidInput(format!(
+            "task envelope id '{}' does not match target task id '{task_id}'",
+            envelope.id
+        )));
+    }
+    Ok(envelope.validate()?)
+}
+
 /// Assemble a whole bundle under this task's shared read lock.
 ///
 /// A bundle spans several files, so reading it is only atomic with respect to
@@ -501,6 +604,7 @@ fn read_bundle_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitErro
     CANONICAL_BUNDLE_READS.with(|reads| reads.set(reads.get() + 1));
     hold_step(BUNDLE_READ_STEP, || {
         with_shared_file_lock(&bundle_lock_target(bundle_dir), "task artifact v2", || {
+            refuse_interrupted_commit(bundle_dir)?;
             read_bundle_at(bundle_dir)
         })
     })
@@ -516,6 +620,7 @@ fn read_bundle_lightweight_consistently(bundle_dir: &Path) -> Result<TaskBundleV
 
     hold_step(BUNDLE_READ_STEP, || {
         with_shared_file_lock(&bundle_lock_target(bundle_dir), "task artifact v2", || {
+            refuse_interrupted_commit(bundle_dir)?;
             read_bundle_lightweight_at(bundle_dir)
         })
     })

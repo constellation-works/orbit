@@ -19,8 +19,9 @@ mod lock;
 mod private;
 
 pub use super::file_lock::{
-    DEFAULT_FILE_LOCK_TIMEOUT, FileLockGuard, FileLockHolderInfo, FileLockOptions, FileLockTimeout,
-    acquire_exclusive_file_lock, hold_step, read_file_lock_holder, try_acquire_exclusive_file_lock,
+    DEFAULT_FILE_LOCK_TIMEOUT, FileLockGuard, FileLockHolderInfo, FileLockOptions, FileLockProbe,
+    FileLockTimeout, LeaseFile, acquire_exclusive_file_lock, hold_step, probe_file_lock,
+    read_file_lock_holder, try_acquire_exclusive_file_lock,
 };
 pub(crate) use atomic::{DURABLE_SYNC_HOLDS, atomic_write_private_bytes};
 pub use atomic::{
@@ -31,9 +32,9 @@ pub use atomic::{
     write_text_with_parent,
 };
 pub use lock::{
-    LockFileNaming, with_exclusive_file_lock, with_exclusive_file_lock_named,
-    with_exclusive_file_lock_named_options, with_exclusive_file_lock_options,
-    with_shared_file_lock, with_shared_file_lock_options,
+    HeldFileLock, LockFileNaming, hold_exclusive_file_lock_options, with_exclusive_file_lock,
+    with_exclusive_file_lock_named, with_exclusive_file_lock_named_options,
+    with_exclusive_file_lock_options, with_shared_file_lock, with_shared_file_lock_options,
 };
 pub(crate) use lock::{classify_lock_io, classify_or_wrap_lock_io};
 #[cfg(any(unix, windows))]

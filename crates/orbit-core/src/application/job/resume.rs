@@ -130,7 +130,7 @@ impl OrbitRuntime {
         }
         // [ORB-12575] Read the claims as an ordinary participant, not through
         // the doctor's non-repairing inspection. A worker killed mid-commit
-        // leaves the partition's pending marker behind, and resume is the
+        // leaves its task's commit lease behind, and resume is the
         // command the operator reaches for next; it must replay that journal
         // like every other runtime read does, not refuse until something
         // unrelated happens to.

@@ -2,7 +2,7 @@
 
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
-use rusqlite::{TransactionBehavior, params};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use crate::Store;
 use crate::contracts::{TaskCommitJournalRecord, TaskCommitJournalState};
@@ -96,6 +96,31 @@ impl Store {
             }
             Ok(())
         })
+    }
+
+    /// One journal row's state, or `None` if no such row exists.
+    pub(crate) fn task_commit_journal_state(
+        &self,
+        journal_id: &str,
+    ) -> Result<Option<TaskCommitJournalState>, OrbitError> {
+        let state = self.with_read_connection(|conn| {
+            conn.query_row(
+                "SELECT state FROM task_commit_journal WHERE journal_id = ?1",
+                params![journal_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(sqlite_store_error)
+        })?;
+        state
+            .map(|state| {
+                TaskCommitJournalState::parse(&state).ok_or_else(|| {
+                    OrbitError::Store(format!(
+                        "task commit journal '{journal_id}' has unknown state '{state}'"
+                    ))
+                })
+            })
+            .transpose()
     }
 
     /// Every unsettled decision for a workspace, oldest first. Recovery
