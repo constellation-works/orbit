@@ -462,6 +462,17 @@ define_config_settings! {
         section: ConfigSection::Housekeeping, order: 130,
         resolve: |raw: Option<u64>| Ok::<_, OrbitError>(raw),
     },
+    worktree_parked_reclaim_after_hours: u64 => u64 {
+        key: "worktree.parked_reclaim_after_hours", value_type: "integer",
+        description: "Hours a task must stay parked in `someday`, counted from that status change, before worktree GC may remove the worktree of a terminal run serving it. Removal also needs no live worker, no unsettled claim and no Git worktree lock. A clean tree goes only when its run branch's commits are reachable from another ref or on origin; otherwise the worktree and branch stay as `skipped:unpublished_commits` (0..=876000, default 336).",
+        section: ConfigSection::Housekeeping, order: 135,
+        resolve: |raw: Option<u64>| match raw {
+            Some(hours) if hours > 876_000 => Err(OrbitError::InvalidInput(format!(
+                "worktree.parked_reclaim_after_hours must be at most 876000, got {hours}"
+            ))),
+            raw => Ok(raw.unwrap_or(336)),
+        },
+    },
     review_baseline_commands: Vec<String> => Vec<String> {
         key: "review.baseline_commands", value_type: "array<string>",
         description: "Commands before-PR review settlement may rerun on the host to confirm a reviewer's claim that a failed required check fails the same way on the pinned base; `workflow.required_validation_commands` always count. A confirmed claim holds the task in the backlog until the base passes instead of blocking it. When the host refutes the claim, its own run on the final candidate decides: a pass with no open finding counts the check as passed and the certificate records the override, and a failure while the base passes rejects the review. A claim about any other command cannot be confirmed and settles the review incomplete. A listed command's failure cannot be recorded as a diagnostic: it needs a passing record or a confirmed claim. Captured when a delivery or claim is admitted. With the required commands, these are also the gates an implementer may hand off when its sandbox deferred only Bubblewrap tests; validation then runs such a gate outside the agent sandbox before delivery. Default empty.",

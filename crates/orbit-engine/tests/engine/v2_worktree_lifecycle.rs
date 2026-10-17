@@ -395,6 +395,7 @@ fn replica_worktree_gc_fences_unreachable_owners_by_route() {
                 WorktreeGcTaskLookup::Found {
                     status: TaskStatus::Done,
                     pr_status: None,
+                    status_since: None,
                 },
             );
 
@@ -4732,6 +4733,7 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
             Ok(task) => WorktreeGcTaskLookup::Found {
                 status: task.status,
                 pr_status: task.pr_status,
+                status_since: Some(task.updated_at),
             },
             Err(_) => WorktreeGcTaskLookup::Unresolved,
         }

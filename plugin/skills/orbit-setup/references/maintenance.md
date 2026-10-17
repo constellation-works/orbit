@@ -21,7 +21,12 @@ orbit gc worktrees --target-only --confirm  # delete target/ and keep the checko
 ```
 
 Collection is conservative: it reaps only worktrees whose associated task has
-settled to `done`, `rejected`, or `archived`. A worktree belonging to live work
+settled to `done`, `rejected`, or `archived`, or that has been parked in
+`someday` for `worktree.parked_reclaim_after_hours` (default 336), counted from
+the status change. A parked worktree also stays while its worker or claim is
+live, while Git holds it locked, or while its run branch has commits that
+exist on no published ref and in no rescue patch
+(`skipped:unpublished_commits`). A worktree belonging to live work
 is never a candidate. A worktree with uncommitted changes is kept
 (`skipped:dirty_rescue_candidate`), except by the scheduled
 `worktree_gc_pipeline`. That pipeline removes a settled run's dirty worktree

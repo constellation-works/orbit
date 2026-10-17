@@ -124,6 +124,14 @@ pub(crate) fn execute_engine_action<
                 Some(_) if target_run_id.is_some() => None,
                 Some(val) => Some(hours_input("scratch_older_than_hours", val)?),
             };
+            // [ORB-16385] Parked tasks age from their status change, by
+            // the host's configured window; an unrepresentable window keeps
+            // every parked worktree rather than failing the sweep.
+            let parked_older_than = host
+                .worktree_parked_reclaim_after_hours()
+                .and_then(|hours| i64::try_from(hours).ok())
+                .and_then(chrono::Duration::try_hours)
+                .and_then(|age| chrono::Utc::now().checked_sub_signed(age));
             let runs = host.list_job_runs_for_gc()?;
             let repo_root = host.repo_root()?;
             let result = vcs::collect_worktrees(
@@ -148,6 +156,7 @@ pub(crate) fn execute_engine_action<
                     // [ORB-15613] A settled run's dirty worktree goes once its
                     // candidate is recoverable; it no longer leaks for good.
                     rescue_dirty: true,
+                    parked_older_than,
                 },
             )?;
             let mut output = serde_json::to_value(result).map_err(|error| {

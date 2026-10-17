@@ -18,9 +18,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Task statuses that settle the work as done — the only statuses that
-/// license discarding a run's worktree and branch. Every other status
-/// (including `blocked` and `review`) retains it, and an unresolvable or
-/// missing task id retains it as well: the collector fails closed.
+/// license discarding a run's worktree and branch outright. A task parked in
+/// `someday` licenses it only under the parked-age rule
+/// (`WorktreeGcOptions::parked_older_than`). Every other status (including
+/// `blocked` and `review`) retains it, and an unresolvable or missing task id
+/// retains it as well: the collector fails closed.
 pub(super) fn task_status_permits_deletion(status: TaskStatus) -> bool {
     matches!(
         status,
@@ -48,6 +50,11 @@ pub struct WorktreeGcOptions {
     /// recoverable elsewhere (a carry ref or published branch holding exactly
     /// it, or a verified rescue patch). Without it a dirty worktree is kept.
     pub rescue_dirty: bool,
+    /// A task parked in `someday` since at least this instant no longer
+    /// retains its run's worktree. The worktree goes only when the run
+    /// branch's commits survive it: reachable from a ref that is not a run
+    /// branch, or on `origin`. `None` keeps every parked worktree.
+    pub parked_older_than: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

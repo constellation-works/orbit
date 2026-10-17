@@ -84,7 +84,7 @@ pub(super) fn rescue_dirty_worktree(
     // recoverable and unchanged, and Git's dirty-tree refusal would otherwise
     // keep the checkout forever.
     remove_worktree(repo_root, path, None, true)?;
-    report.action = delete_run_branch(repo_root, branch);
+    report.action = delete_run_branch(repo_root, branch, None);
     Ok(report)
 }
 
@@ -92,10 +92,22 @@ pub(super) fn rescue_dirty_worktree(
 /// are reclaimed either way; a branch that cannot be deleted right now (ref
 /// lock, checked out elsewhere) is reported rather than turning the whole
 /// pass into an error that hides this removal and stops the paths after it.
-pub(super) fn delete_run_branch(repo_root: &Path, branch: &str) -> String {
-    if branch_exists(repo_root, branch)
-        && git_success(repo_root, &["branch", "-D", branch]).is_err()
-    {
+/// With `checked_tip`, the branch is deleted only while it still points
+/// there, in one compare-and-delete, so a commit made after GC checked the
+/// branch's commits keeps it.
+pub(super) fn delete_run_branch(
+    repo_root: &Path,
+    branch: &str,
+    checked_tip: Option<&str>,
+) -> String {
+    let deleted = |branch: &str| match checked_tip {
+        Some(tip) => git_success(
+            repo_root,
+            &["update-ref", "-d", &format!("refs/heads/{branch}"), tip],
+        ),
+        None => git_success(repo_root, &["branch", "-D", branch]),
+    };
+    if branch_exists(repo_root, branch) && deleted(branch).is_err() {
         "removed:branch_retained".to_string()
     } else {
         "removed".to_string()
