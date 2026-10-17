@@ -1,11 +1,10 @@
 //! Handing a long-lived process over to a newly installed executable.
 //!
 //! `orbit mcp serve`, the dashboard and drain coordinators outlive upgrades.
-//! At an idle boundary they ask [`replaced_installation`] whether the
-//! installed executable still names their running image; when it does not,
-//! and [`candidate_supports`] confirms the candidate speaks this protocol and
-//! can resume the process's state, they replace their image with it through
-//! [`reexec`]. Every Orbit descriptor is close-on-exec, so the generation and
+//! At an idle boundary they ask [`handover_target`] whether the installed
+//! executable replaced their running image and can resume the process's
+//! state; when it can, they replace their image with it through [`reexec`].
+//! Every Orbit descriptor is close-on-exec, so the generation and
 //! registry locks are released by the exec itself and the new image joins
 //! the authority like any newcomer.
 
@@ -122,13 +121,6 @@ pub(super) fn judge_candidate(
             None
         }
     }
-}
-
-/// Whether the executable at `path` implements this admission protocol and,
-/// when named, the resume `capability` the handover needs.
-pub fn candidate_supports(path: &Path, capability: Option<&str>) -> bool {
-    HandoverCandidate::probe(path)
-        .is_some_and(|candidate| capability.is_none_or(|capability| candidate.resumes(capability)))
 }
 
 /// A candidate executable, as a long-lived process would judge it before

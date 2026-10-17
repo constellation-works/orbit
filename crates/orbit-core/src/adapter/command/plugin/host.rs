@@ -1,11 +1,10 @@
 //! Host-level plugin operations that run outside of a workspace runtime.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_types::plugin::{InstalledPlugin, PluginStatus};
-use orbit_types::tool::{McpToolDefinition, McpToolScope, ToolSessionContext};
+use orbit_types::plugin::InstalledPlugin;
+use orbit_types::tool::{McpToolDefinition, ToolSessionContext};
 use serde_json::Value;
 
 use crate::adapter::command::ToolEntryPoint;
@@ -49,45 +48,6 @@ pub fn host_plugin_mcp_definitions(
 pub fn host_plugin_rows(global_root: &Path) -> Result<Vec<InstalledPlugin>, OrbitError> {
     let config = global_only_config(global_root)?;
     orbit_store::Store::open_read_only(&config.persistence.audit_db)?.list_plugins()
-}
-
-/// This host's workspace-scoped plugin tools (`mcp_scope: workspace`), each
-/// mapped to the plugin that serves it.
-///
-/// Only these can be switched off per workspace: a `mcp_scope: global` tool
-/// has no workspace and follows the host state alone. The MCP server uses the
-/// map to leave a workspace-disabled plugin's tools out of `tools/list`.
-pub fn host_plugin_workspace_tool_owners(
-    global_root: &Path,
-) -> Result<BTreeMap<String, String>, OrbitError> {
-    let config = global_only_config(global_root)?;
-    let (registry, load) = discovery::host_plugin_registry(
-        global_root,
-        &config.persistence.audit_db,
-        &config.plugins,
-    )?;
-    let owners = load
-        .registered
-        .iter()
-        .filter(|entry| entry.status == PluginStatus::Active)
-        .flat_map(|entry| {
-            entry
-                .tools
-                .iter()
-                .map(|tool| (tool.as_str(), entry.name.as_str()))
-        })
-        .collect::<BTreeMap<_, _>>();
-    let definitions = registry
-        .mcp_tool_definitions()
-        .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
-    Ok(definitions
-        .into_iter()
-        .filter(|definition| definition.scope == McpToolScope::WorkspaceRequired)
-        .filter_map(|definition| {
-            let owner = owners.get(definition.schema.name.as_str())?;
-            Some((definition.schema.name, (*owner).to_string()))
-        })
-        .collect())
 }
 
 /// Execute a `mcp_scope: global` plugin tool without a workspace runtime,

@@ -8,8 +8,6 @@ use crate::identity::{OrbitId, is_valid_adr_id, is_valid_friction_id};
 use crate::task::{ExternalRef, TaskComplexity, TaskError, TaskPriority, TaskStatus, TaskType};
 
 pub const TASK_ARTIFACT_SCHEMA_VERSION: u32 = 1;
-/// Minimum numeric width used when minting task ids. Parsers accept wider ids.
-pub const ORB_TASK_ID_WIDTH: usize = 5;
 /// Maximum representable allocator value, no longer the five-digit boundary.
 pub const ORB_TASK_ID_MAX: u32 = u32::MAX;
 
@@ -60,17 +58,14 @@ pub fn validate_orb_task_id(id: &str) -> Result<(), TaskError> {
     )))
 }
 
-pub fn format_orb_task_id(value: u32) -> Result<String, TaskError> {
-    format_task_id("ORB", value)
-}
-
 pub fn format_task_id(prefix: &str, value: u32) -> Result<String, TaskError> {
     if !is_valid_task_id_prefix(prefix) {
         return Err(TaskError::Invalid(format!(
             "task id prefix '{prefix}' must be 2-5 uppercase ASCII letters and must not use a reserved artifact namespace"
         )));
     }
-    Ok(format!("{prefix}-{value:0ORB_TASK_ID_WIDTH$}"))
+    // Minted ids are zero-padded to at least five digits. Parsers accept wider ids.
+    Ok(format!("{prefix}-{value:05}"))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

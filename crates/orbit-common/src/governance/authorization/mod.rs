@@ -80,8 +80,7 @@ pub use catalog::{
     DASHBOARD_HOST_EDIT, DASHBOARD_HOST_FORWARD, DASHBOARD_JOB_RUN, DASHBOARD_PLUGIN_DISABLE,
     DASHBOARD_PLUGIN_ENABLE, DASHBOARD_ROUTINE_TOGGLE, DESKTOP_TASK_COMPLETE, DESKTOP_TASK_EDIT,
     GOVERNED_OPERATIONS, GovernedOperation, OperationSurface, PLUGIN_TOOL_MUTATING,
-    PLUGIN_TOOL_READ_ONLY, governed_command, governed_dashboard, governed_plugin_tool,
-    governed_tool,
+    PLUGIN_TOOL_READ_ONLY, governed_command, governed_plugin_tool, governed_tool,
 };
 pub use decision::{AuthorizationDenial, authorize};
 pub use env::{OPERATOR_OVERRIDE_ENV, agent_context_declared, operator_override_active};

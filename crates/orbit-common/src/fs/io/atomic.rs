@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::{create_new_private_file, create_private_dir_all, open_private_file};
+use super::{create_new_private_file, create_private_dir_all};
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -57,25 +57,6 @@ pub fn write_new_private_text(path: &Path, content: &str) -> io::Result<()> {
     sync_file(&file)?;
     drop(file);
     fs::hard_link(&temp_path, &target)?;
-    sync_parent_dir(&File::open(parent)?)
-}
-
-/// Create or replace the marker file `path`, holding `content`, and sync only
-/// the directory entry that names it.
-///
-/// For a file whose presence is the fact it records: once this returns, the
-/// file survives a crash, though `content` may not. One durability sync
-/// where [`atomic_write_text`] takes two, the staged file's and its parent's.
-pub fn write_presence_marker(path: &Path, content: &str) -> io::Result<()> {
-    let target = validated_atomic_target(path)?;
-    let parent = target
-        .parent()
-        .ok_or_else(|| io::Error::other("validated marker target is missing its parent"))?;
-    let mut options = fs::OpenOptions::new();
-    options.create(true).write(true).truncate(true);
-    let mut file = open_private_file(&target, &mut options)?;
-    file.write_all(content.as_bytes())?;
-    drop(file);
     sync_parent_dir(&File::open(parent)?)
 }
 

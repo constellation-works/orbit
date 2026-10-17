@@ -270,7 +270,9 @@ pub struct PublicationSnapshotOutcome {
     pub omitted_attachment_bytes: u64,
 }
 
-/// Build a validated publication tree into a caller-supplied empty destination.
+/// Build a validated publication tree into a caller-supplied empty destination,
+/// carrying logical publication metadata from a distinct canonical
+/// task-registry partition.
 ///
 /// Every canonical bundle is validated before its projection is staged. Each
 /// task is captured under its canonical bundle lock, so a concurrent task
@@ -278,26 +280,6 @@ pub struct PublicationSnapshotOutcome {
 /// new bundle; `include` scans the captured copy that publishes. The
 /// destination path appears only after the envelope and all task trees have
 /// been completed successfully.
-pub fn build_publication_snapshot(
-    registry: &TaskRegistryStore,
-    destination: &Path,
-    metadata: PublicationSnapshotMetadata,
-    policy: &AttachmentPolicy,
-    scanner: Option<&dyn AttachmentSensitivityScanner>,
-) -> Result<PublicationSnapshotOutcome, OrbitError> {
-    let task_workspace_id = metadata.workspace_id.clone();
-    build_publication_snapshot_from_task_workspace(
-        registry,
-        destination,
-        metadata,
-        &task_workspace_id,
-        policy,
-        scanner,
-    )
-}
-
-/// Build a snapshot carrying logical publication metadata from a distinct
-/// canonical task-registry partition.
 pub(crate) fn build_publication_snapshot_from_task_workspace(
     registry: &TaskRegistryStore,
     destination: &Path,

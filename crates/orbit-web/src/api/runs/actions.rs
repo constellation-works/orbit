@@ -191,7 +191,7 @@ fn parse_drain_duration_seconds(raw: &str) -> Result<u64, String> {
 /// runtime path the CLI does. `?workspace` is required: a missing or blank selector returns 400
 /// `workspace_required` and starts nothing, including when the server has a
 /// default workspace (`Ws` would otherwise select that default).
-/// `submit_workspace_auto_run` still enforces the workspace claim. The
+/// `submit_workspace_auto_run_with_mode` still enforces the workspace claim. The
 /// duration must be a bounded window, and opting into `CompletionPolicy::Done`
 /// is explicit and separately governed — it authorizes `review -> done` for
 /// every task the window ships, not only the ones visible now, so it is gated

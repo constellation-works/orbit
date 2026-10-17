@@ -168,21 +168,11 @@ impl V2ActivityCatalog {
             .map(|_| ())
     }
 
-    /// Variant of [`Self::load_dir`] that skips retired schemaVersion 1 assets and
-    /// returns the file paths that were ignored.
-    pub fn load_dir_skipping_retired(&mut self, dir: &Path) -> Result<Vec<PathBuf>, CatalogError> {
-        self.inner.load_dir(
-            dir,
-            &ActivityCatalogAdapter { skip_retired: true },
-            ExistingNamePolicy::Reject,
-            |_| true,
-        )
-    }
-
-    /// Layered-catalog variant of [`Self::load_dir_skipping_retired`]. Duplicate
-    /// names inside `dir` are still invalid, but names that already exist in
-    /// the catalog are left untouched so callers can load directories from
-    /// highest to lowest precedence.
+    /// Load `dir` as a lower-precedence layer, skipping retired schemaVersion 1
+    /// assets and returning the file paths that were ignored. Duplicate names
+    /// inside `dir` are still invalid, but names that already exist in the
+    /// catalog are left untouched so callers can load directories from highest
+    /// to lowest precedence.
     pub fn load_dir_skipping_retired_prefer_existing(
         &mut self,
         dir: &Path,

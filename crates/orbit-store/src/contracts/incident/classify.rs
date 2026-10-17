@@ -101,12 +101,6 @@ pub fn is_failure_only_diagnostic_surface(name: &str) -> bool {
     FAILURE_ONLY_DIAGNOSTIC_SURFACES.contains(&name)
 }
 
-/// True when an audit row is a lifecycle diagnostic rather than a call whose
-/// success and failure populations can be compared.
-pub fn is_lifecycle_diagnostic(event: &AuditEvent) -> bool {
-    is_failure_only_diagnostic_surface(&surface_of(event))
-}
-
 /// True when the row names a real tool. Direct CLI and legacy job-run
 /// lifecycle rows have empty/`NULL` tool names; neither is a tool called
 /// `unknown`.
