@@ -12,7 +12,7 @@ paths:
   - "crates/orbit-exec/src/**"
 related_features: [policy-sandbox, executors, routines]
 related_artifacts: []
-last_validated: 2026-10-10
+last_validated: 2026-10-17
 ---
 
 # Run Orbit on Windows through WSL2

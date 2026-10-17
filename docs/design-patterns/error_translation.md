@@ -1,11 +1,11 @@
 ---
 type: pattern
 summary: "Crate-Boundary Error Translation"
-last_validated: 2026-10-11
+last_validated: 2026-10-17
 ---
 # Crate-Boundary Error Translation
 
-Each crate defines its own typed error (`thiserror`-derived) for internal use; `OrbitError` in `orbit-common` is the workspace-public error surface. A single translation function — `*_error_to_orbit` — lives next to the typed error and is called at every cross-crate boundary via `.map_err(...)`.
+When a crate needs to preserve error distinctions for its callers, define a crate-owned typed error (often `thiserror`-derived) and keep it typed internally. Translate that error to the workspace-public `OrbitError` from `orbit-common` at the crate boundary with a single `*_error_to_orbit` function next to the error; callers use `.map_err(...)`. The registered boundary errors follow this pattern; `orbit-types` has the separate `From` exception described below.
 
 ```rust
 // In crate-foo:
@@ -95,19 +95,9 @@ pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
         unavailable @ DispatchError::DeterministicActionUnavailable { .. } => {
             OrbitError::JobValidation(unavailable.to_string())
         }
-        DispatchError::RecoverableVcsConflict {
-            operation,
-            original_base_sha,
-            target_base_sha,
-            conflicting_paths,
-            diagnostic,
-        } => OrbitError::RecoverableVcsConflict(Box::new(RecoverableVcsConflict {
-            operation,
-            original_base_sha,
-            target_base_sha,
-            conflicting_paths,
-            diagnostic,
-        })),
+        DispatchError::RecoverableVcsConflict(conflict) => {
+            OrbitError::RecoverableVcsConflict(conflict)
+        }
         DispatchError::TaskCompletionLiveRun { task_id, run_id } => {
             OrbitError::TaskCompletionLiveRun { task_id, run_id }
         }
