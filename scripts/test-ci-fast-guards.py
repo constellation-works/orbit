@@ -90,10 +90,14 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
     log.write(json.dumps(sys.argv[1:]) + "\\n")
 env_log = os.environ.get("GUARD_TEST_ENV_LOG")
 if env_log:
+    # Linux moves background work to the idle class; elsewhere it gets nice 19.
+    idle = getattr(os, "SCHED_IDLE", None)
     with open(env_log, "a") as log:
         log.write(json.dumps({"argv": sys.argv[1:],
                               "RUSTC_WORKSPACE_WRAPPER": os.environ.get("RUSTC_WORKSPACE_WRAPPER"),
-                              "CLIPPY_ARGS": os.environ.get("CLIPPY_ARGS")}) + "\\n")
+                              "CLIPPY_ARGS": os.environ.get("CLIPPY_ARGS"),
+                              "idle": idle is not None and os.sched_getscheduler(0) == idle,
+                              "nice": os.getpriority(os.PRIO_PROCESS, 0)}) + "\\n")
 if sys.argv[1] == "metadata":
     print(open(os.environ["GUARD_TEST_METADATA"]).read())
 elif sys.argv[1] == "test" and "--message-format" in sys.argv:
@@ -167,6 +171,8 @@ else:
                                   f'#!/bin/bash\nprintf "%s\\n" "$@" > "$GUARD_TEST_CALLS/{name}"\n')
         shutil.copy2(SCRIPTS / "ci-guardrails.sh", self.scripts / "ci-guardrails.sh")
         shutil.copy2(SCRIPTS / "check-ci-macos.sh", self.scripts / "check-ci-macos.sh")
+        # The lint wrapper is the environment under test, not a guard.
+        shutil.copy2(SCRIPTS / "with-test-build-lint.sh", self.scripts / "with-test-build-lint.sh")
         # The pool sizes itself from the real budget query, so keep the real script.
         shutil.copy2(SCRIPTS / "build-budget.py", self.scripts / "build-budget.py")
         # The full run wraps nextest in the real sampler. A stub would swallow
@@ -344,6 +350,21 @@ exec {shlex.quote(sys.executable)} "$@"
 
     def test_full_ci_runs_every_self_test_on_crates_only_diff(self):
         self.prepare_ci()
+        # The last pool member holds so a pool that outlived the builds would
+        # still be running when nextest starts.
+        self.write_executable(self.scripts / "test-cpu-utilisation.py", '''#!/usr/bin/env python3
+import json, os, time
+time.sleep(0.5)
+with open(os.environ["GUARD_TEST_LOG"], "a") as log:
+    log.write(json.dumps(["guard-end", "test-cpu-utilisation.py"]) + "\\n")
+open(os.path.join(os.environ["GUARD_TEST_CALLS"], "test-cpu-utilisation.py"), "w").close()
+''')
+        self.write_executable(self.scripts / "test-build-budget.sh", '''#!/usr/bin/env python3
+import json, os
+with open(os.environ["GUARD_TEST_LOG"], "a") as log:
+    log.write(json.dumps(["guard-start", "test-build-budget.sh"]) + "\\n")
+open(os.path.join(os.environ["GUARD_TEST_CALLS"], "test-build-budget.sh"), "w").close()
+''')
         self.init_ci_git()
         result = self.run_guard("ci-guardrails.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -365,11 +386,28 @@ exec {shlex.quote(sys.executable)} "$@"
             calls,
         )
         self.assertFalse(any("--all-targets" in call for call in calls))
-        self.assertIn(
-            ["nextest", "run", "--profile", "ci", "--no-fail-fast",
-             "--success-output", "immediate", "--workspace", "--lib", "--bins", "--tests"],
-            calls,
-        )
+        listing = ["nextest", "list", "--list-type", "binaries-only", "--message-format", "json",
+                   "--workspace", "--lib", "--bins", "--tests"]
+        self.assertIn(listing, calls)
+        runs = [call for call in calls if call[:2] == ["nextest", "run"]]
+        self.assertEqual(len(runs), 1, calls)
+        run = runs[0]
+        self.assertEqual(run[:7], ["nextest", "run", "--profile", "ci", "--no-fail-fast",
+                                   "--success-output", "immediate"])
+        # nextest runs the listed binaries instead of building its own set.
+        self.assertIn("--binaries-metadata", run)
+        self.assertIn("--cargo-metadata", run)
+        # Repository guards never share the host with the workspace suites:
+        # the last pool member ends before nextest starts. The doctest and
+        # documentation chain starts after the listing and joins before the
+        # exclusive self-tests.
+        self.assertLess(calls.index(["guard-end", "test-cpu-utilisation.py"]), calls.index(run), calls)
+        doctests = calls.index(["test", "--no-fail-fast", "--workspace", "--doc"])
+        self.assertLess(calls.index(listing), doctests, calls)
+        self.assertLess(calls.index(["doc", "--no-deps", "--workspace"]),
+                        calls.index(["guard-start", "test-build-budget.sh"]), calls)
+        for phase in ("doctests", "documentation"):
+            self.assertIn((phase, "0"), phases)
         # A real command failure must keep its status and timing in the final
         # diagnostic tail, and must not be followed by tests.
         original = (self.bin / "cargo").read_text()
@@ -686,17 +724,38 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                   "--no-run", "--message-format", "json"]
         self.assertIn(folded, calls)
         observed = [json.loads(line) for line in env_log.read_text().splitlines()]
-        self.assertEqual(
-            [row for row in observed if row["argv"] == folded],
-            [{
-                "argv": folded,
-                "RUSTC_WORKSPACE_WRAPPER": "clippy-driver",
-                "CLIPPY_ARGS": (
-                    "-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__"
-                    "-A__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__"
-                ),
-            }],
-        )
+        lint = {
+            "RUSTC_WORKSPACE_WRAPPER": "clippy-driver",
+            "CLIPPY_ARGS": (
+                "-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__"
+                "-A__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__"
+            ),
+        }
+        builds = [row for row in observed if row["argv"] == folded]
+        self.assertEqual([{key: row[key] for key in ("argv", *lint)} for row in builds],
+                         [dict(argv=folded, **lint)])
+        foreground = {key: builds[0][key] for key in ("idle", "nice")}
+        # Cargo fingerprints this environment. The nextest listing and the
+        # doctest build must see exactly the folded build's values, or each
+        # recompiles every workspace member before it can run.
+        listing = [row for row in observed if row["argv"][:2] == ["nextest", "list"]]
+        doctests = [row for row in observed if "--doc" in row["argv"]]
+        self.assertEqual(len(listing), 1, observed)
+        self.assertEqual(len(doctests), 1, observed)
+        for row in (*listing, *doctests):
+            self.assertEqual({key: row[key] for key in lint}, lint, row)
+        # The doctest/documentation chain overlaps the tests only at lowered
+        # priority, so it cannot take CPU time from their deadline assertions;
+        # the tests themselves keep normal priority.
+        background = [row for row in observed if row["argv"][:1] == ["doc"] or
+                      (row["argv"][:1] == ["test"] and "--doc" in row["argv"])]
+        self.assertEqual(len(background), 2, observed)
+        for row in background:
+            self.assertTrue((row["idle"] and not foreground["idle"]) or
+                            row["nice"] > foreground["nice"], (row, foreground))
+        runs = [row for row in observed if row["argv"][:2] == ["nextest", "run"]]
+        self.assertEqual(len(runs), 1, observed)
+        self.assertEqual({key: runs[0][key] for key in foreground}, foreground)
         self.assertTrue(all(row["RUSTC_WORKSPACE_WRAPPER"] is None
                             for row in observed if row["argv"][:1] == ["metadata"]))
         self.assertIn(["fixture-test-bin", "--list", "fixture_test"], calls)

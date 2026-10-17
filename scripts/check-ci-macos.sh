@@ -257,10 +257,8 @@ def failure_output(result: subprocess.CompletedProcess[str]) -> str:
     return "\n".join([*rendered, result.stderr.strip()]).strip()
 
 
-def run_listing(command: list[str], label: str, env: dict[str, str] | None = None) -> str | None:
-    result = subprocess.run(
-        command, cwd=repo_root, capture_output=True, text=True, check=False, env=env,
-    )
+def run_listing(command: list[str], label: str) -> str | None:
+    result = subprocess.run(command, cwd=repo_root, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         errors.append(f"{label} (exit {result.returncode}): {failure_output(result)}")
         return None
@@ -271,19 +269,6 @@ class TestBinary(NamedTuple):
     executable: str
     name: str
     kinds: list[str]
-
-
-# Same lint flags as `cargo clippy --workspace --all-targets -- -D warnings -A
-# clippy::disallowed_methods` (Makefile `ci-lint`, and the former
-# ci-guardrails clippy-all-targets phase). `-A clippy::disallowed_methods`
-# keeps test-only channels exempt; production clippy still denies them.
-# clippy-driver does not shell-split CLIPPY_ARGS. `cargo clippy` joins each
-# argument with this sentinel, and the driver splits on it. A space-separated
-# value is one rustc argument and does not apply the flags.
-ALL_TARGETS_CLIPPY_ARGS = (
-    "-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__"
-    "-A__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__"
-)
 
 
 def workspace_test_executables() -> dict[str, list[TestBinary]]:
@@ -299,14 +284,13 @@ def workspace_test_executables() -> dict[str, list[TestBinary]]:
         ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"],
         "cargo metadata failed",
     )
-    lint_env = os.environ.copy()
-    lint_env["RUSTC_WORKSPACE_WRAPPER"] = "clippy-driver"
-    lint_env["CLIPPY_ARGS"] = ALL_TARGETS_CLIPPY_ARGS
+    # The all-targets lint flags come from the shared wrapper. The nextest run,
+    # doctests and the sandbox gate use it too, so they reuse these artifacts.
     build = run_listing(
-        ["cargo", "test", "--workspace", "--lib", "--bins", "--tests", "--examples",
+        [str(repo_root / "scripts/with-test-build-lint.sh"),
+         "cargo", "test", "--workspace", "--lib", "--bins", "--tests", "--examples",
          "--locked", "--no-run", "--message-format", "json"],
         "workspace test build failed",
-        env=lint_env,
     )
     if metadata is None or build is None:
         return {}

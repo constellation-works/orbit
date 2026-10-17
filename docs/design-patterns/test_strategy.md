@@ -62,6 +62,22 @@ The Check job's nextest phase runs on a 4-vCPU runner with every slot busy. Comp
 
 `.config/nextest.toml` profile `ci` sets `test-threads` to 6 and `retries` to 0. Six is two extra slots on the 4-vCPU runner: enough to overlap that wait-bound fraction, and short of doubling the CPU-bound tests. The profile inherits the default profile, so the group caps stay `stateful-runtime` 1, `task-contracts` 4, and `mcp-contracts` 8. `scripts/ci-guardrails.sh` and the Linux sandbox gate select it with `--profile ci`. A local run that does not pass `--profile ci` keeps the default profile, whose thread count is the logical CPU count. `NEXTEST_TEST_THREADS`, including the value `scripts/build-budget.py` exports from the host `test-threads` file, still overrides the profile.
 
+`scripts/ci-guardrails.sh` arranges the full run around that phase. The repository-guard pool starts after formatting, overlaps the workflow test build and production Clippy, and joins before any test runs. nextest then runs the binaries listed from the folded test build (`--binaries-metadata`) without invoking Cargo. Doctests and documentation run beside it in Linux's idle scheduling class, on CPU time the tests leave idle, and join before the supply-chain gate and the exclusive self-tests. The `cpu-util:` line samples the whole host, so it includes that idle-class work. Every command that compiles workspace members after the folded build runs through `scripts/with-test-build-lint.sh`. Cargo fingerprints `RUSTC_WORKSPACE_WRAPPER` and `CLIPPY_ARGS`, so a nextest run without them recompiled every workspace member.
+
+Timing evidence from 2026-10-17, in wall seconds from the `ci-guardrails-phase:` lines. The hosted column is a slow 4-vCPU runner (run 39042835730; Check job 1261 s, of which guardrails took 1214 s). The local columns ran the guardrails before and after this layout on one host pinned to four cores (`taskset -c 0-3`, `CARGO_INCREMENTAL=0`, after a source change to `orbit-common`), so they compare layouts rather than predict hosted time. The after column gives both samples.
+
+| Phase | Hosted, before | Local, before | Local, after |
+|---|---:|---:|---:|
+| Workflow test build (folded all-targets Clippy) | 206 | 86 | 98 |
+| Production Clippy | 51 | 24 | 24 |
+| nextest, including any build it starts | 764 | 310 | 232–233 |
+| Doctests and documentation in the foreground | 79 | 36 | 0 (206–209 overlapped at idle priority) |
+| Guard pool after the tests | 20 | 11 | 0 (122 overlapping the builds) |
+| Exclusive self-tests | 82 | 46 | 45–85 |
+| Guardrails total | 1214 | 516 | 405–445 |
+
+The before layout's nextest rebuilt the workspace, about 220 s hosted and 91 s locally. Overlapping the pool slowed the workflow test build by 12 s locally, and the idle-priority chain slowed nextest by 13–14 s. The 85 s exclusive sample came from one suite that took 45 s against 7–10 s standalone. Formatting (4–8 s) and the supply-chain gate (0–4 s) are omitted from the table.
+
 The recurring `test-quality-audit` creates evidence-backed proposed tasks for critical coverage gaps, weak assertions, duplication, flaky or slow fixtures and regressions against this budget. It searches existing tasks before filing, links each finding to the audit, and records concrete acceptance criteria. The audit leaves a durable report even when no new finding is confirmed; it does not treat a quota of findings or deletions as success.
 
 ## Why
