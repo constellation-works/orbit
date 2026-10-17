@@ -225,25 +225,25 @@ SLOW_FIXTURE_SECONDS = 12
 
 
 def _kill_group(proc):
-    if proc.poll() is not None:
-        return
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
         return
     except PermissionError:
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                return
+    if proc.poll() is None:
         try:
-            proc.kill()
-        except ProcessLookupError:
-            return
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        try:
-            proc.kill()
-        except ProcessLookupError:
-            pass
-        proc.wait(timeout=5)
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            proc.wait(timeout=5)
 
 
 def _read_chunk(stream):
@@ -302,7 +302,7 @@ def run_step(argv, *, step, env=None, cwd=None, text=False, check=False, hang_qu
             os.set_blocking(stream.fileno(), False)
         while proc.poll() is None or streams:
             now = time.monotonic()
-            if proc.poll() is None and (now >= quiet_deadline or now >= absolute_deadline):
+            if now >= quiet_deadline or now >= absolute_deadline:
                 _kill_group(proc)
                 for stream in list(streams):
                     bucket = stdout_chunks if stream is proc.stdout else stderr_chunks
@@ -758,6 +758,20 @@ class VerifiedDownloadTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, r"hung step: Install cargo-nextest"):
                 self._install_case(self._workflow_steps(), "cargo-nextest", "NEXTEST",
                                    "cargo-nextest", "valid", hang_quiet=2, never_answers=True)
+
+    def test_silent_hang_when_direct_child_exits_with_background_descendant(self):
+        started = time.monotonic()
+        cpu_start = time.process_time()
+        with self.assertRaisesRegex(AssertionError, r"hung step: background descendant"):
+            run_step(
+                ["bash", "-c", "sleep 6 & exit 0"],
+                step="background descendant",
+                hang_quiet=2,
+            )
+        elapsed = time.monotonic() - started
+        cpu_elapsed = time.process_time() - cpu_start
+        self.assertLess(elapsed, 5, "hung step must fail within quiet budget, not wait out descendant")
+        self.assertLess(cpu_elapsed, 1.0, "wait loop must not busy-spin once deadline has passed")
 
     def test_deterministic_slowdown_beyond_legacy_caps_still_passes(self):
         with self.subTest(step="verified download"):
