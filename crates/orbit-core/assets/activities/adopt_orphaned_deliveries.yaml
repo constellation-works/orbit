@@ -6,17 +6,20 @@ spec:
   type: deterministic
   description: >
     Resume each owner-local delivery leaf (`task_pr_pipeline`) whose worker
-    died after it opened its pull request, so landing review, completion and
-    auto-fix continue on that pull request instead of waiting for an
-    operator. A leaf qualifies when it was interrupted within the last 24
-    hours (not by an upgrade, which the clock resumes), is not a claimed
-    execution, has no retry yet, its pull request is still open on the head
-    branch it opened it on, every task it carries still waits on it (in
-    `review`, or `blocked` by the interruption), this drain holds the
-    `completion` and `auto_fix` authority the leaf was started with, and the
-    ordinary checkpoint resume accepts it. At most as many leaves are resumed
-    as the drain has free slots; a stopped drain resumes none. Each adoption
-    or final skip is decided once and audited.
+    died after it opened its pull request and promoted its task to `review`,
+    so landing review, completion and auto-fix continue on that pull request
+    instead of waiting for an operator. A leaf qualifies when its run ended
+    within 24 hours of its last recorded activity (not at an upgrade boundary,
+    which the clock resumes), is not a claimed execution, has no retry yet, no
+    earlier run of its retry lineage was adopted, its pull request is still
+    open on the head branch it opened it on, every task it carries is still in
+    `review`, this drain holds the `completion` and `auto_fix` authority the
+    leaf was started with, and the ordinary checkpoint resume accepts it. At
+    most as many leaves are resumed as the drain has free slots; a stopped
+    drain or a pass held by host resource pressure resumes none. Each adoption
+    or final skip is decided once and audited. The step never fails on a
+    store or forge error: one leaf's error defers it, and a pass that cannot
+    read its candidates or slots reports `pass_error` and adopts nothing.
   input_schema_json:
     type: object
     properties:
@@ -39,5 +42,9 @@ spec:
         type: array
         items:
           type: object
+      pass_error:
+        type: string
+      resource_throttle:
+        type: object
   action: adopt_orphaned_deliveries
   config: {}

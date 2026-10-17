@@ -874,7 +874,8 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   <leaf-run> --json`): `close_failed` means the earlier pull request is
   still open, so close it by hand. To start over instead, add
   `--discard-candidate`; that move closes the earlier pull request with a
-  comment once no run or claim of the task is live. Either way, whichever
+  comment. A move made while a run or claim of the task is still live closes
+  nothing, so make it after the claim settles. Either way, whichever
   run publishes the task's next pull request closes any other open Orbit
   pull request of the task (`closed_stale_pull_requests` in its `pr_open`
   output), so a re-admitted task keeps one open pull request
@@ -1174,9 +1175,11 @@ depends on where it ran:
   pull request, and the task's next claim continues them on the same branch.
   Generic resume is refused, as above, and no drain adopts the run.
 - **Owner-local leaf.** The owner drain's next pass adopts it when it holds
-  the leaf's `--complete` and `--auto-fix` grants. The pass resumes the
-  interrupted run from its checkpoints, so completion and auto-fix continue
-  on the same pull request and head. Every rule and every refusal is listed in
+  the leaf's `--complete` and `--auto-fix` grants and the task is still in
+  `review`. The pass resumes the interrupted run from its checkpoints, once
+  per retry lineage, so completion and auto-fix continue on the same pull
+  request and head. A leaf that died before promoting its task leaves it
+  interruption-`blocked`, which the blocked-task recovery backstop decides. Every rule and every refusal is listed in
   [stuck job runs](stuck-job-runs.md#a-delivery-leaf-that-died-after-opening-its-pull-request).
 
 When the task cannot be resumed, requeue it. An operator's move to `backlog`,

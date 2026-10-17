@@ -1,8 +1,9 @@
 //! The forge a task's terminal decision closes Orbit-authored PRs through.
 //!
 //! When a task lands, is rejected or is archived, Core closes the delivery
-//! and `[BLOCKED]` PRs Orbit opened for it (`application::task::pr_closure`).
-//! That policy only needs three forge operations, so it reaches them through
+//! and `[BLOCKED]` PRs Orbit opened for it (`application::task::pr_closure`),
+//! and an owner drain checks a dead delivery leaf's PR is still open before
+//! it adopts the leaf. Those policies only need four forge operations, so it reaches them through
 //! [`TaskPrForge`] rather than the `gh` CLI directly: production uses
 //! [`GhTaskPrForge`], and fixtures inject a fake forge. No operation deletes a
 //! branch.
@@ -31,6 +32,20 @@ pub struct ForgePullRequest {
 pub trait TaskPrForge: Send + Sync {
     /// Every open pull request of the repository checked out at `repo_root`.
     fn open_pull_requests(&self, repo_root: &Path) -> Result<Vec<ForgePullRequest>, OrbitError>;
+
+    /// Pull request `number` when it is open, read on its own so a
+    /// repository with more open pull requests than one listing returns
+    /// still answers. The default reads it from that listing.
+    fn open_pull_request(
+        &self,
+        repo_root: &Path,
+        number: u64,
+    ) -> Result<Option<ForgePullRequest>, OrbitError> {
+        Ok(self
+            .open_pull_requests(repo_root)?
+            .into_iter()
+            .find(|pull| pull.number == number))
+    }
 
     /// The login this machine's forge credentials act as, which is the
     /// identity Orbit opens its PRs under.
@@ -102,6 +117,31 @@ impl TaskPrForge for GhTaskPrForge {
             OrbitError::Execution("gh pr list did not return an array".to_string())
         })?;
         Ok(entries.iter().filter_map(pull_request_from_json).collect())
+    }
+
+    fn open_pull_request(
+        &self,
+        repo_root: &Path,
+        number: u64,
+    ) -> Result<Option<ForgePullRequest>, OrbitError> {
+        let stdout = run_gh(
+            orbit_tools::github_cli::view_pull_request_request(number),
+            repo_root,
+            "gh pr view",
+        )?;
+        let entry = orbit_tools::github_cli::parse_gh_json(&stdout, "gh pr view")?;
+        if !entry
+            .get("state")
+            .and_then(Value::as_str)
+            .is_some_and(|state| state.eq_ignore_ascii_case("open"))
+        {
+            return Ok(None);
+        }
+        pull_request_from_json(&entry).map(Some).ok_or_else(|| {
+            OrbitError::Execution(format!(
+                "gh pr view #{number} did not report its number, head branch and author"
+            ))
+        })
     }
 
     fn authenticated_login(&self, repo_root: &Path) -> Result<String, OrbitError> {

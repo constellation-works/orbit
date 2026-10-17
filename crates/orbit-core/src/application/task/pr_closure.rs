@@ -9,19 +9,26 @@
 //! close, and archiving a done task must not close the landing it
 //! deliberately kept open.
 //!
-//! An operator or agent moving a task back to `backlog` or `someday` closes
-//! them too ([`OrbitRuntime::close_task_prs_after_requeue`]), since the task's
-//! next attempt opens its own pull request, except a pull request a later run
-//! may still continue: everything while a run or claim of the task is live
-//! (a leaf may still be landing it), everything a failure handoff kept when
-//! the task leaves `blocked` and everything a final-recovery requeue
-//! preserved (the next run resumes that candidate), and the pull request of
-//! a candidate the owner kept from the task's last claim (its next claim
-//! republishes through it). `--discard-candidate` drops those exceptions but
-//! the live one. Automation's own holds and requeues close nothing: they keep
-//! the candidate for the next run, whose `pr_open` closes or reuses the
-//! earlier pull request. That `pr_open` closes every other open delivery PR
-//! of the task once its own is open, so a re-admitted task ends with one.
+//! An operator or agent moving a task from active work to `backlog` or
+//! `someday` closes them too ([`OrbitRuntime::close_task_prs_after_requeue`]),
+//! since the task's next attempt opens its own pull request. It keeps every
+//! pull request a later run may still continue:
+//! - everything while a run or claim of the task is live, or cannot be read
+//!   (a leaf may still be landing one);
+//! - everything when the task was last `blocked` before it was shelved (the
+//!   failure handoff's candidate) or a final-recovery requeue shelved it
+//!   (the published candidate), however often it moved between the shelves
+//!   since;
+//! - the pull request of a candidate the owner kept from the task's last
+//!   claim (its next claim republishes through it), and everything when that
+//!   candidate cannot be read.
+//!
+//! `--discard-candidate` drops those exceptions but the live one. Moving
+//! from `someday` to `backlog`, or out of done, rejected or archived, closes
+//! nothing. Automation's own holds and requeues close nothing: they keep the
+//! candidate for the next run. A run that creates a pull request closes the
+//! task's other open delivery PRs itself, so a re-admitted task ends with
+//! one.
 //!
 //! A PR qualifies only when all of these hold:
 //! - its head branch is `orbit/<TASK-ID>-…`;
@@ -95,8 +102,20 @@ impl OrbitRuntime {
         note: Option<&str>,
         discarded: bool,
     ) -> bool {
+        // Moving between the shelves (`backlog` and `someday`) in either
+        // direction un-shelves or re-shelves the same work; only `backlog` to
+        // `someday` puts it away, and an earlier move already decided what
+        // the shelf keeps. Leaving a terminal status never closes anything:
+        // the terminal decision settled which PRs stay open.
         if previous == task.status
-            || previous == TaskStatus::Proposed
+            || matches!(
+                previous,
+                TaskStatus::Proposed
+                    | TaskStatus::Done
+                    | TaskStatus::Rejected
+                    | TaskStatus::Archived
+            )
+            || (previous == TaskStatus::Someday && task.status == TaskStatus::Backlog)
             || !matches!(task.status, TaskStatus::Backlog | TaskStatus::Someday)
             || !self.context.settings().pr_settings().close_on_terminal
         {
@@ -107,11 +126,17 @@ impl OrbitRuntime {
         }
         let mut keep = BTreeSet::new();
         if !discarded {
-            if previous == TaskStatus::Blocked || self.requeued_by_final_recovery(task, previous) {
+            if self.shelved_candidate_resumes(task) {
                 return true;
             }
-            if let Some(kept) = self.kept_claim_pull_request(&task.id) {
-                keep.insert(kept);
+            match self.kept_claim_pull_request(&task.id) {
+                Ok(Some(kept)) => {
+                    keep.insert(kept);
+                }
+                Ok(None) => {}
+                // An unreadable kept candidate may be the one the next claim
+                // republishes through, so nothing is closed on a guess.
+                Err(()) => return true,
             }
         }
         self.close_open_task_prs(
@@ -226,25 +251,35 @@ impl OrbitRuntime {
         }
     }
 
-    /// Whether `task` entered `previous` through a final-recovery requeue
-    /// that no discard has since overridden. Its next run resumes the
-    /// published candidate through the same pull request.
-    fn requeued_by_final_recovery(&self, task: &Task, previous: TaskStatus) -> bool {
+    /// Whether the task's next run resumes the candidate its shelving kept:
+    /// the last status the task held before it was shelved was `blocked` (a
+    /// failure handoff's candidate and `[BLOCKED]` PR), or a final-recovery
+    /// requeue shelved it (the published candidate and its PR), and no
+    /// discard came since. Later moves between the shelves keep that answer.
+    /// An unreadable history keeps everything.
+    fn shelved_candidate_resumes(&self, task: &Task) -> bool {
         let Ok(history) = self.get_task_history(&task.id) else {
             return true;
         };
-        history
-            .iter()
-            .rev()
-            .find(|entry| {
-                entry.to_status == Some(previous) || entry.event == CANDIDATE_DISCARDED_EVENT
-            })
-            .is_some_and(|entry| entry.event == FINAL_RECOVERY_REQUEUED_EVENT)
+        for entry in history.iter().rev() {
+            if entry.event == CANDIDATE_DISCARDED_EVENT {
+                return false;
+            }
+            if entry.event == FINAL_RECOVERY_REQUEUED_EVENT {
+                return true;
+            }
+            match entry.to_status {
+                Some(TaskStatus::Backlog | TaskStatus::Someday) | None => {}
+                Some(status) => return status == TaskStatus::Blocked,
+            }
+        }
+        false
     }
 
     /// The pull request of the candidate the owner kept from `task_id`'s last
-    /// claim, when the next claim would continue it.
-    fn kept_claim_pull_request(&self, task_id: &str) -> Option<u64> {
+    /// claim, when the next claim would continue it. `Err` when the kept
+    /// candidate cannot be read.
+    fn kept_claim_pull_request(&self, task_id: &str) -> Result<Option<u64>, ()> {
         let kept = self
             .stores()
             .tasks()
@@ -252,12 +287,17 @@ impl OrbitRuntime {
                 task_id,
                 self.automation_machine_identity().unwrap_or_default(),
             )
-            .ok()
-            .flatten()?;
-        if kept.fresh.is_some() {
-            return None;
-        }
-        kept.candidate.pull_request.as_deref()?.parse().ok()
+            .map_err(|error| {
+                tracing::warn!(
+                    target: "orbit.core.pr_closure",
+                    task_id,
+                    error = %error,
+                    "could not read the task's kept claim candidate; its requeue closes no PR",
+                );
+            })?;
+        Ok(kept
+            .filter(|kept| kept.fresh.is_none())
+            .and_then(|kept| kept.candidate.pull_request.as_deref()?.parse().ok()))
     }
 
     /// Delivery PR numbers of the follower handoffs this owner accepted for
