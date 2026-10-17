@@ -187,7 +187,5 @@ pub enum Commands {
     #[command(hide = true)]
     Skill(skill::SkillCommand),
     #[command(hide = true)]
-    Logs(run::legacy_logs::LogsCommand),
-    #[command(hide = true)]
     Artifacts(task::artifacts::ArtifactsCommand),
 }

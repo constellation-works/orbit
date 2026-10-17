@@ -1046,61 +1046,6 @@ updated_at: 2026-01-01T00:00:00Z
              "orbit.qa.absent", "--path", str(log_path), "--format", "ndjson"], work,
             ["nonmatching-and-malformed-records-are-excluded"], empty_log_selection)
 
-    fixture_job = temp / "qa-legacy-logs.yaml"
-    fixture_job.write_text("""schemaVersion: 2
-kind: Job
-metadata:
-  name: qa_legacy_logs_fixture
-spec:
-  state: enabled
-  kind: workflow
-  max_active_runs: 1
-  steps:
-    - id: exact_step
-      default_input:
-        seconds: 0
-      spec:
-        type: deterministic
-        action: sleep
-        config: {}
-""")
-
-    def completed_fixture_run(evidence):
-        body = parse_json(evidence, "fixture job run")
-        # Canonical vocabulary is JobRunState::Success.to_string() == "success"
-        # (crates/orbit-types/src/workflow/job.rs), not the legacy "succeeded" literal.
-        if body.get("state") != "success" or not body.get("run_id"):
-            raise ValueError("deterministic fixture job did not succeed")
-
-    fixture_run = checked("legacy-logs-compatibility",
-                          [orbit_bin, "--root", str(root), "--workspace", str(work), "run", "job",
-                           str(fixture_job), "--input", "crew=sol", "--wait", "--format", "json"],
-                          work, ["supported-run-fixture-completes"], completed_fixture_run)
-    fixture_run_id = json.loads(fixture_run["stdout"])["run_id"] if fixture_run else "missing-run"
-
-    def legacy_logs_output(evidence):
-        body = parse_json(evidence, "legacy logs")
-        # The fixture's single deterministic step is recorded on the run, so the
-        # legacy view renders exactly one legacy_step_to_json entry for it; only
-        # the timing fields are left unchecked.
-        expected = {"step_index": 0, "target_id": "exact_step", "target_type": "activity",
-                    "state": "success", "exit_code": None, "error_code": None,
-                    "error_message": None}
-        observed = {key: body[0].get(key) for key in expected} if isinstance(body, list) and len(body) == 1 else None
-        if observed != expected:
-            raise ValueError(f"legacy logs changed its exact detached-run compatibility output: {body!r}")
-        if "[deprecated]" not in evidence.get("stderr", ""):
-            raise ValueError("legacy logs omitted its compatibility deprecation notice")
-
-    checked("legacy-logs-compatibility",
-            [orbit_bin, "--root", str(root), "--workspace", str(work), "logs", fixture_run_id,
-             "--format", "json"], work,
-            ["exact-legacy-compatibility-output-and-deprecation"], legacy_logs_output)
-    checked("legacy-logs-compatibility",
-            [orbit_bin, "--root", str(root), "--workspace", str(work), "logs", fixture_run_id,
-             "--step", "absent-step", "--format", "json"], work,
-            ["unknown-legacy-step-is-refused"], refused, accept_nonzero=True)
-
     migration_root = temp / "migration-root"
     migration_init = checked(
         "migration-lifecycle",

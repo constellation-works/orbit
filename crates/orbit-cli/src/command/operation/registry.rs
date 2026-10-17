@@ -637,17 +637,6 @@ impl Commands {
                     runtime_dispatch!(Skill),
                 )
             }
-            Commands::Logs(command) => CommandOperation::new(
-                RuntimeNeed::Required,
-                Some(admin_meta(
-                    "logs",
-                    None,
-                    Some("job_run"),
-                    Some(&command.run_id),
-                )),
-                None,
-                runtime_dispatch!(Logs),
-            ),
             Commands::Artifacts(command) => CommandOperation::new(
                 RuntimeNeed::Required,
                 Some(admin_meta(
