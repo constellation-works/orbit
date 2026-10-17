@@ -8,13 +8,13 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
-use rusqlite::{TransactionBehavior, params};
+use rusqlite::{TransactionBehavior, params, params_from_iter};
 
 use crate::Store;
 use crate::contracts::{
-    AdmissionForecastPoint, AdmissionForecastRecord, DeliveryRunResources, DeliveryRunsFreshness,
-    HostResourceMinute, ResourceMinuteLoad, ResourceMinutesTable, ResourceUsageStoreBackend,
-    RunResourceMinute,
+    AdmissionForecastPoint, AdmissionForecastRecord, DeliveryRunInterval, DeliveryRunResources,
+    DeliveryRunsFreshness, HostResourceMinute, ResourceMinuteLoad, ResourceMinutesTable,
+    ResourceUsageStoreBackend, RunResourceMinute,
 };
 
 fn stamp(at: DateTime<Utc>) -> String {
@@ -406,5 +406,63 @@ impl ResourceUsageStoreBackend for Store {
                 .execute(sql, params![stamp(cutoff), limit])
                 .map_err(sqlite_store_error)
         })
+    }
+}
+
+impl Store {
+    /// Delivery workers of `job_ids` whose lifetime overlaps `[since, until)`.
+    ///
+    /// A worker is live from `started_at` until `finished_at`, and still live
+    /// when `finished_at` is absent. Runs that never started are omitted.
+    /// `job_runs` timestamps are variable-width RFC3339, so the overlap is
+    /// applied after parsing rather than as a text comparison.
+    pub fn delivery_runs_overlapping(
+        &self,
+        job_ids: &[&str],
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
+    ) -> Result<Vec<DeliveryRunInterval>, OrbitError> {
+        if job_ids.is_empty() || since >= until {
+            return Ok(Vec::new());
+        }
+        let conn = self.read()?;
+        let placeholders = vec!["?"; job_ids.len()].join(",");
+        // The workspace subquery lets SQLite walk each workspace's job index
+        // instead of scanning `job_runs` as one table. See admission load.
+        let sql = format!(
+            "SELECT started_at, finished_at
+             FROM job_runs
+             WHERE workspace_id IN (SELECT DISTINCT workspace_id FROM job_runs)
+               AND job_id IN ({placeholders})
+               AND started_at IS NOT NULL"
+        );
+        let mut statement = conn.prepare(&sql).map_err(sqlite_store_error)?;
+        let values = job_ids
+            .iter()
+            .map(|job| (*job).to_string())
+            .collect::<Vec<_>>();
+        let rows = statement
+            .query_map(params_from_iter(values), |row| {
+                let started_at = crate::parse_timestamp(&row.get::<_, String>(0)?)?;
+                let finished_at = row
+                    .get::<_, Option<String>>(1)?
+                    .map(|at| crate::parse_timestamp(&at))
+                    .transpose()?;
+                Ok(DeliveryRunInterval {
+                    started_at,
+                    finished_at,
+                })
+            })
+            .map_err(sqlite_store_error)?;
+        let mut intervals = Vec::new();
+        for row in rows {
+            let interval = row.map_err(sqlite_store_error)?;
+            let overlaps = interval.started_at < until
+                && interval.finished_at.is_none_or(|finished| finished > since);
+            if overlaps {
+                intervals.push(interval);
+            }
+        }
+        Ok(intervals)
     }
 }

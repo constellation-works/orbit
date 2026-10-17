@@ -47,6 +47,16 @@ pub struct RunResourceMinute {
     pub samples: u32,
 }
 
+/// A delivery worker's lifetime, from when it started until it finished.
+///
+/// `finished_at` is absent while the run is still live. A run that never
+/// started is not an interval: only a started worker can sample the host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeliveryRunInterval {
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+}
+
 /// One wall-clock minute of the host.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HostResourceMinute {
