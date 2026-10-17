@@ -1,8 +1,8 @@
 ---
 title: Auto-concurrency — Design
 owner: claude
-last_updated: 2026-10-12
-last_validated: 2026-10-12
+last_updated: 2026-10-17
+last_validated: 2026-10-17
 status: Draft
 feature: auto-concurrency
 doc_role: design
@@ -27,8 +27,8 @@ related_artifacts: [ORB-15757, ORB-15774]
 > local admission, §6 pull admission, the `drain_last_pass`, `orbit run show`,
 > `orbit run readiness` and `orbit run profiles --accuracy` rows of §7 the
 > record and diagnostics a local pass exposes, and §8.1 the accuracy report.
-> The per-drain mode controls of §7 are implemented; its dashboard forecast
-> curves remain proposed.
+> The per-drain mode controls of §7 are implemented. The dashboard Drain card
+> shows that recorded forecast; its curves against measured load remain proposed.
 
 This doc covers what admission does today (§1) and the proposal:
 
@@ -697,7 +697,7 @@ Limitations:
 | `orbit run profiles` | Implemented: the profiles per workspace, work class and complexity: deliveries (sparse below `min_profile_deliveries`), horizon, peak CPU and memory and when they occur, and the CPU and memory spread. Flags no-diff profiles with build-like load and names the deliveries behind each flag (§3.2). `--json` for the full series |
 | `orbit run profiles --accuracy` | Implemented (§8.1): composable forecast-time `--since`, exact `--drain` and recorded `--mode` cohorts; mature measured pairs, pending and missing counts per offset; shadow decisions and enforce admissions, gap-fit holds and pull holds per drain. `--json` includes the effective selection and raw pairs |
 | Per-drain mode | Implemented for local drains: CLI `--auto-concurrency off|shadow|enforce`, registered MCP `orbit.workflow.auto` start `auto_concurrency`, and dashboard HTTP start `auto_concurrency` all use Core submission. At durable admission, explicit or configured mode is captured in `input.auto_concurrency` with `input.auto_concurrency_source`, retained on resume/restart. The loop forwards it to the existing classifier; thresholds, profiles, throttle, ceilings and accuracy lineage remain host policy. Stop/resize and explicit pull overrides are refused before effects. |
-| Dashboard | Implemented: an operator launch choice of inherited host mode, off, shadow or enforce. The form reads current inherited host mode from readiness, sends the actual option, and shows the receipt's durable effective mode; the live window shows its captured mode. Forecast curves against measured load with running tasks stacked remain future work. |
+| Dashboard | Implemented: an operator launch choice of inherited host mode, off, shadow or enforce. The form reads current inherited host mode from readiness, sends the actual option, and shows the receipt's durable effective mode; the live window shows its captured mode. The Drain card shows the recorded forecast from readiness: its time, CPU and memory peaks against the current admit thresholds, headroom, admitted tasks with their profile source, and a candidate enforce held. A pass that built none says `no forecast this pass` and shows `last_admission_forecast` when readiness has one. Shadow decisions are labelled hypothetical. Forecast curves against measured load with running tasks stacked remain future work. |
 
 `max_active_leaf_runs` keeps its meaning: the operator's ceiling, enforced
 first.
