@@ -192,6 +192,75 @@ fn save_success_spanning(
     save_run(workspace, &run, None);
 }
 
+/// A finished `task_pilot_pipeline` run whose pilots ran as `drawn`, the
+/// crew it froze under the low pool. Its `resolved_crew` is `task_crew`, the
+/// batch's task crew, as a real pilot run records it.
+fn save_pilot_run(
+    workspace: &Workspace,
+    run_id: &str,
+    now: DateTime<Utc>,
+    finished_at: DateTime<Utc>,
+    state: JobRunState,
+    task_crew: &str,
+    drawn: &str,
+) {
+    let mut run = finished_run(
+        run_id,
+        now,
+        finished_at,
+        state,
+        Some(task_crew),
+        this_host(),
+    );
+    run.job_id = "task_pilot_pipeline".into();
+    let mut pipeline = PipelineState::new(run_id.into(), run.job_id.clone(), json!({}));
+    pipeline.activity_crew_draws.insert(
+        LOW.into(),
+        ActivityCrewDraw {
+            crew: drawn.into(),
+            source: LOW.into(),
+            eligible_pool: Vec::new(),
+        },
+    );
+    save_run(workspace, &run, Some(&pipeline));
+}
+
+/// Point this workspace's `codex` executor at a script that answers every
+/// call with Codex's own 401 turn failure, as a revoked login does.
+#[cfg(unix)]
+fn install_logged_out_codex(workspace: &Workspace) {
+    use orbit_types::resource::ExecutorResource;
+    use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind};
+    use std::os::unix::fs::PermissionsExt;
+
+    let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    let provider = workspace.root.path().join("codex");
+    std::fs::write(
+        &provider,
+        "#!/bin/sh\n/bin/cat > /dev/null\n/bin/cat <<'PAYLOAD'\n\
+         {\"type\":\"turn.failed\",\"error\":{\"message\":\"unexpected status 401 Unauthorized\"}}\n\
+         PAYLOAD\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut executor: ExecutorResource = serde_yaml::from_str(
+        &std::fs::read_to_string(assets.join("executors/codex.yaml")).unwrap(),
+    )
+    .unwrap();
+    executor.spec.command = Some(provider.display().to_string());
+    // The fixture observes the run's failure record, not OS confinement.
+    executor.spec.sandbox = Some(ExecutorSandboxKind::Off);
+    workspace
+        .runtime
+        .upsert_executor_def(&ExecutorDef::from_resource_spec(
+            executor.metadata.name,
+            executor.spec,
+            None,
+            None,
+        ))
+        .unwrap();
+}
+
 fn save_probe(
     workspace: &Workspace,
     now: DateTime<Utc>,
@@ -256,12 +325,13 @@ fn withhold_reason(diagnostic: &AutomationDiagnostic, task_id: &str) -> String {
 
 fn assert_withheld(workspace: &Workspace, now: DateTime<Utc>, task_id: &str) -> String {
     workspace.install_pilot_job();
+    let pilots_before = pilot_count(workspace);
     let suppressed = evaluate(workspace, now, false);
     assert_eq!(suppressed.reason, "work_withheld", "{suppressed:?}");
     assert!(suppressed.batch.is_empty(), "{suppressed:?}");
     assert_eq!(
         pilot_count(workspace),
-        0,
+        pilots_before,
         "a held provider must not start task_pilot_pipeline"
     );
     let reason = withhold_reason(&suppressed, task_id);
@@ -761,6 +831,115 @@ fn limit_and_refusal_failures_do_not_withhold_the_routine() {
     }
 }
 
+/// A pilot that fails on the provider's login is the failure that holds the
+/// next tick. The shipped job runs for real, with only the provider scripted,
+/// so the projection reads the record a real pilot failure leaves.
+fn a_pilot_that_fails_on_the_provider_login_withholds_the_next_tick() {
+    // The scripted provider is a Unix shell script.
+    #[cfg(unix)]
+    pilot_login_failure_withholds_the_next_tick();
+}
+
+#[cfg(unix)]
+fn pilot_login_failure_withholds_the_next_tick() {
+    let workspace = Workspace::new();
+    install_logged_out_codex(&workspace);
+    let task = workspace.task("pilot meets a revoked codex login");
+    let job = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("assets/jobs/task_pilot_pipeline.yaml");
+    let outcome = workspace
+        .runtime
+        .run_job_v2_from_yaml(
+            &job,
+            json!({"task_ids": [task.id], "workspace_path": workspace.repo, "base_branch": "main"}),
+        )
+        .unwrap();
+    assert!(
+        !outcome.success,
+        "the pilot's provider refused it: {outcome:?}"
+    );
+    let reason = assert_withheld(&workspace, Utc::now(), &task.id);
+    assert!(
+        reason.contains("provider_unavailable codex") && reason.contains(&outcome.run_id),
+        "the withhold names the pilot run's own failure: {reason}"
+    );
+}
+
+/// A pilot run's `resolved_crew` is its batch's task crew, but its pilots ran
+/// as the crew it drew. A pilot success clears only that crew's provider, and
+/// a pilot capacity failure holds that crew.
+fn a_pilot_run_counts_as_the_crew_it_drew() {
+    let config = r#"
+[workflow]
+default_crew = "codex_a"
+low_complexity_crews = ["codex_a", "codex_b"]
+[crews.codex_a]
+provider = "codex"
+model = "fixture-a"
+[crews.codex_b]
+provider = "codex"
+model = "fixture-b"
+[crews.claude_c]
+provider = "claude"
+model = "fixture-c"
+"#;
+    let now = Utc::now();
+
+    let unavailable = workspace_with(config);
+    let task = unavailable.task("a claude pilot does not clear codex");
+    save_failure(
+        &unavailable,
+        "jrun-codex-auth",
+        now,
+        now - Duration::minutes(10),
+        ProviderFailureClass::Unavailable,
+        "codex",
+        "codex_a",
+    );
+    save_pilot_run(
+        &unavailable,
+        "jrun-pilot-claude",
+        now,
+        now - Duration::minutes(2),
+        JobRunState::Success,
+        "codex_a",
+        "claude_c",
+    );
+    let reason = assert_withheld(&unavailable, now, &task.id);
+    assert!(
+        reason.contains("provider_unavailable codex") && reason.contains("jrun-codex-auth"),
+        "{reason}"
+    );
+
+    let capacity = workspace_with(config);
+    let task = capacity.task("the pilot's drawn crew is the one out of room");
+    save_pilot_run(
+        &capacity,
+        "jrun-pilot-capacity",
+        now,
+        now - Duration::minutes(5),
+        JobRunState::Failed,
+        "codex_a",
+        "codex_b",
+    );
+    save_step(
+        &capacity,
+        "jrun-pilot-capacity",
+        now - Duration::minutes(5),
+        ProviderFailureClass::Capacity,
+        "codex",
+    );
+    assert_resumes(&capacity, now, &task.id);
+    let (model, draw) = low_draw(&capacity);
+    assert_eq!(draw.crew, "codex_a", "{}", draw.source);
+    assert_eq!(model, "fixture-a");
+    assert!(
+        draw.source.contains("provider_capacity codex_b"),
+        "the hold lands on the crew the pilot drew: {}",
+        draw.source
+    );
+}
+
 /// A pilot admitted into debounce before the failure keeps its pending member.
 /// The hold that starts during the debounce must still stop its dispatch.
 fn a_hold_that_starts_during_debounce_withholds_the_pending_pilot() {
@@ -795,6 +974,8 @@ crate::scenario_table!(
     an_expired_unavailable_hold_lets_the_pilot_resume,
     a_later_success_clears_unavailable_and_capacity,
     a_success_started_before_the_failure_does_not_clear_it,
+    a_pilot_that_fails_on_the_provider_login_withholds_the_next_tick,
+    a_pilot_run_counts_as_the_crew_it_drew,
     an_auth_probe_recovery_clears_unavailable,
     unavailable_holds_every_crew_of_the_provider,
     another_providers_crew_is_drawn_and_the_routine_still_admits,

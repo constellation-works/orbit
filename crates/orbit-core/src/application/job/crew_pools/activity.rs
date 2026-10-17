@@ -67,29 +67,56 @@ impl OrbitRuntime {
     ) -> Result<Crew, OrbitError> {
         let key = complexity_crews_key(complexity);
         let inspection = requires_native_inspection(input);
+        let now = Utc::now();
+        // The hold scans read run history. They run before the run-state
+        // write transaction, and not at all once this run has frozen its draw.
+        let holds = if self.frozen_activity_draw(input, &key)?.is_some() {
+            Vec::new()
+        } else {
+            self.standing_host_provider_holds(now)
+        };
         self.frozen_activity_crew(input, &key, &mut |allowlist| {
-            let (candidates, source) = if inspection {
-                self.inspection_activity_candidates(complexity)?
-            } else if let Some(candidates) = self.configured_complexity_pool(complexity)? {
-                (candidates, key.clone())
-            } else {
-                tracing::warn!(
-                    pool = %key,
-                    "the pool is empty or wholly disabled; this run's activity crew falls back \
-                     to workflow.default_crew",
-                );
-                (
-                    vec![sole_candidate(self.resolve_crew_for_task(None, None)?)],
-                    format!("workflow.default_crew ({key} is empty)"),
-                )
-            };
-            let candidates = permitted_candidates(candidates, &source, allowlist)?;
-            let (candidates, source) = self.provider_unlimited_candidates(candidates, source);
             let (candidates, source) =
-                self.apply_host_provider_holds(candidates, source, Utc::now());
+                self.activity_draw_candidates(complexity, inspection, allowlist, now)?;
+            let (candidates, source) = skip_held_candidates(candidates, source, &holds, now);
             let selected = weighted_draw(&candidates, &source, random)?;
             Ok(activity_crew_draw(selected, &source, &candidates))
         })
+    }
+
+    /// What a complexity-pool activity draw chooses from before host provider
+    /// holds apply: the pool's members (only inspection-capable ones when the
+    /// activity inspects natively, falling back as
+    /// [`Self::complexity_pool_activity_crew`] describes), without disabled,
+    /// zero-weight or allowlist-excluded crews, then without crews at one of
+    /// this host's provider limits while any member is left. The draw and the
+    /// task-pilot routine's withhold both read it, so one narrowing rule
+    /// serves both.
+    fn activity_draw_candidates(
+        &self,
+        complexity: TaskComplexity,
+        inspection: bool,
+        allowlist: Option<&CrewAllowlist>,
+        now: DateTime<Utc>,
+    ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
+        let key = complexity_crews_key(complexity);
+        let (candidates, source) = if inspection {
+            self.inspection_activity_candidates(complexity)?
+        } else if let Some(candidates) = self.configured_complexity_pool(complexity)? {
+            (candidates, key)
+        } else {
+            tracing::warn!(
+                pool = %key,
+                "the pool is empty or wholly disabled; this run's activity crew falls back \
+                 to workflow.default_crew",
+            );
+            (
+                vec![sole_candidate(self.resolve_crew_for_task(None, None)?)],
+                format!("workflow.default_crew ({key} is empty)"),
+            )
+        };
+        let candidates = permitted_candidates(candidates, &source, allowlist)?;
+        Ok(self.provider_unlimited_candidates(candidates, source, now))
     }
 
     /// The candidates and source of an inspection-requiring activity draw
@@ -146,17 +173,7 @@ impl OrbitRuntime {
         key: &str,
         draw: &mut dyn FnMut(Option<&CrewAllowlist>) -> Result<ActivityCrewDraw, OrbitError>,
     ) -> Result<Crew, OrbitError> {
-        let run_id = input
-            .get("job_run_id")
-            .or_else(|| input.get("run_id"))
-            .and_then(Value::as_str)
-            .and_then(non_empty)
-            .ok_or_else(|| {
-                OrbitError::InvalidInput(format!(
-                    "an activity crew drawn from `{key}` needs the input's executing \
-                     `job_run_id` or `run_id` to freeze the draw"
-                ))
-            })?;
+        let run_id = activity_draw_run_id(input, key)?;
         let allowlist = self.crew_allowlist_from_input(input)?;
         let mut drawn: Option<ActivityCrewDraw> = None;
         let update = self
@@ -187,6 +204,20 @@ impl OrbitRuntime {
         self.resolve_crew_for_task(Some(&draw.crew), None)
     }
 
+    /// The draw this run already froze under `key`, read outside any write
+    /// transaction. The frozen-draw transaction stays authoritative: a draw
+    /// that lands between this read and it still wins there.
+    fn frozen_activity_draw(
+        &self,
+        input: &Value,
+        key: &str,
+    ) -> Result<Option<ActivityCrewDraw>, OrbitError> {
+        let run_id = activity_draw_run_id(input, key)?;
+        Ok(self
+            .read_run_state(run_id)?
+            .and_then(|mut state| state.activity_crew_draws.remove(key)))
+    }
+
     /// `candidates` without the crews at one of this host's provider limits,
     /// with `source` naming the skipped crews. When every candidate is
     /// limited, or none is, they are returned as they were.
@@ -194,8 +225,9 @@ impl OrbitRuntime {
         &self,
         candidates: Vec<CrewCandidate>,
         source: String,
+        now: DateTime<Utc>,
     ) -> (Vec<CrewCandidate>, String) {
-        let gate = self.provider_limit_gate(chrono::Utc::now());
+        let gate = self.provider_limit_gate(now);
         let (limited, unlimited): (Vec<_>, Vec<_>) = candidates
             .iter()
             .cloned()
@@ -213,62 +245,28 @@ impl OrbitRuntime {
         (unlimited, format!("{source}; provider limit: {detail}"))
     }
 
-    /// `candidates` without the crews a host provider failure hold covers at
-    /// `now`, with `source` naming the hold. When every candidate is held, or
-    /// none is, they are returned as they were. The limit narrowing has
-    /// already run: a crew dropped there cannot keep a held crew in the draw.
-    fn apply_host_provider_holds(
-        &self,
-        candidates: Vec<CrewCandidate>,
-        source: String,
-        now: DateTime<Utc>,
-    ) -> (Vec<CrewCandidate>, String) {
+    /// Why the task-pilot routine must not start a run at `now`: every crew
+    /// its pilots' draw could choose ([`Self::activity_draw_candidates`] for
+    /// the low tier with native inspection) is under a host hold.
+    ///
+    /// The routine submits no `allowed_crews`, so its runs draw with no
+    /// allowlist. An unreadable pool is not a hold: the draw reports that
+    /// configuration problem itself. A pool that still has a crew the hold
+    /// does not cover returns `None`, and the draw skips the held crews.
+    pub(crate) fn task_pilot_provider_withhold(&self, now: DateTime<Utc>) -> Option<String> {
         let holds = self.standing_host_provider_holds(now);
         if holds.is_empty() {
-            return (candidates, source);
-        }
-        let (held, free): (Vec<_>, Vec<_>) = candidates
-            .into_iter()
-            .partition(|candidate| holds.iter().any(|hold| hold.covers(&candidate.crew, now)));
-        if held.is_empty() {
-            return (free, source);
-        }
-        let detail = provider_hold_detail(&holds, &held, now);
-        if free.is_empty() {
-            (
-                held,
-                format!("{source}; provider hold, none skipped: {detail}"),
-            )
-        } else {
-            (free, format!("{source}; provider hold: {detail}"))
-        }
-    }
-
-    /// Why the task-pilot routine must not start a run at `now`, when every
-    /// positive-weight inspection candidate left after the provider-limit
-    /// narrowing is under a host hold.
-    ///
-    /// An unreadable pool is not a hold: the draw reports that configuration
-    /// problem itself. A pool that still has a crew the hold does not cover
-    /// returns `None`, and the draw skips the held crews.
-    pub(crate) fn task_pilot_provider_withhold(&self, now: DateTime<Utc>) -> Option<String> {
-        let (candidates, source) = match self.inspection_activity_candidates(TaskComplexity::Low) {
-            Ok(drawn) => drawn,
-            Err(error) => {
-                tracing::warn!("task-pilot provider hold reads no crew pool: {error}");
-                return None;
-            }
-        };
-        let candidates: Vec<_> = candidates
-            .into_iter()
-            .filter(|candidate| candidate.weight > 0)
-            .collect();
-        if candidates.is_empty() {
             return None;
         }
-        let (candidates, source) = self.provider_unlimited_candidates(candidates, source);
-        let holds = self.standing_host_provider_holds(now);
-        if holds.is_empty()
+        let (candidates, source) =
+            match self.activity_draw_candidates(TaskComplexity::Low, true, None, now) {
+                Ok(drawn) => drawn,
+                Err(error) => {
+                    tracing::warn!("task-pilot provider hold reads no crew pool: {error}");
+                    return None;
+                }
+            };
+        if candidates.is_empty()
             || candidates
                 .iter()
                 .any(|candidate| !holds.iter().any(|hold| hold.covers(&candidate.crew, now)))
@@ -313,6 +311,52 @@ impl OrbitRuntime {
             )));
         }
         Ok(candidates)
+    }
+}
+
+/// The executing run a frozen activity draw belongs to. Dispatch supplies it
+/// as `job_run_id` when an explicit `run_id` names an originating failure.
+fn activity_draw_run_id<'a>(input: &'a Value, key: &str) -> Result<&'a str, OrbitError> {
+    input
+        .get("job_run_id")
+        .or_else(|| input.get("run_id"))
+        .and_then(Value::as_str)
+        .and_then(non_empty)
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(format!(
+                "an activity crew drawn from `{key}` needs the input's executing \
+                 `job_run_id` or `run_id` to freeze the draw"
+            ))
+        })
+}
+
+/// `candidates` without the crews `holds` cover at `now`, with `source`
+/// naming the hold. When every candidate is held, or none is, they are
+/// returned as they were. The limit narrowing has already run: a crew dropped
+/// there cannot keep a held crew in the draw.
+fn skip_held_candidates(
+    candidates: Vec<CrewCandidate>,
+    source: String,
+    holds: &[HostProviderHold],
+    now: DateTime<Utc>,
+) -> (Vec<CrewCandidate>, String) {
+    if holds.is_empty() {
+        return (candidates, source);
+    }
+    let (held, free): (Vec<_>, Vec<_>) = candidates
+        .into_iter()
+        .partition(|candidate| holds.iter().any(|hold| hold.covers(&candidate.crew, now)));
+    if held.is_empty() {
+        return (free, source);
+    }
+    let detail = provider_hold_detail(holds, &held, now);
+    if free.is_empty() {
+        (
+            held,
+            format!("{source}; provider hold, none skipped: {detail}"),
+        )
+    } else {
+        (free, format!("{source}; provider hold: {detail}"))
     }
 }
 

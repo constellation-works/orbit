@@ -23,7 +23,7 @@ const WINDOW: Duration = Duration::days(7);
 
 /// Most-recent runs read for each side of the projection. A busy host can
 /// push an older failure or its clearing success past this page.
-const SCAN_LIMIT: usize = 200;
+pub(crate) const SCAN_LIMIT: usize = 200;
 
 /// One run that failed authentication and has not been cleared.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -185,7 +185,11 @@ impl OrbitRuntime {
     }
 }
 
-fn bounded_query(state: JobRunState, since: DateTime<Utc>, include_steps: bool) -> JobRunQuery {
+pub(crate) fn bounded_query(
+    state: JobRunState,
+    since: DateTime<Utc>,
+    include_steps: bool,
+) -> JobRunQuery {
     JobRunQuery {
         state: Some(state),
         created_since: Some(since),
@@ -196,7 +200,8 @@ fn bounded_query(state: JobRunState, since: DateTime<Utc>, include_steps: bool) 
     }
 }
 
-fn run_at(run: &JobRun) -> DateTime<Utc> {
+/// When a run ended: its finish, else its start, else its row's creation.
+pub(crate) fn run_at(run: &JobRun) -> DateTime<Utc> {
     run.finished_at.or(run.started_at).unwrap_or(run.created_at)
 }
 

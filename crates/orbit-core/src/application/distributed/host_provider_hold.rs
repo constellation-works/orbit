@@ -10,20 +10,30 @@
 //! failure ran on what then failed, so finishing later does not clear it.
 //! Capacity clears only when such a success is of the held crew, or of any
 //! crew of the provider when the hold covers the whole provider. A probe does
-//! not clear capacity. Limit and refusal failures are
-//! not holds here.
+//! not clear capacity. Limit and refusal failures are not holds here.
+//!
+//! A run counts as the crew it ran as: its `resolved_crew`, except that a
+//! `task_pilot_pipeline` run counts as the crew its pilots drew from the low
+//! pool. A pilot's own provider failure reaches its run record because a
+//! failed fan-out keeps the failing worker's message.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{JobRunOrder, JobRunQuery};
 use orbit_types::identity::Crew;
-use orbit_types::workflow::{JobRun, JobRunState, ProviderFailureClass, failed_provider};
+use orbit_types::task::TaskComplexity;
+use orbit_types::workflow::{
+    JobRun, JobRunState, PipelineState, ProviderFailureClass, failed_provider,
+};
 
 use super::PULL_DRAIN_JOB;
-use super::auth_failures::{canonical_provider, clearing_at, host_of};
+use super::auth_failures::{
+    SCAN_LIMIT, bounded_query, canonical_provider, clearing_at, host_of, run_at,
+};
 use crate::OrbitRuntime;
+use crate::application::job::crew_pools::complexity_crews_key;
 use crate::runtime::task::provider_hold::base_backoff;
 
 /// How far back a failure or the success that clears it is read. The longest
@@ -31,8 +41,10 @@ use crate::runtime::task::provider_hold::base_backoff;
 /// failure whose row was created slightly before it finished.
 const LOOKBACK: Duration = Duration::hours(1);
 
-/// Most-recent runs read for each side of the projection.
-const SCAN_LIMIT: usize = 200;
+/// The job the task-pilot routine starts. Its `resolved_crew` names the
+/// batch's task crews, but its agent work runs as the crew it froze under
+/// `workflow.low_complexity_crews`, so that draw is the crew it ran as.
+const PILOT_JOB: &str = "task_pilot_pipeline";
 
 /// One standing unavailable or capacity hold on this host.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,33 +114,54 @@ impl OrbitRuntime {
         now: DateTime<Utc>,
     ) -> Result<Vec<HostProviderHold>, OrbitError> {
         let since = now - LOOKBACK;
-        let failures = self.stores().jobs().list_job_runs_filtered(&bounded_query(
-            Some(JobRunState::Failed),
-            Some(since),
-            true,
-        ))?;
-        let successes = self.stores().jobs().list_job_runs_filtered(&bounded_query(
-            Some(JobRunState::Success),
-            Some(since),
-            false,
-        ))?;
         let fallback = self.fallback_host();
         let aliases = self.host_aliases(&fallback);
+        let failures = self
+            .stores()
+            .jobs()
+            .list_job_runs_filtered(&bounded_query(JobRunState::Failed, since, true))?
+            .into_iter()
+            .filter(|run| on_this_host(run, &aliases, &fallback))
+            .filter_map(|run| {
+                let (class, message) = provider_failure_step(&run)?;
+                let at = run_at(&run);
+                (now < at + base_backoff(class)).then_some((run, class, message, at))
+            })
+            .collect::<Vec<_>>();
+        // Most draws and routine ticks meet no open failure; they read nothing
+        // more.
+        if failures.is_empty() {
+            return Ok(Vec::new());
+        }
+        let successes = self
+            .stores()
+            .jobs()
+            .list_job_runs_filtered(&bounded_query(JobRunState::Success, since, false))?
+            .into_iter()
+            .filter(|run| on_this_host(run, &aliases, &fallback))
+            .collect::<Vec<_>>();
+        let pilot_crews =
+            self.pilot_drawn_crews(failures.iter().map(|(run, ..)| run).chain(successes.iter()))?;
+        let ran_as = |run: &JobRun| -> Option<String> {
+            if run.job_id == PILOT_JOB {
+                pilot_crews.get(&run.run_id).cloned()
+            } else {
+                run.resolved_crew.clone()
+            }
+        };
+
         let mut provider_success: BTreeMap<String, DateTime<Utc>> = BTreeMap::new();
         let mut crew_success: BTreeMap<(String, String), DateTime<Utc>> = BTreeMap::new();
         for run in &successes {
-            if !on_this_host(run, &aliases, &fallback) {
-                continue;
-            }
-            let Some(crew_name) = run.resolved_crew.as_deref() else {
+            let Some(crew_name) = ran_as(run) else {
                 continue;
             };
-            let Some(provider) = self.provider_of_crew(crew_name) else {
+            let Some(provider) = self.provider_of_crew(&crew_name) else {
                 continue;
             };
             let at = clearing_at(run);
             note_later(&mut provider_success, provider.clone(), at);
-            note_later(&mut crew_success, (provider, crew_name.to_string()), at);
+            note_later(&mut crew_success, (provider, crew_name), at);
         }
         // A pull drain is long-lived: its row is created when the window
         // opens, and a probe records `recovered_at` on that same row later.
@@ -136,19 +169,21 @@ impl OrbitRuntime {
         // started before the lookback. Probes clear unavailability only;
         // they stay out of the success maps capacity reads.
         let mut provider_probe: BTreeMap<String, DateTime<Utc>> = BTreeMap::new();
-        self.note_probe_recoveries(&aliases, &fallback, &mut provider_probe)?;
+        if failures
+            .iter()
+            .any(|(_, class, ..)| *class == ProviderFailureClass::Unavailable)
+        {
+            self.note_probe_recoveries(&aliases, &fallback, &mut provider_probe)?;
+        }
 
         let mut open: BTreeMap<(String, String, Option<String>), OpenFailure> = BTreeMap::new();
-        for run in &failures {
-            if !on_this_host(run, &aliases, &fallback) {
-                continue;
-            }
-            let Some(failure) = self.classify_hold(run) else {
+        for (run, class, message, at) in &failures {
+            let Some(failure) =
+                self.open_failure(run, *class, message.as_deref(), *at, ran_as(run))
+            else {
                 continue;
             };
-            if hold_cleared(&failure, &provider_success, &crew_success, &provider_probe)
-                || now >= failure.at + base_backoff(failure.class)
-            {
+            if hold_cleared(&failure, &provider_success, &crew_success, &provider_probe) {
                 continue;
             }
             let key = (
@@ -193,47 +228,58 @@ impl OrbitRuntime {
         Ok(holds)
     }
 
-    /// The earliest unavailable or capacity step on `run`, scoped the way a
-    /// host hold is: unavailability covers every crew of that provider, and
-    /// capacity covers the run's crew when that crew uses the failing provider.
-    fn classify_hold(&self, run: &JobRun) -> Option<OpenFailure> {
-        let step = run
-            .steps
-            .iter()
-            .filter(|step| {
-                matches!(
-                    ProviderFailureClass::of(
-                        step.error_code.as_deref(),
-                        step.error_message.as_deref()
-                    ),
-                    Some(ProviderFailureClass::Unavailable | ProviderFailureClass::Capacity)
-                )
+    /// The crew each listed pilot run froze for its pilots, read in one
+    /// batch. A pilot run with no draw on record ran as no known crew.
+    fn pilot_drawn_crews<'a>(
+        &self,
+        runs: impl Iterator<Item = &'a JobRun>,
+    ) -> Result<HashMap<String, String>, OrbitError> {
+        let ids = runs
+            .filter(|run| run.job_id == PILOT_JOB)
+            .map(|run| run.run_id.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let key = complexity_crews_key(TaskComplexity::Low);
+        Ok(self
+            .read_run_states(&ids)?
+            .into_iter()
+            .filter_map(|(run_id, state)| {
+                let crew = state?.activity_crew_draws.get(&key)?.crew.clone();
+                Some((run_id, crew))
             })
-            .min_by_key(|step| step.step_index)?;
-        let class =
-            ProviderFailureClass::of(step.error_code.as_deref(), step.error_message.as_deref())?;
-        let named = step
-            .error_message
-            .as_deref()
-            .and_then(failed_provider)
-            .map(canonical_provider);
-        let crew_provider = run
-            .resolved_crew
+            .collect())
+    }
+
+    /// A failure scoped the way a host hold is: unavailability covers every
+    /// crew of the provider, and capacity covers the crew the run ran as when
+    /// that crew uses the failing provider. The provider is the one the
+    /// step's text names, else that crew's.
+    fn open_failure(
+        &self,
+        run: &JobRun,
+        class: ProviderFailureClass,
+        message: Option<&str>,
+        at: DateTime<Utc>,
+        ran_as: Option<String>,
+    ) -> Option<OpenFailure> {
+        let named = message.and_then(failed_provider).map(canonical_provider);
+        let crew_provider = ran_as
             .as_deref()
             .and_then(|crew| self.provider_of_crew(crew));
         let provider = named.or(crew_provider.clone())?;
         let crew = match class {
-            ProviderFailureClass::Capacity => match (&run.resolved_crew, &crew_provider) {
-                (Some(name), Some(crew_provider)) if crew_provider == &provider => {
-                    Some(name.clone())
-                }
-                _ => None,
-            },
+            ProviderFailureClass::Capacity => {
+                ran_as.filter(|_| crew_provider.as_deref() == Some(provider.as_str()))
+            }
             ProviderFailureClass::Unavailable => None,
             ProviderFailureClass::Limit | ProviderFailureClass::Refusal => return None,
         };
         Some(OpenFailure {
-            at: run_at(run),
+            at,
             run_id: run.run_id.clone(),
             class,
             provider,
@@ -248,40 +294,25 @@ impl OrbitRuntime {
         provider_probe: &mut BTreeMap<String, DateTime<Utc>>,
     ) -> Result<(), OrbitError> {
         let mut seen = BTreeSet::new();
-        for run in self
+        let ids = self
             .pull_drain_runs_by_recency()?
             .into_iter()
             .chain(self.active_pull_drain_runs()?)
-        {
-            if !seen.insert(run.run_id.clone()) || !on_this_host(&run, aliases, fallback) {
-                continue;
+            .filter(|run| seen.insert(run.run_id.clone()) && on_this_host(run, aliases, fallback))
+            .map(|run| run.run_id)
+            .collect::<Vec<_>>();
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let states = match self.read_run_states(&ids) {
+            Ok(states) => states,
+            Err(error) => {
+                tracing::warn!("could not read pull-drain auth recoveries: {error}");
+                return Ok(());
             }
-            let state = match self.read_run_state(&run.run_id) {
-                Ok(state) => state,
-                Err(error) => {
-                    tracing::warn!(
-                        run_id = %run.run_id,
-                        "could not read pull-drain auth recovery: {error}"
-                    );
-                    continue;
-                }
-            };
-            let Some(state) = state else {
-                continue;
-            };
-            for recovery in state.pull_drain.pull_auth_recovery.values() {
-                let Some(recovered_at) = recovery.recovered_at else {
-                    continue;
-                };
-                if !aliases.contains(&recovery.exclusion.host) {
-                    continue;
-                }
-                note_later(
-                    provider_probe,
-                    canonical_provider(&recovery.exclusion.provider),
-                    recovered_at,
-                );
-            }
+        };
+        for state in states.into_values().flatten() {
+            note_state_recoveries(&state, aliases, provider_probe);
         }
         Ok(())
     }
@@ -329,27 +360,47 @@ impl OrbitRuntime {
     }
 }
 
-fn bounded_query(
-    state: Option<JobRunState>,
-    since: Option<DateTime<Utc>>,
-    include_steps: bool,
-) -> JobRunQuery {
-    JobRunQuery {
-        state,
-        created_since: since,
-        limit: Some(SCAN_LIMIT),
-        order_by: JobRunOrder::Recency,
-        include_steps,
-        ..JobRunQuery::default()
-    }
-}
-
 fn on_this_host(run: &JobRun, aliases: &BTreeSet<String>, fallback: &str) -> bool {
     aliases.contains(&host_of(run, fallback))
 }
 
-fn run_at(run: &JobRun) -> DateTime<Utc> {
-    run.finished_at.or(run.started_at).unwrap_or(run.created_at)
+/// The earliest unavailable or capacity step on `run`, with its message.
+fn provider_failure_step(run: &JobRun) -> Option<(ProviderFailureClass, Option<String>)> {
+    run.steps
+        .iter()
+        .filter_map(|step| {
+            let class = ProviderFailureClass::of(
+                step.error_code.as_deref(),
+                step.error_message.as_deref(),
+            )?;
+            matches!(
+                class,
+                ProviderFailureClass::Unavailable | ProviderFailureClass::Capacity
+            )
+            .then_some((step.step_index, class, step.error_message.clone()))
+        })
+        .min_by_key(|(index, ..)| *index)
+        .map(|(_, class, message)| (class, message))
+}
+
+fn note_state_recoveries(
+    state: &PipelineState,
+    aliases: &BTreeSet<String>,
+    provider_probe: &mut BTreeMap<String, DateTime<Utc>>,
+) {
+    for recovery in state.pull_drain.pull_auth_recovery.values() {
+        let Some(recovered_at) = recovery.recovered_at else {
+            continue;
+        };
+        if !aliases.contains(&recovery.exclusion.host) {
+            continue;
+        }
+        note_later(
+            provider_probe,
+            canonical_provider(&recovery.exclusion.provider),
+            recovered_at,
+        );
+    }
 }
 
 /// A success that started, or a probe that recovered, strictly after the
