@@ -5,7 +5,7 @@ use orbit_core::application::task::TaskAddParams;
 use orbit_core::{JobRun, JobRunState, JobRunStep, JobTargetType, V2AuditEventInsertParams};
 use orbit_types::task::is_valid_orb_task_id;
 use orbit_types::workflow::{
-    ChildDispatch, DrainCancelRequest, PipelineState, TaskCancellationPolicy,
+    ChildDispatch, DrainCancelRequest, PipelineState, RunRootCause, TaskCancellationPolicy,
 };
 use serde_json::{Value, json};
 
@@ -319,6 +319,63 @@ fn run_tasks_are_projected_over_http_without_per_row_task_reads() {
                 before,
                 "task-free lists need no metadata lookup"
             );
+        },
+    );
+}
+
+/// History splits a task's runs per attempt from `parent_run_id` and names a
+/// cascaded failure's leaf from `root_cause`, so both run lists carry them.
+#[test]
+fn run_lists_link_listed_children_and_name_a_cascaded_failure_leaf() {
+    isolated(
+        "runs::run_lists_link_listed_children_and_name_a_cascaded_failure_leaf",
+        || {
+            let fixture = Fixture::new();
+            let gate = fixture.seed_run("jrun-gate", "task_gate_pipeline", JobRunState::Failed);
+            let leaf = fixture.seed_run("jrun-leaf", "task_pr_pipeline", JobRunState::Failed);
+            let retry = fixture.seed_run("jrun-retry", "task_gate_pipeline", JobRunState::Running);
+            let cause = RunRootCause {
+                leaf_run_id: leaf.run_id.clone(),
+                task_id: Some("ORB-1".into()),
+                step: Some("implement".into()),
+                code: Some("provider_unavailable".into()),
+            };
+            let mut state = PipelineState::new(gate.run_id.clone(), gate.job_id.clone(), json!({}));
+            state.record_child_dispatch(ChildDispatch::submitted(
+                leaf.run_id.clone(),
+                leaf.job_id.clone(),
+                "invoke_and_wait".into(),
+                true,
+                false,
+                Utc::now(),
+            ));
+            state.root_cause = Some(cause.clone());
+            fixture
+                .runtime
+                .write_run_state(&gate.run_id, &state)
+                .unwrap();
+            let server = fixture.server(false);
+            for path in ["/api/job-runs?limit=10", "/api/job-runs/all?limit=10"] {
+                let page = json_ok(server.get(path));
+                let row = |id: &str| {
+                    page["items"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|row| row["run_id"] == id)
+                        .unwrap_or_else(|| panic!("{path} lists {id}"))
+                        .clone()
+                };
+                assert_eq!(
+                    row(&leaf.run_id)["parent_run_id"],
+                    gate.run_id.as_str(),
+                    "{path}"
+                );
+                assert_eq!(row(&gate.run_id)["parent_run_id"], Value::Null, "{path}");
+                assert_eq!(row(&retry.run_id)["parent_run_id"], Value::Null, "{path}");
+                assert_eq!(row(&gate.run_id)["root_cause"], json!(cause), "{path}");
+                assert_eq!(row(&leaf.run_id)["root_cause"], Value::Null, "{path}");
+            }
         },
     );
 }
