@@ -158,7 +158,17 @@ pub fn explain_workspace_auto_readiness(
         .as_ref()
         .map_or_else(|| json!({}), |drain| json!({"run_id": drain.run_id}));
     let pools = runtime.auto_crew_pools_for_input(&pool_input)?;
-    let allowlist = runtime.crew_allowlist(allowed_crews)?;
+    // Without an explicit `--allow-crew`, apply the live drain's own crew
+    // restriction, so a task it excludes as `crew_not_allowed` never reads as
+    // eligible here.
+    let allowlist = if allowed_crews.is_empty() {
+        match active_drain.as_ref() {
+            Some(drain) => runtime.crew_allowlist_from_input(&drain.input)?,
+            None => None,
+        }
+    } else {
+        runtime.crew_allowlist(allowed_crews)?
+    };
     let mut snapshot = backlog_snapshot(
         runtime,
         "explain_workspace_auto_readiness",
@@ -724,6 +734,10 @@ pub fn explain_workspace_auto_readiness(
             "candidate_pool_size": examined.len(),
             "candidate_pool_truncated": candidate_pool_truncated,
             "limit_source": limit_source,
+            // The crews this snapshot admits under: the requested
+            // `--allow-crew` set, else the live drain's; `null` when neither
+            // restricts them.
+            "allowed_crews": allowlist.as_ref().map(CrewAllowlist::names),
             "drain_run_id": active_drain.as_ref().map(|drain| &drain.run_id),
             "drain_status_run_id": if drain_phase == "idle" { None } else { status_run_id },
             "drain_phase": drain_phase,

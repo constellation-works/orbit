@@ -4,7 +4,7 @@ import { normalizeTaskStatus, captureWorkspaceVisit, requestPanel, describePullS
 import { navigateToRun, setActiveTab } from './router.js';
 import { renderAutomation } from './automation.js';
 import { cpuLoadMultiple } from './host-resources.js';
-import { DRAIN_LOCK_REASONS, drainReason, setDrainReadiness } from './drain-waits.js';
+import { DRAIN_LOCK_REASONS, drainCrewNote, drainReason, setDrainReadiness } from './drain-waits.js';
 
 const $ = (id) => document.getElementById(id);
 const pendingOperations = new Set();
@@ -2607,6 +2607,7 @@ function renderAutoDrain(payload) {
     autoDrainProviderLimitNote(payload.provider_limits),
     autoDrainProviderReadings(payload.provider_limits),
     autoDrainProviderAuth(payload.provider_auth_failures),
+    drainCrewNote(payload),
   ].filter(Boolean);
   if (reasons.submit) {
     body.append(autoDrainForecast(payload), ...holds, el("div", { class: "operations-readonly-note", text: reasons.submit }));

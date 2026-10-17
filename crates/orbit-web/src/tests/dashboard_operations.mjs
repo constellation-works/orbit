@@ -1133,6 +1133,19 @@ providerLimitsFixture = null;
 providerAuthFixture = null;
 await fetchAndRenderAutoDrainPane();
 
+// [ORB-16358] The live drain's crew allowlist and the backlog task it leaves
+// out (ORB-6, crew_not_allowed) show on the Drain card; that task is not
+// counted eligible. No allowlist, no note.
+assert(!get('auto-drain-body').querySelector('.drain-crew-note'), 'an unrestricted drain shows no crew note');
+drainCapacityOverride = { allowed_crews: ['sol', 'terra'] };
+await fetchAndRenderAutoDrainPane();
+const crewNote = get('auto-drain-body').querySelector('.drain-crew-note');
+assert(crewNote && crewNote.textContent.includes('Allowed crews: sol, terra.') && crewNote.textContent.includes('waits: ORB-6 (luna).') && !crewNote.textContent.includes('ORB-1 '), `crew note: ${crewNote?.textContent}`);
+assert(get('auto-drain-start-sub').textContent.startsWith('1 eligible now'), `a crew-excluded task is not eligible now: ${get('auto-drain-start-sub').textContent}`);
+assert(drainReadinessFor('ORB-6').label === 'Waiting, other: crew luna not allowed' && drainReadinessFor('ORB-6').title.includes('it allows only sol, terra'), `the task dot names the crew and allowlist: ${JSON.stringify(drainReadinessFor('ORB-6'))}`);
+drainCapacityOverride = {};
+await fetchAndRenderAutoDrainPane();
+
 // An enforce forecast on the Drain card: peaks against admit thresholds,
 // headroom, admitted tasks with profile source, and a held candidate. The
 // persisted skip sentence and friction id stay off the card.
