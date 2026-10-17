@@ -29,8 +29,9 @@ pub use clock::{
     ClockInstallReport, ClockSettings, ClockStatus, ClockUnitConvergence, ClockUnitDrift,
     ClockUnitInspection, ClockUnitReload, ClockUnitRewrite, ClockUnitVerdict,
     DEFAULT_CLOCK_CADENCE_SECONDS, RunningBinary, clock_status, clock_unit_drift_warning,
-    converge_clock_unit, inspect_clock_unit, install_clock, load_clock_settings,
-    probe_program_version, save_clock_settings, set_clock_cadence, set_clock_enabled,
+    converge_clock_unit, doctor_clock_not_running_issue, inspect_clock_unit, install_clock,
+    load_clock_settings, probe_program_version, save_clock_settings, set_clock_cadence,
+    set_clock_enabled,
 };
 pub use due::{DueDecision, due_decision, parse_cron};
 pub use loader::{
