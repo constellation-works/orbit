@@ -2459,7 +2459,8 @@ function forecastPeaks(forecast) {
     const admit = headroom
       ? (Number.isFinite(Number(headroom[admitKey])) ? `admit ${headroom[admitKey]}%` : "admit threshold unknown")
       : "";
-    const roomNumber = Number(headroom?.[roomKey]);
+    // An unmeasured host sends its headroom as null, and Number(null) is 0.
+    const roomNumber = headroom?.[roomKey] == null ? NaN : Number(headroom[roomKey]);
     const room = headroom ? (Number.isFinite(roomNumber) ? `headroom ${roomNumber.toFixed(1)}` : "headroom unknown") : "";
     const over = Number.isFinite(roomNumber) && roomNumber < 0;
     return el("div", { class: `drain-forecast-peak${over ? " over" : ""}` }, [
