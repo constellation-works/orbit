@@ -375,6 +375,7 @@ path_mode = "prepend"
 | `workflow.validation_env.interactive` | `true` | Try `-i -l -c` first, so toolchains exported in rc files are found. `false` probes only `-l -c`. Ignored when `login_shell` is `false`. |
 | `workflow.validation_env.path` | `[]` | PATH entries to add. A leading `~/` expands to `HOME`. Agent sessions get them too ([below](#agent-sessions-share-the-configured-path)). |
 | `workflow.validation_env.build_output_env` | `[]` | Output environment variable names to bind to managed host output for required validation and host evidence; see [build output](#workspace-build-output). |
+| `workflow.validation_env.cargo_incremental` | `false` | When a host validation target is bound, force `CARGO_INCREMENTAL=0` on the validation command. `true` leaves the variable untouched. See [incremental compilation](#incremental-compilation). |
 | `workflow.validation_env.path_mode` | `prepend` | `prepend` puts `path` first; `replace` makes it the whole PATH. |
 
 Required validation commands and `local_shell` steps run in this environment over the [allowlisted agent environment](#executionenv--the-agent-subprocess-environment), so a drain started from a minimal PATH (a service manager, `env -i`, SSH) still finds the toolchain.
@@ -437,6 +438,10 @@ carry `build_output.env`, `directory`, `source` and `context: "host"`; an unconf
 run has empty `env` and null directory/source. Baseline cache schema 9 includes the
 bindings in its key, retaining prior records rather than certifying this contract with
 old results. Recovery fingerprints also include the bindings.
+
+#### Incremental compilation
+
+A host validation target is keyed by its checkout and is built once per candidate, so Cargo's incremental cache there is write-only. When a binding is configured, required validation, host replay, detached evidence, baseline reruns and recovery set `CARGO_INCREMENTAL=0` on the child, replacing any inherited value. The variable is applied where Orbit spawns the command, not by the repository Makefile. `workflow.validation_env.cargo_incremental = true` is the opt-in that leaves `CARGO_INCREMENTAL` untouched, so Cargo's profile default (incremental on for dev) or an allowlisted value stands. With no binding, Orbit does not set the variable. An incremental directory already in a target is left in place; later builds do not add to it. Baseline result identity is unchanged: the setting changes compiler writes, not command results.
 
 **Cleanup and transition.** The existing host-validation-targets layout, source keys,
 run attribution, base-cache locks and scratch lease lineage stay unchanged. Linux's

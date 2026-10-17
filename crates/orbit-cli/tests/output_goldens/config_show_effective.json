@@ -455,6 +455,12 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.validation_env.cargo_incremental": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.validation_env.interactive": {
       "scope": "built-in",
       "state": "default",

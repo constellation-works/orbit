@@ -153,6 +153,10 @@ pub struct ValidationEnvPolicy {
     /// Output variables bound to managed host output by validation runners.
     /// Empty means no output allocation or environment override.
     pub build_output_env: Vec<String>,
+    /// When false (the default), a runner that binds a host validation
+    /// target forces `CARGO_INCREMENTAL=0`. True is the operator opt-in:
+    /// the runner leaves `CARGO_INCREMENTAL` untouched.
+    pub cargo_incremental: bool,
 }
 
 impl Default for ValidationEnvPolicy {
@@ -163,6 +167,7 @@ impl Default for ValidationEnvPolicy {
             path: Vec::new(),
             path_mode: ValidationPathMode::Prepend,
             build_output_env: Vec::new(),
+            cargo_incremental: false,
         }
     }
 }
@@ -434,6 +439,10 @@ pub struct ValidationEnvironment {
     pub build_output_dir: Option<PathBuf>,
     /// Canonical source namespace of the managed output.
     pub build_output_source: Option<PathBuf>,
+    /// Operator opt-in copied from [`ValidationEnvPolicy::cargo_incremental`].
+    /// Host runners read it when they bind output; resolution itself does not
+    /// set `CARGO_INCREMENTAL`.
+    pub cargo_incremental: bool,
 }
 
 impl ValidationEnvironment {
@@ -453,6 +462,7 @@ impl ValidationEnvironment {
             build_output_env: Vec::new(),
             build_output_dir: None,
             build_output_source: None,
+            cargo_incremental: false,
         }
     }
 
@@ -529,6 +539,7 @@ impl ValidationEnvironment {
             build_output_env: policy.build_output_env.clone(),
             build_output_dir: None,
             build_output_source: None,
+            cargo_incremental: policy.cargo_incremental,
         }
     }
 
