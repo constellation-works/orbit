@@ -1,0 +1,38 @@
+Delete applied task-commit journal rows older than `retention.journal_days`, keeping each task's newest applied row
+
+Usage: orbit gc journal [OPTIONS]
+
+Options:
+      --apply
+          Delete what the plan lists; without this flag the command only reports
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --older-than-days <DAYS>
+          Retention window in days, overriding `retention.journal_days` (default 60)
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Without --apply this only reports. Only applied rows of this workspace are selected, and only when a newer applied row of the same task exists. Each task's newest applied row stays even when it is older than the window, so a task keeps one settled decision. Prepared, committed and aborted rows stay: recovery still rolls those forward or back. Deletes run in batches of 1,000 rows, each its own write transaction. Freed pages stay in the store file; VACUUM it while Orbit is idle to return them to the filesystem.
+
+Examples:
+  orbit gc journal
+  orbit gc journal --apply

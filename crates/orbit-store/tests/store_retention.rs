@@ -1,6 +1,6 @@
-//! Bounded retention through the public retention contract: audit rows and
-//! terminal run state older than a cutoff go in short batches, everything
-//! else stays.
+//! Bounded retention through the public retention contract: audit rows,
+//! terminal run state, and applied task-commit journal rows older than a
+//! cutoff go in short batches, and everything recovery still needs stays.
 
 #![allow(clippy::expect_used, clippy::unwrap_used, missing_docs)]
 
@@ -10,10 +10,15 @@ use std::time::Duration;
 use chrono::{DateTime, TimeDelta, TimeZone, Utc};
 use orbit_common::{process, test_env};
 use orbit_store::Store;
-use orbit_store::compose::workspace_job_run_store;
+use orbit_store::compose::{workspace_coordinated_backends, workspace_job_run_store};
 use orbit_store::contracts::{
     AuditRetentionTable, JobRunStepParams, RetentionSelection, StoreRetentionBackend,
+    TaskCoordinationCommitOutcome, TaskCoordinationCommitParams, TaskCreateParams,
 };
+use orbit_store::maintenance::task_registry::{
+    BindWorkspaceParams, TaskRegistryStore, task_registry_path,
+};
+use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{JobRunState, JobTargetType, PipelineState};
 use serde_json::json;
 
@@ -370,5 +375,354 @@ fn million_row_run_audit_prunes_in_sub_second_batches() {
     assert!(
         slowest < Duration::from_secs(1),
         "one {BATCH_ROWS}-row retention batch held the write lock for {slowest:?} of CPU"
+    );
+}
+
+fn journal_ids(store: &Store, sql: &str) -> Vec<String> {
+    let conn = store.connection();
+    let conn = conn.lock().unwrap();
+    let mut stmt = conn.prepare(sql).unwrap();
+    stmt.query_map([], |row| row.get(0))
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect()
+}
+
+fn journal_state(store: &Store, journal_id: &str) -> String {
+    store
+        .connection()
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT state FROM task_commit_journal WHERE journal_id = ?1",
+            rusqlite::params![journal_id],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+/// Applied rows older than the cutoff go when a newer applied row of the same
+/// task exists. The newest applied row stays even when it is old, and so do
+/// prepared, committed and aborted rows. Recovery then still rolls the kept
+/// committed row forward.
+#[test]
+fn journal_retention_keeps_the_newest_applied_row_and_recovery_still_replays() {
+    const TEST: &str = "journal_retention_keeps_the_newest_applied_row_and_recovery_still_replays";
+    let Some(root) = isolated(TEST, Duration::from_secs(120)) else {
+        return;
+    };
+    let partition = "orbit-test-123456";
+    let registry = TaskRegistryStore::open(&task_registry_path(&root)).unwrap();
+    let repo = root.join(partition);
+    let orbit_dir = repo.join(".orbit");
+    std::fs::create_dir_all(&orbit_dir).unwrap();
+    let binding = registry
+        .bind_workspace(BindWorkspaceParams {
+            partition_id: Some(partition.to_string()),
+            slug: "Orbit Test".to_string(),
+            repo_root: repo.clone(),
+            workspace_path: repo,
+            orbit_dir,
+            repo_fingerprint: None,
+        })
+        .unwrap();
+    let store = Store::open(&root.join("state.sqlite")).unwrap();
+    let backends =
+        workspace_coordinated_backends(registry, binding.partition_id.clone(), store.clone())
+            .unwrap();
+    let task = backends
+        .task
+        .task
+        .create_task(TaskCreateParams {
+            actor: "codex".to_string(),
+            parent_id: None,
+            title: "Journal retention".to_string(),
+            description: "Detailed task description".to_string(),
+            acceptance_criteria: vec!["First criterion".to_string()],
+            dependencies: Vec::new(),
+            relations: Vec::new(),
+            tags: Vec::new(),
+            required_tools: Vec::new(),
+            plan: "1. Do the work".to_string(),
+            execution_summary: String::new(),
+            context_files: vec!["src/lib.rs".to_string()],
+            repo_root: None,
+            created_by: Some("codex".to_string()),
+            planned_by: None,
+            implemented_by: None,
+            status: TaskStatus::Backlog,
+            priority: TaskPriority::High,
+            complexity: Some(TaskComplexity::Medium),
+            task_type: TaskType::Feature,
+            external_refs: Vec::new(),
+            source_task_id: None,
+            crew: None,
+            crew_source: None,
+            orchestrator: None,
+            comments: Vec::new(),
+            context_creation: Vec::new(),
+        })
+        .unwrap();
+    let outcome = backends
+        .commit_boundary
+        .commit_task_transition(&TaskCoordinationCommitParams {
+            task_id: task.id.clone(),
+            actor: "codex".into(),
+            expected_status: vec![TaskStatus::Backlog],
+            status: Some(TaskStatus::InProgress),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(
+        matches!(outcome, TaskCoordinationCommitOutcome::Committed(_)),
+        "the transition must settle so its journal row is applied"
+    );
+
+    let applied = journal_ids(
+        &store,
+        &format!(
+            "SELECT journal_id FROM task_commit_journal \
+             WHERE workspace_id = '{}' AND task_id = '{}' AND state = 'applied' \
+             ORDER BY created_at, journal_id",
+            binding.partition_id, task.id
+        ),
+    );
+    assert!(
+        !applied.is_empty(),
+        "the status transition leaves an applied journal row, got {applied:?}"
+    );
+    let newest = applied.last().unwrap().clone();
+    let older_real = &applied[..applied.len() - 1];
+    let replay_intent: String = store
+        .connection()
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT intent_json FROM task_commit_journal WHERE journal_id = ?1",
+            rusqlite::params![newest],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let age = |id: &str, at: &str| {
+        store
+            .connection()
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE task_commit_journal SET created_at = ?2, applied_at = ?2 \
+                 WHERE journal_id = ?1",
+                rusqlite::params![id, at],
+            )
+            .unwrap();
+    };
+    age(&newest, "2025-12-01T00:00:00+00:00");
+    for id in older_real {
+        age(id, "2025-01-01T00:00:00+00:00");
+    }
+    let insert = |id: &str,
+                  workspace: &str,
+                  task_id: &str,
+                  state: &str,
+                  intent: &str,
+                  at: &str,
+                  applied_at: Option<&str>| {
+        store
+            .connection()
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO task_commit_journal ( \
+                     journal_id, workspace_id, task_id, state, intent_json, \
+                     created_at, committed_at, applied_at, reservation_id \
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, NULL)",
+                rusqlite::params![id, workspace, task_id, state, intent, at, applied_at],
+            )
+            .unwrap();
+    };
+    let workspace = binding.partition_id.as_str();
+    insert(
+        "old-dup",
+        workspace,
+        &task.id,
+        "applied",
+        "older-duplicate",
+        "2024-01-01T00:00:00+00:00",
+        Some("2024-01-01T00:00:00+00:00"),
+    );
+    // Same timestamp: the higher journal id is the newest and stays.
+    insert(
+        "tie-a",
+        workspace,
+        "ORB-90002",
+        "applied",
+        "tie-dropped",
+        "2025-06-01T00:00:00+00:00",
+        Some("2025-06-01T00:00:00+00:00"),
+    );
+    insert(
+        "tie-b",
+        workspace,
+        "ORB-90002",
+        "applied",
+        "tie-kept",
+        "2025-06-01T00:00:00+00:00",
+        Some("2025-06-01T00:00:00+00:00"),
+    );
+    insert(
+        "recent",
+        workspace,
+        "ORB-90003",
+        "applied",
+        "inside-window",
+        "2026-06-01T00:00:00+00:00",
+        Some("2026-06-01T00:00:00+00:00"),
+    );
+    insert(
+        "still-prepared",
+        workspace,
+        &task.id,
+        "prepared",
+        "{}",
+        "2020-01-01T00:00:00+00:00",
+        None,
+    );
+    insert(
+        "still-committed",
+        workspace,
+        &task.id,
+        "committed",
+        &replay_intent,
+        "2020-02-01T00:00:00+00:00",
+        None,
+    );
+    insert(
+        "still-aborted",
+        workspace,
+        &task.id,
+        "aborted",
+        "{}",
+        "2020-03-01T00:00:00+00:00",
+        None,
+    );
+    insert(
+        "other-old",
+        "ws-other",
+        "ORB-90004",
+        "applied",
+        "other-workspace-old",
+        "2024-01-01T00:00:00+00:00",
+        Some("2024-01-01T00:00:00+00:00"),
+    );
+    insert(
+        "other-newer",
+        "ws-other",
+        "ORB-90004",
+        "applied",
+        "other-workspace-newer",
+        "2024-06-01T00:00:00+00:00",
+        Some("2024-06-01T00:00:00+00:00"),
+    );
+
+    let cutoff = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+    let mut expected_drop = older_real.to_vec();
+    expected_drop.extend(["old-dup".to_string(), "tie-a".to_string()]);
+    let before = count(&store, "SELECT COUNT(*) FROM task_commit_journal");
+    let selection = store
+        .journal_retention_selection(workspace, cutoff)
+        .unwrap();
+    assert_eq!(selection.rows, expected_drop.len() as u64);
+    let expected_bytes: i64 = store
+        .connection()
+        .lock()
+        .unwrap()
+        .query_row(
+            &format!(
+                "SELECT COALESCE(SUM(octet_length(intent_json)), 0) FROM task_commit_journal \
+                 WHERE journal_id IN ({})",
+                expected_drop
+                    .iter()
+                    .map(|id| format!("'{id}'"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(selection.bytes, expected_bytes as u64);
+    assert!(selection.bytes > 0, "reclaimable intent bytes are reported");
+    assert_eq!(
+        count(&store, "SELECT COUNT(*) FROM task_commit_journal"),
+        before,
+        "a plan deletes nothing"
+    );
+
+    let (removed, _) = drain(|| {
+        store
+            .prune_journal_retention_batch(workspace, cutoff, 1)
+            .unwrap()
+    });
+    assert_eq!(removed, expected_drop.len());
+    for id in &expected_drop {
+        assert!(
+            journal_ids(
+                &store,
+                &format!("SELECT journal_id FROM task_commit_journal WHERE journal_id = '{id}'")
+            )
+            .is_empty(),
+            "{id} is an older applied row and should be gone"
+        );
+    }
+    for id in [
+        "tie-b",
+        "recent",
+        "other-old",
+        "other-newer",
+        "still-prepared",
+        "still-committed",
+        "still-aborted",
+    ] {
+        assert_eq!(
+            journal_ids(
+                &store,
+                &format!("SELECT journal_id FROM task_commit_journal WHERE journal_id = '{id}'")
+            )
+            .len(),
+            1,
+            "{id} stays"
+        );
+    }
+    assert_eq!(journal_state(&store, &newest), "applied");
+    assert_eq!(
+        store
+            .journal_retention_selection(workspace, cutoff)
+            .unwrap(),
+        RetentionSelection::default(),
+        "a second pass finds nothing left to drop"
+    );
+
+    backends.commit_boundary.recover().unwrap();
+    assert_eq!(
+        journal_state(&store, "still-committed"),
+        "applied",
+        "recovery replays the committed row that retention kept"
+    );
+    assert_eq!(
+        journal_state(&store, "still-prepared"),
+        "aborted",
+        "recovery abandons the prepared row that retention kept"
+    );
+    assert_eq!(journal_state(&store, "still-aborted"), "aborted");
+    assert_eq!(journal_state(&store, &newest), "applied");
+    assert_eq!(
+        backends
+            .task
+            .task
+            .get_task(&task.id)
+            .unwrap()
+            .unwrap()
+            .status,
+        TaskStatus::InProgress,
+        "replaying the kept committed intent leaves the published transition in place"
     );
 }

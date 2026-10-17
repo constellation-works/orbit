@@ -87,7 +87,8 @@ pub(super) fn normalize_logins(raw: Vec<String>) -> Vec<String> {
 /// cold workspace build and test gate, still bounded below a typical activity.
 pub(super) const DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES: u32 = 45;
 
-/// Default `retention.audit_days` and `retention.runs_days`.
+/// Default `retention.audit_days`, `retention.runs_days` and
+/// `retention.journal_days`.
 const DEFAULT_RETENTION_DAYS: u32 = 60;
 
 pub(super) fn resolve_retention_days(raw: Option<u32>, key: &str) -> Result<u32, OrbitError> {

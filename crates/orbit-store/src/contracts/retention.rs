@@ -1,5 +1,6 @@
 //! Bounded retention over the host store: audit rows, terminal run state,
-//! the text that can name an audit blob, and the file's page accounting.
+//! applied task-commit journal rows, the text that can name an audit blob,
+//! and the file's page accounting.
 //!
 //! Every mutation is one short statement or transaction over at most `limit`
 //! rows, so a caller sweeping a large history never holds the write lock for
@@ -74,6 +75,30 @@ pub trait StoreRetentionBackend: Send + Sync {
         workspace_id: &str,
         cutoff: DateTime<Utc>,
     ) -> Result<RetentionSelection, OrbitError>;
+
+    /// Applied `task_commit_journal` rows in `workspace_id` older than
+    /// `cutoff` that are not the newest applied row of their task.
+    ///
+    /// Prepared, committed and aborted rows are never selected: recovery
+    /// still has to roll those forward or back. The newest applied row of
+    /// each task stays even when it is older than the cutoff, so a task keeps
+    /// one settled decision. Newest is the later `COALESCE(applied_at,
+    /// created_at)`, then the higher `journal_id`. Other workspaces are
+    /// untouched. Bytes are `octet_length(intent_json)`.
+    fn journal_retention_selection(
+        &self,
+        workspace_id: &str,
+        cutoff: DateTime<Utc>,
+    ) -> Result<RetentionSelection, OrbitError>;
+
+    /// Delete at most `limit` of the rows [`Self::journal_retention_selection`]
+    /// selects, in one statement. Returns how many went.
+    fn prune_journal_retention_batch(
+        &self,
+        workspace_id: &str,
+        cutoff: DateTime<Utc>,
+        limit: usize,
+    ) -> Result<usize, OrbitError>;
 
     /// Drop the pipeline state of at most `limit` selected runs and stamp
     /// their `archived_at`, in one transaction. The run row and its steps stay.

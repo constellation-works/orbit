@@ -7,6 +7,7 @@ Commands:
   tmp        Reclaim this workspace checkout's scratch contents when no job runs are active
   audit      Prune audit rows older than `retention.audit_days` and the audit blobs no remaining row names
   runs       Drop the pipeline state of terminal runs older than `retention.runs_days`, keeping their run and step rows
+  journal    Delete applied task-commit journal rows older than `retention.journal_days`, keeping each task's newest applied row
 
 Options:
       --root <ROOT>

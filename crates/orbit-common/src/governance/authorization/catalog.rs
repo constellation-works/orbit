@@ -536,6 +536,12 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "applying audit retention permanently deletes audit history and blobs",
     },
     GovernedOperation {
+        id: "gc journal",
+        surface: OperationSurface::CliCommand,
+        allowed: &[McpCapability::Operator],
+        rationale: "applying journal retention permanently deletes applied task-commit history",
+    },
+    GovernedOperation {
         id: "gc runs",
         surface: OperationSurface::CliCommand,
         allowed: &[McpCapability::Operator, McpCapability::Runner],

@@ -401,9 +401,10 @@ pub(super) fn doctor_check_task_reservations(runtime: &OrbitRuntime) -> Workspac
     )
 }
 
-/// What store retention could reclaim now under `retention.audit_days` and
-/// `retention.runs_days`. Measured without the blob reference scan, so the
-/// blob figure is an upper bound; `orbit gc audit` reports the exact one.
+/// What store retention could reclaim now under `retention.audit_days`,
+/// `retention.runs_days` and `retention.journal_days`. Measured without the
+/// blob reference scan, so the blob figure is an upper bound; `orbit gc audit`
+/// reports the exact one.
 pub(super) fn doctor_check_store_retention(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     const CHECK: &str = "store-retention";
     let overview = match runtime.store_retention_overview() {
@@ -421,14 +422,18 @@ pub(super) fn doctor_check_store_retention(runtime: &OrbitRuntime) -> WorkspaceD
         WorkspaceDoctorStatus::Ok,
         format!(
             "reclaimable: audit {} rows ({}) older than {} days; run state of {} terminal runs \
-             ({}) older than {} days; up to {} of {} audit blobs; store file {} with {} free. \
-             Plan with `orbit gc audit` and `orbit gc runs`, apply with `--apply`",
+             ({}) older than {} days; applied journal {} rows ({}) older than {} days; up to {} \
+             of {} audit blobs; store file {} with {} free. Plan with `orbit gc audit`, \
+             `orbit gc runs` and `orbit gc journal`, apply with `--apply`",
             overview.audit_rows,
             human_bytes(overview.audit_bytes),
             overview.audit_days,
             overview.run_states,
             human_bytes(overview.run_state_bytes),
             overview.runs_days,
+            overview.journal_rows,
+            human_bytes(overview.journal_bytes),
+            overview.journal_days,
             human_bytes(overview.blob_bytes_past_cutoff),
             human_bytes(overview.blob_bytes),
             human_bytes(overview.store.file_bytes),

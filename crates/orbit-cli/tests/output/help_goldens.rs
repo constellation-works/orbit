@@ -30,6 +30,7 @@ const CASES: &[(&[&str], &str)] = &[
     (&["gc"], "gc/root.txt"),
     (&["gc", "audit"], "gc/audit.txt"),
     (&["gc", "runs"], "gc/runs.txt"),
+    (&["gc", "journal"], "gc/journal.txt"),
     (&["gc", "tmp"], "gc/tmp.txt"),
     (&["gc", "worktrees"], "gc/worktrees.txt"),
     (&["run", "history"], "run/history.txt"),

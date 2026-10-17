@@ -1,13 +1,14 @@
 # Default store retention routine. Seeded disabled: deleting audit history,
-# audit blobs and old run state is an operator decision, so review
-# `orbit gc audit` and `orbit gc runs` plans before opting in. The 04:17 slot
+# audit blobs, old run state and applied task-commit journal rows is an
+# operator decision, so review `orbit gc audit`, `orbit gc runs` and
+# `orbit gc journal` plans before opting in. The 04:17 slot
 # collides with no other shipped default.
 schemaVersion: 1
 name: __ORBIT_ROUTINE_NAME__
 description: >
-  Daily retention of this workspace's audit rows, unreferenced audit blobs and
-  old terminal runs' pipeline state, under retention.audit_days and
-  retention.runs_days.
+  Daily retention of this workspace's audit rows, unreferenced audit blobs,
+  old terminal runs' pipeline state and applied task-commit journal rows,
+  under retention.audit_days, retention.runs_days and retention.journal_days.
 enabled: false
 trigger:
   cron: "17 4 * * *"

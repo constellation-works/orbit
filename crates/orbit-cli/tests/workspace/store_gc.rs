@@ -299,6 +299,7 @@ fn audit_retention_plans_then_prunes_rows_and_unreferenced_blobs() {
     let sweep = &shown["pipeline_state"]["pipeline"]["sweep"];
     assert_eq!(sweep["audit"]["apply"], true, "{sweep}");
     assert_eq!(sweep["runs"]["apply"], true, "{sweep}");
+    assert_eq!(sweep["journal"]["apply"], true, "{sweep}");
     assert!(kept_path.is_file() && step_path.is_file() && pending_path.is_file());
 
     // Deterministic jobs still refuse an unknown configured crew.
@@ -519,6 +520,200 @@ fn find_check<'a>(value: &'a Value, name: &str) -> Option<&'a Value> {
     }
 }
 
+fn journal_retention_reports_reclaimable_rows_and_keeps_in_flight_rows() {
+    let fixture = Fixture::new();
+    let workspace_id = fixture.workspace_id();
+    let old = "2020-01-01T00:00:00+00:00";
+    let newer_old = "2020-06-01T00:00:00+00:00";
+    let recent = chrono::Utc::now().to_rfc3339();
+    let dropped = "drop-this-applied-intent";
+    let kept = "keep-this-applied-intent";
+    {
+        let db = fixture.db();
+        let insert = |id: &str,
+                      workspace: &str,
+                      task: &str,
+                      state: &str,
+                      intent: &str,
+                      at: &str,
+                      applied: Option<&str>| {
+            db.execute(
+                "INSERT INTO task_commit_journal ( \
+                     journal_id, workspace_id, task_id, state, intent_json, \
+                     created_at, committed_at, applied_at, reservation_id \
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, NULL)",
+                params![id, workspace, task, state, intent, at, applied],
+            )
+            .unwrap();
+        };
+        insert(
+            "drop-old",
+            &workspace_id,
+            "ORB-1",
+            "applied",
+            dropped,
+            old,
+            Some(old),
+        );
+        insert(
+            "keep-newest",
+            &workspace_id,
+            "ORB-1",
+            "applied",
+            kept,
+            newer_old,
+            Some(newer_old),
+        );
+        insert(
+            "tie-a",
+            &workspace_id,
+            "ORB-2",
+            "applied",
+            dropped,
+            newer_old,
+            Some(newer_old),
+        );
+        insert(
+            "tie-b",
+            &workspace_id,
+            "ORB-2",
+            "applied",
+            kept,
+            newer_old,
+            Some(newer_old),
+        );
+        insert(
+            "keep-recent",
+            &workspace_id,
+            "ORB-3",
+            "applied",
+            kept,
+            &recent,
+            Some(recent.as_str()),
+        );
+        insert(
+            "keep-prepared",
+            &workspace_id,
+            "ORB-4",
+            "prepared",
+            "prepared",
+            old,
+            None,
+        );
+        insert(
+            "keep-committed",
+            &workspace_id,
+            "ORB-4",
+            "committed",
+            "committed",
+            old,
+            None,
+        );
+        insert(
+            "keep-aborted",
+            &workspace_id,
+            "ORB-4",
+            "aborted",
+            "aborted",
+            old,
+            None,
+        );
+        insert(
+            "other-old",
+            "ws-other",
+            "ORB-5",
+            "applied",
+            dropped,
+            old,
+            Some(old),
+        );
+        insert(
+            "other-newer",
+            "ws-other",
+            "ORB-5",
+            "applied",
+            kept,
+            newer_old,
+            Some(newer_old),
+        );
+    }
+
+    let plan = fixture.json(&["gc", "journal", "--json"]);
+    assert_eq!(plan["apply"], false);
+    assert_eq!(plan["retention_days"], 60);
+    assert_eq!(plan["table"], "task_commit_journal");
+    assert_eq!(plan["scope"], "workspace");
+    assert_eq!(plan["rows"], 2, "{plan}");
+    assert_eq!(plan["bytes"], dropped.len() as u64 * 2, "{plan}");
+    assert_eq!(plan["rows_removed"], 0);
+    assert_eq!(
+        fixture.count("SELECT COUNT(*) FROM task_commit_journal"),
+        10,
+        "a dry-run deletes nothing"
+    );
+
+    fixture
+        .orbit()
+        .args(["gc", "journal", "--apply", "--json"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("capability_denied"));
+    assert_eq!(
+        fixture.count("SELECT COUNT(*) FROM task_commit_journal"),
+        10
+    );
+
+    let applied = fixture.json(&[
+        "gc",
+        "journal",
+        "--apply",
+        "--older-than-days",
+        "30",
+        "--json",
+    ]);
+    assert_eq!(applied["apply"], true);
+    assert_eq!(applied["rows_removed"], 2, "{applied}");
+    assert_eq!(applied["bytes"], dropped.len() as u64 * 2, "{applied}");
+    for id in ["drop-old", "tie-a"] {
+        assert_eq!(
+            fixture.count(&format!(
+                "SELECT COUNT(*) FROM task_commit_journal WHERE journal_id = '{id}'"
+            )),
+            0,
+            "{id} is an older applied row"
+        );
+    }
+    for id in [
+        "keep-newest",
+        "tie-b",
+        "keep-recent",
+        "keep-prepared",
+        "keep-committed",
+        "keep-aborted",
+        "other-old",
+        "other-newer",
+    ] {
+        assert_eq!(
+            fixture.count(&format!(
+                "SELECT COUNT(*) FROM task_commit_journal WHERE journal_id = '{id}'"
+            )),
+            1,
+            "{id} stays"
+        );
+    }
+
+    let again = fixture.json(&["gc", "journal", "--apply", "--json"]);
+    assert_eq!(again["rows"], 0);
+    assert_eq!(again["rows_removed"], 0);
+    assert_eq!(fixture.count("SELECT COUNT(*) FROM task_commit_journal"), 8);
+    fixture
+        .orbit()
+        .args(["gc", "journal", "--older-than-days", "0"])
+        .assert()
+        .failure();
+    assert_eq!(fixture.count("SELECT COUNT(*) FROM task_commit_journal"), 8);
+}
+
 /// Retention is deterministic, so it runs on a host whose default crew is
 /// disabled (a host with no provider CLI seeds every crew disabled) and
 /// records no crew for the run. A crew lookup still guards misconfiguration.
@@ -539,6 +734,10 @@ fn store_retention_contracts() {
         (
             "run_retention_prunes_resource_minutes_past_thirty_days",
             run_retention_prunes_resource_minutes_past_thirty_days as fn(),
+        ),
+        (
+            "journal_retention_reports_reclaimable_rows_and_keeps_in_flight_rows",
+            journal_retention_reports_reclaimable_rows_and_keeps_in_flight_rows as fn(),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");

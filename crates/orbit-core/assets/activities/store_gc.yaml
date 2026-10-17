@@ -5,21 +5,26 @@ metadata:
 spec:
   type: deterministic
   description: >
-    Apply the store retention `orbit gc audit --apply` and `orbit gc runs
-    --apply` perform, under `retention.audit_days` and `retention.runs_days`:
-    delete command and run audit rows older than the audit window, sweep the
-    audit blobs no remaining row or pending write names, and drop the pipeline
-    state of terminal runs older than the run window. Deletes run in batches
-    of short write transactions; VACUUM is left to the operator.
+    Apply the store retention `orbit gc audit --apply`, `orbit gc runs
+    --apply` and `orbit gc journal --apply` perform, under
+    `retention.audit_days`, `retention.runs_days` and
+    `retention.journal_days`: delete command and run audit rows older than
+    the audit window, sweep the audit blobs no remaining row or pending write
+    names, drop the pipeline state of terminal runs older than the run
+    window, and delete applied task-commit journal rows older than the
+    journal window when a newer applied row of the same task exists. Deletes
+    run in batches of short write transactions; VACUUM is left to the operator.
   input_schema_json:
     type: object
   output_schema_json:
     type: object
-    required: [audit, runs]
+    required: [audit, runs, journal]
     properties:
       audit:
         type: object
       runs:
+        type: object
+      journal:
         type: object
   action: store_gc
   config: {}

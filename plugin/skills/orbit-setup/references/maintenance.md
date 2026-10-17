@@ -360,18 +360,24 @@ orbit gc audit                        # rows and bytes past retention.audit_days
 orbit gc audit --apply                # delete them
 orbit gc runs                         # terminal runs past retention.runs_days that still keep pipeline state
 orbit gc runs --apply                 # drop that state; the run, its steps and summary stay
+orbit gc journal                      # applied journal rows and bytes past retention.journal_days
+orbit gc journal --apply              # delete them; each task's newest applied row stays
 orbit gc audit --older-than-days 30   # one-off window instead of the configured one
 ```
 
-`retention.audit_days` and `retention.runs_days` default to 60 days. `gc audit`
-prunes the host-wide command audit and this workspace's run audit, then removes
-blobs that no remaining audit row, run step or pipeline state names. A blob
-written in the last 24 hours, or one a write in progress has marked as pending,
-is always kept. `gc runs` never touches a held run or one still in flight, so
-`orbit run show`, run history and the Cost page keep working. The same pass
-prunes the host's per-minute run and host resource history
+`retention.audit_days`, `retention.runs_days` and `retention.journal_days` default
+to 60 days. `gc audit` prunes the host-wide command audit and this workspace's run
+audit, then removes blobs that no remaining audit row, run step or pipeline state
+names. A blob written in the last 24 hours, or one a write in progress has marked
+as pending, is always kept. `gc runs` never touches a held run or one still in
+flight, so `orbit run show`, run history and the Cost page keep working. The same
+pass prunes the host's per-minute run and host resource history
 (`run_resource_minutes`, `host_resource_minutes`) older than 30 days, whatever
-the run window.
+the run window. `gc journal` deletes this workspace's applied task-commit rows
+only when a newer applied row of the same task exists. Each task keeps its newest
+applied row even when that row is older than the window, and prepared, committed
+and aborted rows stay so recovery can still roll an unfinished commit forward or
+back.
 
 Deletes run in batches of 1,000 rows, each its own short write transaction, so
 running workers are not starved. Freed pages stay inside the database file; each
@@ -382,8 +388,9 @@ report shows the freelist, and `VACUUM` returns it to the filesystem. Run
 sqlite3 ~/.orbit/orbit.db 'VACUUM;'
 ```
 
-`orbit doctor` reports what is reclaimable now (`store-retention`). To run both
-sweeps daily, enable the seeded `store-gc` routine ([automation.md](automation.md)).
+`orbit doctor` reports what is reclaimable now (`store-retention`), including
+applied journal rows. To run the sweeps daily, enable the seeded `store-gc`
+routine ([automation.md](automation.md)).
 On a replica checkout it is owner-only and never fires.
 
 ## Logs

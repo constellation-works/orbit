@@ -31,6 +31,8 @@ pub enum GcTarget {
     Audit(AuditGcArgs),
     /// Drop the pipeline state of terminal runs older than `retention.runs_days`, keeping their run and step rows
     Runs(RunGcArgs),
+    /// Delete applied task-commit journal rows older than `retention.journal_days`, keeping each task's newest applied row
+    Journal(JournalGcArgs),
 }
 
 impl Execute for GcTarget {
@@ -40,6 +42,7 @@ impl Execute for GcTarget {
             Self::Tmp(args) => args.execute(runtime),
             Self::Audit(args) => args.execute(runtime),
             Self::Runs(args) => args.execute(runtime),
+            Self::Journal(args) => args.execute(runtime),
         }
     }
 }
@@ -185,7 +188,45 @@ impl Execute for RunGcArgs {
     }
 }
 
-/// The mode, window, write batches and store pages shared by both reports.
+#[derive(Args)]
+#[command(
+    after_help = "Without --apply this only reports. Only applied rows of this workspace are \
+                  selected, and only when a newer applied row of the same task exists. Each \
+                  task's newest applied row stays even when it is older than the window, so a \
+                  task keeps one settled decision. Prepared, committed and aborted rows stay: \
+                  recovery still rolls those forward or back. Deletes run in batches of 1,000 \
+                  rows, each its own write transaction. Freed pages stay in the store file; \
+                  VACUUM it while Orbit is idle to return them to the filesystem.\n\n\
+                  Examples:\n  orbit gc journal\n  orbit gc journal --apply"
+)]
+pub struct JournalGcArgs {
+    /// Delete what the plan lists; without this flag the command only reports
+    #[arg(long)]
+    pub apply: bool,
+
+    /// Retention window in days, overriding `retention.journal_days` (default 60)
+    #[arg(long, value_name = "DAYS")]
+    pub older_than_days: Option<u32>,
+}
+
+impl Execute for JournalGcArgs {
+    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        let report = runtime.gc_journal(self.apply, self.older_than_days)?;
+        let doc = serde_json::to_value(&report).map_err(|error| {
+            OrbitError::Execution(format!("failed to serialize journal GC report: {error}"))
+        })?;
+        let lines = [
+            format!(
+                "table={} scope={} rows={} bytes={} rows_removed={}",
+                report.table, report.scope, report.rows, report.bytes, report.rows_removed
+            ),
+            summary_line(&doc),
+        ];
+        Ok(Payload::blocks(doc, vec![Block::text(lines.join("\n"))]).into())
+    }
+}
+
+/// The mode, window, write batches and store pages shared by the reports.
 fn summary_line(doc: &serde_json::Value) -> String {
     let field = |pointer: &str| {
         doc.pointer(pointer)

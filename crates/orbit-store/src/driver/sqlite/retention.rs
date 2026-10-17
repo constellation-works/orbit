@@ -1,5 +1,5 @@
-//! Bounded audit and run-state retention, blob-reference scans and page
-//! accounting over the host store.
+//! Bounded audit, run-state and applied-journal retention, blob-reference
+//! scans and page accounting over the host store.
 //!
 //! Sizes come from `octet_length`, which reads a value's length from its
 //! record header instead of walking its overflow chain, so a plan over a
@@ -36,6 +36,34 @@ fn archivable_states_sql() -> String {
         .map(|state| format!("'{state}'"))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Applied journal rows this workspace may drop.
+///
+/// A row goes only when it is applied, older than the cutoff, and some other
+/// applied row of the same task is newer. The newest applied row therefore
+/// stays even when it predates the cutoff, and a task with one applied row
+/// keeps it. `?1` is the workspace, `?2` the cutoff.
+fn reclaimable_journal_sql() -> &'static str {
+    "FROM task_commit_journal j \
+     WHERE j.workspace_id = ?1 \
+       AND j.state = 'applied' \
+       AND COALESCE(j.applied_at, j.created_at) < ?2 \
+       AND EXISTS ( \
+         SELECT 1 FROM task_commit_journal newer \
+         WHERE newer.workspace_id = j.workspace_id \
+           AND newer.task_id = j.task_id \
+           AND newer.state = 'applied' \
+           AND ( \
+             COALESCE(newer.applied_at, newer.created_at) \
+               > COALESCE(j.applied_at, j.created_at) \
+             OR ( \
+               COALESCE(newer.applied_at, newer.created_at) \
+                 = COALESCE(j.applied_at, j.created_at) \
+               AND newer.journal_id > j.journal_id \
+             ) \
+           ) \
+       )"
 }
 
 /// The selection predicate shared by a run-state plan and an archive batch.
@@ -105,6 +133,48 @@ impl StoreRetentionBackend for Store {
                 ),
             }
             .map_err(sqlite_store_error)
+        })
+    }
+
+    fn journal_retention_selection(
+        &self,
+        workspace_id: &str,
+        cutoff: DateTime<Utc>,
+    ) -> Result<RetentionSelection, OrbitError> {
+        let conn = self.read()?;
+        let (rows, bytes) = conn
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*), COALESCE(SUM(octet_length(j.intent_json)), 0) {}",
+                    reclaimable_journal_sql()
+                ),
+                params![workspace_id, cutoff.to_rfc3339()],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .map_err(sqlite_store_error)?;
+        Ok(selection(rows, bytes))
+    }
+
+    fn prune_journal_retention_batch(
+        &self,
+        workspace_id: &str,
+        cutoff: DateTime<Utc>,
+        limit: usize,
+    ) -> Result<usize, OrbitError> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            tx.tx
+                .execute(
+                    &format!(
+                        "DELETE FROM task_commit_journal WHERE journal_id IN ( \
+                             SELECT j.journal_id {} \
+                             ORDER BY COALESCE(j.applied_at, j.created_at), j.journal_id \
+                             LIMIT ?3)",
+                        reclaimable_journal_sql()
+                    ),
+                    params![workspace_id, cutoff.to_rfc3339(), limit],
+                )
+                .map_err(sqlite_store_error)
         })
     }
 

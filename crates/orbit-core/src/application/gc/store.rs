@@ -1,12 +1,13 @@
 //! Retention for the host store: audit rows and unreferenced audit blobs
-//! (`orbit gc audit`), and the pipeline state of old terminal runs with the
+//! (`orbit gc audit`), the pipeline state of old terminal runs with the
 //! host's per-minute resource history and admission forecasts
-//! (`orbit gc runs`).
+//! (`orbit gc runs`), and applied task-commit journal rows
+//! (`orbit gc journal`).
 //!
-//! Both plan by default and delete only when asked. Deletes run in batches of
+//! Each plans by default and deletes only when asked. Deletes run in batches of
 //! [`RETENTION_BATCH_ROWS`], each its own short write transaction, with a
 //! pause between them so other writers are not starved while a long history
-//! is pruned. Neither runs `VACUUM`: freed pages stay on the freelist, which
+//! is pruned. None runs `VACUUM`: freed pages stay on the freelist, which
 //! each report shows.
 
 use std::collections::{HashMap, HashSet};
@@ -133,16 +134,35 @@ pub struct RunGcReport {
     pub store: StoreSpaceReport,
 }
 
+/// Applied task-commit journal rows a cutoff can drop, and how many an
+/// apply removed. The newest applied row of each task is not included.
+#[derive(Debug, Clone, Serialize)]
+pub struct JournalGcReport {
+    pub apply: bool,
+    pub retention_days: u32,
+    pub cutoff: DateTime<Utc>,
+    pub table: &'static str,
+    pub scope: &'static str,
+    pub rows: u64,
+    pub bytes: u64,
+    pub rows_removed: u64,
+    pub writes: BatchReport,
+    pub store: StoreSpaceReport,
+}
+
 /// What retention could reclaim now, measured without the blob reference scan
 /// so `orbit doctor` stays cheap.
 #[derive(Debug, Clone, Serialize)]
 pub struct StoreRetentionOverview {
     pub audit_days: u32,
     pub runs_days: u32,
+    pub journal_days: u32,
     pub audit_rows: u64,
     pub audit_bytes: u64,
     pub run_states: u64,
     pub run_state_bytes: u64,
+    pub journal_rows: u64,
+    pub journal_bytes: u64,
     pub blob_bytes: u64,
     /// Blobs older than the audit cutoff that no pending marker protects: an
     /// upper bound on what the sweep removes, since a newer row may still
@@ -155,6 +175,7 @@ pub struct StoreRetentionOverview {
 struct RetentionDays {
     audit: u32,
     runs: u32,
+    journal: u32,
 }
 
 impl OrbitRuntime {
@@ -166,6 +187,7 @@ impl OrbitRuntime {
         Ok(RetentionDays {
             audit: config.snapshot.retention_audit_days,
             runs: config.snapshot.retention_runs_days,
+            journal: config.snapshot.retention_journal_days,
         })
     }
 
@@ -289,7 +311,45 @@ impl OrbitRuntime {
         })
     }
 
-    /// Reclaimable audit, run-state and blob bytes under the configured
+    /// Plan, or with `apply` perform, journal retention: delete this
+    /// workspace's applied task-commit rows older than the cutoff when a
+    /// newer applied row of the same task exists. Prepared, committed and
+    /// aborted rows stay, and so does each task's newest applied row.
+    /// `retention_days` overrides `retention.journal_days`.
+    pub fn gc_journal(
+        &self,
+        apply: bool,
+        retention_days: Option<u32>,
+    ) -> Result<JournalGcReport, OrbitError> {
+        let days = resolve_override(retention_days, self.retention_days()?.journal)?;
+        let cutoff = cutoff_for(days)?;
+        let store = self.sqlite_store()?;
+        let workspace_id = self.workspace_id()?;
+        let RetentionSelection { rows, bytes } =
+            store.journal_retention_selection(&workspace_id, cutoff)?;
+        let mut writes = BatchReport::default();
+        let rows_removed = if apply && rows > 0 {
+            run_batches(&mut writes, || {
+                store.prune_journal_retention_batch(&workspace_id, cutoff, RETENTION_BATCH_ROWS)
+            })?
+        } else {
+            0
+        };
+        Ok(JournalGcReport {
+            apply,
+            retention_days: days,
+            cutoff,
+            table: "task_commit_journal",
+            scope: "workspace",
+            rows,
+            bytes,
+            rows_removed,
+            writes,
+            store: store.store_space()?.into(),
+        })
+    }
+
+    /// Reclaimable audit, run-state, journal and blob bytes under the configured
     /// windows, without scanning blob references.
     pub fn store_retention_overview(&self) -> Result<StoreRetentionOverview, OrbitError> {
         let days = self.retention_days()?;
@@ -304,6 +364,8 @@ impl OrbitRuntime {
             audit_bytes += selection.bytes;
         }
         let runs = store.run_state_retention_selection(&workspace_id, cutoff_for(days.runs)?)?;
+        let journal =
+            store.journal_retention_selection(&workspace_id, cutoff_for(days.journal)?)?;
         let root = AuditBlobRoot::new(&self.paths().audit_dir);
         let past_cutoff = SystemTime::from(audit_cutoff);
         let marked: HashSet<String> = root
@@ -323,10 +385,13 @@ impl OrbitRuntime {
         Ok(StoreRetentionOverview {
             audit_days: days.audit,
             runs_days: days.runs,
+            journal_days: days.journal,
             audit_rows,
             audit_bytes,
             run_states: runs.rows,
             run_state_bytes: runs.bytes,
+            journal_rows: journal.rows,
+            journal_bytes: journal.bytes,
             blob_bytes,
             blob_bytes_past_cutoff,
             store: store.store_space()?.into(),

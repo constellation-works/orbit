@@ -70,15 +70,20 @@ presence. Path fields live on `WorkspacePaths` in
 | `embed/` | retired search downloads | removable after stopping older binaries; see upgrades |
 | `bin/` | installed Orbit binary (when installed via `install.sh`) | reinstallable |
 
-Store retention can remove old history from this database. `retention.audit_days` and
-`retention.runs_days` default to 60 days; they define eligibility but do not delete data
-by themselves. `orbit gc audit --apply` prunes old command-audit rows, this workspace's
-run-audit rows, and audit blobs no remaining row or pending write references.
-`orbit gc runs --apply` drops pipeline state for terminal runs past the run window while
-keeping their run and step rows, and prunes the per-minute run and host resource history
-(`run_resource_minutes`, `host_resource_minutes`) and the admission forecasts checked
-against it (`admission_forecasts`) older than 30 days. The seeded `store_gc` routine is disabled by default,
-so cleanup happens only after an operator applies a GC command or enables that routine.
+Store retention can remove old history from this database. `retention.audit_days`,
+`retention.runs_days` and `retention.journal_days` default to 60 days; they define
+eligibility but do not delete data by themselves. `orbit gc audit --apply` prunes old
+command-audit rows, this workspace's run-audit rows, and audit blobs no remaining row
+or pending write references. `orbit gc runs --apply` drops pipeline state for terminal
+runs past the run window while keeping their run and step rows, and prunes the
+per-minute run and host resource history (`run_resource_minutes`,
+`host_resource_minutes`) and the admission forecasts checked against it
+(`admission_forecasts`) older than 30 days. `orbit gc journal --apply` deletes this
+workspace's applied `task_commit_journal` rows past the journal window when a newer
+applied row of the same task exists. Each task's newest applied row stays, and every
+prepared, committed or aborted row stays, so recovery can still replay an unfinished
+commit. The seeded `store_gc` routine is disabled by default, so cleanup happens only
+after an operator applies a GC command or enables that routine.
 See [runtime configuration](../CONFIG.md) for the retention settings.
 
 Policy definitions under global or workspace `resources/policies/` may use

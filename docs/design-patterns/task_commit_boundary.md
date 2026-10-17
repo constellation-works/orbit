@@ -72,6 +72,12 @@ Nothing infers the decision from bundle contents, and nothing tries to un-publis
 Because no bundle file is touched before the commit point, a pre-commit failure has nothing to
 compensate beyond the journal row and the marker.
 
+Applied rows are settled: recovery does not read them. `orbit gc journal` (and the `store_gc`
+routine, once enabled) deletes this workspace's applied rows older than `retention.journal_days`
+when a newer applied row of the same task exists. Each task keeps its newest applied row, and
+prepared, committed and aborted rows are never selected, so an unfinished commit is still there
+to roll forward or back.
+
 **Recovery before exposure.** The marker signals interrupted publication. Ordinary operations check it
 once they hold their shared partition lock. A live commit holds the partition exclusively until
 it has dropped its marker, so a marker still there belongs to a commit that crashed, including

@@ -450,6 +450,12 @@ define_config_settings! {
         section: ConfigSection::Housekeeping, order: 110,
         resolve: |raw: Option<u32>| resolve_retention_days(raw, "retention.runs_days"),
     },
+    retention_journal_days: u32 => u32 {
+        key: "retention.journal_days", value_type: "integer",
+        description: "Days `orbit gc journal` keeps applied task-commit journal rows. Older applied rows are reclaimable when a newer applied row of the same task exists; each task's newest applied row, and every prepared, committed or aborted row, stays (1..=36500; default 60).",
+        section: ConfigSection::Housekeeping, order: 115,
+        resolve: |raw: Option<u32>| resolve_retention_days(raw, "retention.journal_days"),
+    },
     worktree_reclaim: Vec<String> => Vec<String> {
         key: "worktree.reclaim", value_type: "array<string>",
         description: "Rebuildable paths to reclaim in terminal, registered run worktrees: relative globs with '*' within a component and '**' across components. Replaces earlier lists; defaults to ['target', '.orbit/tmp/*-target', '.orbit/tmp/base-wt']. Symlinks, tracked content and live or undecidable workers are protected. Collection never runs a command.",
