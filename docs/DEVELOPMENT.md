@@ -13,6 +13,7 @@ The detailed rules behind [CONTRIBUTING.md](../CONTRIBUTING.md). Read the sectio
 | Handing off or reviewing a change | [Validation and CI](#validation-and-ci) |
 | Writing files or spawning processes in production code | [Filesystem writes](#filesystem-writes), [Child processes](#child-processes) |
 | Writing a test that mutates state, spawns processes or submits runs | [Safe Mutable CLI Fixtures](#safe-mutable-cli-fixtures), [Testing & Coverage](#testing--coverage) |
+| Running a mutating `orbit` command by hand for QA, from a managed lane | [Manual QA from a managed lane](#manual-qa-from-a-managed-lane) |
 | Changing the dashboard or website | [Dashboard fixtures](#dashboard-http-integration-fixtures), [Browser checks](#browser-checks-on-a-prepared-host) |
 | Changing toolchains, platforms or dependencies | [MSRV](#toolchain-msrv), [Windows](#windows-compile-check), [Supply-chain](#supply-chain-cargo-deny), [Vendored JS](#vendored-dashboard-javascript) |
 
@@ -380,7 +381,7 @@ After the caller verifies the recorded token with the original handle retained, 
 
 ## Safe Mutable CLI Fixtures
 
-Fixtures and manual reproductions that mutate Orbit task, run, workspace or registry state run isolated from the process that launches them; authorized operator work keeps normal routing. Spawn the CLI as a child with absolute disposable paths, clearing inherited authority before setting `HOME` and `USERPROFILE`:
+Fixtures and manual reproductions that mutate Orbit task, run, workspace or registry state run isolated from the process that launches them; authorized operator work keeps normal routing. Hand-run QA from a managed lane follows the recipe in [Manual QA from a managed lane](#manual-qa-from-a-managed-lane). Spawn the CLI as a child with absolute disposable paths, clearing inherited authority before setting `HOME` and `USERPROFILE`:
 
 ```rust
 use std::path::Path;
@@ -426,6 +427,36 @@ Detached-worker tests use `tests/support/workflow_gate.rs` to hold a step at a s
 - **Workflow-dispatch fixtures wait for every detached worker** to reach a terminal state in the fixture's run history before dropping the temporary home; a successful submission proves only admission. Capture all submitted IDs before assertions, including control-workspace runs, and use a cleanup guard that releases rendezvous waiters and settles workers on assertion unwinds. Wait for the owning processes to exit too, since terminal history can precede their final cleanup. The replica routine fixture exercises this with a held owner while the replica finishes. Check that the expected runs are recorded and that a disposable parent registry exposed through the managed environment gains none, as the output-goldens task-pilot fixture does.
 
 `cargo test -p orbit-cli --test tool plugin_secrets::secret_sinks::seeded_secrets_stay_out` seeds fake provider, SCM, cloud and database credentials before redactor initialization, drives task writes and provider output through the CLI, and reports each leak by sink: task bundles, audit rows and blobs, run logs, attached diagnostics, dashboard log views and the provider's environment. Raw task attachments keep their byte-preserving contract. Its executor runs with `sandbox: off`.
+
+### Manual QA from a managed lane
+
+A managed lane exports Orbit routing and authority: `ORBIT_REGISTRY_ROOT`, `ORBIT_WORKSPACE`, `ORBIT_ROOT`, `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_TASK_ID` and about two dozen more. Unsetting a few of them, or overriding only `HOME`, still lets a dev binary resolve the live global registry. Before a hand-run QA command that mutates state, clear the whole environment and point `HOME` at a disposable directory. Run the steps below as one shell session, from the managed checkout:
+
+```bash
+CHECKOUT="$(git rev-parse --show-toplevel)"
+ORBIT_BIN="$CHECKOUT/target/debug/orbit"   # cargo build -p orbit-cli --bin orbit --locked
+QA_HOME="$(mktemp -d "$CHECKOUT/.orbit/tmp/manual-qa.XXXXXX")/home"
+QA_REPO="$(mktemp -d "${TMPDIR:-/tmp}/orbit-qa-repo.XXXXXX")"
+mkdir -p "$QA_HOME"
+qa() { env -i PATH=/usr/bin:/bin HOME="$QA_HOME" "$@"; }
+
+qa git -C "$QA_REPO" init -q -b main
+
+# Confirm the global root from the scratch home, outside any repository, so no
+# other workspace can be discovered.
+cd "$QA_HOME"
+qa "$ORBIT_BIN" config show --scope global --format json | jq -r '.global_root'
+
+# Register the scratch repository, then confirm its routing before any mutating command.
+cd "$QA_REPO"
+qa "$ORBIT_BIN" workspace init --name manual-qa
+qa "$ORBIT_BIN" config show --format json | jq -r '.global_root, .shared_root, .local_root'
+qa "$ORBIT_BIN" workspace show --format json | jq -r '.checkout.repo_root, .checkout.orbit_dir'
+```
+
+The global root must print `$QA_HOME/.orbit`; the real `~/.orbit` must never appear. After `workspace init`, `shared_root` and `local_root` must be under `$QA_REPO`, and the workspace must report `$QA_REPO` as its checkout. Do not add `--confirm` until those paths match. Preview a destructive command first, then confirm it with the same `qa "$ORBIT_BIN" …` prefix. Stderr warnings such as "no actor identity resolved" are expected in a cleared environment.
+
+Do not run any other Orbit command in `QA_REPO` before `workspace init`. The first command there writes a `.orbit/config.yaml` with a generated workspace identity, and `workspace init` then refuses with an identity conflict. Keep `QA_REPO` outside the checkout, not under `.orbit/tmp/`, because the checkout's own `.orbit` is an ancestor of that directory. Keep `QA_HOME` under `.orbit/tmp/`, as the fixtures do, and delete both directories when the QA is finished.
 
 ## Testing & Coverage
 
