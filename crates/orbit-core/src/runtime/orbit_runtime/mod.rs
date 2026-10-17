@@ -7,6 +7,7 @@ mod config;
 mod host;
 mod identity;
 mod persistence;
+mod validation_warning;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
