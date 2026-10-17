@@ -11,11 +11,12 @@ pub(in crate::executor::automation::vcs) const GITHUB_TRANSIENT_ATTEMPTS: u32 = 
 pub(in crate::executor::automation::vcs) const GITHUB_TRANSIENT_RETRY_DELAY: Duration =
     Duration::from_millis(500);
 
-/// Retry a private automation VCS read-only PR lookup (`PR_LIST`, `PR_VIEW`,
-/// or `PR_STATUS`) across a bounded number of attempts when GitHub answers with
-/// a transient failure. `pr_open` calls the first two operations to check for
-/// an existing PR before deciding whether to create one; `PR_STATUS` is used
-/// during completion. Pushes have their own remote-confirming retry path;
+/// Retry a private automation VCS read-only PR lookup (`PR_LIST`,
+/// `PR_LIST_OPEN`, `PR_VIEW`, or `PR_STATUS`) across a bounded number of
+/// attempts when GitHub answers with a transient failure. `pr_open` calls
+/// `PR_LIST` and `PR_VIEW` to check for an existing PR before deciding whether
+/// to create one, and `PR_LIST_OPEN` to find the tasks' earlier PRs once it
+/// created one; `PR_STATUS` is used during completion. Pushes have their own remote-confirming retry path;
 /// PR creation and merge are never retried in this process wrapper: `pr_open`
 /// reconciles ambiguous create failures by looking up the head before retrying,
 /// while resending a merge risks a duplicate side effect.

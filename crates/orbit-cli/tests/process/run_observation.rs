@@ -2055,6 +2055,9 @@ fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
 
 /// A local admission pass counts deferred tasks inside `queued`; the CLI
 /// prints those tasks separately and subtracts them from the admissible count.
+/// The pass here was deferred on a busy lock, so it keeps the last completed
+/// pass's lists, dated from that pass rather than from an owner a local drain
+/// does not have, and the header says the pass was deferred.
 fn run_show_counts_local_deferred_tasks_once() {
     use orbit_types::workflow::{DrainAdmissionPass, DrainWaitingTask};
 
@@ -2064,6 +2067,8 @@ fn run_show_counts_local_deferred_tasks_once() {
             .unwrap();
     let id = "jrun-cli-local-deferred";
     let now = chrono::Utc::now();
+    let completed = now - chrono::Duration::minutes(1);
+    let lock_error = "record pilot operator handoffs: timed out after 30000ms acquiring task commit boundary (held by pid 4242)";
     fixture.db().execute(
         "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_auto_pipeline',1,'running','{}',?3,?3,?3,?4)",
         params![id, fixture.workspace_id(), now.to_rfc3339(), std::process::id()],
@@ -2088,13 +2093,13 @@ fn run_show_counts_local_deferred_tasks_once() {
         deferred_total: 3,
         excluded: Vec::new(),
         excluded_total: 0,
-        waiting_recorded_at: None,
+        waiting_recorded_at: Some(completed),
         waiting_by_reason: Default::default(),
         consecutive_idle_passes: 0,
         resource_throttle: None,
-        last_pass_error_code: None,
-        last_pass_error: None,
-        consecutive_pass_failures: 0,
+        last_pass_error_code: Some("lock_busy".into()),
+        last_pass_error: Some(lock_error.into()),
+        consecutive_pass_failures: 1,
         admission_refusal: None,
         degraded: false,
         admission_forecast: None,
@@ -2120,6 +2125,20 @@ fn run_show_counts_local_deferred_tasks_once() {
     assert!(
         !text.contains("Still waiting: 3 admissible, 3 deferred"),
         "local deferred tasks must not be counted twice: {text}"
+    );
+    let dated = format!(
+        "(as of the last completed pass at {})",
+        completed.format("%Y-%m-%d %H:%M:%SZ")
+    );
+    assert!(
+        text.contains(&dated) && !text.contains("the owner answered"),
+        "a local drain's kept lists are dated from its last completed pass: {text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "Admission pass deferred: consecutive_failures=1 last_pass_error={lock_error}"
+        )),
+        "{text}"
     );
 }
 

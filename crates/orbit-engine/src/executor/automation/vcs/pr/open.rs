@@ -339,8 +339,8 @@ pub(in crate::executor::automation::vcs) fn close_earlier_task_pull_requests<
     }
     let listed = match host
         .run_private_vcs_operation(
-            operations::PR_LIST,
-            json!({ "state": "open", "workspace_path": workspace_path }),
+            operations::PR_LIST_OPEN,
+            json!({ "workspace_path": workspace_path }),
         )
         .and_then(|response| PullRequestSummary::list_from_response(&response))
     {

@@ -1,7 +1,8 @@
 //! The drain step that adopts interrupted delivery leaves' open pull
 //! requests before it admits new work. What qualifies is
 //! `application::job::orphan_adoption`'s decision; this step only supplies
-//! the drain's authority and its free leaf slots.
+//! the drain's authority and its free leaf slots. Only a malformed step input
+//! fails it; a store or forge error never ends the drain.
 
 use chrono::Utc;
 use orbit_engine::DispatchError;
@@ -41,14 +42,27 @@ pub(crate) fn adopt_orphaned_deliveries(
     )?;
     let ceiling = live_worker_limit(runtime, input)
         .map_or(submitted, |limit| u64::from(limit.max_active_leaf_runs));
-    let occupied = runtime
+    // Adoption is a side step of the pass: an unreadable store skips it for
+    // this pass rather than ending the drain.
+    let occupied = match runtime
         .stores()
         .jobs()
         .drain_leaf_occupancy_for_run(drain_run_id)
-        .map_err(|error| {
-            DispatchError::action_failed(action, format!("read shared leaf occupancy: {error}"))
-        })?
-        .occupied;
+    {
+        Ok(occupancy) => occupancy.occupied,
+        Err(error) => {
+            tracing::warn!(
+                target: "orbit.core.drain",
+                error = %error,
+                "could not read leaf occupancy; this pass adopts nothing",
+            );
+            return Ok(json!({
+                "adopted": [],
+                "skipped": [],
+                "pass_error": format!("read shared leaf occupancy: {error}"),
+            }));
+        }
+    };
     let authority = AdoptionAuthority {
         drain_run_id,
         completion_done: input.get("completion").and_then(Value::as_str) == Some("done"),
@@ -57,9 +71,7 @@ pub(crate) fn adopt_orphaned_deliveries(
             .unwrap_or(usize::MAX)
             .saturating_sub(occupied),
     };
-    runtime
-        .adopt_orphaned_deliveries(&authority, Utc::now())
-        .map_err(|error| DispatchError::action_failed(action, error.to_string()))
+    Ok(runtime.adopt_orphaned_deliveries(&authority, Utc::now()))
 }
 
 /// A templated flag: the template engine may hand a boolean over as text.

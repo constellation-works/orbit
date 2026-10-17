@@ -16,5 +16,7 @@ pub(crate) use approvals::{
     await_approval_pilot, record_proposed_approvals, select_proposed_approvals,
 };
 pub(crate) use classify::classify_workspace_auto_tasks;
+#[cfg(feature = "test-support")]
+pub use classify::release_failure_hook::with_reservation_release_failure;
 pub(super) use drains::read_live_leaf_runs;
 pub(crate) use window::drain_window;

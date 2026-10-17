@@ -919,35 +919,63 @@ the kept candidate ([distributed drain](distributed-drain.md)).
 
 An owner-local delivery leaf (`task_pr_pipeline`) watches the pull request it
 opened: `--complete` merges it, and `--auto-fix` repairs its failed required checks
-and conflicts. If the leaf's worker dies after `pr_open`, orphan reconciliation
-finalizes the run `interrupted` and the task waits in `review`, or in `blocked` with
-a `workflow_run_interrupted` history entry when the leaf died before promoting it.
-Nothing is watching the pull request at that point.
+and conflicts. If the leaf's worker dies after `pr_open` and the task already moved
+to `review`, orphan reconciliation finalizes the run `interrupted` and the task waits
+in `review`. Nothing is watching the pull request at that point. A leaf that died
+before promoting its task leaves the task `blocked` with a `workflow_run_interrupted`
+history entry; the blocked-task recovery backstop ([final recovery pool](../CONFIG.md#final-recovery-pool)) decides that one,
+not the drain.
 
 Each pass of a running owner drain (`orbit run auto`) adopts such a leaf before it
-admits new work. It resumes the interrupted run once from its checkpoints, as
+admits new work. It resumes the interrupted run from its checkpoints, as
 `orbit job resume` would, so the resumed run continues landing review, completion
 and auto-fix on the same pull request and head. The retry lineage carries the
 run's repair ledger and authority. Completion still refuses a head the run did not
 publish. A leaf is adopted only when all of these hold:
 
-- it was interrupted within the last 24 hours, not at an upgrade boundary (the
-  clock resumes those), and it is not a claimed execution;
+- its run ended within the last 24 hours, measured from its last recorded activity
+  (the time orphan reconciliation stamps as its end), not at an upgrade boundary
+  (the clock resumes those), and it is not a claimed execution;
 - its worker is dead and no retry has resumed it yet;
+- it is an original attempt, not itself a resume: a leaf that dies again after a
+  drain or an operator resumed it is left for you to resume. The test reads the run
+  records, so it holds even if the adoption's audit row was lost;
 - its `pr_open` succeeded and that pull request is still open on the same branch;
-- every task it carries still waits on it, in `review` or interruption-`blocked`;
+- every task it carries is still in `review`, checked again just before the resume
+  is submitted;
 - the drain holds the `--complete` and `--auto-fix` grants the leaf was started
   with;
 - checkpoint resume accepts it.
 
-Adopted leaves take free drain slots, and a stopped drain adopts nothing. Each
-adoption, and each final refusal (`pull_request_not_open`, `task_moved`,
-`no_pull_request`, `claimed_execution`, `not_resumable`), is decided once and
-recorded in the audit log as `pipeline.run.orphan_adoption`. To see why a leaf was
-left alone, read the drain's latest `adopt_orphans` step output with
-`orbit run show <drain-run> --json`. A missing grant or an unreadable forge is not
-a decision: a later pass, or a drain started with the grant, considers the leaf
-again.
+Adopted leaves take free drain slots. A stopped drain, or a pass held by host
+resource pressure, adopts nothing. Each adoption, and each final refusal, is decided
+once and recorded in the audit log as `pipeline.run.orphan_adoption`. The final
+refusals are:
+
+- `pull_request_not_open`
+- `task_moved` (the task left `review` or no longer exists)
+- `no_pull_request`
+- `no_task`
+- `claimed_execution`
+- `resumed_attempt`
+- `not_resumable` (checkpoint resume refused it)
+
+To see why a leaf was left alone, read the drain's latest `adopt_orphans` step output
+with `orbit run show <drain-run> --json`. The following are not decisions; a later
+pass considers the leaf again:
+
+- `authority`: a missing grant;
+- `store_unreadable`: an unreadable store;
+- `forge_unreadable`: an unreadable forge. After the first failed read, a pass
+  defers its remaining leaves without asking the forge again, so an unreachable
+  GitHub delays admission by at most one read;
+- `resume_unplannable`: a resume that could not be planned for a reason other than
+  validation, including an activity catalog that does not load (a file caught
+  mid-edit);
+- `resume_failed`: a failed submission.
+
+The step never ends the drain. When it cannot read its candidates or the drain's
+slots, its output carries a `pass_error` and the pass goes on to admission.
 
 When a leaf is not adopted, resume it yourself with `orbit job resume <leaf-run>`,
 or requeue the task. When an operator moves the task back to `backlog`, any of its

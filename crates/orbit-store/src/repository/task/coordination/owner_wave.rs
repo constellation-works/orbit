@@ -51,6 +51,7 @@ impl TaskCommitBoundary {
             let claims = self.execution_claims()?;
             let expires_at = Utc::now() + Duration::seconds(OWNER_WAVE_VISIBILITY_SECONDS);
             let mut admissions = Vec::with_capacity(candidates.len());
+            let mut rows = Vec::with_capacity(candidates.len());
             for candidate in candidates {
                 if let Some(claim) = claims.iter().find(|claim| {
                     claim.phase.protects_footprint()
@@ -63,47 +64,26 @@ impl TaskCommitBoundary {
                     });
                     continue;
                 }
-                self.publish_owner_wave_row(&OwnerWaveRow {
+                let wave = OwnerWaveRow {
                     task_id: candidate.task_id.clone(),
                     footprint: candidate.footprint.clone(),
                     expires_at,
-                })?;
-                admissions.push(OwnerWaveAdmission::admitted(&candidate.task_id));
-            }
-            Ok(admissions)
-        })
-    }
-
-    /// One row per task, replaced by its next admission.
-    fn publish_owner_wave_row(&self, wave: &OwnerWaveRow) -> Result<(), OrbitError> {
-        let payload =
-            serde_json::to_string(wave).map_err(|error| OrbitError::Store(error.to_string()))?;
-        match self.store.task_coordination_row(
-            &self.workspace_id,
-            OWNER_WAVE_KIND,
-            &wave.task_id,
-        )? {
-            Some(previous) => {
-                if !self.store.replace_task_coordination_payload(
-                    &self.workspace_id,
-                    &previous,
-                    &payload,
-                )? {
-                    return Err(OrbitError::Store(
-                        "owner wave admission changed inside the serialization boundary".into(),
-                    ));
-                }
-                Ok(())
-            }
-            None => self.store.insert_task_coordination_row(
-                &self.workspace_id,
-                &TaskCoordinationRow {
+                };
+                rows.push(TaskCoordinationRow {
                     kind: OWNER_WAVE_KIND.into(),
                     row_id: wave.task_id.clone(),
-                    payload_json: payload,
-                },
-            ),
-        }
+                    payload_json: serde_json::to_string(&wave)
+                        .map_err(|error| OrbitError::Store(error.to_string()))?,
+                });
+                admissions.push(OwnerWaveAdmission::admitted(&candidate.task_id));
+            }
+            // One row per task, replaced by its next admission, and the whole
+            // wave in one transaction: a wave that fails publishes none of
+            // its footprints.
+            self.store
+                .upsert_sql_task_coordination_rows(&self.workspace_id, &rows)?;
+            Ok(admissions)
+        })
     }
 
     /// The footprints the owner's local drain admitted and its gates may not
