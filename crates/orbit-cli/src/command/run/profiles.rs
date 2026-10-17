@@ -38,7 +38,8 @@ delivery used more than 1 core for 2 minutes in a row: work that should make no 
 building. The deliveries behind each flag are named below the table. Templates that build by \
 design, such as qa-sweep, are never flagged.\n\n\
 `--json` emits every profile with its full per-minute series (alive, cpu_cores, cpu_stddev, \
-memory_bytes, memory_stddev_bytes), its deliveries and its flagged deliveries.\n\n\
+memory_bytes, memory_mean_bytes, memory_stddev_bytes), its deliveries and its flagged \
+deliveries.\n\n\
 `--accuracy` reports instead how well the host load forecast held up, from what drains in \
 effective auto-concurrency mode `shadow` or `enforce` recorded each admission pass over the last \
 30 days by default: the forecast 5, 10, 20 and 30 minutes ahead, counting what the pass admitted, against \
