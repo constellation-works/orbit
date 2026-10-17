@@ -1334,6 +1334,11 @@ one. From then on:
   cannot be read or validated, are **inconclusive**. A failed optional check
   that no job answers keeps its previous handling.
 
+  After a rerun or branch update, a stale failure for a job already acted
+  on waits while replacement jobs register. That wait does not hide a
+  separately failed required aggregate: it is classified on the next poll,
+  even when every workflow job now passes.
+
   Each of the rerun, the branch update and the repair is spent once. A
   failure past that budget, or one the landing cannot classify (its jobs or
   log are unreadable), stops the landing with the task in `review` and the

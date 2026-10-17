@@ -584,6 +584,8 @@ struct ForgeState {
     unreadable: Vec<String>,
     /// What a rerun of a failed job leaves on the head.
     after_rerun: Option<FakeJob>,
+    /// Keep the failed rollup while replacement jobs have not registered.
+    queued_rerun: bool,
     /// What the check reports on a head the branch update produced.
     after_update: Option<FakeJob>,
     /// The head a branch update on a published remote produces.
@@ -594,6 +596,8 @@ struct ForgeState {
     /// [ORB-16185] A failed required `CodeQL` aggregate outside any workflow,
     /// whose one failure annotation names this file.
     aggregate: Option<&'static str>,
+    /// A required aggregate that fails only after recovery has been spent.
+    after_recovery_aggregate: Option<&'static str>,
 }
 
 /// A forge whose pull request #42 carries the claimed candidate, with one
@@ -771,6 +775,7 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                 }
                 let job = state.jobs.get(&state.head);
                 let (status, conclusion) = match job.map(|job| job.conclusion) {
+                    None if state.queued_rerun => ("COMPLETED", "FAILURE"),
                     None => ("IN_PROGRESS", ""),
                     Some("success") => ("COMPLETED", "SUCCESS"),
                     Some(_) => ("COMPLETED", "FAILURE"),
@@ -886,9 +891,14 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                 }
             }
             "ci.rerun_failed" => {
-                let rerun = state.after_rerun.take().expect("a scripted rerun");
                 let head = state.head.clone();
-                state.jobs.insert(head, rerun);
+                if state.queued_rerun {
+                    state.jobs.remove(&head);
+                } else {
+                    let rerun = state.after_rerun.take().expect("a scripted rerun");
+                    state.jobs.insert(head, rerun);
+                }
+                state.aggregate = state.after_recovery_aggregate.take();
                 Ok(json!({}))
             }
             "pr.update_branch" => {
@@ -918,6 +928,7 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                 let after = state.after_update.take().expect("a scripted update");
                 state.jobs.insert(merge.clone(), after);
                 state.head = merge;
+                state.aggregate = state.after_recovery_aggregate.take();
                 Ok(json!({}))
             }
             "pr.merge_capabilities" => Ok(json!({"repository": {
@@ -2282,6 +2293,125 @@ fn a_required_aggregate_failure_is_classified_from_its_source_annotations() {
         assert!(forge.sent("pr.update_branch").is_empty(), "{case}");
         assert!(forge.sent("pr.merge").is_empty(), "{case}");
     }
+}
+
+/// A completed recovery cannot hide a separately failed required aggregate.
+fn required_aggregate_after_recovery(updated: bool) {
+    let sandbox = tempdir().unwrap();
+    let forge = FakeForge::new(sandbox.path(), true);
+    let candidate = forge.context.candidate.candidate.commit.clone();
+    if updated {
+        let base = forge.context.candidate.base.commit.clone();
+        std::fs::write(forge.repo.join("fix.txt"), "the base's fix\n").unwrap();
+        git(&forge.repo, &["add", "fix.txt"]);
+        git(&forge.repo, &["commit", "-q", "-m", "fix the base"]);
+        let fixed = git(&forge.repo, &["rev-parse", "main"]);
+        forge.job(&candidate, failed(1, 11, CLIPPY_DEAD_CODE));
+        forge.job(&base, failed(2, 21, CLIPPY_DEAD_CODE));
+        forge.job(&fixed, passed(3, 31));
+        forge.state.lock().unwrap().after_update = Some(passed(4, 41));
+    } else {
+        forge.job(&candidate, failed(1, 11, NETWORK_FLAKE));
+        forge.state.lock().unwrap().after_rerun = Some(passed(1, 12));
+    }
+    forge.state.lock().unwrap().after_recovery_aggregate = Some("work.txt");
+
+    land_with(&forge, json!({"max_wait_seconds": 0}))
+        .expect_err("the failed aggregate stops for repair without waiting");
+
+    assert_eq!(forge.sent("ci.rerun_failed").len(), usize::from(!updated));
+    assert_eq!(forge.sent("pr.update_branch").len(), usize::from(updated));
+    assert_eq!(
+        forge.sent("pr.status").len(),
+        2,
+        "classify on the next poll"
+    );
+    assert_eq!(forge.sent("ci.check_annotations").len(), 1);
+    assert_eq!(
+        forge.steps(),
+        [HandoffLandingStep::Stop { repairable: true }]
+    );
+    let reason = forge.stop_reason();
+    assert!(
+        reason.contains("classified `candidate`") && reason.contains("check run 7001"),
+        "the aggregate's classification earns the repair: {reason}"
+    );
+    assert!(forge.sent("pr.merge").is_empty());
+}
+
+#[test]
+fn a_required_aggregate_after_rerun_is_classified_without_waiting() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "a_required_aggregate_after_rerun_is_classified_without_waiting",
+        || required_aggregate_after_recovery(false),
+    );
+}
+
+#[test]
+fn a_required_aggregate_after_branch_update_is_classified_without_waiting() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "a_required_aggregate_after_branch_update_is_classified_without_waiting",
+        || required_aggregate_after_recovery(true),
+    );
+}
+
+/// A stale failure for the rerun job waits until its replacement registers.
+#[test]
+fn a_transient_rerun_waits_for_queued_replacement_jobs() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "a_transient_rerun_waits_for_queued_replacement_jobs",
+        || {
+            let sandbox = tempdir().unwrap();
+            let forge = std::rc::Rc::new(FakeForge::new(sandbox.path(), true));
+            let head = forge.context.candidate.candidate.commit.clone();
+            forge.job(&head, failed(1, 11, NETWORK_FLAKE));
+            {
+                let mut state = forge.state.lock().unwrap();
+                state.after_rerun = Some(passed(1, 12));
+                state.queued_rerun = true;
+            }
+            let waits = std::rc::Rc::new(std::cell::Cell::new(0));
+            let captured_waits = waits.clone();
+            let queued_forge = forge.clone();
+            let result = orbit_engine::test_support::with_vcs_retry_wait(
+                move |_| {
+                    let forge = queued_forge.as_ref();
+                    captured_waits.set(captured_waits.get() + 1);
+                    assert!(
+                        forge.steps().is_empty(),
+                        "queued work must not stop for repair"
+                    );
+                    assert!(forge.sent("pr.merge").is_empty());
+                    assert_eq!(forge.sent("ci.rerun_failed").len(), 1);
+                    let mut state = forge.state.lock().unwrap();
+                    assert!(
+                        !state.jobs.contains_key(&head),
+                        "replacement has not registered"
+                    );
+                    let replacement = state.after_rerun.take().unwrap();
+                    state.jobs.insert(head.clone(), replacement);
+                    state.queued_rerun = false;
+                },
+                || {
+                    land_with(
+                        forge.as_ref(),
+                        json!({"max_wait_seconds":15,"poll_interval_seconds":5}),
+                    )
+                },
+            );
+            assert_eq!(
+                result.expect("the queued rerun eventually passes")["phase"],
+                "landed"
+            );
+            assert_eq!(waits.get(), 1, "wait only while the replacement is queued");
+            assert_eq!(forge.sent("pr.merge").len(), 1);
+            assert!(forge.sent("pr.update_branch").is_empty());
+            assert_eq!(forge.steps().last(), Some(&HandoffLandingStep::Complete));
+        },
+    );
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
