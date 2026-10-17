@@ -62,13 +62,18 @@ enabled = true
 cpu_high_percent = 90
 cpu_resume_percent = 85
 # While only CPU holds admissions, up to this many `no-diff-expected`
-# auto-task leaves (reviews, curation) still start; memory and disk pressure
-# hold them too. 0 holds them with everything else.
+# auto-task leaves (reviews, curation) still start; memory, disk and I/O
+# pressure hold them too. 0 holds them with everything else.
 cpu_light_leaves = 2
 memory_high_percent = 90
 memory_resume_percent = 85
 disk_high_percent = 90
 disk_resume_percent = 85
+# Linux only: `full avg60` of /proc/pressure/io, the share of the last minute
+# in which every runnable task was stalled on disk I/O. Hosts without PSI are
+# not gated.
+io_full_high_percent = 20
+io_full_resume_percent = 10
 
 [runtime]
 # Rotation + retention for the global JSONL log (~/.orbit/state/logs/orbit.jsonl).

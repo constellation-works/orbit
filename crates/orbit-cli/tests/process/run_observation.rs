@@ -62,6 +62,7 @@ impl orbit_core::runtime::host_resource::HostResourceProbe for CalmHost {
             sampled_at: chrono::Utc::now(),
             cpu_percent: Some(10.0),
             memory_percent: Some(10.0),
+            io_full_percent: None,
             disks: disk_paths
                 .iter()
                 .map(|path| orbit_core::runtime::host_resource::DiskSample {

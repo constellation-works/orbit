@@ -437,6 +437,18 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.resource_throttle.io_full_high_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.resource_throttle.io_full_resume_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.resource_throttle.memory_high_percent": {
       "scope": "built-in",
       "state": "default",

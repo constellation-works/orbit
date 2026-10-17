@@ -303,7 +303,7 @@ Interactive init asks for the default crew by name, offering only enabled crews.
 
 ### `[workflow.resource_throttle]` — host pressure
 
-While CPU, memory or a watched filesystem stays at or above its high mark, admission using those thresholds starts no new task work until it falls below the resume mark; running work is never cancelled. Drain, ship and readiness behavior: [host resource pressure runbook](runbooks/distributed-drain.md#host-resource-pressure).
+While CPU, memory, disk I/O (Linux) or a watched filesystem stays at or above its high mark, admission using those thresholds starts no new task work until it falls below the resume mark; running work is never cancelled. Drain, ship and readiness behavior: [host resource pressure runbook](runbooks/distributed-drain.md#host-resource-pressure).
 
 A scheduled host shutdown is a separate hold. `machine.host_shutdown_hold_minutes` (default 180, global only, at least 1) stands new unattended work down only when the schedule is that close, so a reboot set for tomorrow does not idle the host all day. Readiness still names a later schedule. See [scheduled host shutdown](runbooks/distributed-drain.md#scheduled-host-shutdown-or-reboot).
 
@@ -312,11 +312,15 @@ A scheduled host shutdown is a separate hold. `machine.host_shutdown_hold_minute
 | `workflow.resource_throttle.enabled` | `true` | Enable the throttle verdict. `false` restores unthrottled admission; telemetry and severity are still reported. |
 | `workflow.resource_throttle.cpu_high_percent` | `90` | CPU high-water mark. |
 | `workflow.resource_throttle.cpu_resume_percent` | `85` | Resume below this CPU percentage. |
-| `workflow.resource_throttle.cpu_light_leaves` | `2` | Leaves a local drain still starts for `no-diff-expected` auto-tasks (reviews, curation) while CPU is the only held resource; memory and disk pressure hold them too. `0..=32`; `0` holds them with everything else. |
+| `workflow.resource_throttle.cpu_light_leaves` | `2` | Leaves a local drain still starts for `no-diff-expected` auto-tasks (reviews, curation) while CPU is the only held resource; memory, disk and I/O pressure hold them too. `0..=32`; `0` holds them with everything else. |
 | `workflow.resource_throttle.memory_high_percent` | `90` | Memory high-water mark. |
 | `workflow.resource_throttle.memory_resume_percent` | `85` | Resume below this memory percentage. |
 | `workflow.resource_throttle.disk_high_percent` | `90` | High-water mark for each watched filesystem. |
 | `workflow.resource_throttle.disk_resume_percent` | `85` | Resume below this filesystem percentage. |
+| `workflow.resource_throttle.io_full_high_percent` | `20` | Linux only. High-water mark for disk I/O stall: `full avg60` in `/proc/pressure/io`, the share of the last minute in which every runnable task was stalled on I/O. Hosts without pressure stall information (macOS, kernels without PSI) are not gated and report no I/O reading. |
+| `workflow.resource_throttle.io_full_resume_percent` | `10` | Resume below this `full avg60` percentage. |
+
+**Why disk I/O uses `full`, not `some`.** The CPU, memory and filesystem-space marks cannot see disk bandwidth: a host whose storage saturates before its CPU keeps admitting deliveries into I/O contention. `some` counts time when at least one task waits on I/O, which a healthy build host does constantly. `full` counts time when no runnable task could make progress, so it rises only when the disk, not one slow process, is the bottleneck. `avg60` smooths bursts such as a single link step; the ten-second sustain window below still applies. A 47% `full avg60` on a single NVMe running a dozen validating deliveries is the saturation this guards; the 20% / 10% defaults hold new admissions well before that and release once the backlog drains. Raise `io_full_high_percent` on storage that sustains more concurrent builds, or lower the drain ceiling instead. The mark guards admission only: running deliveries are never cancelled or paused, and a held reading reads `io full` in readiness and the drain's last pass.
 
 Percentages are integers `1..=100`; each resume mark must be below its high mark. A workspace override applies only to that workspace's admission. Each resource's hysteresis history is shared by workspaces with identical high and resume marks; different marks keep independent sustain windows and holds against the same host readings. The host dashboard uses the serving machine's global values, read when its monitor first opens, so restart it after changing them.
 

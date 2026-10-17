@@ -1893,8 +1893,8 @@ cat /run/systemd/shutdown/scheduled   # USEC= / MODE= written by logind
 
 ## Host resource pressure
 
-While CPU, memory or a checkout/worktree/global-root filesystem stays at or
-above its high mark for ten seconds (`[workflow.resource_throttle]` in
+While CPU, memory, Linux disk I/O stall or a checkout/worktree/global-root
+filesystem stays at or above its high mark for ten seconds (`[workflow.resource_throttle]` in
 [CONFIG.md](../CONFIG.md#workflowresource_throttle--host-pressure)), Orbit
 starts no new task work until that resource falls back below its resume mark.
 Local drain waves admit no leaves and poll for recovery, pull drains request
@@ -1918,9 +1918,17 @@ orbit run readiness          # "Admissions throttled: memory 93% (throttled at �
 orbit run show <drain-run>   # Throttled: line from the drain's last pass
 ```
 
+Disk I/O is read from `/proc/pressure/io` `full avg60`
+(`io_full_high_percent`, default 20; resume below `io_full_resume_percent`,
+default 10) and appears as `io full` in readiness and the drain's last pass,
+for example `io full 47% (throttled at ≥ 20% since …; resumes below 10%)`. A
+host without pressure stall information, such as macOS, has no I/O reading and
+admits as before.
+
 On the dashboard, the top bar's `load`, `mem` and `disk` chips show the
 serving host's readings; the chip of each held resource is outlined, and its
-tooltip gives the verdict, reason and sample age.
+tooltip gives the verdict, reason and sample age. Settings › System lists the
+I/O row too, on hosts that report it.
 
 - Sampling monitors share recent pressure history in
   `<global-root>/cache/host-resource-pressure.json`, independently of drain
@@ -1942,7 +1950,7 @@ tooltip gives the verdict, reason and sample age.
   resource, a local drain still starts `no-diff-expected` auto-task leaves
   (after-landing review, friction curation, full review) until
   `workflow.resource_throttle.cpu_light_leaves` (default 2) of them are live
-  leaves; every other leaf waits. Memory or disk pressure holds them too, and
+  leaves; every other leaf waits. Memory, disk or I/O pressure holds them too, and
   pull drains do not use the budget. Readiness marks these tasks `cpu-light`,
   prints `CPU-light budget: <active> of <reserved> reserved slots in use`,
   reports `cpu_light_budget_full` for a light task waiting on a spent budget,

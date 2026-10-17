@@ -96,7 +96,11 @@ Sustained host pressure throttles admissions on its own: readiness tasks read
 start/ship responses name the resource, value, threshold and since-when.
 Running workers continue. Report the throttle and wait for it to clear; do not
 raise `--concurrency`, start another drain, or disable
-`workflow.resource_throttle` to push work through unless the user asks. While
+`workflow.resource_throttle` to push work through unless the user asks. On
+Linux the throttle also reads disk I/O stall (`io full`, from
+`/proc/pressure/io`); a host that saturates its disk before its CPU holds
+admissions with CPU idle, so lower the drain ceiling or build slots rather
+than raising the mark. While
 CPU alone is held, `no-diff-expected` auto-tasks (marked `cpu-light`) still
 start within `workflow.resource_throttle.cpu_light_leaves`, and one waiting on
 that spent budget reads `cpu_light_budget_full`. A task whose frozen delivery

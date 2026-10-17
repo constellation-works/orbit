@@ -13,6 +13,7 @@ pub(super) fn sample(
         sampled_at: Utc.timestamp_opt(1_700_000_000 + second, 0).unwrap(),
         cpu_percent: cpu,
         memory_percent: memory,
+        io_full_percent: None,
         disks: vec![DiskSample {
             path: PathBuf::from("/workspace"),
             used_percent: disk,

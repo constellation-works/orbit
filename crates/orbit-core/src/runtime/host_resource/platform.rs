@@ -36,6 +36,7 @@ struct NativeCache {
     sampled_at: chrono::DateTime<chrono::Utc>,
     cpu_percent: Option<f64>,
     memory_percent: Option<f64>,
+    io_full_percent: Option<f64>,
     disks: BTreeMap<PathBuf, Option<f64>>,
 }
 
@@ -62,6 +63,7 @@ impl HostResourceProbe for NativeProbe {
                 sampled_at: chrono::Utc::now(),
                 cpu_percent,
                 memory_percent,
+                io_full_percent: io_full_avg60(),
                 disks: BTreeMap::new(),
             });
         }
@@ -85,6 +87,7 @@ impl HostResourceProbe for NativeProbe {
                 sampled_at: chrono::Utc::now(),
                 cpu_percent: None,
                 memory_percent: None,
+                io_full_percent: None,
                 disks: paths
                     .iter()
                     .map(|path| DiskSample {
@@ -113,9 +116,40 @@ impl HostResourceProbe for NativeProbe {
             sampled_at: cache.sampled_at,
             cpu_percent: cache.cpu_percent,
             memory_percent: cache.memory_percent,
+            io_full_percent: cache.io_full_percent,
             disks,
         }
     }
+}
+
+/// Share of the last minute in which every runnable task was stalled on disk
+/// I/O (`/proc/pressure/io`, `full avg60`). Absent where the host has no
+/// pressure stall information, which admission treats as not gated.
+#[cfg(target_os = "linux")]
+fn io_full_avg60() -> Option<f64> {
+    use std::io::Read;
+    let mut data = String::new();
+    std::fs::File::open("/proc/pressure/io")
+        .ok()?
+        .take(4096)
+        .read_to_string(&mut data)
+        .ok()?;
+    parse_io_full_avg60(&data)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn io_full_avg60() -> Option<f64> {
+    None
+}
+
+/// `full avg10=0.00 avg60=1.23 avg300=0.00 total=123` inside PSI text.
+#[cfg(target_os = "linux")]
+fn parse_io_full_avg60(data: &str) -> Option<f64> {
+    let line = data.lines().find(|line| line.starts_with("full "))?;
+    line.split_whitespace()
+        .find_map(|field| field.strip_prefix("avg60="))?
+        .parse()
+        .ok()
 }
 
 pub(super) fn disk_percent(path: &Path) -> Option<f64> {
