@@ -12,8 +12,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{OptionalJson, bad_request, blocking, bounded_limit, map_runtime_error, validate_id};
-use crate::projections::job_catalog_to_json_with_last_run;
 use crate::state::DashboardState;
+use orbit_core::application::job::job_catalog_to_json_with_last_run;
 
 use super::routines::{
     OperationsQuery, authorization_denied, authorized_caller, explicit_workspace,
