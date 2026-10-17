@@ -331,9 +331,28 @@ fn run_lists_link_listed_children_and_name_a_cascaded_failure_leaf() {
         "runs::run_lists_link_listed_children_and_name_a_cascaded_failure_leaf",
         || {
             let fixture = Fixture::new();
-            let gate = fixture.seed_run("jrun-gate", "task_gate_pipeline", JobRunState::Failed);
-            let leaf = fixture.seed_run("jrun-leaf", "task_pr_pipeline", JobRunState::Failed);
-            let retry = fixture.seed_run("jrun-retry", "task_gate_pipeline", JobRunState::Running);
+            let created = Utc::now() - chrono::Duration::seconds(1);
+            let seed = |id, job, state, offset_ms| {
+                let mut run = fixture.seed_run(id, job, state);
+                run.created_at = created + chrono::Duration::milliseconds(offset_ms);
+                run.scheduled_at = run.created_at;
+                run.started_at = Some(run.created_at);
+                run.finished_at = state.is_terminal().then_some(run.created_at);
+                run.input = Some(json!({"task_id": "ORB-1"}));
+                fixture.save_run(&run);
+                run
+            };
+            let gate = seed("jrun-gate", "task_gate_pipeline", JobRunState::Failed, 0);
+            let leaf = seed("jrun-leaf", "task_pr_pipeline", JobRunState::Failed, 1);
+            let mut retry = seed("jrun-retry", "task_gate_pipeline", JobRunState::Running, 10);
+            retry.retry_source_run_id = Some(gate.run_id.clone());
+            fixture.save_run(&retry);
+            let retry_leaf = seed(
+                "jrun-retry-leaf",
+                "task_pr_pipeline",
+                JobRunState::Running,
+                11,
+            );
             let cause = RunRootCause {
                 leaf_run_id: leaf.run_id.clone(),
                 task_id: Some("ORB-1".into()),
@@ -347,16 +366,30 @@ fn run_lists_link_listed_children_and_name_a_cascaded_failure_leaf() {
                 "invoke_and_wait".into(),
                 true,
                 false,
-                Utc::now(),
+                leaf.created_at,
             ));
             state.root_cause = Some(cause.clone());
             fixture
                 .runtime
                 .write_run_state(&gate.run_id, &state)
                 .unwrap();
+            // Resume copies the source checkpoint, including its dispatches.
+            // The retry then admits its own child without owning the old one.
+            let mut retry_state = state.clone();
+            retry_state.run_id = retry.run_id.clone();
+            retry_state.root_cause = None;
+            retry_state.record_child_dispatch(dispatch(&retry_leaf));
+            write_state(&fixture, &retry, &retry_state);
             let server = fixture.server(false);
             for path in ["/api/job-runs?limit=10", "/api/job-runs/all?limit=10"] {
                 let page = json_ok(server.get(path));
+                let rows = page["items"].as_array().unwrap();
+                assert_eq!(rows.len(), 4, "{path}");
+                assert_eq!(rows[0]["run_id"], retry_leaf.run_id, "newest first: {path}");
+                assert_eq!(
+                    rows[1]["run_id"], retry.run_id,
+                    "retry precedes source: {path}"
+                );
                 let row = |id: &str| {
                     page["items"]
                         .as_array()
@@ -373,8 +406,28 @@ fn run_lists_link_listed_children_and_name_a_cascaded_failure_leaf() {
                 );
                 assert_eq!(row(&gate.run_id)["parent_run_id"], Value::Null, "{path}");
                 assert_eq!(row(&retry.run_id)["parent_run_id"], Value::Null, "{path}");
+                assert_eq!(
+                    row(&retry_leaf.run_id)["parent_run_id"],
+                    retry.run_id,
+                    "{path}"
+                );
+                assert_eq!(row(&gate.run_id)["state"], "failed", "{path}");
+                assert_eq!(row(&leaf.run_id)["state"], "failed", "{path}");
+                assert_eq!(row(&retry.run_id)["state"], "running", "{path}");
+                assert_eq!(row(&retry_leaf.run_id)["state"], "running", "{path}");
                 assert_eq!(row(&gate.run_id)["root_cause"], json!(cause), "{path}");
                 assert_eq!(row(&leaf.run_id)["root_cause"], Value::Null, "{path}");
+                assert_eq!(row(&retry.run_id)["root_cause"], Value::Null, "{path}");
+            }
+            // A page boundary must not let a retry claim an inherited child
+            // merely because its source is outside the loaded page.
+            for path in ["/api/job-runs?limit=3", "/api/job-runs/all?limit=3"] {
+                let page = json_ok(server.get(path));
+                let rows = page["items"].as_array().unwrap();
+                assert_eq!(rows.len(), 3, "{path}");
+                assert_eq!(rows[2]["run_id"], leaf.run_id, "{path}");
+                assert_eq!(rows[2]["parent_run_id"], Value::Null, "{path}");
+                assert_eq!(rows[0]["parent_run_id"], retry.run_id, "{path}");
             }
         },
     );
