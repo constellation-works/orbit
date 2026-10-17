@@ -125,7 +125,7 @@ evidence lookup and do not apply these broader filters.
 Run the capped-population timing benchmark explicitly in release mode:
 
 ```sh
-scripts/build-budget.py -- cargo test -p orbit-store --release --test incident_performance -- --ignored --nocapture
+scripts/build-budget.py -- cargo test -p orbit-store --release --test store capped_scoreboard_population_groups_within_half_a_second -- --ignored --nocapture
 ```
 
 It groups 10,000 events with 1,200 cross-run citations and asserts a 500 ms

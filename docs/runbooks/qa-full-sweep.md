@@ -241,7 +241,7 @@ other existing libtest arguments remain intact. For example:
 python3 scripts/test-qa-full-sweep.py \
   --native-execution-dir .orbit/tmp/qa-native \
   --record-native-command ./scripts/build-budget.py -- \
-  cargo test -p orbit-common --test test_env --locked
+  cargo test -p orbit-common --test common --locked
 ```
 
 Fixture forwarders that bypass libtest capture frame their complete child stdout

@@ -14,7 +14,7 @@
 #      exact string that lands in `InvocationRecord.model`.
 #   3. Validate derived costs against provider-reported `total_cost_usd` from
 #      real runs (see the ground-truth tests in
-#      crates/orbit-common/src/types/tests/pricing.rs).
+#      crates/orbit-common/tests/common/pricing.rs).
 # Rows are APPEND-ONLY with effective date ranges: for a real price CHANGE, add
 # a new row (close the old one with `effective_until`) — never rewrite history.
 # (This whole file is the initial seed being corrected in-place pre-merge, which
@@ -124,7 +124,7 @@ prices:
   # 0.50, output 2.50, cache read 0.05, 5m write 0.625, 1h write 1.0). This
   # table has no prompt-size tiers, so those invocations are underpriced, as
   # with the grok long-context tier below. The rates reproduce the CLI's
-  # total_cost_usd for a real invocation (crates/orbit-common/tests/pricing.rs).
+  # total_cost_usd for a real invocation (crates/orbit-common/tests/common/pricing.rs).
   - model: "claude-haiku-5-5"
     effective_from: "2026-10-07T00:00:00Z"
     effective_until: null
