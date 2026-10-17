@@ -163,6 +163,9 @@ else:
         shutil.copy2(SCRIPTS / "check-ci-macos.sh", self.scripts / "check-ci-macos.sh")
         # The pool sizes itself from the real budget query, so keep the real script.
         shutil.copy2(SCRIPTS / "build-budget.py", self.scripts / "build-budget.py")
+        # The full run wraps nextest in the real sampler. A stub would swallow
+        # the cargo invocation the assertions below observe.
+        shutil.copy2(SCRIPTS / "cpu-utilisation.sh", self.scripts / "cpu-utilisation.sh")
         workflows = self.root / ".github/workflows"
         workflows.mkdir(parents=True, exist_ok=True)
         (self.root / "Cargo.toml").touch()
@@ -343,6 +346,17 @@ exec {shlex.quote(sys.executable)} "$@"
         self.assertIn(("clippy-production", "0"), phases)
         self.assertIn(("workspace-tests", "0"), phases)
         self.assertIn(("repository-guards", "0"), phases)
+        self.assertRegex(
+            result.stderr,
+            r"cpu-util: label=nextest (busy_pct=\d+\.\d+ idle_pct=\d+\.\d+ "
+            r"iowait_pct=\d+\.\d+|unavailable=(unchanged|decreased|proc_stat))",
+        )
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertIn(
+            ["nextest", "run", "--profile", "ci", "--no-fail-fast",
+             "--success-output", "immediate", "--workspace", "--lib", "--bins", "--tests"],
+            calls,
+        )
         # A real command failure must keep its status and timing in the final
         # diagnostic tail, and must not be followed by tests.
         original = (self.bin / "cargo").read_text()
