@@ -447,12 +447,12 @@ old results. Recovery fingerprints also include the bindings.
 A host validation target is keyed by its checkout and is built once per candidate, so Cargo's incremental cache there is write-only. When a binding is configured, required validation, host replay, detached evidence, baseline reruns and recovery set `CARGO_INCREMENTAL=0` on the child, replacing any inherited value. The variable is applied where Orbit spawns the command, not by the repository Makefile. `workflow.validation_env.cargo_incremental = true` is the opt-in that leaves `CARGO_INCREMENTAL` untouched, so Cargo's profile default (incremental on for dev) or an allowlisted value stands. With no binding, Orbit does not set the variable. An incremental directory already in a target is left in place; later builds do not add to it. Baseline result identity is unchanged: the setting changes compiler writes, not command results.
 
 **Cleanup and transition.** The existing host-validation-targets layout, source keys,
-run attribution, base-cache locks and scratch lease lineage stay unchanged. Linux's
-[descriptor-bound collector](runbooks/worktree-reclaim.md#host-validation-output)
-continues to reclaim eligible historical and new output after its checkout disappears;
-active, leased and ambiguous output stays. Non-Linux host output remains isolated but
-this Linux collector is not available there. Retain it for operator maintenance; do not
-infer deletion authority from its hash. No old output, failed-run logs or audit evidence
+run attribution, base-cache locks and scratch lease lineage stay unchanged. The
+[descriptor-bound collector](runbooks/worktree-reclaim.md#host-validation-output) runs
+on native Linux and macOS and continues to reclaim eligible historical and new output
+after its checkout disappears; active, leased and ambiguous output stays. Host output on
+other platforms remains isolated but this collector is not available there. Retain it
+for operator maintenance; do not infer deletion authority from its hash. No old output, failed-run logs or audit evidence
 is migrated or deleted by config resolution. Before deploying this runtime to a Rust
 workspace, install the explicit binding in its owner configuration, preserving existing
 settings; restart/upgrade active clients only through the supported operator procedure.
