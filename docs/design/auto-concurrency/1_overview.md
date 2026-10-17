@@ -38,8 +38,8 @@ and [ORB-15994] for the native measurement repairs and [ORB-15775] for
 forecast recording and accuracy reporting.
 
 The accuracy report now supports operator-selected forecast-time, drain and
-recorded-mode cohorts, and separates unfinished target minutes from mature
-sampling gaps. This is delivered reporting capability, with no admission or
+recorded-mode cohorts, and separates unfinished target minutes, unrecordable
+partial minutes, and mature sampling gaps. This is delivered reporting capability, with no admission or
 configuration retune. A selected cohort does not attest source/build-budget
 homogeneity, and does not turn sparse per-task profiles or wide spread into
 calibrated confidence. See [§8.1](2_design.md#81-the-accuracy-report) and the

@@ -1,6 +1,6 @@
 ---
 type: runbook
-summary: Select an admission forecast cohort and separate idle unsampled minutes from sampling gaps without changing host policy.
+summary: Select an admission forecast cohort and separate idle unsampled minutes, unrecordable partial minutes, and sampling gaps without changing host policy.
 ---
 
 # Evaluate a forecast cohort
@@ -42,30 +42,40 @@ budgets, thresholds, profiles or persistent settings.
      during that minute does not make it a gap yet: the sampler offers the
      host row only for a minute it observed whole.
    - `missing`: the target minute has ended but has no measured row. It is
-     the sum of `unsampled` and `gap`. Waiting for the forecast horizon
-     alone does not repair either.
+     the sum of `unsampled`, `partial` and `gap`. Waiting for the forecast
+     horizon alone does not repair any of them.
    - `unsampled`: the target minute has ended, has no host row, and no
      delivery run was live during it. Host minutes are written only by
      delivery workers, so a forecast made while the drain is idle has
      nothing to pair with. That is not a sampling defect.
+   - `partial`: the target minute has ended, has no host row, and a delivery
+     overlapped it, but no delivery was running for the whole minute. The
+     sampler writes a host row only for a minute a worker saw whole: the
+     worker was already running before the minute began (`started_at`
+     strictly before it) and was still running when the minute ended
+     (`finished_at` absent, or at or after the end). The minute a delivery
+     starts in, and the minute it finishes in, are partial unless another
+     worker covered them whole. That is not a sampling defect.
    - `gap`: the target minute has ended, has no host row, and a delivery
-     run was live during it. A delivery run is a worker of a submitted
-     delivery pipeline or a claimed leaf. It is live from `started_at`
-     until `finished_at` (and still live while `finished_at` is absent).
-     The drain's own run is not a delivery: it records forecasts while
-     idle and does not sample the host. A run that never started does not
-     count. A run that finishes exactly as the minute starts, or starts
-     exactly as the minute ends, does not cover that minute.
+     was running for the whole minute, so the sampler should have written
+     a row. A delivery run is a worker of a submitted delivery pipeline or
+     a claimed leaf. It overlaps a minute from `started_at` until
+     `finished_at` (and still overlaps while `finished_at` is absent).
+     Overlap alone is not a gap. The drain's own run is not a delivery:
+     it records forecasts while idle and does not sample the host. A run
+     that never started does not count. A run that finishes exactly as
+     the minute starts, or starts exactly as the minute ends, does not
+     cover that minute.
    - `paired`: the target minute has ended and has a measured row. These
      alone contribute to error summaries; the report does not certify how
      completely that minute was sampled. A live delivery in a paired
      minute does not move it into `gap`.
 
    At each offset, paired + pending + missing equals the selected recorded
-   point count, and missing = unsampled + gap. `unmeasured` remains
+   point count, and missing = unsampled + partial + gap. `unmeasured` remains
    pending + missing. Text columns `PAIRS`, `PENDING`, `MISSING` and the
-   error columns keep their meaning; `UNSAMPLED` and `GAP` follow
-   `MISSING`. JSON adds `unsampled` and `gap` beside `missing`. Not every forecast
+   error columns keep their meaning; `UNSAMPLED`, `PARTIAL` and `GAP` follow
+   `MISSING`. JSON adds `unsampled`, `partial` and `gap` beside `missing`. Not every forecast
    necessarily records every offset (the configured horizon can cap it).
    An empty cohort has zero counts, empty pairs/drains and null errors.
 5. Retain the raw pairs and the separate configuration evidence for live

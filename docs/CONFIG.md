@@ -215,7 +215,10 @@ time. Only fully ended target minutes with measurements form error pairs.
 `pending` counts future/incomplete minutes, even with a partial measured row;
 `missing` counts ended minutes with no row. `missing` splits into `unsampled`
 (no delivery run was live in that minute, so an idle drain had nothing to
-pair with) and `gap` (a delivery run was live but wrote no host row). The
+pair with), `partial` (a delivery overlapped the minute but none was running
+for all of it; the sampler records only a minute a worker saw whole, so the
+minute a delivery starts or finishes in is not a defect) and `gap` (a
+delivery was running for the whole minute but wrote no host row). The
 compatible `unmeasured` count is pending plus missing. `--json` adds the raw pairs and effective selection. A selected
 drain/time range does not attest source, build-budget or threshold settings:
 those are not stored in forecast rows. Per-task profiles remain a separate

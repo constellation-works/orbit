@@ -612,6 +612,7 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
     assert_eq!(thirty["pending"], 0);
     assert_eq!(thirty["missing"], 1);
     assert_eq!(thirty["unsampled"], 1);
+    assert_eq!(thirty["partial"], 0);
     assert_eq!(thirty["gap"], 0);
     assert_eq!(thirty["cpu"]["mean_error"], Value::Null);
 
@@ -711,10 +712,12 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
     );
 }
 
-/// Idle target minutes are `unsampled`. A delivery that was live and wrote
-/// no host row is a `gap`. A drain, a run that never started, and a run that
-/// only touches the minute's boundary stay unsampled. A measured minute stays
-/// paired, with the same error, even when a delivery overlaps it.
+/// Idle target minutes are `unsampled`. A minute a worker only starts or
+/// finishes inside is `partial`: the sampler cannot record it whole, so it
+/// is not a `gap`. A worker live across a whole minute with no host row is
+/// a `gap`. A drain, a run that never started, and a run that only touches
+/// the minute's boundary stay unsampled. A measured minute stays paired,
+/// with the same error, even when a delivery overlaps it.
 #[test]
 fn accuracy_splits_idle_minutes_from_sampling_gaps() {
     if crate::isolated_test::run_in_child(
@@ -731,7 +734,13 @@ fn accuracy_splits_idle_minutes_from_sampling_gaps() {
         "jrun-drain",
         "shadow",
         minute + chrono::Duration::seconds(20),
-        &[(5, 4.0, 8), (10, 3.0, 2), (20, 1.0, 1)],
+        &[
+            (5, 4.0, 8),
+            (10, 3.0, 2),
+            (15, 2.0, 1),
+            (20, 1.0, 1),
+            (30, 1.0, 1),
+        ],
         &[],
         &[],
         &[],
@@ -754,12 +763,32 @@ fn accuracy_splits_idle_minutes_from_sampling_gaps() {
         Some(at(5) + chrono::Duration::seconds(1)),
         Some(at(5) + chrono::Duration::seconds(50)),
     );
+    // Running before this minute and still running when it ends, with no
+    // host row. The sampler could have recorded it, so this is a gap.
     fixture.job_run(
         "jrun-gap-worker",
         "task_claimed_pr_pipeline",
         "success",
-        Some(at(10) + chrono::Duration::seconds(15)),
-        Some(at(10) + chrono::Duration::seconds(45)),
+        Some(at(10) - chrono::Duration::seconds(30)),
+        Some(at(11)),
+    );
+    // Finishes inside +15 after starting before it. The sampler leaves the
+    // minute it finishes in unrecorded; that is partial, not a gap.
+    fixture.job_run(
+        "jrun-partial-finish",
+        "task_gate_pipeline",
+        "success",
+        Some(at(15) - chrono::Duration::seconds(40)),
+        Some(at(15) + chrono::Duration::seconds(20)),
+    );
+    // Starts inside +30 and keeps running past its end. The sampler never
+    // records the minute a worker starts in, so this is partial, not a gap.
+    fixture.job_run(
+        "jrun-partial-start",
+        "task_auto_pipeline",
+        "success",
+        Some(at(30) + chrono::Duration::seconds(15)),
+        Some(at(31) + chrono::Duration::seconds(10)),
     );
     // Finished as the idle minute started, so it does not cover that minute.
     fixture.job_run(
@@ -800,6 +829,7 @@ fn accuracy_splits_idle_minutes_from_sampling_gaps() {
     assert_eq!(five["pending"], 1);
     assert_eq!(five["missing"], 0);
     assert_eq!(five["unsampled"], 0);
+    assert_eq!(five["partial"], 0);
     assert_eq!(five["gap"], 0);
     assert_eq!(five["unmeasured"], 1);
     assert_eq!(five["cpu"]["mean_error"], -2.0);
@@ -811,7 +841,8 @@ fn accuracy_splits_idle_minutes_from_sampling_gaps() {
     assert_eq!(ten["pending"], 0);
     assert_eq!(ten["missing"], 1);
     assert_eq!(ten["unsampled"], 0);
-    assert_eq!(ten["gap"], 1);
+    assert_eq!(ten["partial"], 0);
+    assert_eq!(ten["gap"], 1, "a minute a worker covered whole stays a gap");
     assert_eq!(ten["cpu"]["mean_error"], Value::Null);
     assert_eq!(ten["memory"]["worst_miss"], Value::Null);
     let twenty = offset(20);
@@ -819,14 +850,29 @@ fn accuracy_splits_idle_minutes_from_sampling_gaps() {
     assert_eq!(twenty["pending"], 0);
     assert_eq!(twenty["missing"], 1);
     assert_eq!(twenty["unsampled"], 1);
+    assert_eq!(twenty["partial"], 0);
     assert_eq!(twenty["gap"], 0);
+    let fifteen = offset(15);
+    assert_eq!(fifteen["paired"], 0);
+    assert_eq!(fifteen["pending"], 0);
+    assert_eq!(fifteen["missing"], 1);
+    assert_eq!(fifteen["unsampled"], 0);
+    assert_eq!(fifteen["partial"], 1);
+    assert_eq!(
+        fifteen["gap"], 0,
+        "a minute the worker only finished inside is not a sampling gap"
+    );
     assert_eq!(twenty["cpu"]["mean_error"], Value::Null);
     let thirty = offset(30);
     assert_eq!(thirty["paired"], 0);
     assert_eq!(thirty["pending"], 0);
-    assert_eq!(thirty["missing"], 0);
+    assert_eq!(thirty["missing"], 1);
     assert_eq!(thirty["unsampled"], 0);
-    assert_eq!(thirty["gap"], 0);
+    assert_eq!(thirty["partial"], 1);
+    assert_eq!(
+        thirty["gap"], 0,
+        "a minute the worker only started inside is not a sampling gap"
+    );
 
     let plain = fixture.stdout(&["run", "profiles", "--accuracy", "--format", "plain"]);
     let row = |label: &str| {
@@ -840,22 +886,32 @@ fn accuracy_splits_idle_minutes_from_sampling_gaps() {
     };
     let ten_row = row("+10m\t");
     assert_eq!(
-        &ten_row[..6],
-        ["+10m", "0 (1 unmeasured)", "0", "1", "0", "1"]
+        &ten_row[..7],
+        ["+10m", "0 (1 unmeasured)", "0", "1", "0", "0", "1"]
     );
-    assert!(ten_row[6..].iter().all(|cell| cell == "-"), "{ten_row:?}");
+    assert!(ten_row[7..].iter().all(|cell| cell == "-"), "{ten_row:?}");
     let twenty_row = row("+20m\t");
     assert_eq!(
-        &twenty_row[..6],
-        ["+20m", "0 (1 unmeasured)", "0", "1", "1", "0"]
+        &twenty_row[..7],
+        ["+20m", "0 (1 unmeasured)", "0", "1", "1", "0", "0"]
+    );
+    let fifteen_row = row("+15m\t");
+    assert_eq!(
+        &fifteen_row[..7],
+        ["+15m", "0 (1 unmeasured)", "0", "1", "0", "1", "0"]
+    );
+    let thirty_row = row("+30m\t");
+    assert_eq!(
+        &thirty_row[..7],
+        ["+30m", "0 (1 unmeasured)", "0", "1", "0", "1", "0"]
     );
     let five_row = row("+5m\t");
     assert_eq!(
-        &five_row[..6],
-        ["+5m", "1 (1 unmeasured)", "1", "0", "0", "0"]
+        &five_row[..7],
+        ["+5m", "1 (1 unmeasured)", "1", "0", "0", "0", "0"]
     );
-    assert_eq!(five_row[6], "-2.0 cores");
-    assert_eq!(five_row[9], "+2.0 GiB");
+    assert_eq!(five_row[7], "-2.0 cores");
+    assert_eq!(five_row[10], "+2.0 GiB");
 }
 
 /// Enforce cohorts report the distinct tasks local passes admitted, the
