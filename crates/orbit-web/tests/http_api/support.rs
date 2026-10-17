@@ -252,6 +252,28 @@ impl Fixture {
         )
     }
 
+    pub(super) fn counted_job_run_server(&self) -> Server {
+        self.server_impl_with_env(
+            false,
+            false,
+            false,
+            &self.path("process.log"),
+            None,
+            &[(
+                "ORBIT_HTTP_RUN_QUERY_TRACE",
+                self.path("run-query.jsonl").as_os_str(),
+            )],
+        )
+    }
+
+    pub(super) fn job_run_query_trace(&self) -> Vec<Value> {
+        fs::read_to_string(self.path("run-query.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
     pub(super) fn replay_server(&self) -> Server {
         self.server_impl(true, false, true)
     }
@@ -568,8 +590,14 @@ pub(super) fn walk_audit_pages(
 }
 
 pub(super) fn serve_fixture() {
-    if let Some(path) = std::env::var_os("ORBIT_HTTP_TASK_QUERY_TRACE") {
-        // Count real store operations across the server's blocking threads.
+    let trace = std::env::var_os("ORBIT_HTTP_TASK_QUERY_TRACE")
+        .map(|path| (path, "orbit.store.task_query"))
+        .or_else(|| {
+            std::env::var_os("ORBIT_HTTP_RUN_QUERY_TRACE")
+                .map(|path| (path, "orbit.core.job_run.reconcile"))
+        });
+    if let Some((path, target)) = trace {
+        // Count task-store operations or stale-run scans across blocking threads.
         tracing_subscriber::registry()
             .with(
                 tracing_subscriber::fmt::layer()
@@ -577,8 +605,8 @@ pub(super) fn serve_fixture() {
                     .with_span_events(tracing_subscriber::fmt::format::FmtSpan::NEW)
                     .with_span_list(false)
                     .with_writer(std::sync::Mutex::new(fs::File::create(path).unwrap()))
-                    .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
-                        metadata.is_span() && metadata.target() == "orbit.store.task_query"
+                    .with_filter(tracing_subscriber::filter::filter_fn(move |metadata| {
+                        metadata.is_span() && metadata.target() == target
                     })),
             )
             .init();
