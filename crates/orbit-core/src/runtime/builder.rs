@@ -283,6 +283,9 @@ pub(crate) fn build_context_from_roots(
             .snapshot
             .workflow_validation_env_build_output_env
             .clone(),
+        cargo_incremental: runtime_config
+            .snapshot
+            .workflow_validation_env_cargo_incremental,
         path_mode: orbit_exec::ValidationPathMode::parse(
             &runtime_config.snapshot.workflow_validation_env_path_mode,
         )

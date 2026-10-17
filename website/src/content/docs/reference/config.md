@@ -289,6 +289,7 @@ warning. A `[crews.system]` table you define is an ordinary crew.
 | `workflow.validation_env.path` | array&lt;string&gt; · **Default:** `[]`<br>`PATH` entries for required validation and `local_shell` steps, combined with the resolved `PATH` per `path_mode`. A leading `~/` expands to `HOME`. Empty adds nothing. |
 | `workflow.validation_env.path_mode` | string · **Default:** `prepend`<br>How `workflow.validation_env.path` combines with the resolved `PATH`: `prepend` puts it first, `replace` makes it the whole `PATH`. |
 | `workflow.validation_env.build_output_env` | array&lt;string&gt; · **Default:** `[]`<br>Environment variable names bound to managed host output for required validation and host evidence. Configured bindings replace inherited values; commands must honor them. Empty allocates nothing. See [Workspace build output](#workspace-build-output). |
+| `workflow.validation_env.cargo_incremental` | bool · **Default:** `false`<br>When a host validation target is bound, force `CARGO_INCREMENTAL=0` on required validation, host evidence, baseline reruns and recovery. `true` leaves the variable untouched. No binding does not set it. |
 | `machine.name` | string · **Default:** Set by `orbit init`<br>Global only. This machine's display name, and the one `[machine]` value you can change. |
 | `machine.id` | string · **Default:** Set by `orbit init`<br>Global only, read-only. This machine's stable generated identity (`hm_…`), written once by `orbit init` and never reused. `orbit config set` refuses it. |
 | `machine.task_prefix` | string · **Default:** Set by `orbit init`<br>Global only, read-only. The task-ID namespace for IDs minted on this machine (2–5 uppercase ASCII letters), chosen once by `orbit init`. `orbit config set` refuses it. |
@@ -401,7 +402,9 @@ Different source checkouts have separate output; repeated host checks for one
 source can reuse it. Commands must honor the locator to preserve that isolation.
 Bindings apply to required validation, host replay and detached evidence,
 including baseline and recovery checks, on every platform. They do not apply
-to agent sessions or ordinary `local_shell` steps. Logs record the resolved
+to agent sessions or ordinary `local_shell` steps. When a binding is in
+effect, those commands also receive `CARGO_INCREMENTAL=0` unless
+`workflow.validation_env.cargo_incremental` is `true`. Logs record the resolved
 `build_output` environment, directory, source and host context.
 
 Managed cleanup retains active, leased or ambiguous output and can reclaim

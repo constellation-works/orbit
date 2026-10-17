@@ -654,6 +654,12 @@ define_config_settings! {
         section: ConfigSection::Delivery, order: 65,
         resolve: |raw: Option<Vec<String>>| resolve_build_output_env(raw),
     },
+    workflow_validation_env_cargo_incremental: bool => bool {
+        key: "workflow.validation_env.cargo_incremental", value_type: "bool",
+        description: "When false (default), required validation, host evidence, baseline reruns and recovery that bind a host validation target force CARGO_INCREMENTAL=0 so one-shot targets do not accumulate an incremental cache. True leaves CARGO_INCREMENTAL untouched. Applied where Orbit spawns those commands. No binding allocates nothing and does not set the variable.",
+        section: ConfigSection::Delivery, order: 66,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
+    },
     workflow_validation_env_path_mode: String => String {
         key: "workflow.validation_env.path_mode", value_type: "string",
         description: "How `workflow.validation_env.path` combines with the resolved PATH: `prepend` (default) puts it first, `replace` makes it the whole PATH.",
