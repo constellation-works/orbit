@@ -426,6 +426,43 @@ tr.audit-detail-row td {
   .codebase-list > .codebase-legend { margin: 0 12px 12px; }
 }
 
+/* Reliability > Tools summary: one column of cards. On a wide screen the
+   long per-tool failure table keeps the left column and the shorter cards
+   (unexpected failures by tool, categories, lifecycle diagnostics, durations,
+   MCP vs CLI) form a second column beside it instead of sitting below it. */
+#audit-summary-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+  background: var(--bg);
+}
+@media (min-width: 1500px) {
+  /* Rows: status note, rate card, one row per side card, then a flexible row
+     that takes the rest of the table's height so the side cards keep their
+     own heights. Margins rather than row gaps space the cards, so a card
+     that is absent leaves no gap. */
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) {
+    display: grid;
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    grid-template-rows: repeat(7, auto) 1fr;
+    column-gap: 16px;
+    row-gap: 0;
+    padding-bottom: 0;
+    align-items: start;
+  }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > * { grid-column: 1 / -1; margin-bottom: 16px; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-panel-status] { grid-row: 1; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="tool-call-failure-rate"] { grid-row: 2; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="tool-call-failures-by-tool"] { grid-column: 1; grid-row: 3 / -1; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="failures-by-tool"] { grid-column: 2; grid-row: 3; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="failure-categories"] { grid-column: 2; grid-row: 4; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="lifecycle-diagnostics"] { grid-column: 2; grid-row: 5; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="duration-by-tool"] { grid-column: 2; grid-row: 6; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="mcp-vs-cli"] { grid-column: 2; grid-row: 7; }
+}
+
 /* Audit & Diagnostics Summary Cards */
 .audit-summary-card {
   background: var(--bg-elev);
