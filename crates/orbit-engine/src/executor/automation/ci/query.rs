@@ -16,9 +16,10 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
-use orbit_exec::{NoSandbox, run_process};
-use orbit_tools::{check_exec_result, github_cli};
+use orbit_tools::github_cli;
 use serde_json::{Value, json};
+
+use super::super::github_host::{auth_status, run_gh};
 
 /// Which slice of a run's log to read, and the read itself, are owned by
 /// `orbit_tools::github_cli` so the stages and the `github.*` tools cannot
@@ -202,23 +203,12 @@ impl HostCiQueries {
             repo_root: repo_root.to_path_buf(),
         }
     }
-
-    fn run_gh(
-        &self,
-        mut request: orbit_exec::ExecRequest,
-        label: &str,
-    ) -> Result<String, OrbitError> {
-        request.current_dir = Some(self.repo_root.to_string_lossy().into_owned());
-        let result = run_process(&request, &NoSandbox)?;
-        check_exec_result(&result, label)?;
-        Ok(result.stdout)
-    }
 }
 
 impl HostCiQueries {
     fn pull_requests(&self, state: &str, limit: u64) -> Result<Vec<Value>, OrbitError> {
         let request = github_cli::pr_list_request(&json!({"state": state, "limit": limit}))?;
-        let stdout = self.run_gh(request, "gh pr list")?;
+        let stdout = run_gh(&self.repo_root, request, "gh pr list")?;
         let parsed = github_cli::parse_gh_json(&stdout, "gh pr list")?;
         Ok(parsed
             .as_array()
@@ -247,7 +237,7 @@ impl HostCiQueries {
             }
         };
         let label = format!("gh pr list {state} head");
-        let stdout = self.run_gh(request, &label)?;
+        let stdout = run_gh(&self.repo_root, request, &label)?;
         let parsed = github_cli::parse_gh_json(&stdout, &label)?;
         Ok(parsed
             .as_array()
@@ -266,7 +256,7 @@ impl HostCiQueries {
     /// failure is still filed, untagged.
     fn with_runner_labels(&self, mut view: Value, run_id: &str) -> Value {
         let labels = github_cli::run_jobs_request(&json!({"run": run_id}))
-            .and_then(|request| self.run_gh(request, "gh api run jobs"))
+            .and_then(|request| run_gh(&self.repo_root, request, "gh api run jobs"))
             .and_then(|stdout| github_cli::parse_gh_json(&stdout, "gh api run jobs"))
             .map(|listing| github_cli::project_job_labels(&listing));
         let labels = match labels {
@@ -289,43 +279,15 @@ impl HostCiQueries {
 
 impl CiQueries for HostCiQueries {
     fn auth_status(&self) -> AuthStatus {
-        let mut request = match github_cli::auth_status_request(&Value::Null) {
-            Ok(request) => request,
-            Err(error) => {
-                return AuthStatus {
-                    available: false,
-                    authenticated: false,
-                    detail: redact_all(&error.to_string()),
-                };
-            }
-        };
-        request.current_dir = Some(self.repo_root.to_string_lossy().into_owned());
-        // A missing `gh`, or a host that refuses to execute it, surfaces as a
-        // spawn error. That is a capability answer, not a fault.
-        match run_process(&request, &NoSandbox) {
-            Ok(result) if result.success => AuthStatus {
-                available: true,
-                authenticated: true,
-                detail: "GitHub CLI is authenticated on this host".to_string(),
-            },
-            Ok(result) => AuthStatus {
-                available: true,
-                authenticated: false,
-                detail: format!(
-                    "GitHub CLI is present but holds no usable credentials on this host: {}",
-                    redact_all(result.stderr.trim())
-                ),
-            },
-            Err(error) => AuthStatus {
-                available: false,
-                authenticated: false,
-                detail: redact_all(&error.to_string()),
-            },
-        }
+        auth_status(&self.repo_root, "")
     }
 
     fn repo_view(&self) -> Result<Value, OrbitError> {
-        let stdout = self.run_gh(github_cli::repo_view_request(&json!({}))?, "gh repo view")?;
+        let stdout = run_gh(
+            &self.repo_root,
+            github_cli::repo_view_request(&json!({}))?,
+            "gh repo view",
+        )?;
         Ok(github_cli::project_repo_view(&github_cli::parse_gh_json(
             &stdout,
             "gh repo view",
@@ -350,7 +312,7 @@ impl CiQueries for HostCiQueries {
 
     fn repository_runs(&self, limit: u64) -> Result<Vec<Value>, OrbitError> {
         let request = github_cli::run_list_request(&json!({"limit": limit}))?;
-        let stdout = self.run_gh(request, "gh run list")?;
+        let stdout = run_gh(&self.repo_root, request, "gh run list")?;
         let parsed = github_cli::parse_gh_json(&stdout, "gh run list")?;
         Ok(parsed
             .as_array()
@@ -360,7 +322,7 @@ impl CiQueries for HostCiQueries {
 
     fn run_view(&self, run_id: &str) -> Result<Value, OrbitError> {
         let request = github_cli::run_view_request(&json!({"run": run_id}))?;
-        let stdout = self.run_gh(request, "gh run view")?;
+        let stdout = run_gh(&self.repo_root, request, "gh run view")?;
         let view =
             github_cli::project_run_view(&github_cli::parse_gh_json(&stdout, "gh run view")?);
         if view
@@ -417,7 +379,7 @@ impl CiQueries for HostCiQueries {
 
     fn job_concurrency_cancellation(&self, job_id: u64) -> Result<Option<String>, OrbitError> {
         let request = github_cli::job_annotations_request(&json!({"job": job_id.to_string()}))?;
-        let stdout = self.run_gh(request, "gh api check-run annotations")?;
+        let stdout = run_gh(&self.repo_root, request, "gh api check-run annotations")?;
         let listing = github_cli::parse_gh_json(&stdout, "gh api check-run annotations")?;
         Ok(github_cli::concurrency_cancellation(&listing).map(|message| redact_all(&message)))
     }
