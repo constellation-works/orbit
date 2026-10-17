@@ -494,6 +494,8 @@
         "repository/task/coordination/tests/boundary.rs::nested_reads_never_queue_behind_writers_they_hold_back",
         "repository/task/coordination/tests/claim_section.rs::a_claim_mutation_section_decodes_its_own_claim_and_syncs_only_its_commit",
         "repository/task/coordination/tests/claim_section.rs::a_reader_waits_out_a_slow_claim_commit_and_no_longer",
+        "repository/task/coordination/tests/claim_section.rs::admission_hold_percentiles_under_concurrent_claim_mutations",
+        "repository/task/coordination/tests/lock_holders.rs::a_lock_busy_retry_scope_outlasts_a_partition_hold_past_one_deadline",
         "repository/task/coordination/tests/lock_holders.rs::a_partition_wait_names_its_exclusive_holder",
         "repository/task/coordination/tests/lock_holders.rs::a_partition_wait_names_its_shared_holders",
         "repository/task/coordination/tests/lock_holders.rs::a_section_held_past_its_threshold_reports_its_label_and_duration",

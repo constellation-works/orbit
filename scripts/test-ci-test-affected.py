@@ -712,7 +712,9 @@ class NextestOutputTransportTests(unittest.TestCase):
         self.summary = json.loads(summary.read_text())
         logs = list((root / ".orbit/tmp").glob("ci-test-affected-nextest-*.log"))
         self.assertEqual(len(logs), 1, result.stderr)
-        self.full_output = logs[0].read_text()
+        # The log is the runner's raw bytes, including a cargo progress CR.
+        # Text mode would turn that CR into LF and disagree with the evidence copy.
+        self.full_output = logs[0].read_text(newline="")
         return result.stdout + result.stderr
 
     def notices(self, output):
