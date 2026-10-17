@@ -3,7 +3,8 @@ name: Desktop App
 # Builds the Tauri desktop shell in desktop/. It is its own Cargo workspace,
 # outside the main build, so it runs only when the shell or this workflow
 # changes; the main Check / Clippy / Test budget never pays for the webview
-# stacks. Manual runs also bundle unsigned macOS and Linux packages.
+# stacks. Manual runs also bundle unsigned macOS and Linux packages for
+# testing; signed release bundles come from release.yml.
 
 on:
   push:
@@ -28,7 +29,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # Keep in step with desktop/Cargo.toml's tauri dependency line.
+  # Keep in step with desktop/Cargo.toml's tauri dependency line and with
+  # the build-desktop job in release.yml.
   TAURI_CLI_VERSION: 2.12.3
 
 jobs:

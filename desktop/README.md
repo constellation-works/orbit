@@ -48,7 +48,8 @@ window navigates only to the status page and the running dashboard. Every other 
 The shell is its own Cargo workspace (its `Cargo.toml` has its own `[workspace]` table), not a member of the root one, so `make ci` and the main CI
 jobs never build it. [`.github/workflows/desktop.yml`](../.github/workflows/desktop.yml) runs
 format and Clippy checks on macOS and Linux whenever `desktop/` changes. A manual run of that
-workflow also uploads unsigned bundles.
+workflow also uploads unsigned bundles for testing. Releases are built separately, as
+described in [Releases](#releases).
 
 Linux needs the WebKitGTK development packages:
 
@@ -73,9 +74,108 @@ Linux. To regenerate the icons from `icons/app-icon.svg`, run
 `cargo tauri icon icons/app-icon.svg -o icons`, then delete the Android, iOS and Windows Store
 outputs.
 
+## Releases
+
+A release tag builds the app in [`release.yml`](../.github/workflows/release.yml) and attaches it to
+the GitHub Release when the repository variable `ORBIT_DESKTOP_RELEASE` is `true`. Until then the
+desktop jobs are skipped, and the CLI release is unaffected either way. The release attaches:
+
+| Asset | Platform |
+|---|---|
+| `orbit-desktop-universal-apple-darwin.dmg` | macOS 11 or later, Apple silicon and Intel. Signed with a Developer ID certificate, notarized, and stapled. |
+| `orbit-desktop-x86_64-unknown-linux-gnu.deb` / `.AppImage` | Linux x86_64, glibc 2.35 or later |
+| `orbit-desktop-aarch64-unknown-linux-gnu.deb` / `.AppImage` | Linux arm64, glibc 2.35 or later |
+| `orbit-desktop-checksums.txt` / `.sig` | SHA-256 of every desktop asset, signed with the Orbit release key |
+
+The names don't change between versions, so
+`https://github.com/constellation-works/orbit/releases/latest/download/<asset>` always points at
+the newest stable build. The desktop jobs run after the CLI's `publish-release` job, so a desktop
+failure never holds back a release. Re-run the failed job from Actions once it's fixed;
+`publish-desktop` then adds the missing assets. It never overwrites an asset that's already
+attached. `desktop/Cargo.toml`'s version must match the tag, and the build fails otherwise.
+[RELEASING.md](../RELEASING.md#4-bump-versions) bumps it with the others.
+
+To check a download, verify the manifest against the release key, then the files against the
+manifest:
+
+```bash
+openssl dgst -sha256 -verify release-signing.pub -signature orbit-desktop-checksums.txt.sig orbit-desktop-checksums.txt
+shasum -a 256 --check --ignore-missing orbit-desktop-checksums.txt
+```
+
+`release-signing.pub` is [`npm/release-signing.pub`](../npm/release-signing.pub) at the release
+tag. On macOS, `spctl --assess --type execute --verbose /Applications/Orbit.app` should report
+`source=Notarized Developer ID`.
+
+### One-time setup
+
+All of these steps are manual. Nothing in the repository creates or stores these credentials.
+
+1. **Join the Apple Developer Program** (paid yearly) with the account that will own the app. An
+   organization enrollment needs a D-U-N-S number and puts the organization's name on the
+   signature. An individual enrollment puts the person's name there. Only the team's Account
+   Holder can create Developer ID certificates.
+2. **Create a Developer ID Application certificate.** Use Xcode → Settings → Accounts → Manage
+   Certificates → **+** → *Developer ID Application*, or create one under Certificates on
+   developer.apple.com from a Keychain Access signing request. Don't use *Apple Development* or
+   *Apple Distribution*: those are for the App Store, and notarization rejects them.
+3. **Export the certificate with its private key** from Keychain Access (My Certificates → right-click
+   → Export) as a `.p12` with a strong password. Base64-encode it with
+   `base64 -i developer-id.p12 | pbcopy`. Delete the `.p12` file once the secret is saved.
+4. **Read the signing identity and team ID.** Run `security find-identity -v -p codesigning` to print
+   the identity, `Developer ID Application: <name> (<team id>)`. The team ID is the ten
+   characters in the parentheses. Membership details on developer.apple.com shows it too.
+5. **Create an app-specific password** for the Apple ID at account.apple.com → Sign-In and Security
+   → App-Specific Passwords. Notarization signs in with this password, never the account password.
+   The Apple ID needs two-factor authentication.
+6. **Add six Actions secrets** under Settings → Secrets and variables → Actions:
+
+   | Secret | Value |
+   |---|---|
+   | `APPLE_CERTIFICATE` | The base64 `.p12` from step 3 |
+   | `APPLE_CERTIFICATE_PASSWORD` | The `.p12` export password |
+   | `APPLE_SIGNING_IDENTITY` | The full identity string from step 4 |
+   | `APPLE_ID` | The Apple ID email that belongs to the team |
+   | `APPLE_PASSWORD` | The app-specific password from step 5 |
+   | `APPLE_TEAM_ID` | The ten-character team ID |
+
+   The existing `ORBIT_RELEASE_SIGNING_KEY_PEM` secret also signs the desktop manifest. Linux needs
+   no other secret.
+7. **Turn the jobs on.** Add the repository variable `ORBIT_DESKTOP_RELEASE` = `true` on the
+   Variables tab of the same page. The next release tag builds the app. If any Apple secret is
+   missing, the macOS job fails and names it, so a release never ships an unsigned app.
+
+Apple's first notarization of a new app can take hours, which is why the build job allows 180
+minutes. Later releases usually finish in minutes. The certificate is valid for five years. When
+you renew it, update `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD` and
+`APPLE_SIGNING_IDENTITY`. If you revoke the app-specific password, notarization fails until you
+replace `APPLE_PASSWORD`.
+
+### Auto-update
+
+The app doesn't update itself. Install a new release over the old one. Most changes don't need
+that anyway, because the dashboard comes from your `orbit` CLI, which `orbit update` upgrades. The
+shell itself rarely changes.
+
+[`tauri-plugin-updater`](https://v2.tauri.app/plugin/updater/) is left out on purpose because it
+doesn't fit Orbit's release-integrity model:
+
+- It only verifies minisign (Ed25519) signatures against one public key compiled into the app. The
+  Orbit release key is RSA-3072, so the updater would need a second private key with its own
+  custody, plus a fourth trust surface next to `install.sh`, the npm postinstall and
+  `TRUSTED_RELEASE_KEYS`.
+- That key has no `not_after` or `revoked_at` record. A leaked updater key can be revoked only by
+  shipping a release signed with the leaked key.
+- It updates the `.app` and AppImage only. `.deb` installs stay manual.
+- It reads a `latest.json` that the release would have to publish. Any release without desktop
+  assets, such as one made before `ORBIT_DESKTOP_RELEASE` is set, breaks the update check.
+
+Add auto-update as its own change once the signed bundles are in use. Either adopt the updater and
+add its key to the rotation runbook in [docs/runbooks/release.md](../docs/runbooks/release.md),
+or have the app check `orbit-desktop-checksums.txt.sig` against the existing release trust set.
+
 ## Not done yet
 
-- Code signing and notarization for macOS, and attaching bundles to Orbit releases.
-- Auto-update.
+- Auto-update (see above) and a Homebrew cask.
 - Native extras: a menu-bar status, notifications for failed runs and tasks ready for review, and
   launch at login.
