@@ -88,21 +88,31 @@ pub(super) fn normalize_logins(raw: Vec<String>) -> Vec<String> {
 pub(super) const DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES: u32 = 45;
 
 /// Default `retention.audit_days` and `retention.runs_days`.
-const DEFAULT_RETENTION_DAYS: u32 = 60;
+pub(super) const DEFAULT_RETENTION_DAYS: u32 = 60;
+
+/// Default `retention.journal_days`. Recovery never reads an applied journal
+/// row, so the window only keeps recent commit decisions for diagnosis; at
+/// about 600 rows of about 80 KB a day, 60 days would let the table pass
+/// 2.5 GiB before anything went.
+pub(super) const DEFAULT_JOURNAL_RETENTION_DAYS: u32 = 14;
 
 /// Default `retention.store_warn_bytes`: 1 GiB. A host store past this with
 /// store GC disabled is worth a warning; a normal fixture store is not.
 /// Zero is allowed and warns for any non-empty store file.
 pub(super) const DEFAULT_STORE_WARN_BYTES: u64 = 1024 * 1024 * 1024;
 
-pub(super) fn resolve_retention_days(raw: Option<u32>, key: &str) -> Result<u32, OrbitError> {
+pub(super) fn resolve_retention_days(
+    raw: Option<u32>,
+    key: &str,
+    default: u32,
+) -> Result<u32, OrbitError> {
     const MAX_DAYS: u32 = 36_500;
     match raw {
         Some(value) if value == 0 || value > MAX_DAYS => Err(OrbitError::InvalidInput(format!(
             "{key} has invalid value {value}; expected 1..={MAX_DAYS}"
         ))),
         Some(value) => Ok(value),
-        None => Ok(DEFAULT_RETENTION_DAYS),
+        None => Ok(default),
     }
 }
 

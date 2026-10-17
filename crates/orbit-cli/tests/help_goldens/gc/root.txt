@@ -8,6 +8,7 @@ Commands:
   deployments  Remove deployment directories, executable backups and store backups in the Orbit home beyond the newest of each, always keeping the rollback executable
   audit        Prune audit rows older than `retention.audit_days` and the audit blobs no remaining row names
   runs         Drop the pipeline state of terminal runs older than `retention.runs_days`, keeping their run and step rows
+  journal      Delete applied task commit journal rows older than `retention.journal_days`, keeping each task's newest
 
 Options:
       --root <ROOT>

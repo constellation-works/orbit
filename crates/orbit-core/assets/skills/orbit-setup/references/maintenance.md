@@ -374,15 +374,18 @@ whether it was denied. It grows without bound until pruned. Prune requires
 ## Store retention
 
 The host store (`~/.orbit/orbit.db`) also keeps every run's audit events and
-pipeline state, and each workspace keeps the blobs those events name under
-`.orbit/state/audit/blobs/`. Two commands bound them. Both only report until
-you pass `--apply`:
+pipeline state, and the commit decision of every task transition (the task
+commit journal). Each workspace keeps the blobs those events name under
+`.orbit/state/audit/blobs/`. Three commands bound them. Each only reports
+until you pass `--apply`:
 
 ```bash
 orbit gc audit                        # rows and bytes past retention.audit_days, and unreferenced blobs
 orbit gc audit --apply                # delete them
 orbit gc runs                         # terminal runs past retention.runs_days that still keep pipeline state
 orbit gc runs --apply                 # drop that state; the run, its steps and summary stay
+orbit gc journal                      # applied commit journal rows past retention.journal_days
+orbit gc journal --apply              # delete them; unsettled rows and each task's newest stay
 orbit gc audit --older-than-days 30   # one-off window instead of the configured one
 ```
 
@@ -401,6 +404,16 @@ the same unregistered workspace ids. The same pass prunes the host's
 per-minute run and host resource history (`run_resource_minutes`,
 `host_resource_minutes`) older than 30 days, whatever the run window.
 
+`gc journal` deletes applied task commit journal rows of this workspace, and of
+unregistered workspace ids, older than `retention.journal_days` (default 14).
+Recovery replays only prepared and committed rows; an applied row is a decision
+already published to its task, kept only to diagnose recent transitions. So
+prepared, committed and aborted rows stay, and so does each task's newest
+applied row. The window is shorter than the others because the journal grows
+fastest: at about 600 rows of about 80 KB a day, 60 days would pass 2.5 GiB. Its
+rows are selected by one read that takes no write lock, then deleted by key in
+batches. The `store-gc` routine does not run it; apply it yourself.
+
 Deletes run in batches of 1,000 rows, each its own short write transaction, so
 running workers are not starved. Freed pages stay inside the database file; each
 report shows the freelist, and `VACUUM` returns it to the filesystem. Run
@@ -410,10 +423,11 @@ report shows the freelist, and `VACUUM` returns it to the filesystem. Run
 sqlite3 ~/.orbit/orbit.db 'VACUUM;'
 ```
 
-`orbit doctor` reports what is reclaimable now (`store-retention`). It warns
+`orbit doctor` reports what audit and run retention could reclaim now
+(`store-retention`); it does not count journal rows. It warns
 when the store file is larger than `retention.store_warn_bytes` (default 1 GiB)
-and no store-gc routine is enabled, and it names the enable command. To run both
-sweeps daily, enable the seeded `store-gc` routine ([automation.md](automation.md)).
+and no store-gc routine is enabled, and it names the enable command. To run the
+audit and run sweeps daily, enable the seeded `store-gc` routine ([automation.md](automation.md)).
 On a replica checkout the same cron routine runs against that host's own store
 and does not call the owner. Enable it there when this machine is the only
 place those rows live. A delivery- or state-triggered copy stays owner-only.

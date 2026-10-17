@@ -1,6 +1,6 @@
-//! Store retention through the real CLI: `orbit gc audit` and `orbit gc runs`
-//! plan by default, delete only with `--apply`, and keep what a remaining row
-//! still needs.
+//! Store retention through the real CLI: `orbit gc audit`, `orbit gc runs`
+//! and `orbit gc journal` plan by default, delete only with `--apply`, and
+//! keep what a remaining row still needs.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -506,6 +506,102 @@ fn run_retention_prunes_resource_minutes_past_thirty_days() {
     assert_eq!(fixture.count("SELECT COUNT(*) FROM admission_forecasts"), 1);
 }
 
+/// `orbit gc journal` plans by default and deletes applied commit journal
+/// rows past `retention.journal_days` only with operator `--apply`. It keeps
+/// each task's newest applied row and every row that is not applied, and its
+/// report names counts, never journal or task ids.
+fn journal_retention_plans_then_prunes_applied_rows() {
+    let fixture = Fixture::new();
+    let workspace_id = fixture.workspace_id();
+    let days_ago = |days: i64| (chrono::Utc::now() - chrono::Duration::days(days)).to_rfc3339();
+    {
+        let db = fixture.db();
+        for (journal_id, task_id, state, age_days) in [
+            ("commit-old-1", "ORB-90001", "applied", 40),
+            ("commit-old-2", "ORB-90001", "applied", 30),
+            ("commit-old-3", "ORB-90001", "applied", 20),
+            ("commit-fresh", "ORB-90001", "applied", 1),
+            ("commit-lone", "ORB-90002", "applied", 40),
+            ("commit-aborted", "ORB-90002", "aborted", 50),
+        ] {
+            let at = days_ago(age_days);
+            db.execute(
+                "INSERT INTO task_commit_journal (journal_id, workspace_id, task_id, state, \
+                     intent_json, created_at, committed_at, applied_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, CASE WHEN ?4 = 'applied' THEN ?6 END)",
+                params![
+                    journal_id,
+                    workspace_id,
+                    task_id,
+                    state,
+                    format!("{{\"pad\":\"{}\"}}", "x".repeat(1024)),
+                    at
+                ],
+            )
+            .unwrap();
+        }
+    }
+
+    let plan = fixture.json(&["gc", "journal", "--json"]);
+    assert_eq!(plan["apply"], false);
+    assert_eq!(plan["retention_days"], 14);
+    assert_eq!(plan["rows"], 3, "the old rows of a task with a newer one");
+    assert!(plan["bytes"].as_u64().unwrap() >= 3 * 1024);
+    assert_eq!(plan["rows_removed"], 0);
+    assert_eq!(
+        fixture.count("SELECT COUNT(*) FROM task_commit_journal"),
+        6,
+        "a plan deletes nothing"
+    );
+    let narrowed = fixture.json(&["gc", "journal", "--older-than-days", "35", "--json"]);
+    assert_eq!(
+        narrowed["rows"], 1,
+        "--older-than-days overrides the window"
+    );
+    let text = fixture
+        .orbit()
+        .args(["gc", "journal"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(text).unwrap();
+    assert!(
+        text.contains("rows=3") && !text.contains("commit-") && !text.contains("ORB-9000"),
+        "the report names counts, not ids: {text}"
+    );
+
+    fixture
+        .orbit()
+        .args(["gc", "journal", "--apply", "--json"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("capability_denied"));
+    let applied = fixture.json(&["gc", "journal", "--apply", "--json"]);
+    assert_eq!(applied["apply"], true);
+    assert_eq!(applied["rows_removed"], 3);
+    assert_eq!(applied["writes"]["batches"], 1);
+    let remaining: Vec<String> = fixture
+        .db()
+        .prepare("SELECT journal_id FROM task_commit_journal ORDER BY journal_id")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(remaining, ["commit-aborted", "commit-fresh", "commit-lone"]);
+
+    let again = fixture.json(&["gc", "journal", "--apply", "--json"]);
+    assert_eq!(again["rows"], 0);
+    assert_eq!(again["rows_removed"], 0);
+    fixture
+        .orbit()
+        .args(["gc", "journal", "--older-than-days", "0"])
+        .assert()
+        .failure();
+}
+
 fn doctor_check(fixture: &Fixture, name: &str) -> Value {
     let doctor = fixture.orbit().args(["doctor", "--json"]).output().unwrap();
     assert!(
@@ -774,6 +870,10 @@ fn store_retention_contracts() {
         (
             "run_retention_prunes_resource_minutes_past_thirty_days",
             run_retention_prunes_resource_minutes_past_thirty_days as fn(),
+        ),
+        (
+            "journal_retention_plans_then_prunes_applied_rows",
+            journal_retention_plans_then_prunes_applied_rows as fn(),
         ),
         (
             "store_retention_warns_only_when_the_store_is_large_and_gc_is_disabled",

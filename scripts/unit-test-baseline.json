@@ -498,6 +498,7 @@
         "repository/task/coordination/tests/claim_section.rs::a_slow_claim_apply_holds_its_bundle_and_not_its_partition",
         "repository/task/coordination/tests/claim_section.rs::exclusive_claim_sections_stay_short_under_concurrent_durable_mutations",
         "repository/task/coordination/tests/commit_replay.rs::a_bind_interrupted_after_its_decision_converges_to_the_committed_state",
+        "repository/task/coordination/tests/commit_replay.rs::journal_retention_keeps_an_interrupted_decision_for_its_replay",
         "repository/task/coordination/tests/commit_replay.rs::opening_a_boundary_replays_a_decision_whose_lease_was_lost",
         "repository/task/coordination/tests/lock_holders.rs::a_partition_wait_names_its_exclusive_holder",
         "repository/task/coordination/tests/lock_holders.rs::a_partition_wait_names_its_shared_holders",
