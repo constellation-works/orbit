@@ -81,6 +81,10 @@ fn shared_section<T>(
     mut options: FileLockOptions,
     op: impl FnOnce() -> Result<T, OrbitError>,
 ) -> Result<T, OrbitError> {
+    #[cfg(feature = "test-support")]
+    {
+        options = lock_timeout_hook::applied(options);
+    }
     // A section nested inside another partition's section already holds that
     // partition, which a writer queued here may be waiting behind indirectly:
     // queueing this read behind that writer could close a cycle that plain
@@ -100,7 +104,45 @@ fn exclusive_section<T>(
     options: FileLockOptions,
     op: impl FnOnce() -> Result<T, OrbitError>,
 ) -> Result<T, OrbitError> {
+    #[cfg(feature = "test-support")]
+    let options = lock_timeout_hook::applied(options);
     with_exclusive_file_lock_options(target, &section.label(), options, op)
+}
+
+/// A shorter acquisition deadline for the boundary sections one thread
+/// enters, so a downstream test of what follows a lock timeout waits seconds
+/// instead of the production 30 s.
+#[cfg(feature = "test-support")]
+pub(crate) mod lock_timeout_hook {
+    use std::cell::Cell;
+    use std::time::Duration;
+
+    use orbit_common::fs::io::FileLockOptions;
+
+    thread_local! {
+        static TIMEOUT: Cell<Option<Duration>> = const { Cell::new(None) };
+    }
+
+    pub(super) fn applied(mut options: FileLockOptions) -> FileLockOptions {
+        if let Some(timeout) = TIMEOUT.with(Cell::get) {
+            options.timeout = timeout;
+        }
+        options
+    }
+
+    /// Run `operation` with every task-commit boundary section it enters on
+    /// this thread failing acquisition after `timeout`, restoring the
+    /// previous deadline on return or unwind. Other threads keep theirs.
+    pub fn with_task_commit_lock_timeout<T>(timeout: Duration, operation: impl FnOnce() -> T) -> T {
+        struct Restore(Option<Duration>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                TIMEOUT.with(|slot| slot.set(self.0));
+            }
+        }
+        let _restore = Restore(TIMEOUT.with(|slot| slot.replace(Some(timeout))));
+        operation()
+    }
 }
 
 thread_local! {

@@ -64,7 +64,7 @@ The Check job's nextest phase runs on a 4-vCPU runner with every slot busy. Comp
 
 `.config/nextest.toml` profile `ci` sets `test-threads` to 6 and `retries` to 0. Six is two extra slots on the 4-vCPU runner: enough to overlap that wait-bound fraction, and short of doubling the CPU-bound tests. The profile inherits the default profile, so the group caps stay `stateful-runtime` 1, `task-contracts` 4, and `mcp-contracts` 8. `scripts/ci-guardrails.sh` and the Linux sandbox gate select it with `--profile ci`. A local run that does not pass `--profile ci` keeps the default profile, whose thread count is the logical CPU count. `NEXTEST_TEST_THREADS`, including the value `scripts/build-budget.py` exports from the host `test-threads` file, still overrides the profile.
 
-`scripts/ci-guardrails.sh` arranges the full run around that phase. The repository-guard pool starts after formatting, overlaps the workflow test build and production Clippy, and joins before any test runs. nextest then runs the binaries listed from the folded test build (`--binaries-metadata`) without invoking Cargo. Doctests and documentation run beside it in Linux's idle scheduling class, on CPU time the tests leave idle, and join before the supply-chain gate and the exclusive self-tests. The `cpu-util:` line samples the whole host, so it includes that idle-class work. Every command that compiles workspace members after the folded build runs through `scripts/with-test-build-lint.sh`. Cargo fingerprints `RUSTC_WORKSPACE_WRAPPER` and `CLIPPY_ARGS`, so a nextest run without them recompiled every workspace member.
+`scripts/ci-guardrails.sh` arranges the full run around that phase. The repository-guard pool starts after formatting, overlaps the workflow test build, and joins before any test runs. `test-ci-download-verified.py`, which waits out fixed delays for nearly all of its wall time, starts beside the pool outside its window and joins with it. nextest then runs the binaries listed from the folded test build (`--binaries-metadata`) without invoking Cargo. Production Clippy, doctests and documentation run beside it in Linux's idle scheduling class, on CPU time the tests leave idle, and join before the supply-chain gate and the exclusive self-tests. The Check job's dev and test profiles carry no debuginfo (`CARGO_PROFILE_DEV_DEBUG` and `CARGO_PROFILE_TEST_DEBUG` are `0` in `ci.yml`); coverage keeps line tables in its own workflow. The `cpu-util:` line samples the whole host, so it includes that idle-class work. Every command that compiles workspace members after the folded build runs through `scripts/with-test-build-lint.sh`. Cargo fingerprints `RUSTC_WORKSPACE_WRAPPER` and `CLIPPY_ARGS`, so a nextest run without them recompiled every workspace member.
 
 Timing evidence from 2026-10-17, in wall seconds from the `ci-guardrails-phase:` lines. The hosted column is a slow 4-vCPU runner (run 39042835730; Check job 1261 s, of which guardrails took 1214 s). The local columns ran the guardrails before and after this layout on one host pinned to four cores (`taskset -c 0-3`, `CARGO_INCREMENTAL=0`, after a source change to `orbit-common`), so they compare layouts rather than predict hosted time. The after column gives both samples.
 
@@ -79,6 +79,27 @@ Timing evidence from 2026-10-17, in wall seconds from the `ci-guardrails-phase:`
 | Guardrails total | 1214 | 516 | 405–445 |
 
 The before layout's nextest rebuilt the workspace, about 220 s hosted and 91 s locally. Overlapping the pool slowed the workflow test build by 12 s locally, and the idle-priority chain slowed nextest by 13–14 s. The 85 s exclusive sample came from one suite that took 45 s against 7–10 s standalone. Formatting (4–8 s) and the supply-chain gate (0–4 s) are omitted from the table.
+
+A second pass the same day targeted slower hosted runners, where the Check job took 1102 s (run 39058921368: setup 41, guardrails before nextest 319, nextest 602, after nextest 140). A fast-runner run of the same layout took 910 s (run 39062382363). It made four changes:
+
+- The job's dev and test profiles dropped line tables. In a separate target with `CARGO_INCREMENTAL=0` and no compiler cache, the workspace test rebuild fell from about 415 to 349 CPU seconds, nextest from 915 to 727 CPU seconds (306 to 259 s wall on the whole host), and the `orbit-core` runtime test binary from 308 to 173 MB. All 2406 tests passed in both.
+- Production Clippy moved from the foreground, after the workflow test build, to the head of the idle-priority chain.
+- `test-ci-download-verified.py` moved from the exclusive suites to beside the pool. It uses about 6 s of CPU time across about 63 s of wall time.
+- `lock_busy_pass` shortens the task-commit lock deadline it waits out twice from 30 s to 2 s with a scoped `test-support` hook. It took 61.5 s and now takes 5.4 s. The deferral, holder-naming, reservation and deferral-limit assertions are unchanged.
+
+No test was retired, skipped, retried or weakened. The local columns ran the full guardrails on one host pinned to four cores (`taskset -c 0-3`, `CARGO_INCREMENTAL=0`, no compiler cache, offline advisory database), each after the same source change to `orbit-store` and `orbit-core`, with the before and after `ci.yml` profile settings. The hosted column is run 39062382363.
+
+| Phase | Hosted, before | Local, before | Local, after |
+|---|---:|---:|---:|
+| Workflow test build (folded all-targets Clippy) | 190 | 90 | 71 |
+| Production Clippy in the foreground | 40 | 43 | 0 (124 overlapped at idle priority) |
+| Wait for the guard pool after the build | 0 | 0 | 6 |
+| nextest | 481 | 235 | 193 |
+| Idle-priority chain after nextest | 0 | 0 | 5 |
+| Exclusive self-tests | 122 | 184 | 40 |
+| Guardrails total | 844 | 561 | 320 |
+
+The before exclusive suites included `test-ci-download-verified.py` (63 s hosted, 89 s locally). `test-ci-fast-guards.py` took 54 s in the local before sample and 16 s after, against 21 s hosted, so host noise accounts for part of that row. The chain after nextest is production Clippy, doctests and documentation still running when the tests end; it finishes at full speed once nextest releases the CPU. The hosted after column is owed by the pull request and the following `agent-main` runs.
 
 The recurring `test-quality-audit` creates evidence-backed proposed tasks for critical coverage gaps, weak assertions, duplication, flaky or slow fixtures and regressions against this budget. It searches existing tasks before filing, links each finding to the audit, and records concrete acceptance criteria. The audit leaves a durable report even when no new finding is confirmed; it does not treat a quota of findings or deletions as success.
 

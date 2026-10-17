@@ -109,6 +109,13 @@ pub use driver::sqlite::routine_store::try_acquire_routine_sweep_lock;
 pub use fs::lock::read_lock_holder;
 pub use repository::task::{TaskCommitBoundary, admission_refusal};
 
+/// Hooks for tests in crates that depend on `orbit-store`, behind the
+/// `test-support` feature. Enable it only from `[dev-dependencies]`.
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    pub use crate::repository::task::coordination::lock_timeout_hook::with_task_commit_lock_timeout;
+}
+
 pub(crate) fn parse_timestamp(raw: &str) -> rusqlite::Result<DateTime<Utc>> {
     let parsed = DateTime::parse_from_rfc3339(raw)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;

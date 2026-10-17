@@ -166,3 +166,5 @@ mod tests;
 use boundary::{BoundaryDepth, Section};
 
 pub use admission::admission_refusal;
+#[cfg(feature = "test-support")]
+pub(crate) use boundary::lock_timeout_hook;

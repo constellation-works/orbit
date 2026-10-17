@@ -19,11 +19,16 @@ env:
   # ENOSPC controls for ephemeral runners. Disk admission below measures
   # the current image rather than assuming an old image's free space. Incremental
   # artifacts roughly double target/ and are useless on ephemeral runners;
-  # full test debuginfo is the single biggest target-size lever. Coverage
-  # only needs line tables, so trim the whole workspace test profile to
-  # line-tables-only (deps included) — 50–70% smaller target/.
+  # debuginfo is the single biggest target-size lever. Coverage runs in
+  # coverage.yml with its own line tables, and nothing in these jobs reads
+  # debuginfo: panic locations are compiled in without it, and no job sets
+  # RUST_BACKTRACE. Dropping line tables from the dev and test profiles (deps
+  # included) shrinks the largest test binary by about 45% and cut the
+  # workspace suites' CPU time by about a fifth in a local comparison. Both
+  # profiles change so dev- and test-profile units keep one setting.
   CARGO_INCREMENTAL: "0"
-  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
   # [ORB-11390] The protected SSH process-metadata regression may self-skip in
   # restricted local/agent sandboxes, but ubuntu-latest must exercise it.
   ORBIT_REQUIRE_PROTECTED_SSH_REGRESSION: "1"
