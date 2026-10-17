@@ -10,7 +10,10 @@ use orbit_types::workflow::{
     CrewExclusion, CrewExclusionSource, PullAuthExclusion, PullCrewPreflight,
 };
 
-use super::crew_window::{CapacityFailures, PullCrewWindow, phase_guidance, phase_name};
+use super::crew_window::{
+    CapacityFailures, OwnerBusyReleases, OwnerBusyVerdict, PullCrewWindow, phase_guidance,
+    phase_name,
+};
 use super::entries::{ClaimedLeafStage, DrainClaimedLeaf, PullLeafClaim, RefusedPullSettlement};
 
 impl crate::OrbitRuntime {
@@ -156,6 +159,7 @@ impl crate::OrbitRuntime {
         let mut auth_exclusions = Vec::new();
         let mut capacity = BTreeMap::<String, CapacityFailures>::new();
         let mut host_suppressed = None;
+        let mut owner_busy = OwnerBusyReleases::default();
         let default_crew = match &preflight {
             Some(preflight) => preflight.default_crew.clone(),
             None => self
@@ -178,6 +182,17 @@ impl crate::OrbitRuntime {
                 .and_then(|receipt| receipt.claim.as_ref())
                 .map(|claim| claim.task_id.as_str())
                 .unwrap_or("a claimed task");
+            // The owner's own busy store blames neither this host nor the
+            // crew: it backs the drain off for a bounded time below, and
+            // suppresses the host only past its episode bound.
+            if let Some(failure) = &evidence.failure
+                && failure.owner_busy
+            {
+                if let Some(at) = self.leaf_ended_at(record.leaf_run_id.as_deref()) {
+                    owner_busy.record(at, format!("{task} was released: {}", failure.reason));
+                }
+                continue;
+            }
             if let Some(failure) = &evidence.failure
                 && failure.class.suppresses_host()
                 && host_suppressed.is_none()
@@ -285,6 +300,14 @@ impl crate::OrbitRuntime {
         // crew whose capacity backoff passed is runnable again in the same
         // window. A crew excluded for the window already keeps that.
         let now = Utc::now();
+        let owner_busy_backoff = match owner_busy.verdict() {
+            Some(OwnerBusyVerdict::Suppress(reason)) => {
+                host_suppressed.get_or_insert(reason);
+                None
+            }
+            Some(OwnerBusyVerdict::Backoff(backoff)) if backoff.until > now => Some(backoff),
+            _ => None,
+        };
         for (crew, failures) in capacity {
             if excluded.iter().any(|exclusion| exclusion.crew == crew) {
                 continue;
@@ -389,6 +412,7 @@ impl crate::OrbitRuntime {
             excluded,
             auth_exclusions,
             host_suppressed,
+            owner_busy_backoff,
         })
     }
 

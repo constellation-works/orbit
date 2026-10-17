@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use orbit_store::contracts::{AdmissionLoad, AdmissionRun};
 use orbit_types::workflow::AUTO_TASK_TAG_PREFIX;
 
+use super::baseline::{CurrentUse, YoungDelivery, baseline};
 use super::{
     ForecastSeries, HostLoad, HostLoadForecast, MemoryTerms, ReservedAdmission, RunningDelivery,
 };
@@ -39,6 +40,7 @@ pub(crate) fn build_forecast(
     let mut memory = vec![MemoryTerms::default(); points];
 
     let mut running = Vec::new();
+    let mut young = Vec::new();
     for delivery in running_deliveries(load, now) {
         let found = profiles.lookup(&running_lookup(&profiles, &delivery));
         let age = delivery.age_minutes as usize;
@@ -49,7 +51,16 @@ pub(crate) fn build_forecast(
                 .is_some_and(|minute| minute.alive > 0.0)
         });
         match profile {
-            Some(profile) => add_running(profile, age, &mut cpu, &mut memory),
+            Some(profile) => {
+                add_running(profile, age, &mut cpu, &mut memory);
+                if let Some(started_at) = unrecorded_start(load, &delivery) {
+                    young.push(YoungDelivery {
+                        started_at,
+                        cpu_cores: profile.series[age].cpu_cores,
+                        memory_bytes: profile.series[age].memory_bytes as f64,
+                    });
+                }
+            }
             None => {
                 for (cores, terms) in cpu.iter_mut().zip(memory.iter_mut()) {
                     *cores += delivery.current_cpu_cores;
@@ -122,35 +133,50 @@ pub(crate) fn build_forecast(
         }
     }
 
-    let running_cpu: f64 = running.iter().map(|d| d.current_cpu_cores).sum();
-    let running_memory = running
-        .iter()
-        .fold(0u64, |sum, d| sum.saturating_add(d.current_memory_bytes));
-    let cpu_baseline = host
-        .and_then(|host| host.cpu_cores)
-        .map(|cores| (cores - running_cpu).max(0.0));
-    let memory_baseline = host.map(|host| host.memory_bytes.saturating_sub(running_memory) as f64);
+    let current = CurrentUse {
+        cpu_cores: running.iter().map(|d| d.current_cpu_cores).sum(),
+        memory_bytes: running
+            .iter()
+            .fold(0u64, |sum, d| sum.saturating_add(d.current_memory_bytes)),
+    };
+    let baseline = baseline(load, host, &current, &young, now);
     for cores in &mut cpu {
-        *cores += cpu_baseline.unwrap_or(0.0);
+        *cores += baseline.cpu.unwrap_or(0.0);
     }
     for terms in &mut memory {
-        terms.add_flat(memory_baseline.unwrap_or(0.0));
+        terms.add_flat(baseline.memory.unwrap_or(0.0));
     }
 
     HostLoadForecast {
         at: now,
         horizon_minutes: horizon,
         host,
+        baseline_minute: baseline.minute,
         running,
         reservations,
-        cpu: series(cpu_baseline, cpu),
+        cpu: series(baseline.cpu, cpu),
         memory: series(
-            memory_baseline,
+            baseline.memory,
             memory.iter().map(MemoryTerms::bytes).collect(),
         ),
         memory_terms: memory,
         profiles,
     }
+}
+
+/// When a delivery whose live runs have not recorded a minute started: the
+/// earliest start of its live runs. `None` once one has recorded a minute, or
+/// while none has started.
+fn unrecorded_start(load: &AdmissionLoad, delivery: &RunningDelivery) -> Option<DateTime<Utc>> {
+    let runs = load.runs.iter().filter(|run| {
+        run.live
+            && run.workspace_id == delivery.workspace_id
+            && delivery.run_ids.contains(&run.run_id)
+    });
+    runs.clone()
+        .all(|run| run.newest_minute.is_none())
+        .then(|| runs.filter_map(|run| run.started_at).min())
+        .flatten()
 }
 
 /// `P_i(a_i + t) · alive_i(a_i + t) / alive_i(a_i)` for each `t`.

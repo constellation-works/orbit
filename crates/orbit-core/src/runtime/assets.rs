@@ -62,6 +62,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/consolidate_code_scanning_tasks.yaml"),
     ),
     (
+        "adopt_orphaned_deliveries",
+        include_str!("../../assets/activities/adopt_orphaned_deliveries.yaml"),
+    ),
+    (
         "drain_window",
         include_str!("../../assets/activities/drain_window.yaml"),
     ),

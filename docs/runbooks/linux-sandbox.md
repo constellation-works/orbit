@@ -231,9 +231,11 @@ namespace-and-mount probe as the unprivileged runner user. Only the Ubuntu
 profile, or an existing `/etc/apparmor.d/bwrap-userns-restrict` fails the step
 with diagnostics. The apt and AppArmor preparation now precedes guardrails, so
 its failure preempts their output. The explicit Linux sandbox/policy enforcement
-gate still runs afterwards and selects the ignored Linux sandbox tests; its
-nextest filters fail if either selection is empty. The workflow never changes
-the global user-namespace controls.
+gate still runs afterwards. It asserts with `cargo nextest list` that its
+portable package selection matches at least one test, because the guardrails
+pass already ran those tests, and its ignored Linux sandbox run fails when that
+selection is empty. The workflow never changes the global user-namespace
+controls.
 
 Step-failure recovery dispatch through Bubblewrap with a provider process has
 no automated native check. Its persistent Git configuration guard runs in the

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
 use std::time::{Duration, Instant};
 
-use orbit_common::OrbitError;
+use orbit_common::{LOCK_BUSY_ERROR_CODE, OrbitError};
 use orbit_types::tool::mcp_advertised_tool_name;
 use serde_json::{Value, json};
 
@@ -370,8 +370,7 @@ impl DestinationSession {
             )
         })?;
         if writer.outbox.send(line).is_err() {
-            let reason = self.ended("write failed: session input closed".to_string());
-            return Err(unreachable(&self.destination, reason));
+            return Err(self.ended_unanswered("write failed: session input closed".to_string()));
         }
         let remaining = self.deadline.saturating_duration_since(Instant::now());
         match writer.acks.recv_timeout(remaining) {
@@ -379,13 +378,9 @@ impl DestinationSession {
                 self.writer = Some(writer);
                 Ok(())
             }
-            Ok(Err(error)) => {
-                let reason = self.ended(format!("write failed: {error}"));
-                Err(unreachable(&self.destination, reason))
-            }
+            Ok(Err(error)) => Err(self.ended_unanswered(format!("write failed: {error}"))),
             Err(RecvTimeoutError::Disconnected) => {
-                let reason = self.ended("write failed: session input closed".to_string());
-                Err(unreachable(&self.destination, reason))
+                Err(self.ended_unanswered("write failed: session input closed".to_string()))
             }
             Err(RecvTimeoutError::Timeout) => {
                 // Killing the child closes its end of the pipe, which is the
@@ -450,8 +445,14 @@ impl DestinationSession {
                     ));
                 }
                 Err(RecvTimeoutError::Disconnected) => {
-                    let reason = self.ended(format!("session ended before answering '{method}'"));
-                    return Err(lost.classify(&self.destination, id, reason));
+                    let reason = format!("session ended before answering '{method}'");
+                    return Err(match lost {
+                        LostAnswer::Unreachable => self.ended_unanswered(reason),
+                        LostAnswer::OutcomeUnknown { .. } => {
+                            let reason = self.ended(reason);
+                            lost.classify(&self.destination, id, reason)
+                        }
+                    });
                 }
             };
             if line.trim().is_empty() {
@@ -513,6 +514,29 @@ impl DestinationSession {
         match self.stderr.settled() {
             "" => reason,
             tail => format!("{reason}; ssh stderr: {tail}"),
+        }
+    }
+
+    /// The failure of a session that ended before a request with no effect
+    /// was answered — nothing on the destination ran.
+    ///
+    /// It is an unreachable host, unless the destination's own diagnostic
+    /// says its store stayed locked: Orbit on that host started and gave up
+    /// waiting for its database, which is how a busy owner fails a fresh
+    /// session. That host was reached and decided nothing, so the failure is
+    /// typed as the destination's `lock_busy` answer. A caller may retry it
+    /// briefly, and a follower drain does not hold the busy owner against the
+    /// executing host as it would an owner it cannot reach.
+    fn ended_unanswered(&mut self, reason: String) -> OrbitError {
+        let busy = reports_store_contention(self.stderr.settled());
+        let reason = self.ended(reason);
+        if !busy {
+            return unreachable(&self.destination, reason);
+        }
+        OrbitError::RemoteTool {
+            code: LOCK_BUSY_ERROR_CODE.to_string(),
+            message: format!("{}: {reason}", self.destination.machine_id),
+            payload: json!({ "code": LOCK_BUSY_ERROR_CODE, "message": reason }),
         }
     }
 
@@ -641,6 +665,18 @@ impl StderrTail {
         }
         &self.tail
     }
+}
+
+/// Whether a destination's stderr reports that Orbit there lost to its own
+/// lock-wait deadline: a SQLite store that stayed locked or busy, or an
+/// advisory file lock it timed out acquiring. The stream comes from another
+/// process, so its text is the only evidence available.
+fn reports_store_contention(stderr: &str) -> bool {
+    let stderr = stderr.to_ascii_lowercase();
+    stderr.contains("database is locked")
+        || stderr.contains("database is busy")
+        || stderr.contains("remained locked during")
+        || (stderr.contains("ms acquiring") && stderr.contains(" lock '"))
 }
 
 fn quote_tail(bytes: &[u8]) -> String {

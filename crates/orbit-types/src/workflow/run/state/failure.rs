@@ -165,6 +165,23 @@ pub const TRANSIENT_FAILURE_ERROR_CODE: &str = "transient_failure";
 /// The bracketed marker form of [`TRANSIENT_FAILURE_ERROR_CODE`].
 pub const TRANSIENT_FAILURE_MARKER: &str = "[transient_failure]";
 
+/// Marker an owner call carries when the owner was reached but could not
+/// serve it only because its own task store or database stayed locked past
+/// its deadline (`lock_busy`), including an owner whose `orbit` exited at
+/// startup reporting a locked store before it answered. The owner decided
+/// nothing, and neither the executing host nor its crew is at fault, so a
+/// claimed leaf it ends releases its claim as `transient` with
+/// `owner_busy` set: its pull drain backs its claims off for a bounded time
+/// instead of excluding the crew or suppressing the host for its window.
+pub const OWNER_BUSY_MARKER: &str = "[owner_busy]";
+
+/// Whether a step failure says its owner call lost to the owner's own
+/// lock-wait deadline ([`OWNER_BUSY_MARKER`]).
+#[must_use]
+pub fn is_owner_busy(message: Option<&str>) -> bool {
+    message.is_some_and(|message| message.contains(OWNER_BUSY_MARKER))
+}
+
 /// Why a claimed leaf ended without its typed handoff, as its settlement
 /// carries it to the owner [ORB-14257].
 ///

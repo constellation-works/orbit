@@ -172,6 +172,7 @@ fn reservations(follower: &OrbitRuntime) -> Vec<AdmissionReservation> {
                 now,
                 delivery_jobs: &[],
                 reservations_expire_before: now - ChronoDuration::minutes(5),
+                resource_minutes_since: None,
             },
             &mut |load| {
                 seen = load.reservations.clone();
@@ -567,6 +568,7 @@ fn pending_pull_capacity_serializes_other_host_admitters_and_recovers_lost_repli
                             now,
                             delivery_jobs: &[],
                             reservations_expire_before: now - ChronoDuration::minutes(5),
+                            resource_minutes_since: None,
                         },
                         &[("ws-local", "local-after-expiry")],
                         &mut |_| Ok(vec![]),

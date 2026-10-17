@@ -10,6 +10,11 @@
 
 use std::io::Read;
 use std::path::Path;
+use std::time::Duration;
+
+/// How often a delivery worker samples its scope and the host. A run minute's
+/// `samples` count therefore bounds how much of the minute it covered.
+pub(crate) const RESOURCE_SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// One reading of the host's cumulative CPU ticks and current memory use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

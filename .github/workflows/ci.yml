@@ -35,6 +35,10 @@ env:
   # uv. Keep in sync with UV_VERSION in ci-macos.yml.
   UV_VERSION: 0.11.28
   UV_LINUX_SHA256: e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224
+  # [ORB-16349] Same pinned-tarball convention as the tools above. The digest is
+  # the SHA-256 of the release asset, computed locally from its download.
+  RIPGREP_VERSION: 14.1.1
+  RIPGREP_LINUX_SHA256: 4cf9f2741e6c465ffdb7c26f38056a59e2a2544b51f7cc128ef28337eeae4d8e
   # Keep in sync with [workspace.package] rust-version in Cargo.toml.
   MSRV: "1.89"
 
@@ -300,11 +304,20 @@ jobs:
       # image no longer ships it, and a missing `rg` makes
       # check-error-translation.sh read empty search results as "translator
       # missing" (false failures on every crate). [ORB-10021]
+      # [ORB-16349] Pinned and checksum-verified like the other tools, instead
+      # of an unpinned apt install.
       - name: Install ripgrep
         run: |
           set -euo pipefail
-          command -v rg >/dev/null 2>&1 || sudo apt-get install -y --no-install-recommends ripgrep
-          rg --version | head -1
+          cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+          mkdir -p .orbit/tmp
+          download_dir="$(mktemp -d .orbit/tmp/tool-download.XXXXXX)"
+          trap 'python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$download_dir"' EXIT
+          archive="$download_dir/archive"
+          mkdir -p "$cargo_bin"
+          scripts/ci-download-verified.sh "https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl.tar.gz" "$RIPGREP_LINUX_SHA256" "$archive"
+          tar zxf "$archive" --strip-components=1 -C "$cargo_bin" "ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl/rg"
+          rg --version | awk -v expected="${RIPGREP_VERSION}" '{print} $1 == "ripgrep" && $2 == expected {ok=1} END {exit !ok}'
 
       # [ORB-13017] Same pinned-tarball convention as nextest. Only the uv
       # binary comes from the network; the plugin fixture's dependency is a
@@ -453,11 +466,15 @@ jobs:
       # crates under `cargo test -p` feature resolution — a second build of
       # the same crates. The nextest filterset below selects them out of the
       # exact `--workspace --lib --bins --tests` artifacts the guardrails step
-      # already built and ran, so the gate costs a re-run and no compile.
+      # already built and ran, so the gate costs no compile.
+      # [ORB-16349] The guardrails pass already ran every non-ignored test in
+      # these packages, so the portable selection is not re-run here. The gate
+      # asserts with `cargo nextest list` that it still selects at least one
+      # test, so a retired or renamed package cannot pass on an empty selection.
       # [ORB-12881] The ignored leg selects orbit-exec's Linux sandbox
       # integration binary (`linux_sandbox::`), which needs a host with working
-      # Bubblewrap namespaces. It runs over the same artifact set as the line
-      # above it so neither leg triggers a rebuild. nextest exits 4 when the
+      # Bubblewrap namespaces. It runs over the same artifact set as the list
+      # above it so neither leg triggers a rebuild. nextest exits 4 when its
       # filterset matches nothing, so a refactor that retires or renames these
       # tests fails the gate instead of passing on an empty selection; never
       # add `--no-tests` here.
@@ -471,8 +488,16 @@ jobs:
       # CPU sample is the cpu-util line from ci-guardrails.sh.
       - name: Linux sandbox/policy enforcement gate
         run: |
-          cargo nextest run --profile ci --no-fail-fast --locked --workspace --lib --bins --tests \
-            -E 'package(orbit-exec) | package(orbit-policy) | package(orbit-tools)'
+          set -euo pipefail
+          # Count matches by filter-match: test-count is the total for the target set.
+          selected=$(cargo nextest list --locked --workspace --lib --bins --tests \
+            -E 'package(orbit-exec) | package(orbit-policy) | package(orbit-tools)' \
+            --message-format json |
+            jq '[."rust-suites"[].testcases[] | select(."filter-match".status == "matches")] | length')
+          if [[ "$selected" -eq 0 ]]; then
+            echo "Linux sandbox/policy enforcement gate: the portable filterset selects no tests" >&2
+            exit 1
+          fi
           cargo nextest run --profile ci --no-fail-fast --locked --workspace --lib --bins --tests \
             --run-ignored only \
             -E 'package(orbit-exec) & binary(sandbox) & test(/^linux_sandbox::/)'

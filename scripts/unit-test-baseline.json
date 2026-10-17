@@ -440,6 +440,7 @@
     "orbit-mcp": {
       "test_function_paths": [
         "adapter/tests/name_map.rs::build_name_map_rejects_sanitized_name_collisions",
+        "federated/probe/tests/session.rs::a_destination_that_exits_on_its_locked_store_is_lock_busy_not_unreachable",
         "federated/probe/tests/session.rs::a_flooding_destination_is_refused_without_buffering_the_flood",
         "federated/probe/tests/session.rs::a_lost_internal_admission_answer_is_outcome_unknown",
         "federated/probe/tests/session.rs::malformed_mutation_replies_preserve_unknown_outcome_identity_without_replay",
