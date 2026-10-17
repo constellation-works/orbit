@@ -97,6 +97,37 @@ fn a_child_is_in_the_process_tree_until_it_exits() {
         "direct child is part of the tree"
     );
 
+    // TreeCpuAccount drops unpaid debt after the owner's next sighting. That
+    // is safe only because a dead but unwaited child stays listed with a
+    // stable total until its parent reaps it, so its reap can't arrive after
+    // its debt has gone (that would count its CPU twice).
+    OwnedChild::signal_spawned_group(child_pid, libc::SIGKILL).expect("kill the sleep");
+    // Safety: `info` is a writable siginfo_t; WNOWAIT leaves the child unreaped.
+    let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
+    let rc = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            child_pid,
+            &mut info,
+            libc::WEXITED | libc::WNOWAIT,
+        )
+    };
+    assert_eq!(rc, 0, "wait for the sleep to exit without reaping it");
+    let zombie_cpu = |label: &str| {
+        let tree = ancestry::process_tree(self_pid).expect("tree readable with a zombie child");
+        tree.iter()
+            .find(|process| process.key.pid == child_pid)
+            .unwrap_or_else(|| panic!("an exited, unreaped child is still in the tree ({label})"))
+            .cpu_time_ns
+    };
+    let first = zombie_cpu("first read");
+    std::thread::sleep(Duration::from_millis(20));
+    assert_eq!(
+        zombie_cpu("second read"),
+        first,
+        "an unreaped child's CPU total is stable"
+    );
+
     child.kill_and_reap();
     let after = ancestry::process_tree(self_pid).expect("tree still readable after reap");
     assert!(
