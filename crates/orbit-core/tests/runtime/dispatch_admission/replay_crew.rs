@@ -100,6 +100,8 @@ fn detached_replay_recaptures_automatic_crews_and_preserves_explicit_choices() {
                 class: ProviderFailureClass::Unavailable,
                 provider: Some("codex".into()),
                 excluded_crews: vec!["held".into()],
+                machine: None,
+                carried_crews: Vec::new(),
                 not_before: Utc::now() + Duration::hours(1),
                 run_id: source.run_id.clone(),
             };

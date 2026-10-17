@@ -143,7 +143,7 @@ pub use run::{
     PROVIDER_CAPACITY_ERROR_CODE, PROVIDER_CAPACITY_MARKER, PROVIDER_FAILURE_HOLD_EVENT,
     PROVIDER_FAILURE_HOLD_MARKER, PROVIDER_LIMIT_ERROR_CODE, PROVIDER_LIMIT_MARKER,
     PROVIDER_REFUSAL_ERROR_CODE, PROVIDER_REFUSAL_MARKER, PROVIDER_UNAVAILABLE_ERROR_CODE,
-    PROVIDER_UNAVAILABLE_MARKER, PS_EXEC_PROBE, PendingDeferral, PipelineState,
+    PROVIDER_UNAVAILABLE_MARKER, PS_EXEC_PROBE, PendingDeferral, PipelineState, ProviderCrewOutage,
     ProviderFailureClass, ProviderFailureHold, ProviderLimitFailure, PullAdmissionFit,
     PullAuthExclusion, PullAuthRecovery, PullBreaker, PullCrewPreflight, PullDrainState,
     PullSinglePass, PullUnfitWork, PullWindowClose, REVIEW_DECISION_PENDING_ERROR_CODE,

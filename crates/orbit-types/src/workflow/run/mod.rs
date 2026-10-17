@@ -43,8 +43,9 @@ pub use held_candidate::{CANDIDATE_HELD_EVENT, CANDIDATE_HELD_MARKER, HeldCandid
 pub use id::{RunIdRole, run_id_candidate, run_id_minute_stem, run_id_role};
 pub use implementer_findings::{normalize_unfiled_findings, unfiled_findings_shape_error};
 pub use provider_hold::{
-    PROVIDER_FAILURE_HOLD_EVENT, PROVIDER_FAILURE_HOLD_MARKER, ProviderFailureClass,
-    ProviderFailureHold, ProviderLimitFailure, failed_provider, provider_failure_text,
+    PROVIDER_FAILURE_HOLD_EVENT, PROVIDER_FAILURE_HOLD_MARKER, ProviderCrewOutage,
+    ProviderFailureClass, ProviderFailureHold, ProviderLimitFailure, failed_provider,
+    provider_failure_text,
 };
 pub use root_cause::{
     CHILD_CANCELLED_ERROR_CODE, CHILD_TIMEOUT_ERROR_CODE, HeldFailure,

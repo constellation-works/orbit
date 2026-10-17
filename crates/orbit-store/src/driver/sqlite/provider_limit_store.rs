@@ -1,4 +1,5 @@
-//! [ORB-14695] The host's provider usage limits in `provider_limit_observations`.
+//! [ORB-14695] The host's provider usage limits in `provider_limit_observations`,
+//! and [ORB-16379] its crew outages in `provider_crew_outages`.
 //!
 //! Timestamps are stored as fixed-width UTC RFC3339 text (microseconds, `Z`),
 //! so SQLite orders them by comparing the text.
@@ -7,6 +8,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
+use orbit_types::workflow::ProviderCrewOutage;
 use rusqlite::{TransactionBehavior, params};
 
 use crate::Store;
@@ -105,6 +107,64 @@ impl ProviderLimitStoreBackend for Store {
                     window_minutes: row.get(11)?,
                     gating: row.get(12)?,
                     partial: false,
+                })
+            })
+            .map_err(sqlite_store_error)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(sqlite_store_error)
+    }
+
+    fn record_provider_crew_outage(&self, outage: &ProviderCrewOutage) -> Result<bool, OrbitError> {
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            tx.connection()
+                .execute(
+                    r#"
+                    INSERT INTO provider_crew_outages (
+                        provider, crew, until_at, observed_at, run_id
+                    ) VALUES (?1, ?2, ?3, ?4, ?5)
+                    ON CONFLICT (provider, crew) DO UPDATE SET
+                        until_at = excluded.until_at,
+                        observed_at = excluded.observed_at,
+                        run_id = excluded.run_id
+                    WHERE excluded.until_at > provider_crew_outages.until_at
+                    "#,
+                    params![
+                        outage.provider.as_deref().unwrap_or_default(),
+                        outage.crew,
+                        stamp(outage.until),
+                        stamp(outage.observed_at),
+                        outage.run_id,
+                    ],
+                )
+                .map(|changed| changed > 0)
+                .map_err(sqlite_store_error)
+        })
+    }
+
+    fn provider_crew_outages(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<ProviderCrewOutage>, OrbitError> {
+        let conn = self.read()?;
+        let mut statement = conn
+            .prepare(
+                r#"
+                SELECT provider, crew, until_at, observed_at, run_id
+                FROM provider_crew_outages
+                WHERE until_at > ?1
+                ORDER BY observed_at DESC, provider, crew
+                "#,
+            )
+            .map_err(sqlite_store_error)?;
+        let rows = statement
+            .query_map([stamp(now)], |row| {
+                let provider: String = row.get(0)?;
+                Ok(ProviderCrewOutage {
+                    provider: (!provider.is_empty()).then_some(provider),
+                    crew: row.get(1)?,
+                    until: crate::parse_timestamp(&row.get::<_, String>(2)?)?,
+                    observed_at: crate::parse_timestamp(&row.get::<_, String>(3)?)?,
+                    run_id: row.get(4)?,
                 })
             })
             .map_err(sqlite_store_error)?;

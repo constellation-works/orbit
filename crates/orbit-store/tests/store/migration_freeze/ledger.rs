@@ -414,6 +414,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0051".to_string(),
                 "worker_cpu_accounting".to_string()
             ),
+            (
+                "migration.v0052".to_string(),
+                "provider_crew_outages".to_string()
+            ),
         ]
     );
 }

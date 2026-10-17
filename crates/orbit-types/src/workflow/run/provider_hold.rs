@@ -12,6 +12,14 @@
 //! The note carries the hold as JSON straight after
 //! [`PROVIDER_FAILURE_HOLD_MARKER`], so the writer (run finalization) and the
 //! readers (admission, the next hold) share one text form.
+//!
+//! [ORB-16379] An unavailable provider is the failing host's: its login
+//! expired there, not on every machine. Such a hold names that `machine` and
+//! excludes its crews only there. Capacity, limit and refusal holds name none
+//! and exclude their crews on every machine, as does a hold stored before
+//! holds named a machine. The host itself also records a
+//! [`ProviderCrewOutage`] for the failed crew, which keeps its own drain off
+//! that crew for every task until the outage lapses.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -205,8 +213,18 @@ pub struct ProviderFailureHold {
     /// The provider that failed, when the run named it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
-    /// Crews admission does not draw for the task before `not_before`.
+    /// Crews admission does not draw for the task before `not_before`, on
+    /// `machine` when the hold names one.
     pub excluded_crews: Vec<String>,
+    /// [ORB-16379] The machine `excluded_crews` are excluded on: the host
+    /// whose provider was unavailable. `None` excludes them on every machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
+    /// [ORB-16379] Crews a still-standing earlier hold excluded on every
+    /// machine, which a machine-scoped hold keeps excluding everywhere.
+    /// Empty unless `machine` is set.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub carried_crews: Vec<String>,
     /// When the excluded crews may run the task again.
     pub not_before: DateTime<Utc>,
     /// The run whose failure placed the hold.
@@ -238,9 +256,137 @@ impl ProviderFailureHold {
         now < self.not_before
     }
 
-    /// Whether `crew` is excluded by this hold.
+    /// Whether `crew` is excluded by this hold on the machine it names, or
+    /// on every machine when it names none.
     #[must_use]
     pub fn excludes(&self, crew: &str) -> bool {
-        self.excluded_crews.iter().any(|excluded| excluded == crew)
+        self.excluded_crews
+            .iter()
+            .chain(&self.carried_crews)
+            .any(|excluded| excluded == crew)
     }
+
+    /// [ORB-16379] Whether `excluded_crews` are excluded on `machine`. An
+    /// executor of unknown identity is treated as the hold's machine.
+    #[must_use]
+    pub fn applies_on(&self, machine: Option<&str>) -> bool {
+        match (self.machine.as_deref(), machine) {
+            (Some(held), Some(machine)) => held == machine,
+            _ => true,
+        }
+    }
+
+    /// [ORB-16379] This hold as `machine` sees it: a hold that names no
+    /// machine, excluding what it excludes there. `None` when it excludes
+    /// nothing there because its crews were excluded on another machine.
+    #[must_use]
+    pub fn on_machine(&self, machine: Option<&str>) -> Option<Self> {
+        let mut seen = self.clone();
+        seen.machine = None;
+        let carried = std::mem::take(&mut seen.carried_crews);
+        if self.applies_on(machine) {
+            seen.excluded_crews.extend(carried);
+        } else if carried.is_empty() {
+            return None;
+        } else {
+            seen.excluded_crews = carried;
+        }
+        seen.excluded_crews.sort();
+        seen.excluded_crews.dedup();
+        Some(seen)
+    }
+
+    /// [ORB-16379] Keep the crews a still-standing `previous` hold excluded,
+    /// each in the scope it was excluded in: crews excluded on every machine
+    /// stay excluded everywhere, and crews excluded on one machine stay
+    /// scoped to it. When both holds are scoped to different machines this
+    /// hold's machine wins; the other host's own outage record still keeps
+    /// its drain off those crews. The hold lasts until the later
+    /// `not_before`.
+    pub fn absorb(&mut self, previous: Self) {
+        let (scoped, mut everywhere) = self.scopes();
+        let (previous_scoped, previous_everywhere) = previous.scopes();
+        everywhere.extend(previous_everywhere);
+        let scoped = match (scoped, previous_scoped) {
+            (Some((machine, mut crews)), Some((previous_machine, previous_crews))) => {
+                if machine == previous_machine {
+                    crews.extend(previous_crews);
+                }
+                Some((machine, crews))
+            }
+            (Some(scoped), None) | (None, Some(scoped)) => Some(scoped),
+            (None, None) => None,
+        };
+        let sorted = |mut crews: Vec<String>| {
+            crews.sort();
+            crews.dedup();
+            crews
+        };
+        match scoped {
+            Some((machine, crews)) => {
+                self.machine = Some(machine);
+                self.excluded_crews = sorted(crews);
+                self.carried_crews = sorted(everywhere);
+            }
+            None => {
+                self.machine = None;
+                self.excluded_crews = sorted(everywhere);
+                self.carried_crews = Vec::new();
+            }
+        }
+        self.not_before = self.not_before.max(previous.not_before);
+    }
+
+    /// The crews excluded on one machine, with it, and those excluded on
+    /// every machine.
+    fn scopes(&self) -> (Option<(String, Vec<String>)>, Vec<String>) {
+        match &self.machine {
+            Some(machine) => (
+                Some((machine.clone(), self.excluded_crews.clone())),
+                self.carried_crews.clone(),
+            ),
+            None => (
+                None,
+                self.excluded_crews
+                    .iter()
+                    .chain(&self.carried_crews)
+                    .cloned()
+                    .collect(),
+            ),
+        }
+    }
+
+    /// `a, b` for an unscoped hold; `a on <machine>; b everywhere` for a
+    /// scoped one.
+    #[must_use]
+    pub fn describe_crews(&self) -> String {
+        let Some(machine) = &self.machine else {
+            return self.excluded_crews.join(", ");
+        };
+        let scoped = format!("{} on {machine}", self.excluded_crews.join(", "));
+        if self.carried_crews.is_empty() {
+            scoped
+        } else {
+            format!("{scoped}; {} everywhere", self.carried_crews.join(", "))
+        }
+    }
+}
+
+/// [ORB-16379] A crew this host could not run because its provider was
+/// unavailable here, say its login expired. Recorded in the host's store when
+/// a local run fails `provider_unavailable`; the host's local admission draws
+/// no task onto the crew until `until`, whatever became of the task that
+/// failed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderCrewOutage {
+    /// The provider that failed, when the run named it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    pub crew: String,
+    /// When the crew may be drawn again: the failed task's hold's
+    /// `not_before`.
+    pub until: DateTime<Utc>,
+    pub observed_at: DateTime<Utc>,
+    /// The run whose failure recorded the outage.
+    pub run_id: String,
 }
