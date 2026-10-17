@@ -24,7 +24,8 @@ pub(crate) struct TreeTemplate {
 }
 
 impl TreeTemplate {
-    /// Read `root` into memory. Templates hold plain directories and files.
+    /// Read `root` into memory. Templates hold plain directories and files,
+    /// captured only after every process that writes `root` has exited.
     pub(crate) fn capture(root: &Path) -> Self {
         let mut template = Self {
             dirs: Vec::new(),
@@ -48,7 +49,15 @@ impl TreeTemplate {
                 self.read(root, &path);
             } else {
                 assert!(kind.is_file(), "template entry {path:?} is not a file");
-                let bytes = std::fs::read(entry.path()).expect("template file");
+                // A lock file means a writer, such as a detached Git
+                // maintenance run, still owns the tree; every row would
+                // inherit its lock, or the file vanishes mid-capture.
+                assert!(
+                    path.extension() != Some("lock".as_ref()),
+                    "template entry {path:?} is a lock file: a process still writes the captured tree"
+                );
+                let bytes = std::fs::read(entry.path())
+                    .unwrap_or_else(|error| panic!("template file {path:?}: {error}"));
                 self.files.push((path, bytes));
             }
         }
