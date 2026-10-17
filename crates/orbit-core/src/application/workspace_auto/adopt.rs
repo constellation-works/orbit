@@ -12,19 +12,16 @@ use crate::OrbitRuntime;
 use crate::application::job::AdoptionAuthority;
 
 use super::classify::templated_u64;
-use super::drains::{DEFAULT_MAX_ACTIVE_LEAF_RUNS, live_admissions_stop, live_worker_limit};
+use super::drains::{
+    DEFAULT_MAX_ACTIVE_LEAF_RUNS, drain_run_id, live_admissions_stop, live_worker_limit,
+};
 
 pub(crate) fn adopt_orphaned_deliveries(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,
 ) -> Result<Value, DispatchError> {
-    let Some(drain_run_id) = input
-        .get("run_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-    else {
+    let Some(drain_run_id) = drain_run_id(input) else {
         return Ok(json!({ "adopted": [], "skipped": [] }));
     };
     // A stopped drain or a host about to shut down starts nothing, as for

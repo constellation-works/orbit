@@ -48,7 +48,7 @@ use crate::application::task::{
 use crate::runtime::engine::crew::normalized_task_crew;
 
 use super::classify::templated_u64;
-use super::drains::live_admissions_stop;
+use super::drains::{drain_run_id, live_admissions_stop};
 use crate::application::task::pilot::{
     approval_disqualification, approved_by_drain, held_classification,
 };
@@ -374,14 +374,6 @@ fn record_report(
             "drain could not record its proposed-task approvals; run show will not list them"
         );
     }
-}
-
-fn drain_run_id(input: &Value) -> Option<&str> {
-    input
-        .get("run_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
 }
 
 fn held_json(snapshot: &ApprovalSnapshot) -> Value {

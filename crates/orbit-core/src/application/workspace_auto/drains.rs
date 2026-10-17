@@ -25,6 +25,15 @@ pub(super) const DRAIN_JOB_NAME: &str = "workspace_auto_pipeline";
 /// its own child finishes rather than when the slowest child in the batch does.
 pub(super) const DEFAULT_MAX_ACTIVE_LEAF_RUNS: u64 = 5;
 
+/// Reads the engine-injected drain `run_id` from an activity input.
+pub(super) fn drain_run_id(input: &Value) -> Option<&str> {
+    input
+        .get("run_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
 /// The live worker ceiling an operator has set on *this* drain [ORB-11253].
 ///
 /// The engine injects the executing run's id into every activity input, which
@@ -33,11 +42,7 @@ pub(super) const DEFAULT_MAX_ACTIVE_LEAF_RUNS: u64 = 5;
 /// a drain that cannot read its own control must keep admitting at the value it
 /// was started with rather than stalling.
 pub(super) fn live_worker_limit(runtime: &OrbitRuntime, input: &Value) -> Option<DrainWorkerLimit> {
-    let run_id = input
-        .get("run_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
+    let run_id = drain_run_id(input)?;
     read_drain_worker_limit(runtime, run_id)
 }
 
@@ -51,11 +56,7 @@ pub(super) fn live_admissions_stop(
 /// The executing drain's own run state, read through the engine-injected run
 /// id. Absent or unreadable state reads as no operator control at all.
 pub(super) fn live_drain_state(runtime: &OrbitRuntime, input: &Value) -> Option<PipelineState> {
-    let run_id = input
-        .get("run_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
+    let run_id = drain_run_id(input)?;
     runtime.read_run_state(run_id).ok().flatten()
 }
 

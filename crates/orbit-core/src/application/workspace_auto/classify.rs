@@ -27,7 +27,8 @@ use crate::runtime::host_resource::forecast::{ForecastDecision, ForecastPoints};
 use crate::runtime::task::locks::lock_context_files_for_task;
 
 use super::drains::{
-    DEFAULT_MAX_ACTIVE_LEAF_RUNS, live_admissions_stop, live_leaf_runs, live_worker_limit,
+    DEFAULT_MAX_ACTIVE_LEAF_RUNS, drain_run_id, live_admissions_stop, live_leaf_runs,
+    live_worker_limit,
 };
 
 /// Wait before re-listing when the backlog has admissible work but every slot
@@ -178,11 +179,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
     // admissions no run represents yet — not this classifier's own wrapper
     // count.
     let jobs = runtime.stores().jobs();
-    let occupancy = input
-        .get("run_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
+    let occupancy = drain_run_id(input)
         .map_or_else(
             || jobs.drain_leaf_occupancy(),
             |id| jobs.drain_leaf_occupancy_for_run(id),
@@ -831,15 +828,6 @@ fn record_admission_forecast(
             "drain could not record its admission forecast; the accuracy report will miss this pass"
         );
     }
-}
-
-/// The drain's run id, when the pass belongs to one.
-fn drain_run_id(input: &Value) -> Option<&str> {
-    input
-        .get("run_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
 }
 
 /// Persist what this pass left waiting on the drain's own run state, so
