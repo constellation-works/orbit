@@ -40,6 +40,8 @@
 //! else, including annotations on files the candidate did not change, is
 //! **inconclusive**. A failed check branch protection does not require keeps
 //! its previous handling.
+//! A stale rollup entry for a job already rerun or updated can wait for its
+//! replacement to register, but never hides a separately failed aggregate.
 //!
 //! The rerun, the branch update and the repair are each spent once. A
 //! failure past that budget, or one this module cannot classify, stops the
@@ -119,6 +121,9 @@ pub(super) struct CheckRecovery {
     /// Failed jobs already acted on, so a rollup that still shows them
     /// before the provider registers the rerun or update waits instead.
     handled: BTreeSet<u64>,
+    /// Rollup entries those jobs answered, retained while replacement jobs
+    /// have not registered yet. Separately failed checks still need evidence.
+    handled_checks: BTreeSet<(Option<String>, String)>,
     /// The classification each action was taken on, for the evidence.
     actions: Vec<String>,
     /// Latest required-check read during failure classification; diagnostics only.
@@ -214,19 +219,15 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
         .iter()
         .filter(|job| unsuccessful(job) && failed.iter().any(|check| answers(job, check)))
         .collect();
-    if failed_jobs.is_empty() && (recovery.rerun || recovery.updated) {
-        // A rerun or update the provider has not registered yet still shows
-        // the old failure in the rollup while its jobs are queued.
-        return Ok(CheckRecoveryStep::Wait);
-    }
     // [ORB-16185] A failed required check no failed job answers is classified
     // from its own annotations, never hidden by the jobs that did fail.
     let unanswered: Vec<&(Option<String>, String)> = failed
         .iter()
         .filter(|check| {
-            !head_jobs
-                .iter()
-                .any(|job| unsuccessful(job) && answers(job, check))
+            !recovery.handled_checks.contains(*check)
+                && !head_jobs
+                    .iter()
+                    .any(|job| unsuccessful(job) && answers(job, check))
         })
         .collect();
     let aggregates = if unanswered.is_empty() {
@@ -235,6 +236,12 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
         unanswered_required(host, context, &pr.to_string(), head, &unanswered, recovery)
     };
     if failed_jobs.is_empty() && aggregates.is_empty() {
+        if recovery.rerun || recovery.updated {
+            // Only wait after separately failed required checks have been
+            // classified. The rollup can retain the old job failure while
+            // the provider queues its replacement.
+            return Ok(CheckRecoveryStep::Wait);
+        }
         return Ok(unclassified(
             "no failed workflow job on the pull request's head answers the failed check"
                 .to_string(),
@@ -255,6 +262,11 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
     let mut base_jobs = None;
     let mut tip_jobs = None;
     let mut jobs = Vec::new();
+    let answered_checks = failed
+        .iter()
+        .filter(|check| failed_jobs.iter().any(|job| answers(job, check)))
+        .cloned()
+        .collect::<BTreeSet<_>>();
     for job in failed_jobs {
         let (Some(run_id), Some(job_id)) = (job["run_id"].as_u64(), job["job_id"].as_u64()) else {
             return Ok(unclassified(
@@ -314,6 +326,7 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
             }
             recovery.rerun = true;
             recovery.handled.extend(jobs.iter().map(|job| job.job_id));
+            recovery.handled_checks.extend(answered_checks);
             recovery
                 .actions
                 .push(format!("reran the failed jobs: {classified}"));
@@ -388,6 +401,7 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
             );
             recovery.updated = true;
             recovery.handled.extend(jobs.iter().map(|job| job.job_id));
+            recovery.handled_checks.extend(answered_checks);
             recovery.actions.push(format!(
                 "merged base tip {tip} into the pull request's branch: {classified}"
             ));
