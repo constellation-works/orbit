@@ -1891,13 +1891,15 @@ fn plant_commit_ci(fx: &Fixture, sha: &str, run_id: u64, conclusion: &str, log: 
 
 /// An unmoved base whose own job fails the same way spends no repair attempt
 /// and stops base-red at the completion deadline. A failure the base does not
-/// fail that way is still admitted from the same budget.
+/// fail that way is still admitted from the same budget, and so is a red base
+/// on a provider-side head the workspace never fetched: git state the check
+/// cannot read is not a base-red hold and must not end the watch.
 #[test]
 fn auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure() {
     isolated(
         "auto_fix::auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure",
         |sandbox| {
-            for case in ["red_base", "candidate"] {
+            for case in ["red_base", "candidate", "unfetched_head"] {
                 in_fresh_row(sandbox, |row| {
                     let fx = Fixture::new(row);
                     let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
@@ -1906,30 +1908,68 @@ fn auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure() {
                         ##[error]Process completed with exit code 101.\n";
                     let candidate_only = "error[E0433]: cannot find module `candidate_only`\n\
                         ##[error]Process completed with exit code 101.\n";
+                    // A provider-side branch update: the PR head exists only
+                    // on the remote, so no local git command can read it.
+                    let head = if case == "unfetched_head" {
+                        let remote = fx.forge.join("remote.git");
+                        let remote = path_str(&remote);
+                        let tree = format!("{}^{{tree}}", fx.candidate);
+                        let update = git(
+                            &fx.repo,
+                            &[
+                                "--git-dir",
+                                remote,
+                                "commit-tree",
+                                &tree,
+                                "-p",
+                                &fx.candidate,
+                                "-m",
+                                "provider update",
+                            ],
+                        );
+                        git(
+                            &fx.repo,
+                            &[
+                                "--git-dir",
+                                remote,
+                                "update-ref",
+                                &format!("refs/heads/{BRANCH}"),
+                                &update,
+                            ],
+                        );
+                        update
+                    } else {
+                        fx.candidate.clone()
+                    };
                     plant_commit_ci(
                         &fx,
-                        &fx.candidate,
+                        &head,
                         11,
                         "failure",
-                        if case == "red_base" {
-                            shared
-                        } else {
+                        if case == "candidate" {
                             candidate_only
+                        } else {
+                            shared
                         },
                     );
                     plant_commit_ci(
                         &fx,
                         &fx.base_sha,
                         21,
-                        if case == "red_base" {
-                            "failure"
-                        } else {
+                        if case == "candidate" {
                             "success"
+                        } else {
+                            "failure"
                         },
                         shared,
                     );
                     fx.script_checks(&["failure"]);
                     let mut input = fx.complete_ungated_input();
+                    if case == "unfetched_head" {
+                        // No published pin, so the provider's head is the one
+                        // the watcher repairs.
+                        input.as_object_mut().unwrap().remove("published_head_sha");
+                    }
                     input["auto_fix"] = json!(true);
                     input["completion"] = json!("review");
                     input["max_wait_seconds"] = json!(15);
@@ -1963,14 +2003,21 @@ fn auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure() {
                             orbit_types::workflow::is_pr_auto_fix_check_repair(&error),
                             "{case}: {error}"
                         );
+                        let evidence = if case == "candidate" {
+                            "candidate_only"
+                        } else {
+                            "broken_base"
+                        };
                         assert!(
-                            error.contains("error[e0433]: cannot find module `candidate_only`"),
-                            "{case}: the candidate signature is the repair evidence: {error}"
+                            error.contains(&format!(
+                                "error[e0433]: cannot find module `{evidence}`"
+                            )),
+                            "{case}: the head signature is the repair evidence: {error}"
                         );
                         assert_eq!(attempts.len(), 1, "{case}: one repair is admitted");
                         assert_eq!(attempts[0].budget, PR_AUTO_FIX_BUDGET);
-                        assert_eq!(attempts[0].head_sha, fx.candidate);
-                        assert_eq!(polls, 1, "{case}: a candidate failure does not wait");
+                        assert_eq!(attempts[0].head_sha, head, "{case}");
+                        assert_eq!(polls, 1, "{case}: a repairable failure does not wait");
                     }
                     assert!(fx.merge_requests().is_empty(), "{case}: no merge");
                     assert_eq!(fx.head(), fx.candidate, "{case}");

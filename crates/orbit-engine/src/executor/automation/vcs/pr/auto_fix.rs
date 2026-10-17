@@ -310,33 +310,33 @@ pub(super) fn check_repair_handoff(
 /// A required failure the base's own job already fails the same way, while
 /// the base branch has not moved past that commit.
 ///
-/// `Ok(Some(reason))` waits for the base and spends no repair attempt.
-/// `Ok(None)` keeps the ordinary repair path, including a candidate-caused
-/// failure and evidence this classification could not read.
+/// `Some(reason)` waits for the base and spends no repair attempt. `None`
+/// keeps the ordinary repair path, including a candidate-caused failure and
+/// any git state or evidence this classification could not read, such as a
+/// head object that is not local.
 pub(super) fn red_base_wait<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
     workspace_path: &str,
     status: &PullRequestStatus,
     failed: &[(Option<String>, String)],
-) -> Result<Option<String>, OrbitError> {
-    let Some(head) = status.head_sha.as_deref() else {
-        return Ok(None);
-    };
-    let Some(base_name) = input_string_field(input, "base") else {
-        return Ok(None);
-    };
+) -> Option<String> {
+    let head = status.head_sha.as_deref()?;
+    let base_name = input_string_field(input, "base")?;
     let workspace = Path::new(workspace_path);
-    let base_ref =
-        resolve_worktree_start_point(workspace, &base_name, base_sync_mode_from_input(input)?)?;
-    let tip = commit_sha(workspace, &base_ref)?;
-    let base = git_output(workspace, &["merge-base", head, &tip])?;
-    match unmoved_red_base(host, workspace, head, &base, &tip, failed) {
-        Ok(reason) => Ok(reason),
-        // An unreadable answer is not itself a red base. The repair read
-        // still stops when the head evidence is missing.
-        Err(_) => Ok(None),
-    }
+    let base_ref = resolve_worktree_start_point(
+        workspace,
+        &base_name,
+        base_sync_mode_from_input(input).ok()?,
+    )
+    .ok()?;
+    let tip = commit_sha(workspace, &base_ref).ok()?;
+    let base = git_output(workspace, &["merge-base", head, &tip]).ok()?;
+    // An unreadable answer is not itself a red base. The repair read still
+    // stops when the head evidence is missing.
+    unmoved_red_base(host, workspace, head, &base, &tip, failed)
+        .ok()
+        .flatten()
 }
 
 /// Read the failed checks on the pinned head and admit their repair. Returns
