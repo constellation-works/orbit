@@ -15,6 +15,7 @@
 //! - `drain_cancel` — graceful and forced cancellation of a drain with in-flight leaves.
 //! - `interrupted_review` — keeping the repair of a review a stopped run was inside.
 //! - `child_timeout` — cancelling a child whose parent's wait expired, keeping its candidate.
+//! - `completion_audit` — the completion audit the stop, worker-ceiling and extension controls share.
 //! - `root_cause` — typed root causes of cascaded failures, and folding a listing by incident.
 //! - `step_recovery` — authenticating executor-owned recovery before it mutates Git.
 //! - `tests/*` — helpers and regression tests split by concern (actions, reconcile, owner, conflict).
@@ -23,6 +24,7 @@ mod actions;
 mod admissions_stop;
 mod build_budget;
 mod child_timeout;
+mod completion_audit;
 mod conflict;
 mod deferral;
 mod delivery;
