@@ -51,8 +51,10 @@ agent is a direct child of the pipeline worker, so `agent_run_list` reports no m
 `busy=false` for a perfectly healthy one. Do not read that as a lost child [ORB-10496].
 
 Ask the pipeline instead. `orbit run show` prints one `Agent:` line per provider subprocess that
-has not reported an exit, and the same records come back as `provider_processes` from
-`GET /api/runs/:id` — which is what bridge `workflow_run_status` returns:
+has not reported an exit. `orbit run show --json` and `GET /api/runs/:id` (bridge
+`workflow_run_status`) both project those children with `RunProviderProcess::to_json`, so the
+objects share keys — including `last_activity_at`, `latest_message`, `stopped_descendants`, and
+`blocked_on_stopped_descendant` — and omit `run_id`, which the caller already has:
 
 ```text
 $ orbit run show jrun-20260727-0241-2
@@ -86,10 +88,12 @@ holds the agent until its wall clock ends, and `blocked=` is never shown there.
 
 Liveness is probed when you ask, against the local process table, so it is only meaningful on
 the host that ran the child; a historical run inspected elsewhere may report `exited` or
-`unknown` depending on what that host can observe. Use
-`orbit run show --json` for the full records (`pid`, `pid_start_time`, `step_id`, `finished`,
-`stopped_descendants`, `blocked_on_stopped_descendant`),
-or `orbit run events <run_id> --type cli.invocation.process` for the raw audit events.
+`unknown` depending on what that host can observe. `orbit run show --json` and
+`GET /api/runs/:id` both return those full process records, and both put `input`, `pid`, and
+`pid_start_time` on the run object. `orbit run events <run_id> --type cli.invocation.process`
+still returns the raw audit events. An unreadable pipeline checkpoint does not fail
+`orbit run show`: the command warns and reports `pipeline_state` as null, and the run record
+stays readable. The HTTP detail already omits that section the same way.
 
 ## A submitted run outlives its command
 
