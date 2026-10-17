@@ -366,13 +366,17 @@ export async function assertRunDetailPresentation(page, evidence) {
     throw new Error(`A running drain must show its deferred admission pass: ${passWarning}`);
   }
   const keptWaiting = await page.locator('#run-detail-meta .still-waiting .child-dispatch-notice').textContent();
-  if (keptWaiting.includes('the owner answered') || !keptWaiting.includes('from the last completed pass at')) {
+  if (keptWaiting.includes('the owner answered') || !keptWaiting.includes('as of the last completed pass at')) {
     throw new Error(`A local drain's kept lists must be dated from its last completed pass: ${keptWaiting}`);
   }
   await render({ state: 'failed', job_id: 'workspace_auto_pipeline', drain_last_pass: deferredPass }, []);
   if (await page.locator('#run-detail-meta .pass-warning').count()
     || !(await page.locator('.run-failure-message').textContent()).includes('held by pid 4242')) {
     throw new Error('A failed drain reports its last pass error in the failure box only');
+  }
+  await render({ state: 'cancelled', job_id: 'workspace_auto_pipeline', drain_last_pass: deferredPass }, []);
+  if (await page.locator('#run-detail-meta .pass-warning').count()) {
+    throw new Error('A cancelled drain has no next pass to retry');
   }
 
   const childDispatches = ['success', 'cancelled', 'failed', null, 'running', 'success'].map((state, index) => ({

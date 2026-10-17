@@ -570,7 +570,7 @@ function buildStillWaiting(pass, run = {}) {
   // lock, which keeps the last completed pass's lists.
   const answered = !pass.waiting_recorded_at ? ""
     : pullDrain ? ` (the owner answered ${fmtAbsTime(pass.waiting_recorded_at)})`
-    : ` (from the last completed pass at ${fmtAbsTime(pass.waiting_recorded_at)})`;
+    : ` (as of the last completed pass at ${fmtAbsTime(pass.waiting_recorded_at)})`;
   const reasonTaskTotal = deferredTotal + excludedTotal;
   const additionalAdmissible = pullDrain ? queued : Math.max(0, queued - deferredTotal);
   const additionalSummary = additionalAdmissible === 1
@@ -611,14 +611,15 @@ function buildStillWaiting(pass, run = {}) {
   return panel;
 }
 
-// A drain still running whose last admission pass failed: a local drain's
-// pass deferred on a busy lock (retried next pass), or a pull drain's failed
-// pass. A failed run reports the same error in its failure box instead.
+// A drain still live whose last admission pass failed: a local drain's pass
+// deferred on a busy lock (retried next pass), or a pull drain's failed pass.
+// A failed run reports the same error in its failure box instead, and a
+// cancelled or finished one has no next pass.
 // Mirrors the `Admission pass deferred:` / `Pull pass warning:` line of
 // `orbit run show`.
 function buildPassWarning(run) {
   const pass = run.drain_last_pass;
-  if (!pass || !pass.last_pass_error || FAILED_RUN_STATES.has(run.state)) return null;
+  if (!pass || !pass.last_pass_error || !LIVE_RUN_STATES.has(run.state)) return null;
   const pullDrain = run.job_id === "workspace_pull_pipeline";
   const failures = pass.consecutive_pass_failures || 0;
   const what = pullDrain ? "Pull pass warning: " : "Admission pass deferred: ";

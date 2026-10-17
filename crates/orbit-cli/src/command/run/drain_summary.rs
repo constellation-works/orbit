@@ -265,7 +265,7 @@ impl WaitingBacklog {
             .map(|answered| {
                 let at = answered.format("%Y-%m-%d %H:%M:%SZ");
                 if self.deferred_in_queued {
-                    format!(" (from the last completed pass at {at})")
+                    format!(" (as of the last completed pass at {at})")
                 } else {
                     format!(" (the owner answered {at})")
                 }

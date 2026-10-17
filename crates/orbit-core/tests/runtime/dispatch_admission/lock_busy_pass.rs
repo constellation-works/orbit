@@ -190,17 +190,62 @@ fn wait_for(path: &Path) {
     }
 }
 
-/// Two lock holders, each across one admission pass longer than one
-/// acquisition deadline. A shared holder, as ordinary task-store work holds
-/// the lock, lets an `enforce` pass read the backlog and reserve its wave but
-/// holds out its admission section: the pass is deferred, the drain stays
-/// running and records `lock_busy` naming the holder, and the host's
-/// reservations are what they were before the pass. An exclusive holder, as
-/// an admission section holds it, stops a pass at its first step, recording
-/// pilot operator handoffs, the site the incident hit; a drain already one
-/// deferred pass short of the limit fails there with the lock error. Once the
-/// holders let go, the deferred drain admits the task with one reservation.
-/// A non-lock failure still fails the pass at once and records no deferral.
+/// The deferral limit, with which an exclusive holder (as an admission
+/// section holds the lock) stops a pass, in a workspace of its own so it runs
+/// beside the shared-holder passes. The first pass stops at its first step,
+/// recording pilot operator handoffs, the site the incident hit, and is
+/// deferred; a drain already one deferred pass short of the limit fails there
+/// with the lock error.
+fn a_drain_at_the_deferral_limit_fails_on_an_admission_section() {
+    let (root, runtime, _repo) = runtime();
+    seed(&runtime, Seed::default());
+    let first = running_run(&runtime, "workspace_auto_pipeline", json!({}));
+    let exhausted = running_run(&runtime, "workspace_auto_pipeline", json!({}));
+    let lock = partition_lock(root.path());
+    let signals = tempfile::TempDir::new_in(root.path()).unwrap();
+    let holder = Holder::spawn(&lock, signals.path(), false);
+
+    let deferred = classify(&runtime, &first, json!({}))
+        .expect("a pass held out by an admission section is deferred");
+    let pass = last_pass(&runtime, &first);
+    assert_eq!(pass["last_pass_error_code"], "lock_busy", "{pass}");
+    assert!(
+        pass["last_pass_error"]
+            .as_str()
+            .is_some_and(|error| error.starts_with("record pilot operator handoffs: ")),
+        "an admission section stops the pass where the incident did: {pass}"
+    );
+
+    let limit = deferred["pass_deferred"]["limit"].as_u64().unwrap();
+    let mut state: PipelineState = runtime.read_run_state(&exhausted).unwrap().unwrap();
+    let mut streak: DrainAdmissionPass = serde_json::from_value(pass).unwrap();
+    streak.consecutive_pass_failures = u32::try_from(limit - 1).unwrap();
+    state.pull_drain.drain_last_pass = Some(streak);
+    runtime.write_run_state(&exhausted, &state).unwrap();
+    let failed =
+        classify(&runtime, &exhausted, json!({})).expect_err("a pass at the deferral limit fails");
+    assert!(
+        failed.contains(".task-commit.lock")
+            && failed.contains(&format!("held by pid {} ", holder.pid)),
+        "the failure carries the lock error: {failed}"
+    );
+    let pass = last_pass(&runtime, &exhausted);
+    assert_eq!(pass["last_pass_error_code"], "lock_busy", "{pass}");
+    assert_eq!(pass["consecutive_pass_failures"], limit, "{pass}");
+    holder.release();
+}
+
+/// Lock holders across admission passes longer than one acquisition
+/// deadline. A shared holder, as ordinary task-store work holds the lock,
+/// lets an `enforce` pass read the backlog and reserve its wave but holds out
+/// its admission section. Such a pass is deferred and the drain stays running
+/// with `lock_busy` naming the holder, even when releasing the wave's
+/// reservations fails too: the reservation it could not release stays until
+/// its TTL. A pass whose release succeeds leaves the host's reservations as
+/// they were before it. Once the holder lets go, the deferred drain admits
+/// the task with one reservation. The deferral limit runs beside these in a
+/// second workspace. A non-lock failure still fails the pass at once and
+/// records no deferral.
 #[test]
 fn a_drain_defers_an_admission_pass_held_out_by_the_task_commit_lock() {
     if !isolated(TEST) {
@@ -210,10 +255,12 @@ fn a_drain_defers_an_admission_pass_held_out_by_the_task_commit_lock() {
         hold_lock(Path::new(&target));
         return;
     }
+    let limit_case =
+        std::thread::spawn(a_drain_at_the_deferral_limit_fails_on_an_admission_section);
     let (root, runtime, _repo) = runtime();
     let task = seed(&runtime, Seed::default());
     let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
-    let exhausted = running_run(&runtime, "workspace_auto_pipeline", json!({}));
+    let unreleased = running_run(&runtime, "workspace_auto_pipeline", json!({}));
 
     // A failure that is not a lock wait fails the pass as it always did.
     let refused = classify(&runtime, &drain, json!({"max_tasks": "many"}))
@@ -228,9 +275,40 @@ fn a_drain_defers_an_admission_pass_held_out_by_the_task_commit_lock() {
     let lock = partition_lock(root.path());
     let signals = tempfile::TempDir::new_in(root.path()).unwrap();
     let before = reserved(&runtime);
+    let holder = Holder::spawn(&lock, signals.path(), true);
+    let section_held_by_holder = |pass: &Value| {
+        let error = pass["last_pass_error"].as_str().unwrap_or_default();
+        error.starts_with("admit the wave through the admission section: ")
+            && error.contains(&format!("pid {} ", holder.pid))
+    };
+
+    // Held out of the admission section, and the release of the wave's
+    // reservations loses to the host store as well.
+    let deferred = orbit_core::test_support::with_reservation_release_failure(
+        || orbit_core::OrbitError::Store("the host store is busy".into()),
+        || classify(&runtime, &unreleased, json!({})),
+    )
+    .expect("a failed release still leaves a lock-busy pass deferred");
+    assert_eq!(deferred["pass_deferred"]["code"], "lock_busy", "{deferred}");
+    let pass = last_pass(&runtime, &unreleased);
+    assert_eq!(pass["last_pass_error_code"], "lock_busy", "{pass}");
+    assert_eq!(pass["consecutive_pass_failures"], 1, "{pass}");
+    assert!(section_held_by_holder(&pass), "{pass}");
+    let shown = as_operator(
+        &runtime,
+        "orbit.workflow.run.show",
+        json!({"id": unreleased}),
+    );
+    assert_eq!(shown["state"], "running", "{shown}");
+    let mut leaked = before.clone();
+    leaked.push(task.id.clone());
+    assert_eq!(
+        reserved(&runtime),
+        leaked,
+        "the reservation a failed release kept is the pass's one copy"
+    );
 
     // Held out of the admission section after gap fit reserved the wave.
-    let holder = Holder::spawn(&lock, signals.path(), true);
     let deferred = classify(&runtime, &drain, json!({}))
         .expect("a pass held out by the lock is deferred, not failed");
     assert_eq!(deferred["has_leaves"], false, "{deferred}");
@@ -244,12 +322,12 @@ fn a_drain_defers_an_admission_pass_held_out_by_the_task_commit_lock() {
     let pass = last_pass(&runtime, &drain);
     assert_eq!(pass["last_pass_error_code"], "lock_busy", "{pass}");
     assert_eq!(pass["consecutive_pass_failures"], 1, "{pass}");
-    let error = pass["last_pass_error"].as_str().unwrap_or_default();
     assert!(
-        error.starts_with("admit the wave through the admission section: ")
-            && error.contains(&format!("pid {} ", holder.pid)),
+        section_held_by_holder(&pass),
         "the deferred pass names the admission section and the lock's holder: {pass}"
     );
+    // Reservations are keyed by task, so this release also gives back the
+    // copy the failed release kept.
     assert_eq!(
         reserved(&runtime),
         before,
@@ -257,33 +335,6 @@ fn a_drain_defers_an_admission_pass_held_out_by_the_task_commit_lock() {
     );
     let shown = as_operator(&runtime, "orbit.workflow.run.show", json!({"id": drain}));
     assert_eq!(shown["state"], "running", "{shown}");
-    holder.release();
-
-    // One busy pass short of the limit, the next busy pass fails the drain
-    // with the lock error.
-    let holder = Holder::spawn(&lock, signals.path(), false);
-    let limit = deferred["pass_deferred"]["limit"].as_u64().unwrap();
-    let mut state: PipelineState = runtime.read_run_state(&exhausted).unwrap().unwrap();
-    let mut streak: DrainAdmissionPass = serde_json::from_value(pass.clone()).unwrap();
-    streak.consecutive_pass_failures = u32::try_from(limit - 1).unwrap();
-    state.pull_drain.drain_last_pass = Some(streak);
-    runtime.write_run_state(&exhausted, &state).unwrap();
-    let failed =
-        classify(&runtime, &exhausted, json!({})).expect_err("a pass at the deferral limit fails");
-    assert!(
-        failed.contains(".task-commit.lock")
-            && failed.contains(&format!("held by pid {} ", holder.pid)),
-        "the failure carries the lock error: {failed}"
-    );
-    let pass = last_pass(&runtime, &exhausted);
-    assert_eq!(pass["last_pass_error_code"], "lock_busy", "{pass}");
-    assert_eq!(pass["consecutive_pass_failures"], limit, "{pass}");
-    assert!(
-        pass["last_pass_error"]
-            .as_str()
-            .is_some_and(|error| error.starts_with("record pilot operator handoffs: ")),
-        "an admission section stops the pass where the incident did: {pass}"
-    );
     holder.release();
 
     let admitted = classify(&runtime, &drain, json!({})).expect("the next pass admits");
@@ -296,6 +347,9 @@ fn a_drain_defers_an_admission_pass_held_out_by_the_task_commit_lock() {
     assert_eq!(
         reserved(&runtime),
         expected,
-        "the admitted task holds one reservation, with none left by the deferred pass"
+        "the admitted task holds one reservation, with none left by the deferred passes"
     );
+    if let Err(panic) = limit_case.join() {
+        std::panic::resume_unwind(panic);
+    }
 }

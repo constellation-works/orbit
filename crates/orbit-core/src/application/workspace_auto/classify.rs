@@ -302,9 +302,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
     if let Err(error) =
         admit_through_section(runtime, action, &mut selection, &snapshot.task_lookup)
     {
-        return Err(release_unadmitted_reservations(
-            runtime, action, &reserved, error,
-        ));
+        return Err(release_unadmitted_reservations(runtime, &reserved, error));
     }
     if let (Some(forecast), Some(record)) = (forecast, admission_forecast.as_ref()) {
         record_admission_forecast(
@@ -490,15 +488,17 @@ struct GapFitPass {
 }
 
 /// Give back the reservations a pass wrote for a wave it then failed to
-/// admit, and return the pass's failure.
+/// admit, and return the pass's failure unchanged.
 ///
 /// Reservations are released by task, which is how the host store keys them.
-/// If they cannot be released, the pass fails rather than defers whatever
-/// stopped it, so a retried pass never runs with this one's reservations
-/// still counted: they expire with the reservation TTL instead.
+/// A release that fails is logged and the pass's own failure still decides
+/// what happens: a pass that lost only to a busy lock is still deferred, so a
+/// contended host store does not end the drain on its first pass. The
+/// reservations it could not release only hold admission back, expire with
+/// the reservation TTL, and the deferral limit bounds how many such passes
+/// can stack them.
 fn release_unadmitted_reservations(
     runtime: &OrbitRuntime,
-    action: &str,
     reserved: &[(String, String)],
     error: PassError,
 ) -> PassError {
@@ -509,23 +509,63 @@ fn release_unadmitted_reservations(
         .iter()
         .map(|(workspace, task)| (workspace.as_str(), task.as_str()))
         .collect();
-    match runtime.release_admission_reservations(&keys) {
-        Ok(()) => error,
-        Err(release_error) => {
-            tracing::warn!(
-                target: "orbit.core.job_run",
-                error = %error.reason(),
-                release_error = %release_error,
-                "drain could not release the reservations of a wave it did not admit; the pass fails"
-            );
-            PassError::Dispatch(DispatchError::action_failed(
-                action,
-                format!(
-                    "{}; the wave's host load reservations could not be released: {release_error}",
-                    error.reason()
-                ),
-            ))
+    if let Err(release_error) = release_reservations(runtime, &keys) {
+        tracing::warn!(
+            target: "orbit.core.job_run",
+            error = %error.reason(),
+            release_error = %release_error,
+            reservations = ?reserved,
+            "drain could not release the reservations of a wave it did not admit; they expire with their TTL"
+        );
+    }
+    error
+}
+
+fn release_reservations(
+    runtime: &OrbitRuntime,
+    keys: &[(&str, &str)],
+) -> Result<(), orbit_common::OrbitError> {
+    #[cfg(feature = "test-support")]
+    if let Some(error) = release_failure_hook::take() {
+        return Err(error);
+    }
+    runtime.release_admission_reservations(keys)
+}
+
+/// Fail the next reservation release on this thread, for a test that needs
+/// the release to lose to the host store while the pass's own failure stands.
+#[cfg(feature = "test-support")]
+pub(crate) mod release_failure_hook {
+    use std::cell::RefCell;
+
+    use orbit_common::OrbitError;
+
+    type Failure = Box<dyn FnOnce() -> OrbitError>;
+
+    thread_local! {
+        static HOOK: RefCell<Option<Failure>> = RefCell::new(None);
+    }
+
+    pub(super) fn take() -> Option<OrbitError> {
+        HOOK.with(|slot| slot.borrow_mut().take())
+            .map(|fail| fail())
+    }
+
+    /// Run `operation` with the first admission-reservation release a drain
+    /// pass attempts on this thread failing with `fail()`.
+    pub fn with_reservation_release_failure<T>(
+        fail: impl FnOnce() -> OrbitError + 'static,
+        operation: impl FnOnce() -> T,
+    ) -> T {
+        struct Clear;
+        impl Drop for Clear {
+            fn drop(&mut self) {
+                HOOK.with(|slot| *slot.borrow_mut() = None);
+            }
         }
+        HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(fail)));
+        let _guard = Clear;
+        operation()
     }
 }
 

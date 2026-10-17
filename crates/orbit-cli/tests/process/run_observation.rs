@@ -2127,7 +2127,7 @@ fn run_show_counts_local_deferred_tasks_once() {
         "local deferred tasks must not be counted twice: {text}"
     );
     let dated = format!(
-        "(from the last completed pass at {})",
+        "(as of the last completed pass at {})",
         completed.format("%Y-%m-%d %H:%M:%SZ")
     );
     assert!(
