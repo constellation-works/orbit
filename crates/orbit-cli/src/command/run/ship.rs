@@ -89,7 +89,6 @@ impl ShipCommand {
 impl Execute for ShipCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let mode = resolve_ship_mode(&self, runtime)?;
-        validate_task_selection(&self.task_ids)?;
         ensure_workflow_exists(SHIP_WORKFLOW)?;
         // Ship is the one workflow whose submission carries task-level
         // admission checks, so it must not use the generic CLI dispatcher.
@@ -173,53 +172,6 @@ fn resolve_ship_mode(
         return Ok(orbit_core::ShipMode::Pr);
     };
     Ok(mode)
-}
-
-#[derive(Args)]
-#[command(
-    about = "Deprecated alias for `orbit run ship --mode local`",
-    override_usage = "orbit run ship-local [<TASK_ID>...] [OPTIONS]",
-    after_help = "`orbit run ship-local` was replaced by `orbit run ship --mode local`."
-)]
-pub struct LegacyShipLocalCommand {
-    /// Deprecated. Pass task IDs to `orbit run ship --mode local`.
-    #[arg(value_name = "TASK_ID", num_args = 0..)]
-    pub task_ids: Vec<String>,
-    /// Deprecated. Use `orbit run ship --mode local --base <BRANCH>`.
-    #[arg(short = 'b', long)]
-    pub base: Option<String>,
-}
-
-impl Execute for LegacyShipLocalCommand {
-    fn execute(self, _runtime: &OrbitRuntime) -> CommandOut {
-        let _ = self;
-        Err(OrbitError::InvalidInput(
-            "`orbit run ship-local` was replaced by `orbit run ship --mode local`".to_string(),
-        ))
-    }
-}
-
-fn validate_task_selection(task_ids: &[String]) -> Result<(), OrbitError> {
-    if let Some(legacy) = task_ids.first().and_then(|value| legacy_ship_form(value)) {
-        return Err(OrbitError::InvalidInput(legacy.to_string()));
-    }
-    Ok(())
-}
-
-fn legacy_ship_form(value: &str) -> Option<&'static str> {
-    match value {
-        "local" => {
-            Some("`orbit run ship local` was replaced by `orbit run ship --mode local <TASK_ID>`")
-        }
-        "pr" => Some("`orbit run ship pr` was replaced by `orbit run ship --mode pr <TASK_ID>`"),
-        "auto" | "ship-auto" => Some(
-            "`orbit run ship auto` was replaced by `orbit run auto`; `orbit run ship` remains leaf-only auto shipment when no task ids are supplied",
-        ),
-        "list" | "show" => Some(
-            "`orbit run ship list/show` was removed; use `orbit run history -j <JOB_ID>` and `orbit run show <RUN_ID>` for run inspection",
-        ),
-        _ => None,
-    }
 }
 
 fn ensure_workflow_exists(workflow_alias: &'static str) -> Result<(), OrbitError> {
