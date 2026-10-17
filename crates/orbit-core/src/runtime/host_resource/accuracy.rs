@@ -15,6 +15,11 @@
 //!   per drain, however many passes it appeared in. Pull drains separately
 //!   count request forecasts, requests sent, and shadow requests enforce
 //!   would have held because no work fit, even without a returned claim.
+//! - **Enforce decisions.** Per drain, over its local `enforce` passes: the
+//!   distinct tasks the pass admitted, and the distinct tasks gap fit held
+//!   (`fit_skipped`). A task held on one pass and admitted on another counts
+//!   in both. Pull drains separately count enforce requests held because no
+//!   work fit. Shadow columns stay on shadow passes only.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -124,7 +129,7 @@ pub struct ForecastPair {
     pub measured_memory_bytes: u64,
 }
 
-/// One drain's shadow decisions against what it admitted.
+/// One drain's shadow and enforce decisions against what it admitted.
 #[derive(Debug, Clone, Serialize)]
 pub struct DrainShadowDecisions {
     pub workspace_id: String,
@@ -133,16 +138,22 @@ pub struct DrainShadowDecisions {
     pub enforce_passes: u64,
     /// Tasks the drain admitted during its shadow passes.
     pub admitted: u64,
-    /// Admitted while gap fit would have held them.
+    /// Admitted while gap fit would have held them. Shadow passes only.
     pub would_hold: Vec<String>,
-    /// Gap fit would have admitted them in a pass that did not.
+    /// Gap fit would have admitted them in a pass that did not. Shadow only.
     pub would_add: Vec<String>,
+    /// Distinct tasks local enforce passes admitted.
+    pub enforce_admitted: u64,
+    /// Distinct tasks gap fit held on local enforce passes (`fit_skipped`).
+    pub gap_held: Vec<String>,
     /// Pull request forecasts, including ones enforce held.
     pub pull_requests: u64,
     /// Requests actually sent to the owner, in either mode.
     pub pull_sent: u64,
     /// Shadow requests enforce would have held (`forecast_no_headroom`).
     pub pull_would_hold: u64,
+    /// Enforce pull requests held because no work fit (`forecast_no_headroom`).
+    pub pull_held: u64,
 }
 
 /// The report over preselected `records` against the host's measured `minutes`.
@@ -283,9 +294,12 @@ fn shadow_decisions(records: &[AdmissionForecastRecord]) -> Vec<DrainShadowDecis
         admitted: BTreeSet<String>,
         would_hold: BTreeSet<String>,
         would_add: BTreeSet<String>,
+        enforce_admitted: BTreeSet<String>,
+        gap_held: BTreeSet<String>,
         pull_requests: u64,
         pull_sent: u64,
         pull_would_hold: u64,
+        pull_held: u64,
     }
     let mut drains: BTreeMap<(&str, &str), Drain> = BTreeMap::new();
     for record in records {
@@ -301,11 +315,16 @@ fn shadow_decisions(records: &[AdmissionForecastRecord]) -> Vec<DrainShadowDecis
                 drain.pull_would_hold += u64::from(pull.forecast_no_headroom);
             } else {
                 drain.enforce_passes += 1;
+                drain.pull_held += u64::from(pull.forecast_no_headroom);
             }
             continue;
         }
         if record.mode != SHADOW {
             drain.enforce_passes += 1;
+            drain
+                .enforce_admitted
+                .extend(record.admitted.iter().cloned());
+            drain.gap_held.extend(record.fit_skipped.iter().cloned());
             continue;
         }
         drain.shadow_passes += 1;
@@ -331,9 +350,12 @@ fn shadow_decisions(records: &[AdmissionForecastRecord]) -> Vec<DrainShadowDecis
             admitted: drain.admitted.len() as u64,
             would_hold: drain.would_hold.into_iter().collect(),
             would_add: drain.would_add.into_iter().collect(),
+            enforce_admitted: drain.enforce_admitted.len() as u64,
+            gap_held: drain.gap_held.into_iter().collect(),
             pull_requests: drain.pull_requests,
             pull_sent: drain.pull_sent,
             pull_would_hold: drain.pull_would_hold,
+            pull_held: drain.pull_held,
         })
         .collect()
 }
