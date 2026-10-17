@@ -258,6 +258,17 @@ spec:
          editing it back, never with Git) before you finish: settlement
          refuses the record when the final candidate does not carry each
          target exactly as you received it.
+         A control on a file your own repair changed cannot come back to the
+         bytes you received, and your repair commit captures whatever the
+         control leaves there. Before the control touches such a file, run
+         `git hash-object <path>` (read-only) on its repaired state and record
+         that blob id under the target's path in the record's
+         `repaired_blob`; then restore the file to exactly those bytes. A
+         repaired finding must list the file in `paths`. Settlement refuses
+         the record when the target has no declared blob, no repaired finding
+         lists it, or the final candidate does not carry the declared blob.
+         Hash before the control runs, never afterwards: a blob taken after
+         it records the mutation, not the repair.
        - `excluded`: an action outside the authorized scope that you
          deliberately did not perform, such as a live deployment. Record it as
          `not_run` (or `denied`); it supplies no coverage and creates no
@@ -456,6 +467,8 @@ spec:
                          "description":"repository-relative paths the outcome is about; required for expected_failure, a failed diagnostic and a baseline claim"},
               "mutation_target":{"type":"array","items":{"type":"string"},
                          "description":"counterfactual only: repository-relative paths the control temporarily changed and restored byte-identical; may lie outside the task's scope"},
+              "repaired_blob":{"type":"object","additionalProperties":{"type":"string"},
+                         "description":"for a mutation_target your own repair changed: its path mapped to the `git hash-object` blob of the repaired file, taken before the control mutated it"},
               "deferred":{"type":"array","items":{"type":"string"},
                           "description":"each DEFERRED: line a passing run printed for a sandbox-confined path it did not execute"},
               "baseline":{"type":"object","required":["base_commit","outcome"],

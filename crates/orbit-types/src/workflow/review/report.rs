@@ -206,6 +206,7 @@ fn normalize_report(report: &mut Value) {
                 "control",
                 "sources",
                 "mutation_target",
+                "repaired_blob",
                 "deferred",
             ] {
                 if record.get(optional).is_some_and(Value::is_null) {

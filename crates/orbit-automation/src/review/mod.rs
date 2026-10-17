@@ -22,8 +22,9 @@ use crate::delivery::json_definition_epoch;
 mod validation;
 
 pub use validation::{
-    SkippedCheck, ValidationContext, ValidationDefect, in_scope, mutation_targets,
-    same_host_command, validation_evidence, validation_limitations, validation_role_counts,
+    MutationTarget, SkippedCheck, ValidationContext, ValidationDefect, in_scope, mutation_targets,
+    repaired_paths, same_host_command, validation_evidence, validation_limitations,
+    validation_role_counts,
 };
 
 /// Assurance an exclusion carries when the landing is the reviewed final

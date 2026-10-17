@@ -14,8 +14,9 @@
 
 use chrono::{TimeZone, Utc};
 use orbit_automation::review::{
-    LandingFacts, SkippedCheck, ValidationContext, ValidationDefect, certificate_acceptable,
-    exclusion, mutation_targets, validation_evidence, validation_limitations,
+    LandingFacts, MutationTarget, SkippedCheck, ValidationContext, ValidationDefect,
+    certificate_acceptable, exclusion, mutation_targets, validation_evidence,
+    validation_limitations,
 };
 use orbit_types::workflow::automation::{Delivery, SourceRevision};
 use orbit_types::workflow::{
@@ -320,6 +321,7 @@ fn record(
         control: None,
         sources: Vec::new(),
         mutation_target: Vec::new(),
+        repaired_blob: Default::default(),
         deferred: Vec::new(),
         baseline: None,
     }
@@ -917,10 +919,11 @@ fn a_counterfactual_names_the_file_it_mutated_apart_from_its_in_scope_sources() 
     );
     assert_eq!(
         mutation_targets(&restored),
-        Ok(vec![(
-            "cargo test -p orbit-review --test fix guards_read_only",
-            production.to_string()
-        )]),
+        Ok(vec![MutationTarget {
+            command: "cargo test -p orbit-review --test fix guards_read_only",
+            path: production.to_string(),
+            repaired_blob: None,
+        }]),
         "settlement compares the target at its repository-relative path"
     );
     let old_shape = mutation(&["crates/orbit-review/tests/fix.rs", production], &[]);
@@ -990,7 +993,7 @@ fn a_mutation_target_must_be_a_repository_relative_path() {
         mutation_targets(std::slice::from_ref(&record)).map(|targets| {
             targets
                 .into_iter()
-                .map(|(_, path)| path)
+                .map(|target| target.path)
                 .collect::<Vec<_>>()
         })
     };

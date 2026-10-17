@@ -244,6 +244,7 @@ impl ReviewedLeaf {
                 control: None,
                 sources: Vec::new(),
                 mutation_target: Vec::new(),
+                repaired_blob: Default::default(),
                 deferred: Vec::new(),
                 baseline: None,
             }],
@@ -358,6 +359,7 @@ impl ReviewedLeaf {
                 control: None,
                 sources: Vec::new(),
                 mutation_target: Vec::new(),
+                repaired_blob: Default::default(),
                 deferred: Vec::new(),
                 baseline: None,
             })

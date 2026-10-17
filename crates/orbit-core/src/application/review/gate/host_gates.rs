@@ -246,6 +246,7 @@ impl Judgement {
                 control: None,
                 sources: Vec::new(),
                 mutation_target: Vec::new(),
+                repaired_blob: Default::default(),
                 deferred: Vec::new(),
                 baseline,
             });
@@ -270,6 +271,7 @@ impl Judgement {
                 control: None,
                 sources: Vec::new(),
                 mutation_target: Vec::new(),
+                repaired_blob: Default::default(),
                 deferred: Vec::new(),
                 baseline: None,
             };

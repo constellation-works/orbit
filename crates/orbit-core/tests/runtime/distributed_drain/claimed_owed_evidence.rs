@@ -86,6 +86,7 @@ pub(super) fn record(id: &str, command: &str, outcome: ValidationOutcome) -> Rev
         control: None,
         sources: Vec::new(),
         mutation_target: Vec::new(),
+        repaired_blob: Default::default(),
         deferred: Vec::new(),
         baseline: None,
     }
