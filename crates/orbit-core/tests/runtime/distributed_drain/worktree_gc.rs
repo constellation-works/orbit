@@ -10,9 +10,14 @@ fn gc_pair(tasks: usize) -> Pair {
 
 /// [`gc_pair`] with `config` appended to the follower's global `config.toml`.
 fn gc_pair_with(tasks: usize, config: &str) -> Pair {
+    replica_gc(Pair::new(tasks), config)
+}
+
+/// Reopen `pair`'s follower as a registered replica runtime, with `config`
+/// appended to its global `config.toml`.
+fn replica_gc(mut pair: Pair, config: &str) -> Pair {
     use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 
-    let mut pair = Pair::new(tasks);
     let global = pair.follower.global_root();
     std::fs::write(
         global.join("config.toml"),
@@ -169,6 +174,42 @@ fn leaf_worktree(pair: &Pair, leaf: &str) -> (PathBuf, u64) {
     std::fs::create_dir_all(&build).unwrap();
     std::fs::write(build.join("orbit"), vec![0u8; 4096]).unwrap();
     (worktree, 4096)
+}
+
+/// Make `replica` a linked worktree of a separate primary clone, as a replica
+/// checkout added with `git worktree add` is, and return the primary.
+fn link_replica_checkout(replica: &Path) -> PathBuf {
+    let parent = replica.parent().unwrap();
+    let primary = parent.join("primary");
+    git(
+        parent,
+        &["init", "-q", "-b", "main", primary.to_str().unwrap()],
+    );
+    std::fs::write(primary.join(".gitignore"), "/target/\n/.orbit/\n").unwrap();
+    git(&primary, &["add", ".gitignore"]);
+    git(&primary, &["commit", "-q", "-m", "init"]);
+    // `git worktree add` needs an empty directory, and the replica already
+    // holds its `.orbit`: add the worktree beside it, then move its link in.
+    let staged = parent.join("replica-link");
+    git(
+        &primary,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--no-checkout",
+            "-b",
+            "replica",
+            staged.to_str().unwrap(),
+        ],
+    );
+    std::fs::remove_dir_all(replica.join(".git")).unwrap();
+    std::fs::rename(staged.join(".git"), replica.join(".git")).unwrap();
+    std::fs::remove_dir(&staged).unwrap();
+    git(replica, &["worktree", "repair"]);
+    git(replica, &["reset", "-q", "--hard"]);
+    assert!(replica.join(".git").is_file());
+    primary.canonicalize().unwrap()
 }
 
 fn gc_report(result: &impl serde::Serialize, leaf: &str) -> Value {
@@ -390,6 +431,93 @@ fn an_accepted_handoff_gives_back_its_build_output_and_then_its_worktree() {
     assert!(
         pair.wire.task_reads.lock().unwrap().is_empty(),
         "an accepted handoff needs no task read or follower task records"
+    );
+}
+
+/// [ORB-16398] A replica checkout that is a linked worktree builds its leaves'
+/// host validation output under the primary that owns its Git directory, not
+/// under its own root. Once the leaf's claim is settled, worktree GC reaps the
+/// leaf's checkout and must reclaim that output with it, while a target no run
+/// derives stays, reported.
+fn a_linked_replica_reclaims_a_settled_leafs_host_validation_output() {
+    let pair = Pair::new(1);
+    let primary = link_replica_checkout(&pair.follower_repo);
+    let config = pair.follower_repo.join(".orbit/config.toml");
+    let mut workspace = std::fs::read_to_string(&config).unwrap_or_default();
+    workspace.push_str("\n[workflow.validation_env]\nbuild_output_env = ['BUILD_OUTPUT_DIR']\n");
+    std::fs::write(&config, workspace).unwrap();
+    let pair = replica_gc(pair, "");
+    let drain = pair.run_drain();
+    let (leaf, worker) = pair.running_leaf_with_worker(&drain, 1);
+    pair.leaf_hands_off(&leaf);
+    assert!(
+        std::process::Command::new("kill")
+            .args(["-TERM", &worker.pid.to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(worker.stopped(), "the handed-off leaf's worker has exited");
+    let settled = pair.pass(&drain);
+    assert!(settled["error"].is_null(), "{settled}");
+    let (worktree, _) = leaf_worktree(&pair, &leaf);
+    let built = orbit_engine::review_gate::run_required_validation(
+        &pair.follower,
+        &worktree,
+        "mkdir -p \"$BUILD_OUTPUT_DIR/debug\" && printf 'leaf host output' > \"$BUILD_OUTPUT_DIR/debug/output\"",
+    )
+    .unwrap();
+    assert!(built.passed, "{}", built.output);
+    let target = PathBuf::from(
+        built.environment["build_output"]["directory"]
+            .as_str()
+            .unwrap(),
+    )
+    .canonicalize()
+    .unwrap();
+    let targets = primary.join(".orbit/state/host-validation-targets");
+    assert_eq!(target.parent(), Some(targets.as_path()));
+    let stray = targets.join("0".repeat(64));
+    std::fs::create_dir_all(stray.join("debug")).unwrap();
+    std::fs::write(stray.join("debug/output"), "unattributed").unwrap();
+
+    let gc = pair
+        .follower
+        .gc_worktrees(true, None, None, false, false)
+        .unwrap();
+    let reports = serde_json::to_value(&gc).unwrap()["reports"].clone();
+    let at = |path: &Path| {
+        reports
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|report| report["path"] == path.to_string_lossy().as_ref())
+            .cloned()
+            .unwrap_or_else(|| panic!("no report for {}: {reports:#}", path.display()))
+    };
+    assert_eq!(at(&worktree)["action"], "removed", "{reports:#}");
+    assert!(!worktree.exists());
+    let reclaimed = at(&target);
+    assert_eq!(reclaimed["action"], "reclaimed", "{reclaimed:#}");
+    assert_eq!(reclaimed["run_id"], leaf, "{reclaimed:#}");
+    assert!(
+        reclaimed["bytes_reclaimed"]
+            .as_u64()
+            .is_some_and(|bytes| bytes >= 16),
+        "{reclaimed:#}"
+    );
+    assert!(
+        !target.exists(),
+        "the settled leaf's host output is reclaimed"
+    );
+    assert_eq!(
+        at(&stray)["action"],
+        "skipped:unattributed_host_target",
+        "{reports:#}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(stray.join("debug/output")).unwrap(),
+        "unattributed"
     );
 }
 
@@ -879,6 +1007,7 @@ crate::scenario_table!(
     delivery_retains_a_shared_worktree_until_every_mapped_run_is_terminal_scenarios,
     delivery_retains_a_shared_worktree_until_every_mapped_run_is_terminal,
     an_accepted_handoff_gives_back_its_build_output_and_then_its_worktree,
+    a_linked_replica_reclaims_a_settled_leafs_host_validation_output,
     a_released_claim_keeps_its_backlogged_worktree_and_unhanded_commit,
     an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure,
     a_replica_collects_a_local_done_task_without_asking_the_owner,
