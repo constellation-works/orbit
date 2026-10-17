@@ -508,6 +508,13 @@ fn job_run_filter_sql(
         conditions.push(format!("created_at >= ?{}", params.len() + 1));
         params.push(Box::new(created_since.to_rfc3339()));
     }
+    if let Some(recency_since) = query.recency_since {
+        conditions.push(format!(
+            "COALESCE(finished_at, started_at, created_at) >= ?{}",
+            params.len() + 1
+        ));
+        params.push(Box::new(recency_since.to_rfc3339()));
+    }
     (conditions.join(" AND "), params)
 }
 

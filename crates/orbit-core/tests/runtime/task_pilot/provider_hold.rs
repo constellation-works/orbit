@@ -92,12 +92,10 @@ fn save_step(
         .unwrap();
 }
 
-/// A finished run. `created_at` stays at `now` so the one-hour scan includes a
-/// finish older than that row's creation, which is how an expiry fixture
-/// reaches the backoff check.
+/// A finished run with independent creation and completion timestamps.
 fn finished_run(
     run_id: &str,
-    now: DateTime<Utc>,
+    created_at: DateTime<Utc>,
     finished_at: DateTime<Utc>,
     state: JobRunState,
     crew: Option<&str>,
@@ -109,7 +107,7 @@ fn finished_run(
         attempt: 1,
         state,
         scheduled_at: finished_at,
-        created_at: now,
+        created_at,
         started_at: Some(finished_at),
         finished_at: Some(finished_at),
         duration_ms: None,
@@ -436,6 +434,67 @@ fn an_expired_unavailable_hold_lets_the_pilot_resume() {
         "fixture",
     );
     assert_resumes(&workspace, now, &task.id);
+}
+
+/// Repair can fail long after the pipeline row was created. The hold must
+/// survive the creation-time scan window and expire from the failure's finish.
+fn an_old_pipeline_repair_failure_holds_until_its_finish_backoff() {
+    let now = Utc::now();
+    let created_at = now - Duration::minutes(75);
+    let finished_at = now - Duration::minutes(5);
+    for (class, backoff_minutes) in [
+        (ProviderFailureClass::Unavailable, 30),
+        (ProviderFailureClass::Capacity, 15),
+    ] {
+        let workspace = Workspace::new();
+        let task = workspace.task("wait for the repair pilot provider to recover");
+        let run_id = "jrun-old-repair";
+        save_pilot_run(
+            &workspace,
+            run_id,
+            created_at,
+            finished_at,
+            JobRunState::Failed,
+            "fixture",
+            "fixture",
+        );
+        let step = JobRunStep {
+            step_index: 4,
+            target_type: JobTargetType::Activity,
+            target_id: "repair_pilots".into(),
+            state: JobRunState::Failed,
+            started_at: Some(created_at + Duration::minutes(40)),
+            finished_at: Some(finished_at),
+            duration_ms: None,
+            exit_code: Some(1),
+            error_code: Some(class.as_str().into()),
+            error_message: Some(provider_failure_text(class, "codex", "repair failure")),
+            agent_response_json: None,
+            lock_wait_ms: None,
+        };
+        workspace
+            .runtime
+            .sqlite_store()
+            .unwrap()
+            .upsert_job_run_step_for_workspace(
+                &workspace.runtime.workspace_id().unwrap(),
+                run_id,
+                &step,
+            )
+            .unwrap();
+
+        let expires_at = finished_at + Duration::minutes(backoff_minutes);
+        for check_at in [now, expires_at - Duration::seconds(1)] {
+            let reason = assert_withheld(&workspace, check_at, &task.id);
+            assert!(
+                reason.contains(class.as_str())
+                    && reason.contains(run_id)
+                    && reason.contains(&until_text(finished_at, backoff_minutes)),
+                "the repair failure holds until its finish-based backoff: {reason}"
+            );
+        }
+        assert_resumes(&workspace, expires_at, &task.id);
+    }
 }
 
 fn a_later_success_clears_unavailable_and_capacity() {
@@ -1084,6 +1143,7 @@ fn a_hold_that_starts_during_debounce_withholds_the_pending_pilot() {
 crate::scenario_table!(
     task_pilot_routine_honours_host_provider_holds_scenarios,
     unavailable_on_the_only_crew_withholds_and_creates_no_pilot_run,
+    an_old_pipeline_repair_failure_holds_until_its_finish_backoff,
     a_hold_that_starts_during_debounce_withholds_the_pending_pilot,
     an_expired_unavailable_hold_lets_the_pilot_resume,
     a_later_success_clears_unavailable_and_capacity,

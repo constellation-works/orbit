@@ -494,6 +494,10 @@ pub struct JobRunQuery {
     /// `terminal_only`; combining this with `terminal_only` yields no rows.
     pub active_only: bool,
     pub created_since: Option<DateTime<Utc>>,
+    /// Inclusive lower bound on run recency: `finished_at`, else `started_at`,
+    /// else `created_at`. Applied before ordering, limiting and step hydration,
+    /// independently of `created_since` and `order_by`.
+    pub recency_since: Option<DateTime<Utc>>,
     pub limit: Option<usize>,
     /// Which timestamp `limit` truncates against. Defaults to `CreatedAt` so
     /// existing CLI/history callers keep their current ordering.
@@ -515,6 +519,7 @@ impl Default for JobRunQuery {
             terminal_only: false,
             active_only: false,
             created_since: None,
+            recency_since: None,
             limit: None,
             order_by: JobRunOrder::default(),
             include_steps: true,

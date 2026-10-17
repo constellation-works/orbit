@@ -159,6 +159,7 @@ fn job_run_query(params: JobRunListParams) -> JobRunQuery {
         terminal_only: params.terminal_only,
         active_only: false,
         created_since: params.since,
+        recency_since: None,
         limit: params.limit,
         order_by: params.order_by,
         include_steps: true,
