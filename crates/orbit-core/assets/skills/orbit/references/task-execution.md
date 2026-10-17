@@ -1,7 +1,10 @@
 # Executing a task
 
 Carry a task from intent to verified implementation with explicit lifecycle
-tracking. Every `orbit.task.*` call needs `model` — your agent family.
+tracking. Every `orbit.task.*` call needs `model` — your agent family. The
+operator close of a rescued blocked task omits `model`, so the write is not
+attributed to an agent; see
+[Close a rescued blocked task](../../orbit-orchestrate/references/recovery.md#close-a-rescued-blocked-task).
 
 No task ID yet? Use the authorized intent, clarify only missing requirements,
 then use
@@ -71,19 +74,19 @@ and repository policy authorize it; a technical lifecycle transition is not a
 substitute for human approval.
 
 For authorized direct pickup (not an already-started managed activity), use `orbit.task.update` with
-`status: "in-progress"` and a `note`. It moves `proposed`, `backlog`, `someday`,
-or `blocked` → `in-progress`; the transition records existing authorization, not
-a new grant. Supply a real plan when starting from `proposed`, `someday` or
-`blocked`:
+`status: "in-progress"` and a `note`. Legal sources are `proposed`, `backlog`,
+`someday`, `blocked`, `rejected`, and `review`. The transition records existing
+authorization, not a new grant. Supply a real plan from every source except
+`backlog`:
 
 ```bash
 orbit tool run orbit.task.update --input '{"id":"<task-id>","status":"in-progress","plan":"<implementation and validation steps>","note":"<authorized pickup>","model":"<agent-family>"}'
 ```
 
-`rejected` is not a pickup state. Reconsider it only when a reviewer or other
-authorized decision explicitly requests a revision; first use
-`orbit.task.update` to move the task to `backlog`, recording that authorization,
-then take it from the backlog in a separate update:
+Reconsider `rejected` only when a reviewer or other authorized decision
+explicitly requests a revision. The table allows `backlog` or `in-progress`.
+`in-progress` needs a plan on that write. Returning to `backlog` does not, and
+a later pickup from `backlog` is a separate update:
 
 ```bash
 orbit tool run orbit.task.update --input '{"id":"<task-id>","status":"backlog","comment":"Authorized revision: <reviewer decision>","model":"<agent-family>"}'
@@ -301,13 +304,13 @@ Justification), `Recommended follow-ups:`.
 One task per activity invocation — no multiplexing. Ask clarifying questions
 before implementing if material ambiguity remains. If approval for `proposed`
 work can't be obtained, stop after recording that state. Use `orbit.task.update`
-with `status: "in-progress"` only for `proposed`, `backlog`, `someday`, or
-`blocked` pickup; an authorized `rejected` revision must return to `backlog`
-first. Direct
+with `status: "in-progress"` for `proposed`, `backlog`, `someday`, `blocked`,
+`rejected`, or `review`. A plan is required except from `backlog`. An
+authorized `rejected` revision may instead return to `backlog` first. Direct
 execution must persist a non-empty `execution_summary` before or with the
 review transition.
 
-Exit: eligible work started via `orbit.task.update`, or an authorized rejected
-revision returned to `backlog` before pickup; execution summary
+Exit: eligible work started via `orbit.task.update`, including an authorized
+`rejected` revision moved to `backlog` or `in-progress`; execution summary
 persisted; friction checkpoint considered; direct execution advanced to
 `review`.

@@ -71,7 +71,13 @@ MCP, automation or upgrade configuration, use [orbit-setup](../orbit-setup/SKILL
 ## Lifecycle essentials
 
 Normal delivery is `proposed → backlog → in-progress → review → done`.
-Starting proposed, someday or blocked work requires a plan and authorization.
-`done` requires review plus durable completion evidence. Terminal work is not
-reopened to fix regressions: create a linked repair task. Follow supported
-transitions and the assigned workflow; agents have no lifecycle force override.
+Moving to `in-progress` requires a plan from every status except `backlog`;
+starting `proposed`, `someday`, or `blocked` work also needs authorization.
+`done` is reachable only from `review` and needs completion evidence. The
+lifecycle table does not reopen `done` or `archived`; file a regression as a
+new task with a `regression_from` relation. Only an operator's
+`orbit task update <id> --status <status> --force` restores them, and
+`orbit task archive <id>` is that table's move to `archived` (`done` and
+`rejected` are not sources). `rejected` returns to `backlog` or
+`in-progress`. Follow supported transitions and the assigned workflow; agents
+have no lifecycle force override.

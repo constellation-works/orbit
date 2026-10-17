@@ -157,6 +157,8 @@ inexplicably. It has targeted repairs, each narrow on purpose:
 | `--fix-stale-artifacts` | Retires deprecated skills, jobs, activities, auto-tasks, and routines that Orbit itself wrote. Locally modified ones are preserved, not deleted. |
 | `--fix-retired-activity-backends` | Removes known retired `spec.backend` values from agent-loop activities. |
 | `--fix-automation-pins` | Deletes this Orbit root and workspace's own state-routine attempt pins that no consumer or live run still names. Legacy shared `refs/orbit/automation/<attempt>` pins and other roots' or workspaces' pins are retained and reported. Refuses while a routine sweep runs. |
+| `--fix-state-directory-permissions` | Restricts writable Orbit state directories to owner-only access, excluding run worktrees, Cargo target trees, and child symlinks (Unix only). |
+| `--fix-orphan-task-stores` | Deletes empty unclaimed task-store partitions, and populated partitions whose bound checkout is confirmed absent, including their task bundles. Unowned or unreachable populated partitions are left alone. Requires `--confirm`. |
 | `--remove-graph` | Removes retired graph state from this worktree and the shared workspace. |
 
 `--fix-stale-artifacts` is how a workspace catches up after an Orbit upgrade
