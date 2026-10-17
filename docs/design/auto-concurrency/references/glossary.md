@@ -14,7 +14,7 @@ repeated here.
 |------|---------|
 | **Admit thresholds** | The host CPU and memory levels, below the throttle's marks, that forecast load plus a candidate's profile must stay under. [2_design.md §5.1](../2_design.md#51-gap-fit) |
 | **Backstop** | The existing resource throttle, which holds all admission under real pressure whatever the forecast says. [2_design.md §5.1](../2_design.md#51-gap-fit) |
-| **Baseline** | Measured host load minus the measured load of running tasks; load that isn't from tasks, held flat over the forecast. [2_design.md §4](../2_design.md#4-the-load-forecast) |
+| **Baseline** | Load that isn't from tasks, held flat over the forecast: the host's last completed minute minus that minute's task load, or the measured host load now minus running tasks' load when no such minute exists. [2_design.md §4](../2_design.md#4-the-load-forecast) |
 | **Delivery** | All runs of one task admitted together (a local chain or one claimed run), sampled as one series from the admission minute. [2_design.md §2](../2_design.md#2-sampling-each-task) |
 | **Gap fit** | Admitting a candidate because forecast load plus its profile stays under the admit thresholds for its whole horizon. [2_design.md §5.1](../2_design.md#51-gap-fit) |
 | **Horizon** | A candidate's 90th-percentile duration from its profile, capped at 120 minutes; the span gap fit checks. [2_design.md §3](../2_design.md#3-profiles) |

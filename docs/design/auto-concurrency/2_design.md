@@ -420,10 +420,9 @@ and built only under the host admission lock (§5.2):
   of its live runs' newest minutes.
 - **Flat tail.** A delivery past its profile's last minute, or with no
   profile at all, contributes its current use at every minute.
-- **Baseline.** Both sides of `B` are means over the same wall-clock
-  minute, so a momentary spike, or a delivery that started after the
-  minute, does not move it (`forecast/host_load.rs`, read just before the
-  lock):
+- **Baseline.** Both sides of `B` cover the same wall-clock minute, so a
+  momentary spike, or a delivery that started after the minute, does not
+  move it (`forecast/host_load.rs`, read just before the lock):
   - **Aligned minute.** The newest `host_resource_minutes` row that started
     within the last 5 minutes and at least 2 minutes 10 seconds ago. By then
     every run minute overlapping it has ended and been written. Every run's

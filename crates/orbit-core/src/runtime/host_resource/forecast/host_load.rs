@@ -37,8 +37,9 @@ pub(crate) struct NonTaskMinute {
 
 /// The newest recorded host minute whose run minutes have all been written,
 /// minus those run minutes, each weighted by how much of the host minute it
-/// covers. Both sides are means over the same wall-clock window, so a
-/// momentary spike, or a delivery that started after the minute, adds
+/// covers. Both sides cover the same wall-clock window (CPU as means, memory
+/// as peaks, as the workers record them), so a momentary spike, or a delivery
+/// that started after the minute, adds
 /// nothing. `None` when no host minute is recent enough or the store cannot
 /// be read: the baseline then comes from the reading now.
 pub(crate) fn non_task_minute(
