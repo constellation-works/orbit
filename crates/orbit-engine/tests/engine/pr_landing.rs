@@ -1554,8 +1554,20 @@ fn a_base_modified_merge_refusal_retries_the_same_candidate_on_fresh_evidence() 
                     fx.complete_ungated_input()
                 };
 
-                let completed = action(&host, "pr_complete", &input)
-                    .unwrap_or_else(|error| panic!("{case}: {error}"));
+                // Every completion clock read advances one millisecond, so the
+                // deadline is always read back after a millisecond boundary.
+                // CI crossed that boundary by chance and reported a sixth
+                // waited second that no poll spent.
+                let clock = std::rc::Rc::new(std::cell::Cell::new(1_000_u64));
+                let completed = orbit_engine::test_support::with_prerequisite_clock(
+                    move || {
+                        clock.set(clock.get() + 1);
+                        clock.get()
+                    },
+                    |_, _| {},
+                    || action(&host, "pr_complete", &input),
+                )
+                .unwrap_or_else(|error| panic!("{case}: {error}"));
 
                 let condition = format!("sha={} merge_method=squash", fx.candidate);
                 assert_eq!(
