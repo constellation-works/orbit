@@ -1793,8 +1793,26 @@
       },
       {
         "name": "concurrency",
-        "description": "Worker limit, positive u32. Optional for start (omitted uses runtime default); required for resize. The drain's only ceiling: delivery jobs impose none of their own",
+        "description": "Worker limit, positive u32. Optional for start (omitted uses runtime default); required for resize. Status previews this ceiling; omitted uses the live local drain, then live pull drain, then default. The drain's only ceiling: delivery jobs impose none of their own",
         "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "task",
+        "description": "Status only: one task ID or a list to explain instead of the bounded backlog",
+        "param_type": "string_list",
+        "required": false
+      },
+      {
+        "name": "limit",
+        "description": "Status only: maximum tasks to explain, including an explicit selection (1-500; default 50)",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "allow_crew",
+        "description": "Status only: configured crews to evaluate; omitted uses the live drain's restriction, if any",
+        "param_type": "string_list",
         "required": false
       },
       {

@@ -106,7 +106,22 @@ const AUTO: OperationSpec<WorkflowVerb> = OperationSpec {
         mcp_only(
             "concurrency",
             ParamType::Integer,
-            "Worker limit, positive u32. Optional for start (omitted uses runtime default); required for resize. The drain's only ceiling: delivery jobs impose none of their own",
+            "Worker limit, positive u32. Optional for start (omitted uses runtime default); required for resize. Status previews this ceiling; omitted uses the live local drain, then live pull drain, then default. The drain's only ceiling: delivery jobs impose none of their own",
+        ),
+        mcp_only(
+            "task",
+            ParamType::StringList,
+            "Status only: one task ID or a list to explain instead of the bounded backlog",
+        ),
+        mcp_only(
+            "limit",
+            ParamType::Integer,
+            "Status only: maximum tasks to explain, including an explicit selection (1-500; default 50)",
+        ),
+        mcp_only(
+            "allow_crew",
+            ParamType::StringList,
+            "Status only: configured crews to evaluate; omitted uses the live drain's restriction, if any",
         ),
         mcp_only(
             "id",

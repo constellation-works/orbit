@@ -670,3 +670,102 @@ fn desktop_governance_and_bounded_reads() {
         orbit_common::test_env::record_scenario_pass(name);
     }
 }
+
+#[test]
+fn drain_status_preserves_readiness_selection_and_shared_metadata() {
+    if crate::isolated_test::run_in_child(
+        "mcp_roundtrip::desktop::drain_status_preserves_readiness_selection_and_shared_metadata",
+    ) {
+        return;
+    }
+    let workspace = McpWorkspace::init();
+    let selector = workspace.work.to_str().unwrap();
+    let mut client = workspace.serve_with_args(&["--operator"]);
+    let mut ids = Vec::new();
+    for title in ["First readiness selection", "Second readiness selection"] {
+        let task = client.call_tool_ok(
+            "orbit_task_add",
+            json!({"workspace":selector,"title":title,"description":"Observe only the named readiness selection","complexity":"low","model":"codex"}),
+        );
+        ids.push(task["id"].as_str().unwrap().to_string());
+    }
+    for (task, crews) in [
+        (json!(ids[1]), json!("sol")),
+        (json!([ids[1]]), json!(["sol"])),
+    ] {
+        let status = client.call_tool_ok("orbit_workflow_auto", json!({"workspace":selector,"action":"status","task":task,"concurrency":7,"limit":500,"allow_crew":crews}));
+        assert_eq!(status["tasks"].as_array().unwrap().len(), 1, "{status}");
+        assert_eq!(status["tasks"][0]["task_id"], ids[1]);
+        assert_eq!(status["capacity"]["max_active_leaf_runs"], 7);
+        assert_eq!(status["capacity"]["allowed_crews"], json!(["sol"]));
+        assert_eq!(status["replica"], false);
+        assert!(
+            status
+                .get("validation_env_warning")
+                .is_some_and(Value::is_null),
+            "{status}"
+        );
+        assert_eq!(
+            status["controls_authorized"], true,
+            "task-panel drain controls remain available"
+        );
+    }
+    assert_eq!(
+        client.call_tool_err(
+            "orbit_workflow_auto",
+            json!({"workspace":selector,"action":"status","task":ids,"limit":1})
+        )["code"],
+        "invalid_input",
+        "explicit selections larger than the limit are refused"
+    );
+    for limit in [0, 501] {
+        assert_eq!(
+            client.call_tool_err(
+                "orbit_workflow_auto",
+                json!({"workspace":selector,"action":"status","limit":limit})
+            )["code"],
+            "invalid_input"
+        );
+    }
+    for (field, value) in [
+        ("task", json!(ids[0])),
+        ("limit", json!(50)),
+        ("allow_crew", json!(["sol"])),
+    ] {
+        let mut input = json!({"workspace":selector,"action":"start","for_seconds":60});
+        input[field] = value;
+        assert_eq!(
+            client.call_tool_err("orbit_workflow_auto", input)["code"],
+            "invalid_input",
+            "readiness selectors must not enable control settings"
+        );
+    }
+    let runs = client.call_tool_ok(
+        "orbit_workflow_run_list",
+        json!({"workspace":selector,"view":"bounded"}),
+    );
+    assert_eq!(
+        runs["total"], 0,
+        "readiness and refused controls submit no runs"
+    );
+    let replica = McpWorkspace::init_replica_of("hm_remote_owner");
+    let mut replica_client = replica.serve_with_args(&["--operator"]);
+    let status = replica_client.call_tool_ok(
+        "orbit_workflow_auto",
+        json!({"workspace":replica.work.to_str().unwrap(),"action":"status"}),
+    );
+    assert_eq!(status["replica"], true);
+    let cli = orbit_ok(
+        McpWorkspace::orbit_command(&replica.work, &replica.home).args([
+            "run",
+            "readiness",
+            "--json",
+        ]),
+    );
+    let cli: Value = serde_json::from_slice(&cli.stdout).unwrap();
+    assert_eq!(cli["replica"], true);
+    assert!(
+        cli.get("validation_env_warning")
+            .is_some_and(Value::is_null)
+    );
+}
