@@ -621,7 +621,7 @@ orbit gc tmp --workspace my-workspace --confirm          # empty it, keep the di
 
 ## Browser checks on a prepared host
 
-Browser checks need Playwright and Chromium, plus Chromium's shared libraries and a font configuration on Linux. A prepared host has a kit at `~/.local/chromium-deps`; its `env.sh` exports `PLAYWRIGHT_BROWSERS_PATH` and `PLAYWRIGHT_MODULE` (Playwright's `index.mjs`), and on Linux also `LD_LIBRARY_PATH` and `FONTCONFIG_FILE`. Source it first. To build, verify or upgrade the kit on Linux or macOS, see the orbit-setup [browser kit reference](../crates/orbit-core/assets/skills/orbit-setup/references/browser-checks.md). On a host without it, set `PLAYWRIGHT_MODULE` yourself and stage dependencies under `.orbit/tmp/` ([runbook](runbooks/website-validation.md#stage-playwright-and-chromium-without-root)). Skia FontConfig crashes and missing `lib*.so` errors are host evidence, not a failed check.
+Browser checks need Playwright and Chromium, plus Chromium's shared libraries and a font configuration on Linux. A prepared host has a kit at `~/.local/chromium-deps`; its `env.sh` exports `PLAYWRIGHT_BROWSERS_PATH` and `PLAYWRIGHT_MODULE` (Playwright's `index.mjs`), and on Linux also `LD_LIBRARY_PATH` and `FONTCONFIG_FILE`. Source it first. To build, verify or upgrade the kit on Linux or macOS, see the orbit-setup [browser kit reference](../crates/orbit-core/assets/skills/orbit-setup/references/browser-checks.md). On a host without it, build the kit there rather than installing Playwright into a checkout: `.orbit/tmp/` is cleared, so it holds only a sandboxed run's disposable copy when the kit is absent ([runbook](runbooks/website-validation.md#stage-playwright-and-chromium-without-root)). Skia FontConfig crashes and missing `lib*.so` errors are host evidence, not a failed check.
 
 ```bash
 . ~/.local/chromium-deps/env.sh
@@ -684,7 +684,7 @@ node website/scripts/check-changelog.mjs \
   "$PLAYWRIGHT_MODULE" http://localhost:4187 .orbit/tmp/changelog-browser
 ```
 
-It checks release dates, merged-PR links, version and subsection anchors, keyboard and no-JavaScript disclosure controls, the version badge and future-dated headings, and records heights and screenshots at 1440px and 375px in both themes. In a restricted executor, keep `PLAYWRIGHT_BROWSERS_PATH`, browser output, screenshots and JSON evidence under `.orbit/tmp/`; point transient `TMPDIR` at a sandbox-writable tmpfs when available. A minimal Linux runner may also need `FONTCONFIG_FILE` naming a config with local fonts.
+It checks release dates, merged-PR links, version and subsection anchors, keyboard and no-JavaScript disclosure controls, the version badge and future-dated headings, and records heights and screenshots at 1440px and 375px in both themes. Source `~/.local/chromium-deps/env.sh` for `PLAYWRIGHT_MODULE` and `PLAYWRIGHT_BROWSERS_PATH`. In a restricted executor, keep browser output, screenshots and JSON evidence under `.orbit/tmp/`; point transient `TMPDIR` at a sandbox-writable tmpfs when available. A minimal Linux runner may also need `FONTCONFIG_FILE` naming a config with local fonts.
 
 ## MCP Apps compatibility prototype
 

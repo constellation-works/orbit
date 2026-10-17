@@ -97,20 +97,20 @@ follows the same toggle: while stdout relays are hidden it holds the newest
 event that is not one, so a drain's agent traffic does not replace an Orbit
 warning.
 
-To validate the dashboard with a prepared Playwright module and Chromium, run
-the isolated browser fixture (1440 px, snapshot, live and paused relays, paths,
-filters, and reload persistence):
+To validate the dashboard in Chromium, source the host's
+[browser kit](../DEVELOPMENT.md#browser-checks-on-a-prepared-host) and run the
+isolated browser fixture (1440 px, snapshot, live and paused relays, paths,
+filters, and reload persistence). The kit's `env.sh` exports
+`PLAYWRIGHT_MODULE` and `PLAYWRIGHT_BROWSERS_PATH`, plus `LD_LIBRARY_PATH` and
+`FONTCONFIG_FILE` on Linux:
 
 ```sh
-ORBIT_PLAYWRIGHT_MODULE="$PWD/.orbit/tmp/browser/node_modules/playwright/index.mjs" \
+. ~/.local/chromium-deps/env.sh
+ORBIT_PLAYWRIGHT_MODULE="$PLAYWRIGHT_MODULE" \
 ORBIT_LOG_BROWSER_EVIDENCE_DIR="$PWD/.orbit/tmp/log-browser" \
-PLAYWRIGHT_BROWSERS_PATH="$PWD/.orbit/tmp/browser/browsers" \
 ./scripts/build-budget.py -- cargo test -p orbit-web --test http_api \
   log::dashboard_log_message_priority_and_agent_filter -- --ignored --nocapture
 ```
-
-On minimal Linux images, also supply the prepared browser's
-`LD_LIBRARY_PATH` and `FONTCONFIG_FILE` for its private libraries and fonts.
 
 ## Rotation and retention
 
