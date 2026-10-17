@@ -39,6 +39,14 @@
 # (`orbit run task-pilot <id>`) remain available for proposed/backlog workspace
 # tasks and do not use this routine's configurable eligibility gate. Other
 # statuses refuse the entire explicit selection before assessment.
+#
+# A host provider hold withholds this dispatch while it covers every crew this
+# job could draw: `provider_unavailable` from the last 30 minutes, or
+# `provider_capacity` from the last 15 minutes. The routine records
+# `provider_hold` and starts no run. The end of the backoff resumes it, and so
+# does a success on this host that started after the failure: of the provider
+# for unavailability, of the held crew for crew capacity. A recovered auth
+# probe also clears unavailability, never capacity. No operator action.
 schemaVersion: 1
 name: __ORBIT_ROUTINE_NAME__
 description: >

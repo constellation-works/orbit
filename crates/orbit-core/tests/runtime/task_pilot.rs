@@ -33,6 +33,7 @@ mod inspection;
 mod malformed_input;
 mod native_os;
 mod pilot_output;
+mod provider_hold;
 mod races;
 mod review_evidence;
 mod settlement;

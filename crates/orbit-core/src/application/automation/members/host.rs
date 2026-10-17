@@ -94,6 +94,7 @@ impl<'a> Host<'a> {
             owner: RefCell::new(None),
             head: RefCell::new(None),
             inspection_cache: None,
+            pilot_hold: RefCell::new(None),
         }
     }
 

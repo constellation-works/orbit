@@ -23,7 +23,7 @@ const WINDOW: Duration = Duration::days(7);
 
 /// Most-recent runs read for each side of the projection. A busy host can
 /// push an older failure or its clearing success past this page.
-const SCAN_LIMIT: usize = 200;
+pub(crate) const SCAN_LIMIT: usize = 200;
 
 /// One run that failed authentication and has not been cleared.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -154,7 +154,7 @@ impl OrbitRuntime {
         Some(canonical_provider(&raw))
     }
 
-    fn provider_of_crew(&self, name: &str) -> Option<String> {
+    pub(crate) fn provider_of_crew(&self, name: &str) -> Option<String> {
         let crew = self.context.settings().crews().get(name)?;
         Some(canonical_provider(&crew.assignment.provider))
     }
@@ -170,7 +170,7 @@ impl OrbitRuntime {
         declared.unwrap_or_else(|| relogin_hint(provider))
     }
 
-    fn fallback_host(&self) -> String {
+    pub(crate) fn fallback_host(&self) -> String {
         let Some(location) = self.automation_execution_location() else {
             return "this host".to_string();
         };
@@ -185,7 +185,11 @@ impl OrbitRuntime {
     }
 }
 
-fn bounded_query(state: JobRunState, since: DateTime<Utc>, include_steps: bool) -> JobRunQuery {
+pub(crate) fn bounded_query(
+    state: JobRunState,
+    since: DateTime<Utc>,
+    include_steps: bool,
+) -> JobRunQuery {
     JobRunQuery {
         state: Some(state),
         created_since: Some(since),
@@ -196,17 +200,18 @@ fn bounded_query(state: JobRunState, since: DateTime<Utc>, include_steps: bool) 
     }
 }
 
-fn run_at(run: &JobRun) -> DateTime<Utc> {
+/// When a run ended: its finish, else its start, else its row's creation.
+pub(crate) fn run_at(run: &JobRun) -> DateTime<Utc> {
     run.finished_at.or(run.started_at).unwrap_or(run.created_at)
 }
 
 /// When a success shows that the provider works. A run that started before a
 /// failure used the credentials that failed, even if it finished after it.
-fn clearing_at(run: &JobRun) -> DateTime<Utc> {
+pub(crate) fn clearing_at(run: &JobRun) -> DateTime<Utc> {
     run.started_at.unwrap_or(run.created_at)
 }
 
-fn host_of(run: &JobRun, fallback: &str) -> String {
+pub(crate) fn host_of(run: &JobRun, fallback: &str) -> String {
     run.executed_on
         .as_ref()
         .and_then(|location| {
@@ -226,7 +231,7 @@ fn named(value: &Option<String>) -> Option<String> {
         .map(str::to_string)
 }
 
-fn canonical_provider(raw: &str) -> String {
+pub(crate) fn canonical_provider(raw: &str) -> String {
     let trimmed = raw.trim();
     Provider::parse(trimmed)
         .map(|provider| provider.as_str().to_string())

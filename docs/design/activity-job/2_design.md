@@ -1295,6 +1295,13 @@ blocks publish empty arrays. The errors key must be nonempty and distinct
 from the fan-out's own id and collect alias; it carries the same guard chain
 as the collect alias and is cleared when final recovery reruns the step.
 
+A join that fails without a worker error keeps the lowest-indexed
+unsuccessful worker's own message as the step's failure message, so the run's
+recorded error carries that worker's cause (a provider marker such as
+`[provider_unavailable] provider=<name>`, say) instead of the executor's
+generic `completed with success=false` fallback. With no worker message the
+fallback stays.
+
 Collection does not itself interpret a successful activity call whose payload
 reports a failed child run. A parent that waits on child workflows must pass
 the collected wait entries to `pipeline_success_guard` after fan-in. The CI

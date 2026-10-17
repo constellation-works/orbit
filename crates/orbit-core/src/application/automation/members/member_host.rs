@@ -86,6 +86,11 @@ impl MemberHost for Host<'_> {
             }
             StateTriggerKind::ExecutionFailed => BTreeMap::new(),
         };
+        // One scan for the page. Admission of a member retained from an
+        // earlier page reads this cache instead of scanning again.
+        let provider_hold = (self.trigger.kind == StateTriggerKind::PreparationEligible)
+            .then(|| self.pilot_provider_withhold(now))
+            .flatten();
 
         for envelope in tasks.items {
             let task = self.runtime.get_task(&envelope.id)?;
@@ -99,6 +104,10 @@ impl MemberHost for Host<'_> {
                     }
                     if let Some(run_ids) = active_preparations.get(&task.id) {
                         withheld.insert(task.id, already_preparing(run_ids));
+                        continue;
+                    }
+                    if let Some(reason) = &provider_hold {
+                        withheld.insert(task.id, reason.clone());
                         continue;
                     }
                     let fingerprint = match self.fingerprint(&task, &source.commit) {
@@ -260,6 +269,12 @@ impl MemberHost for Host<'_> {
                 {
                     return Ok(MemberAdmission::Retire("assessment_fresh".into()));
                 }
+            }
+            // A member retained from before the hold started is still pending.
+            // Withhold it here, after the active-pilot guard, so the routine
+            // does not submit a run the provider would fail.
+            if let Some(reason) = self.cached_pilot_provider_withhold() {
+                return Ok(MemberAdmission::Withhold(reason));
             }
             return Ok(MemberAdmission::Admit);
         }
@@ -639,6 +654,31 @@ impl MemberHost for Host<'_> {
 }
 
 impl Host<'_> {
+    /// The task-pilot withhold for `now`, cached so this evaluation scans the
+    /// host's recent runs once. A different clock replaces the cache.
+    fn pilot_provider_withhold(&self, now: DateTime<Utc>) -> Option<String> {
+        if let Some(cached) = self.pilot_hold.borrow().as_ref()
+            && cached.now == now
+        {
+            return cached.withhold.clone();
+        }
+        let withhold = self.runtime.task_pilot_provider_withhold(now);
+        *self.pilot_hold.borrow_mut() = Some(super::PilotHoldCache {
+            now,
+            withhold: withhold.clone(),
+        });
+        withhold
+    }
+
+    /// Admission reads the observation cache. A reconcile that admits before
+    /// observation computes the hold at the current time.
+    fn cached_pilot_provider_withhold(&self) -> Option<String> {
+        if let Some(cached) = self.pilot_hold.borrow().as_ref() {
+            return cached.withhold.clone();
+        }
+        self.pilot_provider_withhold(Utc::now())
+    }
+
     /// The task statuses this consumer's members are observed in.
     fn observed_statuses(&self) -> Vec<TaskStatus> {
         match self.trigger.kind {

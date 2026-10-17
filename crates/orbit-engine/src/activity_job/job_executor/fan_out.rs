@@ -152,6 +152,7 @@ pub(super) fn run_fan_out(
     let mut collected_count = 0u32;
     let mut failed_count = 0u32;
     let mut first_error: Option<DispatchError> = None;
+    let mut first_failure: Option<String> = None;
     let mut sorted = results
         .into_inner()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -173,6 +174,9 @@ pub(super) fn run_fan_out(
             Ok(o) => {
                 failed_count += 1;
                 collected.push(Value::Null);
+                if first_failure.is_none() {
+                    first_failure.clone_from(&o.message);
+                }
                 errors.push(Value::String(o.message.unwrap_or_else(|| {
                     format!("worker {idx} completed with success=false")
                 })));
@@ -218,10 +222,13 @@ pub(super) fn run_fan_out(
     }
     record_pipeline(ctx, &step.id, collected_value.clone());
 
+    // A failed join keeps the first failing worker's own diagnostic, so the
+    // run's terminal error carries the provider marker or other cause that
+    // worker reported instead of the executor's generic fallback.
     Ok(StepOutcome {
         success: block_ok,
         output: collected_value,
-        message: None,
+        message: (!block_ok).then_some(first_failure).flatten(),
     })
 }
 
