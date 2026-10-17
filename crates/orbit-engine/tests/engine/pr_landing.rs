@@ -1185,6 +1185,7 @@ fn pr_open_preserves_provider_number_representations() {
 /// request, even when GitHub reports `BLOCKED` or `UNKNOWN` instead of
 /// `DRAFT`. A ready pull request (`isDraft` false) still merges.
 #[test]
+#[allow(clippy::print_stderr)] // Name the draft or ready case in isolated child failure output.
 fn a_draft_pull_request_stops_completion_before_any_merge_request() {
     isolated(
         "a_draft_pull_request_stops_completion_before_any_merge_request",
