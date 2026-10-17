@@ -10,8 +10,8 @@ spec:
     so landing review, completion and auto-fix continue on that pull request
     instead of waiting for an operator. A leaf qualifies when its run ended
     within 24 hours of its last recorded activity (not at an upgrade boundary,
-    which the clock resumes), is not a claimed execution, has no retry yet, no
-    earlier run of its retry lineage was adopted, its pull request is still
+    which the clock resumes), is not a claimed execution and not itself a
+    resumed attempt, has no retry yet, its pull request is still
     open on the head branch it opened it on, every task it carries is still in
     `review`, this drain holds the `completion` and `auto_fix` authority the
     leaf was started with, and the ordinary checkpoint resume accepts it. At

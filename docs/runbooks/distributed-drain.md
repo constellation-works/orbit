@@ -1177,7 +1177,7 @@ depends on where it ran:
 - **Owner-local leaf.** The owner drain's next pass adopts it when it holds
   the leaf's `--complete` and `--auto-fix` grants and the task is still in
   `review`. The pass resumes the interrupted run from its checkpoints, once
-  per retry lineage, so completion and auto-fix continue on the same pull
+  (never a resumed attempt), so completion and auto-fix continue on the same pull
   request and head. A leaf that died before promoting its task leaves it
   interruption-`blocked`, which the blocked-task recovery backstop decides. Every rule and every refusal is listed in
   [stuck job runs](stuck-job-runs.md#a-delivery-leaf-that-died-after-opening-its-pull-request).

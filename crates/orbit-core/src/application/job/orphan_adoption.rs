@@ -21,9 +21,12 @@
 //! - it ended within [`ADOPTION_WINDOW`] of its last recorded activity (older
 //!   ones are left to `orbit job resume`), not at an upgrade boundary (the
 //!   clock resumes those), and is not a claimed execution;
-//! - its worker is dead, no retry resumed it yet, no earlier pass decided it
-//!   and no earlier run of its retry lineage was adopted: a leaf that keeps
-//!   dying is adopted once, then left to an operator;
+//! - it is an original attempt, not itself a resume, its worker is dead, no
+//!   retry resumed it yet and no earlier pass decided it. Both lineage tests
+//!   read the run records, not the audit, so a lineage is adopted at most
+//!   once even when the adoption's audit is lost: a resumed attempt that dies
+//!   again, whether a drain or an operator resumed it, is left to an
+//!   operator;
 //! - its `pr_open` succeeded and that pull request is still open on the same
 //!   head branch;
 //! - every task it carries is still in `review`, checked again just before
@@ -36,8 +39,9 @@
 //! most as many runs as the drain has free slots.
 //!
 //! Every final decision, adoption or skip, is audited once under
-//! [`ORPHAN_ADOPTION_AUDIT`]. A missing authority, an unreadable store or
-//! forge, a resume that could not be planned for a reason other than its
+//! [`ORPHAN_ADOPTION_AUDIT`]; the audit only spares a later pass the work of
+//! deciding again. A missing authority, an unreadable store, forge or
+//! activity catalog, a resume that could not be planned for a reason other than its
 //! validation, or a failed submission is not a decision: a later pass
 //! reconsiders the run. No error ends the drain: one run's error defers that
 //! run, and an error the whole pass hits is reported as its `pass_error`.
@@ -68,9 +72,6 @@ const ADOPTION_WINDOW: TimeDelta = TimeDelta::hours(24);
 
 /// Interrupted delivery leaves read by one pass.
 const ADOPTION_SCAN_LIMIT: usize = 64;
-
-/// Retry-lineage ancestors read when looking for an earlier adoption.
-const LINEAGE_DEPTH_LIMIT: usize = 64;
 
 /// The authority the adopting drain was started with.
 pub(crate) struct AdoptionAuthority<'a> {
@@ -110,6 +111,17 @@ impl Skip {
     fn unreadable(what: &str, error: &OrbitError) -> Self {
         Self::deferred("store_unreadable", format!("{what}: {error}"))
     }
+}
+
+/// Reads one pass shares across its candidates, so an unreachable forge or
+/// an unloadable activity catalog costs one attempt per pass, not one per
+/// run.
+#[derive(Default)]
+struct PassReads {
+    /// The first forge read failure of this pass.
+    forge_error: Option<String>,
+    /// The activity catalog's load result, once read.
+    catalog: Option<Result<(), String>>,
 }
 
 /// What one pass does with one interrupted run.
@@ -171,6 +183,7 @@ impl OrbitRuntime {
         let mut adopted = Vec::new();
         let mut skipped = Vec::new();
         let mut missing_authority = Vec::new();
+        let mut reads = PassReads::default();
         for run in interrupted {
             if adopted.len() >= authority.budget {
                 break;
@@ -184,7 +197,7 @@ impl OrbitRuntime {
             {
                 continue;
             }
-            let verdict = match self.adoption_verdict(&run, authority) {
+            let verdict = match self.adoption_verdict(&run, authority, &mut reads) {
                 Verdict::Adopt(pull_request) => self.submit_adoption(&run, authority, pull_request),
                 verdict => verdict,
             };
@@ -245,7 +258,12 @@ impl OrbitRuntime {
     }
 
     /// Whether `run` is adopted, and if not, why.
-    fn adoption_verdict(&self, run: &JobRun, authority: &AdoptionAuthority<'_>) -> Verdict {
+    fn adoption_verdict(
+        &self,
+        run: &JobRun,
+        authority: &AdoptionAuthority<'_>,
+        reads: &mut PassReads,
+    ) -> Verdict {
         let skip = |skip: Skip| Verdict::Skip(skip);
         match self.stores().jobs().job_run_retries(&run.run_id, 1) {
             Ok(retries) if !retries.is_empty() => return Verdict::Ignore,
@@ -260,18 +278,14 @@ impl OrbitRuntime {
         if run_owner_liveness(run) == RunOwnerLiveness::Alive {
             return Verdict::Ignore;
         }
-        match self.adopted_lineage_ancestor(run) {
-            Ok(None) => {}
-            Ok(Some(ancestor)) => {
-                return skip(Skip::decided(
-                    "lineage_adopted",
-                    format!(
-                        "run {ancestor} of this retry lineage was already adopted once; resume \
-                         it with `orbit job resume` once the cause is fixed"
-                    ),
-                ));
-            }
-            Err(error) => return skip(Skip::unreadable("read the retry lineage", &error)),
+        if let Some(source) = run.retry_source_run_id.as_deref() {
+            return skip(Skip::decided(
+                "resumed_attempt",
+                format!(
+                    "this run resumes {source}; a resumed attempt that dies again is left to \
+                     `orbit job resume` once the cause is fixed"
+                ),
+            ));
         }
         match self.is_claimed_execution(&run.run_id) {
             Ok(false) => {}
@@ -326,6 +340,12 @@ impl OrbitRuntime {
                 ),
             ));
         }
+        if let Some(error) = &reads.forge_error {
+            return skip(Skip::deferred(
+                "forge_unreadable",
+                format!("not read after this pass's earlier forge failure: {error}"),
+            ));
+        }
         let repo_root = self.context.paths().repo_root.clone();
         match self.task_pr_forge().open_pull_request(&repo_root, number) {
             Ok(Some(pull)) if pull.head_branch == head => {}
@@ -335,13 +355,32 @@ impl OrbitRuntime {
                     format!("pull request #{number} is no longer open on '{head}'"),
                 ));
             }
-            Err(error) => return skip(Skip::deferred("forge_unreadable", error.to_string())),
+            Err(error) => {
+                let error = error.to_string();
+                reads.forge_error = Some(error.clone());
+                return skip(Skip::deferred("forge_unreadable", error));
+            }
+        }
+        // Resume planning reports an unloadable activity catalog (an I/O
+        // error, or a workspace activity file caught mid-edit) as a
+        // validation refusal, which would read as final. Load it first so
+        // that case defers.
+        let catalog = reads.catalog.get_or_insert_with(|| {
+            self.v2_activity_catalog()
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        });
+        if let Err(error) = catalog {
+            return skip(Skip::deferred(
+                "resume_unplannable",
+                format!("load the activity catalog: {error}"),
+            ));
         }
         match self.plan_job_run_resume(&run.run_id) {
             Ok(_) => Verdict::Adopt(number),
             // Validation is the planner's answer about this run; anything
-            // else (a store read, the catalog, an unsettled claim journal)
-            // may answer differently on a later pass.
+            // else (a store read, an unsettled claim journal) may answer
+            // differently on a later pass.
             Err(error @ OrbitError::JobValidation(_)) => {
                 skip(Skip::decided("not_resumable", error.to_string()))
             }
@@ -427,44 +466,8 @@ impl OrbitRuntime {
         Ok(())
     }
 
-    /// The earliest run of `run`'s retry lineage an earlier pass adopted, if
-    /// any: a leaf that died again after its adoption is not adopted twice.
-    fn adopted_lineage_ancestor(&self, run: &JobRun) -> Result<Option<String>, OrbitError> {
-        let mut source = run.retry_source_run_id.clone();
-        for _ in 0..LINEAGE_DEPTH_LIMIT {
-            let Some(ancestor) = source else {
-                return Ok(None);
-            };
-            if self.orphan_adoption_adopted(&ancestor)? {
-                return Ok(Some(ancestor));
-            }
-            source = self
-                .stores()
-                .jobs()
-                .get_job_run(&ancestor)?
-                .and_then(|run| run.retry_source_run_id);
-        }
-        Ok(None)
-    }
-
     /// Whether an earlier pass already adopted or skipped `run_id`.
     fn orphan_adoption_decided(&self, run_id: &str) -> Result<bool, OrbitError> {
-        Ok(!self.orphan_adoption_decisions(run_id, 1)?.is_empty())
-    }
-
-    /// Whether an earlier pass adopted `run_id`.
-    fn orphan_adoption_adopted(&self, run_id: &str) -> Result<bool, OrbitError> {
-        Ok(self
-            .orphan_adoption_decisions(run_id, 8)?
-            .iter()
-            .any(|decision| decision["decision"] == "adopted"))
-    }
-
-    fn orphan_adoption_decisions(
-        &self,
-        run_id: &str,
-        limit: usize,
-    ) -> Result<Vec<Value>, OrbitError> {
         let decisions = self
             .stores()
             .audit_events()
@@ -472,19 +475,10 @@ impl OrbitRuntime {
                 tool_name: Some(ORPHAN_ADOPTION_AUDIT.to_string()),
                 status: Some(AuditEventStatus::Success),
                 job_run_id: Some(run_id.to_string()),
-                limit,
+                limit: 1,
                 ..AuditEventFilter::default()
             })?;
-        Ok(decisions
-            .iter()
-            .map(|event| {
-                event
-                    .arguments_json
-                    .as_deref()
-                    .and_then(|raw| serde_json::from_str(raw).ok())
-                    .unwrap_or(Value::Null)
-            })
-            .collect())
+        Ok(!decisions.is_empty())
     }
 
     fn audit_orphan_adoption(&self, run: &JobRun, drain_run_id: &str, decision: Value) {

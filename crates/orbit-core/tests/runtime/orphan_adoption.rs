@@ -4,8 +4,10 @@
 //! request under the run's retry lineage. A run is left alone when the drain
 //! lacks the authority it was started with (until a drain holding it passes),
 //! and for good when its pull request is no longer open, its task moved on or
-//! was deleted, it never opened one, or its lineage was already adopted once.
-//! One run's store error defers that run and never fails the pass.
+//! was deleted, it never opened one, or it is itself a resumed attempt. One
+//! run's store error, an unreachable forge (read once per pass) and an
+//! unloadable activity catalog defer instead of deciding, and nothing is
+//! adopted under host resource pressure.
 //!
 //! The pass runs as the drain's own `adopt_orphaned_deliveries` step through
 //! the runtime's deterministic dispatch, against a fake forge. Resumed runs
@@ -28,13 +30,21 @@ use orbit_types::workflow::{JobRunState, JobTargetType, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-/// The forge's open pull requests; adoption only reads them.
+/// The forge's open pull requests; adoption only reads them, one at a time.
+#[derive(Default)]
+struct ForgeState {
+    open: Vec<ForgePullRequest>,
+    /// Every read answers with an error, as an unreachable GitHub does.
+    unreachable: bool,
+    reads: usize,
+}
+
 #[derive(Default, Clone)]
-struct FakeForge(Arc<Mutex<Vec<ForgePullRequest>>>);
+struct FakeForge(Arc<Mutex<ForgeState>>);
 
 impl FakeForge {
     fn open(&self, number: u64, head_branch: &str) {
-        self.0.lock().unwrap().push(ForgePullRequest {
+        self.0.lock().unwrap().open.push(ForgePullRequest {
             number,
             head_branch: head_branch.to_string(),
             body: String::new(),
@@ -45,7 +55,24 @@ impl FakeForge {
 
 impl TaskPrForge for FakeForge {
     fn open_pull_requests(&self, _repo_root: &Path) -> Result<Vec<ForgePullRequest>, OrbitError> {
-        Ok(self.0.lock().unwrap().clone())
+        Ok(self.0.lock().unwrap().open.clone())
+    }
+
+    fn open_pull_request(
+        &self,
+        _repo_root: &Path,
+        number: u64,
+    ) -> Result<Option<ForgePullRequest>, OrbitError> {
+        let mut state = self.0.lock().unwrap();
+        state.reads += 1;
+        if state.unreachable {
+            return Err(OrbitError::Execution("gh pr view failed: timed out".into()));
+        }
+        Ok(state
+            .open
+            .iter()
+            .find(|pull| pull.number == number)
+            .cloned())
     }
 
     fn authenticated_login(&self, _repo_root: &Path) -> Result<String, OrbitError> {
@@ -63,9 +90,11 @@ const LEAF_YAML: &str = "schemaVersion: 2\nkind: Job\nmetadata:\n  name: task_pr
 
 struct Fixture {
     _root: TempDir,
+    activities: std::path::PathBuf,
     runtime: OrbitRuntime,
     jobs: Arc<dyn JobRunStoreBackend>,
     forge: FakeForge,
+    probe: Arc<super::dispatch_admission::PressureProbe>,
 }
 
 impl Fixture {
@@ -89,18 +118,22 @@ impl Fixture {
             .unwrap();
         }
         let forge = FakeForge::default();
+        let probe = super::dispatch_admission::PressureProbe::calm();
         let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
             .unwrap()
-            .with_task_pr_forge(Arc::new(forge.clone()));
+            .with_task_pr_forge(Arc::new(forge.clone()))
+            .with_host_resource_probe(probe.clone());
         let jobs = orbit_store::compose::workspace_job_run_store(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );
         Self {
             _root: root,
+            activities,
             runtime,
             jobs,
             forge,
+            probe,
         }
     }
 
@@ -380,7 +413,7 @@ fn a_leaf_that_dies_again_after_its_adoption_is_left_to_an_operator() {
     assert_eq!(again["adopted"], json!([]), "{again}");
     assert_eq!(
         skipped_reason(&again, &resumed),
-        Some(("lineage_adopted".to_string(), true)),
+        Some(("resumed_attempt".to_string(), true)),
         "{again}"
     );
     assert!(
@@ -433,10 +466,83 @@ fn store_and_task_errors_skip_one_run_and_never_fail_the_pass() {
     );
 }
 
+fn an_unreachable_forge_is_read_once_per_pass_and_defers_every_run() {
+    let fx = Fixture::new();
+    let (_, first, first_head) = fx.dead_leaf(Some(51));
+    let (_, second, second_head) = fx.dead_leaf(Some(52));
+    fx.forge.open(51, &first_head);
+    fx.forge.open(52, &second_head);
+    fx.forge.0.lock().unwrap().unreachable = true;
+    let drain = fx.drain();
+
+    let pass = fx.pass(&drain, "done", true);
+    assert_eq!(pass["adopted"], json!([]), "{pass}");
+    for run in [&first, &second] {
+        assert_eq!(
+            skipped_reason(&pass, run),
+            Some(("forge_unreadable".to_string(), false)),
+            "{pass}"
+        );
+    }
+    assert_eq!(
+        fx.forge.0.lock().unwrap().reads,
+        1,
+        "a pass stops reading the forge after its first failure"
+    );
+
+    // Neither run was decided, so a pass after the forge is back adopts.
+    fx.forge.0.lock().unwrap().unreachable = false;
+    let back = fx.pass(&drain, "done", true);
+    assert_eq!(back["adopted"].as_array().unwrap().len(), 2, "{back}");
+}
+
+fn an_unloadable_activity_catalog_defers_instead_of_deciding() {
+    let fx = Fixture::new();
+    let (_, run, head) = fx.dead_leaf(Some(61));
+    fx.forge.open(61, &head);
+    // An activity file caught mid-edit.
+    let broken = fx.activities.join("half_written.yaml");
+    std::fs::write(
+        &broken,
+        "schemaVersion: 2\nkind: Activity\nmetadata: [unclosed\n",
+    )
+    .unwrap();
+    let drain = fx.drain();
+
+    let pass = fx.pass(&drain, "done", true);
+    assert_eq!(
+        skipped_reason(&pass, &run),
+        Some(("resume_unplannable".to_string(), false)),
+        "{pass}"
+    );
+    assert!(fx.retries(&run).is_empty());
+
+    std::fs::remove_file(&broken).unwrap();
+    let fixed = fx.pass(&drain, "done", true);
+    assert_eq!(fixed["adopted"].as_array().unwrap().len(), 1, "{fixed}");
+}
+
+fn host_resource_pressure_holds_adoption() {
+    let fx = Fixture::new();
+    let (_, run, head) = fx.dead_leaf(Some(71));
+    fx.forge.open(71, &head);
+    let drain = fx.drain();
+    fx.probe.sustain_memory(&fx.runtime, 95.0);
+
+    let pass = fx.pass(&drain, "done", true);
+    assert_eq!(pass["adopted"], json!([]), "{pass}");
+    assert!(pass["resource_throttle"].is_object(), "{pass}");
+    assert!(fx.retries(&run).is_empty(), "nothing starts under pressure");
+    assert_eq!(fx.forge.0.lock().unwrap().reads, 0, "{pass}");
+}
+
 crate::scenario_table!(
     orphan_adoption_scenarios,
     a_dead_leafs_open_pull_request_is_adopted_once_by_a_drain_holding_its_authority,
     runs_that_no_longer_own_an_open_pull_request_are_left_alone,
     a_leaf_that_dies_again_after_its_adoption_is_left_to_an_operator,
     store_and_task_errors_skip_one_run_and_never_fail_the_pass,
+    an_unreachable_forge_is_read_once_per_pass_and_defers_every_run,
+    an_unloadable_activity_catalog_defers_instead_of_deciding,
+    host_resource_pressure_holds_adoption,
 );

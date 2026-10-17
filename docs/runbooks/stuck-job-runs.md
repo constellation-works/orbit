@@ -832,8 +832,9 @@ publish. A leaf is adopted only when all of these hold:
   (the time orphan reconciliation stamps as its end), not at an upgrade boundary
   (the clock resumes those), and it is not a claimed execution;
 - its worker is dead and no retry has resumed it yet;
-- no earlier run of its retry lineage was adopted: a leaf that dies again after
-  its adoption is left for you to resume;
+- it is an original attempt, not itself a resume: a leaf that dies again after a
+  drain or an operator resumed it is left for you to resume. The test reads the run
+  records, so it holds even if the adoption's audit row was lost;
 - its `pr_open` succeeded and that pull request is still open on the same branch;
 - every task it carries is still in `review`, checked again just before the resume
   is submitted;
@@ -851,7 +852,7 @@ refusals are:
 - `no_pull_request`
 - `no_task`
 - `claimed_execution`
-- `lineage_adopted`
+- `resumed_attempt`
 - `not_resumable` (checkpoint resume refused it)
 
 To see why a leaf was left alone, read the drain's latest `adopt_orphans` step output
@@ -860,9 +861,12 @@ pass considers the leaf again:
 
 - `authority`: a missing grant;
 - `store_unreadable`: an unreadable store;
-- `forge_unreadable`: an unreadable forge;
+- `forge_unreadable`: an unreadable forge. After the first failed read, a pass
+  defers its remaining leaves without asking the forge again, so an unreachable
+  GitHub delays admission by at most one read;
 - `resume_unplannable`: a resume that could not be planned for a reason other than
-  validation;
+  validation, including an activity catalog that does not load (a file caught
+  mid-edit);
 - `resume_failed`: a failed submission.
 
 The step never ends the drain. When it cannot read its candidates or the drain's
