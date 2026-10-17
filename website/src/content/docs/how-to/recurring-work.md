@@ -94,7 +94,11 @@ policy:
 - **`target`** must be a job (`job:<name>`). To schedule one activity, wrap it
   in a one-step job.
 - **`missed_run`** handles slots missed while the machine slept. `skip`, the
-  default, waits for the next slot. `catch_up_once` fires one make-up run.
+  default, waits for the next slot and records each skipped slot with the
+  reason `missed_run: skip` (`orbit routine list --json`). `catch_up_once`
+  fires one make-up run. Worktree GC always catches up once, even if its
+  seeded file still says `skip`. `orbit doctor` warns when an enabled
+  routine's last success is older than three times its interval.
 - **`overlap: forbid`**, the default, skips a fire while the previous one is
   still running. After `timeout_minutes`, the stuck fire is recorded as timed
   out and stops blocking.

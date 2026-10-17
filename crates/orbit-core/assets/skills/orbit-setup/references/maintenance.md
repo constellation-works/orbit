@@ -142,6 +142,10 @@ orbit doctor            # config, database, disk, indexes, locks, runs
 orbit doctor --json
 ```
 
+`routine-staleness` warns when an enabled cron routine's last success is older
+than three times its interval, naming the routine. Worktree GC catches up once
+on the next clock tick after missed slots.
+
 Run it after an upgrade, after an interrupted run, and whenever something behaves
 inexplicably. It has targeted repairs, each narrow on purpose:
 

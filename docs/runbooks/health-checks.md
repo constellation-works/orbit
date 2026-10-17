@@ -66,6 +66,7 @@ SQLite `PRAGMA quick_check`; it reads the entire store and can take much longer 
 | `mcp-registration` | Recognized client configuration for this workspace | `ok` when a registration is found (connection is **not** checked); otherwise `warning` naming `orbit mcp init --auto` or `orbit mcp init --client <client>`. |
 | `mcp-callers` | Retired destination-side caller-authorization files under the user's `~/.orbit` | `warning` when inert files remain; otherwise `ok`. Remove the obsolete files; SSH keys govern remote access. The row is omitted when the home directory cannot be resolved. |
 | `clock-unit` | Installed launchd/systemd sweep unit's invocation, program path, and `--version` | `skipped` when no unit is installed; `ok` when matching; `warning` for a different path, stale invocation, unrunnable program, or inspection failure; `error` for version mismatch. Follow the unit-file/access remedy or `orbit clock repair`; this row does not establish native timer readiness. |
+| `routine-staleness` | Enabled, unpaused cron routines whose last success is older than three times the routine's schedule interval | `warning` naming each stale routine; `ok` when every judged routine succeeded within that window, including when none are enabled; `skipped` when the workspace has no identity. A paused or disabled routine is not judged. Inspect `orbit routine list --json`. Worktree GC catches up once on the next clock tick. |
 | `store-retention` | Reclaimable audit rows, terminal-run pipeline state, candidate audit blobs, and SQLite file/free-list space under configured retention windows | `ok` when measured; `warning` if inspection fails. This is a read-only estimate. Plan audit and run cleanup with `orbit gc audit` and `orbit gc runs`, then pass `--apply` to delete. The blob amount is an upper bound until the audit reference scan. |
 | `worktree-reclaim` | Bytes reclaimable from kept run worktrees and host validation output | `warning` above 10 GiB or when inspection fails; otherwise `ok`. Inspect `orbit gc worktrees --reclaim`; to reclaim the declared output, run `ORBIT_OPERATOR=1 orbit gc worktrees --reclaim --confirm`. `skipped` outside a Git checkout. |
 
@@ -482,7 +483,9 @@ dashboard's Host Sweep Clock card shows the same states — a degraded clock is 
 `missed`, not `healthy`, even though the launchd service itself is still enabled.
 It does not replay every tick missed during host or manager downtime: on the next sweep,
 routine `missed_run: catch_up_once` fires once for a gap while `skip` waits for the next natural
-cron slot.
+cron slot and records each skipped slot as `missed_run: skip`. Worktree GC always catches up
+once. `orbit doctor` warns on `routine-staleness` when an enabled routine's last success is
+older than three times its interval.
 
 If an `overlap: forbid` routine remains `overlap_in_flight` after a restart, run one explicit
 `orbit clock tick --json` and inspect the referenced run. The tick releases a dispatched in-flight

@@ -47,7 +47,11 @@ worktrees and [host validation output](#host-validation-output) hold more than
 10 GiB of reclaimable output and names this command.
 
 The scheduled `worktree_gc_pipeline` reclaims every retained terminal worktree
-on each sweep, including failed, blocked and review candidates. Its age floor
+on each sweep, including failed, blocked and review candidates. After missed
+hourly slots it catches up once on the next clock tick, including when an
+already-seeded `.orbit/routines/worktree_gc.yaml` still says `missed_run: skip`.
+`orbit doctor` warns on `routine-staleness` when that routine's last success is
+older than three times its hourly interval. Its age floor
 applies to whole-worktree removal; retained terminal output can be reclaimed
 immediately. When configured, actual admission checks free space beneath the
 state directory and visits oldest terminal worktrees with declared output first,

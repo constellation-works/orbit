@@ -230,6 +230,9 @@ pub(crate) const WORKSPACE_PROBES: &[DoctorProbe] = &[
     DoctorProbe::one("worktree-reclaim", |runtime, _| {
         doctor_check_worktree_reclaim(runtime)
     }),
+    DoctorProbe::one("routine-staleness", |runtime, _| {
+        doctor_check_routine_staleness(runtime)
+    }),
     DoctorProbe::many("task-bundles", |runtime, _| {
         doctor_check_unpublished_bundle_dirs(runtime).into()
     }),

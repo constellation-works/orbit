@@ -123,6 +123,10 @@ pub(crate) const SUPERSEDED_ROUTINE_TEMPLATES: &[(&str, &str)] = &[
         include_str!("../../../assets/routines/superseded/worktree_gc.2026-07-12.yaml"),
     ),
     (
+        "worktree_gc",
+        include_str!("../../../assets/routines/superseded/worktree_gc.2026-10-16.yaml"),
+    ),
+    (
         "ship_sweep",
         include_str!("../../../assets/routines/superseded/ship_sweep.2026-07-15.yaml"),
     ),

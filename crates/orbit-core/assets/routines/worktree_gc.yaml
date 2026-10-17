@@ -8,7 +8,8 @@ description: >
 enabled: false
 trigger:
   cron: "35 * * * *"
-  missed_run: skip
+  # Already-seeded copies that still say skip are caught up by the scheduler.
+  missed_run: catch_up_once
 target: job:worktree_gc_pipeline
 policy:
   timeout_minutes: 30

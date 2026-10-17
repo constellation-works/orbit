@@ -51,6 +51,7 @@ mod init_workspace_seed;
 mod layout_version;
 mod replica_routines;
 mod routine_root;
+mod routine_staleness;
 mod routine_state_seed;
 mod run_profiles;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

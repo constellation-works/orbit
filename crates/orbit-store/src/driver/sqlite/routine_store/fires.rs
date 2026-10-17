@@ -116,6 +116,30 @@ impl Store {
         })
     }
 
+    /// Newest succeeded fire for one routine, by completion time.
+    ///
+    /// `updated_at` is when the success was recorded, so a catch-up that
+    /// just completed an old slot counts as fresh. Slot breaks ties.
+    pub fn routine_latest_succeeded_fire(
+        &self,
+        routine_name: &str,
+    ) -> Result<Option<RoutineFireRecord>, OrbitError> {
+        let conn = self.read()?;
+        conn.query_row(
+            &format!(
+                "SELECT {FIRE_COLUMNS} FROM routine_fires
+                 WHERE routine_name = ?1 AND state = ?2
+                 ORDER BY updated_at DESC, slot DESC LIMIT 1"
+            ),
+            params![routine_name, RoutineFireState::Succeeded.as_str()],
+            fire_row,
+        )
+        .optional()
+        .map_err(sqlite_store_error)?
+        .map(RoutineFireRecord::try_from_row)
+        .transpose()
+    }
+
     /// Most recent fire attempt for one routine, if any.
     pub fn routine_latest_fire(
         &self,

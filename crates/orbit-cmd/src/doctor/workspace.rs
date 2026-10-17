@@ -1,6 +1,63 @@
 use super::system::human_bytes;
 use super::*;
 
+pub(super) fn doctor_check_routine_staleness(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    const CHECK: &str = "routine-staleness";
+    match orbit_core::application::routines::stale_cron_routines(runtime, chrono::Utc::now()) {
+        Err(error) if workspace_has_no_identity(&error) => check(
+            CHECK,
+            WorkspaceDoctorStatus::Skipped,
+            "workspace has no identity; routine freshness is not judged".to_string(),
+        ),
+        Err(error) => check(
+            CHECK,
+            WorkspaceDoctorStatus::Warning,
+            format!("cannot judge routine freshness: {error}"),
+        ),
+        Ok(stale) if stale.is_empty() => check(
+            CHECK,
+            WorkspaceDoctorStatus::Ok,
+            "enabled cron routines last succeeded within 3× their interval".to_string(),
+        ),
+        Ok(stale) => {
+            let message = stale
+                .iter()
+                .map(|routine| {
+                    format!(
+                        "{} last succeeded {} ago, past 3× its {} interval",
+                        routine.name,
+                        human_duration(routine.age),
+                        human_duration(routine.interval)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            actionable_check(
+                CHECK,
+                WorkspaceDoctorStatus::Warning,
+                message,
+                "Inspect `orbit routine list --json`. Worktree GC catches up once on the next \
+                 clock tick; other routines keep their missed_run policy."
+                    .to_string(),
+            )
+        }
+    }
+}
+
+fn workspace_has_no_identity(error: &orbit_common::OrbitError) -> bool {
+    let text = error.to_string();
+    text.contains("workspace config is missing") || text.contains("workspace has no identity")
+}
+
+fn human_duration(duration: chrono::Duration) -> String {
+    let minutes = duration.num_minutes().max(0);
+    if minutes < 120 {
+        format!("{minutes}m")
+    } else {
+        format!("{}h", duration.num_hours().max(0))
+    }
+}
+
 pub(super) fn doctor_check_worktree_reclaim(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     const CHECK: &str = "worktree-reclaim";
     if !runtime.paths().repo_root.join(".git").exists() {

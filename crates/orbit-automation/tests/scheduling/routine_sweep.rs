@@ -3,7 +3,11 @@
 //! tick deadline and `overlap: forbid` with an interrupted source run
 //! [ORB-10597].
 
-use chrono::{DateTime, Duration, TimeZone, Utc};
+use chrono::{DateTime, Duration, Local, TimeZone, Utc};
+use orbit_automation::routines::due::{
+    DueDecision, MISSED_RUN_SKIP_REASON, WORKTREE_GC_ROUTINE_JOB, due_decision_with_grace,
+    missed_slot_span, natural_slot_grace_for_cadence, parse_cron,
+};
 use orbit_automation::routines::loader::{LoadedRoutine, RoutineCollection, RoutineOrigin};
 use orbit_automation::routines::sweep::{
     RoutineDispatch, RunOwnerLiveness, SweepOptions, run_sweep_core,
@@ -11,7 +15,7 @@ use orbit_automation::routines::sweep::{
 use orbit_common::OrbitError;
 use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_store::{RoutineFireIntentParams, RoutineFireRecord, RoutineFireState, Store};
-use orbit_types::workflow::JobRunState;
+use orbit_types::workflow::{JobRunState, MissedRunPolicy};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -301,4 +305,152 @@ fn interrupted_run_with_unprobeable_owner_is_reclaimed_at_the_policy_timeout() {
         .find(|fire| fire.slot == slot)
         .unwrap();
     assert_eq!(seeded.state, RoutineFireState::TimedOut);
+}
+
+fn scheduled(name: &str, missed_run: &str, job: &str) -> LoadedRoutine {
+    let yaml = format!(
+        "schemaVersion: 1\n\
+         name: {name}\n\
+         enabled: true\n\
+         trigger:\n  cron: \"0 * * * *\"\n  missed_run: {missed_run}\n\
+         target: job:{job}\n\
+         policy:\n  timeout_minutes: 30\n  overlap: forbid\n  \
+         retries: {{ max: 0, backoff_minutes: 1 }}\n"
+    );
+    LoadedRoutine {
+        definition: parse_routine_yaml(&yaml).expect("valid routine yaml"),
+        origin: RoutineOrigin::Workspace,
+        source_workspace: "polaris".to_string(),
+        source_orbit_dir: PathBuf::from(SOURCE_DIR),
+        path: PathBuf::from(format!("{SOURCE_DIR}/routines/{name}.yaml")),
+    }
+}
+
+fn same_instant(left: &str, right: &str) -> bool {
+    DateTime::parse_from_rfc3339(left)
+        .unwrap()
+        .with_timezone(&Utc)
+        == DateTime::parse_from_rfc3339(right)
+            .unwrap()
+            .with_timezone(&Utc)
+}
+
+/// Missed worktree-GC slots fire once on the next tick. A sibling that keeps
+/// `missed_run: skip` records one reason per missed slot and does not fire.
+/// A sibling configured `catch_up_once` also fires once, not once per slot.
+#[test]
+fn missed_worktree_gc_slots_catch_up_once_and_skip_records_a_reason() {
+    let local_baseline = Local
+        .with_ymd_and_hms(2026, 10, 16, 12, 0, 0)
+        .single()
+        .expect("baseline is a real local time");
+    let local_now = Local
+        .with_ymd_and_hms(2026, 10, 16, 18, 10, 0)
+        .single()
+        .expect("now is a real local time");
+    let baseline = local_baseline.with_timezone(&Utc);
+    let now = local_now.with_timezone(&Utc);
+    let cron = parse_cron("0 * * * *").expect("hourly cron");
+    let grace = natural_slot_grace_for_cadence(60).expect("grace");
+    let skipped = due_decision_with_grace(
+        &cron,
+        MissedRunPolicy::Skip,
+        &local_baseline,
+        &local_now,
+        grace,
+    )
+    .expect("skip decision");
+    let DueDecision::Skipped { slot: latest } = skipped else {
+        panic!("hourly slots from 12:00 to 18:10 local must be past grace, got {skipped:?}");
+    };
+    let span = missed_slot_span(&cron, &local_baseline, &latest, 48).expect("span");
+    assert!(
+        span.slots.len() >= 2,
+        "the fixture must miss more than one slot, got {}",
+        span.slots.len()
+    );
+    let latest_utc = latest.with_timezone(&Utc).to_rfc3339();
+
+    let store = Store::open_in_memory().expect("in-memory store");
+    let gc = scheduled("worktree-gc", "skip", WORKTREE_GC_ROUTINE_JOB);
+    let skip = scheduled("keep-skip", "skip", "other_pipeline");
+    let catch_up = scheduled("catch-up", "catch_up_once", "catch_up_pipeline");
+    for name in ["worktree-gc", "keep-skip", "catch-up"] {
+        store
+            .routine_record_baseline(name, &baseline.to_rfc3339())
+            .unwrap();
+    }
+    let dispatch = FakeDispatch::default();
+    let coll = collection(vec![gc, skip, catch_up]);
+    let reports = run_sweep_core(&store, &coll, &dispatch, SweepOptions::default(), now).unwrap();
+
+    let report = |name: &str| {
+        reports
+            .iter()
+            .find(|report| report.routine == name)
+            .unwrap_or_else(|| panic!("missing report for {name}"))
+    };
+    let gc_report = report("worktree-gc");
+    assert_eq!(gc_report.action, "fired");
+    assert!(
+        same_instant(gc_report.slot.as_deref().unwrap(), &latest_utc),
+        "catch-up consumes the latest missed slot"
+    );
+    let gc_fires = fires(&store, "worktree-gc");
+    assert_eq!(
+        gc_fires.len(),
+        1,
+        "one catch-up, not one fire per missed slot"
+    );
+    assert_eq!(gc_fires[0].state, RoutineFireState::Dispatched);
+
+    let skip_report = report("keep-skip");
+    assert_eq!(skip_report.action, "skipped");
+    assert_eq!(skip_report.reason.as_deref(), Some(MISSED_RUN_SKIP_REASON));
+    let skip_fires = fires(&store, "keep-skip");
+    assert_eq!(skip_fires.len(), span.slots.len());
+    assert!(
+        skip_fires
+            .iter()
+            .all(|fire| fire.state == RoutineFireState::Skipped
+                && fire.detail.as_deref() == Some(MISSED_RUN_SKIP_REASON))
+    );
+
+    let catch_report = report("catch-up");
+    assert_eq!(catch_report.action, "fired");
+    assert!(same_instant(
+        catch_report.slot.as_deref().unwrap(),
+        &latest_utc
+    ));
+    assert_eq!(fires(&store, "catch-up").len(), 1);
+
+    let jobs: Vec<_> = dispatch
+        .submits
+        .borrow()
+        .iter()
+        .map(|(_, job)| job.clone())
+        .collect();
+    assert_eq!(
+        jobs.iter()
+            .filter(|job| job.as_str() == WORKTREE_GC_ROUTINE_JOB)
+            .count(),
+        1
+    );
+    assert_eq!(
+        jobs.iter()
+            .filter(|job| job.as_str() == "catch_up_pipeline")
+            .count(),
+        1
+    );
+    assert!(jobs.iter().all(|job| job.as_str() != "other_pipeline"));
+    assert_eq!(dispatch.submit_count(), 2);
+
+    let again = run_sweep_core(&store, &coll, &dispatch, SweepOptions::default(), now).unwrap();
+    assert!(
+        again.iter().all(|report| report.action != "fired"),
+        "the same instant must not fire the caught-up slots again: {again:?}"
+    );
+    assert_eq!(dispatch.submit_count(), 2);
+    assert_eq!(fires(&store, "keep-skip").len(), span.slots.len());
+    assert_eq!(fires(&store, "worktree-gc").len(), 1);
 }

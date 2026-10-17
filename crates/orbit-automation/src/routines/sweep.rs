@@ -1,7 +1,8 @@
 //! Deterministic routine evaluation, retry and overlap coordination.
 
 use super::due::{
-    DueDecision, due_decision_with_grace, natural_slot_grace_for_cadence, parse_cron,
+    DueDecision, MISSED_RUN_SKIP_REASON, MISSED_SLOT_RECORD_CAP, WORKTREE_GC_ROUTINE_JOB,
+    due_decision_with_grace, missed_slot_span, natural_slot_grace_for_cadence, parse_cron,
 };
 use super::loader::{LoadedRoutine, RoutineCollection, RoutineLoadError};
 use chrono::{DateTime, Duration, Local, Utc};
@@ -9,7 +10,7 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::{
     RoutineFireIntentParams, RoutineFireRecord, RoutineFireState, RoutineStoreBackend,
 };
-use orbit_types::workflow::{JobRunState, OverlapPolicy};
+use orbit_types::workflow::{JobRunState, MissedRunPolicy, OverlapPolicy};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
@@ -292,9 +293,16 @@ fn sweep_routine(
     let lower_bound = parse_rfc3339(lower_bound_raw)?.with_timezone(&Local);
 
     let natural_slot_grace = natural_slot_grace_for_cadence(options.sweep_cadence_seconds)?;
+    // Worktree GC catches up once even when an already-seeded file still
+    // says skip. Every other routine keeps the policy in its definition.
+    let missed_run = if definition.target.job_name() == WORKTREE_GC_ROUTINE_JOB {
+        MissedRunPolicy::CatchUpOnce
+    } else {
+        definition.trigger.missed_run
+    };
     match due_decision_with_grace(
         &cron,
-        definition.trigger.missed_run,
+        missed_run,
         &lower_bound,
         &now_local,
         natural_slot_grace,
@@ -312,6 +320,9 @@ fn sweep_routine(
                     options,
                 },
             )
+        }
+        DueDecision::Skipped { slot } => {
+            record_skipped_slots(store, routine, &cron, &lower_bound, &slot, options)
         }
         DueDecision::NotDue => {
             // No new slot: a most-recent fire that failed (run-level) or
@@ -668,6 +679,59 @@ fn duration_from_minutes(minutes: u64, field: &str) -> Result<Duration, OrbitErr
     Duration::try_minutes(minutes).ok_or_else(|| {
         OrbitError::InvalidInput(format!("routine {field} is too large for a duration"))
     })
+}
+
+/// Consume each missed slot under `missed_run: skip` and record why.
+///
+/// Slots are written oldest first so the cursor ends on the newest. A gap
+/// longer than [`MISSED_SLOT_RECORD_CAP`] keeps the newest slots and says so
+/// on the oldest recorded row. A dry run reports the same reason and writes
+/// nothing. An already-claimed slot is left as the earlier sweep recorded it.
+fn record_skipped_slots(
+    store: &dyn RoutineStoreBackend,
+    routine: &LoadedRoutine,
+    cron: &croner::Cron,
+    lower_bound: &DateTime<Local>,
+    latest: &DateTime<Local>,
+    options: SweepOptions,
+) -> Result<RoutineSweepReport, OrbitError> {
+    let span = missed_slot_span(cron, lower_bound, latest, MISSED_SLOT_RECORD_CAP)?;
+    let latest_utc = latest.with_timezone(&Utc).to_rfc3339();
+    let mut report = skipped(routine, MISSED_RUN_SKIP_REASON);
+    report.slot = Some(latest_utc);
+    if options.dry_run {
+        return Ok(report);
+    }
+
+    let lower_bound_utc = lower_bound.with_timezone(&Utc).to_rfc3339();
+    let name = &routine.definition.name;
+    for (index, slot) in span.slots.iter().enumerate() {
+        let slot_utc = slot.with_timezone(&Utc).to_rfc3339();
+        let claimed = store.routine_record_fire_intent(&RoutineFireIntentParams {
+            routine_name: name.clone(),
+            slot: slot_utc.clone(),
+            attempt: 1,
+            source_workspace: routine.source_workspace.clone(),
+        })?;
+        if !claimed {
+            continue;
+        }
+        let detail = if index == 0 && span.collapsed_earlier {
+            format!(
+                "{MISSED_RUN_SKIP_REASON}; earlier slots after {lower_bound_utc} were not recorded individually"
+            )
+        } else {
+            MISSED_RUN_SKIP_REASON.to_string()
+        };
+        store.routine_mark_fire_outcome(
+            name,
+            &slot_utc,
+            1,
+            RoutineFireState::Skipped,
+            Some(&detail),
+        )?;
+    }
+    Ok(report)
 }
 
 fn skipped(routine: &LoadedRoutine, reason: &str) -> RoutineSweepReport {

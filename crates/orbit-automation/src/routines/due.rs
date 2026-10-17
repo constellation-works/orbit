@@ -26,6 +26,19 @@ use orbit_types::workflow::MissedRunPolicy;
 /// slot as missed.
 pub const NATURAL_SLOT_GRACE_SECONDS: i64 = 120;
 
+/// Catalog job the seeded worktree-GC routine dispatches.
+///
+/// The sweep always catches this job up once, even when an already-seeded
+/// definition still says `missed_run: skip`.
+pub const WORKTREE_GC_ROUTINE_JOB: &str = "worktree_gc_pipeline";
+
+/// Detail recorded on each slot `missed_run: skip` consumes without firing.
+pub const MISSED_RUN_SKIP_REASON: &str = "missed_run: skip";
+
+/// How many skipped slots one pass records. Older slots in a longer gap are
+/// named once on the oldest recorded row instead of one row each.
+pub const MISSED_SLOT_RECORD_CAP: usize = 48;
+
 /// Derive the natural-slot grace from the cadence of the host clock that
 /// invokes the sweep. The scheduler permits one missed or delayed poll, so a
 /// slot remains natural for two configured cadence intervals. The default
@@ -54,6 +67,26 @@ pub enum DueDecision<Tz: TimeZone> {
         /// Whether this is a make-up fire rather than a natural one.
         is_catch_up: bool,
     },
+    /// `missed_run: skip` and the latest unconsumed slot is past grace.
+    ///
+    /// `slot` is that latest slot. The sweep records every unconsumed slot
+    /// back to the cursor (bounded) and advances the cursor to `slot`, so
+    /// the gap is not reconsidered. This is not [`DueDecision::NotDue`]:
+    /// nothing is due only when the latest slot is already at or behind the
+    /// cursor.
+    Skipped {
+        /// Latest scheduled slot the skip consumes.
+        slot: DateTime<Tz>,
+    },
+}
+
+/// Slots a skip should record, oldest first, ending at `latest`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissedSlotSpan<Tz: TimeZone> {
+    /// Unconsumed slots after `lower_bound`, oldest first, at most `cap`.
+    pub slots: Vec<DateTime<Tz>>,
+    /// Slots after the cursor and before [`Self::slots`] were not listed.
+    pub collapsed_earlier: bool,
 }
 
 /// Pin a scheduled occurrence to its minute (seconds and sub-seconds
@@ -160,9 +193,79 @@ pub fn due_decision_with_grace<Tz: TimeZone>(
             slot: previous,
             is_catch_up: true,
         }),
-        // Wait for the next natural slot. The cursor is left untouched:
-        // correctness only needs slots to be after `lower_bound`, so an
-        // unconsumed missed slot simply never fires.
-        MissedRunPolicy::Skip => Ok(DueDecision::NotDue),
+        // Name the latest missed slot so the sweep can record the gap.
+        // The cursor stays put until that recording consumes the slots.
+        MissedRunPolicy::Skip => Ok(DueDecision::Skipped { slot: previous }),
     }
+}
+
+/// Scheduled slots strictly after `lower_bound` through `latest`, oldest first.
+///
+/// Walks backward from `latest` and keeps at most `cap` slots, so a long
+/// downtime stays bounded. When the gap is longer than `cap`,
+/// [`MissedSlotSpan::collapsed_earlier`] is set and the retained slots are
+/// the newest ones, still ending at `latest`.
+pub fn missed_slot_span<Tz: TimeZone>(
+    cron: &Cron,
+    lower_bound: &DateTime<Tz>,
+    latest: &DateTime<Tz>,
+    cap: usize,
+) -> Result<MissedSlotSpan<Tz>, OrbitError> {
+    if cap == 0 || *latest <= *lower_bound {
+        return Ok(MissedSlotSpan {
+            slots: Vec::new(),
+            collapsed_earlier: false,
+        });
+    }
+
+    let mut newest_first = Vec::new();
+    let mut cursor = latest.clone();
+    let mut collapsed_earlier = false;
+    loop {
+        if cursor <= *lower_bound {
+            break;
+        }
+        if newest_first.len() == cap {
+            collapsed_earlier = true;
+            break;
+        }
+        newest_first.push(cursor.clone());
+        let previous = match cron.find_previous_occurrence(&cursor, false) {
+            Ok(previous) => truncate_to_minute(previous),
+            Err(_) => break,
+        };
+        if previous >= cursor {
+            break;
+        }
+        cursor = previous;
+    }
+    newest_first.reverse();
+    Ok(MissedSlotSpan {
+        slots: newest_first,
+        collapsed_earlier,
+    })
+}
+
+/// Length of the cron period that contains `now`: the previous occurrence
+/// through the next one. DST folds make this 23 or 25 hours for a daily
+/// schedule; callers use the actual gap rather than a nominal cadence.
+pub fn schedule_interval<Tz: TimeZone>(
+    cron: &Cron,
+    now: &DateTime<Tz>,
+) -> Result<Duration, OrbitError> {
+    let previous = cron
+        .find_previous_occurrence(now, true)
+        .map_err(|error| OrbitError::InvalidInput(format!("cron evaluation failed: {error}")))?;
+    let previous = truncate_to_minute(previous);
+    let next = cron
+        .find_next_occurrence(&previous, false)
+        .map_err(|error| OrbitError::InvalidInput(format!("cron evaluation failed: {error}")))?;
+    let next = truncate_to_minute(next);
+    let interval = next.signed_duration_since(previous);
+    if interval <= Duration::zero() {
+        return Err(OrbitError::InvalidInput(
+            "cron interval did not advance".to_string(),
+        ));
+    }
+    Ok(interval)
 }

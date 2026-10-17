@@ -21,6 +21,7 @@ pub use orbit_automation::routines::due;
 pub mod loader;
 pub(crate) mod materialize;
 pub(crate) mod seed;
+pub mod staleness;
 pub mod status;
 pub mod sweep;
 pub(crate) mod template;
@@ -38,6 +39,7 @@ pub use loader::{
     RetiredRoutine, RoutineCollection, RoutineLoadError, RoutineOrigin, RoutineWorkspaceProvider,
     collect_host_routines, runs_in_replica,
 };
+pub use staleness::{StaleRoutine, stale_cron_routines};
 pub(crate) use status::rewrite_enabled_line;
 pub use status::{
     RoutineStatus, RoutineStatusReport, RoutineToggleOutcome, ScheduleDisplayState, pause_routine,

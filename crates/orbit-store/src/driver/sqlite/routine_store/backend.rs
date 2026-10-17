@@ -57,6 +57,13 @@ impl crate::contracts::RoutineStoreBackend for Store {
         Self::routine_latest_fire(self, routine_name)
     }
 
+    fn routine_latest_succeeded_fire(
+        &self,
+        routine_name: &str,
+    ) -> Result<Option<RoutineFireRecord>, OrbitError> {
+        Self::routine_latest_succeeded_fire(self, routine_name)
+    }
+
     fn routine_unresolved_fires(&self) -> Result<Vec<RoutineFireRecord>, OrbitError> {
         Self::routine_unresolved_fires(self)
     }

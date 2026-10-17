@@ -53,7 +53,15 @@ impl RoutineListArgs {
                         "attempt": fire.attempt,
                         "state": fire.state.as_str(),
                         "run_id": fire.run_id,
+                        "detail": fire.detail,
                     })),
+                    "recent_fires": status.recent_fires.iter().map(|fire| json!({
+                        "slot": fire.slot,
+                        "attempt": fire.attempt,
+                        "state": fire.state.as_str(),
+                        "run_id": fire.run_id,
+                        "detail": fire.detail,
+                    })).collect::<Vec<_>>(),
                 })
             })
             .collect();

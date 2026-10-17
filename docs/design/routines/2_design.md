@@ -176,7 +176,10 @@ Field semantics:
   load warning naming the file for one release, then rejected as an unknown key.
 - **`trigger.cron`** — when the routine is due. `missed_run` governs fires that fall in a
   window when the host was asleep or powered off: `catch_up_once` fires a single make-up run
-  on the next sweep (never one per missed slot); `skip` waits for the next natural slot.
+  on the next sweep (never one per missed slot); `skip` waits for the next natural slot and
+  records each skipped slot, up to 48 per pass, with the reason `missed_run: skip` (readable
+  from `orbit routine list --json`). The worktree-GC job (`worktree_gc_pipeline`) always
+  catches up once, even when an already-seeded file still says `skip`.
 - **`target`** — a `job:<name>` reference resolved through the source workspace's job
   catalog at load time. Unresolvable targets are load-time errors. `activity:<name>` is
   reserved and rejected at parse time with wrapping guidance: run dispatch is job-shaped
@@ -665,7 +668,12 @@ Per pass:
    clock-cadence intervals after its scheduled time: the default 60s clock therefore keeps
    the existing 120s grace, while a configured 300s clock keeps a slot natural for 600s.
    This admits one delayed or missed poll without turning genuine downtime into a `skip`
-   fire.
+   fire. `catch_up_once` then fires the latest missed slot once. `skip` does not fire it;
+   the sweep records each unconsumed slot in the gap (at most 48 per pass, oldest first,
+   so the cursor ends on the newest) with detail `missed_run: skip`, and says so on the
+   oldest recorded row when older slots were collapsed. A target of `worktree_gc_pipeline`
+   uses `catch_up_once` for this decision even if its file still says `skip`, so one
+   missed GC window becomes one catch-up pass on the next tick rather than a lost slot.
 6. For each due cron routine: check `overlap` against in-flight fires, record the fire intent
    (idempotency key: routine name + scheduled slot + attempt, transactionally with the
    cursor advance), then dispatch the target via `submit_pipeline_run` in the routine's
@@ -895,7 +903,13 @@ on each owner; delivery/state admission still requires the consumer's owner mach
 - **`catch_up_once` collapses history.** After a week of laptop sleep, a nightly routine
   fires once, not seven times. This is the intended semantic for every currently envisioned
   routine (commits, reindexing), but it is a lossy default; a count-preserving mode would
-  be a new `missed_run` variant.
+  be a new `missed_run` variant. Worktree GC is forced onto this policy: a preserved
+  `missed_run: skip` in an already-seeded `worktree_gc` file still runs one catch-up pass
+  after missed slots, not one pass per slot. Other routines keep the policy in their file.
+  `skip` does not drop the gap silently — each skipped slot is recorded with
+  `missed_run: skip`. `orbit doctor`'s `routine-staleness` row warns when an enabled,
+  unpaused cron routine's last success (or its first observation, if it has never
+  succeeded) is older than three times its schedule interval, and is ok otherwise.
 - **Cron overlap recovery is on the dispatcher.** `overlap: forbid` depends on
   accurate in-flight bookkeeping; a crashed sweep that recorded a fire intent but died
   before dispatch leaves a stale in-flight entry. The outcome-sync step reclaims intents

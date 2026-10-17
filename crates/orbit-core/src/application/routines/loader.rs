@@ -39,7 +39,8 @@ pub struct DiscoveredWorkspaces {
 /// settlement from the owner over its tool surface, so it needs no write to
 /// the owner's coordination store. Every other routine target either mints or
 /// moves owner tasks or ships work, and stays with the owner.
-pub const REPLICA_LOCAL_ROUTINE_JOB: &str = "worktree_gc_pipeline";
+pub const REPLICA_LOCAL_ROUTINE_JOB: &str =
+    orbit_automation::routines::due::WORKTREE_GC_ROUTINE_JOB;
 
 /// Whether a replica checkout may schedule `definition` on this host's clock:
 /// a cron routine targeting [`REPLICA_LOCAL_ROUTINE_JOB`]. Delivery and state

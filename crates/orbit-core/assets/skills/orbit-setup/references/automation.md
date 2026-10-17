@@ -91,7 +91,7 @@ copy. Run `orbit routine list` to see their names on this host.
 
 | Base name | Cadence | Target | What it does |
 |---|---|---|---|
-| `worktree-gc` | hourly | `worktree_gc_pipeline` | Reclaims worktrees whose task settled to done, rejected, or archived, and prunes `.orbit/tmp` entries untouched for 24 hours (`scratch_older_than_hours`). |
+| `worktree-gc` | hourly | `worktree_gc_pipeline` | Reclaims worktrees whose task settled to done, rejected, or archived, and prunes `.orbit/tmp` entries untouched for 24 hours (`scratch_older_than_hours`). Missed hourly slots catch up once on the next tick, even if the seeded file still says `missed_run: skip`. |
 | `task-pilot` | state trigger (`preparation_eligible`) | `task_pilot_pipeline` | Fingerprints eligible proposed/backlog tasks each tick and preflights one whose material has no fresh assessment; quiet while the backlog is unchanged. |
 | `finding-verification` | state trigger (`finding_unverified`) | `finding_verification_pipeline` | Disabled by default; verifies review-filed bug findings still owed a verdict in proposed, someday, or backlog, recording confirmation or rejection with evidence. |
 | `ci-failure-sweep` | hourly at :05 | `ci_failure_sweep_pipeline` | Files deduped proposed CI findings, pilots them, and admits only current warning-free repairs to backlog. |
@@ -195,7 +195,7 @@ name: <routine-name>              # unique across every routine source on the ho
 enabled: true                      # kill-switch in the definition file
 trigger:
   cron: "0 22 * * *"              # 5-field, host-local time
-  missed_run: skip                 # skip | catch_up_once
+  missed_run: skip                 # skip | catch_up_once; worktree GC always catches up once
 target: job:<job-name>
 policy:
   timeout_minutes: 10
@@ -329,6 +329,12 @@ Resolve the toggles in this order — `orbit routine list` shows both at once:
 
 1. `enabled: false` in this checkout's definition (per-user, gitignored).
 2. A local pause (this host only, unversioned, durable across reboots).
+
+`orbit routine list --json` includes each fire's `detail`. A slot lost to
+`missed_run: skip` is recorded there as `missed_run: skip`. `orbit doctor`
+warns on `routine-staleness` when an enabled routine's last success is older
+than three times its interval. Worktree GC catches up once on the next tick
+after missed slots.
 
 If neither explains it, check further out: is this checkout registered as an
 owner (`orbit workspace list`), is the clock unit running

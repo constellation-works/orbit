@@ -82,7 +82,9 @@ still applies.
   `orbit routine pause` it there; `enabled: false` in the file retires it. A
   `state` trigger runs only on the machine it names in `owner_machine`.
 - **Missed slots collapse.** After a sleep, `missed_run: skip` waits for the
-  next slot and `catch_up_once` fires one make-up run.
+  next slot and records each skipped slot's reason. `catch_up_once` fires one
+  make-up run. Worktree GC always catches up once, and `orbit doctor` warns
+  when a routine's last success is older than three times its interval.
 - **No overlap.** A fire is skipped while the previous one is still running,
   for up to `timeout_minutes`.
 - **Seeded disabled.** `orbit workspace init` writes task pilot, ship sweep,

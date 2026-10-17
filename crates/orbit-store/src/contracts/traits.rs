@@ -529,6 +529,14 @@ pub trait RoutineStoreBackend: Send + Sync {
         &self,
         routine_name: &str,
     ) -> Result<Option<RoutineFireRecord>, OrbitError>;
+    /// Newest fire whose state is `succeeded`, by `updated_at` then slot.
+    ///
+    /// Distinct from [`Self::routine_latest_fire`], which is the newest slot
+    /// of any state. A catch-up that just finished an old slot is fresh here.
+    fn routine_latest_succeeded_fire(
+        &self,
+        routine_name: &str,
+    ) -> Result<Option<RoutineFireRecord>, OrbitError>;
     fn routine_unresolved_fires(&self) -> Result<Vec<RoutineFireRecord>, OrbitError>;
     fn routine_recent_fires(
         &self,
