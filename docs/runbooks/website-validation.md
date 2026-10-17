@@ -266,17 +266,17 @@ Stop the server after validation:
 ### Dashboard tour and run screenshot
 
 When regenerating public dashboard media, inspect decoded pixels rather than
-searching the binary files or pinning prose in a test. The dated v2 tour has
-eight chapters over 42.2 seconds at 1320 × 1100, with boundaries at 0, 4.6,
-10.8, 15.4, 22.2, 26.8, 33.0 and 37.6 seconds. Decode a frame within each
-chapter, both sides of every cut, and the pans and final loop cross-fade.
+searching the binary files or pinning prose in a test. The dated v3 tour has
+six chapters over 39.8 seconds at 1320 × 1100, with boundaries at 0, 6.4,
+13.2, 19.4, 26.2 and 32.8 seconds. Decode a frame within each chapter, both
+sides of every cut, and the pans and final loop cross-fade.
 In Chromium, seek with `requestVideoFrameCallback` and record `mediaTime` so
 the evidence identifies the decoded frame, rather than the requested seek.
 
-Inspect task list rows, task records and address bars, run lists and headers,
-audit targets, incident messages, and friction list/detail prose. Production
-task, friction and run identifiers must be omitted or replaced with demo
-labels before encoding. Sanitizing the source screenshots before camera pans
+Inspect task list rows, the Drain dock, address bars, run headers, routine
+last-run links, auto-task last-minted links, the slowest-runs list and the
+codebase view's regressed tasks. Production task, friction and run
+identifiers must be omitted or replaced with demo labels before encoding. Sanitizing the source screenshots before camera pans
 keeps replacements aligned through the whole tour. Check the run-detail PNG
 separately, including its header and Task field. Preserve readable UI, chapter
 captions, dated counts and the capture date.
