@@ -484,7 +484,9 @@ pub struct DrainCapacity {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DrainAdmissionPass {
     /// Stable classifier of the latest failed pass, when available. A skew
-    /// failure is terminal even when the drain window remains open.
+    /// failure is terminal even when the drain window remains open. A local
+    /// drain records `lock_busy` for a pass it deferred because a task-store
+    /// lock stayed held past its acquisition deadline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_pass_error_code: Option<String>,
     pub recorded_at: DateTime<Utc>,
@@ -515,7 +517,8 @@ pub struct DrainAdmissionPass {
     /// recorded. Set by a pull drain, whose pass keeps the last answer it
     /// has while it sends no request (throttled, held, owner unreachable), so
     /// it can be older than `recorded_at`. A local drain classifies afresh
-    /// every pass and leaves it unset.
+    /// every pass and leaves it unset, except on a pass it deferred on a busy
+    /// lock, which keeps the previous pass's view with the time it was read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting_recorded_at: Option<DateTime<Utc>>,
     /// Backlog tasks kept off this host, by reason code: the full count
@@ -538,10 +541,12 @@ pub struct DrainAdmissionPass {
     /// fields. Pull drains only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admission_refusal: Option<String>,
-    /// The latest failed pull pass; cleared by success before degradation.
+    /// The latest failed pull pass, or a local pass deferred on a busy lock
+    /// (naming the holder); cleared by success before degradation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_pass_error: Option<String>,
-    /// Consecutive failed pull passes, independent of failed claimed leaves.
+    /// Consecutive failed pull passes, independent of failed claimed leaves,
+    /// or consecutive deferred local passes; a local drain fails at ten.
     #[serde(default)]
     pub consecutive_pass_failures: u32,
     /// Sticky warning state: new admissions stop, but settlements keep flowing.

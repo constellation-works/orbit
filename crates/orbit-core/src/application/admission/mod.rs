@@ -7,6 +7,7 @@ pub(crate) mod claim_holders;
 pub(super) mod cpu_light;
 pub(super) mod gap_fit;
 pub(super) mod leaf_occupancy;
+pub(crate) mod pass_error;
 pub(crate) mod scan_unresolved;
 pub(super) mod stuck_head;
 pub(super) mod surface_reservation;
