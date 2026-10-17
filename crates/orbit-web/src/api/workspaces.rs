@@ -6,7 +6,7 @@
 //! degrade gracefully: `/api/workspaces` reports the one synthetic entry and
 //! `/api/tasks/all` returns that workspace's tasks.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use axum::extract::{RawQuery, State};
@@ -391,6 +391,17 @@ pub(super) fn all_job_runs_json(
         },
     );
     candidates.truncate(limit);
+    let present: HashSet<(String, String)> = candidates
+        .iter()
+        .map(|(run, workspace_id, _, _)| (workspace_id.clone(), run.run_id.clone()))
+        .collect();
+    for (_, workspace_id, _, value) in &mut candidates {
+        if let Some(parent) = value.get("parent_run_id").and_then(Value::as_str) {
+            if !present.contains(&(workspace_id.clone(), parent.to_string())) {
+                value["parent_run_id"] = Value::Null;
+            }
+        }
+    }
     let truncated = total > candidates.len() as u64;
     let items = candidates
         .into_iter()
