@@ -686,10 +686,14 @@ pub fn explain_workspace_auto_readiness(
 
     // [ORB-14698] Every live provider usage reading, with whether it keeps
     // its crews out of admission and until when.
-    let provider_limits = runtime.provider_limits_view(Utc::now());
+    let now = Utc::now();
+    let provider_limits = runtime.provider_limits_view(now);
     if let Some(error) = &provider_limits.error {
         tracing::warn!("readiness shows no provider limits: {error}");
     }
+    // Recent authentication failures, grouped by host and provider, dropped
+    // once a later successful run of that provider on that host is on record.
+    let provider_auth_failures = runtime.provider_auth_failures(now);
 
     let mut payload = json!({
         "auto_concurrency": runtime.auto_concurrency_view(
@@ -768,6 +772,7 @@ pub fn explain_workspace_auto_readiness(
         },
         "approvals": approvals,
         "provider_limits": provider_limits.readings,
+        "provider_auth_failures": provider_auth_failures,
         "total": total,
         "tasks": tasks,
     });
