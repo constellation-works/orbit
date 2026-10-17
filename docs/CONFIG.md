@@ -393,6 +393,8 @@ Required validation commands and `local_shell` steps run in this environment ove
 
 **Diagnostics.** `orbit doctor`'s `validation-env` row shows the probe mode, fallback, PATH and the `python3`, `git` and `make` it finds, and warns (advisory) on a fallback or an earlier PATH entry shadowing a different executable (`/usr/bin/python3` before `/opt/homebrew/bin/python3`); duplicates and symlink aliases count once ([health checks](runbooks/health-checks.md#run-orbit-doctor)). While required commands are configured, `orbit run auto`, `orbit run ship`, and MCP `orbit.workflow.auto` (`status`, `start`) and `orbit.workflow.ship` warn when the shell cannot be probed, when resolution is off and `path` is empty, or when the resolved PATH drops login-shell entries (possible under `replace`).
 
+Readiness snapshots (CLI, dashboard, fleet drains and MCP drain status) reuse the advisory `validation_env_warning` across processes for two minutes in the local checkout’s `.orbit/state/validation-env-warning.json`. The key includes the launcher environment, shell, validation policy and Orbit version; environment or policy changes invalidate it immediately. Profile edits become visible as the process probe cache and diagnostic cache expire. Missing, invalid or unwritable cache files fall back to normal resolution. This cache holds only the warning, never the environment used to run validation or submit a drain.
+
 #### Workspace build output
 
 `workflow.validation_env.build_output_env` maps each listed variable to one managed,

@@ -829,6 +829,32 @@ fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
         orbit_common::test_env::host_load()
     );
 
+    let (warning, row) = observe();
+    let warning = warning
+        .as_str()
+        .expect("replace drops login-shell PATH entries");
+    assert!(
+        warning.contains("lacks login-shell PATH entries"),
+        "{warning}"
+    );
+    assert!(row["message"].as_str().unwrap().contains(warning), "{row}");
+    let cli = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "run",
+            "readiness",
+            "--json",
+        ]),
+    );
+    let cli: Value = serde_json::from_slice(&cli.stdout).unwrap();
+    assert_eq!(cli["validation_env_warning"], warning);
+    configure("workflow.validation_env.path_mode", "prepend");
+    let (warning, _) = observe();
+    assert!(
+        warning.is_null(),
+        "prepend preserves the login-shell PATH: {warning}"
+    );
+    configure("workflow.validation_env.path_mode", "replace");
+
     // Fixture rc files affect only the probe, with no dependency on the
     // operator's dotfiles. Cover the common account shells on Linux/macOS.
     for profile in [".bash_profile", ".profile"] {

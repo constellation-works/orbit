@@ -541,6 +541,105 @@ fn readiness_snapshot_reports_replica_and_validation_warning() {
     assert!(String::from_utf8(text.stdout).unwrap().contains(warning));
 }
 
+/// Fresh CLI processes must reuse the advisory result without rerunning profiles.
+#[test]
+#[cfg(unix)]
+fn readiness_reuses_validation_warning_across_processes() {
+    if !isolated_run_observation(
+        "run_observation::readiness_reuses_validation_warning_across_processes",
+    ) {
+        return;
+    }
+    let fixture = Fixture::terminal();
+    let marker = fixture.home.join("login-probes");
+    let profile = "printf 'probe\\n' >> \"$HOME/login-probes\"\nexport PATH=\"$HOME/login-tools:/usr/bin:/bin\"\n";
+    for name in [".bash_profile", ".profile", ".zprofile"] {
+        fs::write(fixture.home.join(name), profile).unwrap();
+    }
+    fs::create_dir_all(fixture.home.join(".config/fish")).unwrap();
+    fs::write(
+        fixture.home.join(".config/fish/config.fish"),
+        "printf 'probe\\n' >> \"$HOME/login-probes\"\nset -gx PATH \"$HOME/login-tools\" /usr/bin /bin\n",
+    ).unwrap();
+    let config = fixture.work.join(".orbit/config.toml");
+    let configure = |mode: &str| {
+        fs::write(&config, format!(
+            "[workflow]\nrequired_validation_commands = [\"make check\"]\n[workflow.validation_env]\npath = [\"/usr/bin\", \"/bin\"]\npath_mode = \"{mode}\"\n"
+        )).unwrap();
+    };
+    configure("replace");
+    let first = fixture.json(&["run", "readiness", "--json"]);
+    let warning = first["validation_env_warning"]
+        .as_str()
+        .expect("missing PATH warning");
+    assert!(
+        warning.contains(fixture.home.join("login-tools").to_str().unwrap()),
+        "{warning}"
+    );
+    assert_eq!(fs::read_to_string(&marker).unwrap().lines().count(), 1);
+    let warm = fixture.json(&["run", "readiness", "--json"]);
+    assert_eq!(
+        warm["validation_env_warning"],
+        first["validation_env_warning"]
+    );
+    assert_eq!(
+        fs::read_to_string(&marker).unwrap().lines().count(),
+        1,
+        "a fresh readiness process must not rerun the login shell within the diagnostic TTL"
+    );
+    // Policy edits invalidate the diagnostic even before its TTL expires.
+    configure("prepend");
+    let kept = fixture.json(&["run", "readiness", "--json"]);
+    assert!(kept["validation_env_warning"].is_null(), "{kept}");
+    assert_eq!(fs::read_to_string(&marker).unwrap().lines().count(), 2);
+
+    // An expired result must be recomputed, without a wall-clock sleep.
+    let cache = fixture
+        .work
+        .join(".orbit/state/validation-env-warning.json");
+    let expired = std::time::SystemTime::now()
+        - orbit_exec::LOGIN_SHELL_CACHE_TTL
+        - std::time::Duration::from_secs(1);
+    fs::File::options()
+        .write(true)
+        .open(&cache)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(expired))
+        .unwrap();
+    let refreshed = fixture.json(&["run", "readiness", "--json"]);
+    assert_eq!(
+        refreshed["validation_env_warning"],
+        kept["validation_env_warning"]
+    );
+    assert_eq!(fs::read_to_string(&marker).unwrap().lines().count(), 3);
+
+    // Cache damage cannot suppress the warning or fail readiness.
+    configure("replace");
+    fs::write(&cache, "incomplete JSON").unwrap();
+    let repaired = fixture.json(&["run", "readiness", "--json"]);
+    assert_eq!(
+        repaired["validation_env_warning"],
+        first["validation_env_warning"]
+    );
+    assert_eq!(fs::read_to_string(&marker).unwrap().lines().count(), 4);
+
+    // A cache that cannot be replaced remains advisory: resolve and return
+    // the correct warning on each read instead of failing the snapshot.
+    fs::rename(&cache, fixture.home.join("saved-warning.json")).unwrap();
+    fs::create_dir(&cache).unwrap();
+    for expected in [5, 6] {
+        let uncached = fixture.json(&["run", "readiness", "--json"]);
+        assert_eq!(
+            uncached["validation_env_warning"],
+            first["validation_env_warning"]
+        );
+        assert_eq!(
+            fs::read_to_string(&marker).unwrap().lines().count(),
+            expected
+        );
+    }
+}
+
 fn readiness_reports_total_and_notifies_only_when_backlog_is_truncated() {
     use orbit_core::application::task::TaskAddParams;
     use orbit_core::{TaskComplexity, TaskStatus, TaskType};
