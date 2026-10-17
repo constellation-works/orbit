@@ -170,6 +170,28 @@ fn save_success(
     );
 }
 
+/// A success that ran from `started_at` to `finished_at`.
+fn save_success_spanning(
+    workspace: &Workspace,
+    run_id: &str,
+    now: DateTime<Utc>,
+    started_at: DateTime<Utc>,
+    finished_at: DateTime<Utc>,
+    crew: &str,
+) {
+    let mut run = finished_run(
+        run_id,
+        now,
+        finished_at,
+        JobRunState::Success,
+        Some(crew),
+        this_host(),
+    );
+    run.scheduled_at = started_at;
+    run.started_at = Some(started_at);
+    save_run(workspace, &run, None);
+}
+
 fn save_probe(
     workspace: &Workspace,
     now: DateTime<Utc>,
@@ -378,6 +400,65 @@ fn a_later_success_clears_unavailable_and_capacity() {
     );
     save_success(&capacity, "jrun-codex-ok", now, success_at, "fixture");
     assert_resumes(&capacity, now, &task.id);
+}
+
+/// A success that started before the failure ran on the credentials or
+/// capacity that then failed, so finishing after it does not clear the hold.
+fn a_success_started_before_the_failure_does_not_clear_it() {
+    let now = Utc::now();
+    let started_at = now - Duration::minutes(12);
+    let failure_at = now - Duration::minutes(10);
+    let finished_at = now - Duration::minutes(1);
+
+    let unavailable = Workspace::new();
+    let task = unavailable.task("codex run spans the login failure");
+    save_failure(
+        &unavailable,
+        "jrun-codex-auth",
+        now,
+        failure_at,
+        ProviderFailureClass::Unavailable,
+        "codex",
+        "fixture",
+    );
+    save_success_spanning(
+        &unavailable,
+        "jrun-codex-long",
+        now,
+        started_at,
+        finished_at,
+        "fixture",
+    );
+    let reason = assert_withheld(&unavailable, now, &task.id);
+    assert!(
+        reason.contains("provider_unavailable codex") && reason.contains("jrun-codex-auth"),
+        "{reason}"
+    );
+
+    let capacity = Workspace::new();
+    let task = capacity.task("held crew run spans the capacity failure");
+    save_failure(
+        &capacity,
+        "jrun-codex-capacity",
+        now,
+        failure_at,
+        ProviderFailureClass::Capacity,
+        "codex",
+        "fixture",
+    );
+    save_success_spanning(
+        &capacity,
+        "jrun-codex-long",
+        now,
+        started_at,
+        finished_at,
+        "fixture",
+    );
+    let reason = assert_withheld(&capacity, now, &task.id);
+    assert!(
+        reason.contains("provider_capacity fixture") && reason.contains("jrun-codex-capacity"),
+        "{reason}"
+    );
 }
 
 fn an_auth_probe_recovery_clears_unavailable() {
@@ -713,6 +794,7 @@ crate::scenario_table!(
     a_hold_that_starts_during_debounce_withholds_the_pending_pilot,
     an_expired_unavailable_hold_lets_the_pilot_resume,
     a_later_success_clears_unavailable_and_capacity,
+    a_success_started_before_the_failure_does_not_clear_it,
     an_auth_probe_recovery_clears_unavailable,
     unavailable_holds_every_crew_of_the_provider,
     another_providers_crew_is_drawn_and_the_routine_still_admits,

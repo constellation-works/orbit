@@ -79,9 +79,9 @@ recovery draw from `workflow.medium_complexity_crews`. Each run draws once per
 pool and records it in its state; an empty pool falls back to
 `workflow.default_crew`. A host `provider_unavailable` or `provider_capacity`
 hold withholds the task-pilot routine while it covers every crew that draw
-would use, and the draw skips a held crew while another remains. A later
-success or the end of the backoff resumes the routine; a recovered auth probe
-clears unavailability.
+would use, and the draw skips a held crew while another remains. A success
+that started after the failure, or the end of the backoff, resumes the routine;
+a recovered auth probe clears unavailability.
 Inspect those pools in the active config; change
 persistent configuration only within the user's authorization.
 

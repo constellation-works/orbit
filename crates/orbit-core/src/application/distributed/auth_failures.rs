@@ -202,7 +202,7 @@ fn run_at(run: &JobRun) -> DateTime<Utc> {
 
 /// When a success shows that the provider works. A run that started before a
 /// failure used the credentials that failed, even if it finished after it.
-fn clearing_at(run: &JobRun) -> DateTime<Utc> {
+pub(crate) fn clearing_at(run: &JobRun) -> DateTime<Utc> {
     run.started_at.unwrap_or(run.created_at)
 }
 

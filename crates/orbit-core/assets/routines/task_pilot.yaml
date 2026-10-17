@@ -43,8 +43,9 @@
 # A host provider hold withholds this dispatch. `provider_unavailable` from the
 # last 30 minutes, or `provider_capacity` from the last 15 minutes, covers the
 # crews this job would draw. The routine records `provider_hold` and starts no
-# run. A later success on this host, or the end of the backoff, resumes it. A
-# recovered auth probe also clears unavailability. No operator action.
+# run. A success on this host that started after the failure, or the end of
+# the backoff, resumes it. A recovered auth probe also clears unavailability.
+# No operator action.
 schemaVersion: 1
 name: __ORBIT_ROUTINE_NAME__
 description: >

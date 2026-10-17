@@ -4,11 +4,13 @@
 //! A `provider_unavailable` or `provider_capacity` failure on this host holds
 //! the crews a pilot would draw, for that class's base backoff, without a new
 //! stored record. The window is the failure's own finish time: the projection
-//! carries no backoff of its own. A later success of the provider on this
-//! host, or a pull-drain auth probe that records `recovered_at`, clears
-//! unavailability. Capacity clears only when a later success is of the held
-//! crew, or of any crew of the provider when the hold covers the whole
-//! provider. A probe does not clear capacity. Limit and refusal failures are
+//! carries no backoff of its own. A success of the provider on this host that
+//! started after the failure, or a pull-drain auth probe that records
+//! `recovered_at`, clears unavailability. A success that started before the
+//! failure ran on what then failed, so finishing later does not clear it.
+//! Capacity clears only when such a success is of the held crew, or of any
+//! crew of the provider when the hold covers the whole provider. A probe does
+//! not clear capacity. Limit and refusal failures are
 //! not holds here.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -20,7 +22,7 @@ use orbit_types::identity::Crew;
 use orbit_types::workflow::{JobRun, JobRunState, ProviderFailureClass, failed_provider};
 
 use super::PULL_DRAIN_JOB;
-use super::auth_failures::{canonical_provider, host_of};
+use super::auth_failures::{canonical_provider, clearing_at, host_of};
 use crate::OrbitRuntime;
 use crate::runtime::task::provider_hold::base_backoff;
 
@@ -124,7 +126,7 @@ impl OrbitRuntime {
             let Some(provider) = self.provider_of_crew(crew_name) else {
                 continue;
             };
-            let at = run_at(run);
+            let at = clearing_at(run);
             note_later(&mut provider_success, provider.clone(), at);
             note_later(&mut crew_success, (provider, crew_name.to_string()), at);
         }
@@ -350,7 +352,8 @@ fn run_at(run: &JobRun) -> DateTime<Utc> {
     run.finished_at.or(run.started_at).unwrap_or(run.created_at)
 }
 
-/// A strictly later success or probe clears the failure. Equal timestamps do not.
+/// A success that started, or a probe that recovered, strictly after the
+/// failure finished clears it. Equal timestamps do not.
 fn later_than(at: DateTime<Utc>, cleared: Option<&DateTime<Utc>>) -> bool {
     cleared.is_some_and(|cleared| *cleared > at)
 }
