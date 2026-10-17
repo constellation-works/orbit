@@ -340,7 +340,8 @@ enum ArgvInspection {
     Present(Vec<u8>),
     /// The pid is gone or is an unreaped zombie (`process_is_alive` is false).
     NoProcess,
-    /// The process may still be running, but its argv could not be read.
+    /// The process may still be running, but its argv could not be read or
+    /// was empty.
     Unavailable(String),
 }
 
@@ -381,6 +382,12 @@ fn signal_authorized(inspection: &ArgvInspection, markers: &[&[u8]]) -> bool {
 
 fn inspection_from_read(result: io::Result<Vec<u8>>) -> ArgvInspection {
     match result {
+        // Linux reads a live pid's argv as empty until `execve` publishes the
+        // new image's arguments, which can be after `spawn` returns. Empty
+        // argv names no command, so it is not a different one.
+        Ok(cmdline) if cmdline.is_empty() => {
+            ArgvInspection::Unavailable("empty argv; exec has not published it".to_string())
+        }
         Ok(cmdline) => ArgvInspection::Present(cmdline),
         Err(error)
             if error.kind() == io::ErrorKind::NotFound
@@ -782,6 +789,11 @@ fn argv_probe_recovers_when_a_live_child_outgrows_the_queried_buffer() {
 
 // Fault injection: the public runner cannot deterministically fail a native
 // argv read between two successful observations, or keep it unreadable.
+//
+// Linux publishes a new image's argv only late in `execve`, after `spawn`
+// has already returned, so a live child's `/proc/<pid>/cmdline` can read
+// empty. That empty read once passed the blocked-child leak check
+// immediately (hosted Check job 117482341129).
 #[cfg(unix)]
 #[test]
 fn leak_assertion_retries_unreadable_argv_without_accepting_it_as_reaped() {
@@ -790,14 +802,40 @@ fn leak_assertion_retries_unreadable_argv_without_accepting_it_as_reaped() {
 
     let marker = b"/unique/writer/0";
     let budget = Duration::from_millis(40);
-    for (label, recovery, expected) in [
-        ("transient read failure", Some(true), Some("still running")),
+    let failed_read: fn() -> ArgvInspection =
+        || inspection_from_read(Err(io::Error::from_raw_os_error(libc::EINTR)));
+    let unpublished: fn() -> ArgvInspection = || inspection_from_read(Ok(Vec::new()));
+    for (label, unreadable, recovery, expected) in [
+        (
+            "transient read failure",
+            failed_read,
+            Some(true),
+            Some("still running"),
+        ),
         (
             "persistently unreadable argv",
+            failed_read,
             None,
             Some("argv inspection unavailable"),
         ),
-        ("exit after an unreadable read", Some(false), None),
+        (
+            "exit after an unreadable read",
+            failed_read,
+            Some(false),
+            None,
+        ),
+        (
+            "argv not yet published by exec",
+            unpublished,
+            Some(true),
+            Some("still running"),
+        ),
+        (
+            "persistently empty argv",
+            unpublished,
+            None,
+            Some("argv inspection unavailable"),
+        ),
     ] {
         let started = Instant::now();
         let elapsed = Cell::new(Duration::ZERO);
@@ -810,7 +848,7 @@ fn leak_assertion_retries_unreadable_argv_without_accepting_it_as_reaped() {
                 |_| {
                     attempts += 1;
                     if attempts == 1 || recovery.is_none() {
-                        inspection_from_read(Err(io::Error::from_raw_os_error(libc::EINTR)))
+                        unreadable()
                     } else if recovery == Some(true) {
                         ArgvInspection::Present(b"cat\0/unique/writer/0".to_vec())
                     } else {
@@ -831,9 +869,9 @@ fn leak_assertion_retries_unreadable_argv_without_accepting_it_as_reaped() {
                 budget,
                 "{label}: the whole budget must be used"
             );
-            if recovery.is_none() {
+            if let (None, ArgvInspection::Unavailable(reason)) = (recovery, unreadable()) {
                 assert!(
-                    message.contains(&io::Error::from_raw_os_error(libc::EINTR).to_string()),
+                    message.contains(&reason),
                     "the final unreadable probe must retain the underlying error: {message}"
                 );
             }
@@ -935,6 +973,7 @@ fn flood_cleanup_preserves_unmarked_pids_and_other_group_members() {
 #[test]
 fn blocked_child_leak_check_fails_while_the_writer_lives_and_cleanup_kills_only_that_pid() {
     use std::any::Any;
+    use std::io::{BufRead, BufReader};
     use std::os::unix::process::{CommandExt, ExitStatusExt};
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::process::{Child, Stdio};
@@ -975,14 +1014,14 @@ fn blocked_child_leak_check_fails_while_the_writer_lives_and_cleanup_kills_only_
     fs::create_dir(&other_kids).expect("other kids dir");
     let marker = kids.join("0");
     let leader_path = dir.path().join("absent-leader.pid");
-    // `read` is a shell builtin, so this process blocks with both markers in
-    // its own argv and with no descendants.
+    // `echo` and `read` are shell builtins, so this process blocks with both
+    // markers in its own argv and with no descendants.
     let mut writer = ReapingChild(
         Command::new("sh")
-            .args(["-c", "read value", "cat"])
+            .args(["-c", "echo ready; read value", "cat"])
             .arg(&marker)
             .stdin(Stdio::piped())
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .process_group(0)
             .spawn()
@@ -1004,8 +1043,12 @@ fn blocked_child_leak_check_fails_while_the_writer_lives_and_cleanup_kills_only_
     fs::write(other_kids.join("0"), pid.to_string()).expect("unmatched pid");
     let marker_bytes = marker.as_os_str().as_encoded_bytes().to_vec();
 
-    // The leak assertion below verifies the recorded marker through the
-    // retrying probe. A one-shot argv precheck would reintroduce the flake.
+    // `spawn` can return before `execve` publishes the writer's argv. Once the
+    // shell runs its script, exec has finished and the probe sees both markers.
+    let mut readiness = BufReader::new(writer.0.stdout.take().expect("readiness pipe"));
+    let mut ready = String::new();
+    readiness.read_line(&mut ready).expect("writer readiness");
+    assert_eq!(ready.trim(), "ready", "writer must start its blocking read");
     assert!(
         writer.0.try_wait().expect("writer status").is_none(),
         "writer must still be blocked before the leak check"
