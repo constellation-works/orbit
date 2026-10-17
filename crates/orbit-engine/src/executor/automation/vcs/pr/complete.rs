@@ -330,8 +330,14 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         }
         _ => completion_deadline_ms,
     };
-    let remaining_seconds =
-        completion_deadline_ms.saturating_sub(super::super::completion_deadline::now_ms()?) / 1000;
+    // Round the remaining budget up: only whole seconds already spent count
+    // as waited, matching the `as_secs()` elapsed reads in the loop. Rounding
+    // down charged a full second for the milliseconds between setting the
+    // deadline and reading it back, reporting and consuming a wait that never
+    // happened.
+    let remaining_seconds = completion_deadline_ms
+        .saturating_sub(super::super::completion_deadline::now_ms()?)
+        .div_ceil(1000);
     let mut waited_seconds = max_wait_seconds.saturating_sub(remaining_seconds);
 
     let waited_before = waited_seconds;
