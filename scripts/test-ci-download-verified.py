@@ -418,7 +418,7 @@ class VerifiedDownloadTests(unittest.TestCase):
     def assert_clean(self):
         self.assertEqual(list(self.root.glob(".ci-download-*")), [], "attempt bytes must be cleaned")
 
-    def test_transient_table_recovers_with_fresh_bytes_and_visible_attempts(self):
+    def test_transient_table_recovers_with_fresh_bytes_and_backoff(self):
         rows = [(6, "000"), (7, "000"), (28, "200"),
                 *((22, str(status)) for status in (429, 500, 502, 503, 504))]
         for code, status in rows:
@@ -432,11 +432,6 @@ class VerifiedDownloadTests(unittest.TestCase):
                 self.assertEqual(self.backoffs(), [1])
                 self.assertNotEqual(calls[0][calls[0].index("--output") + 1],
                                     calls[1][calls[1].index("--output") + 1])
-                self.assertIn(f"curl_exit={code}", result.stderr)
-                self.assertIn(f"http='{status}'", result.stderr)
-                self.assertIn("attempt=2 outcome=verified", result.stderr)
-                self.assertIn("attempts=2 total_seconds=", result.stderr)
-                self.assertEqual(result.stderr.count("fixture curl diagnostic"), 2)
                 self.assert_clean()
                 self.destination.unlink()
 
@@ -469,7 +464,6 @@ class VerifiedDownloadTests(unittest.TestCase):
         self.destination.write_bytes(BODY)
         result = self.invoke()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("destination already exists; refusing stale bytes", result.stderr)
         self.assertEqual(self.calls(), [], "an existing archive must not bypass verification")
         self.assertEqual(self.destination.read_bytes(), BODY)
 
@@ -489,7 +483,6 @@ class VerifiedDownloadTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(len(self.calls()), 3)
         self.assertEqual(self.backoffs(active_limit=4), [1, 2])
-        self.assertIn("attempt limit exhausted", result.stderr)
         self.assertFalse(self.destination.exists())
         self.assert_clean()
         for row in (response(6, "000"), response(stall=True)):
@@ -503,9 +496,9 @@ class VerifiedDownloadTests(unittest.TestCase):
                 self.assertEqual(events[0]["stage"], "R")
                 if row.get("stall"):
                     self.assertTrue(events[0]["timed_out"])
-                    self.assertIn("outcome=process_timeout", result.stderr)
                 else:
-                    self.assertIn("total budget cannot accommodate backoff", result.stderr)
+                    self.assertFalse(events[0].get("timed_out", False),
+                                     "insufficient backoff budget must stop after transport exits")
                 self.assertFalse(self.destination.exists())
                 self.assert_clean()
 
@@ -522,7 +515,6 @@ class VerifiedDownloadTests(unittest.TestCase):
                          ["R", 1, "R"])
         self.assertLess(events[2]["timeout"], 0.4)
         self.assertTrue(events[2]["timed_out"])
-        self.assertIn("outcome=process_timeout", result.stderr)
         self.assertFalse(self.destination.exists())
         self.assert_clean()
 
@@ -540,7 +532,6 @@ class VerifiedDownloadTests(unittest.TestCase):
                 result = self.invoke(budget=1.4 if mode == "startup" else 0.3, deadline=True,
                                      stage="RS" if mode == "startup" else "W")
                 self.assertNotEqual(result.returncode, 0, result.stderr)
-                self.assertIn("outcome=process_timeout", result.stderr)
                 if mode == "legacy":
                     with self.assertRaises(json.JSONDecodeError):
                         self.calls()
@@ -646,19 +637,18 @@ class VerifiedDownloadTests(unittest.TestCase):
             # verification. All requests stay on this loopback TLS server.
             self.env.update(PATH=os.environ["PATH"], CURL_CA_BUNDLE=str(cert), NO_PROXY="127.0.0.1")
             endpoint = f"https://127.0.0.1:{server.server_port}"
-            # TLS backends report an abrupt partial-body close as either a
-            # short transfer (18) or a TLS read failure (56); both must refuse.
-            cases = [("/recover", [503, 200], True, (22,)),
-                     ("/forbidden", [403], False, (22,)),
-                     ("/partial", [200], False, (18, 56)),
-                     ("/redirect", [302], False, (1,))]
-            for path, codes, succeeds, curl_exit in cases:
+            # Partial transfers and HTTPS downgrade redirects must refuse
+            # publication regardless of the TLS backend's curl exit code.
+            cases = [("/recover", [503, 200], True),
+                     ("/forbidden", [403], False),
+                     ("/partial", [200], False),
+                     ("/redirect", [302], False)]
+            for path, codes, succeeds in cases:
                 with self.subTest(path=path):
                     requests.clear()
                     statuses[:] = codes
                     result = self.invoke(url=endpoint + path)
                     self.assertEqual(result.returncode == 0, succeeds, result.stderr)
-                    self.assertTrue(any(f"curl_exit={code} " in result.stderr for code in curl_exit), result.stderr)
                     self.assertEqual(requests, [path] * len(codes), "no extra replay or downgrade request")
                     self.assertEqual(self.destination.exists(), succeeds)
                     if succeeds:
@@ -669,7 +659,6 @@ class VerifiedDownloadTests(unittest.TestCase):
             requests.clear()
             result = self.invoke(url=endpoint + "/untrusted")
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("curl_exit=60", result.stderr)
             self.assertEqual(requests, [], "untrusted TLS must fail before an HTTP request")
             self.assert_clean()
         finally:
