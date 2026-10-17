@@ -147,9 +147,9 @@ at a time. That run executes the held command on the new tip and records the
 verdict; the hold lifts only when the command passes. The sweep never runs the
 command itself, so a long check never makes later ticks report `lock_busy`.
 The same sweep files one `baseline-red-repair` task per red base failure (a
-command and the tests it fails on the base) and links each later task held
-for the same failures to it, so the red base has an owner without anyone
-reading worker logs.
+command and the tests it fails on the base) at complexity `medium` and links each
+later task held for the same failures to it, so the red base has an owner
+without anyone reading worker logs.
 It never runs on a follower or inside a claimed worker.
 
 ## Built in: Linux CodeQL evidence for held reviews
