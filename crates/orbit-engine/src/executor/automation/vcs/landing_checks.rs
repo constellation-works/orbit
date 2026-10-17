@@ -597,12 +597,15 @@ fn classify_logged_job<H: RuntimeHost + ?Sized>(
 }
 
 /// Whether every failed check on `head` is a workflow job the base already
-/// fails the same way, and `tip` has not moved past `base`.
+/// fails the same way, and either `tip` has not moved past `base` or the
+/// moved tip's same jobs have not concluded.
 ///
 /// `Ok(Some(reason))` is that hold: auto-fix waits and spends no repair.
 /// `Ok(None)` was read far enough to say this is not that hold, including a
-/// candidate-caused job and a check no workflow job answers. `Err` is a head
-/// job whose log or identity could not be read.
+/// candidate-caused job, a check no workflow job answers, a moved tip whose
+/// same job has concluded (pass or fail), and a moved tip that lists no such
+/// job. `Err` is a head job whose log or identity could not be read. An
+/// unreadable tip listing is `Ok(None)`, not a hold.
 pub(super) fn unmoved_red_base<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
@@ -647,8 +650,24 @@ pub(super) fn unmoved_red_base<H: RuntimeHost + ?Sized>(
     if reasons.is_empty() {
         return Ok(None);
     }
-    // The same predicate the landing uses before it updates a moved base.
-    if moved_tip.is_some_and(|tip| !contains(workspace, tip, head)) {
+    // A moved tip is not the unmoved hold. It is still a hold while every
+    // failed check's same job on that tip exists and has no conclusion:
+    // repairing now would spend an attempt on a failure the new base is
+    // already running. A concluded job (pass or fail) and a tip that lists
+    // no such job are not this hold. A succeeded tip job is the
+    // landed-refresh path, decided before this one. The landing's own
+    // branch update does not use this hold.
+    if let Some(tip) = moved_tip.filter(|tip| !contains(workspace, tip, head)) {
+        tip_jobs.get_or_insert_with(|| {
+            commit_jobs(host, workspace, tip).map_err(|error| error.to_string())
+        });
+        if moved_tip_ci_open(&head_jobs, failed, &tip_jobs) {
+            return Ok(Some(format!(
+                "base_red: {} and the base branch moved to {tip}, whose same job has not \
+                 concluded, so no repair agent runs on this poll",
+                reasons.join("; ")
+            )));
+        }
         return Ok(None);
     }
     Ok(Some(format!(
@@ -656,6 +675,43 @@ pub(super) fn unmoved_red_base<H: RuntimeHost + ?Sized>(
          repair agent runs",
         reasons.join("; ")
     )))
+}
+
+/// Whether every failed check has a same job on the moved tip and none of
+/// those jobs has a conclusion yet. A missing job, a concluded job, or an
+/// unreadable tip listing is not this hold.
+fn moved_tip_ci_open(
+    head_jobs: &[Value],
+    failed: &[(Option<String>, String)],
+    tip_jobs: &CommitJobs,
+) -> bool {
+    let Some(Ok(tip_jobs)) = tip_jobs.as_ref() else {
+        return false;
+    };
+    failed.iter().all(|check| {
+        let Some(job) = head_jobs
+            .iter()
+            .find(|job| unsuccessful(job) && answers(job, check))
+        else {
+            return false;
+        };
+        let mut saw = false;
+        for candidate in tip_jobs.iter().filter(|candidate| same_job(candidate, job)) {
+            saw = true;
+            if job_concluded(candidate) {
+                return false;
+            }
+        }
+        saw
+    })
+}
+
+/// A job GitHub has given a conclusion. An empty or absent conclusion is
+/// still running, queued, or waiting.
+fn job_concluded(job: &Value) -> bool {
+    job["conclusion"]
+        .as_str()
+        .is_some_and(|conclusion| !conclusion.is_empty())
 }
 
 /// Whether the failure of `job`, with genuine `signature`, is the base's:
