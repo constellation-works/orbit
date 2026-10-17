@@ -83,6 +83,15 @@ spec:
               type: array
               items:
                 type: string
+            context_evidence_dropped:
+              type: array
+              items:
+                type: object
+                properties:
+                  selector:
+                    type: string
+                  reason:
+                    type: string
             disposition:
               type: string
               enum: [selectors, verified_no_diff, host_operational]
@@ -214,20 +223,36 @@ spec:
        inspect the supplied filesystem directly.
        Do not edit repository files.
     3. Propose `context_files_after` as exact canonical selectors using only
-       `file:`, `dir:`, or `symbol:`. Every anchor must already exist inside
+       `file:`, `dir:`, or `symbol:` for files the implementation will likely
+       create, modify or delete as a substantive part of the change. This is
+       the task's lock footprint. Omit read-only context, including tests and
+       fixtures only consulted, and shared reference docs that at most need
+       an incidental line update, such as `docs/CONFIG.md`. The implementer
+       must still update affected docs in the same PR; auto-fix resolves
+       textual merges of those incidental edits. Do not list `docs/CONFIG.md`
+       in the footprint. Every anchor must already exist inside
        `workspace_path` at `source_revision` when that field is set; omit
-       read-for-context files and working-tree-only or later-commit paths.
+       working-tree-only or later-commit paths.
        The one exception is an operator-declared creation target: a selector
        named by the task's latest `context_creation_authorized` history entry.
        Keep each one exactly as recorded even though it does not exist yet.
        Never propose any other missing path; deterministic apply keeps
        declared targets you omit and rejects every undeclared missing anchor.
        A task tagged `code-review`, `delivery-code-review`, `qa-full-sweep`,
-       `qa-sweep` or `security-review` was filed by a review whose selectors are its
-       evidence: add the modification targets it lacks, but do not drop a
-       current selector that still exists at `source_revision`, even one you
-       would only read. Deterministic apply keeps any you omit
-       (`context_evidence_retained`); only an operator narrows that scope.
+       `qa-sweep` or `security-review` was filed by a review: keep selectors
+       the finding names as change targets and add modification targets it
+       lacks. You may drop a current selector only after verifying it is
+       read-only evidence or an incidental shared-doc touch, with no substantive
+       change required by the finding. Record each such omission in
+       `context_evidence_dropped` as {"selector":"<exact current selector>",
+       "reason":"<what you inspected and why no substantive change is needed>"}.
+       Read-only evidence belongs in the finding's description; retain its
+       references there and in the recorded drop reason. Do not use a drop
+       record to override a change target or an operator-declared creation
+       target. Deterministic apply validates drop records against omitted,
+       resolving review selectors and records them in the assessment audit.
+       It keeps unexplained omissions in filed order (`context_evidence_retained`).
+       Omit `context_evidence_dropped` or use [] when no verified drops apply.
        Apply uses the host's prepared snapshot as `context_files_before`;
        do not echo that list in your assessment.
        Derive the modification targets from evidence, never by sweeping a

@@ -148,10 +148,25 @@ The next admission honours it. A task already running or claimed is not moved.
 
 ## Modification footprint
 
-`context_files` declares intended creation, modification and deletion targets
-inside this workspace using `file:`, `dir:` or `symbol:path#name:kind`. Prefer
+`context_files` is the task's lock footprint: list only likely creation,
+modification and deletion targets that are a substantive part of the change
+inside this workspace using `file:`, `dir:` or `symbol:path#name:kind`. Omit
+read-only files, tests and fixtures only consulted, and shared reference docs
+that at most need an incidental line update. Do not list `docs/CONFIG.md`;
+the implementer must still update affected docs in the same PR, and auto-fix
+resolves textual merges of incidental edits. Put supporting evidence paths
+in the description instead of reserving locks for them. Prefer
 precise verified files/symbols; a directory is appropriate for a genuinely owned
 area, not a shortcut for all possibly relevant code.
+
+For review-filed tasks, task-pilot keeps selectors the finding names as change
+targets. It may omit a selector it verifies as read-only evidence or an
+incidental shared-doc touch by recording its exact selector and inspection
+reason in `context_evidence_dropped`. Apply validates each record against
+omitted, resolving review selectors and saves it in the assessment audit;
+unexplained omissions remain in filed order as `context_evidence_retained`.
+A record cannot override a proposed change target or an operator-declared
+creation target. Keep evidence references in the finding's description.
 
 Check helper filenames against `.github/codeql/codeql-config.yml` exclusions before prescribing them; production helpers must remain in CodeQL's source selection.
 

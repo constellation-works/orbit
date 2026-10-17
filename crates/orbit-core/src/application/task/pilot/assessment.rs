@@ -12,9 +12,9 @@ use serde_json::{Value, json};
 
 use crate::application::task::{MachineRequirement, NativeOsRequirement};
 
-use super::VALIDATION_TOOL_WARNINGS;
 use super::input::{required_string, required_string_array, string_array_value};
 use super::source::{GitPathKind, SourceSnapshot};
+use super::{CONTEXT_EVIDENCE_DROPPED, VALIDATION_TOOL_WARNINGS};
 
 pub(super) struct ValidatedSelectors {
     pub(super) values: Vec<String>,
@@ -560,8 +560,8 @@ const REVIEW_FINDING_TAGS: [&str; 5] = [
     "security-review",
 ];
 
-/// Whether a review filed the task, so its selectors are evidence the pilot
-/// may add to but not drop.
+/// Whether a review filed the task, so omitted evidence needs an explicit
+/// inspection reason before the pilot can drop it.
 pub(super) fn review_filed(tags: &[String]) -> bool {
     tags.iter()
         .any(|tag| REVIEW_FINDING_TAGS.contains(&tag.as_str()))
@@ -569,9 +569,9 @@ pub(super) fn review_filed(tags: &[String]) -> bool {
 
 /// The selectors of a review-filed task's prepared scope that `after` omits
 /// and that still resolve, with their recorded kind, at the pinned source (or
-/// in the workspace without one). A pilot narrowing the scope to its
-/// modification targets would otherwise erase the review's evidence on every
-/// assessment. A selector that no longer resolves is not kept: it falls to
+/// in the workspace without one). These are the only selectors eligible for
+/// a verified read-only drop; unexplained omissions stay in the lock footprint.
+/// A selector that no longer resolves is not kept: it falls to
 /// the same missing-target handling as any other dropped selector.
 pub(super) fn retained_review_evidence(
     action: &str,
@@ -614,6 +614,49 @@ pub(super) fn retained_review_evidence(
         }
     }
     Ok(retained)
+}
+
+/// Validate explicit read-only drops against omitted, resolving review
+/// evidence. Proposed targets (including retained creation grants) are never
+/// eligible. The agent verifies why a selector needs no substantive change;
+/// apply validates the record, and the assessment audit preserves its reason.
+pub(super) fn reviewed_evidence_drops(
+    action: &str,
+    assessment: &Value,
+    eligible: &[String],
+) -> Result<BTreeSet<String>, DispatchError> {
+    let mut dropped = BTreeSet::new();
+    let Some(value) = assessment.get(CONTEXT_EVIDENCE_DROPPED) else {
+        return Ok(dropped);
+    };
+    let records = value.as_array().ok_or_else(|| {
+        DispatchError::action_failed(
+            action,
+            format!("`{CONTEXT_EVIDENCE_DROPPED}` must be an array"),
+        )
+    })?;
+    for record in records {
+        let selector = required_string(record, "selector", action)?;
+        required_string(record, "reason", action)?;
+        if record["selector"].as_str() != Some(selector)
+            || !eligible.iter().any(|candidate| candidate == selector)
+        {
+            return Err(DispatchError::action_failed(
+                action,
+                format!(
+                    "`{CONTEXT_EVIDENCE_DROPPED}` selector {selector:?} must exactly name an omitted, \
+                     resolving review evidence selector, never a proposed change target or creation grant"
+                ),
+            ));
+        }
+        if !dropped.insert(selector.to_string()) {
+            return Err(DispatchError::action_failed(
+                action,
+                format!("`{CONTEXT_EVIDENCE_DROPPED}` repeats selector {selector:?}"),
+            ));
+        }
+    }
+    Ok(dropped)
 }
 
 /// How an operator records that a missing selector is a target the task will

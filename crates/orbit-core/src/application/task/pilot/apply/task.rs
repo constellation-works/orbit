@@ -27,7 +27,8 @@ use super::super::{
     CONTEXT_CREATION_RETAINED, CONTEXT_EVIDENCE_RETAINED, CONTEXT_REAUTHORIZATION_REQUIRED,
     PILOT_NORMALIZATIONS, VALIDATION_TOOL_WARNINGS, normalize_evidence_gaps, required_machine,
     required_os, required_string, required_string_array, retained_review_evidence, review_filed,
-    unauthorized_missing_targets, validate_after_selectors, validate_recommendations,
+    reviewed_evidence_drops, unauthorized_missing_targets, validate_after_selectors,
+    validate_recommendations,
 };
 use super::{Applied, ApplyContext};
 
@@ -178,18 +179,25 @@ fn scope(
         .collect::<Vec<_>>();
     after.extend(retained.iter().cloned());
     // A review-filed task's selectors are the review's evidence: the pilot
-    // may add modification targets but cannot erase evidence by proposing
-    // only what it would edit. Filed order is kept so an assessment that only
-    // omits evidence leaves the scope unchanged.
-    let evidence = if disposition == "selectors" && review_filed(&snapshot.tags) {
-        let evidence = retained_review_evidence(
+    // may drop verified read-only evidence only with an explicit audit record.
+    // Unexplained omissions retain filed order and leave scope unchanged.
+    let retain_evidence = disposition == "selectors" && review_filed(&snapshot.tags);
+    let mut evidence = if retain_evidence {
+        retained_review_evidence(
             action,
             &snapshot.context_files,
             &after,
             context.workspace_root,
             context.source,
         )
-        .map_err(refused(task_id, "apply_failed"))?;
+        .map_err(refused(task_id, "apply_failed"))?
+    } else {
+        Vec::new()
+    };
+    let dropped = reviewed_evidence_drops(action, assessment, &evidence)
+        .map_err(refused(task_id, "invalid"))?;
+    evidence.retain(|selector| !dropped.contains(selector));
+    if retain_evidence {
         after = snapshot
             .context_files
             .iter()
@@ -201,10 +209,7 @@ fn scope(
             )
             .cloned()
             .collect();
-        evidence
-    } else {
-        Vec::new()
-    };
+    }
     let reauthorization = unauthorized_missing_targets(
         action,
         &snapshot.context_files,
