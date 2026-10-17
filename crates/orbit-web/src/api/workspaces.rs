@@ -244,11 +244,20 @@ pub(super) fn all_job_runs_json(
                     }
                 };
                 total = total.saturating_add(count);
-                candidates.extend(runs.into_iter().map(|run| {
-                    let mut value = job_run_to_json(&run, None);
-                    super::run_tasks::add_tasks(&mut value, &run, &titles);
-                    (run, entry.id.clone(), entry.name.clone(), value)
-                }));
+                let mut values = runs
+                    .iter()
+                    .map(|run| {
+                        let mut value = job_run_to_json(run, None);
+                        super::run_tasks::add_tasks(&mut value, run, &titles);
+                        value
+                    })
+                    .collect::<Vec<_>>();
+                super::run_lineage::add_run_lineage(&runtime, &runs, &mut values);
+                candidates.extend(
+                    runs.into_iter()
+                        .zip(values)
+                        .map(|(run, value)| (run, entry.id.clone(), entry.name.clone(), value)),
+                );
             }
             Err(error) => unavailable.push(json!({
                 "workspace_id": entry.id,

@@ -214,7 +214,7 @@ fn job_runs_page(
     let total = count_job_runs_for_state(runtime, scope, state)?;
     let truncated = total > runs.len() as u64;
     let titles = super::run_tasks::task_titles(runtime, &runs)?;
-    let items: Vec<Value> = runs
+    let mut items: Vec<Value> = runs
         .iter()
         .map(|run| {
             let mut value = job_run_to_json(run, None);
@@ -222,6 +222,7 @@ fn job_runs_page(
             value
         })
         .collect();
+    super::run_lineage::add_run_lineage(runtime, &runs, &mut items);
     Ok(json!({
         "items": items,
         "total": total,
