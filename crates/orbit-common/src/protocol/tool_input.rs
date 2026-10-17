@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::OrbitError;
@@ -402,5 +403,47 @@ pub fn parse_duration_seconds(raw: &str) -> Result<u64, OrbitError> {
     };
     seconds.ok_or_else(|| {
         OrbitError::InvalidInput(format!("duration '{raw}' is too large to represent"))
+    })
+}
+
+/// Parse a `since` window into an instant: an RFC3339 timestamp, a naive
+/// `YYYY-MM-DDTHH:MM:SS` or `YYYY-MM-DD HH:MM:SS` timestamp read as UTC, or a
+/// duration measured back from now.
+///
+/// The caller supplies the duration grammar as `parse_duration`, so each
+/// surface keeps its own rule for bare numbers. Overflowing durations are
+/// refused with the input as the caller wrote it.
+pub fn parse_since_with(
+    raw: &str,
+    parse_duration: impl FnOnce(&str) -> Result<u64, OrbitError>,
+) -> Result<DateTime<Utc>, OrbitError> {
+    let value = raw.trim();
+
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(value) {
+        return Ok(parsed.with_timezone(&Utc));
+    }
+
+    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S") {
+        return Ok(naive.and_utc());
+    }
+    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S") {
+        return Ok(naive.and_utc());
+    }
+
+    let seconds = parse_duration(value)?;
+    let seconds = i64::try_from(seconds).map_err(|_| {
+        OrbitError::InvalidInput(format!(
+            "duration '{raw}' is too large to convert into a timestamp"
+        ))
+    })?;
+    let duration = chrono::Duration::try_seconds(seconds).ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "duration '{raw}' is too large to convert into a timestamp"
+        ))
+    })?;
+    Utc::now().checked_sub_signed(duration).ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "duration '{raw}' is too large to convert into a timestamp"
+        ))
     })
 }
