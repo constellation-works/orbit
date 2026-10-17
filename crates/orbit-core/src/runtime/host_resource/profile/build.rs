@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use orbit_config::AutoConcurrencySettings;
-use orbit_store::contracts::{CPU_ACCOUNTING_LINUX, CPU_ACCOUNTING_MACOS, DeliveryRunResources};
+use orbit_store::contracts::{
+    CPU_ACCOUNTING_LINUX, CPU_ACCOUNTING_MACOS, CPU_ACCOUNTING_MACOS_OWN_ONLY, DeliveryRunResources,
+};
 use orbit_types::workflow::{AUTO_TASK_TAG_PREFIX, auto_task_builds_by_design};
 
 use super::{
@@ -197,6 +199,8 @@ fn deliveries(runs: Vec<DeliveryRunResources>) -> Vec<Delivery> {
                 .iter()
                 .any(|minute| match minute.cpu_accounting.as_deref() {
                     Some(CPU_ACCOUNTING_LINUX | CPU_ACCOUNTING_MACOS) => false,
+                    // Missed reaped descendants and under-measured the load.
+                    Some(CPU_ACCOUNTING_MACOS_OWN_ONLY) => true,
                     None => !cfg!(target_os = "linux"),
                     Some(_) => true,
                 });

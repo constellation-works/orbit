@@ -252,6 +252,175 @@ fn native_cpu_time_agrees_with_getrusage() {
     );
 }
 
+/// One-time native check, outside recurring gates, that the tree account
+/// counts descendants that were reaped between samples, and counts once a
+/// child that samples saw alive before it was reaped. An isolated sampler
+/// process samples its own tree every 250 ms around one child per scenario:
+/// a spawner whose 24 sequential grandchildren each burn about 100 ms and
+/// exit inside one interval, and a 1 s burner seen alive at least twice.
+/// After the reap, the tree CPU beyond the sampler's own must be within 10%
+/// plus 20 ms of `getrusage(RUSAGE_CHILDREN)` over the same scenario.
+#[test]
+#[ignore = "bounded native reaped-descendant accounting; run explicitly in isolation"]
+fn native_tree_cpu_counts_reaped_descendants_once() {
+    const TEST: &str = "process::tests::ancestry::native_tree_cpu_counts_reaped_descendants_once";
+    const ROLE: &str = "ORBIT_NATIVE_TREE_CPU_ROLE";
+    const BURN_MS: &str = "ORBIT_NATIVE_TREE_CPU_BURN_MS";
+    const GRANDCHILDREN: u32 = 24;
+    const INTERVAL: Duration = Duration::from_millis(250);
+
+    fn role(name: &str, burn_ms: u64) -> Command {
+        let mut command = Command::new(std::env::current_exe().expect("existing test binary"));
+        command
+            .args(["--exact", TEST, "--ignored", "--quiet"])
+            .env(ROLE, name)
+            .env(BURN_MS, burn_ms.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null());
+        command
+    }
+    fn burn(wall: Duration) {
+        let started = Instant::now();
+        let mut value = 1_u64;
+        while started.elapsed() < wall {
+            for _ in 0..1_000 {
+                value =
+                    std::hint::black_box(value.wrapping_mul(6364136223846793005).wrapping_add(1));
+            }
+        }
+    }
+    fn children_cpu_ns() -> u64 {
+        let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+        // Safety: the pointer names a writable rusage structure.
+        assert_eq!(
+            unsafe { libc::getrusage(libc::RUSAGE_CHILDREN, usage.as_mut_ptr()) },
+            0
+        );
+        // Safety: the successful syscall initialized the structure.
+        let usage = unsafe { usage.assume_init() };
+        ((usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) as u64 * 1_000_000
+            + (usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) as u64)
+            * 1_000
+    }
+    fn snapshot() -> Vec<ProcessTreeProcess> {
+        ancestry::process_tree(std::process::id())
+            .expect("native tree must be readable for this check")
+    }
+    fn own_ns(tree: &[ProcessTreeProcess]) -> u64 {
+        tree.iter()
+            .find(|process| process.key.pid == std::process::id())
+            .expect("own process")
+            .cpu_time_ns
+    }
+
+    let burn_ms = std::env::var(BURN_MS)
+        .ok()
+        .and_then(|ms| ms.parse().ok())
+        .unwrap_or(0);
+    match std::env::var(ROLE).as_deref() {
+        Ok("burn") => {
+            burn(Duration::from_millis(burn_ms));
+            return;
+        }
+        Ok("spawner") => {
+            for _ in 0..GRANDCHILDREN {
+                let status = role("burn", burn_ms).status().expect("spawn grandchild");
+                assert!(status.success(), "grandchild {status}");
+            }
+            return;
+        }
+        Ok("sampler") => {}
+        _ => {
+            let mut command = role("sampler", 0);
+            crate::test_env::clear_inherited_authority(|key| {
+                command.env_remove(key);
+            });
+            command.args(["--nocapture"]).stdout(Stdio::piped());
+            let output = command.output().expect("isolated tree CPU sampler");
+            std::io::stdout()
+                .write_all(&output.stdout)
+                .expect("tree CPU evidence");
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+    }
+
+    for (scenario, child_role, child_burn_ms, min_alive_samples) in [
+        ("short-lived grandchildren", "spawner", 100, 0),
+        ("long-lived child", "burn", 1_000, 2),
+    ] {
+        let mut account = ancestry::TreeCpuAccount::new();
+        let reference_before = children_cpu_ns();
+        let first = snapshot();
+        let own_before = own_ns(&first);
+        account.observe(&first);
+        let mut child = OwnedChild::from_spawned(
+            role(child_role, child_burn_ms)
+                .process_group(0)
+                .spawn()
+                .expect("spawn scenario child"),
+        );
+        let child_pid = child.pid();
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut samples = 0_u32;
+        let mut alive_samples = 0_u32;
+        let status = loop {
+            std::thread::sleep(INTERVAL);
+            if let Some(status) = child.child_mut().try_wait().expect("poll scenario child") {
+                // Each grandchild was waited for, so the group is empty.
+                child.mark_reaped();
+                break status;
+            }
+            if Instant::now() > deadline {
+                child.kill_and_reap();
+                panic!("{scenario}: child did not finish within 60 s");
+            }
+            let tree = snapshot();
+            alive_samples += u32::from(contains_pid(&tree, child_pid));
+            samples += 1;
+            account.observe(&tree);
+        };
+        assert!(status.success(), "{scenario}: child {status}");
+        // The reap moved the child's whole total into this process's own
+        // reaped counter; the last snapshot is what charges it.
+        let last = snapshot();
+        let own_after = own_ns(&last);
+        account.observe(&last);
+        let measured = account
+            .cumulative_ns()
+            .saturating_sub(own_after - own_before);
+        let reference = children_cpu_ns() - reference_before;
+        let tolerance = reference / 10 + 20_000_000;
+        writeln!(
+            std::io::stdout(),
+            "{}",
+            serde_json::json!({
+                "schema_version": 1, "scenario": scenario, "samples": samples,
+                "alive_samples": alive_samples, "tree_children_cpu_ns": measured,
+                "rusage_children_cpu_ns": reference, "tolerance_ns": tolerance,
+                "absolute_error_ns": measured.abs_diff(reference),
+            })
+        )
+        .expect("tree CPU evidence");
+        assert!(
+            alive_samples >= min_alive_samples,
+            "{scenario}: child sampled alive {alive_samples} times, need {min_alive_samples}"
+        );
+        assert!(
+            reference >= 900_000_000,
+            "{scenario}: insufficient child CPU for a meaningful check: {reference}"
+        );
+        assert!(
+            measured.abs_diff(reference) <= tolerance,
+            "{scenario}: tree {measured} ns vs RUSAGE_CHILDREN {reference} ns; tolerance {tolerance} ns"
+        );
+    }
+}
+
 /// Kernel-call interleavings must never attribute a replacement process's
 /// usage or descendants to the tree the walk started from.
 #[test]
@@ -261,7 +430,7 @@ fn tree_walk_omits_reused_pids_and_reparented_children() {
 
     use crate::process::ancestry::ProcessStartKey;
     use crate::process::ancestry::darwin_tree::{
-        ReadError, own_cpu_ns, read_process_with, snapshot_with,
+        ReadError, mach_cpu_ns, read_process_with, snapshot_with,
     };
 
     // Pure arithmetic and injected platform failure outcomes share this
@@ -279,7 +448,7 @@ fn tree_walk_omits_reused_pids_and_reparented_children() {
         (1, 0, Some((0, 3)), None),
         (1, 0, Some((125, 0)), None),
     ] {
-        match (own_cpu_ns(user, system, timebase), expected) {
+        match (mach_cpu_ns(user, system, timebase), expected) {
             (Ok(actual), Some(expected)) => assert_eq!(actual, expected),
             (Err(ReadError::Unreadable), None) => {}
             (actual, expected) => {
@@ -323,7 +492,7 @@ fn tree_walk_omits_reused_pids_and_reparented_children() {
                 if rusage_denied {
                     Err(ReadError::Unreadable)
                 } else {
-                    Ok((900_000_000, 4096))
+                    Ok((900_000_000, 300_000_000, 4096))
                 }
             },
         );
@@ -338,6 +507,7 @@ fn tree_walk_omits_reused_pids_and_reparented_children() {
                     "{name}"
                 );
                 assert_eq!(process.cpu_time_ns, 900_000_000, "{name}");
+                assert_eq!(process.reaped_cpu_time_ns, 300_000_000, "{name}");
                 assert_eq!(parent, expected_parent, "{name}");
             }
             (Err(ReadError::Gone), Err("gone"))
@@ -396,6 +566,7 @@ fn tree_walk_omits_reused_pids_and_reparented_children() {
                     ProcessTreeProcess {
                         key: ProcessStartKey { pid, starttime },
                         cpu_time_ns: u64::from(pid) * 1_000,
+                        reaped_cpu_time_ns: 0,
                         phys_footprint: u64::from(pid) * 4_096,
                     },
                     parent,

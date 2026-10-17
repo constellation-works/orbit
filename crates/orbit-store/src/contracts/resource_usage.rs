@@ -12,8 +12,13 @@ use serde::{Deserialize, Serialize};
 
 /// CPU accounting from the Linux cgroup microsecond counter.
 pub const CPU_ACCOUNTING_LINUX: &str = "linux-cgroup-v1";
-/// CPU accounting from macOS own Mach ticks converted with the host timebase.
-pub const CPU_ACCOUNTING_MACOS: &str = "macos-mach-ns-v1";
+/// CPU accounting from macOS Mach ticks converted with the host timebase,
+/// counting each process's own CPU and the CPU of descendants it reaped.
+pub const CPU_ACCOUNTING_MACOS: &str = "macos-mach-ns-v2";
+/// Superseded macOS accounting that counted only the CPU of processes alive
+/// at a sample. Reaped short-lived descendants were missed, so profiles
+/// exclude deliveries carrying it.
+pub const CPU_ACCOUNTING_MACOS_OWN_ONLY: &str = "macos-mach-ns-v1";
 
 /// One minute of one run's worker.
 #[derive(Debug, Clone, PartialEq)]

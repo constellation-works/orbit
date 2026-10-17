@@ -1,7 +1,7 @@
 ---
 title: Auto-concurrency — Design
 owner: claude
-last_updated: 2026-10-12
+last_updated: 2026-10-16
 last_validated: 2026-10-12
 status: Draft
 feature: auto-concurrency
@@ -185,12 +185,24 @@ class in `worker/delivery_class.rs`, the host reads in
   `orbit gc runs --apply`, and so the `store-gc` routine, prunes them
   host-wide.
 - **macOS process tree.** macOS has no scopes. Every 5 s the worker sums
-  its own process tree (`process_tree` in `ancestry.rs`). CPU time is the
-  non-negative delta of each process seen in both samples, plus the full
-  CPU time of a process that appeared since the previous sample. The first
-  sample is a baseline, so a worker's lifetime before that does not land in
-  the first minute. A process that exits drops out of the sum; it is not
-  subtracted and its CPU is not added again. Each process is charged only
+  its own process tree (`process_tree` and `TreeCpuAccount` in
+  `ancestry.rs`). A process's total is its own CPU plus the CPU of the
+  children it has waited for (`ri_child_user_time` and
+  `ri_child_system_time`, which carry what those children had reaped in
+  turn). CPU time is the non-negative growth of the total of each process
+  seen in both samples, plus the whole total of a process that appeared
+  since the previous sample, minus the last observed total of each process
+  that left the tree since then. A short-lived compiler, linker or test
+  process that starts and is reaped between samples is charged through its
+  parent's reaped total. One a sample saw alive arrives in its parent's
+  reaped total too, and the subtraction leaves only what it ran after it
+  was last seen, so it is counted once. The walk reads a parent before its
+  children, so a child reaped between those reads is missing from a sample
+  whose parent total does not have it yet; its subtraction waits one sample
+  for the reap. A process that left without being reaped inside the tree,
+  such as one reparented away, offsets at most that next sample's growth.
+  The first sample is a baseline, so a worker's lifetime before that does
+  not land in the first minute. Each process is charged only
   when its start time and parent read the same before and after its usage
   read, and while the parent that listed it still has the same start time.
   A reused or reparented pid is left out of that sample. Memory is the sum of
@@ -293,28 +305,40 @@ actually used.
 ### 3.3 The profile
 
 Worker minutes now carry nullable `cpu_accounting` provenance. New Linux
-minutes use `linux-cgroup-v1`; corrected Mac minutes use `macos-mach-ns-v1`.
-The Mac sampler converts its own user plus system Mach absolute ticks using
-the host's `mach_timebase_info` ratio, with wide integer arithmetic. It never
-adds child totals. An unavailable/zero timebase or a result beyond `u64`
-invalidates the sample, preserving the unreadable-tree behavior.
+minutes use `linux-cgroup-v1`; new Mac minutes use `macos-mach-ns-v2`.
+The Mac sampler converts each process's own and reaped-children user plus
+system Mach absolute ticks using the host's `mach_timebase_info` ratio, with
+wide integer arithmetic, and combines them across samples as §2 describes.
+An unavailable/zero timebase or a result beyond `u64` invalidates the
+sample, preserving the unreadable-tree behavior. Mac minutes stamped
+`macos-mach-ns-v1` counted only the own CPU of processes alive at a sample
+and missed reaped descendants, under-measuring a building delivery several
+times over, so profiles exclude their deliveries on every platform.
 Apple's [fill_task_rusage implementation](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/bsd_kern.c)
 copies task power totals into these counters; their units must not be assumed
 to be nanoseconds. For example, a 125/3 host needs its actual ratio.
 
-The bounded native calibration lives in the existing `orbit-common` test
-binary and is ignored by recurring gates. Run it explicitly with
+The bounded native calibrations live in the existing `orbit-common` test
+binary and are ignored by recurring gates. Run the first explicitly with
 `./scripts/build-budget.py -- cargo test -p orbit-common --lib process::tests::ancestry::native_cpu_time_agrees_with_getrusage -- --ignored --exact --nocapture`.
 It isolates one process, targets 250 ms of single-thread wall time, and compares
 the public tree's own CPU delta with `getrusage(RUSAGE_SELF)`. The documented
 tolerance is 5% plus 5 ms for sequential readings, with at least 100 ms of CPU
 work required. Its JSON output retains the actual timebase, raw tick delta,
 corrected nanoseconds, reference delta and error.
+`native_tree_cpu_counts_reaped_descendants_once`, run the same way, checks
+reaped descendants: an isolated sampler samples its tree every 250 ms around
+a child that runs 24 sequential grandchildren of about 100 ms each, then
+around a 1 s child sampled alive at least twice. After each reap, the tree
+CPU beyond the sampler's own must be within 10% plus 20 ms of
+`getrusage(RUSAGE_CHILDREN)`. Its JSON output records both and the sample
+counts.
 
 The additive storage migration leaves every historical counter and its
 nullable provenance unchanged. On Mac, profiles exclude the entire delivery
 if any minute lacks recognized provenance, including otherwise valid sibling
-runs. Unknown provenance is excluded on every platform. Legacy unmarked
+runs. Unknown and superseded (`macos-mach-ns-v1`) provenance is excluded on
+every platform. Legacy unmarked
 Linux minutes remain eligible on Linux because their cgroup units did not
 change. This compatibility rule supports host-local history; importing
 unmarked Mac history into a Linux store is unsupported. Raw minute reads
@@ -744,9 +768,10 @@ through complete host minutes and the earliest recorded offset (+5 minutes),
 then retain a fresh accuracy report with measured pairs. A unit/fixture pass,
 a worker-only measurement, or forecasts with no paired host minutes does not
 satisfy this operational verification. New native Mac worker minutes carry
-`macos-mach-ns-v1` provenance from the process CPU-unit repair. Historical
-unmarked Mac minutes remain stored but their deliveries are excluded from
-profiles; this host-reader change does not rescale, backfill or relabel them.
+`macos-mach-ns-v2` provenance, which counts reaped descendants. Historical
+unmarked and `macos-mach-ns-v1` Mac minutes remain stored but their
+deliveries are excluded from profiles; this host-reader change does not
+rescale, backfill or relabel them.
 Linux eligibility and raw history retention remain unchanged.
 
 ### 8.1 The accuracy report
