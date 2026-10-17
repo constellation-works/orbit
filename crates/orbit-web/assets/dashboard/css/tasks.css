@@ -245,7 +245,7 @@
   transition: background 0.15s ease;
   border-top: 1px solid var(--hair);
 }
-.row.run-layout { grid-template-columns: 92px minmax(0, 1fr) 84px 148px var(--task-action-width, 72px); }
+.row.run-layout { grid-template-columns: 92px minmax(0, 1fr) 84px 120px var(--task-action-width, 72px); }
 
 .row:hover { background: var(--bg-hover); }
 #tasks-body > .row:hover { background: color-mix(in srgb, var(--bg-elev) 92%, white); }
@@ -654,9 +654,17 @@
     grid-template-columns: 92px minmax(0, 1fr) 84px;
   }
   #tasks-body[data-quick-actions="none"] .row.run-layout {
-    grid-template-columns: 92px minmax(0, 1fr) 84px 148px;
+    grid-template-columns: 92px minmax(0, 1fr) 84px 120px;
   }
   #tasks-body[data-quick-actions="none"] .row .task-quick-cell { display: none; }
+  /* A card with no action in any row (Blocked) does the same for itself. */
+  #tasks-body > .row.no-quick { grid-template-columns: 92px minmax(0, 1fr) 84px; }
+  #tasks-body > .row.run-layout.no-quick { grid-template-columns: 92px minmax(0, 1fr) 84px 120px; }
+  #tasks-body > .row.no-quick .task-quick-cell { display: none; }
+  /* In progress, the action is the run's link, read with the host beside it:
+     it starts at the host column's edge and is wide enough for "on <host>". */
+  #tasks-body > .row[data-group="in-progress"] { --task-action-width: 108px; }
+  #tasks-body > .row[data-group="in-progress"] .task-quick-cell { justify-content: flex-start; }
 }
 
 .row.header {

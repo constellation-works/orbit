@@ -492,7 +492,7 @@ td .rel-rate { font-size: 12px; }
   background: var(--bg-elev); border: 1px solid var(--border);
   border-radius: 8px; padding: 16px 18px;
 }
-.mx-row { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+.mx-row { display: flex; flex-wrap: wrap; gap: 16px; align-items: stretch; }
 .mx-row > .mx-wide { flex: 2 1 520px; }
 .mx-row > .mx-narrow { flex: 1 1 300px; }
 .mx-card-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px; }
