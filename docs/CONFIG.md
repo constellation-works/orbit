@@ -960,7 +960,9 @@ existing recovery activities, final validation and push do the repair:
 - On an open blocked PR, the watcher reads authenticated required-check policy
   for the pinned current head. Queued or running required checks keep waiting
   within the original completion deadline, even beside an unrelated optional
-  failure. An unclassified or optional pending check grants no wait, and a
+  failure. So does a required check that current branch policy names and a
+  freshly pushed head has not reported yet; it is never treated as passed. An
+  unclassified or optional pending check grants no wait, and a
   required failure still takes precedence over pending checks. Review gates and
   unreadable or stale evidence still stop the watcher. A failed required check
   whose job log shows a code failure is repaired, with that head's failed step,

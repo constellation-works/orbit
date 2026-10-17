@@ -935,6 +935,12 @@ conflict, unsatisfied protection or an exhausted check budget records a durable 
 task in `review`, except that a repairable stop starts the automatic repair above. A hosted check the
 accepted before-landing review owed the owner (`owner_owed_evidence`) must report an explicit success on the
 pinned head before the merge is sent; a skipped or neutral result keeps the owner waiting [ORB-15677].
+A `BLOCKED` pull request with no failed and no pending check is refused only after the owner reads
+current branch policy for the pinned head [ORB-16339]: a required check that policy names and the
+freshly pushed head has not reported yet keeps the owner waiting within `max_wait_seconds`, and a
+check that never appears stops at that deadline with the missing check named. Absent-context base
+refresh still diagnoses such a head. When the policy cannot be read, the owner waits at most four
+polls before stopping as before; a readable policy with nothing unreported stops at once.
 A failed pull request check, owed or not, is classified from its failed-step log with the CI sweep's
 error signature [ORB-15956]: `inherited` (the signature also fails on the candidate's base, or the
 same job passes on the moved landing tip) updates the pull request branch from the landing branch

@@ -739,7 +739,7 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
         let mut state = self.state.lock().unwrap();
         let candidate = &self.context.candidate;
         match operation {
-            "ci.current_gates" => Ok(json!({"gates_passed":true})),
+            "ci.current_gates" => Ok(json!({"gates_passed":true,"required":[],"missing":[]})),
             "ci.emission_evidence" => Ok(json!({"evidence":null})),
             "pr.status" => {
                 let scripted_state = state.merge_states.front().copied();
@@ -921,6 +921,8 @@ struct PendingForge {
     forge: FakeForge,
     observations: Mutex<std::collections::VecDeque<Value>>,
     policies: Mutex<std::collections::VecDeque<Value>>,
+    /// Current branch-policy gate answers; empty leaves the forge's own.
+    gates: Mutex<std::collections::VecDeque<Value>>,
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for PendingForge {
@@ -937,6 +939,22 @@ impl orbit_engine::test_support::NullRuntimeHost for PendingForge {
         operation: &str,
         input: Value,
     ) -> Result<Value, OrbitError> {
+        if operation == "ci.current_gates" && !self.gates.lock().unwrap().is_empty() {
+            self.forge
+                .ops
+                .lock()
+                .unwrap()
+                .push((operation.into(), input));
+            let mut gates = self.gates.lock().unwrap();
+            let answer = gates.front().unwrap().clone();
+            if gates.len() > 1 {
+                gates.pop_front();
+            }
+            if answer == json!("auth") {
+                return Err(OrbitError::Execution("HTTP 401: Bad credentials".into()));
+            }
+            return Ok(answer);
+        }
         if operation == "pr.required_checks" {
             self.forge
                 .ops
@@ -988,6 +1006,7 @@ fn pending_forge(repo: &Path, observations: Vec<Value>, policies: Vec<Value>) ->
         forge,
         observations: Mutex::new(observations.into()),
         policies: Mutex::new(policies.into()),
+        gates: Mutex::default(),
     }
 }
 
@@ -1079,6 +1098,97 @@ fn owner_landing_waits_for_exact_required_checks_before_one_verified_merge() {
                     HandoffLandingStep::Complete
                 ]
             );
+        },
+    );
+}
+
+/// [ORB-16339] A freshly pushed head reads BLOCKED before the provider has
+/// queued any check run, so neither the rollup nor the required-check read
+/// names anything. While current branch policy names a required check the
+/// head has not reported, the owner waits within its deadline and merges once
+/// the provider reports the pull request mergeable; a check that never
+/// appears stops at the deadline and names it. Unreadable policy earns only
+/// the bounded unsettled-poll grace, never a wait to the deadline.
+#[test]
+fn owner_landing_waits_for_required_checks_the_head_has_not_reported() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "owner_landing_waits_for_required_checks_the_head_has_not_reported",
+        || {
+            let unreported = || json!({"mergeStateStatus":"BLOCKED","statusCheckRollup":[]});
+            let missing = json!({"gates_passed":false,"required":[{"context":"clippy","app_id":null}],
+                "missing":[{"context":"clippy","app_id":null}]});
+            for (case, observations, gates, max_wait, expected_waits, stop_reason) in [
+                (
+                    "appears",
+                    vec![
+                        unreported(),
+                        unreported(),
+                        json!({"mergeStateStatus":"CLEAN"}),
+                    ],
+                    missing.clone(),
+                    15,
+                    2,
+                    None,
+                ),
+                (
+                    "never",
+                    vec![unreported()],
+                    missing.clone(),
+                    10,
+                    2,
+                    Some("within 10s (required checks the head has not reported: clippy)"),
+                ),
+                (
+                    "unreadable",
+                    vec![unreported()],
+                    json!("auth"),
+                    60,
+                    4,
+                    Some("required reviews or checks are not satisfied"),
+                ),
+            ] {
+                let sandbox = tempdir().unwrap();
+                let host = pending_forge(sandbox.path(), observations, vec![]);
+                let head = host.forge.context.candidate.candidate.commit.clone();
+                *host.policies.lock().unwrap() = vec![json!({"pull_request":{"headRefOid":head,
+                    "commits":{"nodes":[{"commit":{"oid":head,"statusCheckRollup":null}}]}}})]
+                .into();
+                *host.gates.lock().unwrap() = vec![gates].into();
+                let waits = std::rc::Rc::new(std::cell::Cell::new(0));
+                let captured = waits.clone();
+                let result = orbit_engine::test_support::with_vcs_retry_wait(
+                    move |_| captured.set(captured.get() + 1),
+                    || {
+                        land_with(
+                            &host,
+                            json!({"max_wait_seconds":max_wait,"poll_interval_seconds":5}),
+                        )
+                    },
+                );
+                assert_eq!(waits.get(), expected_waits, "{case}: {result:?}");
+                assert_eq!(
+                    host.forge.sent("ci.current_gates").len(),
+                    if case == "unreadable" { 5 } else { 2 },
+                    "{case}: current policy is read on every unreported observation"
+                );
+                match stop_reason {
+                    None => {
+                        assert_eq!(result.unwrap()["phase"], "landed", "{case}");
+                        assert_eq!(host.forge.sent("pr.merge").len(), 1, "{case}");
+                    }
+                    Some(reason) => {
+                        let error = result.unwrap_err().to_string();
+                        assert!(error.contains(reason), "{case}: {error}");
+                        assert!(host.forge.sent("pr.merge").is_empty(), "{case}");
+                        assert_eq!(
+                            host.forge.steps(),
+                            [HandoffLandingStep::Stop { repairable: false }],
+                            "{case}"
+                        );
+                    }
+                }
+            }
         },
     );
 }
