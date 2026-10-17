@@ -1,3 +1,4 @@
+mod check_annotations;
 mod ci;
 mod dispatch;
 mod emission;
@@ -38,6 +39,8 @@ pub(crate) const CI_COMMIT_JOBS: &str = "ci.commit_jobs";
 pub(crate) const CI_JOB_LOG: &str = "ci.job_log";
 /// [ORB-15956] Rerun one workflow run's failed jobs.
 pub(crate) const CI_RERUN_FAILED: &str = "ci.rerun_failed";
+/// [ORB-16185] One required non-workflow check run's failure annotations.
+pub(crate) const CI_CHECK_ANNOTATIONS: &str = "ci.check_annotations";
 
 pub(super) const DEFAULT_TIMEOUT_MS: u64 = 15_000;
 const SLOW_TIMEOUT_MS: u64 = 30_000;
