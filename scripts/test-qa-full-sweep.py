@@ -1467,7 +1467,11 @@ def validate_native_execution(records, repo, head):
 
 
 def native_execution_command(command):
-    executed = list(command)
+    # Wrapper options and delimiters belong to the prefix, not to Cargo or
+    # libtest. Normalize only the arguments following the cargo test boundary.
+    cargo_args = command.index("cargo") + 2
+    prefix = list(command[:cargo_args])
+    executed = list(command[cargo_args:])
     if "--list" in executed or "--no-run" in executed:
         raise ValueError("native execution cannot use a listing or compile-only command")
     if "--" not in executed:
@@ -1478,7 +1482,7 @@ def native_execution_command(command):
     executed = executed[:separator + 1] + [flag for flag in executed[separator + 1:] if flag != "--nocapture"]
     if "--show-output" not in executed:
         executed.append("--show-output")
-    return executed
+    return prefix + executed
 
 
 def record_native_execution(command, repo, directory):

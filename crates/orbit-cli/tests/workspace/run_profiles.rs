@@ -186,6 +186,34 @@ impl Fixture {
             .unwrap();
     }
 
+    /// Insert one job run. `started` is absent when the worker never started.
+    fn job_run(
+        &self,
+        run_id: &str,
+        job_id: &str,
+        state: &str,
+        started: Option<DateTime<Utc>>,
+        finished: Option<DateTime<Utc>>,
+    ) {
+        let stamp = |at: DateTime<Utc>| at.to_rfc3339_opts(SecondsFormat::Micros, true);
+        let created = started.or(finished).unwrap_or_else(Utc::now);
+        self.db()
+            .execute(
+                "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, \
+                     scheduled_at, started_at, finished_at, created_at) \
+                 VALUES (?1, 'ws_fixture', ?2, 1, ?3, ?4, ?5, ?6, ?4)",
+                params![
+                    run_id,
+                    job_id,
+                    state,
+                    stamp(created),
+                    started.map(stamp),
+                    finished.map(stamp),
+                ],
+            )
+            .unwrap();
+    }
+
     /// Record the host's measured minute at `at`.
     fn host_minute(&self, at: DateTime<Utc>, cores: f64, gib: i64) {
         self.db()
@@ -583,6 +611,8 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
     assert_eq!(thirty["unmeasured"], 1);
     assert_eq!(thirty["pending"], 0);
     assert_eq!(thirty["missing"], 1);
+    assert_eq!(thirty["unsampled"], 1);
+    assert_eq!(thirty["gap"], 0);
     assert_eq!(thirty["cpu"]["mean_error"], Value::Null);
 
     let drains = doc["drains"].as_array().unwrap();
@@ -610,7 +640,17 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
     let enforce = drain("jrun-enforce");
     assert_eq!(enforce["enforce_passes"], 1);
     assert_eq!(enforce["shadow_passes"], 0);
+    assert_eq!(enforce["admitted"], 0);
     assert_eq!(enforce["would_hold"], serde_json::json!([]));
+    assert_eq!(enforce["enforce_admitted"], 1);
+    assert_eq!(enforce["gap_held"], serde_json::json!([]));
+    assert_eq!(enforce["pull_held"], 0);
+    assert_eq!(pull["pull_held"], 1);
+    assert_eq!(pull["enforce_admitted"], 0);
+    assert_eq!(pull["pull_would_hold"], 2);
+    assert_eq!(shadow["enforce_admitted"], 0);
+    assert_eq!(shadow["gap_held"], serde_json::json!([]));
+    assert_eq!(shadow["pull_held"], 0);
 
     let plain = fixture.stdout(&["run", "profiles", "--accuracy", "--format", "plain"]);
     let drain_rows: Vec<Vec<&str>> = plain
@@ -631,6 +671,9 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
                 "0",
                 "0",
                 "0",
+                "0",
+                "1",
+                "0",
                 "0"
             ],
             vec![
@@ -643,7 +686,10 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
                 "0",
                 "3",
                 "2",
-                "2"
+                "2",
+                "0",
+                "0",
+                "1"
             ],
             vec![
                 "ws_fixture",
@@ -655,9 +701,344 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
                 "1",
                 "0",
                 "0",
+                "0",
+                "0",
+                "0",
                 "0"
             ],
         ],
         "{plain}"
     );
+}
+
+/// Idle target minutes are `unsampled`. A delivery that was live and wrote
+/// no host row is a `gap`. A drain, a run that never started, and a run that
+/// only touches the minute's boundary stay unsampled. A measured minute stays
+/// paired, with the same error, even when a delivery overlaps it.
+#[test]
+fn accuracy_splits_idle_minutes_from_sampling_gaps() {
+    if crate::isolated_test::run_in_child(
+        "run_profiles::accuracy_splits_idle_minutes_from_sampling_gaps",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let minute = (Utc::now() - chrono::Duration::hours(3))
+        .duration_trunc(chrono::Duration::minutes(1))
+        .unwrap();
+    let at = |minutes: i64| minute + chrono::Duration::minutes(minutes);
+    fixture.forecast(
+        "jrun-drain",
+        "shadow",
+        minute + chrono::Duration::seconds(20),
+        &[(5, 4.0, 8), (10, 3.0, 2), (20, 1.0, 1)],
+        &[],
+        &[],
+        &[],
+    );
+    // Still inside its horizon, so this point is pending rather than a gap.
+    fixture.forecast(
+        "jrun-drain",
+        "shadow",
+        Utc::now() - chrono::Duration::seconds(20),
+        &[(5, 9.0, 9)],
+        &[],
+        &[],
+        &[],
+    );
+    fixture.host_minute(at(5), 6.0, 6);
+    fixture.job_run(
+        "jrun-paired-worker",
+        "task_auto_pipeline",
+        "success",
+        Some(at(5) + chrono::Duration::seconds(1)),
+        Some(at(5) + chrono::Duration::seconds(50)),
+    );
+    fixture.job_run(
+        "jrun-gap-worker",
+        "task_claimed_pr_pipeline",
+        "success",
+        Some(at(10) + chrono::Duration::seconds(15)),
+        Some(at(10) + chrono::Duration::seconds(45)),
+    );
+    // Finished as the idle minute started, so it does not cover that minute.
+    fixture.job_run(
+        "jrun-boundary",
+        "task_gate_pipeline",
+        "success",
+        Some(at(19)),
+        Some(at(20)),
+    );
+    // The drain records forecasts while idle and does not sample the host.
+    fixture.job_run(
+        "jrun-pull",
+        "workspace_pull_pipeline",
+        "running",
+        Some(at(20)),
+        Some(at(21)),
+    );
+    fixture.job_run(
+        "jrun-unstarted",
+        "task_local_pipeline",
+        "pending",
+        None,
+        None,
+    );
+
+    let doc: Value =
+        serde_json::from_str(&fixture.stdout(&["run", "profiles", "--accuracy", "--json"]))
+            .unwrap();
+    let offsets = doc["offsets"].as_array().unwrap();
+    let offset = |minutes: u64| {
+        offsets
+            .iter()
+            .find(|offset| offset["offset_minutes"] == minutes)
+            .unwrap()
+    };
+    let five = offset(5);
+    assert_eq!(five["paired"], 1);
+    assert_eq!(five["pending"], 1);
+    assert_eq!(five["missing"], 0);
+    assert_eq!(five["unsampled"], 0);
+    assert_eq!(five["gap"], 0);
+    assert_eq!(five["unmeasured"], 1);
+    assert_eq!(five["cpu"]["mean_error"], -2.0);
+    assert_eq!(five["cpu"]["under_rate"], 1.0);
+    assert_eq!(five["memory"]["mean_error"], 2.0 * GIB as f64);
+    assert_eq!(five["memory"]["under_rate"], 0.0);
+    let ten = offset(10);
+    assert_eq!(ten["paired"], 0);
+    assert_eq!(ten["pending"], 0);
+    assert_eq!(ten["missing"], 1);
+    assert_eq!(ten["unsampled"], 0);
+    assert_eq!(ten["gap"], 1);
+    assert_eq!(ten["cpu"]["mean_error"], Value::Null);
+    assert_eq!(ten["memory"]["worst_miss"], Value::Null);
+    let twenty = offset(20);
+    assert_eq!(twenty["paired"], 0);
+    assert_eq!(twenty["pending"], 0);
+    assert_eq!(twenty["missing"], 1);
+    assert_eq!(twenty["unsampled"], 1);
+    assert_eq!(twenty["gap"], 0);
+    assert_eq!(twenty["cpu"]["mean_error"], Value::Null);
+    let thirty = offset(30);
+    assert_eq!(thirty["paired"], 0);
+    assert_eq!(thirty["pending"], 0);
+    assert_eq!(thirty["missing"], 0);
+    assert_eq!(thirty["unsampled"], 0);
+    assert_eq!(thirty["gap"], 0);
+
+    let plain = fixture.stdout(&["run", "profiles", "--accuracy", "--format", "plain"]);
+    let row = |label: &str| {
+        plain
+            .lines()
+            .find(|line| line.starts_with(label))
+            .unwrap_or_else(|| panic!("missing {label} row in {plain}"))
+            .split('\t')
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    let ten_row = row("+10m\t");
+    assert_eq!(
+        &ten_row[..6],
+        ["+10m", "0 (1 unmeasured)", "0", "1", "0", "1"]
+    );
+    assert!(ten_row[6..].iter().all(|cell| cell == "-"), "{ten_row:?}");
+    let twenty_row = row("+20m\t");
+    assert_eq!(
+        &twenty_row[..6],
+        ["+20m", "0 (1 unmeasured)", "0", "1", "1", "0"]
+    );
+    let five_row = row("+5m\t");
+    assert_eq!(
+        &five_row[..6],
+        ["+5m", "1 (1 unmeasured)", "1", "0", "0", "0"]
+    );
+    assert_eq!(five_row[6], "-2.0 cores");
+    assert_eq!(five_row[9], "+2.0 GiB");
+}
+
+/// Enforce cohorts report the distinct tasks local passes admitted, the
+/// distinct tasks gap fit held, and enforce pull holds, while shadow columns
+/// stay on shadow passes.
+#[test]
+fn enforce_accuracy_reports_admitted_tasks_gap_holds_and_pull_holds() {
+    if crate::isolated_test::run_in_child(
+        "run_profiles::enforce_accuracy_reports_admitted_tasks_gap_holds_and_pull_holds",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let at = (Utc::now() - chrono::Duration::hours(2))
+        .duration_trunc(chrono::Duration::minutes(1))
+        .unwrap();
+    let stamp = |minutes: i64| at + chrono::Duration::minutes(minutes);
+
+    // A shadow pass must stay out of `--mode enforce` and keep its own columns.
+    fixture.forecast(
+        "jrun-shadow",
+        "shadow",
+        stamp(0),
+        &[(5, 1.0, 1)],
+        &["ORB-S"],
+        &[],
+        &["ORB-S"],
+    );
+    // Two local enforce passes. ORB-2 is admitted twice and ORB-3 is held
+    // twice; each counts once. ORB-4 is held only.
+    fixture.forecast(
+        "jrun-local",
+        "enforce",
+        stamp(1),
+        &[(5, 2.0, 1)],
+        &["ORB-1", "ORB-2"],
+        &["ORB-1", "ORB-2"],
+        &["ORB-3"],
+    );
+    fixture.forecast(
+        "jrun-local",
+        "enforce",
+        stamp(2),
+        &[(5, 2.0, 1)],
+        &["ORB-2"],
+        &["ORB-2"],
+        &["ORB-3", "ORB-4"],
+    );
+    // Pull enforce: one sent with room, one held and not sent, one sent and held.
+    for (minute, sent, held) in [(3i64, true, false), (4, false, true), (5, true, true)] {
+        fixture.forecast(
+            "jrun-pull",
+            "enforce",
+            stamp(minute),
+            &[(5, 3.0, 1)],
+            &[],
+            &[],
+            &[],
+        );
+        fixture
+            .db()
+            .execute(
+                "UPDATE admission_forecasts SET pull_decision_json = ?1 \
+                 WHERE run_id = 'jrun-pull' AND forecast_at = ?2",
+                params![
+                    serde_json::json!({"sent": sent, "forecast_no_headroom": held}).to_string(),
+                    stamp(minute).to_rfc3339_opts(SecondsFormat::Micros, true),
+                ],
+            )
+            .unwrap();
+    }
+
+    let doc: Value = serde_json::from_str(&fixture.stdout(&[
+        "run",
+        "profiles",
+        "--accuracy",
+        "--mode",
+        "enforce",
+        "--json",
+    ]))
+    .unwrap();
+    assert_eq!(doc["selection"]["mode"], "enforce");
+    assert_eq!(doc["forecasts"], 5, "{doc:#}");
+    let drains = doc["drains"].as_array().unwrap();
+    assert_eq!(drains.len(), 2, "{doc:#}");
+    let drain = |run_id: &str| {
+        drains
+            .iter()
+            .find(|drain| drain["run_id"] == run_id)
+            .unwrap_or_else(|| panic!("missing {run_id}: {doc:#}"))
+    };
+    let local = drain("jrun-local");
+    assert_eq!(local["shadow_passes"], 0);
+    assert_eq!(local["enforce_passes"], 2);
+    assert_eq!(local["admitted"], 0);
+    assert_eq!(local["would_hold"], serde_json::json!([]));
+    assert_eq!(local["would_add"], serde_json::json!([]));
+    assert_eq!(local["enforce_admitted"], 2);
+    assert_eq!(local["gap_held"], serde_json::json!(["ORB-3", "ORB-4"]));
+    assert_eq!(local["pull_requests"], 0);
+    assert_eq!(local["pull_sent"], 0);
+    assert_eq!(local["pull_would_hold"], 0);
+    assert_eq!(local["pull_held"], 0);
+    let pull = drain("jrun-pull");
+    assert_eq!(pull["enforce_passes"], 3);
+    assert_eq!(pull["shadow_passes"], 0);
+    assert_eq!(pull["admitted"], 0);
+    assert_eq!(pull["enforce_admitted"], 0);
+    assert_eq!(pull["gap_held"], serde_json::json!([]));
+    assert_eq!(pull["pull_requests"], 3);
+    assert_eq!(pull["pull_sent"], 2);
+    assert_eq!(pull["pull_would_hold"], 0);
+    assert_eq!(pull["pull_held"], 2);
+
+    let plain = fixture.stdout(&[
+        "run",
+        "profiles",
+        "--accuracy",
+        "--mode",
+        "enforce",
+        "--format",
+        "plain",
+    ]);
+    let drain_rows: Vec<Vec<&str>> = plain
+        .lines()
+        .filter(|line| line.starts_with("ws_fixture\t"))
+        .map(|line| line.split('\t').collect())
+        .collect();
+    assert_eq!(
+        drain_rows,
+        vec![
+            vec![
+                "ws_fixture",
+                "jrun-local",
+                "0",
+                "2",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "2",
+                "2",
+                "0"
+            ],
+            vec![
+                "ws_fixture",
+                "jrun-pull",
+                "0",
+                "3",
+                "0",
+                "0",
+                "0",
+                "3",
+                "2",
+                "0",
+                "0",
+                "0",
+                "2"
+            ],
+        ],
+        "{plain}"
+    );
+
+    let shadow: Value = serde_json::from_str(&fixture.stdout(&[
+        "run",
+        "profiles",
+        "--accuracy",
+        "--mode",
+        "shadow",
+        "--json",
+    ]))
+    .unwrap();
+    let shadow_drains = shadow["drains"].as_array().unwrap();
+    assert_eq!(shadow_drains.len(), 1, "{shadow:#}");
+    assert_eq!(shadow_drains[0]["run_id"], "jrun-shadow");
+    assert_eq!(shadow_drains[0]["admitted"], 1);
+    assert_eq!(shadow_drains[0]["would_hold"], serde_json::json!(["ORB-S"]));
+    assert_eq!(shadow_drains[0]["would_add"], serde_json::json!([]));
+    assert_eq!(shadow_drains[0]["enforce_passes"], 0);
+    assert_eq!(shadow_drains[0]["enforce_admitted"], 0);
+    assert_eq!(shadow_drains[0]["gap_held"], serde_json::json!([]));
+    assert_eq!(shadow_drains[0]["pull_would_hold"], 0);
+    assert_eq!(shadow_drains[0]["pull_held"], 0);
 }

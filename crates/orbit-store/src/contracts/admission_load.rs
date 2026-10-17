@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use serde_json::Value;
 
-use super::RunResourceMinute;
+use super::{HostResourceMinute, RunResourceMinute};
 
 /// A delivery run as admission reads it: live, or created since the oldest
 /// reservation.
@@ -22,6 +22,8 @@ pub struct AdmissionRun {
     /// `pending`, `running` or `retrying`.
     pub live: bool,
     pub created_at: DateTime<Utc>,
+    /// When its worker started; `None` while it has not.
+    pub started_at: Option<DateTime<Utc>>,
     pub input: Option<Value>,
     /// The run's newest `run_resource_minutes` row: its current measured use.
     pub newest_minute: Option<RunResourceMinute>,
@@ -60,6 +62,25 @@ pub struct AdmissionLoadQuery<'a> {
     pub delivery_jobs: &'a [&'a str],
     /// Reservations written before this are deleted, not read.
     pub reservations_expire_before: DateTime<Utc>,
+    /// Host minutes starting at or after this, and run minutes of every
+    /// workspace starting at or after it, are read for the baseline. `None`
+    /// reads neither.
+    pub resource_minutes_since: Option<DateTime<Utc>>,
+}
+
+/// One `run_resource_minutes` row of any delivery run, as the baseline reads
+/// it: what the run used over the part of the minute it covered.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AdmissionRunMinute {
+    pub workspace_id: String,
+    pub run_id: String,
+    pub minute_started_at: DateTime<Utc>,
+    /// Mean cores over the part of the minute the worker covered.
+    pub cpu_cores: f64,
+    pub memory_bytes: u64,
+    pub samples: u32,
+    /// The run's `finished_at`; `None` while it is live or its row is gone.
+    pub run_finished_at: Option<DateTime<Utc>>,
 }
 
 /// The host's delivery runs and reservations, read inside the lock.
@@ -71,6 +92,12 @@ pub struct AdmissionLoad {
     pub runs: Vec<AdmissionRun>,
     /// Unexpired reservations, oldest first.
     pub reservations: Vec<AdmissionReservation>,
+    /// The host's recorded minutes since `resource_minutes_since`, oldest
+    /// first.
+    pub host_minutes: Vec<HostResourceMinute>,
+    /// Every delivery run's minutes since `resource_minutes_since`, live or
+    /// finished, oldest first.
+    pub run_minutes: Vec<AdmissionRunMinute>,
 }
 
 /// The caller's decision: the reservations to write for what it admitted.

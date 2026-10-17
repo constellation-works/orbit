@@ -20,6 +20,7 @@ use crate::application::admission::backlog_exclusion::{
 use crate::application::admission::claim_holders::ClaimHolders;
 use crate::application::admission::cpu_light::{LightBudget, ResourceGate};
 use crate::application::admission::gap_fit::{GapFit, GapFitMode, HeadWait, task_lookup};
+use crate::application::admission::pass_error::PassError;
 use crate::application::admission::stuck_head::report_stuck_head;
 use crate::application::admission::unknown_footprint::{FootprintGuard, whole_tree_holder};
 use crate::runtime::host_resource::forecast::{ForecastDecision, ForecastPoints};
@@ -37,6 +38,18 @@ const DEFAULT_POLL_SLEEP_SECONDS: u64 = 30;
 /// Wait before re-listing when nothing is admissible at all. Long, because the
 /// only thing that can change is a task arriving or a live child finishing.
 const DEFAULT_IDLE_SLEEP_SECONDS: u64 = 60;
+
+/// Consecutive admission passes a drain defers on a busy store lock before it
+/// fails with that cause. A deferred pass has already waited out one lock
+/// acquisition deadline (30 s) and then waits the drain's poll interval
+/// (`poll_sleep_seconds`, 30 s by default) before the next one, so ten in a
+/// row are five to ten minutes in which no pass could read or write the task
+/// store: long enough to outlast a burst of admission sections, short enough
+/// that a store that stays locked still ends the drain visibly.
+const TRANSIENT_PASS_FAILURE_LIMIT: u32 = 10;
+
+/// The stable code a deferred pass records as its `last_pass_error_code`.
+const LOCK_BUSY_PASS_CODE: &str = orbit_common::LOCK_BUSY_ERROR_CODE;
 
 /// Default and ceiling for the backlog prefix one iteration examines, matching
 /// `list_backlog_tasks`'s `max_tasks` bound.
@@ -67,18 +80,27 @@ const MAX_CANDIDATE_POOL: u64 = 500;
 /// of overlapping candidates costs one slot instead of all of them. Readiness
 /// reads the same snapshot and calls the same routine, which is what keeps the
 /// diagnostic and the drain from disagreeing about who starts.
+///
+/// A pass that loses only to a busy task-store lock (`lock_busy`) is deferred
+/// rather than failed: see [`defer_lock_busy_pass`].
 pub(crate) fn classify_workspace_auto_tasks(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,
 ) -> Result<Value, DispatchError> {
+    match admission_pass(runtime, action, input) {
+        Ok(output) => Ok(output),
+        Err(error) if error.is_lock_busy() => defer_lock_busy_pass(runtime, action, input, error),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result<Value, PassError> {
     let mode = super::mode::effective_mode(runtime, input)
         .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     runtime
         .record_backlog_pilot_operator_handoffs()
-        .map_err(|error| {
-            DispatchError::action_failed(action, format!("record pilot operator handoffs: {error}"))
-        })?;
+        .map_err(|error| PassError::store(action, "record pilot operator handoffs", error))?;
 
     let submitted_max_active_leaf_runs = templated_u64(
         action,
@@ -153,9 +175,7 @@ pub(crate) fn classify_workspace_auto_tasks(
             || jobs.drain_leaf_occupancy(),
             |id| jobs.drain_leaf_occupancy_for_run(id),
         )
-        .map_err(|error| {
-            DispatchError::action_failed(action, format!("read shared leaf occupancy: {error}"))
-        })?;
+        .map_err(|error| PassError::store(action, "read shared leaf occupancy", error))?;
     // Between iterations nothing of this drain is in flight in-process: a
     // drain worker yields to a pending generation switch or hands itself over
     // to a replaced installation here.
@@ -177,9 +197,9 @@ pub(crate) fn classify_workspace_auto_tasks(
     let mut snapshot = backlog_snapshot(runtime, action, allowlist.as_ref(), &pools)?;
     // A live leaf may carry a task that has since closed; its claim and its
     // light slot still count.
-    snapshot.include_tasks(runtime, &claimed).map_err(|error| {
-        DispatchError::action_failed(action, format!("read claimed tasks: {error}"))
-    })?;
+    snapshot
+        .include_tasks(runtime, &claimed)
+        .map_err(|error| PassError::store(action, "read claimed tasks", error))?;
     // [ORB-14624] A CPU-only throttle leaves the reserved light slots open.
     let light_budget = LightBudget::new(
         runtime
@@ -473,7 +493,7 @@ fn gap_fit_selection(
     pending: &[String],
     can_admit: bool,
     select: &dyn Fn(Option<&mut GapFit<'_>>) -> AdmissionSelection,
-) -> Result<GapFitPass, DispatchError> {
+) -> Result<GapFitPass, PassError> {
     let settings = runtime.context.settings().auto_concurrency();
     let previous = previous_head(runtime, input);
     let head_wait = HeadWait {
@@ -522,9 +542,10 @@ fn gap_fit_selection(
             record: Some(record),
             forecast: Some(forecast),
         }),
-        (GapFitMode::Enforce, Err(error)) => Err(DispatchError::action_failed(
+        (GapFitMode::Enforce, Err(error)) => Err(PassError::store(
             action,
-            format!("admit against the host load forecast: {error}"),
+            "admit against the host load forecast",
+            error,
         )),
         (GapFitMode::Shadow, Err(error)) => {
             tracing::warn!(
@@ -607,7 +628,7 @@ fn admit_through_section(
     action: &str,
     selection: &mut AdmissionSelection,
     task_lookup: &BTreeMap<String, Task>,
-) -> Result<(), DispatchError> {
+) -> Result<(), PassError> {
     let workspace_root = runtime.paths().repo_root.as_path();
     let candidates = selection
         .selected
@@ -629,9 +650,10 @@ fn admit_through_section(
         .tasks()
         .admit_owner_wave(&candidates)
         .map_err(|error| {
-            DispatchError::action_failed(
+            PassError::store(
                 action,
-                format!("admit the wave through the admission section: {error}"),
+                "admit the wave through the admission section",
+                error,
             )
         })?;
     for admission in admissions {
@@ -733,6 +755,136 @@ fn record_last_pass(runtime: &OrbitRuntime, input: &Value, pass: DrainAdmissionP
             false
         }
     }
+}
+
+/// Defer a pass that lost only to a busy lock instead of failing the drain
+/// [ORB-16376].
+///
+/// A drain is a long-lived supervisor: one admission section held past a
+/// waiter's 30 s deadline used to fail this step, which failed the drain's
+/// loop and ended its window while its children kept running, so nothing
+/// was admitted until an operator restarted it. Nothing was decided under
+/// the lock, so the pass is skipped instead: it admits nothing, records the
+/// lock error (which names the holder) as the drain's last pass with
+/// `last_pass_error_code` `lock_busy`, and returns an idle answer that waits
+/// the drain's poll interval before the next pass retries. The waiting
+/// backlog the previous pass recorded is kept, with the time it was read.
+///
+/// The count of consecutive deferred passes lives on that record, and any
+/// pass that completes resets it. At [`TRANSIENT_PASS_FAILURE_LIMIT`] the
+/// pass fails as before, naming the lock and the count, so a store that
+/// stays locked still ends the drain. A pass outside a drain, or one whose
+/// deferral cannot be recorded, has no count to bound it and fails at once.
+fn defer_lock_busy_pass(
+    runtime: &OrbitRuntime,
+    action: &str,
+    input: &Value,
+    error: PassError,
+) -> Result<Value, DispatchError> {
+    let Some(run_id) = drain_run_id(input) else {
+        return Err(error.into());
+    };
+    let backoff_seconds = templated_u64(
+        action,
+        input,
+        "poll_sleep_seconds",
+        DEFAULT_POLL_SLEEP_SECONDS,
+    )?;
+    let reason = error.reason();
+    let mut failures = None;
+    let recorded = runtime
+        .stores()
+        .jobs()
+        .update_run_state(run_id, &mut |_, state| {
+            let pass = deferred_pass(state.pull_drain.drain_last_pass.as_ref(), &reason);
+            failures = Some(pass.consecutive_pass_failures);
+            state.pull_drain.record_admission_pass(pass);
+            Ok(())
+        });
+    let failures = match (recorded, failures) {
+        (Ok(RunStateUpdate::Updated), Some(failures)) => failures,
+        (Ok(_), _) => return Err(error.into()),
+        (Err(record_error), _) => {
+            tracing::warn!(
+                target: "orbit.core.job_run",
+                run_id,
+                error = %record_error,
+                "drain could not record a deferred admission pass; the pass fails"
+            );
+            return Err(error.into());
+        }
+    };
+    if failures >= TRANSIENT_PASS_FAILURE_LIMIT {
+        tracing::error!(
+            target: "orbit.core.job_run",
+            run_id,
+            consecutive_pass_failures = failures,
+            error = %reason,
+            "drain admission failed on a busy task-store lock for too many consecutive passes"
+        );
+        return Err(DispatchError::action_failed(
+            action,
+            format!("{reason} ({failures} consecutive admission passes failed on a busy lock)"),
+        ));
+    }
+    tracing::warn!(
+        target: "orbit.core.job_run",
+        run_id,
+        consecutive_pass_failures = failures,
+        limit = TRANSIENT_PASS_FAILURE_LIMIT,
+        backoff_seconds,
+        error = %reason,
+        "drain admission pass deferred on a busy task-store lock; the next pass retries"
+    );
+    Ok(json!({
+        "loose_task_ids": [],
+        "loose_task_dispatches": [],
+        "has_leaves": false,
+        "idle": true,
+        "sleep_seconds": backoff_seconds,
+        "pass_deferred": {
+            "code": LOCK_BUSY_PASS_CODE,
+            "reason": reason,
+            "consecutive_pass_failures": failures,
+            "limit": TRANSIENT_PASS_FAILURE_LIMIT,
+        },
+    }))
+}
+
+/// The record of a deferred pass: the previous pass's view of the backlog,
+/// read when that pass ran, with this pass's failure and its count.
+fn deferred_pass(previous: Option<&DrainAdmissionPass>, reason: &str) -> DrainAdmissionPass {
+    let now = Utc::now();
+    let consecutive_pass_failures = previous
+        .map_or(0, |pass| pass.consecutive_pass_failures)
+        .saturating_add(1);
+    let mut pass = previous.cloned().unwrap_or_else(|| DrainAdmissionPass {
+        recorded_at: now,
+        capacity: None,
+        queued: 0,
+        deferred: Vec::new(),
+        deferred_total: 0,
+        excluded: Vec::new(),
+        excluded_total: 0,
+        waiting_recorded_at: None,
+        waiting_by_reason: BTreeMap::new(),
+        consecutive_idle_passes: 0,
+        resource_throttle: None,
+        admission_refusal: None,
+        last_pass_error_code: None,
+        last_pass_error: None,
+        consecutive_pass_failures: 0,
+        degraded: false,
+        admission_forecast: None,
+    });
+    if previous.is_some() {
+        pass.waiting_recorded_at = pass.waiting_recorded_at.or(Some(pass.recorded_at));
+    }
+    pass.recorded_at = now;
+    pass.last_pass_error_code = Some(LOCK_BUSY_PASS_CODE.to_string());
+    pass.last_pass_error = Some(reason.to_string());
+    pass.consecutive_pass_failures = consecutive_pass_failures;
+    pass
 }
 
 /// A numeric loop input, tolerating the string a template renders. A step's

@@ -28,7 +28,7 @@ use super::{
     validate_id,
 };
 use crate::projections::{
-    TaskListProjection, task_locks_json, task_row_to_json, task_to_json_with_sidecars,
+    TaskListProjection, task_detail_json, task_locks_json, task_to_json_with_sidecars,
 };
 
 /// Actor recorded for a dashboard-authored comment when the request supplies no
@@ -487,7 +487,7 @@ pub(super) async fn get_task(Ws(runtime): Ws, Path(id): Path<String>) -> Respons
     match blocking("task detail", move || {
         let row = runtime.get_task_row(&id)?;
         Ok(dashboard_status_index(&runtime, &row.task)
-            .and_then(|statuses| task_row_to_json(&runtime, &row, &statuses)))
+            .and_then(|statuses| task_detail_json(&runtime, &row, &statuses)))
     })
     .await
     {

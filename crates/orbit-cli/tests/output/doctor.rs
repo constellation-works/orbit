@@ -44,6 +44,117 @@ fn row<'a>(rows: &'a [Value], name: &str) -> &'a Value {
         .expect("diagnostic row")
 }
 
+/// ORB-16351: a unit file that names this binary is not `clock-unit: ok` while
+/// the systemd timer is disabled or inactive. A substitute `systemctl` reports
+/// each state; enabled and active stays ok.
+#[cfg(target_os = "linux")]
+#[test]
+fn doctor_clock_unit_requires_an_enabled_active_systemd_timer() {
+    if crate::isolated_test::run_in_child(
+        "doctor::doctor_clock_unit_requires_an_enabled_active_systemd_timer",
+    ) {
+        return;
+    }
+    for mode in ["disabled", "inactive", "enabled"] {
+        let fixture = WorkCheckout::new();
+        install_matching_sweep_unit(&fixture.home);
+        let bin = write_substitute_systemctl(fixture.temp.path());
+        let output = command(&fixture)
+            .env("PATH", prepend_path(&bin))
+            .env("ORBIT_TEST_CLOCK_MANAGER", mode)
+            .args(["doctor", "--json"])
+            .output()
+            .expect("doctor report");
+        let parsed = rows(&output);
+        let clock = row(&parsed, "clock-unit");
+        let rendered = format!("{clock}");
+        if mode == "enabled" {
+            assert_eq!(clock["status"], "ok", "{mode}: {rendered}");
+        } else {
+            assert_ne!(clock["status"], "ok", "{mode}: {rendered}");
+            assert!(
+                rendered.contains("orbit clock enable"),
+                "{mode}: {rendered}"
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn install_matching_sweep_unit(home: &std::path::Path) {
+    let unit_dir = home.join(".config/systemd/user");
+    fs::create_dir_all(&unit_dir).expect("systemd user unit dir");
+    let program = env!("CARGO_BIN_EXE_orbit")
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    fs::write(
+        unit_dir.join("orbit-sweep.service"),
+        format!(
+            "[Service]\nType=oneshot\nTimeoutStartSec=10min\nKillMode=mixed\nExecStart=\"{program}\" clock tick\n"
+        ),
+    )
+    .expect("sweep unit");
+}
+
+#[cfg(target_os = "linux")]
+fn write_substitute_systemctl(root: &std::path::Path) -> std::path::PathBuf {
+    let bin = root.join("bin");
+    fs::create_dir_all(&bin).expect("substitute bin");
+    let path = bin.join("systemctl");
+    fs::write(
+        &path,
+        r#"#!/bin/sh
+mode=${ORBIT_TEST_CLOCK_MANAGER:-enabled}
+case " $* " in
+  *" is-enabled "*)
+    if [ "$mode" = "disabled" ]; then
+      echo disabled
+      exit 1
+    fi
+    echo enabled
+    exit 0
+    ;;
+esac
+for arg in "$@"; do
+  case "$arg" in
+    orbit-sweep.timer)
+      if [ "$mode" = "disabled" ] || [ "$mode" = "inactive" ]; then
+        printf '%s\n' LoadState=loaded ActiveState=inactive
+      else
+        printf '%s\n' LoadState=loaded ActiveState=active \
+          'NextElapseUSecRealtime=Mon 2026-10-19 12:00:00 UTC' \
+          NextElapseUSecMonotonic=1000000
+      fi
+      exit 0
+      ;;
+    orbit-sweep.service)
+      printf '%s\n' ActiveState=inactive Result=success TimeoutStartUSec=10min KillMode=mixed
+      exit 0
+      ;;
+  esac
+done
+exit 0
+"#,
+    )
+    .expect("substitute systemctl");
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = fs::metadata(&path)
+        .expect("systemctl metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&path, permissions).expect("systemctl mode");
+    bin
+}
+
+#[cfg(target_os = "linux")]
+fn prepend_path(dir: &std::path::Path) -> std::ffi::OsString {
+    let mut entries = vec![dir.to_path_buf()];
+    if let Some(path) = std::env::var_os("PATH") {
+        entries.extend(std::env::split_paths(&path));
+    }
+    std::env::join_paths(entries).expect("join PATH")
+}
+
 #[cfg(unix)]
 #[test]
 fn doctor_warns_about_selected_root_skill_links_without_changing_discovery_entries() {
@@ -899,4 +1010,196 @@ fn fs_access_reports_the_shipped_policy_verdicts_for_workspace_relative_paths() 
             "{path}: human output must carry the modify verdict"
         );
     }
+}
+
+/// An enabled hourly routine warns once its last success is past three hours,
+/// and a newer skipped fire does not make that success look fresh.
+#[test]
+fn doctor_warns_when_routine_last_success_is_stale() {
+    if crate::isolated_test::run_in_child("doctor::doctor_warns_when_routine_last_success_is_stale")
+    {
+        return;
+    }
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path().join("empty-home");
+    let repo = temp.path().join("repo");
+    let root = temp.path().join("custom-root");
+    fs::create_dir_all(&home).expect("home");
+    fs::create_dir_all(&repo).expect("repo");
+    crate::git_repo::SeededRepo::new(&repo)
+        .readme("# routine freshness\n")
+        .build();
+    let root_arg = root.to_string_lossy().into_owned();
+    let run = |args: &[&str]| {
+        let mut command = cargo_bin_cmd!("orbit");
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(&repo)
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .env_remove("ORBIT_FORMAT")
+            .args(args)
+            .output()
+            .expect("orbit")
+    };
+    for args in [
+        &[
+            "--root",
+            root_arg.as_str(),
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "freshness-host",
+            "--task-prefix",
+            "FR",
+        ][..],
+        &[
+            "--root",
+            root_arg.as_str(),
+            "workspace",
+            "init",
+            "--name",
+            "routine-freshness",
+        ][..],
+    ] {
+        let output = run(args);
+        assert!(
+            output.status.success(),
+            "orbit {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let list = run(&[
+        "--root",
+        root_arg.as_str(),
+        "routine",
+        "list",
+        "--format",
+        "json",
+    ]);
+    assert!(
+        list.status.success(),
+        "{}",
+        String::from_utf8_lossy(&list.stderr)
+    );
+    let listed: Value = serde_json::from_slice(&list.stdout).expect("routine list JSON");
+    let routine = listed["routines"]
+        .as_array()
+        .and_then(|routines| {
+            routines.iter().find(|routine| {
+                routine["target"]
+                    .as_str()
+                    .is_some_and(|target| target.contains("worktree_gc"))
+            })
+        })
+        .expect("seeded worktree-gc routine");
+    let name = routine["name"].as_str().expect("name").to_string();
+    let now = chrono::Utc::now();
+    let rfc = |ago: chrono::Duration| (now - ago).to_rfc3339();
+    let database = Connection::open(root.join("orbit.db")).expect("host database");
+    database
+        .execute(
+            "INSERT INTO routine_cursors (routine_name, baseline_at, last_slot, updated_at) \
+             VALUES (?1, ?2, ?2, ?2)",
+            rusqlite::params![name, rfc(chrono::Duration::hours(5))],
+        )
+        .expect("cursor");
+    database
+        .execute(
+            "INSERT INTO routine_fires \
+             (routine_name, slot, attempt, state, run_id, source_workspace, detail, created_at, updated_at) \
+             VALUES (?1, ?2, 1, 'succeeded', 'jrun-fresh', 'routine-freshness', NULL, ?3, ?4)",
+            rusqlite::params![
+                name,
+                rfc(chrono::Duration::hours(5)),
+                rfc(chrono::Duration::hours(5)),
+                rfc(chrono::Duration::hours(4)),
+            ],
+        )
+        .expect("old success");
+    fn freshness(rows: &[Value]) -> &Value {
+        row(rows, "routine-freshness")
+    }
+    let before_enable = rows(&run(&["--root", root_arg.as_str(), "doctor", "--json"]));
+    assert_eq!(
+        freshness(&before_enable)["status"],
+        "ok",
+        "a disabled routine is not stale: {}",
+        freshness(&before_enable)
+    );
+
+    // With `--root`, this host keeps seeded routines in the global catalog.
+    let definition = root.join("routines/worktree_gc.yaml");
+    let yaml = fs::read_to_string(&definition).expect("seeded routine");
+    assert!(yaml.contains("enabled: false"), "{yaml}");
+    fs::write(
+        &definition,
+        yaml.replacen("enabled: false", "enabled: true", 1),
+    )
+    .expect("enable");
+
+    let stale = rows(&run(&["--root", root_arg.as_str(), "doctor", "--json"]));
+    let stale_row = freshness(&stale);
+    assert_eq!(stale_row["status"], "warning", "{stale_row}");
+    assert!(
+        stale_row["message"]
+            .as_str()
+            .is_some_and(|message| message.contains(&name)),
+        "the warning names the routine: {stale_row}"
+    );
+
+    database
+        .execute(
+            "INSERT INTO routine_fires \
+             (routine_name, slot, attempt, state, run_id, source_workspace, detail, created_at, updated_at) \
+             VALUES (?1, ?2, 1, 'skipped', NULL, 'routine-freshness', 'missed_run: skip', ?2, ?2)",
+            rusqlite::params![name, rfc(chrono::Duration::minutes(30))],
+        )
+        .expect("newer skip");
+    let still_stale = rows(&run(&["--root", root_arg.as_str(), "doctor", "--json"]));
+    let still = freshness(&still_stale);
+    assert_eq!(
+        still["status"], "warning",
+        "a skip is not a success: {still}"
+    );
+    assert!(
+        still["message"]
+            .as_str()
+            .is_some_and(|message| message.contains(&name)),
+        "{still}"
+    );
+    let listed = run(&[
+        "--root",
+        root_arg.as_str(),
+        "routine",
+        "list",
+        "--format",
+        "json",
+    ]);
+    let listed: Value = serde_json::from_slice(&listed.stdout).expect("list after skip");
+    let last_fire = listed["routines"]
+        .as_array()
+        .and_then(|routines| routines.iter().find(|routine| routine["name"] == name))
+        .and_then(|routine| routine.get("last_fire"))
+        .expect("last fire");
+    assert_eq!(last_fire["detail"], "missed_run: skip", "{last_fire}");
+    assert_eq!(last_fire["state"], "skipped", "{last_fire}");
+
+    database
+        .execute(
+            "UPDATE routine_fires SET updated_at = ?1 \
+             WHERE routine_name = ?2 AND state = 'succeeded'",
+            rusqlite::params![rfc(chrono::Duration::hours(1)), name],
+        )
+        .expect("refresh success");
+    let fresh = rows(&run(&["--root", root_arg.as_str(), "doctor", "--json"]));
+    assert_eq!(
+        freshness(&fresh)["status"],
+        "ok",
+        "a success inside 3× the hourly interval is ok: {}",
+        freshness(&fresh)
+    );
 }

@@ -139,7 +139,10 @@ impl OrbitRuntime {
                 Ok(entries) => observations.push(ledger_observation(
                     budget,
                     &entries,
-                    policy.threshold(&budget.provider),
+                    // `off` is not a percent. The budget's reset stays on the
+                    // default (or a percent override); admission then ignores
+                    // the reading because the gate is off.
+                    policy.budget_threshold(&budget.provider),
                     now,
                 )),
                 Err(error) => tracing::warn!(

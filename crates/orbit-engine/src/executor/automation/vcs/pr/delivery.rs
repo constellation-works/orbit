@@ -27,6 +27,7 @@ use super::super::freshness::{branch_freshness_against_ref, commit_sha};
 use super::super::git::{base_sync_mode_from_input, resolve_worktree_start_point};
 use super::super::operations;
 use super::answers::{CheckState, PullRequestStatus, RequiredChecks, ReviewDecision, StatusCheck};
+use super::auto_fix::UNSETTLED_BLOCKED_POLLS;
 use crate::context::RuntimeHost;
 
 /// The candidate identity a completion-authorized run is allowed to deliver.
@@ -319,6 +320,15 @@ pub(in crate::executor::automation::vcs) fn classify_pr_state(
         return PrMergeState::Closed;
     }
 
+    // [ORB-16342] GitHub can report a draft with a merge state other than
+    // DRAFT, including BLOCKED, UNKNOWN and CLEAN. Completion used to request
+    // a merge from those states and spend recovery on HTTP 405. An explicit
+    // draft is refused before that match. The DRAFT arm below still covers an
+    // answer that omits `isDraft`.
+    if pull_request.is_draft {
+        return PrMergeState::Blocked("the pull request is still a draft".into());
+    }
+
     let merge_state = pull_request
         .merge_state_status
         .as_deref()
@@ -389,6 +399,7 @@ fn classify_blocked_pr(pull_request: &PullRequestStatus) -> PrMergeState {
 }
 
 /// Which consumer may refine a failed rollup into a bounded required-check wait.
+#[derive(Clone, Copy)]
 pub(in crate::executor::automation::vcs) enum BlockedCheckWait<'a> {
     /// Owner landing retains its failed-rollup refusal and captured owed checks.
     Owner(&'a [String]),
@@ -396,20 +407,78 @@ pub(in crate::executor::automation::vcs) enum BlockedCheckWait<'a> {
     AutoFix,
 }
 
+/// [ORB-16339] Why the last observation of a BLOCKED head waited although the
+/// head reported nothing pending and nothing failed.
+enum UnreportedWait {
+    None,
+    /// Current branch policy names these checks, and the head has not
+    /// reported them yet.
+    Missing(Vec<String>),
+    /// Branch policy could not be read, so a bounded grace stands in for it.
+    Unsettled(String),
+}
+
+/// Required checks a freshly published head has not reported yet, tracked
+/// across one completion or landing wait. A head can read BLOCKED for a few
+/// seconds before the provider queues its first check run.
+pub(in crate::executor::automation::vcs) struct UnreportedChecks {
+    last: UnreportedWait,
+    /// Observations waited on while branch policy was unreadable.
+    unsettled_polls: u32,
+}
+
+impl UnreportedChecks {
+    pub(in crate::executor::automation::vcs) fn new() -> Self {
+        Self {
+            last: UnreportedWait::None,
+            unsettled_polls: 0,
+        }
+    }
+
+    /// Whether the last observation waits for checks readable policy names.
+    /// Absent-context recovery may still diagnose such a head.
+    pub(in crate::executor::automation::vcs) fn awaiting_policy_checks(&self) -> bool {
+        matches!(self.last, UnreportedWait::Missing(_))
+    }
+
+    /// What a wait that ends here was still waiting for, for its stop reason.
+    pub(in crate::executor::automation::vcs) fn timeout_note(&self) -> String {
+        match &self.last {
+            UnreportedWait::None => String::new(),
+            UnreportedWait::Missing(names) => format!(
+                " (required checks the head has not reported: {})",
+                names.join(", ")
+            ),
+            UnreportedWait::Unsettled(why) => format!(
+                " (the head reported no pending required check and branch policy is \
+                 unreadable: {why})"
+            ),
+        }
+    }
+}
+
 /// Refine BLOCKED only from authenticated current policy on the observed head,
-/// or an actually running check captured as owner-owed. Never infer pending
-/// from absent checks or a completed neutral/skipped result. This grants only
-/// another bounded observation; only the provider's mergeable state can merge.
+/// or an actually running check captured as owner-owed. A completed
+/// neutral/skipped result is never pending. An absent check is pending only
+/// while current branch policy names it as required [ORB-16339]; when that
+/// policy is unreadable, owner consumers get the bounded unsettled-poll grace
+/// auto-fix already applies. This grants only another bounded observation
+/// within the caller's deadline; only the provider's mergeable state can merge.
 pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
     pr: &str,
     status: &PullRequestStatus,
     wait: BlockedCheckWait<'_>,
+    unreported: &mut UnreportedChecks,
     deadline_ms: u64,
 ) -> Result<PrMergeState, String> {
+    unreported.last = UnreportedWait::None;
     let state = classify_pr_state(status);
-    if status.merge_state_status.as_deref() != Some("BLOCKED")
+    // A draft is already refused. Refining BLOCKED into a check wait would
+    // hand it to auto-merge or repair [ORB-16342].
+    if status.is_draft
+        || status.merge_state_status.as_deref() != Some("BLOCKED")
         || !matches!(state, PrMergeState::Blocked(_))
     {
         return Ok(state);
@@ -472,11 +541,72 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
                         .is_some_and(|(workflow, own)| name == &format!("{workflow} / {own}"))
             })
     });
-    Ok(if pending {
-        PrMergeState::Pending
-    } else {
-        state
-    })
+    if pending {
+        return Ok(PrMergeState::Pending);
+    }
+    // A failed check keeps its existing recovery or stop.
+    if checks
+        .iter()
+        .any(|check| check.state == Some(CheckState::Failed))
+    {
+        return Ok(state);
+    }
+    match unreported_required_checks(host, workspace, pr, status, deadline_ms) {
+        Ok(missing) if missing.is_empty() => Ok(state),
+        Ok(missing) => {
+            unreported.last = UnreportedWait::Missing(missing);
+            Ok(PrMergeState::Pending)
+        }
+        // Auto-fix applies the same grace in its own BLOCKED verdict.
+        Err(why) => match wait {
+            BlockedCheckWait::Owner(_) if unreported.unsettled_polls < UNSETTLED_BLOCKED_POLLS => {
+                unreported.unsettled_polls += 1;
+                unreported.last = UnreportedWait::Unsettled(why);
+                Ok(PrMergeState::Pending)
+            }
+            _ => Ok(state),
+        },
+    }
+}
+
+/// The checks current branch policy requires that the observed head has not
+/// reported at all, from the same authenticated current-gates read a base
+/// update is held to. A check the head reported, in any state, is not here.
+fn unreported_required_checks<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &Path,
+    pr: &str,
+    status: &PullRequestStatus,
+    deadline_ms: u64,
+) -> Result<Vec<String>, String> {
+    let (Some(head), Some(branch), Some(base)) = (
+        status.head_sha.as_deref(),
+        status.head_branch.as_deref(),
+        status.base_branch.as_deref(),
+    ) else {
+        return Err("the pull request did not report its head and base".into());
+    };
+    let gates = host
+        .run_private_vcs_operation(
+            operations::CI_CURRENT_GATES,
+            json!({
+                "workspace_path":workspace.to_string_lossy(),"pr":pr,"head_sha":head,
+                "head_branch":branch,"base_branch":base,"deadline_ms":deadline_ms,
+            }),
+        )
+        .map_err(|error| error.to_string())?;
+    gates["missing"]
+        .as_array()
+        .ok_or_else(|| "the current-gates answer named no missing checks".to_string())?
+        .iter()
+        .map(|gate| {
+            gate["context"]
+                .as_str()
+                .filter(|context| !context.is_empty())
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| "the current-gates answer named an unreadable check".to_string())
+        })
+        .collect()
 }
 
 /// [ORB-15677] Where the owner-owed hosted checks stand on a pull request.

@@ -615,10 +615,24 @@ pub(crate) fn pull_refill(
     let host_suppressed = crews
         .as_ref()
         .and_then(|window| window.host_suppressed.as_deref());
+    let owner_busy_backoff = crews
+        .as_ref()
+        .and_then(|window| window.owner_busy_backoff.as_ref());
     let no_runnable_crew = if let Some(reason) = host_suppressed {
         format!(
             "host_suppressed: this drain claims no more work on this host for its window \
              because {reason}; see `crews.host_suppressed`, fix the host, and start a new drain"
+        )
+    } else if let Some(backoff) = owner_busy_backoff {
+        format!(
+            "owner_busy_backoff: a claimed leaf was released because the owner's store stayed \
+             locked ({}); this drain requests no claim until {}, when requests resume by \
+             themselves. This is busy-owner episode {} in this window; episode {} suppresses \
+             this host for the window instead; see `crews.owner_busy_backoff`",
+            backoff.reason,
+            backoff.until.to_rfc3339(),
+            backoff.episodes,
+            crate::application::distributed::OWNER_BUSY_EPISODE_LIMIT,
         )
     } else if crews.as_ref().is_some_and(PullCrewWindow::held_until_lift) {
         // [ORB-14697, ORB-14902, ORB-15791] A usage limit and a capacity

@@ -29,6 +29,8 @@ mod workflow_gate;
 mod agent_rules;
 mod ambient_authority_isolation;
 mod config_set_root;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod deployment_gc;
 #[cfg(unix)]
 mod doctor_confirm;
 mod doctor_runtime;

@@ -120,6 +120,7 @@ impl OrbitRuntime {
             base_sha: base_sha.into(),
             base_branch: base_branch.into(),
             superseded: None,
+            checkpoint_owner: None,
         };
         Ok((source, task, binding))
     }

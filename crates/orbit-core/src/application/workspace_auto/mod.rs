@@ -3,6 +3,7 @@
 //! report, the drain window, and the read-only readiness projection, plus the live drain
 //! and leaf-run reads they share.
 
+mod adopt;
 mod approvals;
 mod classify;
 mod drains;
@@ -10,6 +11,7 @@ mod mode;
 mod readiness;
 mod window;
 
+pub(crate) use adopt::adopt_orphaned_deliveries;
 pub(crate) use approvals::{
     await_approval_pilot, record_proposed_approvals, select_proposed_approvals,
 };

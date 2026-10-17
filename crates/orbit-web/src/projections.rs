@@ -1,8 +1,10 @@
-//! The `*_to_json` projections the dashboard API serves. A task builds on the
-//! base projection and full record every read surface shares
-//! (`orbit_types::task::task_base_json`,
-//! `orbit_core::application::task::task_record_json`) and adds only the
-//! dashboard's own extras; the other projections are dashboard-local.
+//! The `*_to_json` projections the dashboard API serves. A task detail builds
+//! on the show record every read surface shares
+//! (`orbit_core::application::task::task_show_json`) and adds only the
+//! dashboard's own extras. A mutation response builds on `task_record_json`
+//! instead, so it does not carry show-only guidance. An audit event builds on
+//! the base the CLI shares (`orbit_types::telemetry::audit_event_base_json`).
+//! The other projections are dashboard-local.
 
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -10,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbit_common::fs::overlap_index::OverlapIndex;
 use orbit_core::application::job::JobCatalogEntry;
 use orbit_core::application::task::{
-    PullRequestLinks, TaskRow, declared_context_files, task_record_json,
+    PullRequestLinks, TaskRow, declared_context_files, task_record_json, task_show_json,
     task_status_transition_allowed, task_status_transition_required_field,
 };
 use orbit_core::runtime::engine::ConfiguredCrewRegistryProjection;
@@ -18,56 +20,21 @@ use orbit_core::{
     AuditEvent, JobRun, OrbitError, OrbitRuntime, ResolvedCrewProjection, Task, TaskStatus,
 };
 use orbit_types::task::{TaskEnvelopeV2, task_base_json};
+use orbit_types::telemetry::audit_event_base_json;
 use orbit_types::workflow::{JobV2Step, JobV2StepBody};
 use serde_json::{Map, Value, json};
 
 pub(crate) fn audit_event_to_json(event: &AuditEvent) -> Value {
     let actor = event.actor();
-    json!({
-        "id": event.id,
-        "execution_id": event.execution_id,
-        "timestamp": event.timestamp.to_rfc3339(),
-        "command": event.command,
-        "subcommand": event.subcommand,
-        "tool_name": event.tool_name,
-        "target_type": event.target_type,
-        "target_id": event.target_id,
-        "role": event.role,
-        // ORB-10888: the canonical actor beside the raw label. `role` stays
-        // byte-for-byte what was recorded; these are derived.
-        "actor": actor.id,
-        "actor_kind": actor.kind.to_string(),
-        "actor_vendor": actor.vendor,
-        "actor_family": actor.family,
-        "actor_model": actor.model,
-        "status": event.status.to_string(),
-        "exit_code": event.exit_code,
-        "duration_ms": event.duration_ms,
-        "working_directory": event.working_directory,
-        "arguments_json": event.arguments_json,
-        "stdout_truncated": event.stdout_truncated,
-        "stderr_truncated": event.stderr_truncated,
-        "error_message": event.error_message,
-        "host": event.host,
-        "pid": event.pid,
-        "session_id": event.session_id,
-        "workspace_id": event.workspace_id,
-        "caller_machine_id": event.caller_machine_id,
-        "caller_machine_name": event.caller_machine_name,
-        "process_machine_id": event.process_machine_id,
-        "process_machine_name": event.process_machine_name,
-        "transport": event.transport,
-        "trace_id": event.trace_id,
-        "caller_ip": event.caller_ip,
-        "effective_capabilities": event.effective_capabilities,
-        "origin_session_id": event.origin_session_id,
-        "mcp_call_id": event.mcp_call_id,
-        "lease_id": event.lease_id,
-        "task_id": event.task_id,
-        "job_run_id": event.job_run_id,
-        "activity_id": event.activity_id,
-        "step_index": event.step_index,
-    })
+    let mut value = audit_event_base_json(event);
+    // ORB-10888: the canonical actor beside the raw label. `role` stays
+    // byte-for-byte what was recorded; these are derived.
+    value["actor"] = json!(actor.id);
+    value["actor_kind"] = json!(actor.kind.to_string());
+    value["actor_vendor"] = json!(actor.vendor);
+    value["actor_family"] = json!(actor.family);
+    value["actor_model"] = json!(actor.model);
+    value
 }
 
 pub(crate) fn job_catalog_to_json_with_last_run(
@@ -194,19 +161,40 @@ pub(crate) fn task_to_json_with_sidecars(
     task_row_to_json(runtime, &row, status_by_id)
 }
 
-/// The full task projection: the shared task record (every body, the
-/// sidecars, the review gate and the run-aware crew), plus the dashboard's
-/// extras — linked pull requests, the lifecycle transitions with their evidence
-/// requirements, run navigability and `readiness.preparing`. Served by
-/// `GET /api/tasks/:id` and every mutation response; the list endpoints serve
-/// [`TaskListProjection`] instead.
+/// A mutation response: [`task_record_json`] plus the dashboard extras. It does
+/// not carry the show-only `next_step` and `final_recovery` guidance.
+/// `GET /api/tasks/:id` serves [`task_detail_json`] instead. List endpoints
+/// serve [`TaskListProjection`].
 pub(crate) fn task_row_to_json(
     runtime: &OrbitRuntime,
     row: &TaskRow,
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Result<Value, OrbitError> {
+    let object = task_record_json(runtime, row, status_by_id)?;
+    with_dashboard_extras(runtime, row, object)
+}
+
+/// `GET /api/tasks/:id`: [`task_show_json`] plus the dashboard extras — linked
+/// pull requests, the lifecycle transitions with their evidence requirements,
+/// run navigability and `readiness.preparing`.
+pub(crate) fn task_detail_json(
+    runtime: &OrbitRuntime,
+    row: &TaskRow,
+    status_by_id: &BTreeMap<String, TaskStatus>,
+) -> Result<Value, OrbitError> {
+    let object = task_show_json(runtime, row, status_by_id)?;
+    with_dashboard_extras(runtime, row, object)
+}
+
+/// Linked pull requests, lifecycle transitions, run navigability and
+/// `readiness.preparing`. These are dashboard controls, not part of the shared
+/// task record.
+fn with_dashboard_extras(
+    runtime: &OrbitRuntime,
+    row: &TaskRow,
+    mut object: Map<String, Value>,
+) -> Result<Value, OrbitError> {
     let task = &row.task;
-    let mut object = task_record_json(runtime, row, status_by_id)?;
     link_pull_requests(&mut object, task, &PullRequestLinks::new(runtime));
     object.insert(
         "status_transitions".to_string(),

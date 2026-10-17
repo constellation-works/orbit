@@ -79,7 +79,8 @@ pub enum MissedRunPolicy {
     /// Fire a single make-up run on the next sweep, no matter how many
     /// slots were missed.
     CatchUpOnce,
-    /// Ignore missed slots; wait for the next natural one.
+    /// Record each missed slot as a skipped fire with a reason and wait for
+    /// the next natural one. Nothing is dispatched for those slots.
     #[default]
     Skip,
 }

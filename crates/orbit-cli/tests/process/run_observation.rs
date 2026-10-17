@@ -1780,6 +1780,180 @@ fn run_concurrency_retunes_a_pull_drain_past_the_former_leaf_ceiling() {
     );
 }
 
+/// [ORB-16337] Readiness uses a live pull drain's ceiling when no local drain
+/// is running, including after `orbit run concurrency --set`, and still prefers
+/// a local drain and the idle default of 5.
+fn readiness_uses_a_live_pull_drains_ceiling() {
+    let fixture = Fixture::init();
+    let text = |fixture: &Fixture| -> String {
+        let output = fixture
+            .orbit()
+            .args(["run", "readiness"])
+            .output()
+            .expect("spawn readiness");
+        assert!(
+            output.status.success(),
+            "readiness text failed: {output:?}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("readiness text is utf-8")
+    };
+
+    let idle = fixture.json(&["run", "readiness", "--json"]);
+    assert_eq!(idle["capacity"]["max_active_leaf_runs"], 5, "{idle}");
+    assert_eq!(idle["capacity"]["active_leaf_runs"], 0, "{idle}");
+    assert_eq!(idle["capacity"]["free_slots"], 5, "{idle}");
+    assert_eq!(idle["capacity"]["limit_source"], "default", "{idle}");
+    assert!(idle["capacity"]["drain_run_id"].is_null(), "{idle}");
+    assert!(idle["capacity"]["pull_drain_run_id"].is_null(), "{idle}");
+    let idle_text = text(&fixture);
+    assert!(
+        idle_text.contains("Active leaf runs: 0/5; free slots: 5."),
+        "{idle_text}"
+    );
+    assert!(
+        !idle_text.contains("Leaf ceiling:"),
+        "idle readiness must not name a pull ceiling: {idle_text}"
+    );
+
+    let runtime = orbit_core::OrbitRuntime::from_roots(
+        &fixture.home.join(".orbit"),
+        &fixture.work.join(".orbit"),
+    )
+    .unwrap();
+    let now = chrono::Utc::now().to_rfc3339();
+    let pull_id = "jrun-cli-pull-ceiling";
+    let input = serde_json::json!({"max_active_leaf_runs": 3});
+    fixture.db().execute(
+        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_pull_pipeline',1,'running',?3,?4,?4,?4,?5)",
+        params![pull_id, fixture.workspace_id(), input.to_string(), now, std::process::id()],
+    ).unwrap();
+    runtime
+        .write_run_state(
+            pull_id,
+            &orbit_types::workflow::PipelineState::new(
+                pull_id.into(),
+                "workspace_pull_pipeline".into(),
+                input,
+            ),
+        )
+        .unwrap();
+    for index in 0..2 {
+        fixture.db().execute(
+            "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'task_pr_pipeline',1,'running',?3,?3,?3,?4)",
+            params![format!("jrun-cli-leaf-ceiling-{index}"), fixture.workspace_id(), now, std::process::id()],
+        ).unwrap();
+    }
+
+    let submitted = fixture.json(&["run", "readiness", "--json"]);
+    assert_eq!(
+        submitted["capacity"]["max_active_leaf_runs"], 3,
+        "{submitted}"
+    );
+    assert_eq!(submitted["capacity"]["active_leaf_runs"], 2, "{submitted}");
+    assert_eq!(
+        submitted["capacity"]["free_slots"], 1,
+        "free slots are the pull ceiling minus occupied leaves: {submitted}"
+    );
+    assert_eq!(
+        submitted["capacity"]["limit_source"], "pull_run_input",
+        "{submitted}"
+    );
+    assert_eq!(
+        submitted["capacity"]["pull_drain_run_id"], pull_id,
+        "{submitted}"
+    );
+    assert!(
+        submitted["capacity"]["drain_run_id"].is_null(),
+        "{submitted}"
+    );
+    let submitted_text = text(&fixture);
+    assert!(
+        submitted_text.contains("Active leaf runs: 2/3; free slots: 1."),
+        "{submitted_text}"
+    );
+    assert!(
+        submitted_text.contains(&format!("Leaf ceiling: {pull_id} (pull_run_input).")),
+        "{submitted_text}"
+    );
+
+    let changed = fixture.json(&["run", "concurrency", pull_id, "--set", "4", "--json"]);
+    assert_eq!(changed["outcome"], "updated", "{changed}");
+    assert_eq!(changed["concurrency"], 4, "{changed}");
+    let resized = fixture.json(&["run", "readiness", "--json"]);
+    assert_eq!(resized["capacity"]["max_active_leaf_runs"], 4, "{resized}");
+    assert_eq!(resized["capacity"]["active_leaf_runs"], 2, "{resized}");
+    assert_eq!(resized["capacity"]["free_slots"], 2, "{resized}");
+    assert_eq!(
+        resized["capacity"]["limit_source"], "pull_run_control",
+        "{resized}"
+    );
+    let resized_text = text(&fixture);
+    assert!(
+        resized_text.contains("Active leaf runs: 2/4; free slots: 2."),
+        "{resized_text}"
+    );
+    assert!(
+        resized_text.contains(&format!("Leaf ceiling: {pull_id} (pull_run_control).")),
+        "{resized_text}"
+    );
+
+    let requested = fixture.json(&["run", "readiness", "--concurrency", "8", "--json"]);
+    assert_eq!(
+        requested["capacity"]["max_active_leaf_runs"], 8,
+        "{requested}"
+    );
+    assert_eq!(requested["capacity"]["free_slots"], 6, "{requested}");
+    assert_eq!(
+        requested["capacity"]["limit_source"], "requested",
+        "{requested}"
+    );
+
+    let local_id = "jrun-cli-local-ceiling";
+    let local_input = serde_json::json!({"max_active_leaf_runs": 7});
+    fixture.db().execute(
+        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_auto_pipeline',1,'running',?3,?4,?4,?4,?5)",
+        params![local_id, fixture.workspace_id(), local_input.to_string(), now, std::process::id()],
+    ).unwrap();
+    runtime
+        .write_run_state(
+            local_id,
+            &orbit_types::workflow::PipelineState::new(
+                local_id.into(),
+                "workspace_auto_pipeline".into(),
+                local_input,
+            ),
+        )
+        .unwrap();
+    let local = fixture.json(&["run", "readiness", "--json"]);
+    assert_eq!(
+        local["capacity"]["max_active_leaf_runs"], 7,
+        "a live local drain keeps precedence over the pull drain: {local}"
+    );
+    assert_eq!(local["capacity"]["active_leaf_runs"], 2, "{local}");
+    assert_eq!(local["capacity"]["free_slots"], 5, "{local}");
+    assert_eq!(local["capacity"]["limit_source"], "run_input", "{local}");
+    assert_eq!(local["capacity"]["drain_run_id"], local_id, "{local}");
+    assert_eq!(local["capacity"]["pull_drain_run_id"], pull_id, "{local}");
+    let local_text = text(&fixture);
+    assert!(
+        local_text.contains("Active leaf runs: 2/7; free slots: 5."),
+        "{local_text}"
+    );
+    assert!(
+        !local_text.contains("Leaf ceiling:"),
+        "local-drain text must not name the pull ceiling: {local_text}"
+    );
+    assert!(
+        local_text.contains(&format!("Running drain: {local_id}.")),
+        "{local_text}"
+    );
+    assert!(
+        local_text.contains(&format!("Running pull drain: {pull_id}.")),
+        "{local_text}"
+    );
+}
+
 /// [ORB-13901] A short-lived CLI cannot sample long enough to judge
 /// sustained pressure, so it reports the throttle a live drain recorded on
 /// its last pass: readiness and `run show` name the resource, value,
@@ -2835,6 +3009,10 @@ fn run_observation_contracts_3() {
         (
             "run_concurrency_retunes_a_pull_drain_past_the_former_leaf_ceiling",
             run_concurrency_retunes_a_pull_drain_past_the_former_leaf_ceiling as fn(),
+        ),
+        (
+            "readiness_uses_a_live_pull_drains_ceiling",
+            readiness_uses_a_live_pull_drains_ceiling as fn(),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");

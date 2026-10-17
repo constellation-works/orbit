@@ -21,16 +21,19 @@ pub(in crate::executor::automation::vcs) mod source_identity;
 
 pub use answers::PullRequestStatus;
 pub(in crate::executor::automation::vcs) use answers::{CheckState, ReviewDecision};
+pub(in crate::executor::automation::vcs) use answers::{RequiredChecks, read_required_checks};
 pub(in crate::executor::automation::vcs) use answers::{read_pr_status, read_pr_status_before};
 pub(in crate::executor::automation) use attribution::ship_done_attribution;
 pub(in crate::executor::automation::vcs) use body::meaningful_execution_summary;
 pub(in crate::executor::automation) use complete::pr_complete;
 pub(in crate::executor::automation::vcs) use delivery::{
-    BlockedCheckWait, DeliveryPin, OwedHostedChecks, PrMergeState, checked_pr_state,
-    classify_pr_state, owed_hosted_checks,
+    BlockedCheckWait, DeliveryPin, OwedHostedChecks, PrMergeState, UnreportedChecks,
+    checked_pr_state, classify_pr_state, owed_hosted_checks,
 };
 pub(in crate::executor::automation) use merge::git_merge;
 pub(in crate::executor::automation::vcs) use merge::resolve_permitted_merge;
-pub(in crate::executor::automation::vcs) use open::open_or_reuse_unchecked;
 pub(in crate::executor::automation) use open::pr_open;
+pub(in crate::executor::automation::vcs) use open::{
+    close_earlier_task_pull_requests, open_or_reuse_unchecked,
+};
 pub(in crate::executor::automation) use promote::pr_promote;

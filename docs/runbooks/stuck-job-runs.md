@@ -5,7 +5,7 @@ tags: [operations, jobs, runs, recovery, debugging]
 paths: ["crates/orbit-core/src/application/job/**", "crates/orbit-cli/src/command/run/**", "crates/orbit-core/src/runtime/audit/run.rs"]
 related_features: [activity-job, auditability]
 related_artifacts: [ORB-10070, ORB-10496, ORB-10801]
-last_validated: 2026-10-12
+last_validated: 2026-10-17
 ---
 
 # Recover Stuck Job Runs
@@ -51,8 +51,10 @@ agent is a direct child of the pipeline worker, so `agent_run_list` reports no m
 `busy=false` for a perfectly healthy one. Do not read that as a lost child [ORB-10496].
 
 Ask the pipeline instead. `orbit run show` prints one `Agent:` line per provider subprocess that
-has not reported an exit, and the same records come back as `provider_processes` from
-`GET /api/runs/:id` — which is what bridge `workflow_run_status` returns:
+has not reported an exit. `orbit run show --json` and `GET /api/runs/:id` (bridge
+`workflow_run_status`) both project those children with `RunProviderProcess::to_json`, so the
+objects share keys — including `last_activity_at`, `latest_message`, `stopped_descendants`, and
+`blocked_on_stopped_descendant` — and omit `run_id`, which the caller already has:
 
 ```text
 $ orbit run show jrun-20260727-0241-2
@@ -86,10 +88,12 @@ holds the agent until its wall clock ends, and `blocked=` is never shown there.
 
 Liveness is probed when you ask, against the local process table, so it is only meaningful on
 the host that ran the child; a historical run inspected elsewhere may report `exited` or
-`unknown` depending on what that host can observe. Use
-`orbit run show --json` for the full records (`pid`, `pid_start_time`, `step_id`, `finished`,
-`stopped_descendants`, `blocked_on_stopped_descendant`),
-or `orbit run events <run_id> --type cli.invocation.process` for the raw audit events.
+`unknown` depending on what that host can observe. `orbit run show --json` and
+`GET /api/runs/:id` both return those full process records, and both put `input`, `pid`, and
+`pid_start_time` on the run object. `orbit run events <run_id> --type cli.invocation.process`
+still returns the raw audit events. An unreadable pipeline checkpoint does not fail
+`orbit run show`: the command warns and reports `pipeline_state` as null, and the run record
+stays readable. The HTTP detail already omits that section the same way.
 
 ## A submitted run outlives its command
 
@@ -223,10 +227,13 @@ task to `backlog`, while a forge hold keeps it `in-progress` as described below.
 cancellation returns its task to `backlog` with the cancellation reason, preserving the candidate
 for a later resume. Pass `--block` to `orbit run cancel` when the existing manual recovery flow is
 preferred; the dashboard cancel uses the backlog default. `orbit task show
-<task-id>` prints a `Next:` line for a blocked task: the exact `orbit job resume <run-id>` when
-that run is resumable (`failed`, `timeout`, `interrupted`), or the `orbit task update <task-id>
---status backlog` command for other blocks. `--json` carries the same in `next_step`; it is
-absent for a task that is not blocked by a run.
+<task-id>`, local or routed to the host the id names, prints a `Next:` line for a blocked task:
+the exact `orbit job resume <run-id>` when that run is resumable (`failed`, `timeout`,
+`interrupted`), or the `orbit task update <task-id> --status backlog` command for other blocks.
+`--json`, `orbit.task.show` and `GET /api/tasks/:id` carry the same object in `next_step`; it is
+absent for a task that is not blocked by a run. The same show prints `Final Recovery:` when a
+final-recovery decision is recorded, and those JSON surfaces carry `final_recovery` with
+`run_id`, `decision`, `outcome` and `at`. A task list does not include either field.
 
 ## Cancel a conclusively stuck run
 
@@ -372,6 +379,17 @@ the checkpoint owner. Direct ownership still authorizes the original run.
 An unrelated run, a broken lineage, or a task re-claimed by a superseding run
 fails before Orbit commits, pushes, or updates the task.
 
+A resumed run's own final recovery can commit a repair and resume the commit
+step. Its receipt (exact before/after HEAD and worktree) is recorded in the
+resumed run's state, not the owner's. The commit step accepts that HEAD only
+when the receipt was recorded on a bounded same-job `retry_source_run_id` chain
+from the executing run to the checkpoint owner, and the task is still bound to
+that owner. Preparation, synchronization, native validation and configured
+review then run again on the repaired candidate, on the same branch and PR.
+A descendant of the repair, a copied receipt, or a run outside the lineage is
+refused with `worktree_head_changed`. A task bound to any other run is refused
+before the commit as well.
+
 Resume also refuses before it creates a run when a task the source names is
 bound to a different run, or to the same run id on another machine. The error
 names that binding (run id and machine). Checkpoints, the worktree, and the
@@ -432,6 +450,16 @@ A transient read-only completion lookup can spend the run's one final-recovery
 attempt by retrying completion in the same worker. It keeps the published commit
 SHA, PR and successful checkpoints; it does not reimplement, recommit or repush the
 candidate, or restart hosted CI. Final recovery must be enabled for the run.
+
+An eligible lookup is one of completion's authenticated reads made before any
+mutation: the PR status, required-check and merge-policy reads, and the
+base-refresh and missing-prerequisite evidence reads, such as a commit's combined
+status. Only a transport failure qualifies: a GitHub 502/503/504 or GraphQL
+timeout answer, or a TLS handshake timeout. Invalid or truncated evidence, a
+changed head, base, policy or identity, a credential, permission,
+administrative-rule or other permanent refusal, and an exhausted completion
+deadline keep their ordinary failure. A failed read never counts as passing
+required checks; the resumed completion reads them again.
 
 The host first authenticates the successful commit, preparation, synchronization,
 push and PR chain, exact clean checkout, current task ownership, remote branch
@@ -566,6 +594,21 @@ remote lease; submission requires fresh validation and configured review and
 grants no merge approval. Source receipts stay unchanged. Completion-preservation
 receipts are a distinct contract and cannot substitute for blocked-publication
 evidence; a direct final-recovery requeue suppresses the terminal hook.
+
+A generic resume whose own final-recovery repair was refused at the commit
+boundary, and whose terminal hook then pushed that repair and opened or kept
+the PR, is recovered the same way: inspect the **stopped resumed run**, not its
+checkpoint owner. Inspection requires the task to remain bound to the owner
+and authenticates the resumed run's applied `resume` receipt for this task.
+The published head must be the receipt's exact repair, made from the owner's
+latest authenticated host candidate in the same worktree. The resumed run must
+not have passed its own commit boundary. Every run from it back to the owner
+must be a stopped run of the same job. The returned
+`binding.checkpoint_owner` names the owner and digests its run, steps,
+checkpoints and definition. Submit that binding as usual. A changed owner
+invalidates it before admission, and the admitted run refuses before source
+effects. The new run adopts the same branch and PR and revalidates the
+candidate from scratch. Source and owner receipts stay unchanged.
 
 An operator source-repair admission authorizes one attempt. Generic resume
 cannot restart that attempt. If a repair publishes a new head on the original
@@ -715,7 +758,15 @@ repair: the wait lifts by itself at the next admission pass after the reset.
 To run it sooner, give the pool an unlimited member, set the task's `crew` to
 a crew on another provider, or raise the threshold
 (`workflow.provider_limit_max_used_pct`, or `workflow.provider_limit_overrides`
-for that provider). An explicitly crewed task waits by default; with
+for that provider). To keep using a provider whose plan window is exhausted
+while paid credits remain, set that provider's override to `off`
+(`["codex:off"]`). Readings stay recorded and shown: readiness JSON lists
+them with `threshold` `off` and `gated` false, and `orbit doctor`'s
+`provider-limits:<provider>` row says gating is off. No reading then limits
+a crew. A later run that actually fails on a usage limit still records the
+task's provider failure hold, which is the signal that paid credits have run
+out. Removing the `off` entry gates the same readings again. An explicitly
+crewed task waits by default; with
 `workflow.provider_limit_explicit_crews = "pool"` it is drawn from its
 complexity pool instead. See
 [CONFIG.md](../CONFIG.md#provider-usage-limits).
@@ -758,6 +809,47 @@ window closes first, the run holds and the leaf releases its claim to the owner 
 `transient` failure naming the head it kept. That release does not stop the drain
 offering the crew or the host, and the task's next claim on that follower continues
 the kept candidate ([distributed drain](distributed-drain.md)).
+
+## A delivery leaf that died after opening its pull request
+
+An owner-local delivery leaf (`task_pr_pipeline`) watches the pull request it
+opened: `--complete` merges it, and `--auto-fix` repairs its failed required checks
+and conflicts. If the leaf's worker dies after `pr_open`, orphan reconciliation
+finalizes the run `interrupted` and the task waits in `review`, or in `blocked` with
+a `workflow_run_interrupted` history entry when the leaf died before promoting it.
+Nothing is watching the pull request at that point.
+
+Each pass of a running owner drain (`orbit run auto`) adopts such a leaf before it
+admits new work. It resumes the interrupted run once from its checkpoints, as
+`orbit job resume` would, so the resumed run continues landing review, completion
+and auto-fix on the same pull request and head. The retry lineage carries the
+run's repair ledger and authority. Completion still refuses a head the run did not
+publish. A leaf is adopted only when all of these hold:
+
+- it was interrupted within the last 24 hours, not at an upgrade boundary (the
+  clock resumes those), and it is not a claimed execution;
+- its worker is dead and no retry has resumed it yet;
+- its `pr_open` succeeded and that pull request is still open on the same branch;
+- every task it carries still waits on it, in `review` or interruption-`blocked`;
+- the drain holds the `--complete` and `--auto-fix` grants the leaf was started
+  with;
+- checkpoint resume accepts it.
+
+Adopted leaves take free drain slots, and a stopped drain adopts nothing. Each
+adoption, and each final refusal (`pull_request_not_open`, `task_moved`,
+`no_pull_request`, `claimed_execution`, `not_resumable`), is decided once and
+recorded in the audit log as `pipeline.run.orphan_adoption`. To see why a leaf was
+left alone, read the drain's latest `adopt_orphans` step output with
+`orbit run show <drain-run> --json`. A missing grant or an unreadable forge is not
+a decision: a later pass, or a drain started with the grant, considers the leaf
+again.
+
+When a leaf is not adopted, resume it yourself with `orbit job resume <leaf-run>`,
+or requeue the task. When an operator moves the task back to `backlog`, any of its
+pull requests that no live run is delivering are closed
+([`[pr]` rules](../CONFIG.md#pr--pull-requests)). A claimed leaf on a follower is
+never adopted this way: its claim's release keeps the candidate and pull request,
+and the task's next claim continues them ([distributed drain](distributed-drain.md)).
 
 ## Replay from the beginning
 

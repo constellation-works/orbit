@@ -37,7 +37,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use orbit_store::contracts::{HostResourceMinute, ResourceUsageStoreBackend, RunResourceMinute};
@@ -47,10 +46,9 @@ use super::delivery_class::DeliveryResourceClass;
 use super::scope::{ScopeUsage, WorkerScopeCgroup};
 use super::usage_tree::TreeSampler;
 use crate::OrbitRuntime;
-use crate::runtime::host_resource::{HostUsageReading, read_host_usage};
-
-/// How often a worker samples its scope and the host.
-pub(crate) const SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
+use crate::runtime::host_resource::{
+    HostUsageReading, RESOURCE_SAMPLE_INTERVAL as SAMPLE_INTERVAL, read_host_usage,
+};
 
 const MINUTE: TimeDelta = TimeDelta::minutes(1);
 

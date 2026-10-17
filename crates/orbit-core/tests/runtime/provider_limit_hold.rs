@@ -264,10 +264,30 @@ fn a_model_scoped_limit_excludes_only_the_crews_on_that_model() {
     }
 }
 
+/// [ORB-16371] Turning the pre-dispatch gate off does not suppress the hold
+/// a usage-limit failure records. That hold is the signal paid credits ran out.
+fn an_off_override_still_records_a_usage_limit_hold() {
+    let config = CODEX_MODELS.replacen(
+        "[workflow]\n",
+        "[workflow]\nprovider_limit_overrides = [\"codex:off\"]\n",
+        1,
+    );
+    let fx = fixture(&config);
+    let task = fx.task("sol");
+    let reported = Utc::now() + Duration::hours(2);
+    fail_with_limit(&fx, &task, "sol", &resetting_at(reported));
+    let hold = fx.last_hold(&task);
+    assert_eq!(hold.class, ProviderFailureClass::Limit);
+    assert_eq!(hold.provider.as_deref(), Some("codex"));
+    assert_eq!(hold.excluded_crews, ["luna", "sol"]);
+    assert_eq!(fx.status(&task), TaskStatus::Backlog);
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_limit_without_a_reported_reset_backs_off_from_thirty_minutes_to_six_hours_scenarios,
     a_limit_without_a_reported_reset_backs_off_from_thirty_minutes_to_six_hours,
     a_reported_reset_is_clamped_to_five_minutes_through_seven_days,
-    a_model_scoped_limit_excludes_only_the_crews_on_that_model
+    a_model_scoped_limit_excludes_only_the_crews_on_that_model,
+    an_off_override_still_records_a_usage_limit_hold
 );

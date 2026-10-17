@@ -175,24 +175,34 @@ impl Fixture {
         self.ended(&run);
     }
 
-    /// `run` ends.
+    /// `run` ends, starting first if it had not.
     fn ended(&self, run: &str) {
+        let jobs = orbit_store::compose::workspace_job_run_store(
+            self.runtime.sqlite_store().unwrap(),
+            self.workspace_id(),
+        );
+        if jobs.get_job_run(run).unwrap().unwrap().state == JobRunState::Pending {
+            jobs.mark_job_run_running(run, Utc::now(), std::process::id())
+                .unwrap();
+        }
+        jobs.finalize_job_run(run, JobRunState::Success, Utc::now(), Some(0))
+            .unwrap();
+    }
+
+    /// A `hard` delivery of a new task, admitted two minutes ago, whose live
+    /// run has not started: its profile is ahead and it uses nothing yet, so
+    /// the host reading is all baseline. Returns its run.
+    fn running_hard_delivery(&self) -> String {
+        let task = self.task("running", TaskPriority::Low, TaskComplexity::Hard);
         orbit_store::compose::workspace_job_run_store(
             self.runtime.sqlite_store().unwrap(),
             self.workspace_id(),
         )
-        .finalize_job_run(run, JobRunState::Success, Utc::now(), Some(0))
-        .unwrap();
-    }
-
-    /// A `hard` delivery of a new task, admitted two minutes ago and still
-    /// running; returns its run.
-    fn running_hard_delivery(&self) -> String {
-        let task = self.task("running", TaskPriority::Low, TaskComplexity::Hard);
-        running_run(
-            &self.runtime,
+        .insert_job_run(
             "task_auto_pipeline",
-            json!({
+            1,
+            Utc::now(),
+            Some(json!({
                 "task_ids": [task],
                 "resource_class": {
                     "task_id": task,
@@ -200,8 +210,11 @@ impl Fixture {
                     "complexity": "hard",
                     "admitted_at": Utc::now() - Duration::seconds(130),
                 },
-            }),
+            })),
+            None,
         )
+        .expect("run")
+        .run_id
     }
 
     fn drain(&self) -> String {
@@ -410,6 +423,50 @@ fn candidates_admitted_in_one_pass_count_each_other() {
     let mut expected = vec![first, second];
     expected.sort();
     assert_eq!(reserved, expected);
+}
+
+/// Memory fits by a high quantile of the deliveries' summed memory, not the
+/// sum of their p90s. Of ten three-minute `low` deliveries, two used 9 GiB
+/// and the rest 1: a p90 of 9 GiB over a mean of 2.6. A candidate beside two
+/// running deliveries priced the same makes 27 GiB of p90s, over the 24 GiB
+/// threshold even before the host's own use, yet the quantile of their sum,
+/// about 16.9 GiB, fits over 2 GiB in use and is admitted. Over 10 GiB in
+/// use it does not, and the candidate is refused for memory.
+fn memory_fits_by_the_quantile_of_the_sum_not_the_sum_of_p90s() {
+    let fixture = Fixture::new("enforce", "");
+    for index in 0..10 {
+        let memory = if index < 2 { 9 * GIB } else { GIB };
+        fixture.finished_delivery_using("low", &[0.5; 3], memory);
+    }
+    fixture.running_hard_delivery();
+    fixture.running_hard_delivery();
+    let candidate = fixture.task("candidate", TaskPriority::High, TaskComplexity::Low);
+    let drain = fixture.drain();
+
+    write_proc(&fixture.proc_root, 10);
+    let busy = classify(&fixture.runtime, &drain, 4);
+    assert_eq!(admitted(&busy), Vec::<String>::new(), "{busy:#}");
+    let record = recorded(&fixture.runtime, &drain, &busy);
+    let [skip] = record.skipped.as_slice() else {
+        panic!("{record:#?}");
+    };
+    assert_eq!(skip.task_id, candidate);
+    assert_eq!(skip.resource.as_deref(), Some("memory"));
+    assert_eq!(skip.detail, "memory 84% at +0m", "{record:#?}");
+
+    write_proc(&fixture.proc_root, 2);
+    let roomy = classify(&fixture.runtime, &drain, 4);
+    assert_eq!(admitted(&roomy), vec![candidate.clone()], "{roomy:#}");
+    let record = recorded(&fixture.runtime, &drain, &roomy);
+    assert!(record.skipped.is_empty(), "{record:#?}");
+    let [admission] = record.admitted.as_slice() else {
+        panic!("{record:#?}");
+    };
+    assert_eq!(
+        admission.idle_host, None,
+        "it fits beside the running deliveries, not by the idle-host rule"
+    );
+    assert_eq!(fixture.reserved(&fixture.runtime), vec![candidate]);
 }
 
 /// `shadow` admits what `off` admits for the same inputs, records the
@@ -625,12 +682,7 @@ fn a_starving_head_holds_backfill_until_it_fits() {
 
     // The running delivery ends: the head fits, and work behind it is
     // admitted again.
-    let jobs = orbit_store::compose::workspace_job_run_store(
-        fixture.runtime.sqlite_store().unwrap(),
-        fixture.workspace_id(),
-    );
-    jobs.finalize_job_run(&running, JobRunState::Success, Utc::now(), Some(0))
-        .unwrap();
+    fixture.ended(&running);
     let third = classify(&fixture.runtime, &drain, 5);
     assert_eq!(admitted(&third)[0], heavy, "{third:#}");
     assert!(admitted(&third).contains(&light), "{third:#}");
@@ -658,7 +710,8 @@ fn a_pass_gap_fit_refuses_entirely_polls() {
 /// `shadow` and `enforce` passes each record the forecast at the offsets
 /// inside the horizon (10 minutes here, so +5 and +10), counting what the
 /// pass admitted, with the pass's decisions; `off` records nothing. The
-/// accuracy report counts, per drain, what shadow would have held.
+/// accuracy report counts, per drain, what shadow would have held and what
+/// enforce admitted or held.
 fn shadow_and_enforce_passes_record_their_forecast_and_off_records_none() {
     let fixture = Fixture::new("off", "");
     fixture.finished_delivery("hard", &[1.0, 1.0, 1.0, 6.0, 1.0]);
@@ -722,6 +775,9 @@ fn shadow_and_enforce_passes_record_their_forecast_and_off_records_none() {
     assert_eq!(decisions.run_id, drain);
     assert_eq!((decisions.shadow_passes, decisions.enforce_passes), (1, 1));
     assert_eq!(decisions.admitted, 2);
+    assert_eq!(decisions.enforce_admitted, 1);
+    assert_eq!(decisions.gap_held, vec![heavy.clone()]);
+    assert_eq!(decisions.pull_held, 0);
     assert_eq!(decisions.would_hold, vec![heavy]);
     assert!(decisions.would_add.is_empty(), "{decisions:#?}");
     // No worker has measured the host yet, so nothing pairs.
@@ -1182,6 +1238,7 @@ crate::scenario_table!(
     enforce_skips_a_colliding_candidate_and_admits_a_lighter_one_behind_it_scenarios,
     enforce_skips_a_colliding_candidate_and_admits_a_lighter_one_behind_it,
     candidates_admitted_in_one_pass_count_each_other,
+    memory_fits_by_the_quantile_of_the_sum_not_the_sum_of_p90s,
     shadow_admits_as_off_and_records_what_enforce_would_do,
     per_run_mode_overrides_the_host_and_survives_reopen,
     the_ceiling_holds_before_gap_fit,

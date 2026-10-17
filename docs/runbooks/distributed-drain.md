@@ -715,9 +715,35 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   receipt for is closed (`Refused`) and its slot returned.
 - An unreachable owner is reported in the iteration output and retried; the
   drain never fails over to its own store.
+- The owner's own drain survives the same waits. An admission pass that
+  times out on the task commit lock or the database (`lock_busy`) admits
+  nothing, records `last_pass_error_code: lock_busy` with the lock error,
+  which names the holder's pid and section, on
+  `pipeline_state.drain_last_pass`, and waits the drain's poll interval
+  before the next pass retries; `orbit run show` reads `Admission pass
+  deferred: consecutive_failures=N`. Ten deferred passes in a row fail the
+  drain with that error, and any completed pass resets the count. Other
+  admission failures still fail the drain at once.
 - An owner that times out waiting on its task commit lock or its database
-  answers `lock_busy`. A leaf's owner reads retry it twice before failing, and
-  a step it still fails releases the claim as `transient`. When these recur,
+  answers `lock_busy`. So does an owner whose `orbit` exits on its locked store
+  before it answers the follower's SSH session (`session ended before answering
+  'initialize'; ssh stderr: ... database is locked`): the follower reads the
+  owner's own diagnostic and does not report that host as unreachable. A
+  leaf's owner reads retry it twice before failing, and a step it still fails
+  releases the claim as `transient` and marks it `owner_busy`. The owner was
+  reached and decided nothing, so the release blames neither the follower's
+  host nor its crew, and it does not count against the task's release budget.
+  The drain backs its claims off instead: for 5 minutes from when the leaf
+  ended it requests nothing (`owner_busy_backoff:` refusal,
+  `crews.owner_busy_backoff` with `until`, `episodes` and `releases`), then
+  requests again in the same window, and the owner may hand the same task
+  straight back. Releases that end within 5 minutes of the previous one, such
+  as several leaves that were running when the store locked, are one episode.
+  A third episode in one window suppresses the host for the rest of the window
+  (`host_suppressed:`, whose reason names the episode and release counts),
+  because an owner that stays busy across backoffs needs an operator. An owner
+  older than this release records the mark without honouring it, and holds the
+  task from that drain as for any other `transient` release. When these recur,
   read the owner's `orbit.jsonl`: the `still waiting for advisory file lock`
   warning names each holder of the lock by pid, section and call site, and
   `advisory file lock held past its threshold` names a section that held it
@@ -800,8 +826,11 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   it as `deferred`.
   After `environment` or `owner_route` — failures of the host itself — it requests
   no more work at all for its window (`host_suppressed:` refusal,
-  `crews.host_suppressed`); fix the host and start a new drain. In either
-  case (forge releases aside) the owner does not hand the released task back
+  `crews.host_suppressed`); fix the host and start a new drain. An owner whose
+  store stayed locked is not one of these: its `transient` release backs the
+  drain off briefly instead (`owner_busy_backoff`, above), and only repeated
+  episodes suppress the host. In either
+  case (forge and busy-owner releases aside) the owner does not hand the released task back
   to that drain, so it is not pulled straight back; another drain may still
   take it. When the leaf had
   committed a candidate, the release or block names it, and the task's next
@@ -844,8 +873,12 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   `superseded_pull_request` in that step's output (`orbit run show
   <leaf-run> --json`): `close_failed` means the earlier pull request is
   still open, so close it by hand. To start over instead, add
-  `--discard-candidate`; the earlier pull request then stays open until the
-  task reaches done, rejected or archived, which closes it.
+  `--discard-candidate`; that move closes the earlier pull request with a
+  comment once no run or claim of the task is live. Either way, whichever
+  run publishes the task's next pull request closes any other open Orbit
+  pull request of the task (`closed_stale_pull_requests` in its `pr_open`
+  output), so a re-admitted task keeps one open pull request
+  ([`[pr]` rules](../CONFIG.md#pr--pull-requests)).
 
   A leaf can also commit past the head it pushed and then fail: a
   before-landing reviewer's fix is committed in the leaf's worktree before
@@ -1006,7 +1039,15 @@ request is audited on the run (`pipeline.run.window_extend.completed`, with
 idle one waiting at least `poll_sleep_seconds`) still bounds a drain extended
 over days; past it the drain ends and a new one carries its admissions. The drain's `--concurrency`, as last
 retuned, is the only ceiling on its leaves: the claimed leaf jobs declare no
-active-run limit of their own. A leaf in its before-landing review (the owner's
+active-run limit of their own. On the follower, `orbit run readiness` with no
+`--concurrency` and no local drain reports that ceiling. Text prints
+`Active leaf runs: <occupied>/<ceiling>` and the free slots left under it, plus
+a `Leaf ceiling:` line. `--json` sets `capacity.max_active_leaf_runs`,
+`capacity.free_slots`, and `capacity.limit_source` to `pull_run_input` for the
+submitted value or `pull_run_control` after `orbit run concurrency --set` (or
+`orbit run extend --concurrency`). A live local drain still supplies the
+ceiling instead (`run_input` or `run_control`), and with neither drain live
+the report stays at 5 (`default`). A leaf in its before-landing review (the owner's
 `review.before_landing`) runs no implementer but keeps its claim until it
 settles. Admission counts `occupied - min(reviewing, --concurrency)` against
 `--concurrency` before each claim. Reviewing starts after the persisted
@@ -1124,6 +1165,27 @@ Owner-local landing of an already-authorized handoff does not need a drain or
 ship-sweep. Followers never merge. Review-only work stays in `review` until
 explicit completion authority is recorded.
 
+### Dead leaves and their pull requests
+
+A delivery leaf can die after it opened its pull request. The recovery path
+depends on where it ran:
+
+- **Claimed leaf (follower).** Its claim's release keeps the candidate and the
+  pull request, and the task's next claim continues them on the same branch.
+  Generic resume is refused, as above, and no drain adopts the run.
+- **Owner-local leaf.** The owner drain's next pass adopts it when it holds
+  the leaf's `--complete` and `--auto-fix` grants. The pass resumes the
+  interrupted run from its checkpoints, so completion and auto-fix continue
+  on the same pull request and head. Every rule and every refusal is listed in
+  [stuck job runs](stuck-job-runs.md#a-delivery-leaf-that-died-after-opening-its-pull-request).
+
+When the task cannot be resumed, requeue it. An operator's move to `backlog`,
+or a `--discard-candidate` requeue out of `blocked`, closes the task's pull
+requests that no live run or claim is delivering. Whichever run publishes the
+task's next pull request closes any other open Orbit pull request of the task.
+Either way, the task keeps one open pull request
+([`[pr]` rules](../CONFIG.md#pr--pull-requests)).
+
 ### Requeue or salvage an interrupted review
 
 A claimed leaf that is cancelled or interrupted while its reviewer is working
@@ -1204,7 +1266,10 @@ one. From then on:
     stops for the one automatic repair, and the stop evidence carries the
     failed job, its signature and a log excerpt. A repair that is already
     spent stops in `review` instead. A base that has not moved, and is still
-    red, stops in `review` without a repair. The owner merges that head only
+    red, stops in `review` without a repair. `orbit run auto --auto-fix` uses
+    this same classification for that unmoved red base: it spends no repair
+    attempt, waits out its completion deadline, and stops with a base-red
+    reason. The owner merges that head only
     when it is a clean merge of the accepted candidate with a commit already
     on the landing branch.
     When the owner checkout has `origin`, adopting a newly observed updated
@@ -1217,6 +1282,16 @@ one. From then on:
     automatic repair, the same repair a conflicting base gets, and the stop
     evidence carries the failed step's signature and log excerpt for the
     repair leaf.
+
+  A failed required check that no failed job answers, such as a provider
+  app's aggregate beside passing analysis jobs, is classified too, so a job
+  failure beside it never hides it. Its evidence is its own failure
+  annotations, read as `--auto-fix` reads them (see
+  [PR auto-fix repairs](../CONFIG.md#pr-auto-fix-repairs)). It is
+  **candidate** only when every annotated source file is one the candidate
+  changed from its base. Annotations on other files, or annotations that
+  cannot be read or validated, are **inconclusive**. A failed optional check
+  that no job answers keeps its previous handling.
 
   Each of the rerun, the branch update and the repair is spent once. A
   failure past that budget, or one the landing cannot classify (its jobs or
@@ -1606,13 +1681,15 @@ enable a dark routine to "turn on" distributed drain.
 On the owner, delivery removes a task worktree once the run lands, and the
 owner's `worktree-gc-<workspace>` routine is the hourly backstop. A follower's
 claimed-leaf worktrees live in its replica checkout, which no owner process
-touches, so the replica schedules its own GC on its host clock. That routine is
-the only one a replica fires. Its ship sweep, task pilot, CI and Dependabot
-sweeps and its auto-tasks stay owner work: `orbit routine list` shows them as
-`owner-only` with the owner machine named, a toggle or pause is refused, and
-the sweep reports them `skipped` with an `owner_only_in_replica:` reason. The
-auto-task panel marks toggle and manual mint unavailable and names the owner;
-replica task minting remains refused.
+touches, so the replica schedules its own GC on its host clock. That routine
+and the replica's store-gc routine are the only ones a replica fires. Its ship
+sweep, task pilot, CI and Dependabot sweeps and its auto-tasks stay owner
+work: `orbit routine list` shows them as `owner-only` with the owner machine
+named, a toggle or pause is refused, and the sweep reports them `skipped` with
+an `owner_only_in_replica:` reason. The auto-task panel marks toggle and
+manual mint unavailable and names the owner; replica task minting remains
+refused. A delivery- or state-triggered routine stays owner work even when it
+targets one of those two jobs.
 
 Enable the replica's GC on the follower as an operator, with
 `orbit_routine_control` (`action: toggle`) or the dashboard's Operations
@@ -1644,6 +1721,45 @@ ref so an unpublished HEAD survives branch deletion
 Each kept worktree's declared build output is reclaimed on every sweep, and
 `orbit run show <gc-run>` lists every kept worktree with its reason and
 `retained_bytes`.
+
+## Replica store GC
+
+The follower's host store is not the owner's. Command audit, resource history,
+and the run audit and terminal run state of the workspaces it replicates live
+in the follower's own `~/.orbit/orbit.db`. The owner's `store-gc-<workspace>`
+routine never opens that file. On a follower-only host every checkout is a
+replica, so the store stays untrimmed until a replica schedules
+`store_gc_pipeline` for itself.
+
+That routine is seeded disabled, the same as on an owner checkout. Review the
+plans, then enable it on the follower:
+
+```bash
+orbit gc audit --json --workspace <replica-workspace>
+orbit gc runs --json --workspace <replica-workspace>
+```
+
+Enable it with `orbit_routine_control` (`action: toggle`) or the dashboard's
+Operations routines panel, or set `enabled: true` in the replica checkout's
+`.orbit/routines/store_gc.yaml`. Then confirm it is armed:
+
+```bash
+orbit routine list --workspace <replica-workspace>
+```
+
+The run applies both plans against the local store. It deletes command-audit
+rows and per-minute resource history past their windows (those tables are
+host-wide on this machine), and this workspace's run-audit rows, the audit
+blobs nothing still names, and the pipeline state of terminal runs older than
+`retention.runs_days`. Run rows and steps stay, and nothing is vacuumed. The
+activity does not call the owner and does not write the owner's coordination
+store. Enabling it on the owner is unchanged: that routine still prunes only
+the owner's store.
+
+One enabled replica routine is enough for the host-wide tables. Each
+replicated workspace still needs its own routine, or a pass from that
+workspace, before its run audit and run state are pruned. A delivery- or
+state-triggered copy of the job stays owner work and is listed `owner-only`.
 
 ## Scheduled host shutdown or reboot
 
@@ -1777,7 +1893,9 @@ long-lived processes.
 its window was open: the `Requests held:` line, from `admission_refusal` under
 `pipeline_state.drain_last_pass`. Its values are `circuit_open` (the failure breaker is open),
 `circuit_half_open` (it waits for the drain's claims to settle before one probe claim),
-`settlement_refused`, `no_runnable_crew`, `host_suppressed`,
+`settlement_refused`, `no_runnable_crew`, `host_suppressed`, `owner_busy_backoff`
+(a claimed leaf was released because the owner's store stayed locked; requests resume by
+themselves at the time it names),
 `host_shutdown_scheduled` (a shutdown or reboot inside
 `machine.host_shutdown_hold_minutes`), or the owner probe's refusal.
 The value is set afresh each pass. This host's resource throttle has its own `Throttled:` line,

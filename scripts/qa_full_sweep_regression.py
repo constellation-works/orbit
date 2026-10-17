@@ -110,6 +110,7 @@ def self_test():
     harness = Path(os.environ.get("QA_SWEEP_HARNESS_UNDER_TEST", Path(__file__).with_name("test-qa-full-sweep.py"))).resolve()
     scratch = Path(__file__).resolve().parent.parent / ".orbit/tmp"
     scratch.mkdir(parents=True, exist_ok=True)
+    native_recorder_prefix_self_test(harness, scratch)
     with tempfile.TemporaryDirectory(prefix="qa-evidence-regression-", dir=scratch) as tmp:
         repo = Path(tmp)
         for directory in ["bin", "scripts", ".orbit/tmp", "browsers"]:
@@ -430,3 +431,52 @@ def self_test():
         assert all(row(report, name)["outcome"] == "NOT_RUN" for name in ["first", "second"]), report
         # Repeated invocations also retain earlier report bytes.
         assert all(Path(directory).is_dir() for directory in directories), directories
+
+
+def native_recorder_prefix_self_test(harness, scratch):
+    """Wrapper delimiters must not consume Cargo's separator or libtest options."""
+    with tempfile.TemporaryDirectory(prefix="qa-native-prefix-", dir=scratch) as tmp:
+        repo = Path(tmp)
+        (repo / "Cargo.toml").write_text(
+            '[package]\nname = "recorder-prefix"\nversion = "0.0.0"\nedition = "2021"\n'
+            '[workspace]\n[[test]]\nname = "boundary"\npath = "boundary.rs"\n')
+        (repo / "boundary.rs").write_text(
+            '#[test]\nfn selected() { println!("selected test diagnostics"); }\n'
+            '#[test]\nfn unrelated() { panic!("the recorder must preserve the test filter"); }\n')
+        wrapper = repo / "wrapper.py"
+        wrapper.write_text(
+            'import os, sys\n'
+            'start = 3 if sys.argv[1] == "-p" else sys.argv.index("--") + 1\n'
+            'command = sys.argv[start:]\n'
+            'os.execvp(command[0], command)\n')
+        cargo = ["cargo", "test", "--offline", "--test", "boundary", "selected"]
+        prefix = [sys.executable, str(wrapper), "--"]
+        options = ["--exact", "--test-threads=1", "--nocapture", "--show-output"]
+        cases = [
+            ("direct", [], [], ["--show-output"]),
+            ("direct-options", [], options, [flag for flag in options if flag != "--nocapture"]),
+            ("wrapper", prefix, [], ["--show-output"]),
+            ("wrapper-options", prefix, options, [flag for flag in options if flag != "--nocapture"]),
+            ("sandbox-style-prefix", [sys.executable, str(wrapper), "-p", "(version 1)(allow default)"],
+             ["--exact", "--nocapture"], ["--exact", "--show-output"]),
+            ("prefix-options", [sys.executable, str(wrapper), "--show-output", "--nocapture", "--"],
+             ["--exact", "--nocapture"], ["--exact", "--show-output"]),
+        ]
+        env = {**os.environ, "CARGO_TARGET_DIR": str(repo / "target"),
+               "RUSTC_WRAPPER": "", "RUSTC_WORKSPACE_WRAPPER": ""}
+        for name, wrapper_args, libtest_args, expected_args in cases:
+            print(f"native recorder prefix regression: {name}", flush=True)
+            command = [*wrapper_args, *cargo, *(["--", *libtest_args] if libtest_args else [])]
+            records = repo / name
+            child = subprocess.run(
+                [sys.executable, str(harness), "--repo-root", str(repo),
+                 "--native-execution-dir", str(records), "--record-native-command", *command],
+                cwd=repo, env=env, capture_output=True, text=True, timeout=60)
+            assert child.returncode == 0, (name, child.stdout, child.stderr)
+            recorded = json.loads(next(records.glob("*.json")).read_text())
+            assert recorded["command"] == command, (name, recorded)
+            assert recorded["executed_command"] == [*wrapper_args, *cargo, "--", *expected_args], (name, recorded)
+            assert recorded["exit_code"] == 0 and recorded["cleanup_verified"], (name, recorded)
+            assert "test selected ... ok" in recorded["stdout"], (name, recorded)
+            assert "selected test diagnostics" in recorded["stdout"], (name, recorded)
+            assert "test result: ok. 1 passed; 0 failed;" in recorded["stdout"], (name, recorded)

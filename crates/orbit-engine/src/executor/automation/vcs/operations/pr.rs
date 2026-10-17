@@ -12,20 +12,36 @@ use super::{BASE_MODIFIED_REFUSAL, DEFAULT_TIMEOUT_MS, SLOW_TIMEOUT_MS};
 /// condition was not what failed.
 const BASE_MODIFIED_REASON: &str = "Base branch was modified. Review and try the merge again.";
 
+/// Upper bound on pull requests one unfiltered listing reads.
+const PR_LIST_ALL_LIMIT: &str = "500";
+
+/// The pull requests on one head branch, or, without `head`, every pull
+/// request in `state` with its body, which is how a run finds its tasks'
+/// earlier delivery pull requests.
 pub(super) fn pr_list(input: &Value) -> Result<Value, OrbitError> {
-    let head = required_string(input, "head")?;
+    let head = optional_string(input, "head");
     let state = optional_string(input, "state").unwrap_or("open");
     let workspace_path = required_string(input, "workspace_path")?;
-    let args = vec![
+    let mut args = vec![
         "pr".to_string(),
         "list".to_string(),
         "--state".to_string(),
         state.to_string(),
-        "--head".to_string(),
-        head.to_string(),
-        "--json".to_string(),
-        "number,title,headRefName,author".to_string(),
     ];
+    match head {
+        Some(head) => args.extend([
+            "--head".to_string(),
+            head.to_string(),
+            "--json".to_string(),
+            "number,title,headRefName,author".to_string(),
+        ]),
+        None => args.extend([
+            "--limit".to_string(),
+            PR_LIST_ALL_LIMIT.to_string(),
+            "--json".to_string(),
+            "number,title,headRefName,author,body".to_string(),
+        ]),
+    }
     let result = execute_with_transient_retry(
         "gh",
         &args,
@@ -504,7 +520,7 @@ pub(super) fn pr_status(input: &Value) -> Result<Value, OrbitError> {
         "view".to_string(),
         selector.to_string(),
         "--json".to_string(),
-        "number,state,mergedAt,mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,headRefName,headRefOid,baseRefName,mergeCommit,url,autoMergeRequest".to_string(),
+        "number,state,isDraft,mergedAt,mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,headRefName,headRefOid,baseRefName,mergeCommit,url,autoMergeRequest".to_string(),
     ];
     let result = if input.get("deadline_ms").is_some() {
         super::super::completion_deadline::Deadline::from_input(input)?.execute(
@@ -533,7 +549,8 @@ pub(super) fn pr_status(input: &Value) -> Result<Value, OrbitError> {
 /// Which checks on a PR's head commit branch protection requires.
 ///
 /// `gh pr view --json statusCheckRollup` does not say, so this asks the
-/// GraphQL API for each rollup context's `isRequired` against the PR. The
+/// GraphQL API for each rollup context's `isRequired` against the PR, with a
+/// check run's own and its app's identity. The
 /// answer carries the head commit it describes; the reader in `pr/answers.rs`
 /// refuses one that is truncated or names another head.
 pub(super) fn pr_required_checks(input: &Value) -> Result<Value, OrbitError> {
@@ -547,8 +564,8 @@ pub(super) fn pr_required_checks(input: &Value) -> Result<Value, OrbitError> {
     let query = "query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){\
         pullRequest(number:$pr){headRefOid commits(last:1){nodes{commit{oid \
         statusCheckRollup{contexts(first:100){pageInfo{hasNextPage} nodes{__typename \
-        ... on CheckRun{name status conclusion isRequired(pullRequestNumber:$pr) \
-        checkSuite{workflowRun{workflow{name}}}} \
+        ... on CheckRun{databaseId name status conclusion isRequired(pullRequestNumber:$pr) \
+        checkSuite{app{databaseId} workflowRun{workflow{name}}}} \
         ... on StatusContext{context state isRequired(pullRequestNumber:$pr)}}}}}}}}}}";
     let args = vec![
         "api".to_string(),

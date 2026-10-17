@@ -17,6 +17,12 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
         "invocation evidence",
     );
     let mut full = job_run_to_json_with_activity_provenance(run, state.as_ref(), &evidence);
+    // The shared projection leaves the submitted input and the claimed worker
+    // identity to each surface. Run detail carries the same three fields MCP
+    // already adds, so the dashboard and `orbit run show --json` name one run.
+    full["input"] = json!(run.input);
+    full["pid"] = json!(run.pid);
+    full["pid_start_time"] = json!(run.pid_start_time);
     // Child dispatches persist lineage rather than task input. Resolve their
     // runs first, then share one task-title lookup with the parent header.
     let children = state
@@ -130,7 +136,7 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
         "steps_source": steps.source.as_str(),
         "provider_processes": provider_processes
             .iter()
-            .map(run_provider_process_to_json)
+            .map(RunProviderProcess::to_json)
             .collect::<Vec<_>>(),
     })
 }
@@ -145,23 +151,5 @@ fn or_warn<T: Default>(
     result.unwrap_or_else(|error| {
         tracing::warn!(run_id, section, %error, "run detail omitted a section");
         T::default()
-    })
-}
-
-fn run_provider_process_to_json(record: &RunProviderProcess) -> Value {
-    json!({
-        "run_id": record.run_id,
-        "event_id": record.event_id,
-        "ts": record.ts.map(|ts| ts.to_rfc3339()),
-        "step_id": record.step_id,
-        "step_index": record.step_index,
-        "provider": record.provider,
-        "pid": record.pid,
-        "pid_start_time": record.pid_start_time,
-        "finished": record.finished,
-        "liveness": record.liveness.as_str(),
-        "exit_code": record.exit_code,
-        "timed_out": record.timed_out,
-        "duration_ms": record.duration_ms,
     })
 }

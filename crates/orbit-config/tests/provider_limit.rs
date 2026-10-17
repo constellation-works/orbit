@@ -4,14 +4,14 @@
 
 use orbit_config::{
     ConfigRoots, ConfigScope, ConfigStore, ProviderLimitBudgetUnit, ProviderLimitExplicitCrews,
-    ProviderLimitPolicy, ResolvedConfig,
+    ProviderLimitPolicy, ProviderLimitThreshold, ResolvedConfig,
 };
 
 const OVERRIDES: &str = "workflow.provider_limit_overrides";
 const BUDGETS: &str = "workflow.provider_limit_budgets";
 
-/// The policy one load of `[workflow]` `body` admits, or its error.
-fn load(body: &str) -> Result<ProviderLimitPolicy, String> {
+/// The resolved config one load of `[workflow]` `body` admits, or its error.
+fn load_config(body: &str) -> Result<ResolvedConfig, String> {
     let global = tempfile::tempdir().expect("global tempdir");
     let workspace = tempfile::tempdir().expect("workspace tempdir");
     std::fs::write(
@@ -20,8 +20,12 @@ fn load(body: &str) -> Result<ProviderLimitPolicy, String> {
     )
     .expect("write config");
     ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-        .map(|config| config.snapshot.provider_limit_policy())
         .map_err(|error| error.to_string())
+}
+
+/// The policy one load of `[workflow]` `body` admits, or its error.
+fn load(body: &str) -> Result<ProviderLimitPolicy, String> {
+    load_config(body).map(|config| config.snapshot.provider_limit_policy())
 }
 
 /// `orbit config set --global key value`, validated as the command does.
@@ -41,7 +45,10 @@ fn unset_keys_gate_at_ninety_percent_and_keep_explicit_crews_waiting() {
     assert_eq!(policy, ProviderLimitPolicy::default());
     assert_eq!(policy.max_used_pct, 90);
     assert_eq!(policy.explicit_crews, ProviderLimitExplicitCrews::Wait);
-    assert_eq!(policy.threshold("claude"), 90);
+    assert_eq!(
+        policy.threshold("claude"),
+        ProviderLimitThreshold::Percent(90)
+    );
 }
 
 #[test]
@@ -53,12 +60,58 @@ fn overrides_are_admitted_under_their_canonical_provider() {
     )
     .expect("valid provider limit settings load");
     assert_eq!(policy.max_used_pct, 80);
-    assert_eq!(policy.threshold("claude"), 95, "anthropic is claude");
-    assert_eq!(policy.threshold("anthropic"), 95);
-    assert_eq!(policy.threshold("grok"), 100);
-    assert_eq!(policy.threshold("codex"), 80, "the default threshold");
+    assert_eq!(
+        policy.threshold("claude"),
+        ProviderLimitThreshold::Percent(95),
+        "anthropic is claude"
+    );
+    assert_eq!(
+        policy.threshold("anthropic"),
+        ProviderLimitThreshold::Percent(95)
+    );
+    assert_eq!(
+        policy.threshold("grok"),
+        ProviderLimitThreshold::Percent(100)
+    );
+    assert_eq!(
+        policy.threshold("codex"),
+        ProviderLimitThreshold::Percent(80),
+        "the default threshold"
+    );
     assert_eq!(policy.explicit_crews, ProviderLimitExplicitCrews::Pool);
     set(OVERRIDES, r#"["claude:80", "grok:100"]"#).expect("config set admits valid overrides");
+}
+
+/// [ORB-16371] `provider:off` loads, is what `orbit config get` reads back
+/// (the admitted snapshot value), and an alias is stored once under the
+/// canonical provider. `off` is not a budget percent.
+#[test]
+fn off_turns_one_providers_gate_off_and_is_stored_canonically() {
+    let config = load_config(
+        "provider_limit_max_used_pct = 80\n\
+         provider_limit_overrides = [\"openai:OFF\", \"grok:100\"]",
+    )
+    .expect("codex:off loads");
+    assert_eq!(
+        config.snapshot.workflow_provider_limit_overrides,
+        ["codex:off".to_string(), "grok:100".to_string()],
+        "config get shows the admitted value"
+    );
+    let policy = config.snapshot.provider_limit_policy();
+    assert_eq!(policy.threshold("codex"), ProviderLimitThreshold::Off);
+    assert_eq!(policy.threshold("openai"), ProviderLimitThreshold::Off);
+    assert_eq!(policy.threshold("chatgpt"), ProviderLimitThreshold::Off);
+    assert_eq!(policy.budget_threshold("codex"), 80, "off is not a percent");
+    assert_eq!(
+        policy.threshold("grok"),
+        ProviderLimitThreshold::Percent(100)
+    );
+    assert_eq!(policy.budget_threshold("grok"), 100);
+    assert_eq!(
+        policy.threshold("claude"),
+        ProviderLimitThreshold::Percent(80)
+    );
+    set(OVERRIDES, r#"["codex:off"]"#).expect("config set admits off");
 }
 
 #[test]
@@ -74,6 +127,7 @@ fn invalid_provider_limit_settings_are_refused_by_load_and_config_set() {
             r#"["claude:80", "anthropic:70"]"#,
             "more than once",
         ),
+        (OVERRIDES, r#"["codex:off", "openai:80"]"#, "more than once"),
         ("workflow.provider_limit_max_used_pct", "0", "1..=100"),
         ("workflow.provider_limit_max_used_pct", "101", "1..=100"),
         (

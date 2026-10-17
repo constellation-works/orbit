@@ -242,8 +242,9 @@ pub(crate) fn run_sweep_at_with_providers_at(
     let mut load_errors: Vec<RoutineLoadError> = discovered.errors.clone();
     let no_workspace_loaded = no_workspace_loaded_row(&discovered);
 
-    // [ORB-14173] Replica checkouts contribute only their host-local
-    // worktree GC routines; the rest are reported as owner work below.
+    // [ORB-14173] [ORB-16354] Replica checkouts contribute only their
+    // host-local worktree GC and store GC routines; the rest are reported
+    // as owner work below.
     let host = if Instant::now() < deadline {
         collect_host_routines(&discovered)
     } else {

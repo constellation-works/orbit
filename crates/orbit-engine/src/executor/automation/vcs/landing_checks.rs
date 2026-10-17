@@ -31,6 +31,16 @@
 //!   base or the candidate at fault, so the landing stops in review and
 //!   spends nothing.
 //!
+//! [ORB-16185] A required check that no failed job answers, such as a
+//! provider app's aggregate result beside passing analysis jobs, is not
+//! hidden by the jobs that did fail: every failed required check is
+//! classified. Its evidence is its own failure annotations
+//! ([`annotations`]); they make it a **candidate** failure only when each
+//! annotated source is a file the candidate changed from its base. Anything
+//! else, including annotations on files the candidate did not change, is
+//! **inconclusive**. A failed check branch protection does not require keeps
+//! its previous handling.
+//!
 //! The rerun, the branch update and the repair are each spent once. A
 //! failure past that budget, or one this module cannot classify, stops the
 //! landing in review, with the classification in the stop evidence. The
@@ -60,9 +70,11 @@ use super::super::ci::log_signature::{
 use super::baseline::network_inconclusive;
 use super::git::{git_command_success, git_output};
 use super::operations;
-use super::pr::{CheckState, PullRequestStatus};
+use super::pr::{CheckState, PullRequestStatus, RequiredChecks};
 
+mod annotations;
 mod log;
+use annotations::{source_annotations, unanswered_required};
 use log::job_log;
 
 /// Largest log excerpt a stop's evidence carries per failed job.
@@ -150,9 +162,12 @@ pub(super) fn failed_checks(status: &PullRequestStatus) -> Vec<(Option<String>, 
         .collect()
 }
 
-/// One failed job on the pull request's head.
+/// One failed job, or one failed required check run outside a workflow, on
+/// the pull request's head.
 struct FailedJob {
-    run_id: u64,
+    /// The workflow run to rerun; none for a check run outside a workflow.
+    run_id: Option<u64>,
+    /// The job's, or the check run's, provider identity.
     job_id: u64,
     label: String,
     class: CheckFailureClass,
@@ -197,22 +212,39 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
         .iter()
         .filter(|job| unsuccessful(job) && failed.iter().any(|check| answers(job, check)))
         .collect();
-    if failed_jobs.is_empty() {
+    if failed_jobs.is_empty() && (recovery.rerun || recovery.updated) {
         // A rerun or update the provider has not registered yet still shows
         // the old failure in the rollup while its jobs are queued.
-        if recovery.rerun || recovery.updated {
-            return Ok(CheckRecoveryStep::Wait);
-        }
+        return Ok(CheckRecoveryStep::Wait);
+    }
+    // [ORB-16185] A failed required check no failed job answers is classified
+    // from its own annotations, never hidden by the jobs that did fail.
+    let unanswered: Vec<&(Option<String>, String)> = failed
+        .iter()
+        .filter(|check| {
+            !head_jobs
+                .iter()
+                .any(|job| unsuccessful(job) && answers(job, check))
+        })
+        .collect();
+    let aggregates = if unanswered.is_empty() {
+        Vec::new()
+    } else {
+        unanswered_required(host, context, &pr.to_string(), head, &unanswered, recovery)
+    };
+    if failed_jobs.is_empty() && aggregates.is_empty() {
         return Ok(unclassified(
             "no failed workflow job on the pull request's head answers the failed check"
                 .to_string(),
         ));
     }
-    if failed_jobs.iter().all(|job| {
-        job["job_id"]
-            .as_u64()
-            .is_some_and(|id| recovery.handled.contains(&id))
-    }) {
+    if aggregates.is_empty()
+        && failed_jobs.iter().all(|job| {
+            job["job_id"]
+                .as_u64()
+                .is_some_and(|id| recovery.handled.contains(&id))
+        })
+    {
         return Ok(CheckRecoveryStep::Wait);
     }
 
@@ -236,55 +268,28 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
                 )));
             }
         };
-        let signature = error_signature(&log, failed_step(job));
-        let (class, why, tip_passes) = if let Some(evidence) = transient_evidence(&log) {
-            (
-                CheckFailureClass::Transient,
-                format!("the log shows `{evidence}`"),
-                false,
-            )
-        } else if signature.step_fallback {
-            (
-                CheckFailureClass::Inconclusive,
-                "its log names no diagnostic, only the failed step".to_string(),
-                false,
-            )
-        } else {
-            match inherited(
-                host,
-                workspace,
-                job,
-                &signature.text,
-                base,
-                moved_tip,
-                &mut base_jobs,
-                &mut tip_jobs,
-            ) {
-                Err(gap) => (CheckFailureClass::Inconclusive, gap, false),
-                Ok(Some(found)) => (CheckFailureClass::Inherited, found.why, found.tip_passes),
-                Ok(None) => (
-                    CheckFailureClass::Candidate,
-                    format!(
-                        "base {base} does not fail it that way{}",
-                        moved_tip.map_or_else(String::new, |tip| format!(
-                            " and it does not pass on the current base {tip}"
-                        ))
-                    ),
-                    false,
-                ),
-            }
-        };
+        let (class, why, tip_passes, signature) = classify_logged_job(
+            host,
+            workspace,
+            job,
+            &log,
+            base,
+            moved_tip,
+            &mut base_jobs,
+            &mut tip_jobs,
+        );
         jobs.push(FailedJob {
-            run_id,
+            run_id: Some(run_id),
             job_id,
             label,
             class,
-            signature: signature.text,
+            signature,
             why,
             excerpt: excerpt(&log),
             tip_passes,
         });
     }
+    jobs.extend(aggregates);
     let class = jobs
         .iter()
         .map(|job| job.class)
@@ -295,7 +300,7 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
 
     match class {
         CheckFailureClass::Transient if !recovery.rerun => {
-            let runs: BTreeSet<u64> = jobs.iter().map(|job| job.run_id).collect();
+            let runs: BTreeSet<u64> = jobs.iter().filter_map(|job| job.run_id).collect();
             for run_id in runs {
                 host.run_private_vcs_operation(
                     operations::CI_RERUN_FAILED,
@@ -405,8 +410,13 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
 /// watcher, read with the same job and log answers the landing uses.
 pub(super) enum HeadCheckEvidence {
     /// Every failed check is a workflow job whose log was read and shows no
-    /// runner or network failure: hand it to a repair with this evidence.
-    Repair(String),
+    /// runner or network failure, or a required check run outside a workflow
+    /// whose authenticated annotations name source failures: hand it to a
+    /// repair with this evidence and the retained provider answers.
+    Repair {
+        evidence: String,
+        annotations: Vec<Value>,
+    },
     /// Not a failure a code repair can clear, or not one this read could
     /// establish, for this reason.
     Stop(String),
@@ -415,15 +425,18 @@ pub(super) enum HeadCheckEvidence {
 /// Read the failed jobs behind `failed` on `head`, the exact commit the
 /// rollup reported, so the evidence a repair receives is bound to it.
 ///
-/// A check no workflow job answers is a status this run cannot attribute to
-/// code (an external app, a policy gate); an unreadable job or log proves
-/// nothing; a log that shows the runner or the network failing is not the
-/// candidate's. Each stops without a repair.
+/// A required check run outside a workflow is attributed to code only by
+/// its own source failure annotations ([`annotations`]); any other check no
+/// workflow job answers (an external status, a policy gate) is not. An
+/// unreadable job or log proves nothing; a log that shows the runner or the
+/// network failing is not the candidate's. Each stops without a repair.
 pub(super) fn head_check_evidence<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
+    pr: &str,
     head: &str,
     failed: &[(Option<String>, String)],
+    required: &RequiredChecks,
 ) -> HeadCheckEvidence {
     let jobs = match commit_jobs(host, workspace, head) {
         Ok(jobs) => jobs,
@@ -434,6 +447,7 @@ pub(super) fn head_check_evidence<H: RuntimeHost + ?Sized>(
         }
     };
     let mut details = Vec::new();
+    let mut annotations = Vec::new();
     for check in failed {
         let label = match &check.0 {
             Some(workflow) => format!("{workflow} / {}", check.1),
@@ -443,10 +457,20 @@ pub(super) fn head_check_evidence<H: RuntimeHost + ?Sized>(
             .iter()
             .find(|job| unsuccessful(job) && answers(job, check))
         else {
-            return HeadCheckEvidence::Stop(format!(
-                "no failed workflow job on head {head} answers check '{label}', so it is not a \
-                 failure a code repair is known to clear"
-            ));
+            match source_annotations(host, workspace, pr, head, check, required, None) {
+                Ok(found) => {
+                    details.push(found.detail);
+                    annotations.push(found.provider);
+                    continue;
+                }
+                Err(gap) => {
+                    return HeadCheckEvidence::Stop(format!(
+                        "no failed workflow job on head {head} answers check '{label}', and its \
+                         annotations do not establish a source failure ({gap}), so it is not a \
+                         failure a code repair is known to clear"
+                    ));
+                }
+            }
         };
         let (Some(run_id), Some(job_id)) = (job["run_id"].as_u64(), job["job_id"].as_u64()) else {
             return HeadCheckEvidence::Stop(format!(
@@ -487,7 +511,10 @@ pub(super) fn head_check_evidence<H: RuntimeHost + ?Sized>(
     if details.is_empty() {
         return HeadCheckEvidence::Stop(format!("the rollup names no failed check on head {head}"));
     }
-    HeadCheckEvidence::Repair(details.join("\n"))
+    HeadCheckEvidence::Repair {
+        evidence: details.join("\n"),
+        annotations,
+    }
 }
 
 /// The jobs on one commit, or why they could not be read; read once per
@@ -502,6 +529,131 @@ struct Inheritance {
     /// the first update still happens, and the failure is not treated as
     /// surviving onto a passing tip.
     tip_passes: bool,
+}
+
+/// The class of one failed job whose log was already read.
+///
+/// Landing and auto-fix both call this. The signature comparison is
+/// [`inherited`]; nothing here re-implements it.
+#[allow(clippy::too_many_arguments)]
+fn classify_logged_job<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &Path,
+    job: &Value,
+    log: &str,
+    base: &str,
+    moved_tip: Option<&str>,
+    base_jobs: &mut CommitJobs,
+    tip_jobs: &mut CommitJobs,
+) -> (CheckFailureClass, String, bool, String) {
+    let signature = error_signature(log, failed_step(job));
+    if let Some(evidence) = transient_evidence(log) {
+        return (
+            CheckFailureClass::Transient,
+            format!("the log shows `{evidence}`"),
+            false,
+            signature.text,
+        );
+    }
+    if signature.step_fallback {
+        return (
+            CheckFailureClass::Inconclusive,
+            "its log names no diagnostic, only the failed step".to_string(),
+            false,
+            signature.text,
+        );
+    }
+    match inherited(
+        host,
+        workspace,
+        job,
+        &signature.text,
+        base,
+        moved_tip,
+        base_jobs,
+        tip_jobs,
+    ) {
+        Err(gap) => (CheckFailureClass::Inconclusive, gap, false, signature.text),
+        Ok(Some(found)) => (
+            CheckFailureClass::Inherited,
+            found.why,
+            found.tip_passes,
+            signature.text,
+        ),
+        Ok(None) => (
+            CheckFailureClass::Candidate,
+            format!(
+                "base {base} does not fail it that way{}",
+                moved_tip.map_or_else(String::new, |tip| format!(
+                    " and it does not pass on the current base {tip}"
+                ))
+            ),
+            false,
+            signature.text,
+        ),
+    }
+}
+
+/// Whether every failed check on `head` is a workflow job the base already
+/// fails the same way, and `tip` has not moved past `base`.
+///
+/// `Ok(Some(reason))` is that hold: auto-fix waits and spends no repair.
+/// `Ok(None)` was read far enough to say this is not that hold, including a
+/// candidate-caused job and a check no workflow job answers. `Err` is a head
+/// job whose log or identity could not be read.
+pub(super) fn unmoved_red_base<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &Path,
+    head: &str,
+    base: &str,
+    tip: &str,
+    failed: &[(Option<String>, String)],
+) -> Result<Option<String>, String> {
+    let head_jobs = commit_jobs(host, workspace, head).map_err(|error| error.to_string())?;
+    let moved_tip = (tip != base).then_some(tip);
+    let mut base_jobs = None;
+    let mut tip_jobs = None;
+    let mut reasons = Vec::new();
+    for check in failed {
+        let Some(job) = head_jobs
+            .iter()
+            .find(|job| unsuccessful(job) && answers(job, check))
+        else {
+            return Ok(None);
+        };
+        let (Some(run_id), Some(job_id)) = (job["run_id"].as_u64(), job["job_id"].as_u64()) else {
+            return Err("a failed job reported no identity".to_string());
+        };
+        let label = job_label(job);
+        let log = job_log(host, workspace, run_id, job_id, job)
+            .map_err(|error| format!("the log of '{label}' could not be read: {error}"))?;
+        let (class, why, _, _) = classify_logged_job(
+            host,
+            workspace,
+            job,
+            &log,
+            base,
+            moved_tip,
+            &mut base_jobs,
+            &mut tip_jobs,
+        );
+        if class != CheckFailureClass::Inherited {
+            return Ok(None);
+        }
+        reasons.push(why);
+    }
+    if reasons.is_empty() {
+        return Ok(None);
+    }
+    // The same predicate the landing uses before it updates a moved base.
+    if moved_tip.is_some_and(|tip| !contains(workspace, tip, head)) {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "base_red: {} and the base branch has not moved past it, so the base is still red and no \
+         repair agent runs",
+        reasons.join("; ")
+    )))
 }
 
 /// Whether the failure of `job`, with genuine `signature`, is the base's:

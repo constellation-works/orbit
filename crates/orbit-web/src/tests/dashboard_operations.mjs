@@ -57,6 +57,8 @@ let nullCapacity = false;
 let resourceThrottle = null;
 let drainCapacityOverride = {};
 let drainTasksOverride = null;
+let providerLimitsFixture = null;
+let providerAuthFixture = null;
 const drainDeadline = window.__drainDeadline || new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
 let submittedJob = null;
 const memberDiagnostic = {
@@ -183,6 +185,8 @@ globalThis.fetch = async (path, options = {}) => {
       ...drainCapacityOverride,
     },
     tasks: drainTasksOverride || readinessTasks,
+    ...(providerLimitsFixture ? { provider_limits: providerLimitsFixture } : {}),
+    ...(providerAuthFixture ? { provider_auth_failures: providerAuthFixture } : {}),
   });
   return response({});
 };
@@ -223,6 +227,7 @@ for (const gone of ['Task readiness', 'Waiting on deps', 'slots busy', 'Snapshot
 }
 assert(!descendants(drainBody).some(node => /auto-drain-(task|slot)/.test(String(node.className || ''))), 'no readiness rows or slot tiles');
 assert(get('auto-drain-phase-label').textContent === 'Idle' && !get('auto-drain-live'), 'no live window reads idle');
+assert(drainBody.querySelector('.drain-forecast-state')?.textContent === 'no forecast this pass', 'a readiness payload with no forecast says no forecast this pass');
 assert(!get('auto-drain-start').hidden, 'the Start card shows for a writable workspace');
 // With no live window Stop becomes "Send pending results": the settle-only pass
 // needs no drain, so it stays usable and says what it does in visible text.
@@ -1093,4 +1098,118 @@ rebuilt.querySelector('button').click(); await tick(); await tick();
 assert(rebuilt.textContent.includes('full-input'), 'full state can be retried after an error');
 // Leave the harness on the normal routines view for the layout scenarios.
 rebuilt.open = false; await tick();
+
+// Provider readings list every window with its age. A stale one carries the
+// marker; a fresh one reads "today". The gated sentence stays the admission
+// note. An auth row names the host, provider, runs and fix command, and a
+// later payload that no longer lists it removes the row.
+setWorkspace('one');
+const readingUntil = '2026-10-17T18:00:00Z';
+providerLimitsFixture = [
+  { provider: 'codex', scope: null, window: 'seven_day', used_percent: 92, threshold: 90, gated: true, until: readingUntil, crews: ['sol'], observed_at: '2026-10-14T12:00:00Z', stale: true, age_seconds: 3 * 86400 },
+  { provider: 'claude', scope: null, window: 'five_hour', used_percent: 40, threshold: 90, gated: false, until: readingUntil, crews: ['opus'], observed_at: new Date().toISOString(), stale: false, age_seconds: 90 },
+];
+providerAuthFixture = [{
+  host: 'dk-server-2', provider: 'claude',
+  runs: [{ run_id: 'jrun-auth-early', at: '2026-10-17T01:38:00Z' }, { run_id: 'jrun-auth-late', at: '2026-10-17T01:39:00Z' }],
+  fix_command: 'Run `claude auth login`.',
+}];
+await fetchAndRenderAutoDrainPane();
+const providerNote = get('auto-drain-body').querySelector('.drain-provider-limit-note');
+assert(providerNote && providerNote.textContent.startsWith('Provider limits: codex seven_day 92%') && !providerNote.textContent.includes('claude') && !providerNote.textContent.includes('stale'), `the gated note is unchanged: ${providerNote?.textContent}`);
+const providerReadings = [...get('auto-drain-body').querySelectorAll('.drain-provider-reading')];
+const staleReading = providerReadings.find(node => node.textContent.includes('codex'));
+const freshReading = providerReadings.find(node => node.textContent.includes('claude'));
+assert(staleReading && staleReading.classList.contains('stale') && staleReading.textContent.includes('3d old') && staleReading.textContent.includes('stale'), `stale reading: ${staleReading?.textContent}`);
+assert(freshReading && freshReading.textContent.includes('today') && !freshReading.textContent.includes('stale'), `fresh reading: ${freshReading?.textContent}`);
+const authItem = get('auto-drain-body').querySelector('.drain-provider-auth-item');
+assert(authItem && authItem.textContent.includes('dk-server-2') && authItem.textContent.includes('claude') && authItem.textContent.includes('claude auth login'), `auth item: ${authItem?.textContent}`);
+assert(authItem.querySelector('a[href*="jrun-auth-early"]') && authItem.querySelector('a[href*="jrun-auth-late"]'), `auth runs: ${authItem.textContent}`);
+providerAuthFixture = [];
+await fetchAndRenderAutoDrainPane();
+assert(!get('auto-drain-body').querySelector('.drain-provider-auth-item'), 'a later success drops the auth item from the card');
+assert([...get('auto-drain-body').querySelectorAll('.drain-provider-reading')].some(node => node.textContent.includes('today')), 'fresh readings still render as today');
+providerLimitsFixture = null;
+providerAuthFixture = null;
+await fetchAndRenderAutoDrainPane();
+
+// An enforce forecast on the Drain card: peaks against admit thresholds,
+// headroom, admitted tasks with profile source, and a held candidate. The
+// persisted skip sentence and friction id stay off the card.
+const forecastAt = '2026-10-17T06:25:00Z';
+const enforceForecast = {
+  mode: 'enforce',
+  forecast_at: forecastAt,
+  cpu_peak: { minute: 6, value: 7.2, percent: 90 },
+  memory_peak: { minute: 2, value: 1024, percent: 40 },
+  admitted: [{ task_id: 'ORB-FIT', profile_source: 'without_complexity', idle_host: 'admitted on an idle host' }],
+  skipped: [
+    { task_id: 'ORB-HELD', profile_source: 'exact', resource: 'cpu', minute: 6, percent: 94, detail: 'protects ORB-LEAKED' },
+    { task_id: 'ORB-WAIT', profile_source: 'heaviest_on_host', detail: 'starvation guard protects ORB-LEAKED' },
+  ],
+  head: {
+    task_id: 'ORB-HELD',
+    failing_since: forecastAt,
+    protected: true,
+    miss: { profile_source: 'exact', profile_key: 'change/medium', resource: 'cpu', minute: 6, percent: 94, baseline_percent: 12 },
+    stall: {
+      reference: { profile_source: 'exact', profile_key: 'change/medium', resource: 'cpu', minute: 6, percent: 94, baseline_percent: 12 },
+      since: forecastAt,
+      passes: 3,
+      stuck: true,
+      friction_id: 'FR-LEAKED',
+    },
+  },
+  headroom: { cpu_percent: -1, memory_percent: 34, admit_cpu_percent: 89, admit_memory_percent: 74 },
+  task_titles: { 'ORB-FIT': 'Fitting candidate', 'ORB-HELD': 'Heavy candidate', 'ORB-WAIT': 'Small candidate' },
+};
+const forecastCard = () => get('auto-drain-body').querySelector('.drain-forecast');
+drainCapacityOverride = { admission_forecast: enforceForecast };
+await fetchAndRenderAutoDrainPane();
+let forecast = forecastCard();
+let forecastText = forecast?.textContent || '';
+assert(forecast?.dataset.forecastState === 'built' && !forecast.querySelector('.drain-forecast-state'), `enforce forecast replaces the empty state: ${forecastText}`);
+assert(forecast.querySelector('time')?.dateTime === forecastAt && forecastText.includes('2026-10-16 23:25') && forecastText.includes('PDT'), `forecast time: ${forecastText}`);
+assert(forecastText.includes('90.0%') && forecastText.includes('7.2 cores') && forecastText.includes('at +6m') && forecastText.includes('admit 89%') && forecastText.includes('headroom -1.0'), `cpu peak, threshold and headroom: ${forecastText}`);
+assert(forecast.querySelector('.drain-forecast-peak.over')?.textContent.includes('CPU peak'), 'a peak over its admit threshold is marked');
+assert(forecastText.includes('40.0%') && forecastText.includes('1.0 KiB') && forecastText.includes('at +2m') && forecastText.includes('admit 74%') && forecastText.includes('headroom 34.0'), `memory peak, threshold and headroom: ${forecastText}`);
+assert(forecastText.includes('Admitted') && forecastText.includes('Fitting candidate') && forecastText.includes('profile without_complexity') && forecastText.includes('admitted on an idle host'), `admitted task and profile: ${forecastText}`);
+assert(forecast.querySelector('a[href*="ORB-FIT"]') && forecast.querySelector('a[href*="ORB-HELD"]'), `admitted and held tasks link: ${forecastText}`);
+assert(forecastText.includes('Held') && forecastText.includes('Heavy candidate') && forecastText.includes('cpu 94% at +6m') && forecastText.includes('profile exact'), `held candidate shows the hold: ${forecastText}`);
+assert(forecastText.includes('Small candidate') && forecastText.includes('waiting for the protected queue head to fit') && forecastText.includes('profile heaviest_on_host'), `a starvation hold names the guard, not a stored sentence: ${forecastText}`);
+assert(forecastText.includes('Starvation guard protects') && forecastText.includes('Stuck head') && forecastText.includes('change/medium via exact') && forecastText.includes('3 protected passes'), `protected and stuck head: ${forecastText}`);
+assert(!forecastText.includes('ORB-LEAKED') && !forecastText.includes('FR-LEAKED'), `stored ids stay off the card: ${forecastText}`);
+drainCapacityOverride = { admission_forecast: { ...enforceForecast, mode: 'shadow' } };
+await fetchAndRenderAutoDrainPane();
+forecast = forecastCard();
+forecastText = forecast?.textContent || '';
+assert(forecastText.includes('shadow · hypothetical') && forecastText.includes('Would admit') && forecastText.includes('Would hold') && forecastText.includes('Starvation guard would protect') && !forecastText.includes('Held'), `shadow decisions stay hypothetical: ${forecastText}`);
+drainCapacityOverride = {
+  admission_forecast: {
+    mode: 'enforce',
+    forecast_at: null,
+    head: { task_id: 'ORB-HELD', failing_since: forecastAt, protected: true },
+    task_titles: { 'ORB-HELD': 'Heavy candidate' },
+  },
+  last_admission_forecast: {
+    mode: 'enforce',
+    forecast_at: '2026-10-17T05:00:00Z',
+    cpu_peak: { minute: 4, value: 3.5, percent: 50 },
+    memory_peak: { minute: 1, value: 2048, percent: 20 },
+    admitted: [{ task_id: 'ORB-FIT', profile_source: 'exact' }],
+    headroom: { cpu_percent: 39, memory_percent: 54, admit_cpu_percent: 89, admit_memory_percent: 74 },
+    task_titles: { 'ORB-FIT': 'Fitting candidate' },
+  },
+};
+await fetchAndRenderAutoDrainPane();
+forecast = forecastCard();
+forecastText = forecast?.textContent || '';
+assert(forecast?.dataset.forecastState === 'retained' && forecast.querySelector('.drain-forecast-state')?.textContent === 'no forecast this pass', `a pass that built none still says so: ${forecastText}`);
+assert(forecastText.includes('Starvation guard protects') && forecastText.includes('Heavy candidate'), `this pass still shows a protected head: ${forecastText}`);
+const retained = forecast.querySelector('.drain-forecast-retained');
+const retainedText = retained?.textContent || '';
+assert(retainedText.includes('Last forecast') && retainedText.includes('2026-10-16 22:00') && retainedText.includes('50.0%') && retainedText.includes('admit 89%') && retainedText.includes('headroom 39.0') && retainedText.includes('Fitting candidate') && retainedText.includes('profile exact'), `retained forecast: ${retainedText}`);
+drainCapacityOverride = {};
+await fetchAndRenderAutoDrainPane();
+assert(forecastCard()?.querySelector('.drain-forecast-state')?.textContent === 'no forecast this pass', 'clearing the forecast returns the empty state');
 globalThis.operationsTestsPassed = true;

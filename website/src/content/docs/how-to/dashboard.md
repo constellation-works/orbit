@@ -252,6 +252,12 @@ The card shows:
   here too.
 - **Capacity.** Running tasks against the limit, free slots, and what a window
   started now would admit.
+- **Admission forecast.** The last pass's forecast time, CPU and memory peaks
+  against the admit thresholds, headroom, tasks it admitted and the profile
+  that priced each one, and any candidate enforce held. A pass that built no
+  forecast says `no forecast this pass` and, when an earlier forecast was
+  kept, shows that one too. Shadow decisions are marked hypothetical; they
+  do not hold anyone.
 - **Readiness.** **Start a window** counts the tasks eligible now and those
   waiting, from a read-only readiness snapshot. The task list's **Backlog**
   card splits the same snapshot into **Eligible now**, **Waiting on locks**,

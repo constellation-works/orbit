@@ -17,13 +17,16 @@
 //!
 //! At that point it stops reading, stops the service, and returns
 //! [`StdioExit::HandOver`] with the client's original `initialize` request
-//! and any partial line it had read. The reader defers a handover while that
-//! partial line exceeds [`MAX_CARRYOVER`], keeping the service alive until a
-//! later idle check. The caller execs the new executable with
-//! that state in [`RESUME_ENV`]. Because `exec` keeps the pid and the stdio
-//! descriptors, the client sees one uninterrupted session. The new process
-//! replays the `initialize` request into its server rather than expecting a
-//! second handshake.
+//! and any partial line it had read. A request can arrive between the idle
+//! check and the reader stopping, so stopping the reader keeps the service's
+//! input open: the service answers that request and waits to be stopped,
+//! rather than reading end of input as the client leaving. The reader defers
+//! a handover while that partial line exceeds [`MAX_CARRYOVER`], keeping the
+//! service alive until a later idle check. The caller execs the new
+//! executable with that state in [`RESUME_ENV`]. Because `exec` keeps the pid
+//! and the stdio descriptors, the client sees one uninterrupted session. The
+//! new process replays the `initialize` request into its server rather than
+//! expecting a second handshake.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -52,6 +55,28 @@ pub const RESUME_ENV: &str = "ORBIT_MCP_RESUME";
 
 /// How often an idle session checks for a replacement or a pending switch.
 const LIFECYCLE_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Debug-build fixture only. Milliseconds between stdio lifecycle checks.
+/// Release builds keep the two-second budget whatever this says. Values
+/// outside 20ms..=2s are ignored so a fixture can only shorten the tick.
+pub const LIFECYCLE_INTERVAL_ENV: &str = "ORBIT_TEST_MCP_LIFECYCLE_INTERVAL_MS";
+
+fn lifecycle_interval_from_env(value: Option<&str>, debug_build: bool) -> Duration {
+    if debug_build
+        && let Some(milliseconds) = value.and_then(|raw| raw.parse::<u64>().ok())
+        && (20..=2_000).contains(&milliseconds)
+    {
+        return Duration::from_millis(milliseconds);
+    }
+    LIFECYCLE_INTERVAL
+}
+
+fn lifecycle_interval() -> Duration {
+    lifecycle_interval_from_env(
+        std::env::var(LIFECYCLE_INTERVAL_ENV).ok().as_deref(),
+        cfg!(debug_assertions),
+    )
+}
 /// A partial line longer than this is not handed over; the session keeps
 /// serving and retries at a later idle point.
 const MAX_CARRYOVER: usize = 32 * 1024;
@@ -317,7 +342,7 @@ async fn serve_handing_over(
     };
     let cancel = running.cancellation_token();
     let mut service = tokio::spawn(running.waiting());
-    let mut interval = tokio::time::interval(LIFECYCLE_INTERVAL);
+    let mut interval = tokio::time::interval(lifecycle_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
@@ -364,8 +389,11 @@ async fn serve_handing_over(
                 "mcp serve_stdio: the stdin reader stopped unexpectedly".into(),
             ));
         };
-        let carryover = match outcome {
-            unix::PumpOutcome::Stopped(carryover) => carryover,
+        // Hold the input open until the service is cancelled: on EOF the
+        // service answers what it was forwarded and finishes, which would end
+        // the session below instead of handing it over.
+        let (carryover, _input) = match outcome {
+            unix::PumpOutcome::Stopped { carryover, input } => (carryover, input),
             unix::PumpOutcome::Closed => {
                 // The client left while this session was deciding.
                 let _ = service.await;
@@ -577,8 +605,12 @@ mod unix {
     }
 
     pub(super) enum PumpOutcome {
-        /// Stopped on request, holding the partial line read so far.
-        Stopped(Vec<u8>),
+        /// Stopped on request, holding the partial line read so far and the
+        /// sender that keeps the service's input open.
+        Stopped {
+            carryover: Vec<u8>,
+            input: mpsc::Sender<Vec<u8>>,
+        },
         /// The client closed stdin.
         Closed,
     }
@@ -618,7 +650,10 @@ mod unix {
                         }
                         let _ = accepted.send(true);
                     }
-                    return Ok(PumpOutcome::Stopped(buffer));
+                    return Ok(PumpOutcome::Stopped {
+                        carryover: buffer,
+                        input: lines,
+                    });
                 }
                 ready = stdin.0.readable() => ready?,
             };

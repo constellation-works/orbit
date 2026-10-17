@@ -555,7 +555,7 @@ owns delivery:
   drain's refill pass delivers too, and first reconciles any launched leaf whose worker died, so
   an orphaned leaf's settlement is recorded and delivered without operator action. Once the
   worker and every drain are gone, the OS clock sweep retries: each tick also opens the host's
-  replica checkouts (they fire only host-local worktree-GC routines; owner-work
+  replica checkouts (they fire only host-local worktree-GC and store-GC routines; owner-work
   schedules stay inert) and runs a delivery-only pass
   (`OrbitRuntime::deliver_recorded_pull_settlements`). That pass delivers what is recorded and
   records a terminal leaf's settlement, but never ends unlaunched work.
@@ -655,7 +655,14 @@ owns delivery:
   executor's default. `environment` and `owner_route`
   are the host's own failures: they suppress the host for the window (`crews.host_suppressed`),
   so the drain requests nothing more whatever crew a task names, and the owner holds every task
-  from that drain run. For any excluding class the owner's admission also holds the released
+  from that drain run. A busy owner is not: a leaf whose owner call lost to the owner's own
+  lock-wait deadline — an owner `lock_busy` answer, or an owner `orbit` that exited on its locked
+  store before it answered the session — releases as `transient` with `failure.owner_busy`. That
+  release excludes no crew, holds neither the task nor the host on the owner, and is outside the
+  release budget; the follower backs its requests off for 5 minutes from when the leaf ended
+  (`crews.owner_busy_backoff`, refusal `owner_busy_backoff`). Releases within 5 minutes of the
+  previous one are one episode, and a third episode in one window suppresses the host with a
+  reason naming the episode and release counts. For any excluding class the owner's admission also holds the released
   task itself from that drain run (`crew_unavailable`), so a release that reaches the owner after
   the follower built its next request is not pulled straight back. `baseline_red` releases with
   its hold, and the owner's admission withholds the task until the base moves to a commit where
@@ -935,6 +942,12 @@ conflict, unsatisfied protection or an exhausted check budget records a durable 
 task in `review`, except that a repairable stop starts the automatic repair above. A hosted check the
 accepted before-landing review owed the owner (`owner_owed_evidence`) must report an explicit success on the
 pinned head before the merge is sent; a skipped or neutral result keeps the owner waiting [ORB-15677].
+A `BLOCKED` pull request with no failed and no pending check is refused only after the owner reads
+current branch policy for the pinned head [ORB-16339]: a required check that policy names and the
+freshly pushed head has not reported yet keeps the owner waiting within `max_wait_seconds`, and a
+check that never appears stops at that deadline with the missing check named. Absent-context base
+refresh still diagnoses such a head. When the policy cannot be read, the owner waits at most four
+polls before stopping as before; a readable policy with nothing unreported stops at once.
 A failed pull request check, owed or not, is classified from its failed-step log with the CI sweep's
 error signature [ORB-15956]: `inherited` (the signature also fails on the candidate's base, or the
 same job passes on the moved landing tip) updates the pull request branch from the landing branch
@@ -1252,6 +1265,7 @@ Acceptance criteria, not reported as passing.
 | Forced release while the owner is unreachable | The release stays recorded; the clock sweep delivers it once the owner answers, with no drain running ([ORB-13892]) |
 | Detached child or in-run step retry reads a task | Owner routing and claim context survive; no local fallback |
 | Claimed implementer with no SSH route to the owner (agent sandbox) | Scoped owner calls cross the run broker; task updates stay denied, and the output summary reaches `claim_handoff` as the owner's `execution_summary` |
+| Owner's own drain admission pass times out on a task or database lock | The pass is deferred, not failed: it admits nothing, records `lock_busy` and the lock error (naming the holder) as the drain's last pass, and the next pass retries after the poll interval. Ten consecutive deferred passes fail the drain with that error; a completed pass resets the count; any other admission error fails the drain as before |
 | Owner times out waiting on a task or database lock | The owner answers the retryable `lock_busy`, not `internal_error`; a bound worker retries an owner read twice (1 s, then 3 s) before failing, so an agent envelope's task load (final recovery's included) outlasts a burst; a step it still fails settles as `transient`, never as `candidate` or `base_conflict` ([ORB-15088]) |
 | Claimed agent's owner call from inside the sandbox | Only the claim-scoped owner calls cross the run's broker; another call, task or relation is refused before the owner; a missing broker is `owner_route_unavailable`, settled as a release ([ORB-14260]) |
 | Claimed run creates files under an admitted `dir:` selector | Committed and handed off with no exact `file:` selector; eligible additions outside the original module footprint request owner-validated widening; ineligible paths are refused before any index change; `.orbit/tmp/` scratch is never delivered ([ORB-13756]) |

@@ -1,8 +1,9 @@
 //! The composed runtime through its public surface: dispatch admission, the
 //! distributed drain, `os:` tag routing, retired deterministic stubs, final
 //! recovery, repeated rebase recovery, relation auto-close, PR closure on
-//! terminal decisions, plugin inspection, the sandbox opt-out, the agent
-//! sandbox mask and cold lexical search hydration.
+//! terminal decisions and requeues, orphaned delivery adoption, plugin
+//! inspection, the sandbox opt-out, the agent sandbox mask and cold lexical
+//! search hydration.
 //!
 //! One integration-test binary per area keeps link cost down; add a module
 //! here rather than a new top-level `tests/*.rs` file
@@ -36,6 +37,7 @@ mod admission_forecast;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod agent_sandbox_mask;
 mod artifact_tools;
+mod audit_commit_report;
 mod auto_task_update;
 mod baseline_hold_refresh;
 mod baseline_hold_tick;
@@ -50,6 +52,7 @@ mod drain_cancel;
 mod drain_extend;
 mod final_recovery;
 mod finding_verification;
+mod fixture_template;
 mod flaky_validation;
 mod forecast_accuracy;
 mod forge_hold_resume;
@@ -85,6 +88,7 @@ mod implement_blocker;
 mod invocation_metrics;
 mod job_finalization;
 mod local_route_before_pr;
+mod orphan_adoption;
 mod plugin_inspection;
 mod pr_forge_admission;
 mod pr_infrastructure;

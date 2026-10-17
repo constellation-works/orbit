@@ -113,6 +113,25 @@ mod workspace_route {
             "the call was delivered once and is not retried here: {calls:?}"
         );
     }
+
+    /// A destination reached whose store stayed locked decided nothing; it
+    /// is not a host the caller lost. The mux keeps its `lock_busy` class, so
+    /// a bound worker retries the read and a follower drain backs off rather
+    /// than suppressing its own host.
+    #[test]
+    fn a_destination_whose_store_stayed_locked_is_lock_busy_through_the_mux() {
+        let probe = three_destination_probe().store_locked(OWNER_MACHINE);
+        let log = probe.call_log();
+        let host = FederatedMcpHost::new(destinations(), Arc::new(probe));
+
+        let error = call_err(&host, "orbit.task.show", "hm_owner/ws_orbit");
+        assert!(error.is_lock_busy(), "{error:?}");
+        assert!(
+            !matches!(error, OrbitError::UnreachableDestination(_)),
+            "{error:?}"
+        );
+        assert!(log.calls().is_empty(), "nothing was dispatched");
+    }
 }
 
 mod task_route {

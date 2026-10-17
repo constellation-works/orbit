@@ -21,7 +21,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use chrono::Utc;
@@ -85,6 +85,7 @@ mod no_diff;
 mod ordering;
 #[cfg(unix)]
 mod orphaned_supervisor;
+mod owner_busy;
 mod owner_gates;
 mod partial_candidate;
 mod pilot;
@@ -478,21 +479,34 @@ fn open_runtime(root: &Path, machine: &str) -> (OrbitRuntime, PathBuf) {
     let repo = root.join(machine).join("repo");
     std::fs::create_dir_all(&global).unwrap();
     std::fs::create_dir_all(&repo).unwrap();
-    let git_boundary = crate::git_test_support::command()
-        .args(["init", "--bare", "--initial-branch=main", "-q"])
-        .arg(repo.join(".git"))
-        .output()
-        .unwrap();
-    assert!(
-        git_boundary.status.success(),
-        "initialize fixture Git discovery boundary: {}",
-        String::from_utf8_lossy(&git_boundary.stderr)
-    );
+    git_boundary().write(&repo.join(".git"));
     std::fs::create_dir_all(repo.join(".orbit")).unwrap();
+    crate::fixture_template::seed_store(&global);
     let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
         .expect("runtime")
         .with_automation_machine_identity(Some(machine.to_string()));
     (calm_host(runtime), repo)
+}
+
+/// The empty bare repository each fixture checkout copies to its `.git`, so
+/// Git discovery stops there instead of reaching a surrounding checkout.
+/// It is initialized once per process; every checkout owns its copy.
+fn git_boundary() -> &'static crate::fixture_template::TreeTemplate {
+    static TEMPLATE: OnceLock<crate::fixture_template::TreeTemplate> = OnceLock::new();
+    TEMPLATE.get_or_init(|| {
+        let scratch = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+        let init = crate::git_test_support::command()
+            .args(["init", "--bare", "--initial-branch=main", "-q"])
+            .arg(scratch.path())
+            .output()
+            .unwrap();
+        assert!(
+            init.status.success(),
+            "initialize fixture Git discovery boundary: {}",
+            String::from_utf8_lossy(&init.stderr)
+        );
+        crate::fixture_template::TreeTemplate::capture(scratch.path())
+    })
 }
 
 /// `runtime` admitting against a pinned calm resource sample, never the live

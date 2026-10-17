@@ -263,6 +263,8 @@ the installed binary for its `update --contract` and, when it speaks
 - `orbit mcp serve` hands over once no request is in flight. The pid, stdio pipes and
   MCP session survive — the client does not re-initialize — because the new image
   receives the initialize parameters and any unread input (`mcp-stdio-v1`).
+  A request that arrives while the server stops reading is answered first, and the
+  session is then handed over rather than closed.
   Only requests accepted by the MCP transport count as in flight; malformed or
   dropped messages cannot prevent handover when their errors omit the request id.
   A buffered partial line larger than 32 KiB defers handover: the current image
@@ -515,6 +517,8 @@ must open is newer only by additive migrations — it keeps reading and writing 
 read-compatible ones — it serves reads and refuses writes — and refused when a breaking
 migration separates the two. See
 [Run an older binary against a newer workspace](#run-an-older-binary-against-a-newer-workspace).
+`orbit gc deployments` never removes it; see
+[Reclaim old deployments and backups](#reclaim-old-deployments-and-backups).
 
 Without a root override, `orbit update` converges **the workspace you run it from**. `ORBIT_ROOT`
 selects an environment-only override, while an explicit `--root` takes precedence over it. Run
@@ -783,6 +787,49 @@ sqlite3 ~/.orbit/orbit.db "VACUUM INTO '/backups/orbit.db'"
 
 See [Inventory and protect Orbit state](./state-and-backup.md) for WAL-safe alternatives and
 the complete authoritative-state inventory.
+
+## Reclaim old deployments and backups
+
+Deploys leave copies behind in the Orbit home that no other GC class removes: build
+directories under `~/.orbit/deployments/` (sources, `target/`, candidates, logs), copies
+of replaced executables in `~/.orbit/bin/`, and store copies such as
+`~/.orbit/orbit.db.bak-<date>`. After an upgrade is verified, apply the retention with
+`orbit gc deployments`. It only reports until you pass `--confirm`:
+
+```sh
+orbit gc deployments                    # every entry, its bytes, and whether it is kept or would be removed
+orbit gc deployments --keep 1           # report with a tighter retention
+orbit gc deployments --confirm          # remove what the report lists as would_remove
+orbit gc deployments --confirm --json   # the same, with removed paths and bytes as JSON
+```
+
+The retention is:
+
+- **Three classes, each counted separately.** A deployment is any top-level entry of
+  `~/.orbit/deployments/`. An executable backup is a regular file in `~/.orbit/bin/`
+  whose name carries a `.bak`, `.before-`, `.pre-`, `.stale` or `-stale-` marker, such as
+  `orbit.bak-<date>` or `orbit-graph.stale-<date>`. A store backup is any
+  `~/.orbit/orbit.db.bak*` entry. The installed executables, other tools in `bin/`,
+  and the live `orbit.db` with its `-wal` and `-shm` files are never candidates.
+- **Keep the newest N of each class**, `--keep` (default 2, at least 1), ordered by the
+  newest modification time of anything inside the entry.
+- **Always keep the rollback target.** Every `<executable>.previous`, which `orbit update`
+  writes as the outgoing executable (see [Recovery and resumption](#recovery-and-resumption)),
+  is reported as `rollback_target`. A deployment directory whose `orbit-local-candidate`
+  manifest (see [Deploy a locally built candidate](#deploy-a-locally-built-candidate-pinned-to-a-source-commit))
+  names the SHA-256 of the installed `orbit` is kept as `installed_candidate`, and one
+  naming `orbit.previous` as `rollback_candidate`. Pinned entries do not count toward
+  `--keep`.
+
+Each entry reports its class, path, action (`kept`, `would_remove` or `removed`), reason
+and bytes; the summary totals reclaimable, reclaimed and kept bytes. Measurement finishes
+before anything is removed. Removal goes through descriptors pinned to each directory and
+never follows a link: a symbolic link is unlinked, never its target, and a symlinked
+`deployments/` or `bin/` is refused. `--confirm` needs operator authority, like the other
+GC classes.
+
+Leave a store backup you still need for recovery outside `~/.orbit`, for example under the
+`/backups` path above, or raise `--keep` until that recovery is over.
 
 ## Review and apply migrations
 

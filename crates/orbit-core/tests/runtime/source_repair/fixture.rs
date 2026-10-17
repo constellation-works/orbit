@@ -1,4 +1,5 @@
 //! Real-Git host checkpoint fixture for the public source-repair scenarios.
+use crate::fixture_template::TreeTemplate;
 use chrono::Utc;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, TaskStatus};
@@ -9,6 +10,7 @@ use orbit_types::workflow::{JobRun, JobRunState, JobTargetType, PipelineState};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use tempfile::TempDir;
 
 pub(super) fn git(repo: &Path, args: &[&str]) -> String {
@@ -19,6 +21,118 @@ pub(super) fn git(repo: &Path, args: &[&str]) -> String {
         .unwrap();
     assert!(output.status.success(), "git {args:?}: {output:?}");
     String::from_utf8(output.stdout).unwrap().trim().into()
+}
+
+/// The published, rebased candidate every fixture starts from: a checkout
+/// and the bare remote its origin URL is rewritten to, with the commits the
+/// host's checkpoints name. It is built once per branch in a process and
+/// written into each fixture's root, so a fixture repeats none of the Git
+/// commands that set it up; every fixture still owns its checkout and remote.
+#[derive(Clone)]
+struct SourceCheckout {
+    tree: Arc<TreeTemplate>,
+    /// The bare remote's path in the scratch root the template was built in.
+    remote: String,
+    original_base: String,
+    committed: String,
+    base: String,
+    head: String,
+}
+
+impl SourceCheckout {
+    fn for_branch(branch: &str) -> Arc<Self> {
+        static TEMPLATES: OnceLock<Mutex<HashMap<String, Arc<SourceCheckout>>>> = OnceLock::new();
+        let mut templates = TEMPLATES.get_or_init(Default::default).lock().unwrap();
+        templates
+            .entry(branch.to_string())
+            .or_insert_with(|| Arc::new(Self::build(branch)))
+            .clone()
+    }
+
+    fn build(branch: &str) -> Self {
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+        let repo = root.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["config", "user.email", "fixture@example.com"]);
+        git(&repo, &["config", "user.name", "Fixture"]);
+        git(&repo, &["config", "commit.gpgsign", "false"]);
+        std::fs::write(repo.join(".gitignore"), ".orbit/\n").unwrap();
+        std::fs::write(repo.join("source.txt"), "base\n").unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-qm", "base"]);
+        let original_base = git(&repo, &["rev-parse", "HEAD"]);
+        let remote = root.path().join("origin.git");
+        std::fs::create_dir_all(&remote).unwrap();
+        git(&remote, &["init", "--bare", "-q"]);
+        git(
+            &repo,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/owner/repository.git",
+            ],
+        );
+        git(
+            &repo,
+            &[
+                "config",
+                &format!("url.{}.insteadOf", remote.display()),
+                "https://github.com/owner/repository.git",
+            ],
+        );
+        git(&repo, &["checkout", "-qb", branch]);
+        std::fs::write(repo.join("source.txt"), "candidate needing repair\n").unwrap();
+        git(&repo, &["add", "source.txt"]);
+        git(&repo, &["commit", "-qm", "candidate"]);
+        let committed = git(&repo, &["rev-parse", "HEAD"]);
+        git(&repo, &["checkout", "-q", "main"]);
+        std::fs::write(repo.join("base-advance.txt"), "new base\n").unwrap();
+        git(&repo, &["add", "base-advance.txt"]);
+        git(&repo, &["commit", "-qm", "advance base"]);
+        let base = git(&repo, &["rev-parse", "HEAD"]);
+        git(&repo, &["checkout", "-q", branch]);
+        git(&repo, &["rebase", "main"]);
+        let head = git(&repo, &["rev-parse", "HEAD"]);
+        assert_ne!(committed, head);
+        assert!(
+            !crate::git_test_support::command()
+                .current_dir(&repo)
+                .args(["merge-base", "--is-ancestor", &committed, &head])
+                .status()
+                .unwrap()
+                .success(),
+            "real host rewrite must have no original-commit ancestry"
+        );
+        git(&repo, &["push", "-q", "origin", "main", branch]);
+        Self {
+            tree: Arc::new(TreeTemplate::capture(root.path())),
+            remote: remote.display().to_string(),
+            original_base,
+            committed,
+            base,
+            head,
+        }
+    }
+
+    /// Write this fixture's own `repo` and `origin.git` under `root`, with its
+    /// origin URL rewritten to that remote.
+    fn write(&self, root: &Path) {
+        self.tree.write(root);
+        let config = root.join("repo/.git/config");
+        let text = std::fs::read_to_string(&config).unwrap();
+        assert!(
+            text.contains(&self.remote),
+            "template origin rewrite names its remote"
+        );
+        let remote = root.join("origin.git");
+        std::fs::write(
+            config,
+            text.replace(&self.remote, &remote.display().to_string()),
+        )
+        .unwrap();
+    }
 }
 
 pub(super) struct Fixture {
@@ -96,35 +210,6 @@ impl Fixture {
             _ => "before_pr = false\nbefore_landing = false",
         };
         std::fs::write(repo.join(".orbit/config.toml"), format!("[crews.fixture]\nprovider = \"codex\"\nmodel = \"fixture-model\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"fixture\"\nrequired_validation_commands = [{command}]\n[operation]\nreview_crew = \"fixture\"\n[review]\n{review}\n")).unwrap();
-        git(&repo, &["init", "-q", "-b", "main"]);
-        git(&repo, &["config", "user.email", "fixture@example.com"]);
-        git(&repo, &["config", "user.name", "Fixture"]);
-        git(&repo, &["config", "commit.gpgsign", "false"]);
-        std::fs::write(repo.join(".gitignore"), ".orbit/\n").unwrap();
-        std::fs::write(repo.join("source.txt"), "base\n").unwrap();
-        git(&repo, &["add", "."]);
-        git(&repo, &["commit", "-qm", "base"]);
-        let original_base = git(&repo, &["rev-parse", "HEAD"]);
-        let remote = root.path().join("origin.git");
-        std::fs::create_dir_all(&remote).unwrap();
-        git(&remote, &["init", "--bare", "-q"]);
-        git(
-            &repo,
-            &[
-                "remote",
-                "add",
-                "origin",
-                "https://github.com/owner/repository.git",
-            ],
-        );
-        git(
-            &repo,
-            &[
-                "config",
-                &format!("url.{}.insteadOf", remote.display()),
-                "https://github.com/owner/repository.git",
-            ],
-        );
         let jobs = global.join("resources/jobs");
         let activities = global.join("resources/activities");
         std::fs::create_dir_all(&jobs).unwrap();
@@ -152,6 +237,7 @@ impl Fixture {
         }
         let yaml = "schemaVersion: 2\nkind: Job\nmetadata:\n  name: task_pr_pipeline\nspec:\n  state: enabled\n  task_delivery: {}\n  steps:\n    - {id: worktree, target: 'activity:worktree_setup'}\n    - {id: commit, target: 'activity:git_commit'}\n    - {id: prepare_branch, target: 'activity:pr_prepare'}\n    - {id: sync_base, target: 'activity:git_rebase'}\n    - {id: push, target: 'activity:git_push'}\n    - {id: pr_open, target: 'activity:pr_open'}\n    - {id: resume_candidate, target: 'activity:candidate_resume'}\n    - {id: complete_pr, target: 'activity:pr_complete'}\n";
         std::fs::write(jobs.join("task_pr_pipeline.yaml"), yaml).unwrap();
+        crate::fixture_template::seed_store(&global);
         let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
             .unwrap()
             .with_automation_execution_location(Some(ExecutionLocation {
@@ -170,31 +256,18 @@ impl Fixture {
             })
             .unwrap()
             .id;
+        // Opening the runtime and adding the task read no Git state, so the
+        // checkout can follow the task whose id names its branch.
         let branch = format!("orbit/{task}-source");
-        git(&repo, &["checkout", "-qb", &branch]);
-        std::fs::write(repo.join("source.txt"), "candidate needing repair\n").unwrap();
-        git(&repo, &["add", "source.txt"]);
-        git(&repo, &["commit", "-qm", "candidate"]);
-        let committed = git(&repo, &["rev-parse", "HEAD"]);
-        git(&repo, &["checkout", "-q", "main"]);
-        std::fs::write(repo.join("base-advance.txt"), "new base\n").unwrap();
-        git(&repo, &["add", "base-advance.txt"]);
-        git(&repo, &["commit", "-qm", "advance base"]);
-        let base = git(&repo, &["rev-parse", "HEAD"]);
-        git(&repo, &["checkout", "-q", &branch]);
-        git(&repo, &["rebase", "main"]);
-        let head = git(&repo, &["rev-parse", "HEAD"]);
-        assert_ne!(committed, head);
-        assert!(
-            !crate::git_test_support::command()
-                .current_dir(&repo)
-                .args(["merge-base", "--is-ancestor", &committed, &head])
-                .status()
-                .unwrap()
-                .success(),
-            "real host rewrite must have no original-commit ancestry"
-        );
-        git(&repo, &["push", "-q", "origin", "main", &branch]);
+        let checkout = SourceCheckout::for_branch(&branch);
+        checkout.write(root.path());
+        let SourceCheckout {
+            original_base,
+            committed,
+            base,
+            head,
+            ..
+        } = (*checkout).clone();
         let mut source = runtime
             .insert_job_run(
                 "task_pr_pipeline",
@@ -511,3 +584,58 @@ impl Fixture {
         );
     }
 }
+
+/// The commit `branch` names on the fixture's origin, read through its
+/// rewritten URL, which must reach this fixture's own bare remote.
+fn origin_head(f: &Fixture) -> String {
+    assert_eq!(
+        git(&f.repo, &["ls-remote", "--get-url", "origin"]),
+        f._root.path().join("origin.git").display().to_string(),
+        "a fixture's origin must resolve to its own remote"
+    );
+    let refs = git(&f.repo, &["ls-remote", "origin", &f.branch]);
+    refs.split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// A fixture's commit and push stay in its own checkout and remote: the next
+/// fixture from the same template starts from the unpublished candidate.
+fn a_published_review_stays_in_its_own_checkout_and_remote() {
+    let mut first = Fixture::new();
+    first.publish_review(false);
+    assert_eq!(origin_head(&first), first.head);
+    let (branch, published) = (first.branch.clone(), first.head.clone());
+    drop(first);
+    let second = Fixture::new();
+    assert_eq!(branch, second.branch, "both copy one template");
+    assert_ne!(published, second.head);
+    assert_eq!(
+        origin_head(&second),
+        second.head,
+        "an earlier fixture's push reached this fixture's remote"
+    );
+    assert_eq!(git(&second.repo, &["rev-parse", "HEAD"]), second.head);
+    assert!(!second.repo.join("review.txt").exists());
+}
+
+/// Runs after the publishing row in the same child process, so it observes any
+/// commit that reached the shared template instead of the row's copy.
+fn a_later_fixture_starts_from_the_published_candidate() {
+    let f = Fixture::new();
+    assert_eq!(git(&f.repo, &["rev-parse", "HEAD"]), f.head);
+    assert_eq!(
+        origin_head(&f),
+        f.head,
+        "an earlier row's push reached the shared checkout template"
+    );
+    assert_eq!(git(&f.repo, &["status", "--porcelain"]), "");
+    assert!(!f.repo.join("review.txt").exists());
+}
+
+crate::scenario_table!(
+    checkout_template_isolation_scenarios,
+    a_published_review_stays_in_its_own_checkout_and_remote,
+    a_later_fixture_starts_from_the_published_candidate,
+);

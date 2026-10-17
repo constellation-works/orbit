@@ -177,11 +177,16 @@ ci-fast:
 ci-test-affected:
 	CARGO="$(CARGO)" BUILD_BUDGET="$(BUILD_BUDGET)" ORBIT_VALIDATION_GATE="make ci-test-affected" python3 ./scripts/ci-test-affected.py
 
-# Compile-time pre-handoff gate for agents. Keep these passes aligned with
-# scripts/ci-guardrails.sh: production enforces bounded channels, then all
-# targets retain the other workspace lints without flagging test-only channels,
-# then rustdoc denies warnings (private intra-doc links turned agent-main red
-# twice on 2026-10-07 because no agent gate built docs).
+# Compile-time pre-handoff gate for agents. Production clippy denies
+# clippy::disallowed_methods (unbounded channels). The all-targets pass keeps
+# the other workspace lints and allows that lint, so test-only channels stay
+# legal. These two clippy commands are unchanged: this gate does not build
+# test binaries, so it cannot fold the all-targets lint into a test build.
+# The CI job does that fold inside scripts/check-ci-macos.sh --workspace-build
+# and no longer runs a second clippy-all-targets phase
+# (scripts/ci-guardrails.sh). Rustdoc then denies warnings (private intra-doc
+# links turned agent-main red twice on 2026-10-07 because no agent gate built
+# docs).
 ci-lint:
 	./scripts/require-python.sh
 	./scripts/check-dependency-direction.sh

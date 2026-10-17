@@ -246,6 +246,11 @@ pub(crate) fn run_deterministic(
         CoreDeterministicAction::ClassifyWorkspaceAutoTasks => {
             workspace_auto::classify_workspace_auto_tasks(runtime, action, input)
         }
+        // Resume interrupted owner-local delivery leaves that still own an
+        // open pull request, within the drain's authority and free slots.
+        CoreDeterministicAction::AdoptOrphanedDeliveries => {
+            workspace_auto::adopt_orphaned_deliveries(runtime, action, input)
+        }
         // `--approve-proposed`: the qualifying proposed tasks a pass pilots
         // under the drain's authority, what each finished pilot approved, and
         // the bounded wait on a live pilot.

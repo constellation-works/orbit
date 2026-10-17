@@ -1,13 +1,13 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use orbit_engine::DispatchError;
 use orbit_types::task::{
     EpicHierarchyNode, Task, TaskReferenceIndex, TaskStatus, inherited_only_epic_roots,
     task_dependencies_ready_with_index,
 };
 use orbit_types::workflow::ShipMode;
 
+use super::super::pass_error::PassError;
 use super::super::surface_reservation::{
     MAX_SURFACE_RESERVATIONS, reserves_surface, reserving_detail, withhold_reserved_surfaces,
 };
@@ -46,7 +46,7 @@ pub(crate) fn backlog_snapshot(
     action: &str,
     allowlist: Option<&CrewAllowlist>,
     pools: &CapturedCrewPools,
-) -> Result<BacklogSnapshot, DispatchError> {
+) -> Result<BacklogSnapshot, PassError> {
     backlog_snapshot_in_mode(
         runtime,
         action,
@@ -64,16 +64,12 @@ pub(super) fn backlog_snapshot_in_mode(
     allowlist: Option<&CrewAllowlist>,
     pools: &CapturedCrewPools,
     mode: ShipMode,
-) -> Result<BacklogSnapshot, DispatchError> {
+) -> Result<BacklogSnapshot, PassError> {
     // The population is materialized once, by moving the selection into the
     // lookup. Everything below borrows from it: the backlog is a vector of
     // references and the snapshot hands back IDs.
-    let task_lookup = admission_population(runtime.stores().tasks()).map_err(|err| {
-        DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: format!("list tasks: {err}"),
-        }
-    })?;
+    let task_lookup = admission_population(runtime.stores().tasks())
+        .map_err(|error| PassError::store(action, "list tasks", error))?;
     // One status projection per snapshot. It is the registry-global index,
     // not a re-read of `task_lookup`'s statuses (see `BacklogSnapshot`).
     let status_by_id = runtime
@@ -82,10 +78,7 @@ pub(super) fn backlog_snapshot_in_mode(
                 .values()
                 .filter(|task| task.status == TaskStatus::Backlog),
         )
-        .map_err(|err| DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: format!("load global task status projection: {err}"),
-        })?;
+        .map_err(|error| PassError::store(action, "load global task status projection", error))?;
     let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
     let workspace_root = runtime.paths().repo_root.as_path();
     // [ORB-12500] Claims need no separate holder entry here. A claimed task is

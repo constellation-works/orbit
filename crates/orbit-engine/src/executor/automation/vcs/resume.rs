@@ -667,3 +667,35 @@ pub(super) fn ensure_retry_descends_from<H: RuntimeHost + ?Sized>(
         "{operation}: run '{run_id}' has no bounded retry lineage to {ancestor_label} '{ancestor_run_id}' for task '{task_id}'"
     )))
 }
+
+/// The bounded retry chain from `run_id` up to `ancestor_run_id`, both ends
+/// included, or `None` when `run_id` does not descend from that ancestor
+/// through same-job `retry_source_run_id` links.
+pub(super) fn retry_chain_to<H: RuntimeHost + ?Sized>(
+    host: &H,
+    run_id: &str,
+    ancestor_run_id: &str,
+) -> Result<Option<Vec<String>>, OrbitError> {
+    let Some(mut current) = host.get_job_run(run_id)? else {
+        return Ok(None);
+    };
+    let job_id = current.job_id.clone();
+    let mut chain = vec![current.run_id.clone()];
+    for _ in 0..FAILURE_HANDOFF_LINEAGE_MAX_HOPS {
+        if current.run_id == ancestor_run_id {
+            return Ok(Some(chain));
+        }
+        let Some(parent_run_id) = current.retry_source_run_id.clone() else {
+            return Ok(None);
+        };
+        let Some(parent) = host.get_job_run(&parent_run_id)? else {
+            return Ok(None);
+        };
+        if parent.job_id != job_id || chain.contains(&parent.run_id) {
+            return Ok(None);
+        }
+        chain.push(parent.run_id.clone());
+        current = parent;
+    }
+    Ok(None)
+}
