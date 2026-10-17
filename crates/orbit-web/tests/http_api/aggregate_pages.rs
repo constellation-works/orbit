@@ -134,6 +134,7 @@ fn aggregate_job_runs_page_is_bounded_and_observational() {
             // Warm: every workspace runtime is open and the store pages are cached.
             let warm = page("all");
             assert_eq!(warm["items"].as_array().expect("items").len(), 50);
+            assert_eq!(warm["total"], 20_000);
             assert_eq!(warm["truncated"], true);
             assert_eq!(warm["unavailable"], serde_json::json!([]));
             assert_eq!(warm["items"][0]["run_id"], "jrun-03999");
@@ -170,6 +171,72 @@ fn aggregate_job_runs_page_is_bounded_and_observational() {
                 (orbit_core::JobRunState::Failed, None),
                 "a dashboard GET must not reconcile runs"
             );
+        },
+    );
+}
+
+#[test]
+fn aggregate_job_runs_total_sums_every_workspace_independent_of_page_size() {
+    isolated(
+        "aggregate_pages::aggregate_job_runs_total_sums_every_workspace_independent_of_page_size",
+        || {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let global_root = tmp.path().join("global");
+            std::fs::create_dir_all(&global_root).expect("create global root");
+            let (alpha_orbit, alpha_repo) = seed_workspace(&global_root, tmp.path(), "alpha");
+            let (bravo_orbit, bravo_repo) = seed_workspace(&global_root, tmp.path(), "bravo");
+            write_registry(
+                &global_root,
+                &[("alpha", &alpha_repo), ("bravo", &bravo_repo)],
+            );
+            let server = spawn_server(
+                tmp.path(),
+                true,
+                false,
+                false,
+                &tmp.path().join("process.log"),
+                None,
+                &[],
+            );
+            let page = |query: &str| json_ok(server.get(&format!("/api/job-runs/all?{query}")));
+            // Open both workspace runtimes before seeding, so the in-flight
+            // runs below are read as stored rather than reconciled on open.
+            assert_eq!(page("state=active&limit=1")["total"], 0);
+
+            let alpha = OrbitRuntime::from_roots(&global_root, &alpha_orbit).expect("alpha");
+            let bravo = OrbitRuntime::from_roots(&global_root, &bravo_orbit).expect("bravo");
+            for (runtime, prefix, active) in [(&alpha, "a", 3), (&bravo, "b", 2)] {
+                for index in 0..active {
+                    let state = if index == 0 {
+                        JobRunState::Pending
+                    } else {
+                        JobRunState::Running
+                    };
+                    seed_run(
+                        runtime,
+                        &format!("jrun-{prefix}-active-{index}"),
+                        "ship",
+                        state,
+                    );
+                }
+                seed_run(
+                    runtime,
+                    &format!("jrun-{prefix}-done"),
+                    "ship",
+                    JobRunState::Success,
+                );
+            }
+
+            // The Jobs rail asks for a one-item page; its total is still the
+            // per-workspace sum (3 + 2), not the page length.
+            for limit in [1, 100] {
+                let active = page(&format!("state=active&limit={limit}"));
+                let items = active["items"].as_array().expect("items");
+                assert_eq!(active["total"], 5, "active total at limit {limit}");
+                assert_eq!(items.len(), limit.min(5));
+                assert_eq!(active["truncated"], limit < 5);
+            }
+            assert_eq!(page("state=all&limit=1")["total"], 7);
         },
     );
 }

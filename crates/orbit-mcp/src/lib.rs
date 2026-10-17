@@ -39,7 +39,7 @@ pub use remote::{
     ignored_caller_authorization_paths, mcp_server_identity, safe_mcp_tool_names,
     serve_mcp_remote_proxy, warn_ignored_caller_authorization, workspace_list_includes_crews,
 };
-pub use stdio_session::{RESUME_ENV, StdioExit, stdin_supports_handover};
+pub use stdio_session::{LIFECYCLE_INTERVAL_ENV, RESUME_ENV, StdioExit, stdin_supports_handover};
 
 /// Back-end for the complete MCP tool surface.
 ///

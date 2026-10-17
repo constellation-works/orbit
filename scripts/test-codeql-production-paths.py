@@ -139,14 +139,17 @@ class ProductionPathsTests(unittest.TestCase):
     def test_ci_fast_routes_the_real_guard_and_propagates_failure(self):
         shell = (ROOT / "scripts/ci-guardrails.sh").read_text()
         for name in re.findall(r'\$repo_root/scripts/([\w.-]+)', shell):
-            if name == "check-codeql-production-paths.py":
+            if name in {"check-codeql-production-paths.py", "build-budget.py"}:
                 continue
             stub = self.write(f"scripts/{name}", "#!/bin/sh\nexit 0\n")
             stub.chmod(0o755)
+        # The guard pool sizes itself from the real budget query, so keep the real script.
+        shutil.copy2(ROOT / "scripts/build-budget.py", self.root / "scripts/build-budget.py")
         shutil.copy2(ROOT / "scripts/ci-guardrails.sh", self.root / "scripts/ci-guardrails.sh")
         cargo = self.write("bin/cargo", "#!/bin/sh\nexit 0\n")
         cargo.chmod(0o755)
-        env = dict(os.environ, PATH=f"{cargo.parent}:{os.environ['PATH']}")
+        env = dict(os.environ, PATH=f"{cargo.parent}:{os.environ['PATH']}",
+                   ORBIT_BUILD_BUDGET_DIR=str(self.root / "budget"))
         command = ["bash", str(self.root / "scripts/ci-guardrails.sh"), "--fast"]
         self.write("crates/demo/src/child_test.rs", "pub fn child() {}\n")
         self.write("crates/demo/src/lib.rs", "#[cfg(test)]\nmod child_test;\n")

@@ -113,6 +113,7 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
         return Ok(RefreshStep::Adopted { waiting: false });
     }
     if !diagnose
+        || status.is_draft
         || status.merge_state_status.as_deref() != Some("BLOCKED")
         || !matches!(classify_pr_state(status), PrMergeState::Blocked(_))
         || !status.status_checks.as_ref().is_some_and(|checks| {

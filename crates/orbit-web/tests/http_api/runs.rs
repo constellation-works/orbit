@@ -995,3 +995,144 @@ fn failure_chain_names_the_deepest_descendant_and_projects_cancellation() {
         },
     );
 }
+
+/// [ORB-16330] Run detail projects provider children through the shared
+/// `RunProviderProcess::to_json` (activity and stuck-descendant fields, no
+/// `run_id`) and names the same worker identity MCP already puts on the run.
+#[test]
+fn run_detail_projects_shared_provider_processes_and_worker_identity() {
+    isolated(
+        "runs::run_detail_projects_shared_provider_processes_and_worker_identity",
+        || {
+            let fixture = Fixture::new();
+            let mut run = fixture.seed_run(
+                "jrun-provider-identity",
+                "task_auto_pipeline",
+                JobRunState::Running,
+            );
+            run.pid = Some(4242);
+            run.pid_start_time = Some("v1:4242".into());
+            run.input = Some(json!({"task_id": "ORB-1"}));
+            fixture.save_run(&run);
+            let workspace = fixture.runtime.workspace_id().unwrap();
+            let seed = |event_id: &str, ts: &str, parent: Option<&str>, body: Value| {
+                let mut payload = json!({
+                    "schemaVersion": 1,
+                    "event_type": "test.event",
+                    "event_id": event_id,
+                    "ts": ts,
+                    "run_id": run.run_id,
+                    "agent_identity": "codex",
+                    "parent_event_id": parent,
+                });
+                let object = payload.as_object_mut().unwrap();
+                for (key, value) in body.as_object().unwrap().clone() {
+                    object.insert(key, value);
+                }
+                fixture
+                    .runtime
+                    .insert_v2_audit_event(&V2AuditEventInsertParams {
+                        workspace_id: workspace.clone(),
+                        event_id: event_id.into(),
+                        source: "v2_envelope".into(),
+                        schema_version: 1,
+                        event_type: "test.event".into(),
+                        ts: ts.parse::<DateTime<Utc>>().unwrap(),
+                        run_id: run.run_id.clone(),
+                        agent_identity: "codex".into(),
+                        parent_event_id: parent.map(str::to_string),
+                        workspace_path: None,
+                        payload_json: payload.to_string(),
+                    })
+                    .unwrap();
+            };
+            seed(
+                "evt-step",
+                "2026-10-10T08:00:00Z",
+                None,
+                json!({"body_kind": "step_started", "step_id": "invoke"}),
+            );
+            seed(
+                "evt-process",
+                "2026-10-10T08:00:01Z",
+                Some("evt-step"),
+                json!({
+                    "body_kind": "cli_invocation_process",
+                    "provider": "codex",
+                    "pid": 4242,
+                    "pid_start_time": "v1:4242",
+                    "run_id": "decoy-process-run",
+                }),
+            );
+            seed(
+                "evt-activity",
+                "2026-10-10T08:00:11Z",
+                Some("evt-step"),
+                json!({
+                    "body_kind": "cli_invocation_activity",
+                    "provider": "codex",
+                    "observed_bytes": 512,
+                    "latest_message": "Reading the sweep clock config.",
+                    "latest_message_truncated": true,
+                }),
+            );
+            seed(
+                "evt-stopped",
+                "2026-10-10T08:00:12Z",
+                Some("evt-step"),
+                json!({
+                    "body_kind": "cli_invocation_stopped_descendant",
+                    "pid": 4243,
+                    "command": "sleep-forever",
+                    "ended": false,
+                    "error": "permission denied",
+                    "stopped_ms": 600000,
+                }),
+            );
+
+            let server = fixture.server(false);
+            let detail = json_ok(server.get(&format!("/api/runs/{}", run.run_id)));
+            assert_eq!(detail["run"]["pid"], 4242, "{detail}");
+            assert_eq!(detail["run"]["pid_start_time"], "v1:4242", "{detail}");
+            assert_eq!(detail["run"]["input"]["task_id"], "ORB-1", "{detail}");
+            let processes = detail["provider_processes"].as_array().unwrap();
+            assert_eq!(processes.len(), 1, "{detail}");
+            let process = &processes[0];
+            assert!(
+                process.get("run_id").is_none(),
+                "process objects omit run_id: {process}"
+            );
+            for key in [
+                "last_activity_at",
+                "latest_message",
+                "latest_message_truncated",
+                "stdout_blob_ref",
+                "build_budget_waits",
+                "stopped_descendants",
+                "blocked_on_stopped_descendant",
+            ] {
+                assert!(process.get(key).is_some(), "missing {key}: {process}");
+            }
+            assert_eq!(process["provider"], "codex");
+            assert_eq!(process["pid"], 4242);
+            assert_eq!(process["step_id"], "invoke");
+            assert_eq!(process["latest_message"], "Reading the sweep clock config.");
+            assert_eq!(process["latest_message_truncated"], true);
+            assert_eq!(process["last_activity_at"], "2026-10-10T08:00:11+00:00");
+            assert!(process["stdout_blob_ref"].is_null());
+            assert!(process["build_budget_waits"].is_null());
+            // A pid that is not a live child cannot be blocked; the key is
+            // still present, and the seeded descendant is listed beside it.
+            assert!(
+                process["blocked_on_stopped_descendant"].is_null(),
+                "{process}"
+            );
+            assert_eq!(process["stopped_descendants"][0]["pid"], 4243);
+            assert_eq!(
+                process["stopped_descendants"][0]["command"],
+                "sleep-forever"
+            );
+            assert_eq!(process["stopped_descendants"][0]["ended"], false);
+        },
+    );
+}

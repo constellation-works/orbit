@@ -715,6 +715,15 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   receipt for is closed (`Refused`) and its slot returned.
 - An unreachable owner is reported in the iteration output and retried; the
   drain never fails over to its own store.
+- The owner's own drain survives the same waits. An admission pass that
+  times out on the task commit lock or the database (`lock_busy`) admits
+  nothing, records `last_pass_error_code: lock_busy` with the lock error,
+  which names the holder's pid and section, on
+  `pipeline_state.drain_last_pass`, and waits the drain's poll interval
+  before the next pass retries; `orbit run show` reads `Admission pass
+  deferred: consecutive_failures=N`. Ten deferred passes in a row fail the
+  drain with that error, and any completed pass resets the count. Other
+  admission failures still fail the drain at once.
 - An owner that times out waiting on its task commit lock or its database
   answers `lock_busy`. A leaf's owner reads retry it twice before failing, and
   a step it still fails releases the claim as `transient`. When these recur,
@@ -1006,7 +1015,15 @@ request is audited on the run (`pipeline.run.window_extend.completed`, with
 idle one waiting at least `poll_sleep_seconds`) still bounds a drain extended
 over days; past it the drain ends and a new one carries its admissions. The drain's `--concurrency`, as last
 retuned, is the only ceiling on its leaves: the claimed leaf jobs declare no
-active-run limit of their own. A leaf in its before-landing review (the owner's
+active-run limit of their own. On the follower, `orbit run readiness` with no
+`--concurrency` and no local drain reports that ceiling. Text prints
+`Active leaf runs: <occupied>/<ceiling>` and the free slots left under it, plus
+a `Leaf ceiling:` line. `--json` sets `capacity.max_active_leaf_runs`,
+`capacity.free_slots`, and `capacity.limit_source` to `pull_run_input` for the
+submitted value or `pull_run_control` after `orbit run concurrency --set` (or
+`orbit run extend --concurrency`). A live local drain still supplies the
+ceiling instead (`run_input` or `run_control`), and with neither drain live
+the report stays at 5 (`default`). A leaf in its before-landing review (the owner's
 `review.before_landing`) runs no implementer but keeps its claim until it
 settles. Admission counts `occupied - min(reviewing, --concurrency)` against
 `--concurrency` before each claim. Reviewing starts after the persisted
@@ -1204,7 +1221,10 @@ one. From then on:
     stops for the one automatic repair, and the stop evidence carries the
     failed job, its signature and a log excerpt. A repair that is already
     spent stops in `review` instead. A base that has not moved, and is still
-    red, stops in `review` without a repair. The owner merges that head only
+    red, stops in `review` without a repair. `orbit run auto --auto-fix` uses
+    this same classification for that unmoved red base: it spends no repair
+    attempt, waits out its completion deadline, and stops with a base-red
+    reason. The owner merges that head only
     when it is a clean merge of the accepted candidate with a commit already
     on the landing branch.
     When the owner checkout has `origin`, adopting a newly observed updated
@@ -1217,6 +1237,16 @@ one. From then on:
     automatic repair, the same repair a conflicting base gets, and the stop
     evidence carries the failed step's signature and log excerpt for the
     repair leaf.
+
+  A failed required check that no failed job answers, such as a provider
+  app's aggregate beside passing analysis jobs, is classified too, so a job
+  failure beside it never hides it. Its evidence is its own failure
+  annotations, read as `--auto-fix` reads them (see
+  [PR auto-fix repairs](../CONFIG.md#pr-auto-fix-repairs)). It is
+  **candidate** only when every annotated source file is one the candidate
+  changed from its base. Annotations on other files, or annotations that
+  cannot be read or validated, are **inconclusive**. A failed optional check
+  that no job answers keeps its previous handling.
 
   Each of the rerun, the branch update and the repair is spent once. A
   failure past that budget, or one the landing cannot classify (its jobs or
@@ -1606,13 +1636,15 @@ enable a dark routine to "turn on" distributed drain.
 On the owner, delivery removes a task worktree once the run lands, and the
 owner's `worktree-gc-<workspace>` routine is the hourly backstop. A follower's
 claimed-leaf worktrees live in its replica checkout, which no owner process
-touches, so the replica schedules its own GC on its host clock. That routine is
-the only one a replica fires. Its ship sweep, task pilot, CI and Dependabot
-sweeps and its auto-tasks stay owner work: `orbit routine list` shows them as
-`owner-only` with the owner machine named, a toggle or pause is refused, and
-the sweep reports them `skipped` with an `owner_only_in_replica:` reason. The
-auto-task panel marks toggle and manual mint unavailable and names the owner;
-replica task minting remains refused.
+touches, so the replica schedules its own GC on its host clock. That routine
+and the replica's store-gc routine are the only ones a replica fires. Its ship
+sweep, task pilot, CI and Dependabot sweeps and its auto-tasks stay owner
+work: `orbit routine list` shows them as `owner-only` with the owner machine
+named, a toggle or pause is refused, and the sweep reports them `skipped` with
+an `owner_only_in_replica:` reason. The auto-task panel marks toggle and
+manual mint unavailable and names the owner; replica task minting remains
+refused. A delivery- or state-triggered routine stays owner work even when it
+targets one of those two jobs.
 
 Enable the replica's GC on the follower as an operator, with
 `orbit_routine_control` (`action: toggle`) or the dashboard's Operations
@@ -1644,6 +1676,45 @@ ref so an unpublished HEAD survives branch deletion
 Each kept worktree's declared build output is reclaimed on every sweep, and
 `orbit run show <gc-run>` lists every kept worktree with its reason and
 `retained_bytes`.
+
+## Replica store GC
+
+The follower's host store is not the owner's. Command audit, resource history,
+and the run audit and terminal run state of the workspaces it replicates live
+in the follower's own `~/.orbit/orbit.db`. The owner's `store-gc-<workspace>`
+routine never opens that file. On a follower-only host every checkout is a
+replica, so the store stays untrimmed until a replica schedules
+`store_gc_pipeline` for itself.
+
+That routine is seeded disabled, the same as on an owner checkout. Review the
+plans, then enable it on the follower:
+
+```bash
+orbit gc audit --json --workspace <replica-workspace>
+orbit gc runs --json --workspace <replica-workspace>
+```
+
+Enable it with `orbit_routine_control` (`action: toggle`) or the dashboard's
+Operations routines panel, or set `enabled: true` in the replica checkout's
+`.orbit/routines/store_gc.yaml`. Then confirm it is armed:
+
+```bash
+orbit routine list --workspace <replica-workspace>
+```
+
+The run applies both plans against the local store. It deletes command-audit
+rows and per-minute resource history past their windows (those tables are
+host-wide on this machine), and this workspace's run-audit rows, the audit
+blobs nothing still names, and the pipeline state of terminal runs older than
+`retention.runs_days`. Run rows and steps stay, and nothing is vacuumed. The
+activity does not call the owner and does not write the owner's coordination
+store. Enabling it on the owner is unchanged: that routine still prunes only
+the owner's store.
+
+One enabled replica routine is enough for the host-wide tables. Each
+replicated workspace still needs its own routine, or a pass from that
+workspace, before its run audit and run state are pruned. A delivery- or
+state-triggered copy of the job stays owner work and is listed `owner-only`.
 
 ## Scheduled host shutdown or reboot
 

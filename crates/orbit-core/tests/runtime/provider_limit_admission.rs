@@ -90,15 +90,35 @@ impl Fixture {
 
     /// Record a Claude `five_hour` reading, observed now.
     fn read_claude(&self, used_percent: f64, exhausted: bool, resets_at: DateTime<Utc>) {
+        self.read(
+            "claude",
+            "five_hour",
+            ProviderLimitSource::Event,
+            Some(used_percent),
+            exhausted,
+            resets_at,
+        );
+    }
+
+    /// Record one usage reading.
+    fn read(
+        &self,
+        provider: &str,
+        window: &str,
+        source: ProviderLimitSource,
+        used_percent: Option<f64>,
+        exhausted: bool,
+        resets_at: DateTime<Utc>,
+    ) {
         self.runtime()
             .record_provider_limit(&ProviderLimitObservation {
-                provider: "claude".into(),
+                provider: provider.into(),
                 model: None,
-                window: Some("five_hour".into()),
+                window: Some(window.into()),
                 exhausted,
-                source: ProviderLimitSource::Event,
+                source,
                 resets_at: Some(resets_at),
-                used_percent: Some(used_percent),
+                used_percent,
                 window_minutes: Some(300),
                 gating: true,
                 partial: false,
@@ -108,6 +128,16 @@ impl Fixture {
                 detail: String::new(),
             })
             .unwrap();
+    }
+
+    /// Every live reading in `orbit run readiness --json`.
+    fn limits(&self) -> Vec<Value> {
+        self.runtime()
+            .workspace_auto_readiness(&[], None, 50, &[])
+            .unwrap()["provider_limits"]
+            .as_array()
+            .cloned()
+            .unwrap()
     }
 
     /// The observation a run records when Antigravity fails on its quota
@@ -279,6 +309,59 @@ fn an_override_at_one_hundred_gates_only_an_exhausted_window() {
     assert_eq!(entry["reason"], "provider_limit", "{entry}");
 }
 
+/// [ORB-16371] `codex:off` leaves an exhausted event reading and a
+/// usage-limit failure observation visible, with `gated: false` and
+/// threshold `off`, and the codex-pool task eligible. Removing the entry
+/// gates that same state again.
+fn an_off_override_leaves_an_exhausted_provider_eligible() {
+    let pool = r#"["sol"]"#;
+    let fx = Fixture::new(&config(pool, "provider_limit_overrides = [\"codex:off\"]"));
+    let task = fx.task(None);
+    let reset = (Utc::now() + Duration::hours(2)).trunc_subsecs(6);
+    fx.read(
+        "codex",
+        "primary",
+        ProviderLimitSource::Event,
+        Some(100.0),
+        true,
+        reset,
+    );
+    fx.read(
+        "codex",
+        "secondary",
+        ProviderLimitSource::Error,
+        None,
+        true,
+        reset,
+    );
+
+    let limits = fx.limits();
+    for window in ["primary", "secondary"] {
+        let reading = limits
+            .iter()
+            .find(|reading| reading["provider"] == "codex" && reading["window"] == window)
+            .unwrap_or_else(|| panic!("no {window} reading: {limits:?}"));
+        assert_eq!(reading["gated"], false, "{reading}");
+        assert_eq!(reading["threshold"], "off", "{reading}");
+        assert_eq!(reading["exhausted"], true, "{reading}");
+    }
+    let entry = fx.readiness(&task);
+    assert_eq!(entry["eligible"], true, "{entry}");
+    assert_ne!(entry["reason"], "provider_limit", "{entry}");
+
+    fx.configure(&config(pool, ""));
+    let entry = fx.readiness(&task);
+    assert_eq!(entry["eligible"], false, "{entry}");
+    assert_eq!(entry["reason"], "provider_limit", "{entry}");
+    let limits = fx.limits();
+    let primary = limits
+        .iter()
+        .find(|reading| reading["window"] == "primary")
+        .unwrap();
+    assert_eq!(primary["gated"], true, "{primary}");
+    assert_eq!(primary["threshold"], 90, "{primary}");
+}
+
 /// [ORB-15102] The observation a quota failure records keeps a low-complexity
 /// task off the Antigravity crew until the reset it named.
 fn a_recorded_antigravity_quota_keeps_low_complexity_work_off_its_crew_until_the_reset() {
@@ -323,5 +406,6 @@ crate::scenario_table!(
     a_task_waits_on_an_exhausted_provider_until_the_reset,
     an_explicit_crew_waits_unless_the_policy_draws_from_its_pool,
     an_override_at_one_hundred_gates_only_an_exhausted_window,
+    an_off_override_leaves_an_exhausted_provider_eligible,
     a_recorded_antigravity_quota_keeps_low_complexity_work_off_its_crew_until_the_reset
 );

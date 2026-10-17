@@ -1,0 +1,45 @@
+Remove deployment directories, executable backups and store backups in the Orbit home beyond the newest of each, always keeping the rollback executable
+
+Usage: orbit gc deployments [OPTIONS]
+
+Options:
+      --confirm
+          Remove what the report lists; without this flag the command only reports
+          
+          [aliases: --yes]
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --dry-run
+          Explicitly request the default non-destructive mode
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --keep <N>
+          Newest entries to keep in each class, besides the rollback-pinned ones
+          
+          [default: 2]
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Without --confirm this only reports. Three classes are counted separately: top-level entries of ~/.orbit/deployments, copies of replaced executables in ~/.orbit/bin (names with a .bak, .before-, .pre-, .stale or -stale- marker), and store copies named ~/.orbit/orbit.db.bak*. Each class keeps its newest entries by the newest modification time inside them. The installed executable and every <executable>.previous rollback copy are never removed, nor is a deployment whose orbit-local-candidate manifest names the bytes of the installed or rollback executable; those do not count toward --keep. Links are removed, never followed.
+
+Examples:
+  orbit gc deployments
+  orbit gc deployments --keep 1 --confirm --json

@@ -153,7 +153,7 @@ impl OrbitRuntime {
 
     /// How the admission forecasts recorded on this host over the last
     /// 30 days compare with its measured minutes, and how
-    /// each drain's shadow decisions compare with what it admitted.
+    /// each drain's shadow and enforce decisions compare with what it admitted.
     pub fn forecast_accuracy(&self) -> Result<ForecastAccuracy, OrbitError> {
         let report_at = Utc::now();
         self.forecast_accuracy_selected(AccuracySelection::last_30_days(report_at), report_at)
@@ -203,11 +203,24 @@ impl OrbitRuntime {
                     .as_ref()
                     .is_none_or(|mode| mode == &record.mode)
         });
-        let minutes = match records.first() {
-            Some(first) => store.host_resource_minutes(first.forecast_at - Duration::minutes(1))?,
-            None => Vec::new(),
+        let (minutes, deliveries) = match records.first() {
+            Some(first) => {
+                let lower = first.forecast_at - Duration::minutes(1);
+                let jobs = delivery_jobs();
+                (
+                    store.host_resource_minutes(lower)?,
+                    store.delivery_runs_overlapping(&jobs, lower, report_at)?,
+                )
+            }
+            None => (Vec::new(), Vec::new()),
         };
-        Ok(forecast_accuracy(&records, &minutes, selection, report_at))
+        Ok(forecast_accuracy(
+            &records,
+            &minutes,
+            &deliveries,
+            selection,
+            report_at,
+        ))
     }
 
     /// Read the host's load from `<proc_root>/{stat,meminfo}` instead of

@@ -263,3 +263,53 @@ assert.equal(unnamed.querySelector('.run-failure-head').textContent, 'Cancelled'
 assert.equal(unnamed.querySelector('.run-cancelled-when'), null);
 assert.equal(unnamed.querySelector('.run-cancelled-reason').textContent, 'no reason recorded');
 assert.equal(unnamed.querySelector('.run-failure-root'), null);
+
+setActiveRunDetail({
+  run: { run_id: 'jrun-no-procs', state: 'running' },
+  steps: [],
+  provider_processes: [],
+});
+renderRunDetailMeta();
+assert.equal(meta.querySelector('.provider-processes'), null, 'an empty process list adds no panel');
+
+setActiveRunDetail({
+  run: { run_id: 'jrun-provider', state: 'running' },
+  steps: [],
+  provider_processes: [{
+    event_id: 'evt-process',
+    provider: 'codex',
+    pid: 4242,
+    step_id: 'invoke',
+    liveness: 'alive',
+    finished: false,
+    last_activity_at: '2026-10-10T08:00:11Z',
+    latest_message: 'Reading the sweep clock config.',
+    run_id: 'SHOULD-NOT-RENDER-RUN-ID',
+    stopped_descendants: [{
+      pid: 4243,
+      command: 'sleep-forever',
+      ended: false,
+      error: 'permission denied',
+      still_stopped: true,
+    }],
+    blocked_on_stopped_descendant: { pid: 4243 },
+  }],
+});
+renderRunDetailMeta();
+const processes = meta.querySelector('.provider-processes');
+assert.ok(processes, 'run detail renders provider processes');
+const processText = processes.textContent;
+assert.match(processText, /provider codex/);
+assert.match(processText, /pid 4242/);
+assert.match(processText, /step invoke/);
+assert.match(processText, /liveness alive/);
+assert.match(processText, /blocked=stopped-descendant/);
+assert.match(processText, /last activity FMT:2026-10-10T08:00:11Z/);
+assert.equal(
+  processes.querySelector('.provider-process-message').textContent,
+  'Reading the sweep clock config.',
+);
+const descendant = processes.querySelector('.stopped-descendant');
+assert.match(descendant.textContent, /stopped descendant: pid=4243 command=`sleep-forever`/);
+assert.match(descendant.textContent, /the supervisor could not end it \(permission denied\); still stopped/);
+assert.equal(processText.includes('SHOULD-NOT-RENDER-RUN-ID'), false);

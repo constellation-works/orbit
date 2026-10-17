@@ -15,8 +15,9 @@ pub enum RoutineFireState {
     Dispatched,
     /// The dispatched run finished successfully.
     Succeeded,
-    /// The scheduled slot was consumed without dispatch because a workspace
-    /// drain already owned the coordinator slot.
+    /// The scheduled slot was consumed without dispatch. A workspace drain
+    /// already owned the coordinator slot, or `missed_run: skip` recorded a
+    /// gap. `detail` carries the reason.
     Skipped,
     /// The dispatched run finished in failure.
     Failed,

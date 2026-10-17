@@ -101,6 +101,7 @@ def command_arguments(arguments: list[str]) -> list[str]:
     if arguments == ["--help"] or arguments == ["-h"]:
         print(
             "usage: scripts/build-budget.py -- COMMAND [ARG ...]\n"
+            "       scripts/build-budget.py --cargo-jobs\n"
             "\n"
             "Configuration: ORBIT_BUILD_SLOTS overrides <budget-dir>/slots "
             "(default 2); ORBIT_CARGO_JOBS, then CARGO_BUILD_JOBS, override "
@@ -314,6 +315,11 @@ def prioritized_command(command: list[str], environment: dict[str, str]) -> list
 
 
 def main() -> None:
+    if sys.argv[1:] == ["--cargo-jobs"]:
+        # Read-only: callers size concurrency from the jobs Cargo would receive, without taking a slot.
+        print(configured_budget()[1])
+        return
+
     command = command_arguments(sys.argv[1:])
     slots, cargo_jobs, test_threads, enabled = configured_budget()
     low_priority = low_priority_enabled()

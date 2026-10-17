@@ -39,10 +39,14 @@ impl Store {
             if inserted == 0 {
                 return Ok(false);
             }
+            // Slots are chrono RFC3339 UTC (`+00:00`), so the text order is
+            // chronological. A retry of an older slot must not rewind a cursor
+            // that a newer skipped slot already advanced.
             tx.tx
                 .execute(
                     "UPDATE routine_cursors SET last_slot = ?2, updated_at = ?3
-                     WHERE routine_name = ?1",
+                     WHERE routine_name = ?1
+                       AND (last_slot IS NULL OR last_slot < ?2)",
                     params![intent.routine_name, intent.slot, now],
                 )
                 .map_err(sqlite_store_error)?;
@@ -121,20 +125,77 @@ impl Store {
         &self,
         routine_name: &str,
     ) -> Result<Option<RoutineFireRecord>, OrbitError> {
-        let conn = self.read()?;
-        conn.query_row(
+        self.routine_one_fire(
             &format!(
                 "SELECT {FIRE_COLUMNS} FROM routine_fires
                  WHERE routine_name = ?1
                  ORDER BY slot DESC, attempt DESC LIMIT 1"
             ),
-            params![routine_name],
-            fire_row,
+            routine_name,
         )
-        .optional()
-        .map_err(sqlite_store_error)?
-        .map(RoutineFireRecord::try_from_row)
-        .transpose()
+    }
+
+    /// Newest intent or dispatched fire for one routine, if work is in flight.
+    ///
+    /// `overlap: forbid` uses this rather than [`Self::routine_latest_fire`]:
+    /// a later skipped slot is terminal and must not hide an older run.
+    pub fn routine_blocking_fire(
+        &self,
+        routine_name: &str,
+    ) -> Result<Option<RoutineFireRecord>, OrbitError> {
+        self.routine_one_fire(
+            &format!(
+                "SELECT {FIRE_COLUMNS} FROM routine_fires
+                 WHERE routine_name = ?1 AND state IN ('intent', 'dispatched')
+                 ORDER BY slot DESC, attempt DESC LIMIT 1"
+            ),
+            routine_name,
+        )
+    }
+
+    /// Newest fire that is not a skipped slot. Retry looks here so a later
+    /// `missed_run: skip` row cannot bury a failed attempt that still has budget.
+    pub fn routine_latest_non_skip_fire(
+        &self,
+        routine_name: &str,
+    ) -> Result<Option<RoutineFireRecord>, OrbitError> {
+        self.routine_one_fire(
+            &format!(
+                "SELECT {FIRE_COLUMNS} FROM routine_fires
+                 WHERE routine_name = ?1 AND state != 'skipped'
+                 ORDER BY slot DESC, attempt DESC LIMIT 1"
+            ),
+            routine_name,
+        )
+    }
+
+    /// Newest successful fire. Freshness uses `updated_at`, so a catch-up slot
+    /// that just succeeded counts as recent even when its scheduled slot is old.
+    pub fn routine_latest_succeeded_fire(
+        &self,
+        routine_name: &str,
+    ) -> Result<Option<RoutineFireRecord>, OrbitError> {
+        self.routine_one_fire(
+            &format!(
+                "SELECT {FIRE_COLUMNS} FROM routine_fires
+                 WHERE routine_name = ?1 AND state = 'succeeded'
+                 ORDER BY updated_at DESC, slot DESC, attempt DESC LIMIT 1"
+            ),
+            routine_name,
+        )
+    }
+
+    fn routine_one_fire(
+        &self,
+        sql: &str,
+        routine_name: &str,
+    ) -> Result<Option<RoutineFireRecord>, OrbitError> {
+        let conn = self.read()?;
+        conn.query_row(sql, params![routine_name], fire_row)
+            .optional()
+            .map_err(sqlite_store_error)?
+            .map(RoutineFireRecord::try_from_row)
+            .transpose()
     }
 
     /// All fires that have not reached a terminal state (intent recorded but

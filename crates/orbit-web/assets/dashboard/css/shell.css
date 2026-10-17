@@ -364,6 +364,11 @@
   opacity: 0.55;
 }
 
+/* The notifications opt-in reads as on while pressed; the phone layout's
+   inline-flex must not reveal it where the browser has no notifications. */
+.notify-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent-hover); }
+.topbar .notify-btn[hidden] { display: none; }
+
 /* On phones the top bar keeps the brand, Drain and Refresh on its first row
    and the host readings on a second; the rail below holds the host and
    workspace pickers side by side over scrolling destinations and views. */

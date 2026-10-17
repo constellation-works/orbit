@@ -49,7 +49,12 @@ journalctl --user -u orbit-sweep.service --since '1 hour ago' --no-pager -o shor
 
 `orbit clock status` and the doctor's `clock-unit` row flag a tick still running
 after its five-minute budget, a failed service start, or missing recovery
-settings. An exhausted cooperative budget exits nonzero and names deferred
+settings. The doctor row also flags a systemd timer that is disabled or inactive,
+and on macOS a launchd agent that is not loaded or a `sweep.log` older than the
+tick interval. `orbit clock enable` arms it again. `orbit clock status` still
+reports an operator pause as `paused`.
+
+An exhausted cooperative budget exits nonzero and names deferred
 workspaces in the tick report (`deadline_exceeded`, `skipped_workspaces` in
 JSON). A synchronous operation that never returns hits systemd's ten-minute
 startup timeout, which kills the service group and lets the timer recover.

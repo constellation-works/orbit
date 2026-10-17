@@ -5,13 +5,20 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 workflow="${CI_MACOS_WORKFLOW:-$repo_root/.github/workflows/ci-macos.yml}"
 evidence_output=""
 # --workspace-build lists the filtered tests from one
-# `cargo test --workspace --lib --bins --tests --no-run` build instead of a
-# `cargo test -p <crate>` build per filter. Per-package invocations resolve
-# features differently from the workspace build (resolver 2), so on a runner
-# that also runs the workspace-wide nextest pass they recompile serde, tokio,
-# hyper, reqwest and every workspace crate up to orbit-core a second time.
-# The default keeps the per-package listing for callers whose `-p` artifacts
-# are already warm (the macOS job, local runs). [DANI-10428]
+# `cargo test --workspace --lib --bins --tests --examples --no-run` build
+# instead of a `cargo test -p <crate>` build per filter. Per-package
+# invocations resolve features differently from the workspace build (resolver
+# 2), so on a runner that also runs the workspace-wide nextest pass they
+# recompile serde, tokio, hyper, reqwest and every workspace crate up to
+# orbit-core a second time. That build also lints workspace members with
+# clippy-driver and the flags the former `clippy-all-targets` phase passed
+# (`-D warnings -A clippy::disallowed_methods`). `--examples` is required
+# because `--all-targets` lints examples and `--tests` does not. This repo has
+# no benches. Dependencies keep the configured sccache rustc wrapper; Cargo
+# chains it in front of clippy-driver for workspace members. The default keeps
+# the per-package listing, without that lint, for callers whose `-p` artifacts
+# are already warm (the macOS job, local runs without --workspace-build).
+# [DANI-10428]
 workspace_build=""
 
 usage() {
@@ -233,8 +240,10 @@ if not filtered_tests:
     errors.append("no filtered cargo test commands found in the macOS workflow")
 
 
-def run_listing(command: list[str], label: str) -> str | None:
-    result = subprocess.run(command, cwd=repo_root, capture_output=True, text=True, check=False)
+def run_listing(command: list[str], label: str, env: dict[str, str] | None = None) -> str | None:
+    result = subprocess.run(
+        command, cwd=repo_root, capture_output=True, text=True, check=False, env=env,
+    )
     if result.returncode != 0:
         errors.append(f"{label} (exit {result.returncode}): {result.stderr.strip()}")
         return None
@@ -247,21 +256,40 @@ class TestBinary(NamedTuple):
     kinds: list[str]
 
 
+# Same lint flags as `cargo clippy --workspace --all-targets -- -D warnings -A
+# clippy::disallowed_methods` (Makefile `ci-lint`, and the former
+# ci-guardrails clippy-all-targets phase). `-A clippy::disallowed_methods`
+# keeps test-only channels exempt; production clippy still denies them.
+# clippy-driver does not shell-split CLIPPY_ARGS. `cargo clippy` joins each
+# argument with this sentinel, and the driver splits on it. A space-separated
+# value is one rustc argument and does not apply the flags.
+ALL_TARGETS_CLIPPY_ARGS = (
+    "-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__"
+    "-A__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__"
+)
+
+
 def workspace_test_executables() -> dict[str, list[TestBinary]]:
     """Map each workspace package to the test binaries of one workspace build.
 
-    These are the exact artifacts `cargo nextest run --workspace --lib --bins
-    --tests` uses, so listing from them adds no compile work. Doctests are not
-    listed (the per-package path includes them); the guard only needs >= 1 match.
+    The build is what `cargo nextest run --workspace --lib --bins --tests`
+    runs, plus examples so the folded all-targets lint covers them. Listing
+    still selects only the binaries the workflow filters name. Doctests are
+    not listed (the per-package path includes them); the guard only needs
+    >= 1 match.
     """
     metadata = run_listing(
         ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"],
         "cargo metadata failed",
     )
+    lint_env = os.environ.copy()
+    lint_env["RUSTC_WORKSPACE_WRAPPER"] = "clippy-driver"
+    lint_env["CLIPPY_ARGS"] = ALL_TARGETS_CLIPPY_ARGS
     build = run_listing(
-        ["cargo", "test", "--workspace", "--lib", "--bins", "--tests", "--locked", "--no-run",
-         "--message-format", "json"],
+        ["cargo", "test", "--workspace", "--lib", "--bins", "--tests", "--examples",
+         "--locked", "--no-run", "--message-format", "json"],
         "workspace test build failed",
+        env=lint_env,
     )
     if metadata is None or build is None:
         return {}

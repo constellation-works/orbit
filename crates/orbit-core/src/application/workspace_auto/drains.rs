@@ -1,10 +1,10 @@
 use orbit_common::OrbitError;
-use orbit_engine::DispatchError;
 use orbit_store::contracts::{DrainLeafOccupancy, JobRunQuery};
 use orbit_types::workflow::{DrainAdmissionsStop, DrainWorkerLimit, PipelineState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::admission::pass_error::PassError;
 use crate::application::distributed::PULL_DRAIN_JOB;
 
 /// The job that ships loose leaves. Its live runs are read for two things at
@@ -151,13 +151,29 @@ pub(super) fn workspace_drains(
     Ok((active, queued))
 }
 
-/// The live pull-drain run on a replica checkout, with its admissions stop.
+/// The live pull-drain run on a replica checkout, with its admissions stop
+/// and the ceiling it is admitting under [ORB-16337].
 pub(super) struct LivePullDrain {
     pub(super) run_id: String,
     pub(super) stop: Option<DrainAdmissionsStop>,
     /// Why its last pass requested no claim although its window was open
     /// [ORB-15637].
     pub(super) refusal: Option<String>,
+    submitted: u32,
+    /// An operator adjustment, when one has been accepted. It wins over
+    /// `submitted`, the same way it does for a local drain.
+    pub(super) limit: Option<DrainWorkerLimit>,
+}
+
+impl LivePullDrain {
+    /// The ceiling this pull drain is admitting under: the operator
+    /// adjustment when one is recorded, otherwise the value it was submitted
+    /// with (the job default of 5 when the input omits it).
+    pub(super) fn effective_max_active_leaf_runs(&self) -> u32 {
+        self.limit
+            .as_ref()
+            .map_or(self.submitted, |limit| limit.max_active_leaf_runs)
+    }
 }
 
 /// The running `workspace_pull_pipeline` run, if any. `orbit run auto --stop`
@@ -172,6 +188,12 @@ pub(super) fn live_pull_drain(runtime: &OrbitRuntime) -> Result<Option<LivePullD
         .into_iter()
         .find(|run| run.state == orbit_types::workflow::JobRunState::Running)
         .map(|run| {
+            let submitted = run
+                .input
+                .as_ref()
+                .and_then(|input| input.get("max_active_leaf_runs"))
+                .and_then(json_u32)
+                .unwrap_or(DEFAULT_MAX_ACTIVE_LEAF_RUNS as u32);
             let state = runtime
                 .stores()
                 .jobs()
@@ -182,10 +204,15 @@ pub(super) fn live_pull_drain(runtime: &OrbitRuntime) -> Result<Option<LivePullD
                 .as_ref()
                 .and_then(|state| state.pull_drain.drain_last_pass.as_ref())
                 .and_then(|pass| pass.admission_refusal.clone());
+            let limit = state
+                .as_ref()
+                .and_then(|state| state.pull_drain.drain_worker_limit.clone());
             LivePullDrain {
                 run_id: run.run_id,
                 stop: state.and_then(|state| state.pull_drain.drain_admissions_stop),
                 refusal,
+                submitted,
+                limit,
             }
         }))
 }
@@ -220,19 +247,18 @@ pub(crate) struct LiveLeafRun {
 pub(super) fn live_leaf_runs(
     runtime: &OrbitRuntime,
     action: &str,
-) -> Result<Vec<LiveLeafRun>, DispatchError> {
+) -> Result<Vec<LiveLeafRun>, PassError> {
     // Reconcile first, unscoped: occupancy now counts every live leaf
     // definition (`task_pr_pipeline`, `task_local_pipeline`, and the claimed
     // pair), not just wrappers. One orphaned `running` row — a worker killed
     // by a reboot or an OOM — would occupy a slot forever, and the drain
     // would keep shipping at a quietly lower parallelism, which is exactly
     // the kind of thing nobody notices [ORB-12649].
-    runtime.reconcile_stale_job_runs(None).map_err(|err| {
-        DispatchError::action_failed(action, format!("reconcile stale job runs: {err}"))
-    })?;
-    read_live_leaf_runs(runtime).map_err(|error| {
-        DispatchError::action_failed(action, format!("list live {LEAF_JOB_NAME} runs: {error}"))
-    })
+    runtime
+        .reconcile_stale_job_runs(None)
+        .map_err(|error| PassError::store(action, "reconcile stale job runs", error))?;
+    read_live_leaf_runs(runtime)
+        .map_err(|error| PassError::store(action, format!("list live {LEAF_JOB_NAME} runs"), error))
 }
 
 /// The one capacity reading legacy and pull admission share [ORB-12617].

@@ -33,8 +33,8 @@ impl OrbitRuntime {
 /// `review` gate when one exists [ORB-11333], and the host-local crew
 /// enrichment ([`OrbitRuntime::task_crew_read`]).
 ///
-/// `orbit task show --json`, `orbit.task.show` and the dashboard's task detail
-/// all serve this record and add only their own extras to it.
+/// A single-task show serves [`task_show_json`], which is this record plus
+/// `next_step` and `final_recovery`. Writes and list rows stay on this record.
 pub fn task_record_json(
     runtime: &OrbitRuntime,
     row: &TaskRow,
@@ -60,6 +60,40 @@ pub fn task_record_json(
         object.insert("review".to_string(), review);
     }
     runtime.task_crew_read(task).insert_into(&mut object);
+    Ok(object)
+}
+
+/// The show record: [`task_record_json`] plus the operator guidance only a
+/// single-task readout carries.
+///
+/// `next_step` says what to do about a task a failed run left `blocked`.
+/// `final_recovery` is the last automated final-recovery decision, with
+/// `run_id`, `decision`, `outcome` and `at`. Each key is present only when it
+/// applies. `orbit task show`, `orbit.task.show`, `GET /api/tasks/:id` and a
+/// routed remote show all serve this record and add only their own extras.
+pub fn task_show_json(
+    runtime: &OrbitRuntime,
+    row: &TaskRow,
+    status_by_id: &BTreeMap<String, TaskStatus>,
+) -> Result<Map<String, Value>, OrbitError> {
+    let mut object = task_record_json(runtime, row, status_by_id)?;
+    if let Some(next) = runtime.blocked_next_step(&row.task, &row.history) {
+        object.insert(
+            "next_step".to_string(),
+            serde_json::to_value(next).map_err(serialize_error("next_step"))?,
+        );
+    }
+    if let Some(record) = super::FinalRecoveryRecord::last(&row.history, &row.comments) {
+        object.insert(
+            "final_recovery".to_string(),
+            serde_json::json!({
+                "run_id": record.run_id,
+                "decision": record.decision,
+                "outcome": record.outcome,
+                "at": record.at,
+            }),
+        );
+    }
     Ok(object)
 }
 
