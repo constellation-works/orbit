@@ -1,14 +1,15 @@
 //! The host load forecast and the host admission lock through the public
 //! runtime: running deliveries scaled by their profile's survival with a flat
 //! tail past it, reservations from minute zero, a baseline measured from
-//! `/proc/stat` and `/proc/meminfo` rather than `/proc/loadavg`, every
-//! workspace on the store, reservation expiry, fresh reads on every call, and
-//! two admitter processes that cannot both fill one gap.
+//! `/proc/stat` and `/proc/meminfo` rather than `/proc/loadavg`, aligned with
+//! the recorded host and run minutes when there are some, every workspace on
+//! the store, reservation expiry, fresh reads on every call, and two admitter
+//! processes that cannot both fill one gap.
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::time::{Duration as StdDuration, Instant};
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, DurationRound, Utc};
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::host_resource::forecast::{
     AdmissionReservationRequest, ForecastDecision, HostLoadForecast,
@@ -16,7 +17,7 @@ use orbit_core::runtime::host_resource::forecast::{
 use orbit_core::runtime::host_resource::profile::{ProfileLookup, ProfileSource};
 use orbit_store::Store;
 use orbit_store::contracts::{
-    AdmissionLoadQuery, AdmissionLoadStoreBackend, NewAdmissionReservation,
+    AdmissionLoadQuery, AdmissionLoadStoreBackend, HostResourceMinute, NewAdmissionReservation,
     ResourceUsageStoreBackend, RunResourceMinute,
 };
 use orbit_types::workflow::{JobRun, JobRunState};
@@ -42,6 +43,10 @@ impl Fixture {
     /// Profiles from one delivery, a ten-minute horizon, and a host whose
     /// `/proc` holds nothing until a test writes it.
     fn new() -> Self {
+        Self::with_horizon(10)
+    }
+
+    fn with_horizon(horizon: u32) -> Self {
         let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("home/.orbit");
         let workspace_root = root.path().join("repo/.orbit");
@@ -51,7 +56,10 @@ impl Fixture {
         }
         std::fs::write(
             global.join("config.toml"),
-            "[machine.auto_concurrency]\nmin_profile_deliveries = 1\nhorizon_cap_minutes = 10\n",
+            format!(
+                "[machine.auto_concurrency]\nmin_profile_deliveries = 1\n\
+                 horizon_cap_minutes = {horizon}\n"
+            ),
         )
         .unwrap();
         let runtime = OrbitRuntime::from_roots(&global, &workspace_root)
@@ -141,6 +149,53 @@ impl Fixture {
                 })
                 .unwrap();
         }
+    }
+
+    /// One run minute starting at `started`, covering `samples` readings.
+    #[allow(clippy::too_many_arguments)]
+    fn minute_at(
+        &self,
+        run_id: &str,
+        task: &str,
+        index: u32,
+        admitted: DateTime<Utc>,
+        started: DateTime<Utc>,
+        cores: f64,
+        bytes: u64,
+        samples: u32,
+    ) {
+        self.store
+            .record_run_resource_minute(&RunResourceMinute {
+                workspace_id: self.workspace.clone(),
+                run_id: run_id.to_string(),
+                minute_index: index,
+                minute_started_at: started,
+                task_id: task.to_string(),
+                work_class: "change".to_string(),
+                complexity: Some("medium".to_string()),
+                resumed: false,
+                delivery_admitted_at: Some(admitted),
+                cpu_cores: cores,
+                cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
+                memory_bytes: bytes,
+                samples,
+            })
+            .unwrap();
+    }
+
+    /// The host minute a worker recorded at `at`.
+    fn host_minute(&self, at: DateTime<Utc>, cores: f64, bytes: u64) {
+        self.store
+            .offer_host_resource_minute(&HostResourceMinute {
+                minute_at: at,
+                cpu_cores: cores,
+                cpu_count: 15,
+                memory_bytes: bytes,
+                memory_total_bytes: 32 * GIB,
+                samples: 12,
+                recorded_by_run_id: None,
+            })
+            .unwrap();
     }
 
     /// One finished `change` delivery, admitted days ago, lasting one minute
@@ -442,6 +497,177 @@ fn the_baseline_is_measured_utilization_minus_running_use() {
     );
 }
 
+/// Thirty seconds into the current whole minute, so the recorded host
+/// minutes below fall on known boundaries.
+fn into_a_minute() -> DateTime<Utc> {
+    Utc::now().duration_trunc(Duration::minutes(1)).unwrap() + Duration::seconds(30)
+}
+
+fn gib(series: &[f64]) -> Vec<f64> {
+    series.iter().map(|bytes| bytes / GIB_F).collect()
+}
+
+/// A 250 ms reading of 14 busy cores, against a last complete minute of 6
+/// with a four-core delivery in it, leaves the baseline at that minute's 2
+/// cores at every offset out to +30. The same tick delta over a window of
+/// more than a minute is load the host sustained, such as a manual build that
+/// began after the minute: it floors the baseline.
+fn a_short_host_spike_does_not_raise_the_baseline_but_sustained_load_does() {
+    let fixture = Fixture::with_horizon(30);
+    fixture.finished_delivery("ORB-p", "medium", &[2.0; 3], &[GIB; 3]);
+    let now = into_a_minute();
+    let minute = now - Duration::seconds(90);
+    let admitted = minute - Duration::minutes(1);
+    let workspace = fixture.workspace.clone();
+    let run = fixture.job_run(&workspace, "ORB-run", admitted, JobRunState::Running, None);
+    for index in 0..2 {
+        let started = admitted + Duration::minutes(i64::from(index));
+        fixture.minute_at(&run, "ORB-run", index, admitted, started, 4.0, 8 * GIB, 12);
+    }
+    fixture.host_minute(minute - Duration::minutes(1), 9.0, 14 * GIB);
+    fixture.host_minute(minute, 6.0, 12 * GIB);
+    fixture.write_proc(10_000, 90_000, 12 * GIB);
+    fixture.forecast_at(now);
+    // 1,400 of 1,500 ticks busy over 15 CPUs: 14 cores.
+    fixture.write_proc(11_400, 90_100, 12 * GIB);
+
+    let forecast = fixture.forecast_at(now);
+    assert!((forecast.host.unwrap().cpu_cores.unwrap() - 14.0).abs() < 1e-9);
+    assert_eq!(forecast.baseline_minute, Some(minute));
+    let baseline = forecast.cpu.baseline.unwrap();
+    assert!(
+        (baseline - 2.0).abs() < 1e-9,
+        "the baseline is the last complete minute's 6 cores minus the delivery's 4, \
+         not the 250 ms spike: {baseline}"
+    );
+    // The delivery, two minutes into a three-minute profile, adds 2 cores at +0.
+    assert_series(
+        &forecast.cpu.minutes,
+        &[&[4.0][..], &[2.0; 30]].concat(),
+        "cpu",
+    );
+    assert_eq!(forecast.memory.baseline, Some(4.0 * GIB_F));
+
+    // Seventy seconds on, the window since the first reading holds 14 cores,
+    // and the delivery, past its profile, holds its 4.
+    let later = fixture.forecast_at(now + Duration::seconds(70));
+    let baseline = later.cpu.baseline.unwrap();
+    assert!(
+        (baseline - 10.0).abs() < 1e-9,
+        "load sustained past the settled minute floors the baseline: {baseline}"
+    );
+    assert_series(
+        &later.cpu.minutes,
+        &[14.0; 31],
+        "cpu after a sustained window",
+    );
+}
+
+/// A delivery 20 s old with no recorded minute, whose startup load is in the
+/// host reading, is counted once: the forecast is the non-task baseline plus
+/// its profile. With no recorded host minute the live reading subtracts the
+/// third of its first minute's profile it has reached; with one, the
+/// baseline is that minute's, and the live reading cannot pull it lower.
+fn a_delivery_without_a_minute_is_counted_once() {
+    let fixture = Fixture::new();
+    fixture.finished_delivery("ORB-p", "small", &[1.5, 3.0], &[3 * GIB, 2 * GIB]);
+    let now = into_a_minute();
+    let workspace = fixture.workspace.clone();
+    fixture.job_run(
+        &workspace,
+        "ORB-new",
+        now - Duration::seconds(20),
+        JobRunState::Running,
+        None,
+    );
+    // 2 cores and 4 GiB not from tasks, plus a third of 1.5 cores and 3 GiB.
+    fixture.write_proc(10_000, 90_000, 5 * GIB);
+    fixture.forecast_at(now);
+    fixture.write_proc(10_250, 91_250, 5 * GIB);
+    let expected_cpu = [&[3.5, 5.0][..], &[2.0; 9]].concat();
+    let expected_memory = [&[7.0, 6.0][..], &[4.0; 9]].concat();
+
+    let forecast = fixture.forecast_at(now);
+    assert_eq!(forecast.baseline_minute, None);
+    let delivery = &forecast.running[0];
+    assert_eq!(delivery.task_id, "ORB-new");
+    assert!(!delivery.held_flat && delivery.current_cpu_cores == 0.0);
+    let baseline = forecast.cpu.baseline.unwrap();
+    assert!(
+        (baseline - 2.0).abs() < 1e-9,
+        "the delivery's startup load is not in the baseline as well: {baseline}"
+    );
+    assert_series(&forecast.cpu.minutes, &expected_cpu, "cpu");
+    assert_series(
+        &gib(&forecast.memory.minutes),
+        &expected_memory,
+        "memory GiB",
+    );
+
+    // The delivery's memory is gone from the live reading; the recorded
+    // minute before it started still says 4 GiB is not from tasks.
+    let minute = now - Duration::seconds(90);
+    fixture.host_minute(minute, 2.0, 4 * GIB);
+    fixture.write_proc(10_250, 91_250, 4 * GIB);
+    let forecast = fixture.forecast_at(now);
+    assert_eq!(forecast.baseline_minute, Some(minute));
+    assert_eq!(forecast.cpu.baseline, Some(2.0));
+    assert_eq!(
+        forecast.memory.baseline,
+        Some(4.0 * GIB_F),
+        "the delivery's expected use never takes the baseline below the minute's"
+    );
+    assert_series(&forecast.cpu.minutes, &expected_cpu, "cpu");
+    assert_series(
+        &gib(&forecast.memory.minutes),
+        &expected_memory,
+        "memory GiB",
+    );
+}
+
+/// A run at 4 cores that ended 5 s into its last minute is subtracted from
+/// the host minute for the 20 s of its previous minute and those 5 s, 1.67
+/// cores, not as if the last minute ran to the end: the baseline is the 2
+/// cores not from tasks. Its memory never takes the baseline below the host's
+/// 12 GiB less the run's 8.
+fn the_baseline_never_subtracts_more_than_the_runs_used() {
+    let fixture = Fixture::new();
+    let now = into_a_minute();
+    let minute = now - Duration::seconds(90);
+    let admitted = minute - Duration::seconds(40);
+    let finished = minute + Duration::seconds(25);
+    let workspace = fixture.workspace.clone();
+    let run = fixture.job_run(
+        &workspace,
+        "ORB-done",
+        admitted,
+        JobRunState::Success,
+        Some(finished),
+    );
+    fixture.minute_at(&run, "ORB-done", 0, admitted, admitted, 4.0, 8 * GIB, 12);
+    // Two readings, the second at the run's end.
+    let last = admitted + Duration::minutes(1);
+    fixture.minute_at(&run, "ORB-done", 1, admitted, last, 4.0, 8 * GIB, 2);
+    fixture.host_minute(minute, 2.0 + 4.0 * 25.0 / 60.0, 12 * GIB);
+    fixture.write_proc(10_000, 90_000, 4 * GIB);
+    fixture.forecast_at(now);
+    fixture.write_proc(10_900, 90_600, 4 * GIB);
+
+    let forecast = fixture.forecast_at(now);
+    assert_eq!(forecast.baseline_minute, Some(minute));
+    assert!(forecast.running.is_empty());
+    let baseline = forecast.cpu.baseline.unwrap();
+    assert!(
+        (baseline - 2.0).abs() < 1e-9,
+        "the run's last minute counts only the 5 s it ran: {baseline}"
+    );
+    let memory = forecast.memory.baseline.unwrap();
+    assert!(
+        memory >= 4.0 * GIB_F,
+        "at least the host's 12 GiB less the run's 8 is not from tasks: {memory}"
+    );
+}
+
 /// A reservation stops counting once a delivery run naming its task is
 /// created in its workspace after it, or five minutes after it was written.
 fn a_reservation_ends_when_its_run_exists_or_after_five_minutes() {
@@ -528,6 +754,7 @@ fn every_call_reads_running_reservations_and_baseline_fresh() {
                 now,
                 delivery_jobs: &["task_pr_pipeline"],
                 reservations_expire_before: now - Duration::minutes(5),
+                resource_minutes_since: None,
             },
             &mut |_| {
                 Ok(vec![NewAdmissionReservation {
@@ -705,6 +932,9 @@ crate::scenario_table!(
     the_forecast_scales_running_deliveries_by_survival_and_adds_reservations,
     a_live_leaf_of_another_workspace_counts,
     the_baseline_is_measured_utilization_minus_running_use,
+    a_short_host_spike_does_not_raise_the_baseline_but_sustained_load_does,
+    a_delivery_without_a_minute_is_counted_once,
+    the_baseline_never_subtracts_more_than_the_runs_used,
     a_reservation_ends_when_its_run_exists_or_after_five_minutes,
     every_call_reads_running_reservations_and_baseline_fresh
 );
