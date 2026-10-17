@@ -86,8 +86,8 @@ pub(crate) use pilot::{
     operator_validation_requirements, pilot_blocker_task_ids,
 };
 pub use provider_limit::{
-    CrewProviderLimit, ProviderLimitReading, ProviderLimitsView, ProviderUsageStatus,
-    UngatedLaneLimit, short_time,
+    CrewProviderLimit, ProviderLimitReading, ProviderLimitThreshold, ProviderLimitsView,
+    ProviderUsageStatus, UngatedLaneLimit, short_time,
 };
 pub use pull_request_links::PullRequestLinks;
 pub use record_json::{task_record_json, task_show_field_json, task_show_json};

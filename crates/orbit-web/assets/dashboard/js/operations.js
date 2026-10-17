@@ -2368,10 +2368,11 @@ function autoDrainProviderReadings(readings) {
     const scope = reading.scope ? ` [${reading.scope}]` : "";
     const used = reading.used_percent == null ? "usage not reported" : `${reading.used_percent}%`;
     const age = autoDrainReadingAge(reading);
+    const gating = reading.threshold === "off" ? " · gating off" : "";
     const row = el("li", {
       class: `drain-provider-reading${age.stale ? " stale" : ""}`,
       title: reading.observed_at ? `Observed ${reading.observed_at}` : "Observed time unknown",
-      text: `${reading.provider}${scope} ${reading.window || "usage window"} ${used} · ${age.label}${age.stale ? " · stale" : ""}`,
+      text: `${reading.provider}${scope} ${reading.window || "usage window"} ${used} · ${age.label}${age.stale ? " · stale" : ""}${gating}`,
     });
     list.append(row);
   }
