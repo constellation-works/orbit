@@ -775,7 +775,7 @@ const summaryBeforeHostHang = summaryReads;
 const toolCallsBeforeHostHang = summaryToolCalls();
 await runPoll();
 const liveTimers = () => scheduledPolls.filter(entry => !entry.handle.cancelled);
-const polls = liveTimers().filter(entry => String(entry.fn).includes('refreshDashboard'));
+const polls = liveTimers().filter(entry => entry.fn.name === 'runRefresh');
 check(hungHostSignals.length >= 1 && hungHostSignals.every(signal => signal && !signal.aborted), 'host request stays unanswered and carries an abort signal');
 check(summaryReads > summaryBeforeHostHang && summaryToolCalls() !== toolCallsBeforeHostHang, 'other panels refresh while host resources never answer');
 check(!text('meta-text').includes('fetching') && node('conn-status').className.includes('green'), 'hung host request does not leave the dashboard fetching');
