@@ -727,12 +727,20 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
 - An owner that times out waiting on its task commit lock or its database
   answers `lock_busy`. So does an owner whose `orbit` exits on its locked store
   before it answers the follower's SSH session (`session ended before answering
-  'initialize'; ssh stderr: ... database is locked`): the follower reads the
-  owner's own diagnostic and does not report that host as unreachable. A
+  'initialize'; ssh stderr: ... error: store error: database is locked`): the
+  follower reads only the owner `orbit`'s final error, the last stderr line,
+  and only when ssh carried the remote command's exit. An ssh failure (exit
+  255) or a lock error quoted only by an earlier warning stays an unreachable
+  owner, and a `tools/call` whose session ended that way stays
+  `outcome_unknown`, because it may already have run. A
   leaf's owner reads retry it twice before failing, and a step it still fails
   releases the claim as `transient` and marks it `owner_busy`. The owner was
   reached and decided nothing, so the release blames neither the follower's
-  host nor its crew, and it does not count against the task's release budget.
+  host nor its crew. The owner honours the mark only on a `transient` release,
+  and only for a task's first three busy releases within the release budget's
+  24 hours: those do not count against the task's release budget, and later
+  ones count like any other `transient` release, so a task the owner keeps
+  failing is eventually blocked rather than cycling across drains.
   The drain backs its claims off instead: for 5 minutes from when the leaf
   ended it requests nothing (`owner_busy_backoff:` refusal,
   `crews.owner_busy_backoff` with `until`, `episodes` and `releases`), then
@@ -740,10 +748,16 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   straight back. Releases that end within 5 minutes of the previous one, such
   as several leaves that were running when the store locked, are one episode.
   A third episode in one window suppresses the host for the rest of the window
-  (`host_suppressed:`, whose reason names the episode and release counts),
-  because an owner that stays busy across backoffs needs an operator. An owner
-  older than this release records the mark without honouring it, and holds the
-  task from that drain as for any other `transient` release. When these recur,
+  (`host_suppressed:`, whose reason names the episode and release counts, and
+  `crews.host_suppressed_by_busy_owner`), because an owner that stays busy
+  across backoffs needs an operator; the follower host is not at fault, and
+  the refusal points at the owner's lock holders instead of the host. Upgrade
+  the owner before its followers: an owner that predates the mark drops it
+  when it reads the release, records an ordinary `transient` release that
+  counts against the task's release budget of two in 24 hours (so the third
+  such release blocks the task), and holds the task from that drain for the
+  rest of its window, while the newer follower still backs off rather than
+  excluding the crew. When these recur,
   read the owner's `orbit.jsonl`: the `still waiting for advisory file lock`
   warning names each holder of the lock by pid, section and call site, and
   `advisory file lock held past its threshold` names a section that held it
@@ -829,7 +843,7 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   `crews.host_suppressed`); fix the host and start a new drain. An owner whose
   store stayed locked is not one of these: its `transient` release backs the
   drain off briefly instead (`owner_busy_backoff`, above), and only repeated
-  episodes suppress the host. In either
+  episodes suppress the host, with guidance to clear the owner's lock holders. In either
   case (forge and busy-owner releases aside) the owner does not hand the released task back
   to that drain, so it is not pulled straight back; another drain may still
   take it. When the leaf had

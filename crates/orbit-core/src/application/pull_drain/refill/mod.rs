@@ -618,7 +618,18 @@ pub(crate) fn pull_refill(
     let owner_busy_backoff = crews
         .as_ref()
         .and_then(|window| window.owner_busy_backoff.as_ref());
-    let no_runnable_crew = if let Some(reason) = host_suppressed {
+    let by_busy_owner = crews
+        .as_ref()
+        .is_some_and(|window| window.host_suppressed_by_busy_owner);
+    let no_runnable_crew = if let Some(reason) = host_suppressed.filter(|_| by_busy_owner) {
+        format!(
+            "host_suppressed: this drain claims no more work on this host for its window \
+             because {reason}. This host is not at fault: find what holds the owner's store \
+             (the owner's `orbit.jsonl` names each lock holder in its `still waiting for \
+             advisory file lock` and `advisory file lock held past its threshold` warnings), \
+             then start a new drain"
+        )
+    } else if let Some(reason) = host_suppressed {
         format!(
             "host_suppressed: this drain claims no more work on this host for its window \
              because {reason}; see `crews.host_suppressed`, fix the host, and start a new drain"

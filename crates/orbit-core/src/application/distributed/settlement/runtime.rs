@@ -188,9 +188,13 @@ impl crate::OrbitRuntime {
             if let Some(failure) = &evidence.failure
                 && failure.owner_busy
             {
-                if let Some(at) = self.leaf_ended_at(record.leaf_run_id.as_deref()) {
-                    owner_busy.record(at, format!("{task} was released: {}", failure.reason));
-                }
+                // A leaf whose run is no longer recorded here ended long
+                // ago: its release still counts towards the episode bound,
+                // and its backoff has passed.
+                let at = self
+                    .leaf_ended_at(record.leaf_run_id.as_deref())
+                    .unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
+                owner_busy.record(at, format!("{task} was released: {}", failure.reason));
                 continue;
             }
             if let Some(failure) = &evidence.failure
@@ -300,9 +304,13 @@ impl crate::OrbitRuntime {
         // crew whose capacity backoff passed is runnable again in the same
         // window. A crew excluded for the window already keeps that.
         let now = Utc::now();
+        let mut host_suppressed_by_busy_owner = false;
         let owner_busy_backoff = match owner_busy.verdict() {
             Some(OwnerBusyVerdict::Suppress(reason)) => {
-                host_suppressed.get_or_insert(reason);
+                if host_suppressed.is_none() {
+                    host_suppressed = Some(reason);
+                    host_suppressed_by_busy_owner = true;
+                }
                 None
             }
             Some(OwnerBusyVerdict::Backoff(backoff)) if backoff.until > now => Some(backoff),
@@ -412,6 +420,7 @@ impl crate::OrbitRuntime {
             excluded,
             auth_exclusions,
             host_suppressed,
+            host_suppressed_by_busy_owner,
             owner_busy_backoff,
         })
     }

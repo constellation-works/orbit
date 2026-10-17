@@ -33,6 +33,7 @@ pub use error::{
     ArtifactOrigin, ArtifactOriginMode, CandidateAbsorbed, ClaimRefusalKind, ConflictedFile,
     DependencyNotDelivered, HostRegistryCode, LOCK_BUSY_ERROR_CODE, NotFoundKind, OrbitError,
     RecoverableVcsConflict, SqliteContention, StorageLayer, WorkspaceClaimHeld,
+    is_lock_busy_message,
 };
 pub use model::pricing::derive_cost_usd;
 pub use tracing;

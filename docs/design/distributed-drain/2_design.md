@@ -659,10 +659,14 @@ owns delivery:
   lock-wait deadline — an owner `lock_busy` answer, or an owner `orbit` that exited on its locked
   store before it answered the session — releases as `transient` with `failure.owner_busy`. That
   release excludes no crew, holds neither the task nor the host on the owner, and is outside the
-  release budget; the follower backs its requests off for 5 minutes from when the leaf ended
+  release budget for the task's first three such releases in the budget window (the owner
+  honours the mark only on a `transient` release, and counts later ones like any other); the
+  follower reads only the owner `orbit`'s final stderr error, and only when ssh carried the
+  remote command's exit. The follower backs its requests off for 5 minutes from when the leaf ended
   (`crews.owner_busy_backoff`, refusal `owner_busy_backoff`). Releases within 5 minutes of the
   previous one are one episode, and a third episode in one window suppresses the host with a
-  reason naming the episode and release counts. For any excluding class the owner's admission also holds the released
+  reason naming the episode and release counts (`crews.host_suppressed_by_busy_owner`), whose
+  refusal points at the owner's lock holders rather than the host. For any excluding class the owner's admission also holds the released
   task itself from that drain run (`crew_unavailable`), so a release that reaches the owner after
   the follower built its next request is not pulled straight back. `baseline_red` releases with
   its hold, and the owner's admission withholds the task until the base moves to a commit where

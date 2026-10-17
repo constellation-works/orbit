@@ -47,6 +47,10 @@ pub struct PullCrewWindow {
     /// itself, whatever its crew [ORB-14257]. `None` while the host runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host_suppressed: Option<String>,
+    /// Whether `host_suppressed` came from repeated busy-owner episodes
+    /// rather than a failure of this host: the remedy is on the owner.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub host_suppressed_by_busy_owner: bool,
     /// While set, this drain requests no claim until `until`: a claimed leaf
     /// was released because the owner's store stayed locked, which blames
     /// neither this host nor its crew. It lifts by itself in the same window;
