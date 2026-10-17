@@ -153,7 +153,7 @@ impl OrbitRuntime {
         Some(canonical_provider(&raw))
     }
 
-    fn provider_of_crew(&self, name: &str) -> Option<String> {
+    pub(crate) fn provider_of_crew(&self, name: &str) -> Option<String> {
         let crew = self.context.settings().crews().get(name)?;
         Some(canonical_provider(&crew.assignment.provider))
     }
@@ -169,7 +169,7 @@ impl OrbitRuntime {
         declared.unwrap_or_else(|| relogin_hint(provider))
     }
 
-    fn fallback_host(&self) -> String {
+    pub(crate) fn fallback_host(&self) -> String {
         let Some(location) = self.automation_execution_location() else {
             return "this host".to_string();
         };
@@ -199,7 +199,7 @@ fn run_at(run: &JobRun) -> DateTime<Utc> {
     run.finished_at.or(run.started_at).unwrap_or(run.created_at)
 }
 
-fn host_of(run: &JobRun, fallback: &str) -> String {
+pub(crate) fn host_of(run: &JobRun, fallback: &str) -> String {
     run.executed_on
         .as_ref()
         .and_then(|location| {
@@ -219,7 +219,7 @@ fn named(value: &Option<String>) -> Option<String> {
         .map(str::to_string)
 }
 
-fn canonical_provider(raw: &str) -> String {
+pub(crate) fn canonical_provider(raw: &str) -> String {
     let trimmed = raw.trim();
     Provider::parse(trimmed)
         .map(|provider| provider.as_str().to_string())

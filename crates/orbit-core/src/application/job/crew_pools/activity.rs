@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_config::canonical_crew_pool;
 use orbit_types::identity::Crew;
@@ -7,6 +8,7 @@ use orbit_types::workflow::{ActivityCrewDraw, FINAL_RECOVERY_CREWS_KEY, RunState
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::distributed::HostProviderHold;
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::run_input::non_empty;
 
@@ -47,9 +49,11 @@ impl OrbitRuntime {
     /// members this run's `allowed_crews` excludes. Crews at one of this
     /// host's provider limits are skipped while any member is left; when every
     /// member is limited the draw stays as it was and its source names the
-    /// limit. An empty or wholly disabled pool falls back to
-    /// `workflow.default_crew`, as an unassigned task does, and the frozen
-    /// record's source says so.
+    /// limit. Crews covered by a host provider failure hold
+    /// (`provider_unavailable` or `provider_capacity`) are skipped the same
+    /// way, after that limit narrowing. An empty or wholly disabled pool falls
+    /// back to `workflow.default_crew`, as an unassigned task does, and the
+    /// frozen record's source says so.
     ///
     /// [ORB-15792] An activity that inspects pinned source natively (the task
     /// pilot) draws only crews whose provider has that surface, through
@@ -81,6 +85,8 @@ impl OrbitRuntime {
             };
             let candidates = permitted_candidates(candidates, &source, allowlist)?;
             let (candidates, source) = self.provider_unlimited_candidates(candidates, source);
+            let (candidates, source) =
+                self.apply_host_provider_holds(candidates, source, Utc::now());
             let selected = weighted_draw(&candidates, &source, random)?;
             Ok(activity_crew_draw(selected, &source, &candidates))
         })
@@ -207,6 +213,72 @@ impl OrbitRuntime {
         (unlimited, format!("{source}; provider limit: {detail}"))
     }
 
+    /// `candidates` without the crews a host provider failure hold covers at
+    /// `now`, with `source` naming the hold. When every candidate is held, or
+    /// none is, they are returned as they were. The limit narrowing has
+    /// already run: a crew dropped there cannot keep a held crew in the draw.
+    fn apply_host_provider_holds(
+        &self,
+        candidates: Vec<CrewCandidate>,
+        source: String,
+        now: DateTime<Utc>,
+    ) -> (Vec<CrewCandidate>, String) {
+        let holds = self.standing_host_provider_holds(now);
+        if holds.is_empty() {
+            return (candidates, source);
+        }
+        let (held, free): (Vec<_>, Vec<_>) = candidates
+            .into_iter()
+            .partition(|candidate| holds.iter().any(|hold| hold.covers(&candidate.crew, now)));
+        if held.is_empty() {
+            return (free, source);
+        }
+        let detail = provider_hold_detail(&holds, &held, now);
+        if free.is_empty() {
+            (
+                held,
+                format!("{source}; provider hold, none skipped: {detail}"),
+            )
+        } else {
+            (free, format!("{source}; provider hold: {detail}"))
+        }
+    }
+
+    /// Why the task-pilot routine must not start a run at `now`, when every
+    /// positive-weight inspection candidate left after the provider-limit
+    /// narrowing is under a host hold.
+    ///
+    /// An unreadable pool is not a hold: the draw reports that configuration
+    /// problem itself. A pool that still has a crew the hold does not cover
+    /// returns `None`, and the draw skips the held crews.
+    pub(crate) fn task_pilot_provider_withhold(&self, now: DateTime<Utc>) -> Option<String> {
+        let (candidates, source) = match self.inspection_activity_candidates(TaskComplexity::Low) {
+            Ok(drawn) => drawn,
+            Err(error) => {
+                tracing::warn!("task-pilot provider hold reads no crew pool: {error}");
+                return None;
+            }
+        };
+        let candidates: Vec<_> = candidates
+            .into_iter()
+            .filter(|candidate| candidate.weight > 0)
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+        let (candidates, source) = self.provider_unlimited_candidates(candidates, source);
+        let holds = self.standing_host_provider_holds(now);
+        if holds.is_empty()
+            || candidates
+                .iter()
+                .any(|candidate| !holds.iter().any(|hold| hold.covers(&candidate.crew, now)))
+        {
+            return None;
+        }
+        let detail = provider_hold_detail(&holds, &candidates, now);
+        Some(format!("provider_hold: no crew left in {source}; {detail}"))
+    }
+
     /// The enabled members of `workflow.final_recovery_crews`, each with its
     /// tickets. An empty pool disables final recovery, and a pool whose every
     /// member is disabled is refused the same way rather than falling back to
@@ -242,4 +314,31 @@ impl OrbitRuntime {
         }
         Ok(candidates)
     }
+}
+
+/// `<hold>[, <hold>...]; crews <list> skipped` for the held `crews`.
+fn provider_hold_detail(
+    holds: &[HostProviderHold],
+    held: &[CrewCandidate],
+    now: DateTime<Utc>,
+) -> String {
+    let mut details = Vec::new();
+    for hold in holds {
+        if held
+            .iter()
+            .any(|candidate| hold.covers(&candidate.crew, now))
+        {
+            let detail = hold.detail();
+            if !details.contains(&detail) {
+                details.push(detail);
+            }
+        }
+    }
+    let mut names = held
+        .iter()
+        .map(|candidate| candidate.crew.name.as_str())
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    names.dedup();
+    format!("{}; crews {} skipped", details.join(", "), names.join(", "))
 }

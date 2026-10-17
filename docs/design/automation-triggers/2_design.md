@@ -359,7 +359,11 @@ critical section, and its successful preparation checkpoint holds the same
 tasks afterwards. Observation and admission withhold them as
 `already_preparing: <run id>` until that run becomes terminal. This prevents a
 routine, a drain or the CI sweep from duplicating another pilot that started
-seconds earlier, even when the task's material changes while held. Explicit
+seconds earlier, even when the task's material changes while held. A host
+provider failure hold withholds preparation the same way, as `provider_hold: ...`,
+until its backoff ends or a later success on this host clears it. An auth probe
+clears unavailability. A pool that still has another crew is admitted, and the
+draw uses the crews the hold leaves. Explicit
 pilot selections report held tasks as `already_preparing` exclusions with
 `prepared_by_run_ids`, settle each as superseded `piloted_elsewhere` naming its
 holder, and prepare the free tasks; an all-held selection succeeds without
