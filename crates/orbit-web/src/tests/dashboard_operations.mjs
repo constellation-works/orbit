@@ -1,6 +1,6 @@
 // Runs against shipped modules in Chromium via dashboard_operations_browser.mjs,
 // the required dashboard-operations-browser scenario in the QA sweep inventory.
-const { setHost, setWorkspace, setWindow, setMultiWorkspace, runHref, statusPill } = await import('./js/common.js');
+const { setHost, setWorkspace, setRegisteredHosts, setWindow, setMultiWorkspace, runHref, statusPill } = await import('./js/common.js');
 const { initOperations, fetchAndRenderOperations: fetchAndRenderOperationsPane, fetchAndRenderJobs, fetchAndRenderAutoDrainPane } = await import('./js/operations.js');
 const { drainReadinessFor } = await import('./js/drain-waits.js');
 const { setActiveTab } = await import('./js/router.js');
@@ -50,10 +50,15 @@ let drainAdmissionsStopped = false;
 let pullDrainRunId = null;
 let pullDrainStopped = false;
 let failReadiness = false;
+let readinessFailureStatus = 500;
 let delayReadiness = false;
 let readinessPending = false;
 let releaseReadiness = null;
 let drainReadinessRefresh = null;
+let fleetResponses = {};
+let delayFleet = false;
+let fleetReadsPending = 0;
+let releaseFleetReads = [];
 let nullCapacity = false;
 let resourceThrottle = null;
 let drainCapacityOverride = {};
@@ -90,6 +95,7 @@ window.confirm = message => { confirmations.push(message); return true; };
 const response = (payload, status = 200) => ({ ok: status === 200, status, json: async () => payload, text: async () => JSON.stringify(payload) });
 globalThis.fetch = async (path, options = {}) => {
   const url = new URL(path, 'http://dashboard.test');
+  const requestedFleetHost = url.pathname.match(/^\/api\/on\/([^/]+)\/fleet\/drains$/)?.[1];
   // A selected host reaches the same fixture through the serving host's forward.
   url.pathname = url.pathname.replace(/^\/api\/on\/[^/]+\//, '/api/');
   const workspace = url.searchParams.get('workspace');
@@ -130,10 +136,18 @@ globalThis.fetch = async (path, options = {}) => {
     return fullStateError ? response({ error: 'full state unavailable' }, 500)
       : response({ state: { consumer: 'routine/one', members: { pending: { 'member-full': { fingerprint: 'full-input' } } } } });
   }
-  if (url.pathname === '/api/fleet/drains') return response({ items: [
-    { workspace_id: 'one', workspace_name: 'one', phase: 'draining', slots_used: 1, slots_ceiling: 4, eligible_count: 2, holds: [] },
-    { workspace_id: 'two', workspace_name: 'two', phase: 'idle', slots_used: 0, slots_ceiling: 4, eligible_count: 4, holds: [] },
-  ] });
+  if (url.pathname === '/api/fleet/drains') {
+    const payload = fleetResponses[requestedFleetHost] || { items: [
+      { workspace_id: 'one', workspace_name: 'one', phase: 'draining', slots_used: 1, slots_ceiling: 4, eligible_count: 2, holds: [] },
+      { workspace_id: 'two', workspace_name: 'two', phase: 'idle', slots_used: 0, slots_ceiling: 4, eligible_count: 4, holds: [] },
+    ] };
+    if (delayFleet) {
+      fleetReadsPending += 1;
+      await new Promise(resolve => releaseFleetReads.push(resolve));
+      fleetReadsPending -= 1;
+    }
+    return response(payload);
+  }
   if (url.pathname === '/api/routines') return response({
     machine_name: 'fixture-host', cron_zone: { name: 'America/Los_Angeles', offset_seconds: -25200 }, controls_authorized: capabilities.routine_toggle.authorized, capabilities: { ...capabilities }, session_explanation: 'Session access: restart the dashboard server with explicit operator authority.',
     routines: [
@@ -162,12 +176,14 @@ globalThis.fetch = async (path, options = {}) => {
       ];
     return response({ items, total: items.length, limit: 100, truncated: false });
   }
+  const failThisReadiness = url.pathname === '/api/workflows/auto/readiness' && failReadiness;
+  const thisReadinessFailureStatus = readinessFailureStatus;
   if (url.pathname === '/api/workflows/auto/readiness' && delayReadiness) {
     readinessPending = true;
     await new Promise(resolve => { releaseReadiness = resolve; });
     readinessPending = false;
   }
-  if (url.pathname === '/api/workflows/auto/readiness' && failReadiness) return response({ error: 'readiness unavailable' }, 500);
+  if (url.pathname === '/api/workflows/auto/readiness' && failThisReadiness) return response({ error: 'readiness unavailable' }, thisReadinessFailureStatus);
   if (url.pathname === '/api/workflows/auto/readiness') return response({
     auto_concurrency: { mode: 'enforce', source: 'explicit', configured_mode: 'shadow' },
     controls_authorized: controlsAuthorized,
@@ -197,6 +213,59 @@ globalThis.fetch = async (path, options = {}) => {
 };
 setWorkspace('one');
 initOperations({ selectFleetScope: () => setActiveTab('auto-drain'), getJobsSubtab: () => jobsSubtab, getOperationsSubtab: () => operationsSubtab, getWorkspaces: () => ['one', 'two'].map(id => ({ id, name: id, status: 'active' })) });
+await fetchAndRenderOperations();
+// A slow selected readiness failure must not hold back the independently
+// completed fleet read, and the refresh still reports that selected failure.
+const fleetIndicator = get('global-drain-state');
+const fleetIndicatorLabel = () => fleetIndicator.querySelector('.global-drain-label').textContent;
+const idleFleetPayload = name => ({ items: [
+  { workspace_id: `${name}-workspace`, workspace_name: name, phase: 'idle', slots_used: 0, slots_ceiling: 4, eligible_count: 1, holds: [] },
+] });
+const drainingFleetPayload = name => ({ items: [
+  { workspace_id: `${name}-workspace`, workspace_name: name, phase: 'draining', slots_used: 1, slots_ceiling: 4, eligible_count: 1, holds: [] },
+] });
+setRegisteredHosts([{ name: 'ready-local', local: true }, { name: 'ready-remote', local: false }]);
+fleetResponses = { 'ready-local': idleFleetPayload('local'), 'ready-remote': drainingFleetPayload('remote') };
+fleetIndicator.hidden = true;
+fleetIndicator.dataset.drainState = 'idle';
+fleetIndicator.querySelector('.global-drain-label').textContent = 'Fleet idle · 2 workspaces';
+failReadiness = true;
+readinessFailureStatus = 503;
+delayReadiness = true;
+const readinessRefresh = fetchAndRenderAutoDrainPane().then(() => null, error => error);
+await tick();
+assert(readinessPending, 'the selected readiness request is still pending while fleet data completes');
+assert(!fleetIndicator.hidden && fleetIndicator.dataset.drainState === 'draining' && fleetIndicatorLabel() === 'Draining · 1 of 2', `the active remote fleet drain appears before readiness completes: ${fleetIndicatorLabel()}`);
+delayReadiness = false;
+releaseReadiness?.();
+const readinessError = await readinessRefresh;
+const readinessStatus = get('auto-drain-body').querySelector('[data-panel-status]');
+assert(readinessError?.status === 503 && readinessError.message === 'readiness unavailable' && readinessError.networkFailure === false, 'the refresh preserves the readiness HTTP error');
+assert(readinessStatus?.textContent.startsWith('Refresh failed; showing stale data: readiness unavailable') && get('auto-drain-body').getAttribute('aria-busy') === 'false', `the selected readiness panel shows its failure: ${readinessStatus?.textContent}`);
+failReadiness = false;
+readinessFailureStatus = 500;
+await fetchAndRenderAutoDrainPane();
+
+// An older fleet read cannot replace the current workspace's newer result.
+setRegisteredHosts([{ name: 'retired-local', local: true }, { name: 'retired-remote', local: false }]);
+fleetResponses = { 'retired-local': idleFleetPayload('old local'), 'retired-remote': idleFleetPayload('old remote') };
+delayFleet = true;
+const retiredRefresh = fetchAndRenderAutoDrainPane();
+await tick();
+assert(fleetReadsPending === 2, 'the retired scope fleet reads are pending');
+setWorkspace('two');
+setRegisteredHosts([{ name: 'current-local', local: true }, { name: 'current-remote', local: false }]);
+fleetResponses = { 'current-local': idleFleetPayload('current local'), 'current-remote': drainingFleetPayload('current remote') };
+delayFleet = false;
+await fetchAndRenderAutoDrainPane();
+assert(fleetIndicator.dataset.drainState === 'draining' && fleetIndicatorLabel() === 'Draining · 1 of 2', 'the current scope renders its active fleet drain');
+const retiredReleases = releaseFleetReads.splice(0);
+retiredReleases.forEach(release => release());
+await retiredRefresh;
+assert(fleetIndicator.dataset.drainState === 'draining' && fleetIndicatorLabel() === 'Draining · 1 of 2', 'a retired fleet response cannot overwrite the current view');
+setWorkspace('one');
+setRegisteredHosts([]);
+fleetResponses = {};
 await fetchAndRenderOperations();
 const mintedStatus = get('auto-tasks-body').querySelector('.pill');
 const taskStatus = statusPill('in-progress');
