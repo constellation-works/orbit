@@ -63,9 +63,22 @@ fn every_surface_reads_the_seeded_provider_limit_store() {
     }
     let fixture = Fixture::init();
     configure_crews(&fixture);
-    let runtime =
-        OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
-            .unwrap();
+    orbit_registry::ensure_machine_identity(&fixture.home.join(".orbit"), || {
+        Ok(orbit_registry::NewMachineIdentity {
+            name: "provider-limits-host".into(),
+            task_prefix: "PL".into(),
+        })
+    })
+    .unwrap();
+    let runtime = orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_resolved_roots(
+        orbit_core::runtime::OrbitRuntimeRoots {
+            global_root: fixture.home.join(".orbit"),
+            shared_root: fixture.work.join(".orbit"),
+            local_root: fixture.work.join(".orbit"),
+        },
+    )
+    .unwrap();
+    let reading_host = runtime.automation_machine_identity().unwrap();
     // Claude past the default 90% threshold, Codex well below it; Gemini
     // reports no usage at all.
     runtime
@@ -185,6 +198,10 @@ fn every_surface_reads_the_seeded_provider_limit_store() {
         .find(|exclusion| exclusion["crew"] == "opus")
         .unwrap_or_else(|| panic!("opus not excluded: {window:#}"));
     assert_eq!(exclusion["source"], "provider_limit", "{exclusion}");
+    assert!(
+        exclusion["reason"].as_str().unwrap().contains(reading_host),
+        "the JSON exclusion identifies the local reading's host: {exclusion}"
+    );
     assert_eq!(exclusion["until"], claude["until"], "{exclusion}");
     assert_eq!(window["runnable"], serde_json::json!(["sol"]), "{window}");
     let text = fixture
@@ -197,7 +214,8 @@ fn every_surface_reads_the_seeded_provider_limit_store() {
     assert!(
         text.lines().any(|line| line.contains("Crews:")
             && line.contains("excluded opus (provider_limit until ")
-            && line.contains("claude five_hour at 93%")),
+            && line.contains("claude five_hour at 93%")
+            && line.contains(reading_host)),
         "{text}"
     );
 

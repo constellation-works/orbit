@@ -903,8 +903,10 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   released for a `transient` failure other than a forge outage, with the
   task, class and reason) or `provider_limit` (this host's latest reading of
   the crew's provider usage window is at or over its threshold, written
-  `(provider_limit until <time>)` before the reading; it lifts at `until`
-  within the same drain, see
+  `(provider_limit until <time>)` before the reading and `reading from host
+  <machine-id>` after it; it lifts at `until` within the same drain. These
+  readings come from the executor's local store, independently of the owner's
+  login and usage limits. See
   [provider usage limits](../CONFIG.md#provider-usage-limits)). Each iteration's output carries
   the same window as `crews`. Auth exclusions also list provider, host, failure time, error class,
   re-login hint, credential source and next probe time (`auth_exclusions`).
@@ -1197,8 +1199,14 @@ one. From then on:
     or the landing branch has moved past that base and the same job passes
     on its tip. The landing updates the pull request's branch from the
     landing branch once and waits for the checks on the new head. No agent
-    runs. The owner merges that head only when it is a clean merge of the
-    accepted candidate with a commit already on the landing branch.
+    runs. If the same check still fails on that new head and the same job
+    passes on the base tip, the failure is the candidate's: the landing
+    stops for the one automatic repair, and the stop evidence carries the
+    failed job, its signature and a log excerpt. A repair that is already
+    spent stops in `review` instead. A base that has not moved, and is still
+    red, stops in `review` without a repair. The owner merges that head only
+    when it is a clean merge of the accepted candidate with a commit already
+    on the landing branch.
     When the owner checkout has `origin`, adopting a newly observed updated
     head requires a successful fresh fetch of the landing branch, even if
     the initial fetch failed and the head and base are cached. A failed

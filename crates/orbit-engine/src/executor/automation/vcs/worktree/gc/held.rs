@@ -8,18 +8,26 @@
 //! or unlink outside the held tree.
 
 use std::ffi::{CStr, CString, OsStr};
+#[cfg(target_os = "linux")]
 use std::fs;
 use std::io;
 use std::mem::MaybeUninit;
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
+#[cfg(target_os = "linux")]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path};
 
-/// A path descriptor needs only search access to the parent, not read access
-/// to the directory, so it can hold one whose access is still to be restored.
+/// Linux path descriptors can hold directories without read access.
+#[cfg(target_os = "linux")]
 const HELD_FLAGS: libc::c_int =
     libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+/// Darwin has no O_PATH. Require read access at open time and fail closed
+/// otherwise; fchmod can restore owner write/search access through this fd.
+/// Do not emulate O_PATH with a checked path or a /dev/fd path.
+#[cfg(target_os = "macos")]
+const HELD_FLAGS: libc::c_int =
+    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
 /// Listing reopens a held directory's own `.`, which is never a symlink.
 const LIST_FLAGS: libc::c_int = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC;
 const OWNER_RWX: libc::mode_t = 0o700;
@@ -27,8 +35,8 @@ const OWNER_RWX: libc::mode_t = 0o700;
 /// The device and inode an entry had when it was observed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Identity {
-    device: u64,
-    inode: u64,
+    device: libc::dev_t,
+    inode: libc::ino_t,
 }
 
 /// What a no-follow stat of one entry saw.
@@ -115,10 +123,14 @@ impl HeldDirectory {
             // SAFETY: errno is this thread's and the stream is live. The name
             // is copied before the next readdir invalidates the entry.
             unsafe {
-                *libc::__errno_location() = 0;
+                #[cfg(target_os = "linux")]
+                let errno = libc::__errno_location();
+                #[cfg(target_os = "macos")]
+                let errno = libc::__error();
+                *errno = 0;
                 let entry = libc::readdir(stream.0);
                 if entry.is_null() {
-                    let error = *libc::__errno_location();
+                    let error = *errno;
                     return if error == 0 {
                         Ok(names)
                     } else {
@@ -162,10 +174,25 @@ impl HeldDirectory {
         if directory.mode & OWNER_RWX != OWNER_RWX {
             // A path descriptor cannot be passed to fchmod. Its /proc link
             // names exactly the held inode, never a path that can move.
+            #[cfg(target_os = "linux")]
             fs::set_permissions(
                 format!("/proc/self/fd/{}", directory.fd.as_raw_fd()),
                 fs::Permissions::from_mode((directory.mode | OWNER_RWX) & 0o7777),
             )?;
+            #[cfg(target_os = "macos")]
+            {
+                // SAFETY: the readable no-follow descriptor is still bound
+                // to the expected directory, even if its name was replaced.
+                if unsafe {
+                    libc::fchmod(
+                        directory.fd.as_raw_fd(),
+                        (directory.mode | OWNER_RWX) & 0o7777,
+                    )
+                } < 0
+                {
+                    return Err(io::Error::last_os_error());
+                }
+            }
         }
         for child in directory.names()? {
             let entry = directory.entry(&child)?;
@@ -209,13 +236,11 @@ fn replaced(name: &CStr) -> io::Error {
     ))
 }
 
-// `dev_t` and `ino_t` are `u64` on 64-bit targets and narrower on some 32-bit
-// ones; widen them without a cast either way.
-#[allow(clippy::useless_conversion)]
+// Keep native types: Darwin dev_t is signed, unlike Linux dev_t.
 fn identity(metadata: &libc::stat) -> Identity {
     Identity {
-        device: u64::from(metadata.st_dev),
-        inode: u64::from(metadata.st_ino),
+        device: metadata.st_dev,
+        inode: metadata.st_ino,
     }
 }
 

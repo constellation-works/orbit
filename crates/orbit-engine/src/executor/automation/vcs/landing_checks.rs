@@ -11,7 +11,12 @@
 //!   or the base branch has moved past that base and the same job passes on
 //!   its tip. The landing merges the current base into the pull request's
 //!   branch once, through the provider's branch update, and waits for the
-//!   checks again on the new head. No agent runs.
+//!   checks again on the new head. No agent runs. A failure that is still
+//!   there after that one update, on a base tip where the same job passes,
+//!   is the candidate's: the landing stops for the one automatic repair,
+//!   with the failed job, its signature and a log excerpt, unless that
+//!   repair is already spent, in which case it stops in review. An unmoved
+//!   base that is still red stops in review without a repair.
 //! - **transient**: the log shows the network or the runner failing, by the
 //!   rule the validation gates already rerun on. The landing reruns the
 //!   failed jobs once and waits again.
@@ -26,9 +31,11 @@
 //!   base or the candidate at fault, so the landing stops in review and
 //!   spends nothing.
 //!
-//! The rerun, the branch update and the repair are each spent once; a
-//! failure past that, or one this module cannot classify, stops the landing
-//! in review as before, with the classification in the stop evidence.
+//! The rerun, the branch update and the repair are each spent once. A
+//! failure past that budget, or one this module cannot classify, stops the
+//! landing in review, with the classification in the stop evidence. The
+//! repair an inherited failure earns after its one update is that same
+//! single repair, not a second update or a second repair.
 //!
 //! A branch update moves the pull request's head off the accepted candidate.
 //! [`verified_base_update`] accepts the new head only when it is a merge of
@@ -152,6 +159,9 @@ struct FailedJob {
     signature: String,
     why: String,
     excerpt: String,
+    /// The moved base tip's same job succeeded. A failure that remains after
+    /// the one branch update is then the candidate's, not the base's.
+    tip_passes: bool,
 }
 
 /// Classify the failed checks on `status`'s head and act on them.
@@ -227,15 +237,17 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
             }
         };
         let signature = error_signature(&log, failed_step(job));
-        let (class, why) = if let Some(evidence) = transient_evidence(&log) {
+        let (class, why, tip_passes) = if let Some(evidence) = transient_evidence(&log) {
             (
                 CheckFailureClass::Transient,
                 format!("the log shows `{evidence}`"),
+                false,
             )
         } else if signature.step_fallback {
             (
                 CheckFailureClass::Inconclusive,
                 "its log names no diagnostic, only the failed step".to_string(),
+                false,
             )
         } else {
             match inherited(
@@ -248,8 +260,8 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
                 &mut base_jobs,
                 &mut tip_jobs,
             ) {
-                Err(gap) => (CheckFailureClass::Inconclusive, gap),
-                Ok(Some(why)) => (CheckFailureClass::Inherited, why),
+                Err(gap) => (CheckFailureClass::Inconclusive, gap, false),
+                Ok(Some(found)) => (CheckFailureClass::Inherited, found.why, found.tip_passes),
                 Ok(None) => (
                     CheckFailureClass::Candidate,
                     format!(
@@ -258,6 +270,7 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
                             " and it does not pass on the current base {tip}"
                         ))
                     ),
+                    false,
                 ),
             }
         };
@@ -269,6 +282,7 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
             signature: signature.text,
             why,
             excerpt: excerpt(&log),
+            tip_passes,
         });
     }
     let class = jobs
@@ -301,6 +315,25 @@ pub(super) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
         CheckFailureClass::Transient => Ok(CheckRecoveryStep::Stop(evidence(
             "it failed again after its one rerun, so the candidate stays in review",
         ))),
+        CheckFailureClass::Inherited
+            if (recovery.updated || head != context.candidate.candidate.commit)
+                && onto_passing_tip(&jobs) =>
+        {
+            // The one update already landed the candidate on a base tip where
+            // the same job passes, so the failure that remains is the
+            // candidate's. It takes the same single repair a candidate-class
+            // failure does, and a spent repair stops in review.
+            if context.automatic_repair_spent {
+                Ok(CheckRecoveryStep::Stop(evidence(
+                    "this candidate already is the one automatic repair, so it stays in review",
+                )))
+            } else {
+                Ok(CheckRecoveryStep::Repair(evidence(
+                    "it failed again after one branch update onto a base where the same job \
+                     passes, so the candidate is handed to one automatic repair",
+                )))
+            }
+        }
         CheckFailureClass::Inherited
             if recovery.updated || head != context.candidate.candidate.commit =>
         {
@@ -461,6 +494,16 @@ pub(super) fn head_check_evidence<H: RuntimeHost + ?Sized>(
 /// landing attempt.
 type CommitJobs = Option<Result<Vec<Value>, String>>;
 
+/// An inherited failure, and whether the moved base tip passes the same job.
+struct Inheritance {
+    why: String,
+    /// True when the moved tip's same job succeeded. A failed tip read does
+    /// not set this and does not turn a base-signature match inconclusive:
+    /// the first update still happens, and the failure is not treated as
+    /// surviving onto a passing tip.
+    tip_passes: bool,
+}
+
 /// Whether the failure of `job`, with genuine `signature`, is the base's:
 /// the same signature fails on the base commit, or the base branch moved and
 /// the same job passes there. `Ok(None)` is an answer read in full; `Err`
@@ -475,7 +518,7 @@ fn inherited<H: RuntimeHost + ?Sized>(
     moved_tip: Option<&str>,
     base_jobs: &mut CommitJobs,
     tip_jobs: &mut CommitJobs,
-) -> Result<Option<String>, String> {
+) -> Result<Option<Inheritance>, String> {
     let base_jobs = base_jobs
         .get_or_insert_with(|| commit_jobs(host, workspace, base).map_err(|e| e.to_string()))
         .as_ref()
@@ -499,7 +542,12 @@ fn inherited<H: RuntimeHost + ?Sized>(
             ));
         }
         if found.text == signature {
-            return Ok(Some(format!("the same signature fails on base {base}")));
+            let tip_passes =
+                moved_tip.is_some_and(|tip| same_job_passes(host, workspace, job, tip, tip_jobs));
+            return Ok(Some(Inheritance {
+                why: format!("the same signature fails on base {base}"),
+                tip_passes,
+            }));
         }
     }
     let Some(tip) = moved_tip else {
@@ -516,7 +564,40 @@ fn inherited<H: RuntimeHost + ?Sized>(
         .any(|candidate| {
             same_job(candidate, job) && candidate["conclusion"].as_str() == Some("success")
         })
-        .then(|| format!("the base branch moved from {base} to {tip}, where it passes")))
+        .then(|| Inheritance {
+            why: format!("the base branch moved from {base} to {tip}, where it passes"),
+            tip_passes: true,
+        }))
+}
+
+/// Whether every inherited job passes on the moved base tip. One that does
+/// not keeps the post-update review stop: the base may still explain it.
+fn onto_passing_tip(jobs: &[FailedJob]) -> bool {
+    jobs.iter()
+        .any(|job| job.class == CheckFailureClass::Inherited)
+        && jobs
+            .iter()
+            .filter(|job| job.class == CheckFailureClass::Inherited)
+            .all(|job| job.tip_passes)
+}
+
+/// Whether `tip` reports `job` succeeded. A failed read is not a pass, and
+/// it is cached so a later job sees the same answer.
+fn same_job_passes<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &Path,
+    job: &Value,
+    tip: &str,
+    tip_jobs: &mut CommitJobs,
+) -> bool {
+    let read = tip_jobs.get_or_insert_with(|| {
+        commit_jobs(host, workspace, tip).map_err(|error| error.to_string())
+    });
+    read.as_ref().is_ok_and(|jobs| {
+        jobs.iter().any(|candidate| {
+            same_job(candidate, job) && candidate["conclusion"].as_str() == Some("success")
+        })
+    })
 }
 
 /// A shared-base failure already repaired on a newer base. Every failed

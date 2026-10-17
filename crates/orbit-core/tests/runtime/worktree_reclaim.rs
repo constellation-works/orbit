@@ -54,7 +54,7 @@ fn admission_reclaims_oldest_kept_worktrees_first_and_leaves_active_runs() {
     // Host validation output, keyed by the checkout outside it: the oldest
     // run's checkout is gone, the active run's is not.
     let mut host_targets = Vec::new();
-    let linux = cfg!(target_os = "linux");
+    let host_gc = cfg!(any(target_os = "linux", target_os = "macos"));
     // Insert in reverse age order, so insertion order cannot pass this test.
     for (age, state) in [
         (1, JobRunState::Failed),
@@ -87,7 +87,7 @@ fn admission_reclaims_oldest_kept_worktrees_first_and_leaves_active_runs() {
         );
         std::fs::create_dir_all(worktree.join("cache")).unwrap();
         std::fs::write(worktree.join("cache/output"), vec![0; 37]).unwrap();
-        if linux && age >= 3 {
+        if host_gc && age >= 3 {
             let built = orbit_engine::review_gate::run_required_validation(
                 &runtime,
                 &worktree,
@@ -124,11 +124,11 @@ fn admission_reclaims_oldest_kept_worktrees_first_and_leaves_active_runs() {
     let host_bytes = inspected
         .reports
         .iter()
-        .filter(|report| linux && report.path == host_targets[1])
+        .filter(|report| host_gc && report.path == host_targets[1])
         .map(|report| report.bytes_reclaimed)
         .sum::<u64>();
     assert_eq!(inspected.bytes_reclaimed, 74 + host_bytes, "{inspected:#?}");
-    assert!(!linux || host_bytes > 0, "{inspected:#?}");
+    assert!(!host_gc || host_bytes > 0, "{inspected:#?}");
     assert!(
         kept.iter()
             .take(3)
@@ -151,7 +151,7 @@ fn admission_reclaims_oldest_kept_worktrees_first_and_leaves_active_runs() {
             .take(3)
             .all(|(_, path)| path.join(".git").exists())
     );
-    if linux {
+    if host_gc {
         assert!(
             host_targets[0].join("debug/output").is_file(),
             "an active run's output stays"
@@ -174,7 +174,7 @@ fn admission_reclaims_oldest_kept_worktrees_first_and_leaves_active_runs() {
         })
         .collect::<Vec<_>>();
     let mut expected = vec![kept[1].0.clone(), kept[0].0.clone()];
-    if linux {
+    if host_gc {
         expected.insert(0, kept[3].0.clone());
     }
     assert_eq!(order, expected, "oldest output must be reclaimed first");

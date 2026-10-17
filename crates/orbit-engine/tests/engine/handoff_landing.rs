@@ -9,8 +9,10 @@
 //! on a conflicting or stale base is marked repairable [ORB-14261]. A hosted
 //! check the review owed the owner gates the merge, and only an explicit
 //! success counts [ORB-15677] [ORB-15812]. A failed check is classified from
-//! its job log: one inherited from the base updates the branch, a transient
-//! one is rerun once, and the candidate's own earns one repair [ORB-15956].
+//! its job log: one inherited from the base updates the branch, and one that
+//! still fails on a base tip where the same job passes earns one repair
+//! [ORB-16322]; a transient one is rerun once, and the candidate's own earns
+//! one repair [ORB-15956].
 //! Evidence that cannot be read decides none of those and spends nothing,
 //! and a branch update is verified against the base as the provider merged
 //! it, not as the owner last fetched it [ORB-15970].
@@ -1428,6 +1430,118 @@ fn a_check_failure_inherited_from_the_base_updates_the_branch_and_lands() {
             .is_some_and(|action| action.contains("inherited") && action.contains(&fixed)),
         "{evidence}"
     );
+}
+
+/// [ORB-16322] An inherited check that still fails after the one branch
+/// update is the candidate's when the same job passes on the base tip. The
+/// landing stops for the one automatic repair, and the stop evidence carries
+/// the failed job, its signature and a log excerpt. A landing whose repair
+/// is already spent stops in review after that same one update. A tip that
+/// does not pass the job stays a review stop, and nothing here reruns the
+/// job or updates the branch a second time.
+#[test]
+fn an_inherited_failure_that_survives_the_branch_update_gets_one_repair() {
+    for (label, repair_spent, tip_passes, after, repairable, signature) in [
+        (
+            "candidate diagnostic on a green tip",
+            false,
+            true,
+            CANDIDATE_ERROR,
+            true,
+            "cannot find value `delivered` in this scope",
+        ),
+        (
+            "repair already spent",
+            true,
+            true,
+            CANDIDATE_ERROR,
+            false,
+            "cannot find value `delivered` in this scope",
+        ),
+        (
+            "the base diagnostic survives onto a green tip",
+            false,
+            true,
+            CLIPPY_DEAD_CODE,
+            true,
+            "function `stale_helper` is never used",
+        ),
+        (
+            "the tip is red too",
+            false,
+            false,
+            CLIPPY_DEAD_CODE,
+            false,
+            "function `stale_helper` is never used",
+        ),
+    ] {
+        let sandbox = tempdir().unwrap();
+        let mut forge = FakeForge::new(sandbox.path(), true);
+        forge.context.automatic_repair_spent = repair_spent;
+        let candidate = forge.context.candidate.candidate.commit.clone();
+        let base = forge.context.candidate.base.commit.clone();
+        std::fs::write(forge.repo.join("fix.txt"), "the base's fix\n").unwrap();
+        git(&forge.repo, &["add", "fix.txt"]);
+        git(&forge.repo, &["commit", "-q", "-m", "fix the base"]);
+        let fixed = git(&forge.repo, &["rev-parse", "main"]);
+        forge.job(&candidate, failed(1, 11, CLIPPY_DEAD_CODE));
+        forge.job(&base, failed(2, 21, CLIPPY_DEAD_CODE));
+        forge.job(
+            &fixed,
+            if tip_passes {
+                passed(3, 31)
+            } else {
+                failed(3, 31, CLIPPY_DEAD_CODE)
+            },
+        );
+        forge.state.lock().unwrap().after_update = Some(failed(4, 41, after));
+
+        let error = land_with(&forge, json!({"max_wait_seconds": 0}))
+            .expect_err("the surviving failure stops the landing");
+
+        assert_eq!(
+            forge.sent("pr.update_branch").len(),
+            1,
+            "{label}: one update"
+        );
+        assert!(
+            forge.sent("ci.rerun_failed").is_empty(),
+            "{label}: no rerun"
+        );
+        assert!(forge.sent("pr.merge").is_empty(), "{label}: no merge");
+        assert_eq!(
+            forge.steps(),
+            vec![HandoffLandingStep::Stop { repairable }],
+            "{label}"
+        );
+        let reason: String = serde_json::from_str(&forge.last_evidence()).unwrap();
+        assert!(
+            reason.contains("CI / clippy")
+                && reason.contains(signature)
+                && reason.contains("Process completed with exit code 101"),
+            "{label}: the stop carries the failed job, signature and excerpt: {reason}"
+        );
+        if repairable {
+            assert!(
+                reason.contains("automatic repair") && !reason.contains("stays in review"),
+                "{label}: {reason}"
+            );
+        } else if repair_spent {
+            assert!(
+                reason.contains("already is the one automatic repair")
+                    && reason.contains("stays in review"),
+                "{label}: {reason}"
+            );
+        } else {
+            assert!(
+                reason.contains("one branch update")
+                    && reason.contains("stays in review")
+                    && !reason.contains("automatic repair"),
+                "{label}: {reason}"
+            );
+        }
+        assert!(error.to_string().contains(signature), "{label}: {error}");
+    }
 }
 
 /// [ORB-15956] A check the candidate itself fails stops the landing for the

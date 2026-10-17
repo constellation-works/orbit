@@ -26,8 +26,10 @@
 //!    automatic repair leaf that does exactly that [ORB-14261]. A failed
 //!    hosted check is classified first ([`super::landing_checks`]): a failure
 //!    inherited from the base updates the branch onto the current base once,
-//!    a transient one is rerun once, and one the candidate caused stops for
-//!    the same single repair [ORB-15956].
+//!    and one that still fails there on a base tip where the same job passes
+//!    stops for the one automatic repair; a transient one is rerun once, and
+//!    one the candidate caused stops for the same single repair [ORB-15956]
+//!    [ORB-16322].
 //!
 //! The guarded `review -> done` transition is the owner store's, behind its own
 //! recheck of the current authorization and the digest-pinned validation
