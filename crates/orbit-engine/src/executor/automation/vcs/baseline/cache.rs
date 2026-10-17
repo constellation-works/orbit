@@ -80,7 +80,7 @@ pub(in super::super) fn cache_paths(
 
 /// A base run this repository's cache records: the scratch checkout it ran
 /// in and the lock it held throughout.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(in super::super) struct RecordedBaseRun {
     pub(in super::super) worktree: PathBuf,
     pub(in super::super) lock: PathBuf,
@@ -90,7 +90,7 @@ pub(in super::super) struct RecordedBaseRun {
 /// a run starts and kept afterwards, so it is the durable record that the
 /// run's checkout (and so its host validation target) existed; holding the
 /// lock proves no base run is using either.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(in super::super) fn recorded_base_runs(repo: &Path) -> Vec<RecordedBaseRun> {
     let Ok(dir) = git_common_dir(repo).map(|common| common.join(CACHE_DIR)) else {
         return Vec::new();

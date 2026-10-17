@@ -70,7 +70,10 @@ pub(super) fn is_registered_worktree(repo_root: &Path, path: &Path) -> Result<bo
     ))
 }
 
-#[cfg(all(target_os = "linux", feature = "test-support"))]
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos"),
+    feature = "test-support"
+))]
 pub use gc::with_host_target_removal_hook;
 pub use gc::{
     WorktreeGcOptions, WorktreeGcResult, collect_worktrees, run_worktree_has_reclaim_output,

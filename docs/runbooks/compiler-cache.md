@@ -399,8 +399,10 @@ build-budget admission, toolchain environment and candidate/base/tree evidence
 bindings are unchanged. Baseline result schema 9 includes the workspace output
 bindings in a new versioned cache key so earlier results cannot certify the new execution contract; old records
 are retained at their earlier keys. These targets are rebuildable host state;
-configuration does not delete old output or shared caches. The Linux collector
-retains its run attribution and scratch lease controls; other platforms retain
+configuration does not delete old output or shared caches. Native Linux and macOS
+collectors preserve run attribution, base-cache locks and scratch leases. macOS
+uses readable no-follow directory descriptors and descriptor-bound permission
+restoration; unreadable or unprovable targets are refused. Other platforms retain
 output for operator maintenance. The first validation
 in each source namespace pays for a fresh build; dependencies still use the
 compiler cache. Sandboxed builds continue using their own warm targets.
