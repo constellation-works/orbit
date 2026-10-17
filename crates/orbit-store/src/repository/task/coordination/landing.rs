@@ -14,6 +14,7 @@ use chrono::Utc;
 use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::handoff::*;
+use serde_json::Value;
 
 use super::TaskCommitBoundary;
 use super::lifecycle::{decode, invalid, row};
@@ -450,7 +451,8 @@ impl TaskCommitBoundary {
     /// tells the caller what becomes of the claim: an original claim waits in
     /// `repair_pending` with its task back `in-progress` for one repair leaf;
     /// a claim that already is that repair fails and blocks its task with
-    /// both attempts' evidence.
+    /// both attempts' human reasons. The raw stop string, including an
+    /// `owner_landing_refusal` diagnostic, stays on the landing attempt.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn stop_landing_attempt(
         &self,
@@ -474,13 +476,14 @@ impl TaskCommitBoundary {
             ));
         }
         let (old, mut attempt) = self.live_attempt(auth, handoff_id)?;
+        let displayed = operator_stop_reason(reason);
         attempt.state = LandingAttemptState::Stopped;
-        attempt.evidence = Some(reason.into());
+        attempt.evidence = Some(reason.to_string());
         attempt.updated_at = Utc::now();
         effects
             .replacements
             .push((old, row(ATTEMPT, handoff_id, &attempt)?));
-        params.status_note = Some(reason.into());
+        params.status_note = Some(displayed.clone());
         params.status_event = Some("landing_stopped".into());
         if !repairable {
             return Ok(LandingStop::Stopped);
@@ -492,14 +495,14 @@ impl TaskCommitBoundary {
                     auth,
                     &format!(
                         "landing stopped on a repairable failure; an automatic repair \
-                         replaces this handoff: {reason}"
+                         replaces this handoff: {displayed}"
                     ),
                     params,
                     effects,
                 )?;
                 params.status = Some(TaskStatus::InProgress);
                 params.status_note = Some(format!(
-                    "{reason}; the candidate waits for one automatic repair leaf, which \
+                    "{displayed}; the candidate waits for one automatic repair leaf, which \
                      re-applies it onto the current base, revalidates it and hands it off again"
                 ));
                 Ok(LandingStop::Repair)
@@ -507,7 +510,7 @@ impl TaskCommitBoundary {
             Some(first) => {
                 self.revoke_handoff_authority(
                     auth,
-                    &format!("the automatic repair's landing stopped again: {reason}"),
+                    &format!("the automatic repair's landing stopped again: {displayed}"),
                     params,
                     effects,
                 )?;
@@ -516,11 +519,33 @@ impl TaskCommitBoundary {
                     first,
                     &state.claim.claim_id,
                     &accepted,
-                    reason,
+                    &displayed,
                 )))
             }
         }
     }
+}
+
+/// Operator text for a landing stop.
+///
+/// The landing attempt keeps the raw evidence string. An
+/// `owner_landing_refusal` diagnostic stays there; status notes, revocation
+/// reasons, the repair leaf's stop text and the blocked comment carry its
+/// capped human `reason.value`. Any other evidence, including an older
+/// plain string, is shown unchanged.
+pub(super) fn operator_stop_reason(evidence: &str) -> String {
+    let Ok(value) = serde_json::from_str::<Value>(evidence) else {
+        return evidence.to_string();
+    };
+    if value.get("kind").and_then(Value::as_str) != Some("owner_landing_refusal") {
+        return evidence.to_string();
+    }
+    value
+        .pointer("/reason/value")
+        .and_then(Value::as_str)
+        .filter(|reason| !reason.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| evidence.to_string())
 }
 
 fn retry_id(handoff_id: &str, request_key: &str) -> String {
@@ -538,23 +563,25 @@ pub(super) enum LandingStop {
     Blocked(String),
 }
 
-/// The blocked task's comment: both attempts' candidates and stop evidence,
-/// so an operator sees why the automatic repair could not land either.
+/// The blocked task's comment: both attempts' candidates and the human
+/// reason each stop recorded, so an operator sees why the automatic repair
+/// could not land either. A diagnostic object stays on the attempt.
 fn repair_exhausted_comment(
     first: &ClaimRepair,
     repair_claim_id: &str,
     repaired: &AcceptedHandoff,
     reason: &str,
 ) -> String {
+    let first_reason = operator_stop_reason(&first.stop_evidence);
+    let reason = operator_stop_reason(reason);
     format!(
         "Automatic repair exhausted: the repaired handoff's landing stopped again, so the \
          task is blocked for an operator.\n\n\
-         First attempt (claim {}, handoff {}): {}\nStopped: {}\n\n\
+         First attempt (claim {}, handoff {}): {}\nStopped: {first_reason}\n\n\
          Repair attempt (claim {repair_claim_id}, handoff {}): {}\nStopped: {reason}",
         first.repairs_claim_id,
         first.handoff_id,
         describe_candidate(&first.candidate),
-        first.stop_evidence,
         repaired.handoff_id,
         describe_candidate(&repaired.handoff.candidate),
     )

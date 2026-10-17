@@ -1341,9 +1341,12 @@ one. From then on:
   Owner PR refusals also retain a versioned JSON diagnostic in the existing
   landing-attempt evidence string (`kind: owner_landing_refusal`,
   `schema_version: 1`), alongside its safe human-readable `reason.value`.
-  Read it from the stopped attempt, whose attempt number and owner run bind it
-  to the accepted handoff; retrying the same handoff preserves that first
-  attempt's evidence. Older plain-string evidence remains valid.
+  The task status note, the handoff revocation reason, the repair leaf's
+  stop text and a blocked repair comment carry that human `reason.value`,
+  not the diagnostic object. Read the object from the stopped attempt, whose
+  attempt number and owner run bind it to the accepted handoff; retrying the
+  same handoff preserves that first attempt's evidence. Older plain-string
+  evidence remains valid and is still shown as recorded.
 
   The diagnostic records the accepted base/candidate, latest typed PR identity,
   review and rollup, owner-owed contexts, final observed classification, and
