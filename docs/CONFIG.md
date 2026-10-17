@@ -991,7 +991,10 @@ existing recovery activities, final validation and push do the repair:
   error signature and log excerpt as evidence. When that same signature already
   fails on the base commit and the base branch has not moved past it, the
   watcher admits no repair: it waits for the base within the completion
-  deadline and then stops with a base-red reason. That classification is the
+  deadline and then stops with a base-red reason. The same wait applies when
+  the base has moved to a commit whose same job has not concluded. A concluded
+  job on that commit, including a failure, or a commit that lists no such job,
+  is not this wait. That classification is the
   landing's, not a second copy. A failure the base does not fail the same way
   is still repaired, and the three-attempt budget is unchanged. A conflict is
   rebased onto the current base by PR conflict recovery.
