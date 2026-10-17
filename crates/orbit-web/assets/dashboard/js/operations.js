@@ -58,7 +58,7 @@ function clearAllFeedbackTimers() {
 }
 
 function isWarningLine(line) {
-  return /^\s*(?:warning|note):/i.test(line);
+  return /^\s*(?:warning|note|refresh failed):/i.test(line);
 }
 
 function expireFeedback(id) {
@@ -328,7 +328,7 @@ async function runOperation({ selection, key, feedbackId, pending, failure, rend
     } catch (error) {
       if (selection.current()) {
         $(feedbackId)?.appendChild(el("span", {
-          text: ` Refresh failed: ${error.message}. The action succeeded; refresh before submitting another action.`,
+          text: `\nRefresh failed: ${error.message}. The action succeeded; refresh before submitting another action.`,
         }));
       }
     }
