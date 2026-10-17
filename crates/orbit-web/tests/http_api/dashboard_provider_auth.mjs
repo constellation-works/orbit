@@ -230,6 +230,8 @@ assert(item, 'an authentication failure is listed');
 assert(item.textContent.includes('claude') && item.textContent.includes('dk-server-2'), `the item names provider and host: ${item.textContent}`);
 const links = [...item.querySelectorAll('a')].map(link => link.textContent);
 assert.deepEqual(links, ['jrun-auth-early', 'jrun-auth-late'], `the failing runs are linked: ${links}`);
+const linkScopes = [...item.querySelectorAll('a')].map(link => link.href);
+assert(linkScopes.every(href => href.includes('workspace=ws-fixture')), `run links keep the selected workspace scope: ${linkScopes}`);
 const fix = item.querySelector('.drain-provider-auth-fix');
 assert(fix && fix.textContent.includes('claude auth login'), `the fix command is shown: ${item.textContent}`);
 

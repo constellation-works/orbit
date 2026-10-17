@@ -2392,7 +2392,7 @@ function autoDrainProviderAuth(failures) {
     const runs = Array.isArray(item.runs) ? item.runs : [];
     runs.forEach((run, index) => {
       row.append(index === 0 ? " " : ", ");
-      if (run?.run_id) row.append(runLink(run.run_id));
+      if (run?.run_id) row.append(runLink(run.run_id, selectedWorkspace()?.id));
     });
     if (item.fix_command) {
       row.append(" ");
