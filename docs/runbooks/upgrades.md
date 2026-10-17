@@ -263,6 +263,8 @@ the installed binary for its `update --contract` and, when it speaks
 - `orbit mcp serve` hands over once no request is in flight. The pid, stdio pipes and
   MCP session survive — the client does not re-initialize — because the new image
   receives the initialize parameters and any unread input (`mcp-stdio-v1`).
+  A request that arrives while the server stops reading is answered first, and the
+  session is then handed over rather than closed.
   Only requests accepted by the MCP transport count as in flight; malformed or
   dropped messages cannot prevent handover when their errors omit the request id.
   A buffered partial line larger than 32 KiB defers handover: the current image
