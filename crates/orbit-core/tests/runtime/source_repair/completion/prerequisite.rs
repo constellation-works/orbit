@@ -376,7 +376,7 @@ esac
 
 fn assert_resumed_merge(
     f: &Fixture,
-    checkout: &PathBuf,
+    checkout: &std::path::Path,
     calls: PathBuf,
     token: &str,
     reread: bool,
