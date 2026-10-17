@@ -183,6 +183,120 @@ fn a_second_base_stop_blocks_the_task_with_both_attempts_evidence() {
     );
 }
 
+/// An owner pull-request refusal stores its diagnostic on the landing attempt.
+/// The task status note, the repair leaf's stop text and the blocked comment
+/// carry the diagnostic's human reason. The engine's handoff landing records
+/// this same evidence string; its test host does not persist a task, so the
+/// note and comment are observed on the owner's record of that stop.
+fn an_owner_landing_refusal_shows_the_human_reason_not_the_diagnostic() {
+    const FIRST_REASON: &str =
+        "pull request #42 conflicts with its base; the owner does not rebase unvalidated code";
+    const SECOND_REASON: &str =
+        "pull request #42 conflicts with its base again after the one automatic repair";
+    const FIRST_SENTINEL: &str = "first-observation-sentinel";
+    const SECOND_SENTINEL: &str = "second-observation-sentinel";
+
+    let owner = OwnerLocal::new();
+    let first = owner.handed_off_leaf(|checkout, _| {
+        std::fs::write(checkout.join(FILE), FIRST).unwrap();
+        "Outcome: success\nImplemented the first change."
+    });
+    let task = owner.pair.claimed_task(&first);
+    let first_claim = owner.claim_of(&first);
+    let first_evidence = owner_landing_refusal(FIRST_REASON, FIRST_SENTINEL);
+    let first_handoff = owner.stop_with_refusal(&task, &first_evidence);
+
+    assert_eq!(owner.claim_phase(&first_claim), "repair_pending");
+    assert_eq!(owner.pair.owner_status(&task), "in-progress");
+    assert_eq!(
+        attempt_evidence(&owner, &first_handoff).as_deref(),
+        Some(first_evidence.as_str())
+    );
+    let notes = landing_stopped_notes(&owner.pair.owner_task(&task));
+    assert!(
+        notes.iter().any(|note| {
+            note.contains(FIRST_REASON)
+                && note.contains("automatic repair")
+                && !note.contains(FIRST_SENTINEL)
+                && !note.contains("owner_landing_refusal")
+        }),
+        "the status note carries the human reason: {notes:?}"
+    );
+
+    let repair = owner.handed_off_leaf(|checkout, _| {
+        std::fs::write(checkout.join(FILE), REPAIRED).unwrap();
+        "Outcome: success\nRepaired a resumed candidate onto the current base."
+    });
+    let carried = owner.leaf_input(&repair);
+    let carried_stop = carried["claim_repair"]["stop_evidence"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        carried_stop.contains(FIRST_REASON)
+            && !carried_stop.contains(FIRST_SENTINEL)
+            && !carried_stop.contains("owner_landing_refusal"),
+        "the repair leaf sees the human reason: {carried_stop}"
+    );
+
+    let repair_claim = owner.claim_of(&repair);
+    let second_evidence = owner_landing_refusal(SECOND_REASON, SECOND_SENTINEL);
+    let second_handoff = owner.stop_with_refusal(&task, &second_evidence);
+    assert_eq!(owner.claim_phase(&repair_claim), "failed");
+    assert_eq!(owner.pair.owner_status(&task), "blocked");
+    assert_eq!(
+        attempt_evidence(&owner, &second_handoff).as_deref(),
+        Some(second_evidence.as_str())
+    );
+    assert_eq!(
+        attempt_evidence(&owner, &first_handoff).as_deref(),
+        Some(first_evidence.as_str()),
+        "the first attempt keeps the diagnostic after the repair stops"
+    );
+    let notes = landing_stopped_notes(&owner.pair.owner_task(&task));
+    assert!(
+        notes.iter().any(|note| note == SECOND_REASON),
+        "the blocked status note is the human reason: {notes:?}"
+    );
+    assert!(
+        notes.iter().all(|note| {
+            !note.contains(FIRST_SENTINEL)
+                && !note.contains(SECOND_SENTINEL)
+                && !note.contains("owner_landing_refusal")
+        }),
+        "no status note carries the diagnostic: {notes:?}"
+    );
+    let comments = comments_of(&owner.pair.owner_task(&task));
+    for evidence in [
+        first_claim.as_str(),
+        repair_claim.as_str(),
+        FIRST_REASON,
+        SECOND_REASON,
+    ] {
+        assert!(
+            comments.contains(evidence),
+            "{evidence} in the blocked task's comments: {comments}"
+        );
+    }
+    assert!(
+        !comments.contains(FIRST_SENTINEL)
+            && !comments.contains(SECOND_SENTINEL)
+            && !comments.contains("owner_landing_refusal"),
+        "the blocked comment does not carry the diagnostic: {comments}"
+    );
+    let pass = owner.pair.pass(&owner.drain);
+    assert!(pass["error"].is_null(), "{pass}");
+    assert_eq!(
+        owner
+            .pair
+            .follower_jobs
+            .list_job_runs(LOCAL_LEAF_JOB)
+            .unwrap()
+            .len(),
+        2,
+        "a blocked task admits no further repair: {pass}"
+    );
+}
+
 /// An owner draining its own backlog in local ship mode: the drain reaches the
 /// owner as its own local session, and its leaves run in worktrees of the
 /// owner's repository.
@@ -565,6 +679,33 @@ impl OwnerLocal {
         self.accepted(claim_id).handoff.candidate.candidate.commit
     }
 
+    /// Record the diagnostic string an owner pull-request refusal stores,
+    /// against the landing attempt acceptance dispatched.
+    fn stop_with_refusal(&self, task: &str, evidence: &str) -> String {
+        let runtime = &self.pair.wire.owner;
+        let attempt = runtime
+            .landing_attempts()
+            .unwrap()
+            .into_iter()
+            .find(|attempt| {
+                attempt.task_id == task && attempt.state == LandingAttemptState::Dispatched
+            })
+            .unwrap_or_else(|| panic!("no landing dispatched for {task}"));
+        let handoff_id = attempt.handoff_id.clone();
+        self.own_landing_worker(attempt.job_run_id.as_deref().expect("landing job"));
+        RuntimeHost::record_handoff_landing(
+            runtime,
+            &orbit_engine::HandoffLandingUpdate {
+                handoff_id: handoff_id.clone(),
+                step: orbit_engine::HandoffLandingStep::Stop { repairable: true },
+                observed: None,
+                evidence: evidence.to_string(),
+            },
+        )
+        .unwrap_or_else(|error| panic!("record owner landing refusal: {error}"));
+        handoff_id
+    }
+
     fn leaf_input(&self, leaf: &str) -> Value {
         self.pair
             .follower_jobs
@@ -639,6 +780,55 @@ impl Drop for OwnerLocal {
     }
 }
 
+/// The evidence string `stop_pr` records for an owner landing refusal.
+fn owner_landing_refusal(reason: &str, sentinel: &str) -> String {
+    json!({
+        "schema_version": 1,
+        "kind": "owner_landing_refusal",
+        "reason": {
+            "value": reason,
+            "original_chars": reason.chars().count(),
+            "truncated": false
+        },
+        "repairable": true,
+        "owner_owed": {
+            "state": "collected",
+            "original_count": 40,
+            "truncated": true,
+            "items": [{
+                "value": sentinel,
+                "original_chars": sentinel.chars().count(),
+                "truncated": false
+            }]
+        },
+        "observation": {"required_checks": {"state": "not_collected"}, "sentinel": sentinel},
+        "workflow_prerequisites": {"state": "not_collected"},
+        "emission_proof": {"state": "not_collected"}
+    })
+    .to_string()
+}
+
+fn attempt_evidence(owner: &OwnerLocal, handoff_id: &str) -> Option<String> {
+    owner
+        .pair
+        .wire
+        .owner
+        .landing_attempt_record(handoff_id, 1)
+        .unwrap()
+        .expect("landing attempt")
+        .evidence
+}
+
+fn landing_stopped_notes(task: &Value) -> Vec<String> {
+    task["history"]
+        .as_array()
+        .expect("task history")
+        .iter()
+        .filter(|event| event["event"] == "landing_stopped")
+        .map(|event| event["note"].as_str().unwrap_or("").to_string())
+        .collect()
+}
+
 fn engine_action(host: &OrbitRuntime, action: &str, input: &Value) -> Value {
     orbit_engine::execute_deterministic_action(
         host,
@@ -677,7 +867,8 @@ impl OwnerCoordinator for ToSelf {
 crate::scenario_table!(
     a_landing_stopped_on_its_base_is_repaired_and_lands_under_the_same_task_scenarios,
     a_landing_stopped_on_its_base_is_repaired_and_lands_under_the_same_task,
-    a_second_base_stop_blocks_the_task_with_both_attempts_evidence
+    a_second_base_stop_blocks_the_task_with_both_attempts_evidence,
+    an_owner_landing_refusal_shows_the_human_reason_not_the_diagnostic
 );
 
 #[path = "landing_retry.rs"]

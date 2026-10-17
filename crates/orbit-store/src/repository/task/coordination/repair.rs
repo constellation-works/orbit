@@ -136,6 +136,7 @@ impl TaskCommitBoundary {
             let stop_evidence = self
                 .landing_attempt(&accepted.handoff_id)?
                 .and_then(|attempt| attempt.evidence)
+                .map(|evidence| super::landing::operator_stop_reason(&evidence))
                 .unwrap_or_default();
             candidates.push(RepairCandidate {
                 repair: ClaimRepair {
