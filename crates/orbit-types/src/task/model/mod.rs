@@ -51,8 +51,8 @@ pub use support::{
     MAX_TASK_ARTIFACT_CONTENT_BYTES, ResolvedTaskDependency, ResolvedTaskRelation, TaskArtifact,
     TaskComment, TaskHistoryEntry, UnsatisfiableTaskDependency, artifact_presentation,
     image_bytes_match_media_type, inline_safe_artifact_media_type, is_inline_image_media_type,
-    is_textual_artifact_media_type, media_type_for_artifact_path, normalized_artifact_media_type,
-    push_external_ref_if_missing,
+    is_textual_artifact_media_type, media_type_for_artifact_path, names_task_delivery_pull_request,
+    normalized_artifact_media_type, push_external_ref_if_missing,
 };
 
 pub use task::{

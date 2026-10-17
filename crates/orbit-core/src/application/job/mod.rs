@@ -8,6 +8,7 @@ pub(crate) mod delivery;
 mod exec;
 mod final_recovery;
 mod forge_hold_resume;
+mod orphan_adoption;
 pub(crate) mod pipeline;
 pub(crate) mod pipeline_actions;
 mod pr_auto_fix;
@@ -47,6 +48,7 @@ pub(crate) use catalog::{DEFAULT_JOB_FILES, seed_default_jobs};
 pub use catalog::{JobCatalogEntry, JobCatalogFilter};
 pub use catalog_layers::CatalogReferenceLayer;
 pub use exec::V2JobRunResult;
+pub(crate) use orphan_adoption::AdoptionAuthority;
 pub use pipeline::{
     PipelineInvokeResult, PipelineWaitEntry, PipelineWaitResult, PipelineWorkerLogSnapshot,
     SubmissionKind, SubmissionNotices,

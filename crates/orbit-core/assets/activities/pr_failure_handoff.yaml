@@ -49,6 +49,11 @@ spec:
       - phase
       - decision
     properties:
+      closed_stale_pull_requests:
+        type: array
+        description: >
+          The task's other open delivery pull requests closed after a new
+          blocked handoff pull request was created, as for `pr_open`.
       phase:
         type: string
       decision:

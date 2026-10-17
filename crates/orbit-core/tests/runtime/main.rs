@@ -1,8 +1,9 @@
 //! The composed runtime through its public surface: dispatch admission, the
 //! distributed drain, `os:` tag routing, retired deterministic stubs, final
 //! recovery, repeated rebase recovery, relation auto-close, PR closure on
-//! terminal decisions, plugin inspection, the sandbox opt-out, the agent
-//! sandbox mask and cold lexical search hydration.
+//! terminal decisions and requeues, orphaned delivery adoption, plugin
+//! inspection, the sandbox opt-out, the agent sandbox mask and cold lexical
+//! search hydration.
 //!
 //! One integration-test binary per area keeps link cost down; add a module
 //! here rather than a new top-level `tests/*.rs` file
@@ -85,6 +86,7 @@ mod implement_blocker;
 mod invocation_metrics;
 mod job_finalization;
 mod local_route_before_pr;
+mod orphan_adoption;
 mod plugin_inspection;
 mod pr_forge_admission;
 mod pr_infrastructure;

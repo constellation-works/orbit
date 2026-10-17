@@ -844,8 +844,12 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   `superseded_pull_request` in that step's output (`orbit run show
   <leaf-run> --json`): `close_failed` means the earlier pull request is
   still open, so close it by hand. To start over instead, add
-  `--discard-candidate`; the earlier pull request then stays open until the
-  task reaches done, rejected or archived, which closes it.
+  `--discard-candidate`; that move closes the earlier pull request with a
+  comment once no run or claim of the task is live. Either way, whichever
+  run publishes the task's next pull request closes any other open Orbit
+  pull request of the task (`closed_stale_pull_requests` in its `pr_open`
+  output), so a re-admitted task keeps one open pull request
+  ([`[pr]` rules](../CONFIG.md#pr--pull-requests)).
 
   A leaf can also commit past the head it pushed and then fail: a
   before-landing reviewer's fix is committed in the leaf's worktree before
@@ -1131,6 +1135,27 @@ Deliberate recovery is operator-driven:
 Owner-local landing of an already-authorized handoff does not need a drain or
 ship-sweep. Followers never merge. Review-only work stays in `review` until
 explicit completion authority is recorded.
+
+### Dead leaves and their pull requests
+
+A delivery leaf can die after it opened its pull request. The recovery path
+depends on where it ran:
+
+- **Claimed leaf (follower).** Its claim's release keeps the candidate and the
+  pull request, and the task's next claim continues them on the same branch.
+  Generic resume is refused, as above, and no drain adopts the run.
+- **Owner-local leaf.** The owner drain's next pass adopts it when it holds
+  the leaf's `--complete` and `--auto-fix` grants. The pass resumes the
+  interrupted run from its checkpoints, so completion and auto-fix continue
+  on the same pull request and head. Every rule and every refusal is listed in
+  [stuck job runs](stuck-job-runs.md#a-delivery-leaf-that-died-after-opening-its-pull-request).
+
+When the task cannot be resumed, requeue it. An operator's move to `backlog`,
+or a `--discard-candidate` requeue out of `blocked`, closes the task's pull
+requests that no live run or claim is delivering. Whichever run publishes the
+task's next pull request closes any other open Orbit pull request of the task.
+Either way, the task keeps one open pull request
+([`[pr]` rules](../CONFIG.md#pr--pull-requests)).
 
 ### Requeue or salvage an interrupted review
 

@@ -1,5 +1,6 @@
-//! A task's terminal decision closes its Orbit-authored PRs through the
-//! runtime's forge, and nothing else does.
+//! A task's terminal decision, or an operator's move back to backlog or
+//! someday, closes its Orbit-authored PRs through the runtime's forge; a new
+//! run, a failure handoff's hold and automation's own requeues do not.
 //!
 //! Each test injects a fake forge holding one repository's open PRs: the
 //! task's stale delivery PR, its `[BLOCKED]` preservation PR, and PRs that
@@ -517,6 +518,122 @@ fn the_config_switch_disables_closing() {
         .reject_task(&task_id, "not wanted".to_string(), None)
         .expect("reject the task");
 
+    assert!(fx.forge.closed_numbers().is_empty());
+    assert_eq!(fx.forge.state().lookups, 0);
+}
+
+#[test]
+fn an_operator_requeue_closes_the_tasks_undelivered_orbit_prs() {
+    let fx = Fixture::new();
+    let task_id = fx.add_task("Sent back from review");
+    let other = fx.add_task("Unrelated task");
+    fx.seed_forge(&task_id, &other);
+    fx.record_prs(&task_id, &[11, 13]);
+    fx.move_to_review(&task_id);
+
+    fx.update(json!({
+        "id": task_id,
+        "status": "backlog",
+        "note": "needs a different approach",
+        "model": "codex"
+    }));
+
+    assert_eq!(fx.forge.closed_numbers(), vec![11, 13]);
+    let comment = fx.forge.comment_for(11);
+    assert!(
+        comment.contains("backlog") && comment.contains("needs a different approach"),
+        "the comment names the requeue and its reason: {comment}"
+    );
+    assert_eq!(
+        fx.forge.still_open(),
+        vec![20, 21, 22],
+        "human, other-task and non-naming PRs stay open"
+    );
+
+    // A PR opened since, which nothing delivers once the task is shelved.
+    fx.forge.open_pr(
+        14,
+        &format!("orbit/{task_id}-eeee5555"),
+        &format!("Delivers {task_id}."),
+        BOT,
+    );
+    fx.update(json!({ "id": task_id, "status": "someday", "model": "codex" }));
+    assert_eq!(fx.forge.closed_numbers(), vec![11, 13, 14]);
+    assert!(fx.forge.comment_for(14).contains("someday"));
+}
+
+#[test]
+fn leaving_blocked_keeps_the_failure_handoff_pr_until_its_candidate_is_discarded() {
+    let fx = Fixture::new();
+    let task_id = fx.add_task("Blocked with a handoff PR");
+    let other = fx.add_task("Unrelated task");
+    fx.seed_forge(&task_id, &other);
+    fx.record_prs(&task_id, &[13]);
+    let block = |fx: &Fixture| {
+        fx.update(json!({ "id": task_id, "status": "in_progress", "model": "codex" }));
+        fx.runtime
+            .apply_task_automation_update(
+                &task_id,
+                TaskAutomationUpdate {
+                    status: Some(TaskStatus::Blocked),
+                    status_note: Some("failure handoff published PR #13".to_string()),
+                    ..TaskAutomationUpdate::default()
+                },
+            )
+            .expect("block the task");
+    };
+
+    block(&fx);
+    fx.update(json!({ "id": task_id, "status": "backlog", "model": "codex" }));
+    assert!(
+        fx.forge.closed_numbers().is_empty(),
+        "the next run resumes the handoff's candidate through its PR"
+    );
+
+    block(&fx);
+    fx.runtime
+        .update_task_with_identity(
+            &task_id,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                discard_candidate: true,
+                ..Default::default()
+            },
+            None,
+            Some("codex".to_string()),
+        )
+        .expect("requeue discarding the candidate");
+    assert_eq!(
+        fx.forge.closed_numbers(),
+        vec![11, 13],
+        "a discarded candidate's PRs are closed"
+    );
+}
+
+#[test]
+fn automation_requeues_close_nothing() {
+    let fx = Fixture::new();
+    let task_id = fx.add_task("Held by automation");
+    let other = fx.add_task("Unrelated task");
+    fx.seed_forge(&task_id, &other);
+    fx.record_prs(&task_id, &[11]);
+    fx.update(json!({ "id": task_id, "status": "in_progress", "model": "codex" }));
+
+    fx.runtime
+        .apply_task_automation_update(
+            &task_id,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Backlog),
+                status_note: Some("requeued for the next run".to_string()),
+                ..TaskAutomationUpdate::default()
+            },
+        )
+        .expect("requeue the task");
+
+    assert_eq!(
+        fx.runtime.get_task(&task_id).unwrap().status,
+        TaskStatus::Backlog
+    );
     assert!(fx.forge.closed_numbers().is_empty());
     assert_eq!(fx.forge.state().lookups, 0);
 }

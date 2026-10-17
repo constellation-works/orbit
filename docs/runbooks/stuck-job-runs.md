@@ -792,6 +792,47 @@ window closes first, the run holds and the leaf releases its claim to the owner 
 offering the crew or the host, and the task's next claim on that follower continues
 the kept candidate ([distributed drain](distributed-drain.md)).
 
+## A delivery leaf that died after opening its pull request
+
+An owner-local delivery leaf (`task_pr_pipeline`) watches the pull request it
+opened: `--complete` merges it, and `--auto-fix` repairs its failed required checks
+and conflicts. If the leaf's worker dies after `pr_open`, orphan reconciliation
+finalizes the run `interrupted` and the task waits in `review`, or in `blocked` with
+a `workflow_run_interrupted` history entry when the leaf died before promoting it.
+Nothing is watching the pull request at that point.
+
+Each pass of a running owner drain (`orbit run auto`) adopts such a leaf before it
+admits new work. It resumes the interrupted run once from its checkpoints, as
+`orbit job resume` would, so the resumed run continues landing review, completion
+and auto-fix on the same pull request and head. The retry lineage carries the
+run's repair ledger and authority. Completion still refuses a head the run did not
+publish. A leaf is adopted only when all of these hold:
+
+- it was interrupted within the last 24 hours, not at an upgrade boundary (the
+  clock resumes those), and it is not a claimed execution;
+- its worker is dead and no retry has resumed it yet;
+- its `pr_open` succeeded and that pull request is still open on the same branch;
+- every task it carries still waits on it, in `review` or interruption-`blocked`;
+- the drain holds the `--complete` and `--auto-fix` grants the leaf was started
+  with;
+- checkpoint resume accepts it.
+
+Adopted leaves take free drain slots, and a stopped drain adopts nothing. Each
+adoption, and each final refusal (`pull_request_not_open`, `task_moved`,
+`no_pull_request`, `claimed_execution`, `not_resumable`), is decided once and
+recorded in the audit log as `pipeline.run.orphan_adoption`. To see why a leaf was
+left alone, read the drain's latest `adopt_orphans` step output with
+`orbit run show <drain-run> --json`. A missing grant or an unreadable forge is not
+a decision: a later pass, or a drain started with the grant, considers the leaf
+again.
+
+When a leaf is not adopted, resume it yourself with `orbit job resume <leaf-run>`,
+or requeue the task. When an operator moves the task back to `backlog`, any of its
+pull requests that no live run is delivering are closed
+([`[pr]` rules](../CONFIG.md#pr--pull-requests)). A claimed leaf on a follower is
+never adopted this way: its claim's release keeps the candidate and pull request,
+and the task's next claim continues them ([distributed drain](distributed-drain.md)).
+
 ## Replay from the beginning
 
 When checkpoint outputs are invalid or the run must start from step zero:
