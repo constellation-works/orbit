@@ -168,8 +168,9 @@ pub struct HandoffValidationLog {
     pub output: String,
     /// [ORB-15427] Set on a failed command whose failing tests the leaf's
     /// own base run fails too. The owner accepts a non-zero log only with
-    /// this report, and only after its own run of the base shares every
-    /// failure it names.
+    /// this report. When the host OSes match or either is unknown, its base
+    /// run must share every failure named; when both known OSes differ, the
+    /// owner checks base-branch history without running the base command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub known_red: Option<HandoffKnownRed>,
     /// Original failure and passing isolated replay on this exact candidate.
@@ -178,8 +179,11 @@ pub struct HandoffValidationLog {
 }
 
 /// A claimed leaf's report that a required command failed only with tests
-/// its base fails too [ORB-15427]. It is the leaf's claim, never proof: the
-/// owner reruns the command on this base itself before it accepts the log.
+/// its base fails too [ORB-15427]. It is the leaf's claim, never proof. When
+/// the host OSes match or either is unknown, the owner reruns the command on
+/// this base before it accepts the log. When both OSes are known and differ,
+/// the owner checks that the base is still on its captured base-branch history
+/// and accepts the follower's reported failures for that OS without a base run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HandoffKnownRed {
