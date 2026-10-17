@@ -63,6 +63,40 @@ pub(in crate::executor::automation::vcs) fn is_transient_github_failure(message:
         || (text.contains("graphql") && text.contains("timeout"))
 }
 
+/// True when a failed read-only provider observation is a transport failure:
+/// a transient answer as above, or a TLS handshake timeout. A credential,
+/// permission, permanent HTTP, malformed-answer or deadline diagnostic
+/// anywhere in the message disqualifies it, as does unreadable, truncated or
+/// changed prerequisite evidence.
+pub(in crate::executor::automation::vcs) fn is_transient_observation_failure(
+    message: &str,
+) -> bool {
+    let text = message.to_ascii_lowercase();
+    (is_transient_github_failure(&text) || text.contains("tls handshake timeout"))
+        && ![
+            "http 400",
+            "http 401",
+            "http 403",
+            "http 404",
+            "http 409",
+            "http 410",
+            "http 422",
+            "http 429",
+            "bad credentials",
+            "permission",
+            "not accessible by integration",
+            "authentication",
+            "saml",
+            "rate limit",
+            "invalid json",
+            "invalid api json",
+            "evidence is unavailable (",
+            "deadline expired",
+        ]
+        .iter()
+        .any(|token| text.contains(token))
+}
+
 pub(in crate::executor::automation::vcs) fn execute(
     program: &str,
     args: Vec<String>,

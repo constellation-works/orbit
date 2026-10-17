@@ -437,6 +437,16 @@ attempt by retrying completion in the same worker. It keeps the published commit
 SHA, PR and successful checkpoints; it does not reimplement, recommit or repush the
 candidate, or restart hosted CI. Final recovery must be enabled for the run.
 
+An eligible lookup is one of completion's authenticated reads made before any
+mutation: the PR status, required-check and merge-policy reads, and the
+base-refresh and missing-prerequisite evidence reads, such as a commit's combined
+status. Only a transport failure qualifies: a GitHub 502/503/504 or GraphQL
+timeout answer, or a TLS handshake timeout. Invalid or truncated evidence, a
+changed head, base, policy or identity, a credential, permission,
+administrative-rule or other permanent refusal, and an exhausted completion
+deadline keep their ordinary failure. A failed read never counts as passing
+required checks; the resumed completion reads them again.
+
 The host first authenticates the successful commit, preparation, synchronization,
 push and PR chain, exact clean checkout, current task ownership, remote branch
 lease and unchanged remote base. Native validation must have captured the same
