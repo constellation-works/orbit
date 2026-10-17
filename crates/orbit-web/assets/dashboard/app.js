@@ -342,7 +342,6 @@ function runDetailContext() {
     fmtDuration,
     fmtRelative,
     fmtAbsTime,
-    truncate,
     // run action builders (from runs.js) and nav for renderRunDetailMeta
     navigateToRun: nTR,
     setActiveTab: sAT,

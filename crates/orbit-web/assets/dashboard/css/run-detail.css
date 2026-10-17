@@ -486,3 +486,25 @@ a.failure-id-link:focus-visible {
 }
 .knowledge-grid .value { color: var(--fg); }
 .knowledge-grid .value.ratio { color: var(--accent-hover); }
+
+/* Run events: a one-line preview that opens to the full fields. */
+/* Takes the width the other columns leave, so the table fits the panel. */
+td.run-event-detail { width: 100%; max-width: 0; min-width: 16rem; }
+td.run-event-detail summary {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+td.run-event-detail summary::-webkit-details-marker { display: none; }
+td.run-event-detail summary::before { content: "▸ "; color: var(--fg-dim); }
+td.run-event-detail details[open] summary::before { content: "▾ "; }
+td.run-event-detail details[open] summary { color: var(--fg); }
+td.run-event-detail pre {
+  margin: 6px 0 2px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  color: var(--fg);
+}
