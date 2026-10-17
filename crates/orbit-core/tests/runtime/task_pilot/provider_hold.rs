@@ -680,9 +680,37 @@ fn limit_and_refusal_failures_do_not_withhold_the_routine() {
     }
 }
 
+/// A pilot admitted into debounce before the failure keeps its pending member.
+/// The hold that starts during the debounce must still stop its dispatch.
+fn a_hold_that_starts_during_debounce_withholds_the_pending_pilot() {
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    let task = workspace.task("login fails while the pilot debounces");
+    let started = Utc::now();
+    let pending = evaluate(&workspace, started, false);
+    assert_eq!(pending.reason, "debouncing", "{pending:?}");
+
+    let now = started + Duration::minutes(3);
+    save_failure(
+        &workspace,
+        "jrun-codex-auth",
+        now,
+        now - Duration::minutes(1),
+        ProviderFailureClass::Unavailable,
+        "codex",
+        "fixture",
+    );
+    let reason = assert_withheld(&workspace, now, &task.id);
+    assert!(
+        reason.contains("provider_unavailable codex") && reason.contains("jrun-codex-auth"),
+        "{reason}"
+    );
+}
+
 crate::scenario_table!(
     task_pilot_routine_honours_host_provider_holds_scenarios,
     unavailable_on_the_only_crew_withholds_and_creates_no_pilot_run,
+    a_hold_that_starts_during_debounce_withholds_the_pending_pilot,
     an_expired_unavailable_hold_lets_the_pilot_resume,
     a_later_success_clears_unavailable_and_capacity,
     an_auth_probe_recovery_clears_unavailable,
