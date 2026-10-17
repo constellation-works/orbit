@@ -19,14 +19,14 @@
 //! output.
 
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::time::Duration;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::file_lock::{FileLockGuard, read_file_lock_holder};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use orbit_common::fs::file_lock::{FileLockOptions, acquire_exclusive_file_lock};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use orbit_common::fs::io::atomic_write_bytes;
 use serde::{Deserialize, Serialize};
 
@@ -37,9 +37,9 @@ use super::build_output::{host_validation_source, host_validation_target_key};
 const LEASES_DIR: [&str; 3] = [".orbit", "state", "host-validation-leases"];
 const LEASE_SCHEMA_VERSION: u32 = 1;
 /// Long enough to outlast GC removing a large target under the lock.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const LEASE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) const LEASE_LABEL: &str = "host validation target lease";
 
 /// A detached scratch checkout that builds into a host validation target
@@ -72,7 +72,7 @@ pub(super) struct LeaseRecord {
 }
 
 /// A leased target's lineage record and lock.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) struct LeasedTarget {
     pub(super) record: LeaseRecord,
     pub(super) record_path: PathBuf,
@@ -88,12 +88,12 @@ pub struct ScratchHostTargetLease {
 
 /// Lease the host validation target of scratch `checkout`, recording what
 /// built it before the target exists. The descriptor-bound collector runs
-/// only on Linux; elsewhere output is retained and the lease holds nothing.
+/// on Linux and macOS; elsewhere output is retained and the lease holds nothing.
 pub fn lease_scratch_host_target(
     checkout: &Path,
     kind: ScratchHostTarget,
 ) -> Result<ScratchHostTargetLease, OrbitError> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let (primary, source) = host_validation_source(checkout)?;
         let (record_path, lock) = lease_paths(&primary, &host_validation_target_key(&source));
@@ -122,7 +122,7 @@ pub fn lease_scratch_host_target(
         Ok(ScratchHostTargetLease { _lock: Some(guard) })
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = (checkout, kind);
         Ok(ScratchHostTargetLease { _lock: None })
@@ -131,7 +131,7 @@ pub fn lease_scratch_host_target(
 
 /// The lease that names target `key` under `primary`, when its record is a
 /// regular file whose source derives exactly that key.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) fn leased_target(primary: &Path, key: &str) -> Option<LeasedTarget> {
     let (record_path, lock) = lease_paths(primary, key);
     // A no-follow stat sees a redirect as neither a directory nor a file.

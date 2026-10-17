@@ -38,7 +38,7 @@ pub mod activity_job;
 pub mod test_support {
     pub use crate::activity_job::cli_runner::with_cli_supervision_clock;
     pub use crate::context::NullRuntimeHost;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub use crate::executor::automation::vcs::with_host_target_removal_hook;
     pub use crate::executor::automation::vcs::{
         with_prerequisite_clock, with_remote_probe_backoff, with_vcs_retry_wait,

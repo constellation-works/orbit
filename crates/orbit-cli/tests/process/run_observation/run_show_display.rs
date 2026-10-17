@@ -252,6 +252,81 @@ fn run_show_lists_a_final_recovery_resume_with_its_rationale() {
     assert!(shown(&fixture, &[]).contains(rationale));
 }
 
+/// [ORB-16330] `orbit run show --json` names the claimed worker the way MCP
+/// does, and an unreadable pipeline checkpoint is a warning with
+/// `pipeline_state` null rather than a failed command.
+fn run_show_keeps_worker_identity_and_degrades_on_an_unreadable_checkpoint() {
+    let fixture = Fixture::terminal();
+    seed_interrupted_run(&fixture);
+    let workspace_id = fixture.workspace_id();
+    let input = r#"{"task_id":"ORB-1"}"#;
+    fixture
+        .db()
+        .execute(
+            "UPDATE job_runs SET pid = 4242, pid_start_time = 'v1:4242', input_json = ?1
+             WHERE run_id = ?2",
+            params![input, INTERRUPTED],
+        )
+        .expect("record worker identity");
+    let readable = serde_json::json!({
+        "run_id": INTERRUPTED,
+        "job_id": "task_pr_pipeline",
+        "initial_input": {},
+        "pipeline": {"marker": "readable"},
+        "updated_at": "2026-10-08T00:26:00+00:00",
+    });
+    fixture
+        .db()
+        .execute(
+            "INSERT INTO job_run_states (workspace_id, run_id, pipeline_state_json)
+             VALUES (?1, ?2, ?3)",
+            params![workspace_id, INTERRUPTED, readable.to_string()],
+        )
+        .expect("seed readable checkpoint");
+
+    let shown = fixture.json(&["run", "show", INTERRUPTED, "--no-reconcile", "--json"]);
+    assert_eq!(shown["run"]["pid"], 4242, "{shown}");
+    assert_eq!(shown["run"]["pid_start_time"], "v1:4242", "{shown}");
+    assert_eq!(shown["run"]["input"]["task_id"], "ORB-1", "{shown}");
+    assert_eq!(
+        shown["pipeline_state"]["pipeline"]["marker"], "readable",
+        "{shown}"
+    );
+
+    fixture
+        .db()
+        .execute(
+            "UPDATE job_run_states SET pipeline_state_json = '{' WHERE run_id = ?1",
+            params![INTERRUPTED],
+        )
+        .expect("corrupt checkpoint");
+    let output = fixture
+        .orbit()
+        .env_remove("RUST_LOG")
+        .args(["run", "show", INTERRUPTED, "--no-reconcile", "--json"])
+        .output()
+        .expect("spawn orbit");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "an unreadable checkpoint must not fail run show\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("warning: pipeline checkpoint unreadable"),
+        "run show must warn on stderr: {stderr}"
+    );
+    let degraded: serde_json::Value = serde_json::from_str(&stdout).expect("run show JSON");
+    assert!(
+        degraded["pipeline_state"].is_null(),
+        "unreadable checkpoint reports pipeline_state null: {degraded}"
+    );
+    assert_eq!(degraded["run"]["pid"], 4242, "{degraded}");
+    assert_eq!(degraded["run"]["pid_start_time"], "v1:4242", "{degraded}");
+    assert_eq!(degraded["run"]["input"]["task_id"], "ORB-1", "{degraded}");
+    assert_eq!(degraded["run"]["run_id"], INTERRUPTED, "{degraded}");
+}
+
 #[test]
 fn run_show_contracts() {
     if !isolated_run_observation("run_observation::run_show_display::run_show_contracts") {
@@ -269,6 +344,10 @@ fn run_show_contracts() {
         (
             "run_show_lists_a_final_recovery_resume_with_its_rationale",
             run_show_lists_a_final_recovery_resume_with_its_rationale as fn(),
+        ),
+        (
+            "run_show_keeps_worker_identity_and_degrades_on_an_unreadable_checkpoint",
+            run_show_keeps_worker_identity_and_degrades_on_an_unreadable_checkpoint as fn(),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");

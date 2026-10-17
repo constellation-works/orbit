@@ -71,7 +71,25 @@ pub(crate) fn run_show_payload(
     verbose: bool,
 ) -> CommandOut {
     let run = resolve_run(runtime, run_id, read)?;
-    let state = runtime.read_run_state(&run.run_id)?;
+    // An unreadable checkpoint is one section, as on HTTP and MCP. The run
+    // record, steps, and provider processes stay readable; failing the whole
+    // command hid them behind a store error.
+    let (state, checkpoint_unreadable) = match runtime.read_run_state(&run.run_id) {
+        Ok(state) => (state, false),
+        Err(error) => {
+            tracing::warn!(
+                target: "orbit.cli.run",
+                run_id = %run.run_id,
+                %error,
+                "pipeline checkpoint unreadable; run shown without it"
+            );
+            eprintln!(
+                "warning: pipeline checkpoint unreadable for {}; run shown without it: {error}",
+                run.run_id
+            );
+            (None, true)
+        }
+    };
 
     if let Some(step_id) = step_id {
         let step = resolve_run_step(runtime, &run, step_id)?;
@@ -186,6 +204,12 @@ pub(crate) fn run_show_payload(
     });
 
     let mut header = run_header_text_with_lock_holders(&run, state.as_ref(), &lock_holders);
+    if checkpoint_unreadable {
+        header.push_str(&format!(
+            "\n{} pipeline checkpoint unreadable; pipeline state omitted",
+            crate::output::color::bold("Warning:"),
+        ));
+    }
     if run.job_id == "workspace_auto_pipeline" {
         let mode = runtime.run_auto_concurrency(&run.run_id)?;
         header.push_str(&format!(

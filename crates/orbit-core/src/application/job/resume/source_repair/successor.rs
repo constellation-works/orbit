@@ -17,7 +17,11 @@ impl OrbitRuntime {
                             crate::application::task::FinalRecoveryOutcome::Requeued
                                 | crate::application::task::FinalRecoveryOutcome::Escalated { .. }
                         )
-                    )),
+                    ))
+                // A resume's applied repair settles nothing on the task; its
+                // stopped failure-hook publication is repairable only through
+                // the authenticated owner lineage.
+                || self.resumed_recovery(source, task)?.is_some(),
         )
     }
 

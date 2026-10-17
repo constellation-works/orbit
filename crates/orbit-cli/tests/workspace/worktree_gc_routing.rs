@@ -50,6 +50,9 @@ use tempfile::tempdir;
 
 use crate::fixture_crew;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod host_output;
+
 struct Workspace {
     repo: PathBuf,
     orbit_dir: PathBuf,
@@ -224,6 +227,11 @@ fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspa
 
     let (worktree_a, _task_a) = seed_eligible_worktree(&workspace_a, &home, "A");
     let (worktree_b, task_b) = seed_eligible_worktree(&workspace_b, &home, "B");
+    // Own all dispatched workers through assertions and unwind. HostOutput
+    // drops first, settling its deliberately active passive fixture owner.
+    let mut routine_runs = crate::routine_runs::RoutineRuns::new(temp, &home, &[&repo_a, &repo_b]);
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let host_output = host_output::HostOutput::seed(&workspace_b, &home);
     assert!(worktree_a.exists(), "workspace A fixture worktree missing");
     assert!(worktree_b.exists(), "workspace B fixture worktree missing");
     let expected_worktree_b = worktree_b
@@ -235,6 +243,10 @@ fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspa
     // needing to fabricate a backdated run record.
     zero_worktree_gc_age_floor(&home);
     enable_worktree_gc_routine(&workspace_b);
+    let routine_path = workspace_b.orbit_dir.join("routines/worktree_gc.yaml");
+    let routine_definition = fs::read(&routine_path).unwrap();
+    let pipeline_path = home.join(".orbit/resources/jobs/worktree_gc_pipeline.yaml");
+    let pipeline_definition = fs::read(&pipeline_path).unwrap();
 
     // Fire the sweep from workspace A's checkout — the "non-current"
     // workspace relative to B, whose routine is the one that must dispatch.
@@ -279,6 +291,7 @@ fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspa
     // minute so the next sweep has a natural due slot without waiting for the
     // wall clock to cross a boundary.
     let baseline = fire_sweep();
+    routine_runs.retain_sweep(&baseline);
     assert!(
         routine_report(&baseline, "worktree-gc-workspace-b").is_some(),
         "sweep never evaluated workspace B's worktree_gc routine: {baseline}"
@@ -287,6 +300,7 @@ fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspa
     make_routine_due(&home, "worktree-gc-workspace-b");
 
     let fired = fire_sweep();
+    routine_runs.retain_sweep(&fired);
     let report = routine_report(&fired, "worktree-gc-workspace-b").unwrap_or_else(|| {
         panic!(
             "sweep never evaluated workspace B's worktree_gc routine on the second pass: {fired}"
@@ -358,6 +372,61 @@ fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspa
         }),
         "reap output did not attribute the removal to workspace B's fixture worktree: {reap}"
     );
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        host_output.assert_reports(reap, "reclaimed");
+        host_output.assert_controls();
+        let bytes = host_output.reclaimed_bytes(reap);
+        assert!(bytes > 0);
+        test_env::record_scenario_pass(&format!("host-output-routine-first {reap}"));
+
+        // Move only the isolated scheduler fixture's completed slot into the
+        // past, retaining its run receipt, to deterministically admit a second
+        // slot without a wall-clock minute wait or changing the routine.
+        let connection = rusqlite::Connection::open(home.join(".orbit/orbit.db")).unwrap();
+        assert_eq!(
+            connection
+                .execute(
+                    "UPDATE routine_fires SET slot = ?1 WHERE routine_name = ?2",
+                    rusqlite::params![
+                        (Utc::now() - ChronoDuration::minutes(2)).to_rfc3339(),
+                        "worktree-gc-workspace-b"
+                    ],
+                )
+                .unwrap(),
+            1
+        );
+        make_routine_due(&home, "worktree-gc-workspace-b");
+        let repeated = fire_sweep();
+        routine_runs.retain_sweep(&repeated);
+        let report = routine_report(&repeated, "worktree-gc-workspace-b").unwrap();
+        assert!(
+            matches!(
+                report["action"].as_str(),
+                Some("fired") | Some("retry_fired")
+            ),
+            "{repeated}"
+        );
+        let run_id = report["run_id"].as_str().unwrap();
+        assert_ne!(run_id, gc_run_id);
+        wait_until(Duration::from_secs(20), || {
+            run_json(&repo_b, &home, &["run", "show", run_id, "--json"])["run"]["state"]
+                == "success"
+        });
+        let repeated_run = run_json(&repo_b, &home, &["run", "show", run_id, "--json"]);
+        assert_eq!(repeated_run["run"]["state"], "success", "{repeated_run}");
+        let repeated_reap = &repeated_run["pipeline_state"]["pipeline"]["reap"];
+        host_output.assert_reports(repeated_reap, "absent");
+        host_output.assert_controls();
+        assert_eq!(repeated_reap["bytes_reclaimed"], 0, "{repeated_reap}");
+        test_env::record_scenario_pass(&format!("host-output-routine-repeat {repeated_reap}"));
+        drop(host_output);
+    }
+    assert_eq!(fs::read(routine_path).unwrap(), routine_definition);
+    assert_eq!(fs::read(pipeline_path).unwrap(), pipeline_definition);
+    routine_runs
+        .settle()
+        .expect("all fixture GC workers exited");
 }
 
 fn register_workspace(repo: &Path, home: &Path, name: &str) -> Workspace {

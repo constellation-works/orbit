@@ -192,19 +192,29 @@ pub(super) fn head_descends_from_pin(
     )
 }
 
-/// Accept only the exact repair HEAD observed during this run's final
-/// recovery, after its resume decision was durably applied. A descendant of
-/// that repair or an unrelated worktree gains no permission from the record.
+/// Accept only the exact repair HEAD observed during final recovery, after its
+/// resume decision was durably applied. A descendant of that repair or an
+/// unrelated worktree gains no permission from the record.
+///
+/// The receipt is read from the run executing this step (`input.run_id`). A
+/// generic resume keeps the worktree's original batch as `checkpoint_owner`,
+/// while its own final recovery records the receipt in the resumed run's
+/// state. That receipt counts only when the executing run is a bounded
+/// same-job retry descendant of the checkpoint owner, the receipt was recorded
+/// on that chain, and the task is still bound to the checkpoint owner.
 pub(super) fn head_matches_final_recovery<H: RuntimeHost + ?Sized>(
     host: &H,
-    run_id: &str,
+    input: &Value,
+    checkpoint_owner: &str,
     task_id: &str,
     workspace_path: &Path,
     base_sha: &str,
     head_sha: &str,
 ) -> Result<bool, OrbitError> {
+    let active_run_id =
+        input_string_field(input, "run_id").unwrap_or_else(|| checkpoint_owner.to_string());
     let Some(checkpoint) = host
-        .read_run_state(run_id)?
+        .read_run_state(&active_run_id)?
         .and_then(|state| state.final_recovery)
     else {
         return Ok(false);
@@ -221,11 +231,23 @@ pub(super) fn head_matches_final_recovery<H: RuntimeHost + ?Sized>(
     let Some(repair) = checkpoint.repair_commit else {
         return Ok(false);
     };
-    Ok(repair.head_sha == head_sha
-        && repair.head_sha_before != head_sha
-        && repair.workspace_path == workspace_path.canonicalize()?
-        && head_descends_from_pin(workspace_path, base_sha, &repair.head_sha_before)?
-        && head_descends_from_pin(workspace_path, &repair.head_sha_before, head_sha)?)
+    if repair.head_sha != head_sha
+        || repair.head_sha_before == head_sha
+        || repair.workspace_path != workspace_path.canonicalize()?
+        || !head_descends_from_pin(workspace_path, base_sha, &repair.head_sha_before)?
+        || !head_descends_from_pin(workspace_path, &repair.head_sha_before, head_sha)?
+    {
+        return Ok(false);
+    }
+    if active_run_id == checkpoint_owner {
+        return Ok(true);
+    }
+    let Some(chain) = super::super::resume::retry_chain_to(host, &active_run_id, checkpoint_owner)?
+    else {
+        return Ok(false);
+    };
+    Ok(chain.contains(&checkpoint.key.run_id)
+        && host.get_task(task_id)?.job_run_id.as_deref() == Some(checkpoint_owner))
 }
 
 /// Reject anything that is not a full Git object id.

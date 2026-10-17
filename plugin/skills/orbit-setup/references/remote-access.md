@@ -184,6 +184,14 @@ run/step inspection, routines, knowledge/frictions, audit, and metrics. Verify t
 selected workspace before any mutation; a dashboard aggregate or metric is not
 proof that a particular task or run succeeded.
 
+A visible dashboard refreshes every 30 seconds. In a background browser tab it
+refreshes no panels and instead checks failed runs and the drain once a minute:
+the page title gains a `(N failed)` prefix for runs that failed while the tab
+was hidden, cleared when the tab is shown again. **Notify** in the top bar opts
+in to a browser notification when a drain ends or a task is newly held on a red
+base while the tab is hidden; the browser asks for permission only on that
+click.
+
 ### Switching hosts in the dashboard
 
 A host registered with `orbit host add` appears in the dashboard's **Host**

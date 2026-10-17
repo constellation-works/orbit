@@ -411,24 +411,33 @@ fn auto_fix_resume_publishes_source_admitted_local_repair_safely() {
 // CI API answers belong to the same bare-remote head read by the forge.
 // Unlike a scripted green status, source_contract evaluates the published tree.
 pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> Option<Value> {
+    let forge = host.repo.parent().unwrap().join("forge");
+    let observed = || {
+        let reads: usize = fs::read_to_string(forge.join("reads"))
+            .unwrap_or_else(|_| "0".into())
+            .trim()
+            .parse()
+            .unwrap();
+        let script = fs::read_to_string(forge.join("checks")).unwrap();
+        script
+            .lines()
+            .nth(reads.saturating_sub(1))
+            .or_else(|| script.lines().last())
+            .unwrap()
+            .to_string()
+    };
+    let aggregate = host.scripted.lock().unwrap()["test_ci_repair"]["aggregate"]
+        .as_str()
+        .map(ToOwned::to_owned);
+    let contract = |commit: &str| git(&host.repo, &["show", &format!("{commit}:src/contract")]);
     match operation {
         "pr.required_checks" => {
             let head = git(
                 &host.repo,
                 &["ls-remote", "origin", &format!("refs/heads/{BRANCH}")],
             );
-            let forge = host.repo.parent().unwrap().join("forge");
-            let reads: usize = fs::read_to_string(forge.join("reads"))
-                .unwrap()
-                .trim()
-                .parse()
-                .unwrap();
-            let script = fs::read_to_string(forge.join("checks")).unwrap();
-            let observed = script
-                .lines()
-                .nth(reads.saturating_sub(1))
-                .or_else(|| script.lines().last())
-                .unwrap();
+            let head = head.split_whitespace().next().unwrap();
+            let observed = observed();
             let status = if observed == "pending" {
                 "IN_PROGRESS"
             } else {
@@ -441,25 +450,105 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
             } else {
                 "FAILURE"
             };
+            let nodes = match aggregate.as_deref() {
+                // [ORB-16185] The provider app's aggregate is a required check
+                // run outside any workflow; its analysis job passes.
+                Some(aggregate) => {
+                    let failed = if contract(head) == "fixed" {
+                        "SUCCESS"
+                    } else {
+                        "FAILURE"
+                    };
+                    let mut nodes = vec![
+                        json!({"__typename":"CheckRun","name":"CodeQL","isRequired":true,"status":"COMPLETED","conclusion":failed,
+                            "databaseId":if aggregate == "missing_identity" { Value::Null } else { json!(7001) },
+                            "checkSuite":{"app":{"databaseId":57789},"workflowRun":null}}),
+                        json!({"__typename":"CheckRun","name":"Analyze (rust)","isRequired":true,"status":"COMPLETED","conclusion":"SUCCESS",
+                            "databaseId":7002,"checkSuite":{"app":{"databaseId":15368},"workflowRun":{"workflow":{"name":"CodeQL"}}}}),
+                    ];
+                    if aggregate == "mixed" {
+                        nodes.push(json!({"name":"test","isRequired":true,"status":"COMPLETED","conclusion":failed}));
+                    }
+                    nodes
+                }
+                None => vec![
+                    json!({"name":"test","isRequired":true,"status":status,"conclusion":conclusion}),
+                ],
+            };
             Some(
-                json!({"pull_request":{"headRefOid":head.split_whitespace().next().unwrap(),"commits":{"nodes":[{"commit":{
-                    "oid":head.split_whitespace().next().unwrap(),
-                    "statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[{"name":"test","isRequired":true,"status":status,"conclusion":conclusion}]}}
+                json!({"pull_request":{"headRefOid":head,"commits":{"nodes":[{"commit":{
+                    "oid":head,
+                    "statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":nodes}}
                 }}]}}}),
             )
         }
         "ci.commit_jobs" => {
             let commit = input["commit"].as_str().unwrap();
-            let contents = git(&host.repo, &["show", &format!("{commit}:src/contract")]);
+            let contents = contract(commit);
             let run = u64::from_str_radix(&commit[..12], 16).unwrap();
-            Some(
-                json!({"jobs":[{"name":"test","workflow":"CI","conclusion":if contents == "fixed" {"success"} else {"failure"},"run_id":run,"job_id":run+1,"failed_step":"source contract"}]}),
-            )
+            let test = json!({"name":"test","workflow":"CI","conclusion":if contents == "fixed" {"success"} else {"failure"},"run_id":run,"job_id":run+1,"failed_step":"source contract"});
+            let jobs = match aggregate.as_deref() {
+                Some(aggregate) => {
+                    let mut jobs = vec![
+                        json!({"name":"Analyze (rust)","workflow":"CodeQL","conclusion":"success","run_id":run+2,"job_id":run+3,"failed_step":null}),
+                    ];
+                    if aggregate == "mixed" {
+                        jobs.push(test);
+                    }
+                    jobs
+                }
+                None => vec![test],
+            };
+            Some(json!({"jobs":jobs}))
         }
 
         "ci.job_log" => Some(
             json!({"log":"error: src/contract: expected fixed, found broken\nsource contract failed"}),
         ),
+        "ci.check_annotations" => {
+            let aggregate = aggregate.unwrap_or_default();
+            let head = input["head_sha"].as_str().unwrap();
+            assert_eq!(
+                (
+                    &input["name"],
+                    &input["check_run_id"],
+                    &input["app_id"],
+                    &input["pr"]
+                ),
+                (
+                    &json!("CodeQL"),
+                    &json!(7001),
+                    &json!(57789),
+                    &json!(PR_NUMBER)
+                ),
+                "the read names the identities of the head-bound required-check read"
+            );
+            let path = match aggregate.as_str() {
+                "workflow_path" => ".github/workflows/ci.yml",
+                "escape" => "../outside/src/contract",
+                _ => "src/contract",
+            };
+            let blob_head = if aggregate == "stale" {
+                "0".repeat(40)
+            } else {
+                head.to_string()
+            };
+            Some(json!({
+                "repository": "orbit/test", "repository_id": 500, "pr": 42, "head_sha": head,
+                "base_ref": BASE,
+                "check_run": {"id": 7001, "name": "CodeQL", "conclusion": "failure",
+                    "app_id": if aggregate == "foreign_app" { 99 } else { 57789 },
+                    "annotations_count": 1},
+                "annotations": [{
+                    "path": path,
+                    "blob_href": format!("https://github.com/orbit/test/blob/{blob_head}/{path}"),
+                    "start_line": 1, "end_line": 1,
+                    "annotation_level": if aggregate == "no_failure" { "warning" } else { "failure" },
+                    "title": "Contract violation",
+                    "message": "src/contract must read fixed\nit reads broken",
+                }],
+            }))
+        }
         _ => None,
     }
 }
@@ -1586,6 +1675,178 @@ fn auto_fix_mixed_failure_wait_preserves_recovery_and_refusals() {
                     assert_eq!(fx.head(), fx.candidate);
                     assert_eq!(fx.remote_tip(BRANCH), fx.candidate);
                     assert_eq!(fx.remote_tip(BASE), fx.base_sha);
+                    assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+                });
+            }
+        },
+    );
+}
+
+/// [ORB-16185] A required provider-app aggregate fails on the exact head
+/// with source annotations while its analysis job passes and no workflow job
+/// answers it. Its authenticated annotations admit the one same-PR repair,
+/// retained before admission, which is validated, published and watched to a
+/// green head; the mixed row proves the aggregate is not hidden by a failed
+/// workflow job beside it. Annotations that are foreign, stale, unbound to
+/// the policy read's identity, non-source or outside the checkout refuse the
+/// repair and leave the candidate and its budget untouched.
+#[test]
+fn auto_fix_repairs_required_aggregate_from_authenticated_source_annotations() {
+    isolated(
+        "auto_fix::auto_fix_repairs_required_aggregate_from_authenticated_source_annotations",
+        |sandbox| {
+            for aggregate in [
+                "valid",
+                "mixed",
+                "foreign_app",
+                "missing_identity",
+                "stale",
+                "workflow_path",
+                "escape",
+                "no_failure",
+            ] {
+                in_fresh_row(sandbox, |row| {
+                    let mut fx = Fixture::new(row);
+                    fs::create_dir_all(fx.repo.join(".git/info")).unwrap();
+                    fs::write(fx.repo.join(".git/info/exclude"), ".orbit/\n").unwrap();
+                    fx.commit_on_base("src/contract", "broken\n");
+                    git(&fx.repo, &["reset", "--hard", BASE]);
+                    fx.base_sha = fx.head();
+                    delete_remote_branch(&fx, BRANCH);
+                    fx.candidate = fx.commit("README.md", "documentation only\n");
+                    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+                    host.set_context_files(TASK_ID, &["file:README.md"]);
+                    action(
+                        &host,
+                        "pr_open",
+                        &fx.open_input(&fx.candidate, &fx.base_sha),
+                    )
+                    .unwrap();
+                    host.script(
+                        "test_ci_repair",
+                        json!({"mode":"repair","aggregate":aggregate}),
+                    );
+                    host.script(
+                        "test_checkpoint",
+                        json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
+                    );
+                    host.require_commands(&["test \"$(cat src/contract)\" = fixed"]);
+                    fx.script_checks(&[if aggregate == "mixed" {
+                        "source_aggregate_mixed"
+                    } else {
+                        "source_aggregate"
+                    }]);
+                    let mut input = fx.complete_ungated_input();
+                    input["auto_fix"] = json!(true);
+                    input["completion"] = json!("review");
+                    let mut job = job_asset(json!([
+                        {"id":"commit","target":"activity:checkpoint","recovery_activity":"step_failure_recovery"},
+                        {"id":"complete_pr","target":"activity:pr_complete","recovery_activity":"pr_conflict_recovery","default_input":input}
+                    ]));
+                    let mut catalog = V2ActivityCatalog::new();
+                    for (name, action) in [
+                        ("checkpoint", "test_checkpoint"),
+                        ("pr_complete", "pr_complete"),
+                        ("step_failure_recovery", "test_ci_repair"),
+                        ("pr_conflict_recovery", "unexpected_conflict"),
+                    ] {
+                        catalog.insert(
+                            name,
+                            ActivityV2 {
+                                description: name.into(),
+                                input_schema_json: Value::Null,
+                                output_schema_json: Value::Null,
+                                fs_profile: None,
+                                spec: ActivityV2Spec::Deterministic(DeterministicSpec {
+                                    action: action.into(),
+                                    config: Value::Null,
+                                }),
+                            },
+                        );
+                    }
+                    resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
+                    let audit = tempfile::tempdir().unwrap();
+                    let (writer, _, _) = build_writer_and_sinks(audit.path(), RUN_ID);
+                    let outcome =
+                        execute_job_with_resume(&job, json!({}), RUN_ID, writer, &host, None);
+                    let repair = host
+                        .scripted_inputs
+                        .lock()
+                        .unwrap()
+                        .get("test_ci_repair")
+                        .cloned();
+                    let attempts = pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER);
+                    if matches!(aggregate, "valid" | "mixed") {
+                        let result = outcome.expect(aggregate);
+                        assert!(result.success, "{aggregate}: {result:?}");
+                        let head = fx.head();
+                        assert_ne!(head, fx.candidate);
+                        assert_eq!(
+                            fx.remote_tip(BRANCH),
+                            head,
+                            "the same PR carries the repair"
+                        );
+                        assert_eq!(
+                            result.pipeline["complete_pr"]["merge"]["reason"],
+                            "auto_fix_mergeable"
+                        );
+                        let handed = repair.expect("one repair runs")["error_message"]
+                            .as_str()
+                            .unwrap()
+                            .to_string();
+                        assert!(
+                            handed.contains("required check 'CodeQL' (check run 7001 of app 57789")
+                                && handed.contains("- src/contract:1 [Contract violation]: src/contract must read fixed it reads broken"),
+                            "the repair receives the authenticated source diagnostics: {handed}"
+                        );
+                        assert_eq!(
+                            handed.contains("'CI / test' failed in step `source contract`"),
+                            aggregate == "mixed",
+                            "a failed workflow job is evidenced beside the aggregate: {handed}"
+                        );
+                        let retained = host.validation_log(
+                            TASK_ID,
+                            &format!("auto-fix/{RUN_ID}/check-annotations-{}.json", fx.candidate),
+                        );
+                        assert_eq!(retained["failed_head"], fx.candidate);
+                        assert_eq!(retained["checks"][0]["check_run"]["id"], 7001);
+                        assert_eq!(retained["checks"][0]["head_sha"], fx.candidate);
+                        let validated =
+                            host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+                        assert_eq!(
+                            validated["tested_head"], head,
+                            "fresh validation of the repair"
+                        );
+                        assert_eq!(attempts.len(), 1, "one repair from the shared budget");
+                        assert_eq!(attempts[0].head_sha, fx.candidate);
+                    } else {
+                        let error = match outcome {
+                            Ok(result) => {
+                                assert!(!result.success, "{aggregate}: {result:?}");
+                                result.message.unwrap_or_default()
+                            }
+                            Err(error) => error.to_string(),
+                        };
+                        let expected = match aggregate {
+                            "foreign_app" => "not bound to this pull request",
+                            "missing_identity" => "no check run or app identity",
+                            "stale" => "does not link that file at head",
+                            "workflow_path" | "escape" => "names no repository source path",
+                            _ => "no failure annotation naming a source location",
+                        };
+                        assert!(
+                            error.contains("auto_fix_stopped") && error.contains(expected),
+                            "{aggregate}: {error}"
+                        );
+                        assert!(repair.is_none(), "{aggregate}: no repair agent runs");
+                        assert!(attempts.is_empty(), "{aggregate}: no budget is spent");
+                        assert_eq!(fx.remote_tip(BRANCH), fx.candidate, "{aggregate}");
+                        assert_eq!(fx.head(), fx.candidate, "{aggregate}");
+                    }
+                    assert!(
+                        fx.merge_requests().is_empty(),
+                        "repair does not grant completion"
+                    );
                     assert_eq!(host.status(TASK_ID), TaskStatus::Review);
                 });
             }

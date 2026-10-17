@@ -311,7 +311,11 @@ impl crate::OrbitRuntime {
                 excluded.push(CrewExclusion {
                     crew: crew.name.clone(),
                     source: CrewExclusionSource::ProviderLimit,
-                    reason: limit.describe(),
+                    reason: format!(
+                        "{}; reading from host {}",
+                        limit.describe(),
+                        self.automation_machine_identity().unwrap_or("unregistered")
+                    ),
                     until: Some(limit.until),
                 });
             }

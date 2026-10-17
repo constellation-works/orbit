@@ -903,8 +903,10 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   released for a `transient` failure other than a forge outage, with the
   task, class and reason) or `provider_limit` (this host's latest reading of
   the crew's provider usage window is at or over its threshold, written
-  `(provider_limit until <time>)` before the reading; it lifts at `until`
-  within the same drain, see
+  `(provider_limit until <time>)` before the reading and `reading from host
+  <machine-id>` after it; it lifts at `until` within the same drain. These
+  readings come from the executor's local store, independently of the owner's
+  login and usage limits. See
   [provider usage limits](../CONFIG.md#provider-usage-limits)). Each iteration's output carries
   the same window as `crews`. Auth exclusions also list provider, host, failure time, error class,
   re-login hint, credential source and next probe time (`auth_exclusions`).
@@ -1215,6 +1217,16 @@ one. From then on:
     automatic repair, the same repair a conflicting base gets, and the stop
     evidence carries the failed step's signature and log excerpt for the
     repair leaf.
+
+  A failed required check that no failed job answers, such as a provider
+  app's aggregate beside passing analysis jobs, is classified too, so a job
+  failure beside it never hides it. Its evidence is its own failure
+  annotations, read as `--auto-fix` reads them (see
+  [PR auto-fix repairs](../CONFIG.md#pr-auto-fix-repairs)). It is
+  **candidate** only when every annotated source file is one the candidate
+  changed from its base. Annotations on other files, or annotations that
+  cannot be read or validated, are **inconclusive**. A failed optional check
+  that no job answers keeps its previous handling.
 
   Each of the rerun, the branch update and the repair is spent once. A
   failure past that budget, or one the landing cannot classify (its jobs or

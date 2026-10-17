@@ -1,11 +1,11 @@
 mod classify;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod held;
-// Only Linux required validation builds into a host-owned target, and its
-// removal is bound to descriptors only Linux can pin without read access.
-#[cfg(target_os = "linux")]
+// Native Linux and macOS collection uses held no-follow directories.
+// Other platforms retain configured host output.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod host_targets;
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod host_targets {
     use super::sweep::{WorktreeGcOptions, WorktreeGcReport};
     use orbit_types::workflow::JobRun;
@@ -31,7 +31,10 @@ mod reclaim;
 mod rescue;
 mod sweep;
 
-#[cfg(all(target_os = "linux", feature = "test-support"))]
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos"),
+    feature = "test-support"
+))]
 pub use host_targets::with_host_target_removal_hook;
 pub use paths::run_worktree_paths;
 pub use reclaim::run_worktree_has_reclaim_output;

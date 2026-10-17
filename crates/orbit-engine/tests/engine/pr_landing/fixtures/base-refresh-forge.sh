@@ -58,7 +58,15 @@ case "$1 ${2:-}" in
             *merge*|*Merge*) echo '{"data":{"repository":{"nameWithOwner":"'"$slug"'","mergeCommitAllowed":true,"squashMergeAllowed":true,"rebaseMergeAllowed":false,"autoMergeAllowed":false,"pullRequest":{"baseRefName":"'"$base"'","baseRef":{"branchProtectionRule":{"requiresLinearHistory":false}}}}}}' ;;
             *) echo "unknown graphql $*" >&2; exit 2 ;;
         esac ;;
-    'api repos/{owner}/{repo}') printf '%s\n' "$repo" ;;
+    'api repos/{owner}/{repo}')
+        # One controlled read delay, never synthetic host load. The former
+        # one-second allowance timed out here before reservation or mutation.
+        if [ -f "$forge/delay-read" ] && [ ! -f "$forge/read-delay-entered" ]; then
+            touch "$forge/read-delay-entered"
+            sleep 2
+            touch "$forge/read-delay-finished"
+        fi
+        printf '%s\n' "$repo" ;;
     'api repos/{owner}/{repo}/pulls/42')
         if [ -f "$forge/changed_head" ]; then head=$(printf '%040d' 1); fi
         printf '{"number":42,"state":"open","merged":false,"head":{"sha":"%s","ref":"%s","repo":%s},"base":{"sha":"%s","ref":"%s","repo":%s}}\n' "$head" "$branch" "$repo" "$base_sha" "$base" "$repo" ;;

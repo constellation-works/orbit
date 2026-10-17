@@ -20,7 +20,9 @@ use super::entries::RefusedPullSettlement;
 /// resume, and ends with the drain.
 ///
 /// [ORB-14697] Each pass also excludes the crews this host's provider-limit
-/// store finds at their usage limit, until the reading lapses. A timed
+/// store finds at their usage limit, until the reading lapses. The reason
+/// names the host whose local store supplied the reading; an owner's reading
+/// does not gate a follower. A timed
 /// exclusion — a provider limit or a capacity backoff — carries its `until`,
 /// and the crew is runnable again within the same window once it passes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

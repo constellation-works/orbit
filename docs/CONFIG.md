@@ -878,12 +878,12 @@ provider_limit_explicit_crews = "wait"      # or "pool"
 
 A redrawn task's `crew_selection.source` names the limit. A task left with no unlimited crew waits with `reason: "provider_limit"` in `orbit run readiness --json` and the detail `<provider> <window> at <used>% (limit <threshold>%) until <reset>; crews <list> skipped`, lifting by itself after the reset. An `orbit run ship` naming such a task still runs it on its usual draw. A standing [provider failure hold](#provider-failure-holds) that leaves no crew reports `provider_backoff` first. Operator steps: [stuck job runs](runbooks/stuck-job-runs.md#a-task-waiting-on-a-provider-usage-limit).
 
-**Pull drains.** Each pass of a follower's pull drain re-reads its own store and excludes each limited crew from its crew window with source `provider_limit` and an `until` time; unlike other exclusions, it lifts at `until` within the same drain. The owner never hands the follower a task on that crew meanwhile. The owner's before-PR reviewer is not gated.
+**Pull drains.** Each pass of a follower's pull drain re-reads its own store and excludes each limited crew from its crew window with source `provider_limit` and an `until` time; unlike other exclusions, it lifts at `until` within the same drain. The owner never hands the follower a task on that crew meanwhile. The owner's own provider readings apply only to owner-local work; neither the owner's admission answer nor a settlement supplies readings to the follower's window. Each provider-limit exclusion names the host whose local store supplied it. The owner's before-PR reviewer is not gated.
 
 **Surfaces** all share admission's view of live readings (liveness, threshold, crew rules), so none shows a crew runnable while admission skips it.
 
 - `orbit run readiness`: a `Provider limits:` line per gated reading (`claude five_hour 93% >= 90% until 15:00Z: opus, sonnet skipped`; a reset on another UTC day includes its date) and each waiting task's detail. `--json` has a top-level `provider_limits` array of every live reading: `provider`, `scope` (the model a reading names, else `null`), `window`, `used_percent`, `exhausted`, `resets_at`, `source`, `observed_at`, `gating`, `partial`, `threshold`, `gated`, `until` and `crews` (enabled crews covered).
-- `orbit run show <pull-drain>`: `excluded <crew> (provider_limit until <time>): <reading>`.
+- `orbit run show <pull-drain>`: `excluded <crew> (provider_limit until <time>): <reading>; reading from host <machine-id>` (`unregistered` when the runtime has no machine identity).
 - `orbit doctor`: one `provider-limits:<provider>` row per provider an enabled crew uses (a provider with no usage windows and no budget, which is every provider but Codex and Claude, shows `info`; a budgeted one shows its `ledger` reading, such as `grok 5h budget 67%`), plus a `provider-limits:operation.review_crew` warning when that ungated lane uses a gated provider. Row semantics: [health checks](runbooks/health-checks.md#run-orbit-doctor). `orbit doctor providers` shows the same per executor (`LIMITS` column, `provider_limits` in `--json`).
 - Dashboard: the Settings › Crews Limit column (tightest window, used percent, reset, `gated` badge); the Drain card names gated readings and lists tasks waiting with `provider_limit`.
 
@@ -960,6 +960,22 @@ existing recovery activities, final validation and push do the repair:
   whose job log shows a code failure is repaired, with that head's failed step,
   error signature and log excerpt as evidence. A conflict is rebased onto the
   current base by PR conflict recovery.
+- A failed required check run that no workflow produced (a provider app's
+  aggregate result, such as a code-scanning check beside passing analysis jobs)
+  is repaired only from its own failure annotations. The watcher reads them
+  from the forge for the check run and app identity that the head-bound
+  required-check read reported, and requires a complete, unchanged answer bound to the
+  repository, pull request, head and base branch. Each failure annotation must
+  name a relative source file that exists at that head, through an exact-head
+  blob link, with a line and a message. A passing analysis job does not satisfy
+  the aggregate, and a failed workflow job beside it does not hide it: every
+  failed required check needs its own evidence. Duplicate, foreign, stale,
+  truncated or changed provider answers, a missing identity, an aggregate
+  without failure annotations, and annotations on workflow configuration, on a
+  path outside the checkout or showing a runner or network failure stop the
+  watcher without spending an attempt. The answer is retained under
+  `auto-fix/<run>/check-annotations-<failed-head>.json` before the repair is
+  admitted from the same attempt budget.
 - A job log that exceeds the display or full-command retention limit can still
   supply bounded failure regions. Recovery requires a fully scanned source,
   complete command and region selection, and exactly one provider-reported
