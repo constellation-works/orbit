@@ -137,14 +137,16 @@ passed verdict
 travels in the handoff, and the owner checks the certificate against its own
 copy before it accepts, including the captured owner check list. The owner also
 verifies exact-run and exact-head validation logs using its own required
-commands; a command-list mismatch fails closed. A log reporting known red is
-accepted only after a comparable base run fails every test it names. The
+commands; a command-list mismatch fails closed. A same-OS log reporting known
+red is accepted only after a comparable base run fails every test it names. The
 owner's own run is comparable only when the follower was admitted on the same
 host OS as this owner. That OS is the validation environment the drain
 records, and a different OS is a different validation environment. The base
 must also be in the history of the base branch this owner captured at
-admission. Settlement gives all owner base comparisons one ten-minute deadline
-within the routed call's fifteen minutes.
+admission, for both same-OS and cross-OS settlements. An off-branch base
+refuses settlement without running a validation command. Settlement gives all
+owner base comparisons one ten-minute deadline within the routed call's
+fifteen minutes.
 A cut or other inconclusive attempted run is retained separately from conclusive
 base results; retries reuse its refusal and partial failures never confirm the
 report. A later conclusive base result can replace that refusal; a moved base
@@ -152,7 +154,8 @@ or different replay selection gets its own check. When that same-OS base run
 contradicts the report (passes the reported tests or fails without one), the
 owner releases the claim with a `known_red_contradicted` reason and the
 follower closes its settlement obsolete; no revoke is needed. When the follower
-was admitted on a different OS, the owner does not read a cached result or
+was admitted on a different OS, after checking that same base-branch
+membership the owner does not read a cached result or
 start a base run for the report, and it does not release the claim as
 `known_red_contradicted` or return the task to the backlog. It accepts the
 follower's base evidence for that OS, records the known-red tests, and accepts
