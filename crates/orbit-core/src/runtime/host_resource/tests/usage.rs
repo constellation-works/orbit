@@ -102,7 +102,9 @@ fn host_usage_is_tick_utilization_in_cores_and_unavailable_memory() {
         assert!(reading.memory_used_bytes <= reading.memory_total_bytes);
         let probe = HostLoadProbe::default();
         probe.prepare();
-        let load = probe.measure().expect("native forecast host load");
+        let load = probe
+            .measure(chrono::Utc::now())
+            .expect("native forecast host load");
         let cores = load
             .cpu_cores
             .expect("ticks advance beyond XNU cache window");

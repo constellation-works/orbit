@@ -17,13 +17,16 @@
 //!
 //! At that point it stops reading, stops the service, and returns
 //! [`StdioExit::HandOver`] with the client's original `initialize` request
-//! and any partial line it had read. The reader defers a handover while that
-//! partial line exceeds [`MAX_CARRYOVER`], keeping the service alive until a
-//! later idle check. The caller execs the new executable with
-//! that state in [`RESUME_ENV`]. Because `exec` keeps the pid and the stdio
-//! descriptors, the client sees one uninterrupted session. The new process
-//! replays the `initialize` request into its server rather than expecting a
-//! second handshake.
+//! and any partial line it had read. A request can arrive between the idle
+//! check and the reader stopping, so stopping the reader keeps the service's
+//! input open: the service answers that request and waits to be stopped,
+//! rather than reading end of input as the client leaving. The reader defers
+//! a handover while that partial line exceeds [`MAX_CARRYOVER`], keeping the
+//! service alive until a later idle check. The caller execs the new
+//! executable with that state in [`RESUME_ENV`]. Because `exec` keeps the pid
+//! and the stdio descriptors, the client sees one uninterrupted session. The
+//! new process replays the `initialize` request into its server rather than
+//! expecting a second handshake.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -386,8 +389,11 @@ async fn serve_handing_over(
                 "mcp serve_stdio: the stdin reader stopped unexpectedly".into(),
             ));
         };
-        let carryover = match outcome {
-            unix::PumpOutcome::Stopped(carryover) => carryover,
+        // Hold the input open until the service is cancelled: on EOF the
+        // service answers what it was forwarded and finishes, which would end
+        // the session below instead of handing it over.
+        let (carryover, _input) = match outcome {
+            unix::PumpOutcome::Stopped { carryover, input } => (carryover, input),
             unix::PumpOutcome::Closed => {
                 // The client left while this session was deciding.
                 let _ = service.await;
@@ -599,8 +605,12 @@ mod unix {
     }
 
     pub(super) enum PumpOutcome {
-        /// Stopped on request, holding the partial line read so far.
-        Stopped(Vec<u8>),
+        /// Stopped on request, holding the partial line read so far and the
+        /// sender that keeps the service's input open.
+        Stopped {
+            carryover: Vec<u8>,
+            input: mpsc::Sender<Vec<u8>>,
+        },
         /// The client closed stdin.
         Closed,
     }
@@ -640,7 +650,10 @@ mod unix {
                         }
                         let _ = accepted.send(true);
                     }
-                    return Ok(PumpOutcome::Stopped(buffer));
+                    return Ok(PumpOutcome::Stopped {
+                        carryover: buffer,
+                        input: lines,
+                    });
                 }
                 ready = stdin.0.readable() => ready?,
             };

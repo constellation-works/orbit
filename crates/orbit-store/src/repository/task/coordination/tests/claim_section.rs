@@ -296,6 +296,7 @@ fn a_claim_mutation_section_decodes_its_own_claim_and_syncs_only_its_commit() {
                     candidate: None,
                     provider_limit: false,
                     provider_refusal: false,
+                    owner_busy: false,
                 }),
                 ..Default::default()
             }),

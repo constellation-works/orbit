@@ -1,5 +1,5 @@
-//! The host admission lock over `job_runs`, `run_resource_minutes` and
-//! `admission_reservations`.
+//! The host admission lock over `job_runs`, `run_resource_minutes`,
+//! `host_resource_minutes` and `admission_reservations`.
 //!
 //! `job_runs` is read across every workspace: the workspace subquery lets
 //! SQLite walk the per-workspace state and recency indexes instead of
@@ -15,7 +15,7 @@ use rusqlite::{Connection, TransactionBehavior, params, params_from_iter};
 use crate::Store;
 use crate::contracts::{
     AdmissionDecision, AdmissionLoad, AdmissionLoadQuery, AdmissionLoadStoreBackend,
-    AdmissionReservation, AdmissionRun, RunResourceMinute,
+    AdmissionReservation, AdmissionRun, AdmissionRunMinute, HostResourceMinute, RunResourceMinute,
 };
 
 /// The run states that hold a delivery's work.
@@ -52,9 +52,15 @@ impl AdmissionLoadStoreBackend for Store {
             }
             let reservations = reservations(conn)?;
             let since = reservations.first().map(|first| first.reserved_at);
+            let (host_minutes, run_minutes) = match query.resource_minutes_since {
+                Some(since) => (host_minutes(conn, since)?, run_minutes(conn, since)?),
+                None => (Vec::new(), Vec::new()),
+            };
             let load = AdmissionLoad {
                 runs: delivery_runs(conn, query.delivery_jobs, since)?,
                 reservations,
+                host_minutes,
+                run_minutes,
             };
             let mut written = Vec::new();
             for reservation in decide(&load)? {
@@ -122,7 +128,8 @@ fn delivery_runs(
     }
     let placeholders = vec!["?"; jobs.len()].join(",");
     let select = format!(
-        "SELECT workspace_id, run_id, job_id, state IN {LIVE_STATES}, created_at, input_json
+        "SELECT workspace_id, run_id, job_id, state IN {LIVE_STATES}, created_at, input_json,
+                started_at
          FROM job_runs
          WHERE workspace_id IN (SELECT DISTINCT workspace_id FROM job_runs)
            AND job_id IN ({placeholders})"
@@ -146,6 +153,10 @@ fn delivery_runs(
                     input: row
                         .get::<_, Option<String>>(5)?
                         .and_then(|raw| serde_json::from_str(&raw).ok()),
+                    started_at: row
+                        .get::<_, Option<String>>(6)?
+                        .map(|at| crate::parse_timestamp(&at))
+                        .transpose()?,
                     newest_minute: None,
                 })
             })
@@ -212,4 +223,71 @@ fn delivery_runs(
         (a.created_at, &a.workspace_id, &a.run_id).cmp(&(b.created_at, &b.workspace_id, &b.run_id))
     });
     Ok(runs)
+}
+
+/// The host's minutes starting at or after `since`, oldest first.
+fn host_minutes(
+    conn: &Connection,
+    since: DateTime<Utc>,
+) -> Result<Vec<HostResourceMinute>, OrbitError> {
+    let mut statement = conn
+        .prepare(
+            "SELECT minute_at, cpu_cores, cpu_count, memory_bytes, memory_total_bytes,
+                    samples, recorded_by_run_id
+             FROM host_resource_minutes
+             WHERE minute_at >= ?1
+             ORDER BY minute_at",
+        )
+        .map_err(sqlite_store_error)?;
+    let rows = statement
+        .query_map(params![stamp(since)], |row| {
+            Ok(HostResourceMinute {
+                minute_at: crate::parse_timestamp(&row.get::<_, String>(0)?)?,
+                cpu_cores: row.get(1)?,
+                cpu_count: row.get(2)?,
+                memory_bytes: unsigned(row.get(3)?),
+                memory_total_bytes: unsigned(row.get(4)?),
+                samples: row.get(5)?,
+                recorded_by_run_id: row.get(6)?,
+            })
+        })
+        .map_err(sqlite_store_error)?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(sqlite_store_error)
+}
+
+/// Every run's minutes starting at or after `since`, with the run's
+/// `finished_at`, oldest first.
+fn run_minutes(
+    conn: &Connection,
+    since: DateTime<Utc>,
+) -> Result<Vec<AdmissionRunMinute>, OrbitError> {
+    let mut statement = conn
+        .prepare(
+            "SELECT m.workspace_id, m.run_id, m.minute_started_at, m.cpu_cores,
+                    m.memory_bytes, m.samples, r.finished_at
+             FROM run_resource_minutes m
+             LEFT JOIN job_runs r ON r.workspace_id = m.workspace_id AND r.run_id = m.run_id
+             WHERE m.minute_started_at >= ?1
+             ORDER BY m.minute_started_at, m.workspace_id, m.run_id",
+        )
+        .map_err(sqlite_store_error)?;
+    let rows = statement
+        .query_map(params![stamp(since)], |row| {
+            Ok(AdmissionRunMinute {
+                workspace_id: row.get(0)?,
+                run_id: row.get(1)?,
+                minute_started_at: crate::parse_timestamp(&row.get::<_, String>(2)?)?,
+                cpu_cores: row.get(3)?,
+                memory_bytes: unsigned(row.get(4)?),
+                samples: row.get(5)?,
+                run_finished_at: row
+                    .get::<_, Option<String>>(6)?
+                    .map(|at| crate::parse_timestamp(&at))
+                    .transpose()?,
+            })
+        })
+        .map_err(sqlite_store_error)?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(sqlite_store_error)
 }

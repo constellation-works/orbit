@@ -428,7 +428,7 @@ impl OrbitRuntime {
 }
 
 /// Whether an upgrade quiesced the run or refused its worker's admission.
-fn upgrade_interrupted(run: &JobRun) -> bool {
+pub(super) fn upgrade_interrupted(run: &JobRun) -> bool {
     run.steps.iter().any(|step| {
         step.error_code.as_deref() == Some(UPGRADE_QUIESCE_ERROR_CODE)
             || step.error_message.as_deref().is_some_and(|message| {
