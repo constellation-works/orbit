@@ -688,7 +688,8 @@ class NextestOutputTransportTests(unittest.TestCase):
         environment.update(CARGO_TARGET_DIR=str(Path(temporary.name) / "target"), CARGO_NET_OFFLINE="true",
                            BUILD_BUDGET="env", CI_TEST_BASE="HEAD",
                            # CI exports CARGO_TERM_COLOR=always; the assertions read plain text.
-                           CARGO_TERM_COLOR="never", NO_COLOR="1")
+                           # Forced progress makes cargo fail without a terminal width; with one, its redraws add \r.
+                           CARGO_TERM_COLOR="never", CARGO_TERM_PROGRESS_WHEN="never", NO_COLOR="1")
         for arguments in (("init", "--initial-branch=main"), ("add", "."), ("commit", "-m", "base")):
             subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
                             "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", *arguments],
@@ -712,7 +713,8 @@ class NextestOutputTransportTests(unittest.TestCase):
         self.summary = json.loads(summary.read_text())
         logs = list((root / ".orbit/tmp").glob("ci-test-affected-nextest-*.log"))
         self.assertEqual(len(logs), 1, result.stderr)
-        self.full_output = logs[0].read_text()
+        # Raw bytes: read_text() would translate the \r redraws that the retained evidence keeps.
+        self.full_output = logs[0].read_bytes().decode()
         return result.stdout + result.stderr
 
     def notices(self, output):
