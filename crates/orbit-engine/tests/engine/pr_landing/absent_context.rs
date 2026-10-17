@@ -415,7 +415,6 @@ fn reserved_refresh_observes_lost_unapplied_and_pending_outcomes_without_another
                             "phase={phase} {}",
                             refresh_diagnostics(&fx, &host, mode, now, &result)
                         );
-                        eprintln!("{diagnostics}");
                         assert!(result.is_err(), "{diagnostics}");
                         assert_eq!(
                             fs::read_to_string(fx.forge.join("mutations")).unwrap_or_else(
