@@ -18,6 +18,8 @@ const fire = async timer => { timer.cancelled = true; timer.fn(); await settle()
 
 let failedTotal = 3;
 let failedStatus = 200;
+// Workspaces the aggregate total left out, as `/api/job-runs/all` lists them.
+let failedUnavailable = [];
 let readiness = { capacity: { drain_phase: 'draining' }, tasks: [] };
 const urls = [];
 const respond = (status, body) => ({
@@ -29,7 +31,10 @@ const fetch = async url => {
   urls.push(url);
   const path = url.split('?')[0];
   if (path === '/api/job-runs' || path === '/api/job-runs/all') {
-    return failedStatus === 200 ? respond(200, { items: [], total: failedTotal }) : respond(failedStatus, { error: 'unavailable' });
+    if (failedStatus !== 200) return respond(failedStatus, { error: 'unavailable' });
+    return respond(200, path === '/api/job-runs/all'
+      ? { items: [], total: failedTotal, unavailable: failedUnavailable }
+      : { items: [], total: failedTotal });
   }
   if (path === '/api/workflows/auto/readiness') return respond(200, readiness);
   return respond(404, { error: `unexpected ${url}` });
@@ -190,5 +195,26 @@ common.namespace.setWorkspace(null);
 urls.length = 0;
 await setHidden(true);
 assert.deepEqual(urls, ['/api/job-runs/all?state=failed&limit=1'], 'the aggregate background read is the cross-workspace failed count');
+
+// The aggregate total sums only the workspaces that answered. A workspace that
+// drops out lowers it and its return raises it, with no failure in either, so
+// neither moves the count; a rise while the same workspace stays out still does.
+failedTotal = 120;
+await setHidden(false);
+await setHidden(true);
+failedTotal = 70;
+failedUnavailable = [{ workspace_id: 'ws-three', workspace_name: 'three', error: 'workspace is unavailable' }];
+await fire(pending('runBackground')[0]);
+assert.equal(document.title, 'Jobs · orbit', 'a workspace that drops out does not read as failures');
+failedTotal = 75;
+await fire(pending('runBackground')[0]);
+assert.equal(document.title, '(5 failed) Jobs · orbit', 'a rise across the available workspaces counts while one stays out');
+failedTotal = 120;
+failedUnavailable = [];
+await fire(pending('runBackground')[0]);
+assert.equal(document.title, '(5 failed) Jobs · orbit', 'a workspace that returns does not read as failures');
+failedTotal = 122;
+await fire(pending('runBackground')[0]);
+assert.equal(document.title, '(7 failed) Jobs · orbit', 'counting resumes once the answering workspaces match');
 
 console.log('hidden dashboard polls every 60 s, prefixes the title with new failures until shown, and notifies a drain end or new hold only after opt-in');

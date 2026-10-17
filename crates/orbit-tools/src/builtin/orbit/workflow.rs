@@ -61,10 +61,20 @@ impl GuardedModes for WorkflowVerb {
         }
     }
 
-    fn shape_input(self, _ctx: &ToolContext, _input: &mut Value) -> Result<(), OrbitError> {
+    fn shape_input(self, _ctx: &ToolContext, input: &mut Value) -> Result<(), OrbitError> {
         match self {
-            WorkflowVerb::Auto
-            | WorkflowVerb::RunList
+            WorkflowVerb::Auto => {
+                // Status consumes these selectors above. Keep the control actions'
+                // existing refusal of fields that only the readiness read accepts.
+                let allowed = self
+                    .spec()
+                    .mcp_params()
+                    .map(|(param, _)| param.name)
+                    .filter(|name| !["task", "limit", "allow_crew"].contains(name))
+                    .collect::<Vec<_>>();
+                reject_unknown_tool_fields(input, &allowed)
+            }
+            WorkflowVerb::RunList
             | WorkflowVerb::RunResume
             | WorkflowVerb::RunShow
             | WorkflowVerb::Ship => Ok(()),
@@ -99,7 +109,7 @@ fn ensure_not_managed(ctx: &ToolContext) -> Result<(), OrbitError> {
 }
 
 /// The auto-drain control's explicit workspace, and its status action, which
-/// takes no settings and is served as the drain readiness read. The other
+/// parses selection settings and is served as the drain readiness read. The other
 /// actions go to the drain control.
 fn auto_status(ctx: &ToolContext, input: &Value) -> Option<Result<Value, OrbitError>> {
     if let Err(error) = required_string(input, &["workspace"], "workspace") {
@@ -111,7 +121,19 @@ fn auto_status(ctx: &ToolContext, input: &Value) -> Option<Result<Value, OrbitEr
         Err(error) => return Some(Err(error)),
     }
     Some(
-        reject_unknown_tool_fields(input, &["workspace", "action", "model"]).and_then(|()| {
+        reject_unknown_tool_fields(
+            input,
+            &[
+                "workspace",
+                "action",
+                "model",
+                "task",
+                "concurrency",
+                "limit",
+                "allow_crew",
+            ],
+        )
+        .and_then(|()| {
             let mut input = input.clone();
             if let Some(object) = input.as_object_mut() {
                 object.remove("action");

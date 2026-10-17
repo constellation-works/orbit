@@ -55,6 +55,7 @@ use super::landing_checks::{
     verify_published_base_update,
 };
 use super::operations;
+use super::pr::diagnostics;
 use super::pr::{
     BlockedCheckWait, DeliveryPin, OwedHostedChecks, PrMergeState, PullRequestStatus,
     UnreportedChecks, checked_pr_state, classify_pr_state, owed_hosted_checks, read_pr_status,
@@ -188,9 +189,17 @@ fn reconcile_intent<H: RuntimeHost + ?Sized>(
 ) -> Result<Option<Value>, OrbitError> {
     let candidate = &context.candidate;
     let mut delivery_error = None;
+    let mut refusal_observation = None;
     let (merged, evidence) = match &candidate.delivery {
         HandoffDelivery::PullRequest { number } => {
             let status = read_pr_status(host, &context.workspace_path, &number.to_string())?;
+            refusal_observation = Some(json!({
+                "pr":diagnostics::status(&status), "status_observations":1,
+                "status_history_truncated":false,
+                "required_checks":{"state":"not_collected"},
+                "unreported_wait":{"state":"not_collected"},
+                "classification":diagnostics::text(&describe(&classify_pr_state(&status))),
+            }));
             match classify_pr_state(&status) {
                 PrMergeState::Merged => {
                     let mut pin = pin_for(candidate);
@@ -205,8 +214,8 @@ fn reconcile_intent<H: RuntimeHost + ?Sized>(
                             let evidence = json!({
                                 "reconciled": "pull_request_merged",
                                 "pull_request": number,
-                                "provider_state": status.provider_state(),
-                                "delivery_error": error.to_string(),
+                                "provider_state": diagnostics::status(&status),
+                                "delivery_error": diagnostics::reason(&error.to_string()),
                             });
                             delivery_error = Some(error);
                             evidence
@@ -219,7 +228,7 @@ fn reconcile_intent<H: RuntimeHost + ?Sized>(
                     json!({
                         "reconciled": "pull_request_open",
                         "pull_request": number,
-                        "provider_state": describe(&other),
+                        "provider_state": diagnostics::text(&describe(&other)),
                     }),
                 ),
             }
@@ -270,12 +279,24 @@ fn reconcile_intent<H: RuntimeHost + ?Sized>(
         &evidence,
     )?;
     if let Some(error) = delivery_error {
-        return Err(stop(host, context, &error.to_string())?);
+        return Err(stop_pr(
+            host,
+            context,
+            refusal_observation.as_ref().unwrap_or(&Value::Null),
+            false,
+            &error.to_string(),
+        )?);
     }
     if !merged {
         return Ok(None);
     }
-    let observed = observe_or_stop(host, context, None, view)?;
+    let observed = observe_candidate(context, None, view).map_err(|error| {
+        if let Some(observation) = &refusal_observation {
+            stop_pr(host, context, observation, false, &error.to_string()).unwrap_or(error)
+        } else {
+            stop(host, context, &error.to_string()).unwrap_or(error)
+        }
+    })?;
     Ok(Some(complete(host, context, observed, &evidence)?))
 }
 
@@ -319,6 +340,9 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
     let mut unreported = UnreportedChecks::new();
     let mut waited_seconds = 0_u64;
     let mut intent: Option<String> = None;
+    let mut diagnostic = json!({"pr":{"state":"not_collected"},
+        "required_checks":{"state":"not_collected"}, "status_observations":0,
+        "classification":{"state":"not_collected"}});
     loop {
         if max_wait_seconds > 0
             && (waited_seconds >= max_wait_seconds
@@ -331,6 +355,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 max_wait_seconds,
                 &context.owed_hosted_checks,
                 &unreported,
+                &diagnostic,
             )?);
         }
         let status = if max_wait_seconds == 0 {
@@ -338,7 +363,19 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
         } else {
             read_pr_status_before(host, &workspace, &pr_number, deadline_ms)?
         };
+        diagnostic["pr"] = diagnostics::status(&status);
+        diagnostic["required_checks"] = json!({"state":"not_collected"});
+        diagnostic["unreported_wait"] = json!({"state":"not_collected"});
+        diagnostic["status_observations"] = json!(
+            diagnostic["status_observations"]
+                .as_u64()
+                .unwrap_or(0)
+                .saturating_add(1)
+        );
+        diagnostic["status_history_truncated"] =
+            json!(diagnostic["status_observations"].as_u64().unwrap_or(0) > 1);
         let mut state = classify_pr_state(&status);
+        diagnostic["classification"] = diagnostics::text(&describe(&state));
         waited_seconds = waited_seconds.max(started.elapsed().as_secs());
         // [ORB-15956] A branch update this landing (or an earlier attempt)
         // requested moved the head onto a verified merge with the base.
@@ -354,7 +391,9 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
             false,
             Some(&context.handoff_id),
         )
-        .map_err(|error| stop(host, context, &error.to_string()).unwrap_or(error))?;
+        .map_err(|error| {
+            stop_pr(host, context, &diagnostic, false, &error.to_string()).unwrap_or(error)
+        })?;
         if matches!(refresh, super::base_refresh::RefreshStep::Changed) {
             continue;
         }
@@ -368,7 +407,15 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 Ok(delivered) => delivered,
                 // A merged pull request whose identity is not ours is not this
                 // handoff's delivery, whatever it merged.
-                Err(error) => return Err(stop(host, context, &error.to_string())?),
+                Err(error) => {
+                    return Err(stop_pr(
+                        host,
+                        context,
+                        &diagnostic,
+                        false,
+                        &error.to_string(),
+                    )?);
+                }
             };
             let mut evidence = json!({
                 "delivery": delivered.as_json(),
@@ -381,7 +428,9 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
             if let Some(actions) = recovery.evidence() {
                 evidence["check_recovery"] = actions;
             }
-            let observed = observe_or_stop(host, context, Some(&status), view)?;
+            let observed = observe_candidate(context, Some(&status), view).map_err(|error| {
+                stop_pr(host, context, &diagnostic, false, &error.to_string()).unwrap_or(error)
+            })?;
             if let Some(intent_id) = intent {
                 record(
                     host,
@@ -400,9 +449,15 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
         // Every non-merged state below is read against the pinned identity
         // first: a repointed branch or base must never receive a merge request.
         if let Err(error) = pin.ensure_pinned_candidate(&status, &pr_number) {
-            return Err(stop(host, context, &error.to_string())?);
+            return Err(stop_pr(
+                host,
+                context,
+                &diagnostic,
+                false,
+                &error.to_string(),
+            )?);
         }
-        state = match checked_pr_state(
+        let checked = checked_pr_state(
             host,
             &workspace,
             &pr_number,
@@ -410,16 +465,23 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
             BlockedCheckWait::Owner(&context.owed_hosted_checks),
             &mut unreported,
             deadline_ms,
-        ) {
+        );
+        diagnostic["required_checks"] = unreported.required_observation.clone();
+        diagnostic["unreported_wait"] = unreported.diagnostic();
+        state = match checked {
             Ok(state) => state,
             Err(reason) => {
-                return Err(stop(
+                diagnostic["classification"] = diagnostics::text("required_check_refusal");
+                return Err(stop_pr(
                     host,
                     context,
+                    &diagnostic,
+                    false,
                     &format!("pull request #{pr_number} cannot be merged ({reason})"),
                 )?);
             }
         };
+        diagnostic["classification"] = diagnostics::text(&describe(&state));
         // A required context the head has not reported may be one only the
         // advanced base emits, so absent-context recovery still diagnoses it.
         if !refresh_wait
@@ -436,8 +498,9 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 true,
                 Some(&context.handoff_id),
             )
-            .map_err(|error| stop(host, context, &error.to_string()).unwrap_or(error))?
-            {
+            .map_err(|error| {
+                stop_pr(host, context, &diagnostic, false, &error.to_string()).unwrap_or(error)
+            })? {
                 super::base_refresh::RefreshStep::Changed => continue,
                 super::base_refresh::RefreshStep::Wait
                 | super::base_refresh::RefreshStep::Adopted { waiting: true } => {
@@ -478,14 +541,16 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
         let mut waiting_on_recovery = refresh_wait;
         if let Some(reason) = check_reason {
             if failed.is_empty() {
-                return Err(stop(
+                return Err(stop_pr(
                     host,
                     context,
+                    &diagnostic,
+                    false,
                     &format!("{reason}, so the candidate stays in review"),
                 )?);
             }
             let tip = landing_tip(context, view);
-            match recover_failed_checks(
+            let recovered = recover_failed_checks(
                 host,
                 context,
                 &status,
@@ -493,14 +558,18 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 tip.as_deref(),
                 &mut recovery,
                 &reason,
-            )? {
+            )?;
+            if let Some(observation) = recovery.required_observation.take() {
+                diagnostic["required_checks"] = observation;
+            }
+            match recovered {
                 CheckRecoveryStep::Acted => continue,
                 CheckRecoveryStep::Wait => waiting_on_recovery = true,
                 CheckRecoveryStep::Repair(evidence) => {
-                    return Err(stop_for_repair(host, context, &evidence)?);
+                    return Err(stop_pr(host, context, &diagnostic, true, &evidence)?);
                 }
                 CheckRecoveryStep::Stop(evidence) => {
-                    return Err(stop(host, context, &evidence)?);
+                    return Err(stop_pr(host, context, &diagnostic, false, &evidence)?);
                 }
             }
         }
@@ -508,9 +577,11 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
             _ if waiting_on_recovery => {}
             PrMergeState::Merged => unreachable!("merged is handled above"),
             PrMergeState::Closed => {
-                return Err(stop(
+                return Err(stop_pr(
                     host,
                     context,
+                    &diagnostic,
+                    false,
                     &format!(
                         "pull request #{pr_number} was closed without merging; the candidate \
                          stays in review"
@@ -518,9 +589,11 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 )?);
             }
             PrMergeState::Contradictory(reason) => {
-                return Err(stop(
+                return Err(stop_pr(
                     host,
                     context,
+                    &diagnostic,
+                    false,
                     &format!(
                         "pull request #{pr_number} reports a contradictory merge state \
                          ({reason}); landing needs an unambiguous merged state"
@@ -535,15 +608,17 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 // A branch that is only behind its base is stale, not refused:
                 // the repair brings it up to date and revalidates it.
                 return Err(if behind_base(&status) {
-                    stop_for_repair(host, context, &reason)?
+                    stop_pr(host, context, &diagnostic, true, &reason)?
                 } else {
-                    stop(host, context, &reason)?
+                    stop_pr(host, context, &diagnostic, false, &reason)?
                 });
             }
             PrMergeState::Conflict => {
-                return Err(stop_for_repair(
+                return Err(stop_pr(
                     host,
                     context,
+                    &diagnostic,
+                    true,
                     &format!(
                         "pull request #{pr_number} conflicts with its base; the owner does not \
                          rebase unvalidated code, so a repair needs fresh validation and a new \
@@ -560,11 +635,12 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                         max_wait_seconds,
                         &context.owed_hosted_checks,
                         &unreported,
+                        &diagnostic,
                     )?);
                 }
                 if updated_head.is_some() {
                     let current = host.run_private_vcs_operation(operations::CI_CURRENT_GATES, json!({"workspace_path":workspace,"pr":pr_number,"head_sha":status.head_sha,"head_branch":status.head_branch,"base_branch":status.base_branch,"deadline_ms":deadline_ms}))
-                        .map_err(|error| stop(host,context,&error.to_string()).unwrap_or(error))?;
+                        .map_err(|error| stop_pr(host, context, &diagnostic, false,&error.to_string()).unwrap_or(error))?;
                     if current["gates_passed"] != true {
                         // A newly required context that has not succeeded is
                         // still a gate, including on a provider-reported CLEAN.
@@ -576,6 +652,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                                 max_wait_seconds,
                                 &context.owed_hosted_checks,
                                 &unreported,
+                                &diagnostic,
                             )?);
                         }
                         let delay = poll_interval_seconds
@@ -600,13 +677,20 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                         max_wait_seconds,
                         &context.owed_hosted_checks,
                         &unreported,
+                        &diagnostic,
                     )?);
                 }
-                let observed = observe_or_stop(host, context, Some(&status), view)?;
+                let observed =
+                    observe_candidate(context, Some(&status), view).map_err(|error| {
+                        stop_pr(host, context, &diagnostic, false, &error.to_string())
+                            .unwrap_or(error)
+                    })?;
                 if observed.repository != capabilities.repository {
-                    return Err(stop(
+                    return Err(stop_pr(
                         host,
                         context,
+                        &diagnostic,
+                        false,
                         &format!(
                             "pull request #{pr_number} belongs to repository \
                              '{}', not the handoff's '{}'",
@@ -668,6 +752,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 max_wait_seconds,
                 waiting,
                 &unreported,
+                &diagnostic,
             )?);
         }
         let sleep_seconds = poll_interval_seconds.min(max_wait_seconds - waited_seconds);
@@ -683,6 +768,7 @@ fn landing_timeout<H: RuntimeHost + ?Sized>(
     max_wait_seconds: u64,
     owed: &[String],
     unreported: &UnreportedChecks,
+    diagnostic: &Value,
 ) -> Result<OrbitError, OrbitError> {
     let mut waiting = if owed.is_empty() {
         String::new()
@@ -690,9 +776,11 @@ fn landing_timeout<H: RuntimeHost + ?Sized>(
         format!(" (owed hosted checks not yet passed: {})", owed.join(", "))
     };
     waiting.push_str(&unreported.timeout_note());
-    stop(
+    stop_pr(
         host,
         context,
+        diagnostic,
+        false,
         &format!(
             "pull request #{number} did not reach a merged state within {max_wait_seconds}s{waiting}; the candidate stays in review"
         ),
@@ -1127,6 +1215,47 @@ fn complete<H: RuntimeHost + ?Sized>(
         "task_id": context.task_id,
         "evidence": evidence,
     }))
+}
+
+/// Keep diagnostics in the existing opaque evidence string. The enclosing
+/// durable attempt supplies its attempt number/run; `observed` stays empty.
+fn stop_pr<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &HandoffLandingContext,
+    observation: &Value,
+    repairable: bool,
+    reason: &str,
+) -> Result<OrbitError, OrbitError> {
+    let reason = diagnostics::reason(reason);
+    let evidence = json!({
+        "schema_version":1, "kind":"owner_landing_refusal",
+        "reason":reason, "repairable":repairable,
+        "accepted":{
+            "task":diagnostics::text(&context.task_id),
+            "handoff":diagnostics::text(&context.handoff_id),
+            "repository":diagnostics::text(&context.candidate.repository),
+            "base":diagnostics::text(&context.candidate.base.commit),
+            "candidate":diagnostics::text(&context.candidate.candidate.commit),
+            "source_branch":diagnostics::text(&context.candidate.source_branch),
+            "base_branch":diagnostics::text(&context.candidate.base_branch),
+            "landing_branch":diagnostics::text(&context.candidate.landing_branch),
+        },
+        "owner_owed": diagnostics::collection(&context.owed_hosted_checks, |name| diagnostics::text(name)),
+        "observation":observation,
+        "workflow_prerequisites":{"state":"not_collected"},
+        "emission_proof":{"state":"not_collected"},
+    });
+    record(
+        host,
+        context,
+        HandoffLandingStep::Stop { repairable },
+        None,
+        &evidence,
+    )?;
+    Ok(OrbitError::Execution(format!(
+        "handoff_land: {}",
+        reason["value"].as_str().unwrap_or_default()
+    )))
 }
 
 /// Record a durable stop and return the error the run fails with, so the

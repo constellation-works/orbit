@@ -185,12 +185,41 @@ class in `worker/delivery_class.rs`, the host reads in
   `orbit gc runs --apply`, and so the `store-gc` routine, prunes them
   host-wide.
 - **macOS process tree.** macOS has no scopes. Every 5 s the worker sums
-  its own process tree (`process_tree` in `ancestry.rs`). CPU time is the
-  non-negative delta of each process seen in both samples, plus the full
-  CPU time of a process that appeared since the previous sample. The first
-  sample is a baseline, so a worker's lifetime before that does not land in
-  the first minute. A process that exits drops out of the sum; it is not
-  subtracted and its CPU is not added again. Each process is charged only
+  its own process tree (`process_tree` and `TreeCpuAccount` in
+  `ancestry.rs`). A process's total is its own CPU plus the CPU of the
+  children it has waited for (`ri_child_user_time` and
+  `ri_child_system_time`, which carry what those children had reaped in
+  turn). CPU time is the non-negative growth of the total of each process
+  seen in both samples, plus the whole total of a process that appeared
+  since the previous sample. A short-lived compiler, linker or test process
+  that starts and is reaped between samples is charged through its parent's
+  reaped total. One a sample saw alive arrives in its parent's reaped total
+  too, so each process that left the tree is looked up again by pid and
+  start time. If it is gone, it exited: its last observed total becomes owed
+  by the member that listed it, or, when that member exited as well, by the
+  nearest ancestor still in the tree, since a reaped process's total carries
+  what it had reaped. Growth of the owing member's reaped total pays the
+  debt instead of being charged, so the sampled child is counted once and a
+  reap that lands samples later (the walk reads a parent before its
+  children) is still matched. If it is alive under the same parent, the walk
+  missed it and it stays tracked. If it is alive under another parent, it
+  was reparented away: what it ran in the tree stays charged and it owes
+  nothing. An exited process nobody has waited for stays listed and
+  readable as a zombie, so one that left the walk was reaped before the walk
+  reached it, and a reap by its owner shows in the owner's reaped total in
+  that sample or at the owner's next sighting. A debt settles only at those
+  two sightings, and whatever is left is dropped. Each climb restarts the
+  window, so a nested reap that lands a sample later one level up is still
+  matched. Some debts are never paid, because the descendant was reaped
+  outside the tree: its parent exited without waiting for it (a tool timeout
+  kills a build, the shell under the agent dies and the agent reaps it, and
+  `launchd` reaps the build; or a dropped child handle whose parent exits
+  after it), its parent sets `SA_NOCLDWAIT`, or it was reparented and exited
+  within one interval. Until the window closes, such a debt absorbs the
+  owner's unrelated reaped growth, so the tree undercounts by at most that
+  growth over two sightings, and never by more than the debt.
+  The first sample is a baseline, so a worker's lifetime before that does
+  not land in the first minute. Each process is charged only
   when its start time and parent read the same before and after its usage
   read, and while the parent that listed it still has the same start time.
   A reused or reparented pid is left out of that sample. Memory is the sum of
@@ -293,28 +322,44 @@ actually used.
 ### 3.3 The profile
 
 Worker minutes now carry nullable `cpu_accounting` provenance. New Linux
-minutes use `linux-cgroup-v1`; corrected Mac minutes use `macos-mach-ns-v1`.
-The Mac sampler converts its own user plus system Mach absolute ticks using
-the host's `mach_timebase_info` ratio, with wide integer arithmetic. It never
-adds child totals. An unavailable/zero timebase or a result beyond `u64`
-invalidates the sample, preserving the unreadable-tree behavior.
+minutes use `linux-cgroup-v1`; new Mac minutes use `macos-mach-ns-v2`.
+The Mac sampler converts each process's own and reaped-children user plus
+system Mach absolute ticks using the host's `mach_timebase_info` ratio, with
+wide integer arithmetic, and combines them across samples as §2 describes.
+An unavailable/zero timebase or a result beyond `u64` invalidates the
+sample, preserving the unreadable-tree behavior. Mac minutes stamped
+`macos-mach-ns-v1` counted only the own CPU of processes alive at a sample
+and missed reaped descendants, under-measuring a building delivery several
+times over, so profiles exclude their deliveries on every platform. Every
+Mac delivery recorded before this change carries `macos-mach-ns-v1` or no
+provenance, so the exclusion empties every Mac profile at upgrade: Mac
+admission starts cold, as on a host without profiles (§5.4), and profiles
+return only as `macos-mach-ns-v2` deliveries accumulate.
 Apple's [fill_task_rusage implementation](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/bsd_kern.c)
 copies task power totals into these counters; their units must not be assumed
 to be nanoseconds. For example, a 125/3 host needs its actual ratio.
 
-The bounded native calibration lives in the existing `orbit-common` test
-binary and is ignored by recurring gates. Run it explicitly with
+The bounded native calibrations live in the existing `orbit-common` test
+binary and are ignored by recurring gates. Run the first explicitly with
 `./scripts/build-budget.py -- cargo test -p orbit-common --lib process::tests::ancestry::native_cpu_time_agrees_with_getrusage -- --ignored --exact --nocapture`.
 It isolates one process, targets 250 ms of single-thread wall time, and compares
 the public tree's own CPU delta with `getrusage(RUSAGE_SELF)`. The documented
 tolerance is 5% plus 5 ms for sequential readings, with at least 100 ms of CPU
 work required. Its JSON output retains the actual timebase, raw tick delta,
 corrected nanoseconds, reference delta and error.
+`native_tree_cpu_counts_reaped_descendants_once`, run the same way, checks
+reaped descendants: an isolated sampler samples its tree every 250 ms around
+a child that runs 24 sequential grandchildren of about 100 ms each, then
+around a 1 s child sampled alive at least twice. After each reap, the tree
+CPU beyond the sampler's own must be within 10% plus 20 ms of
+`getrusage(RUSAGE_CHILDREN)`. Its JSON output records both and the sample
+counts.
 
 The additive storage migration leaves every historical counter and its
 nullable provenance unchanged. On Mac, profiles exclude the entire delivery
 if any minute lacks recognized provenance, including otherwise valid sibling
-runs. Unknown provenance is excluded on every platform. Legacy unmarked
+runs. Unknown and superseded (`macos-mach-ns-v1`) provenance is excluded on
+every platform. Legacy unmarked
 Linux minutes remain eligible on Linux because their cgroup units did not
 change. This compatibility rule supports host-local history; importing
 unmarked Mac history into a Linux store is unsupported. Raw minute reads
@@ -801,7 +846,7 @@ Limitations:
 | `orbit run show` | Implemented: an `Admission:` line from the recorded pass, e.g. `forecast — skipped heavy candidate (cpu 94% at +6m)`, with candidate titles, shadow decisions labelled hypothetical, and a protected head named by the starvation guard; a `Stuck head:` line while that head is stuck (§5.3). After an idle pass, it names the last built forecast's timestamp, decisions and peaks, and says the current pass built none. JSON preserves `pipeline_state.drain_last_pass.admission_forecast` and retains built history in `pipeline_state.drain_last_forecast`. |
 | `orbit run readiness` | Implemented: the last pass's host forecast peaks, headroom below the current admission thresholds, each judged candidate's profile source and wait, and a stuck head (§5.3). JSON adds `capacity.admission_forecast` and `tasks[].admission_forecast` for the current pass, plus `capacity.last_admission_forecast` for retained built history. Idle passes show that history without changing eligibility; without either recorded block, output is unchanged. See [observing admission](../../CONFIG.md#machineauto_concurrency--host-forecast-admission). |
 | `orbit run profiles` | Implemented: the profiles per workspace, work class and complexity: deliveries (sparse below `min_profile_deliveries`), horizon, peak CPU and memory and when they occur, and the CPU and memory spread. Flags no-diff profiles with build-like load and names the deliveries behind each flag (§3.2). `--json` for the full series |
-| `orbit run profiles --accuracy` | Implemented (§8.1): composable forecast-time `--since`, exact `--drain` and recorded `--mode` cohorts; mature measured pairs, pending and missing counts per offset, with missing split into unsampled (no delivery live) and gap (delivery live, no host row); shadow decisions and enforce admissions, gap-fit holds and pull holds per drain. `--json` includes the effective selection and raw pairs |
+| `orbit run profiles --accuracy` | Implemented (§8.1): composable forecast-time `--since`, exact `--drain` and recorded `--mode` cohorts; mature measured pairs, pending and missing counts per offset, with missing split into unsampled (no delivery live), partial (a delivery overlapped the minute but none saw it whole) and gap (a delivery ran for the whole minute and wrote no host row); shadow decisions and enforce admissions, gap-fit holds and pull holds per drain. `--json` includes the effective selection and raw pairs |
 | Per-drain mode | Implemented for local drains: CLI `--auto-concurrency off|shadow|enforce`, registered MCP `orbit.workflow.auto` start `auto_concurrency`, and dashboard HTTP start `auto_concurrency` all use Core submission. At durable admission, explicit or configured mode is captured in `input.auto_concurrency` with `input.auto_concurrency_source`, retained on resume/restart. The loop forwards it to the existing classifier; thresholds, profiles, throttle, ceilings and accuracy lineage remain host policy. Stop/resize and explicit pull overrides are refused before effects. |
 | Dashboard | Implemented: an operator launch choice of inherited host mode, off, shadow or enforce. The form reads current inherited host mode from readiness, sends the actual option, and shows the receipt's durable effective mode; the live window shows its captured mode. The Drain card shows the recorded forecast from readiness: its time, CPU and memory peaks against the current admit thresholds, headroom, admitted tasks with their profile source, and a candidate enforce held. A pass that built none says `no forecast this pass` and shows `last_admission_forecast` when readiness has one. Shadow decisions are labelled hypothetical. Forecast curves against measured load with running tasks stacked remain future work. |
 
@@ -850,9 +895,10 @@ through complete host minutes and the earliest recorded offset (+5 minutes),
 then retain a fresh accuracy report with measured pairs. A unit/fixture pass,
 a worker-only measurement, or forecasts with no paired host minutes does not
 satisfy this operational verification. New native Mac worker minutes carry
-`macos-mach-ns-v1` provenance from the process CPU-unit repair. Historical
-unmarked Mac minutes remain stored but their deliveries are excluded from
-profiles; this host-reader change does not rescale, backfill or relabel them.
+`macos-mach-ns-v2` provenance, which counts reaped descendants. Historical
+unmarked and `macos-mach-ns-v1` Mac minutes remain stored but their
+deliveries are excluded from profiles; this host-reader change does not
+rescale, backfill or relabel them.
 Linux eligibility and raw history retention remain unchanged.
 
 ### 8.1 The accuracy report
@@ -885,18 +931,25 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   every point. Until `minute_at + 1 minute <= report_at`, the point is
   **pending**, even if a partial measured row already exists. After that
   boundary it is **missing** if no row exists, otherwise **paired**.
-  `missing` is `unsampled` plus `gap`. `unsampled` is an ended minute with
-  no host row and no delivery run live: host minutes are written only by
-  delivery workers, so an idle drain's forecast has nothing to pair with.
-  `gap` is an ended minute with no host row while a delivery worker was
-  live, from its `started_at` until its `finished_at`. The drain's own run
-  and a run that never started are not deliveries. A run that finishes
+  `missing` is `unsampled` plus `partial` plus `gap`. `unsampled` is an ended
+  minute with no host row and no delivery run live: host minutes are written
+  only by delivery workers, so an idle drain's forecast has nothing to pair
+  with. `partial` is an ended minute with no host row that a delivery
+  overlapped, but that no delivery was running for the whole of. The sampler
+  writes a host row only for a minute a worker saw whole — already running
+  before the minute began, and still running when it ended — so the minute
+  a delivery starts in and the minute it finishes in are partial unless
+  another worker covered them whole. That is not a sampling defect. `gap`
+  is an ended minute with no host row while a delivery was running for the
+  whole minute, so the sampler should have written a row. The drain's own
+  run and a run that never started are not deliveries. A run that finishes
   exactly as the minute starts, or starts exactly as the minute ends, does
   not cover it. A live delivery in a paired or still-pending minute does
   not move that point. Per offset, paired + pending + missing equals the
   selected recorded point count; the compatible `unmeasured` field is
   pending + missing. Text keeps `PAIRS`, `PENDING`, `MISSING` and the error
-  columns, and adds `UNSAMPLED` and `GAP`. JSON adds `unsampled` and `gap`.
+  columns, and adds `UNSAMPLED`, `PARTIAL` and `GAP`. JSON adds `unsampled`,
+  `partial` and `gap`.
   A completed minute with a row is usable regardless of sample count; this
   report does not certify sampling completeness.
 - **Errors**, per offset and for CPU (cores) and memory (bytes): the mean
@@ -920,7 +973,7 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   both time bounds, drain and mode (`all` when unrestricted). JSON retains
   `since`, `forecasts`, `offsets`, `drains` and `pairs`, adding `report_at`,
   effective `selection` (`since`, `drain`, `mode`; null means unrestricted),
-  and per-offset `pending`, `missing`, `unsampled` and `gap`. Empty cohorts have zero counts,
+  and per-offset `pending`, `missing`, `unsampled`, `partial` and `gap`. Empty cohorts have zero counts,
   empty pairs and drains, and null error summaries. Invalid timestamps,
   modes, empty drain ids and a since later than report time are rejected;
   selectors require `--accuracy`. Rows are pruned with the resource history

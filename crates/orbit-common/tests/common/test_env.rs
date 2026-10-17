@@ -404,6 +404,8 @@ mod orphaned_fixture_children {
 
     /// ORB-15293: a child that keeps reporting progress is slow, not hung, so
     /// the quiet deadline must not kill it however long it runs in total.
+    /// ORB-16411: that deadline opens at the first byte, so these 300 ms are
+    /// the gap between lines, not an allowance for exec and libtest startup.
     #[test]
     fn a_child_that_keeps_printing_outlives_its_quiet_deadline() {
         let dir = tempfile::tempdir().unwrap();
@@ -423,6 +425,46 @@ mod orphaned_fixture_children {
         assert!(
             started.elapsed() > quiet,
             "child ran past the quiet deadline"
+        );
+        assert_child_test_passed(
+            "chatty_child_entry",
+            output.status,
+            &output.stdout,
+            &output.stderr,
+        );
+    }
+
+    /// ORB-16411: the quiet window used to include exec and libtest startup, so
+    /// a 300 ms bound killed a healthy child on a loaded host. Holding the
+    /// first byte past that bound must not report the child as hung.
+    #[test]
+    fn a_child_whose_first_line_arrives_after_the_quiet_window_is_not_hung() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = std::env::current_exe().unwrap();
+        let exe = exe.to_str().unwrap();
+        let entry = "orphaned_fixture_children::chatty_child_entry";
+        // The shell writes nothing, then replaces itself. The first byte is
+        // the chatty child's, and it arrives after `quiet`.
+        let script = format!(
+            "sleep 0.5; exec {} --exact {} --ignored --nocapture",
+            quote_posix_arg(exe),
+            quote_posix_arg(entry),
+        );
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", &script]);
+        command.env(CHATTY_MILLIS_ENV, "600");
+        let quiet = Duration::from_millis(300);
+        let started = Instant::now();
+        let output = run_child_test_within(
+            &mut command,
+            entry,
+            dir.path(),
+            quiet,
+            Duration::from_secs(120),
+        );
+        assert!(
+            started.elapsed() >= Duration::from_millis(1_000),
+            "the pre-output delay and the print budget must both elapse"
         );
         assert_child_test_passed(
             "chatty_child_entry",

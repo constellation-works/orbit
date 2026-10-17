@@ -1075,6 +1075,12 @@ fn auto_readiness_reports_authorization_and_replica_for_the_start_form() {
             let agent = json_ok(fixture.server(false).get(&uri));
             assert_eq!(agent["controls_authorized"], false, "{agent}");
             assert_eq!(agent["replica"], false, "{agent}");
+            assert!(
+                agent
+                    .get("validation_env_warning")
+                    .is_some_and(Value::is_null),
+                "{agent}"
+            );
             let operator = json_ok(fixture.server(true).get(&uri));
             assert_eq!(operator["controls_authorized"], true, "{operator}");
             assert_eq!(operator["replica"], false, "{operator}");
@@ -1334,6 +1340,37 @@ fn auto_readiness_applies_the_live_drains_crew_restriction() {
                     .unwrap_or_else(|| panic!("{} missing: {payload:#}", task.id))
             };
 
+            let selected_uri = format!(
+                "{uri}&task={},{}&concurrency=7&limit=500&allow_crew=sol",
+                excluded.id, permitted.id
+            );
+            let selected = json_ok(server.get(&selected_uri));
+            assert_eq!(selected["tasks"].as_array().unwrap().len(), 2, "{selected}");
+            assert_eq!(selected["capacity"]["max_active_leaf_runs"], 7);
+            assert_eq!(selected["capacity"]["allowed_crews"], json!(["sol"]));
+            assert_eq!(entry(&selected, &excluded)["reason"], "crew_not_allowed");
+            assert_eq!(entry(&selected, &permitted)["eligible"], true);
+            let both_crews =
+                json_ok(server.get(&selected_uri.replace("allow_crew=sol", "allow_crew=sol,opus")));
+            assert_eq!(entry(&both_crews, &excluded)["eligible"], true);
+            assert_eq!(
+                both_crews["capacity"]["allowed_crews"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                2
+            );
+
+            assert_eq!(
+                server
+                    .get(&selected_uri.replace("limit=500", "limit=1"))
+                    .status(),
+                400,
+                "explicit selections larger than the limit are refused"
+            );
+            for limit in [0, 501] {
+                assert_eq!(server.get(&format!("{uri}&limit={limit}")).status(), 400);
+            }
             let idle = json_ok(server.get(&uri));
             assert_eq!(idle["capacity"]["allowed_crews"], Value::Null, "{idle:#}");
             for task in [&excluded, &permitted, &defaulted] {

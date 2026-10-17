@@ -365,7 +365,7 @@ fn sweep_routine(
                         dispatch,
                         FireRequest {
                             slot: &retry.slot,
-                            attempt: retry.attempt + 1,
+                            attempt: next_retry_attempt(store, &retry)?,
                             fired_action: "retry_fired",
                             options,
                         },
@@ -399,7 +399,7 @@ fn sweep_routine(
                     dispatch,
                     FireRequest {
                         slot: &retry.slot,
-                        attempt: retry.attempt + 1,
+                        attempt: next_retry_attempt(store, &retry)?,
                         fired_action: "retry_fired",
                         options,
                     },
@@ -483,7 +483,8 @@ fn missed_skip_report(routine: &LoadedRoutine, walk: &MissedSlotWalk<Local>) -> 
 /// terminal so a make-up fire never races an orphaned run.
 ///
 /// Skipped rows are not failures: a newer skip must not hide this row, and
-/// must not be written while it still exists.
+/// must not be written while it still exists. A skipped row on this slot
+/// occupies an attempt number but does not spend `retries.max`.
 fn retryable_failure(
     store: &dyn RoutineStoreBackend,
     routine: &LoadedRoutine,
@@ -498,11 +499,37 @@ fn retryable_failure(
     if latest.state != RoutineFireState::Failed {
         return Ok(None);
     }
-    // attempt is 1-based: max=2 allows attempts 2 and 3.
-    if latest.attempt > retries.max {
+    // Real tries on this slot. Without skipped gaps this equals
+    // `latest.attempt`: max=2 allows the initial fire plus two re-dispatches.
+    let non_skipped = store
+        .routine_slot_attempts(&latest.routine_name, &latest.slot)?
+        .map(|attempts| attempts.non_skipped)
+        .unwrap_or(latest.attempt);
+    if non_skipped > retries.max {
         return Ok(None);
     }
     Ok(Some(latest))
+}
+
+/// Attempt number for the next re-dispatch of `failed`.
+///
+/// One past the highest row already stored on that slot, so a drain-skipped
+/// retry is not claimed again. The skipped row keeps its number; the
+/// re-dispatch uses the next free one.
+fn next_retry_attempt(
+    store: &dyn RoutineStoreBackend,
+    failed: &RoutineFireRecord,
+) -> Result<u32, OrbitError> {
+    let highest = store
+        .routine_slot_attempts(&failed.routine_name, &failed.slot)?
+        .map(|attempts| attempts.highest)
+        .unwrap_or(failed.attempt);
+    highest.max(failed.attempt).checked_add(1).ok_or_else(|| {
+        OrbitError::Store(format!(
+            "routine '{}' slot '{}' has no free retry attempt",
+            failed.routine_name, failed.slot
+        ))
+    })
 }
 
 /// The most recent failed fire whose retry backoff has elapsed.
@@ -564,7 +591,12 @@ fn fire(
         && let Some(drain_run_id) = dispatch.live_workspace_drain(&routine.source_orbit_dir)?
     {
         let reason = format!("workspace_drain_live: {drain_run_id}");
-        if !options.dry_run {
+        // The due slot's first attempt is consumed as skipped. A retry must
+        // not be: that row occupies the attempt key, the failed predecessor
+        // stays the latest non-skipped fire, and every later tick reports
+        // `slot_already_claimed` instead of dispatching. Leave the retry
+        // unclaimed so a later tick can fire the next free attempt.
+        if attempt == 1 && !options.dry_run {
             let claimed = store.routine_record_fire_intent(&RoutineFireIntentParams {
                 routine_name: name.clone(),
                 slot: slot.to_string(),

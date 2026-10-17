@@ -88,6 +88,19 @@ pub struct RoutineFireIntentParams {
     pub source_workspace: String,
 }
 
+/// Attempt occupancy for one scheduled slot.
+///
+/// `highest` includes skipped rows, which occupy the idempotency key.
+/// `non_skipped` counts real tries. A drain yield that recorded `skipped`
+/// does not spend `retries.max`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoutineSlotAttempts {
+    /// Largest attempt number stored for the slot, skipped rows included.
+    pub highest: u32,
+    /// How many of those rows are not `skipped`.
+    pub non_skipped: u32,
+}
+
 /// One recorded fire attempt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoutineFireRecord {

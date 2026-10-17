@@ -138,16 +138,26 @@ travels in the handoff, and the owner checks the certificate against its own
 copy before it accepts, including the captured owner check list. The owner also
 verifies exact-run and exact-head validation logs using its own required
 commands; a command-list mismatch fails closed. A log reporting known red is
-accepted only after the owner's own run of a base in its captured base
-branch's history fails every test it names. Settlement gives all owner base
-comparisons one ten-minute deadline within the routed call's fifteen minutes.
+accepted only after a comparable base run fails every test it names. The
+owner's own run is comparable only when the follower was admitted on the same
+host OS as this owner. That OS is the validation environment the drain
+records, and a different OS is a different validation environment. The base
+must also be in the history of the base branch this owner captured at
+admission. Settlement gives all owner base comparisons one ten-minute deadline
+within the routed call's fifteen minutes.
 A cut or other inconclusive attempted run is retained separately from conclusive
 base results; retries reuse its refusal and partial failures never confirm the
 report. A later conclusive base result can replace that refusal; a moved base
-or different replay selection gets its own check. When the owner's own
-completed base run contradicts the report instead (passes the reported tests or
-fails without one), the owner releases the claim with a `known_red_contradicted`
-reason and the follower closes its settlement obsolete; no revoke is needed.
+or different replay selection gets its own check. When that same-OS base run
+contradicts the report (passes the reported tests or fails without one), the
+owner releases the claim with a `known_red_contradicted` reason and the
+follower closes its settlement obsolete; no revoke is needed. When the follower
+was admitted on a different OS, the owner does not read a cached result or
+start a base run for the report, and it does not release the claim as
+`known_red_contradicted` or return the task to the backlog. It accepts the
+follower's base evidence for that OS, records the known-red tests, and accepts
+the handoff. The pull request the leaf opened stays that delivery for review
+and landing, rather than sitting open while a later attempt starts without it.
 A follower that cannot resolve
 or run the captured crew stops pulling with `before_pr_reviewer_unavailable`
 rather than claiming work it cannot review. A local-only ship workspace with
@@ -580,6 +590,16 @@ Drain card follows the same rule: readiness reports `replica: true` and the
 **Proposed tasks** control is disabled with that reason. Start an
 approve-proposed window (`orbit run auto --approve-proposed`, or **Approve
 qualifying** in the owner's Drain card) on the owner.
+
+Readiness uses one shared snapshot across `orbit run readiness`, MCP
+`orbit.workflow.auto` with `action: "status"`, and
+`GET /api/workflows/auto/readiness`. MCP status accepts `task` (one id or a
+list), `concurrency`, `limit` (1–500, default 50), and `allow_crew` (configured
+crew names). HTTP accepts `task` and `allow_crew` as comma-separated query
+values, plus the same concurrency and limit. Omitted crew selection uses the
+live drain's restriction, if any. All three JSON responses include `replica`
+and `validation_env_warning` (null when no warning applies). CLI text prints
+that warning when present. Selection never reserves work or starts a drain.
 
 Every admission receipt captures the owner's
 `workflow.required_validation_commands` and `review.baseline_commands`, whether
@@ -1316,6 +1336,34 @@ one. From then on:
   failure past that budget, or one the landing cannot classify (its jobs or
   log are unreadable), stops the landing with the task in `review` and the
   classification in the stop evidence (`orbit task show <task-id>`).
+  Owner PR refusals also retain a versioned JSON diagnostic in the existing
+  landing-attempt evidence string (`kind: owner_landing_refusal`,
+  `schema_version: 1`), alongside its safe human-readable `reason.value`.
+  Read it from the stopped attempt, whose attempt number and owner run bind it
+  to the accepted handoff; retrying the same handoff preserves that first
+  attempt's evidence. Older plain-string evidence remains valid.
+
+  The diagnostic records the accepted base/candidate, latest typed PR identity,
+  review and rollup, owner-owed contexts, final observed classification, and
+  whether the required-check read was collected, failed to read/parse, or
+  disagreed about the head. Its allowlisted required-check projection includes
+  the provider's `isRequired` observations, **not** a separately versioned
+  branch-policy snapshot. Missing, null, unreadable, unknown and collected-empty
+  observations must not be interpreted as passing checks.
+
+  Capture adds no provider requests. Only the latest status observation is
+  retained; `status_observations` counts the observations it replaces. Each
+  collection retains at most 32 entries with original count and truncation,
+  and observation strings are redacted before a 512-character limit with
+  original character count and truncation. The human reason has a separate
+  4,096-character limit, retaining its beginning and final disposition when
+  truncated. Arbitrary payloads, URL fields and transcript archives are excluded.
+  Workflow prerequisites and emission proof are explicitly `not_collected` by
+  this diagnostic, even if separate recovery work obtained its own evidence.
+  A later workflow/job timestamp therefore cannot prove what the initial API
+  returned or that a required check would eventually appear. These observations
+  grant no wait, repair or merge authority and do not change existing deadlines.
+
 - An older published head can also lack a currently required context while
   every reported check succeeded. With captured landing authority (or the
   owner's `auto_fix` completion authority), recovery can update the branch

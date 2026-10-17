@@ -809,10 +809,13 @@ The retention is:
   `~/.orbit/deployments/`. An executable backup is a regular file in `~/.orbit/bin/`
   whose name carries a `.bak`, `.before-`, `.pre-`, `.stale` or `-stale-` marker, such as
   `orbit.bak-<date>` or `orbit-graph.stale-<date>`. A store backup is any
-  `~/.orbit/orbit.db.bak*` entry. The installed executables, other tools in `bin/`,
+  `~/.orbit/orbit.db.bak*` entry together with its appended `-wal` and `-shm`
+  sidecars. These files count as one backup and share a retention decision,
+  including when only the sidecars remain. Each path and its bytes are still
+  reported separately. The installed executables, other tools in `bin/`,
   and the live `orbit.db` with its `-wal` and `-shm` files are never candidates.
 - **Keep the newest N of each class**, `--keep` (default 2, at least 1), ordered by the
-  newest modification time of anything inside the entry.
+  newest modification time of anything inside the entry or store-backup set.
 - **Always keep the rollback target.** Every `<executable>.previous`, which `orbit update`
   writes as the outgoing executable (see [Recovery and resumption](#recovery-and-resumption)),
   is reported as `rollback_target`. A deployment directory whose `orbit-local-candidate`

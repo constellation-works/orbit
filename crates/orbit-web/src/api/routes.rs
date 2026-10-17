@@ -50,6 +50,7 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
         .route("/tasks/all", get(workspaces::list_all_tasks))
         .route("/job-runs/all", get(workspaces::list_all_job_runs))
         .route("/workspaces", get(workspaces::list_workspaces))
+        .route("/fleet/drains", get(workspaces::list_fleet_drains))
         .route(
             "/tasks/:id",
             get(tasks::get_task).patch(tasks::update_task_action),

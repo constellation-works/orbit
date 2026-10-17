@@ -342,6 +342,8 @@ impl CleanLeaf {
             None,
             CHECK,
             "",
+            None,
+            None,
         )
     }
 
@@ -416,13 +418,35 @@ impl CleanLeaf {
             gated,
             CHECK,
             "",
+            None,
+            None,
         )
     }
 
     /// A verified clean leaf whose owner and follower require `red`'s command
     /// instead of [`CHECK`] [ORB-15427].
     fn red(red: &RedCheck) -> Self {
-        Self::build_requiring(false, "done", &[], true.into(), None, &red.command(), "")
+        Self::red_on(red, None, None)
+    }
+
+    /// [`Self::red`] admitted with the owner and follower on `owner` and
+    /// `follower`. `None` leaves the runtime's own host OS.
+    fn red_on(
+        red: &RedCheck,
+        owner: Option<orbit_types::task::HostOs>,
+        follower: Option<orbit_types::task::HostOs>,
+    ) -> Self {
+        Self::build_requiring(
+            false,
+            "done",
+            &[],
+            true.into(),
+            None,
+            &red.command(),
+            "",
+            owner,
+            follower,
+        )
     }
 
     /// A tagged review whose owner and follower require `check`'s command and
@@ -440,6 +464,8 @@ impl CleanLeaf {
             Some(GateOn::Both),
             &check.command(),
             "",
+            None,
+            None,
         )
     }
 
@@ -456,11 +482,14 @@ impl CleanLeaf {
             None,
             CHECK,
             &replay.config(),
+            None,
+            None,
         );
         fixture.input["implementation"]["already_resolved"] = json!({"selectors": selectors});
         fixture
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_requiring(
         already_landed: bool,
         completion: &str,
@@ -469,6 +498,8 @@ impl CleanLeaf {
         gated: Option<GateOn>,
         required: &str,
         follower_config: &str,
+        owner_os: Option<orbit_types::task::HostOs>,
+        follower_os: Option<orbit_types::task::HostOs>,
     ) -> Self {
         let config = format!(
             "[workflow]\ndistributed_completion = \"{completion}\"\nrequired_validation_commands = [\"{required}\"]\n[review]\nbefore_pr = true\n[operation]\nreview_crew = \"sol\"\n"
@@ -486,7 +517,15 @@ impl CleanLeaf {
         };
         let owner_config = naming(gated.is_some_and(GateOn::owner));
         let config = naming(gated.is_some_and(GateOn::follower)) + follower_config;
-        let pair = Pair::with_owner_config(&owner_config, &[None]);
+        let mut pair = match owner_os {
+            Some(os) => Pair::with_owner_host(&owner_config, "", &[None], |owner| {
+                owner.with_host_os(Some(os))
+            }),
+            None => Pair::with_owner_config(&owner_config, &[None]),
+        };
+        if let Some(os) = follower_os {
+            pair.follower = pair.follower.clone().with_host_os(Some(os));
+        }
         let task = pair.tasks[0].clone();
         let base = prepare_clean_owner(&pair, &task);
         if !tags.is_empty() {
@@ -2477,6 +2516,89 @@ fn a_claimed_known_red_log_is_accepted_only_on_the_owners_own_base_run() {
         }
         fixture.assert_no_blocked();
     }
+}
+
+/// [ORB-16432] A macOS leaf's known-red report is not contradicted by a Linux
+/// owner's base run. The two hosts are different validation environments, so
+/// the owner does not run the base, does not release `known_red_contradicted`,
+/// and accepts the follower's failures. The handoff stays the delivery, so a
+/// pull request the leaf opened is not abandoned for a later attempt.
+#[test]
+fn a_macos_leaf_known_red_report_is_not_contradicted_by_a_linux_owner_base() {
+    use orbit_types::task::HostOs;
+    use orbit_types::workflow::{KNOWN_RED_VALIDATION_EVENT, KnownRedValidation};
+
+    if !isolated(
+        module_path!(),
+        "a_macos_leaf_known_red_report_is_not_contradicted_by_a_linux_owner_base",
+    ) {
+        return;
+    }
+    let red = RedCheck::new();
+    let fixture = CleanLeaf::red_on(&red, Some(HostOs::Linux), Some(HostOs::Macos));
+    let admitted = fixture.pair.admission(&fixture.leaf);
+    assert_eq!(admitted.request.os, Some(HostOs::Macos));
+    fixture.attach("automation-coverage.json", json!({"findings": []}));
+    let handoff = fixture.run_clean_pipeline("task_claimed_pr_pipeline");
+    let leaf_runs = red.runs();
+    // A Linux pass of the same command would be a contradiction on one OS.
+    red.pass();
+    let settled = fixture
+        .settle(&handoff)
+        .expect("a different OS does not contradict the follower's base evidence");
+    assert_eq!(
+        red.runs(),
+        leaf_runs,
+        "the owner does not run its own base for another OS"
+    );
+    assert_eq!(settled["status"], "review", "{settled}");
+    assert_ne!(fixture.pair.owner_status(&fixture.task), "backlog");
+    let claim = fixture.pair.owner_claim(&handoff.claim_id);
+    assert_eq!(claim["claim"]["phase"], "handed_off", "{claim}");
+    let accepted = fixture
+        .pair
+        .wire
+        .owner
+        .accepted_task_handoff(&handoff.claim_id)
+        .expect("the handoff, including its delivery, is kept");
+    assert_eq!(
+        accepted.handoff.candidate.delivery, handoff.candidate.delivery,
+        "the leaf's delivery stays this attempt"
+    );
+    let task = fixture.pair.owner_task(&fixture.task);
+    let notes = task["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["event"] == KNOWN_RED_VALIDATION_EVENT)
+        .map(|event| event["note"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    let known = KnownRedValidation::from_text(&notes[0]).unwrap();
+    assert_eq!(known.command, red.command());
+    assert_eq!(known.base_sha, fixture.base);
+    assert_eq!(
+        known.failures.identities,
+        vec![RedCheck::FAILURE.to_string()]
+    );
+    assert!(
+        notes[0].contains("macos") && notes[0].contains("linux"),
+        "the acceptance names the OS mismatch: {}",
+        notes[0]
+    );
+    assert!(
+        task["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|event| event["event"] != "claim_released"
+                && !event["note"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("known_red_contradicted")),
+        "{task}"
+    );
+    fixture.assert_no_blocked();
 }
 
 impl RedCheck {

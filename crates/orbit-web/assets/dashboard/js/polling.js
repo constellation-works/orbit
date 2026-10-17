@@ -111,12 +111,22 @@ function heldTasks(readiness) {
     .map((entry) => entry.task_id));
 }
 
+// The aggregate total sums only the workspaces that answered, so a workspace
+// dropping out lowers it and its return raises it with no failure in either.
+// The key names the unavailable workspaces; totals compare only under one key.
+function unavailableKey(payload) {
+  const names = Array.isArray(payload?.unavailable) ? payload.unavailable : [];
+  return names.map((entry) => entry?.workspace_id).sort().join(",");
+}
+
 // One light read for the hidden tab. A field is null when its source did not
 // answer, so a failed read never reads as a change.
 async function readBackground() {
   const aggregate = isAggregateView();
   const failed = fetchJson(`${aggregate ? "/api/job-runs/all" : "/api/job-runs"}?state=failed&limit=1`)
-    .then((payload) => (Number.isFinite(payload?.total) ? payload.total : null));
+    .then((payload) => (Number.isFinite(payload?.total)
+      ? { total: payload.total, unavailable: unavailableKey(payload) }
+      : null));
   const readiness = aggregate || !getWorkspace() ? Promise.resolve(null) : fetchJson("/api/workflows/auto/readiness");
   const [failedResult, readinessResult] = await Promise.allSettled([failed, readiness]);
   const drain = readinessResult.status === "fulfilled" ? readinessResult.value : null;
@@ -144,8 +154,9 @@ async function checkBackground() {
     return;
   }
   if (seen.failed !== null) {
-    if (watch.failed !== null && seen.failed > watch.failed) {
-      unseenFailures += seen.failed - watch.failed;
+    const sameWorkspaces = watch.failed !== null && watch.failed.unavailable === seen.failed.unavailable;
+    if (sameWorkspaces && seen.failed.total > watch.failed.total) {
+      unseenFailures += seen.failed.total - watch.failed.total;
       applyTitle();
     }
     watch.failed = seen.failed;

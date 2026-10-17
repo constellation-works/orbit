@@ -28,15 +28,18 @@ pub(super) fn read(
 ) -> Result<Value, OrbitError> {
     let workspace = required_string(&input, &["workspace"], "workspace")?;
     let scope = required_string(&input, &["scope"], "scope")?;
-    let limit = number(&input, "limit", 25)?;
-    if !(1..=MAX_PAGE).contains(&limit) {
+    // Drain selection has the readiness operation's own default and bounds;
+    // other desktop projections retain their smaller page budget.
+    let drain = scope == "drain";
+    let limit = number(&input, "limit", if drain { 50 } else { 25 })?;
+    if !drain && !(1..=MAX_PAGE).contains(&limit) {
         return Err(invalid("limit must be between 1 and 50"));
     }
     let mut result = match scope.as_str() {
         "tasks" => tasks(runtime, &input, limit)?,
         "task" => task(runtime, session, &input, limit)?,
         "runs" => runs(runtime, &input, limit)?,
-        "drain" => super::drain::readiness(runtime)?,
+        "drain" => super::drain::readiness(runtime, &input, limit)?,
         "routines" | "auto_tasks" | "jobs" => {
             super::automation::read(runtime, &scope, number(&input, "offset", 0)?, limit)?
         }

@@ -2,11 +2,14 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, TimeZone, Utc};
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{JobRun, JobRunState, JobRunStep, JobTargetType, V2AuditEventInsertParams};
+use orbit_core::{
+    JobRun, JobRunState, JobRunStep, JobTargetType, OrbitRuntime, V2AuditEventInsertParams,
+};
 use orbit_types::task::is_valid_orb_task_id;
 use orbit_types::workflow::{
     ChildDispatch, DrainCancelRequest, PipelineState, RunRootCause, TaskCancellationPolicy,
 };
+use orbit_types::workspace::WorkspaceCheckout;
 use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};
@@ -323,6 +326,70 @@ fn run_tasks_are_projected_over_http_without_per_row_task_reads() {
     );
 }
 
+fn add_workspace(fixture: &Fixture, id: &str, name: &str) -> OrbitRuntime {
+    let path = orbit_registry::workspace_registry::registry_path_for(&fixture.global);
+    let mut registry = orbit_registry::workspace_registry::load_registry_from(&path).unwrap();
+    let mut workspace = registry.workspaces[0].clone();
+    workspace.id = id.into();
+    workspace.name = name.into();
+    let repo = fixture.path(name);
+    let work = repo.join(".orbit");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::write(
+        work.join("config.yaml"),
+        format!("schema_version: 1\nworkspace_id: {id}\n"),
+    )
+    .unwrap();
+    let checkout = WorkspaceCheckout::owner(id.into(), repo, work);
+    registry.workspaces.push(workspace.clone());
+    registry.checkouts.push(checkout.clone());
+    orbit_registry::workspace_registry::save_registry_to(&registry, &path).unwrap();
+    orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
+        &fixture.global,
+        &workspace,
+        &checkout,
+    )
+    .unwrap()
+}
+
+fn seed_workspace_run(
+    runtime: &OrbitRuntime,
+    id: &str,
+    job: &str,
+    state: JobRunState,
+    offset_ms: i64,
+    created: DateTime<Utc>,
+    task_id: &str,
+) -> JobRun {
+    let ts = created + chrono::Duration::milliseconds(offset_ms);
+    let run = JobRun {
+        run_id: id.to_string(),
+        job_id: job.to_string(),
+        attempt: 1,
+        state,
+        scheduled_at: ts,
+        created_at: ts,
+        started_at: Some(ts),
+        finished_at: state.is_terminal().then_some(ts),
+        duration_ms: None,
+        pid: None,
+        pid_start_time: None,
+        input: Some(json!({"task_id": task_id})),
+        retry_source_run_id: None,
+        knowledge_metrics: None,
+        resolved_crew: None,
+        crew_model: None,
+        steps: Vec::new(),
+        executed_on: None,
+    };
+    runtime
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &run, None)
+        .unwrap();
+    run
+}
+
 /// History splits a task's runs per attempt from `parent_run_id` and names a
 /// cascaded failure's leaf from `root_cause`, so both run lists carry them.
 #[test]
@@ -331,9 +398,29 @@ fn run_lists_link_listed_children_and_name_a_cascaded_failure_leaf() {
         "runs::run_lists_link_listed_children_and_name_a_cascaded_failure_leaf",
         || {
             let fixture = Fixture::new();
-            let gate = fixture.seed_run("jrun-gate", "task_gate_pipeline", JobRunState::Failed);
-            let leaf = fixture.seed_run("jrun-leaf", "task_pr_pipeline", JobRunState::Failed);
-            let retry = fixture.seed_run("jrun-retry", "task_gate_pipeline", JobRunState::Running);
+            let other = add_workspace(&fixture, "ws_http_runs_other", "other");
+            let created = Utc::now() - chrono::Duration::seconds(1);
+            let seed = |id, job, state, offset_ms| {
+                let mut run = fixture.seed_run(id, job, state);
+                run.created_at = created + chrono::Duration::milliseconds(offset_ms);
+                run.scheduled_at = run.created_at;
+                run.started_at = Some(run.created_at);
+                run.finished_at = state.is_terminal().then_some(run.created_at);
+                run.input = Some(json!({"task_id": "ORB-1"}));
+                fixture.save_run(&run);
+                run
+            };
+            let gate = seed("jrun-gate", "task_gate_pipeline", JobRunState::Failed, 0);
+            let leaf = seed("jrun-leaf", "task_pr_pipeline", JobRunState::Failed, 1);
+            let mut retry = seed("jrun-retry", "task_gate_pipeline", JobRunState::Running, 10);
+            retry.retry_source_run_id = Some(gate.run_id.clone());
+            fixture.save_run(&retry);
+            let retry_leaf = seed(
+                "jrun-retry-leaf",
+                "task_pr_pipeline",
+                JobRunState::Running,
+                11,
+            );
             let cause = RunRootCause {
                 leaf_run_id: leaf.run_id.clone(),
                 task_id: Some("ORB-1".into()),
@@ -347,16 +434,30 @@ fn run_lists_link_listed_children_and_name_a_cascaded_failure_leaf() {
                 "invoke_and_wait".into(),
                 true,
                 false,
-                Utc::now(),
+                leaf.created_at,
             ));
             state.root_cause = Some(cause.clone());
             fixture
                 .runtime
                 .write_run_state(&gate.run_id, &state)
                 .unwrap();
+            // Resume copies the source checkpoint, including its dispatches.
+            // The retry then admits its own child without owning the old one.
+            let mut retry_state = state.clone();
+            retry_state.run_id = retry.run_id.clone();
+            retry_state.root_cause = None;
+            retry_state.record_child_dispatch(dispatch(&retry_leaf));
+            write_state(&fixture, &retry, &retry_state);
             let server = fixture.server(false);
             for path in ["/api/job-runs?limit=10", "/api/job-runs/all?limit=10"] {
                 let page = json_ok(server.get(path));
+                let rows = page["items"].as_array().unwrap();
+                assert_eq!(rows.len(), 4, "{path}");
+                assert_eq!(rows[0]["run_id"], retry_leaf.run_id, "newest first: {path}");
+                assert_eq!(
+                    rows[1]["run_id"], retry.run_id,
+                    "retry precedes source: {path}"
+                );
                 let row = |id: &str| {
                     page["items"]
                         .as_array()
@@ -373,8 +474,76 @@ fn run_lists_link_listed_children_and_name_a_cascaded_failure_leaf() {
                 );
                 assert_eq!(row(&gate.run_id)["parent_run_id"], Value::Null, "{path}");
                 assert_eq!(row(&retry.run_id)["parent_run_id"], Value::Null, "{path}");
+                assert_eq!(
+                    row(&retry_leaf.run_id)["parent_run_id"],
+                    retry.run_id,
+                    "{path}"
+                );
+                assert_eq!(row(&gate.run_id)["state"], "failed", "{path}");
+                assert_eq!(row(&leaf.run_id)["state"], "failed", "{path}");
+                assert_eq!(row(&retry.run_id)["state"], "running", "{path}");
+                assert_eq!(row(&retry_leaf.run_id)["state"], "running", "{path}");
                 assert_eq!(row(&gate.run_id)["root_cause"], json!(cause), "{path}");
                 assert_eq!(row(&leaf.run_id)["root_cause"], Value::Null, "{path}");
+                assert_eq!(row(&retry.run_id)["root_cause"], Value::Null, "{path}");
+            }
+            // A page boundary must not let a retry claim an inherited child
+            // merely because its source is outside the loaded page.
+            for path in ["/api/job-runs?limit=3", "/api/job-runs/all?limit=3"] {
+                let page = json_ok(server.get(path));
+                let rows = page["items"].as_array().unwrap();
+                assert_eq!(rows.len(), 3, "{path}");
+                assert_eq!(rows[2]["run_id"], leaf.run_id, "{path}");
+                assert_eq!(rows[2]["parent_run_id"], Value::Null, "{path}");
+                assert_eq!(rows[0]["parent_run_id"], retry.run_id, "{path}");
+            }
+
+            // When multiple workspaces merge and a parent run falls outside
+            // the response limit while its child remains, the child's
+            // parent_run_id must be null instead of naming the cut parent.
+            let _other1 = seed_workspace_run(
+                &other,
+                "jrun-other-1",
+                "task_pr_pipeline",
+                JobRunState::Success,
+                2,
+                created,
+                "ORB-2",
+            );
+            let _other2 = seed_workspace_run(
+                &other,
+                "jrun-other-2",
+                "task_pr_pipeline",
+                JobRunState::Success,
+                3,
+                created,
+                "ORB-2",
+            );
+
+            let page = json_ok(server.get("/api/job-runs/all?limit=5"));
+            let rows = page["items"].as_array().unwrap();
+            assert_eq!(rows.len(), 5, "top 5 merged across workspaces");
+            assert!(
+                !rows.iter().any(|row| row["run_id"] == gate.run_id),
+                "older parent gate run was pushed past limit"
+            );
+            let leaf_row = rows
+                .iter()
+                .find(|row| row["run_id"] == leaf.run_id)
+                .expect("child leaf run remains in top 5");
+            assert_eq!(
+                leaf_row["parent_run_id"],
+                Value::Null,
+                "parent_run_id must be null when parent is cut from cross-workspace response"
+            );
+            for row in rows {
+                if let Some(parent) = row.get("parent_run_id").and_then(Value::as_str) {
+                    assert!(
+                        rows.iter().any(|r| r["run_id"] == parent),
+                        "every non-null parent_run_id must name a listed run, got {parent} for {}",
+                        row["run_id"]
+                    );
+                }
             }
         },
     );

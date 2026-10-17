@@ -376,10 +376,10 @@ pub(super) fn carried_external_evidence(
 }
 
 /// Whether `hold` is still the in-progress task's latest delivery decision:
-/// the task is linked to the held run, its meaning is unchanged, and no later
-/// status decision or review superseded the hold. A stale artifact left
-/// behind after an operator changed the task or a later review failed is
-/// never current.
+/// the task is linked to the held run or its checkpoint owner, its meaning
+/// is unchanged, and no later status decision or review superseded the hold.
+/// A stale artifact left behind after an operator changed the task or a
+/// later review failed is never current.
 pub(crate) fn hold_is_current(
     runtime: &OrbitRuntime,
     task: &Task,
@@ -387,7 +387,6 @@ pub(crate) fn hold_is_current(
 ) -> Result<bool, OrbitError> {
     if task.status != TaskStatus::InProgress
         || hold.schema_version != 1
-        || task.job_run_id.as_deref() != Some(&hold.run_id)
         || combined_task_meaning_digest(&[(
             task.id.to_string(),
             task_meaning_digest(task).map_err(super::automation_error)?,
@@ -395,6 +394,12 @@ pub(crate) fn hold_is_current(
         .map_err(super::automation_error)?
             != hold.task_meaning_digest
     {
+        return Ok(false);
+    }
+    let Some(owner) = task.job_run_id.as_deref() else {
+        return Ok(false);
+    };
+    if owner != hold.run_id && !super::resumes_owner(runtime, &hold.run_id, owner)? {
         return Ok(false);
     }
     let history = runtime.get_task_history(&task.id)?;

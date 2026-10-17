@@ -241,6 +241,9 @@ async function assertReliabilityAccounting(page, evidenceDirectory) {
     { name: 'zero-excluded-low-sample', window: '7d',
       counts: { total: 3, succeeded: 2, failed: 1, cancelled: 0, skipped: 0, held: 0, in_flight: 0, unknown: 0 },
       settled: 3, excluded: 0, display: '1/3 · n too small', lowSample: true },
+    { name: 'rolled-up-wrappers', window: '24h',
+      counts: { total: 9, succeeded: 4, failed: 1, cascaded: 2, cancelled: 1, skipped: 0, held: 1, in_flight: 0, unknown: 0 },
+      settled: 5, excluded: 2, display: '1/5 · n too small', lowSample: true },
   ];
   const observations = [];
   const failures = [];
@@ -265,11 +268,22 @@ async function assertReliabilityAccounting(page, evidenceDirectory) {
     });
     const runs = shown.tiles['Runs in window'];
     const failureRate = shown.tiles['Job-run failure rate'];
-    const accounting = runs.hint.match(/^(\d+) settled · (\d+) not counted$/);
+    const cascaded = scenario.counts.cascaded || 0;
+    const accounting = cascaded > 0
+      ? runs.hint.match(/^(\d+) settled · (\d+) rolled up · (\d+) not counted$/)
+      : runs.hint.match(/^(\d+) settled · (\d+) not counted$/);
+    const settledShown = accounting ? Number(accounting[1]) : NaN;
+    const excludedShown = accounting ? Number(accounting[cascaded > 0 ? 3 : 2]) : NaN;
+    const rolledShown = cascaded > 0 && accounting ? Number(accounting[2]) : 0;
     if (runs.value !== String(scenario.counts.total) || !accounting
-      || Number(accounting[1]) !== scenario.settled || Number(accounting[2]) !== scenario.excluded
-      || Number(runs.value) !== Number(accounting[1]) + Number(accounting[2])) {
-      failures.push(`${scenario.name}: Runs in window must reconcile total = settled + excluded: ${JSON.stringify(runs)}`);
+      || settledShown !== scenario.settled || excludedShown !== scenario.excluded || rolledShown !== cascaded
+      || Number(runs.value) !== settledShown + rolledShown + excludedShown) {
+      failures.push(`${scenario.name}: Runs in window must reconcile total = settled + rolled up + excluded: ${JSON.stringify(runs)}`);
+    }
+    if (!shown.note.includes('rolled into that leaf')
+      || !shown.note.includes('numerator') || !shown.note.includes('denominator')
+      || (cascaded > 0 && !shown.note.includes(`${cascaded} wrapper`))) {
+      failures.push(`${scenario.name}: the denominator note must state that wrapper echoes roll into the leaf and sit outside the rate: ${shown.note}`);
     }
     const explainedExcluded = shown.note.match(/(\d+) further run/);
     if (!['held', 'cancelled', 'skipped', 'flight', 'unrecognized'].every(state => shown.note.includes(state))

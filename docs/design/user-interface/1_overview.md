@@ -40,6 +40,27 @@ Agent runs produce more state changes, logs, and diagnostics than a human can re
   aggregate views without a selected workspace) is shown as unknown. Lock refreshes
   update open details without discarding unsaved editors.
 
+The Tasks dock's Drain view shows a fleet table in **All workspaces** mode:
+host, workspace, drain phase, used/ceiling leaf slots, eligible tasks, most common
+wait reason, and admission/provider holds. Selecting a row switches host and
+workspace using the dashboard scope controls. The table stacks into labelled rows
+inside a narrow dock. The top-bar fleet indicator remains visible when an idle
+workspace is selected; opening it selects the fleet overview.
+
+`GET /api/fleet/drains` returns `{ items: [...] }` with one row per registered
+workspace on the addressed host. Each row includes `workspace_id`, `workspace_name`,
+`phase`, `slots_used`, `slots_ceiling`, `eligible_count`, `top_wait_reason`, and
+`holds`. Failed/inactive workspaces stay visible with `phase: "unavailable"`, an
+`error`, and null counts. Counts use the read-only readiness snapshot (up to 500
+tasks); `counts_truncated` marks a lower bound, displayed with `+`. The top wait
+is the most frequent reason among those tasks, with alphabetical ties. Slots
+include shared leaf occupancy, matching the workspace Drain card.
+
+The browser combines this endpoint across the serving host's registered hosts
+through `/api/on/<host>/fleet/drains`, with at most three requests in flight and a
+15-second cache. Unreachable hosts remain error rows and the indicator marks
+partial coverage. No recursive federation or workspace writes are performed.
+
 ## 3. At a Glance
 
 | Concern | File | Task |

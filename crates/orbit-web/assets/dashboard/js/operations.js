@@ -3,6 +3,7 @@
 import { normalizeTaskStatus, captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, isAggregateView, onWorkspaceChange, postJson, runHref, statusPill, submissionNoticeLines, fmtDuration, bindTaskLink } from './common.js';
 import { navigateToRun, setActiveTab } from './router.js';
 import { renderAutomation } from './automation.js';
+import { fetchFleetDrains, fleetDrainLabel, renderFleetDrains } from './fleet-drains.js';
 import { cpuLoadMultiple } from './host-resources.js';
 import { DRAIN_LOCK_REASONS, drainCrewNote, drainReason, setDrainReadiness } from './drain-waits.js';
 
@@ -807,7 +808,7 @@ function renderOperations(payload) {
   const inactive = workspace
     ? (payload.retired || []).filter((routine) => routine.plugin_inactive && routine.source === workspace)
     : [];
-  // A replica schedules only worktree GC; its owner schedules the rest.
+  // A replica schedules only worktree GC and store GC on a cron trigger; its owner schedules the rest.
   const ownerOnly = workspace
     ? (payload.owner_only || []).filter((routine) => routine.source === workspace)
     : [];
@@ -844,7 +845,7 @@ function renderOperations(payload) {
   if (ownerOnly.length) {
     body.appendChild(inactivePluginGroup(
       ownerOnly.map((routine) => ({ name: routine.name, detail: routine.target, reason: routine.reason, state: "owner-only" })),
-      "fires", "Owner only", "this replica schedules only worktree GC · enable these on the owner machine",
+      "fires", "Owner only", "this replica schedules only worktree GC and store GC on a cron trigger · enable these on the owner machine",
     ));
   }
   if (workspace) {
@@ -1634,10 +1635,10 @@ function autoDrainTimeLeft(endsAt) {
   return minutes < 60 ? `${minutes}m left` : `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m left`;
 }
 
-function updateDrainIndicators(phase, label, running = 0) {
+function updateDrainIndicators(phase, label) {
   const aggregate = isAggregateView();
-  const indicatorPhase = aggregate ? "per-workspace" : phase;
-  const indicatorLabel = aggregate ? "Per-workspace drain status" : label;
+  const indicatorPhase = aggregate ? "fleet" : phase;
+  const indicatorLabel = aggregate ? "Fleet drains" : label;
   const tab = document.querySelector?.('#dock-mode-toggle [data-mode="drain"]');
   const tabState = $("dock-drain-state");
   if (tab) {
@@ -1645,29 +1646,11 @@ function updateDrainIndicators(phase, label, running = 0) {
     tab.setAttribute("aria-label", `Drain: ${indicatorLabel}`);
     tab.title = indicatorLabel;
   }
-  if (tabState) tabState.textContent = aggregate ? "per workspace" : phase === "winding_down" ? label : "";
-  const global = $("global-drain-state");
-  if (global) {
-    global.hidden = phase === "idle" && !aggregate;
-    global.dataset.drainState = indicatorPhase;
-    global.setAttribute("aria-label", aggregate
-      ? "Drain status is per workspace. Select a workspace to inspect its live status."
-      : `${label}. Open Drain card`);
-    const text = global.querySelector?.('.global-drain-label');
-    if (text) text.textContent = indicatorLabel;
-    // How many of this window's tasks still run, beside the phase.
-    const count = global.querySelector?.('.global-drain-running');
-    if (count) count.textContent = !aggregate && phase !== "idle" && phase !== "pulling" && running > 0 ? `· ${running} running` : "";
-    if (!global.dataset.wired) {
-      global.addEventListener("click", () => setActiveTab("auto-drain"));
-      global.dataset.wired = "true";
-    }
-  }
+  if (tabState) tabState.textContent = aggregate ? "fleet" : phase === "winding_down" ? label : "";
 }
 
-// The card's head carries the state as a pill; the body below names the live
-// window. Both indicators outside the card (the Drain tab and the top bar
-// pill) are set from the same phase.
+// The card and dock tab describe the selected workspace. The top-bar pill
+// separately describes the fleet, including work outside that selection.
 function autoDrainPhase(payload) {
   const live = autoDrainLiveWindow(payload);
   const capacity = payload.capacity || {};
@@ -1684,9 +1667,13 @@ function autoDrainPhase(payload) {
 
 function renderAutoDrainHead(payload) {
   const { phase, running, label, pulling, pullLabel } = autoDrainPhase(payload);
-  updateDrainIndicators(pulling ? "pulling" : phase, pulling ? pullLabel : label, running);
+  updateDrainIndicators(pulling ? "pulling" : phase, pulling ? pullLabel : label);
   const card = $("auto-drain-panel");
-  if (card) card.dataset.drainState = pulling ? "pulling" : phase;
+  if (card) {
+    card.dataset.drainState = pulling ? "pulling" : phase;
+    const title = card.querySelector('.drain-title');
+    if (title) title.textContent = 'Auto-drain';
+  }
   const pill = $("auto-drain-phase");
   if (pill) pill.dataset.drainState = pulling ? "pulling" : phase;
   const dot = $("auto-drain-dot");
@@ -2472,7 +2459,8 @@ function forecastPeaks(forecast) {
     const admit = headroom
       ? (Number.isFinite(Number(headroom[admitKey])) ? `admit ${headroom[admitKey]}%` : "admit threshold unknown")
       : "";
-    const roomNumber = Number(headroom?.[roomKey]);
+    // An unmeasured host sends its headroom as null, and Number(null) is 0.
+    const roomNumber = headroom?.[roomKey] == null ? NaN : Number(headroom[roomKey]);
     const room = headroom ? (Number.isFinite(roomNumber) ? `headroom ${roomNumber.toFixed(1)}` : "headroom unknown") : "";
     const over = Number.isFinite(roomNumber) && roomNumber < 0;
     return el("div", { class: `drain-forecast-peak${over ? " over" : ""}` }, [
@@ -2659,12 +2647,55 @@ function renderAutoDrainStart(payload, reasons) {
 function fetchAndRenderAutoDrain() {
   const workspace = selectedWorkspace();
   if (!workspace) {
-    return requestPanel("auto-drain-body", "unselected", () => Promise.resolve({}), renderAutoDrain, "auto-drain-phase-label");
+    return requestPanel("auto-drain-body", "fleet", fetchFleetDrains, payload => {
+      setDrainReadiness({});
+      updateDrainIndicators('fleet', 'Fleet drains');
+      const card = $("auto-drain-panel");
+      if (card) {
+        card.dataset.drainState = 'fleet';
+        const title = card.querySelector('.drain-title');
+        if (title) title.textContent = 'Fleet drains';
+      }
+      const pill = $("auto-drain-phase");
+      if (pill) pill.dataset.drainState = 'fleet';
+      const dot = $("auto-drain-dot");
+      if (dot) dot.className = 'drain-dot';
+      const body = $("auto-drain-body");
+      body.replaceChildren(renderFleetDrains(payload, context.selectFleetScope));
+      const start = $("auto-drain-start");
+      if (start) start.hidden = true;
+      const label = $("auto-drain-phase-label");
+      if (label) label.textContent = "Fleet";
+      renderFleetIndicator(payload);
+    }, "auto-drain-phase-label");
   }
   const query = autoDrainConcurrency && autoDrainConcurrencyValid() ? `?concurrency=${encodeURIComponent(autoDrainConcurrency)}` : "";
   const scope = "/api/workflows/auto/readiness";
   const path = `${scope}${query}`;
-  return requestPanel("auto-drain-body", scope, () => fetchJson(path), renderAutoDrain, "auto-drain-phase-label");
+  const visit = captureWorkspaceVisit();
+  return Promise.all([
+    requestPanel("auto-drain-body", scope, () => fetchJson(path), renderAutoDrain, "auto-drain-phase-label"),
+    fetchFleetDrains(),
+  ]).then(([, payload]) => { if (visit.isCurrent()) renderFleetIndicator(payload); });
+}
+
+// The chrome always names the fleet, including when an idle default workspace
+// is selected. The dock's phase continues to describe the selected workspace.
+function renderFleetIndicator(payload) {
+  const global = $("global-drain-state");
+  if (!global) return;
+  global.hidden = false;
+  const label = fleetDrainLabel(payload);
+  const active = payload.items.some(row => ['draining', 'pulling'].includes(row.phase));
+  global.dataset.drainState = active ? 'draining' : payload.items.some(row => row.phase === 'winding_down') ? 'winding_down' : 'idle';
+  global.setAttribute('aria-label', `${label}. Open fleet drains`);
+  global.querySelector('.global-drain-label').textContent = label;
+  global.querySelector('.global-drain-running').textContent = '';
+  // Open the fleet through the same scope switch used by its rows.
+  if (!global.dataset.fleetWired) {
+    global.addEventListener('click', () => context.selectFleetScope(null, null));
+    global.dataset.fleetWired = 'true';
+  }
 }
 
 function throwFirstPanelError(results) {

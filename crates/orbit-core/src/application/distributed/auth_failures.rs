@@ -2,8 +2,9 @@
 //!
 //! A `provider_unavailable` step is an authentication failure. The card groups
 //! those runs by the host that executed them and the provider that failed.
-//! A later successful run of that same provider on that same host drops the
-//! group. Nothing is written: the projection is the recent job history.
+//! A successful run of that same provider on that same host drops the group
+//! when it started after the failure. Nothing is written: the projection is
+//! the recent job history.
 
 use std::collections::BTreeMap;
 
@@ -86,7 +87,7 @@ impl OrbitRuntime {
                 continue;
             };
             let key = (host_of(run, &fallback_host), provider);
-            let at = run_at(run);
+            let at = clearing_at(run);
             cleared_at
                 .entry(key)
                 .and_modify(|latest| {
@@ -197,6 +198,12 @@ fn bounded_query(state: JobRunState, since: DateTime<Utc>, include_steps: bool) 
 
 fn run_at(run: &JobRun) -> DateTime<Utc> {
     run.finished_at.or(run.started_at).unwrap_or(run.created_at)
+}
+
+/// When a success shows that the provider works. A run that started before a
+/// failure used the credentials that failed, even if it finished after it.
+fn clearing_at(run: &JobRun) -> DateTime<Utc> {
+    run.started_at.unwrap_or(run.created_at)
 }
 
 pub(crate) fn host_of(run: &JobRun, fallback: &str) -> String {

@@ -702,7 +702,8 @@ pub fn explain_workspace_auto_readiness(
         tracing::warn!("readiness shows no provider limits: {error}");
     }
     // Recent authentication failures, grouped by host and provider, dropped
-    // once a later successful run of that provider on that host is on record.
+    // once a successful run of that provider on that host that started after
+    // the failure is on record.
     let provider_auth_failures = runtime.provider_auth_failures(now);
 
     let mut payload = json!({
@@ -809,6 +810,15 @@ impl OrbitRuntime {
         limit: usize,
         allowed_crews: &[String],
     ) -> Result<Value, OrbitError> {
-        explain_workspace_auto_readiness(self, task_ids, max_active_leaf_runs, limit, allowed_crews)
+        let mut snapshot = explain_workspace_auto_readiness(
+            self,
+            task_ids,
+            max_active_leaf_runs,
+            limit,
+            allowed_crews,
+        )?;
+        snapshot["replica"] = json!(self.replica_owner_machine().is_some());
+        snapshot["validation_env_warning"] = json!(self.validation_env_preflight_warning());
+        Ok(snapshot)
     }
 }

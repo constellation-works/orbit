@@ -94,7 +94,10 @@ fn unfinished_minutes_stay_pending_and_only_mature_measurements_form_pairs() {
             "{offset:?}"
         );
         assert_eq!(offset.unmeasured, offset.pending + offset.missing);
-        assert_eq!(offset.missing, offset.unsampled + offset.gap);
+        assert_eq!(
+            offset.missing,
+            offset.unsampled + offset.partial + offset.gap
+        );
         assert_eq!(offset.gap, 0, "no delivery run is live in this fixture");
         assert_eq!(offset.paired + offset.pending + offset.missing, 4);
         assert_eq!(offset.cpu.mean_error, Some(-2.0));
@@ -113,7 +116,7 @@ fn unfinished_minutes_stay_pending_and_only_mature_measurements_form_pairs() {
         .unwrap();
     for offset in &matured.offsets {
         assert_eq!((offset.paired, offset.pending, offset.missing), (2, 1, 1));
-        assert_eq!((offset.unsampled, offset.gap), (1, 0));
+        assert_eq!((offset.unsampled, offset.partial, offset.gap), (1, 0, 0));
         assert_eq!(offset.unmeasured, offset.pending + offset.missing);
         assert_eq!(offset.paired + offset.pending + offset.missing, 4);
         assert_eq!(offset.cpu.mean_error, Some(-44.0));
@@ -124,7 +127,7 @@ fn unfinished_minutes_stay_pending_and_only_mature_measurements_form_pairs() {
         .unwrap();
     for offset in &missing.offsets {
         assert_eq!((offset.paired, offset.pending, offset.missing), (2, 0, 2));
-        assert_eq!((offset.unsampled, offset.gap), (2, 0));
+        assert_eq!((offset.unsampled, offset.partial, offset.gap), (2, 0, 0));
         assert_eq!(offset.unmeasured, offset.pending + offset.missing);
         assert_eq!(offset.paired + offset.pending + offset.missing, 4);
     }
@@ -142,10 +145,11 @@ fn unfinished_minutes_stay_pending_and_only_mature_measurements_form_pairs() {
                 offset.pending,
                 offset.missing,
                 offset.unsampled,
+                offset.partial,
                 offset.gap,
                 offset.unmeasured
             ),
-            (0, 0, 0, 0, 0, 0)
+            (0, 0, 0, 0, 0, 0, 0)
         );
         assert!(offset.cpu.mean_error.is_none() && offset.memory.worst_miss.is_none());
     }

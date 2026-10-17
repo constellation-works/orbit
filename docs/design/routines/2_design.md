@@ -192,7 +192,10 @@ Field semantics:
   fixed backoff, and overlap handling. `overlap: forbid` is the default; `timeout_minutes`
   defaults to 60 and doubles as the staleness horizon (§4), `retries` defaults to
   `{max: 0, backoff_minutes: 2}`. Retries re-dispatch a *failed* fire under the same slot
-  (attempt 2..max+1) once the backoff has elapsed, evaluated on later sweep passes. A fire
+  once the backoff has elapsed, evaluated on later sweep passes. `retries.max` counts
+  non-skipped attempts on that slot (the initial fire plus re-dispatches). A skipped
+  attempt occupies its number but does not spend budget, so the next re-dispatch uses
+  the next free attempt. With no skipped rows that number is still 2..max+1. A fire
   that *errored at dispatch* (`submit_pipeline_run` failed synchronously — lock contention, a
   momentary catalog/store hiccup) is retried under the same policy as a run-level failure
   ([ORB-00422]): a transient dispatch failure is the class retries exist to absorb, so it must
@@ -699,11 +702,16 @@ Per pass:
    accept no caller-supplied parameters, and every step in such a job must declare its own
    `default_input` rather than inheriting the job base input (which would expose the
    reserved field to the activity).
-   A due `workspace_ship_pipeline` slot is consumed as `skipped` when a
+   A due `workspace_ship_pipeline` slot's first attempt is consumed as `skipped` when a
    `workspace_auto_pipeline` is already running or retrying in its source
-   workspace. The tick reports `workspace_drain_live: <run id>` even without
-   `--verbose`; `orbit routine show` retains that detail in recent fires. It
-   does not queue a sweep behind a manual drain: the later sweep would use its
+   workspace. A retry of a failed fire yields to that drain without writing another
+   skipped row, so the attempt stays free. A skipped retry already stored on the slot
+   does not stick later ticks on `slot_already_claimed`: the sweep dispatches the next
+   free attempt, and that skipped row does not spend `retries.max`. The tick reports
+   `workspace_drain_live: <run id>` even without
+   `--verbose`; `orbit routine show` retains that detail in recent fires when the
+   first attempt was recorded. It does not queue a sweep behind a manual drain: the
+   later sweep would use its
    own review completion policy after a manual `--complete` window expires.
    Readiness names the running `workspace_auto_pipeline` and its live worker
    ceiling in `capacity.drain_run_id` and `capacity.max_active_leaf_runs`.

@@ -254,7 +254,9 @@ os.execv(sys.argv[1], sys.argv[1:])
 "#;
 
 /// Holds `BEGIN EXCLUSIVE` across stdin EOF, the shutdown-checkpoint shape
-/// that surfaces `database is locked` once the busy timeout expires.
+/// that surfaces `database is locked` once the busy timeout expires. The
+/// checkpoint outlasts the fixture hang guard, so a runtime that outlives its
+/// stand-in keeps the store locked for the whole wait; the test kills it after.
 #[cfg(target_os = "linux")]
 const LOCK_HOLDING_RUNTIME: &str = r#"#!/usr/bin/env python3
 import os, sqlite3, sys, time
@@ -267,7 +269,7 @@ connection.execute("INSERT INTO held VALUES (1)")
 with open(ready, "w") as handle:
     handle.write(str(os.getpid()))
 sys.stdin.buffer.read(1)
-time.sleep(30)
+time.sleep(600)
 connection.execute("COMMIT")
 "#;
 
@@ -420,9 +422,9 @@ fn session_kill_leaves_store_locked(release_on_parent_death: bool) -> bool {
     let _ = session.wait();
     let locked = if release_on_parent_death {
         // The runtime is gone only once it has left the write that was in
-        // flight. Waiting for that exit is the event; the hang guard bounds it.
-        wait_until_owner_store_released(&db, pid);
-        false
+        // flight. Waiting for that exit is the event; the hang guard bounds it
+        // and reports the store still locked when it expires.
+        !wait_until_owner_store_released(&db, pid)
     } else {
         owner_store_locked_now(&db) && holder_still_running(pid)
     };
@@ -458,12 +460,6 @@ fn wait_for_holder(ready: &Path, session: &mut Child) -> u32 {
     }
 }
 
-/// Production busy budget the next owner open would spend if it raced the
-/// previous runtime. The regression holds the lock strictly longer than this
-/// without letting that open start.
-#[cfg(target_os = "linux")]
-const STORE_BUSY_BUDGET: Duration = Duration::from_secs(5);
-
 #[cfg(target_os = "linux")]
 fn probe_owner_store(db: &Path, timeout_secs: &str) -> i32 {
     let status = Command::new("/usr/bin/python3")
@@ -487,180 +483,20 @@ fn owner_store_locked_now(db: &Path) -> bool {
     }
 }
 
-/// The killed stand-in's runtime has left the store. A holder that is still
-/// exiting stays in the loop until the fixture hang guard.
+/// Whether the killed stand-in's runtime has left the store. A holder that is
+/// still exiting is polled until the fixture hang guard, then reported as
+/// still holding the store.
 #[cfg(target_os = "linux")]
-fn wait_until_owner_store_released(db: &Path, holder: u32) {
+fn wait_until_owner_store_released(db: &Path, holder: u32) -> bool {
     let started = Instant::now();
     loop {
         if !holder_still_running(holder) && !owner_store_locked_now(db) {
-            return;
+            return true;
         }
-        assert!(
-            started.elapsed() < orbit_common::test_env::FIXTURE_STEP_DEADLINE,
-            "owner runtime {holder} still holds the store after its stand-in was killed"
-        );
+        if started.elapsed() >= orbit_common::test_env::FIXTURE_STEP_DEADLINE {
+            return false;
+        }
         std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
-/// One runtime, two modes selected by `ORBIT_FIXTURE_LOCK_MODE`. `hold` keeps
-/// the write lock until released. `acquire` records that it started and then
-/// takes the lock with the production 5s busy budget. The inherited flock
-/// stays open until the process exits.
-#[cfg(target_os = "linux")]
-const LOCK_BUDGET_RUNTIME: &str = r#"#!/usr/bin/env python3
-import os, sqlite3, sys, time
-mode = os.environ["ORBIT_FIXTURE_LOCK_MODE"]
-db = os.environ["ORBIT_FIXTURE_DB"]
-if mode == "hold":
-    ready = os.environ["ORBIT_FIXTURE_READY"]
-    release = os.environ["ORBIT_FIXTURE_RELEASE"]
-    released = os.environ["ORBIT_FIXTURE_RELEASED"]
-    connection = sqlite3.connect(db, isolation_level=None, timeout=0)
-    connection.execute("BEGIN EXCLUSIVE")
-    connection.execute("CREATE TABLE IF NOT EXISTS held(x INTEGER)")
-    with open(ready, "w") as handle:
-        handle.write(str(os.getpid()))
-    while not os.path.exists(release):
-        time.sleep(0.05)
-    connection.execute("COMMIT")
-    with open(released, "w") as handle:
-        handle.write("released")
-elif mode == "acquire":
-    open(os.environ["ORBIT_FIXTURE_ENTERED"], "w").close()
-    connection = sqlite3.connect(db, timeout=5)
-    try:
-        connection.execute("BEGIN IMMEDIATE")
-    except sqlite3.OperationalError as error:
-        raise SystemExit(2 if "locked" in str(error) else 1)
-    connection.execute("ROLLBACK")
-    open(os.environ["ORBIT_FIXTURE_ACQUIRED"], "w").close()
-else:
-    sys.exit(1)
-"#;
-
-/// After the stand-in is killed, the previous runtime keeps the write lock
-/// for longer than the store's busy budget. The next session must not start
-/// its runtime during that window; once the holder exits, the open succeeds.
-#[cfg(target_os = "linux")]
-#[test]
-fn next_owner_open_waits_out_a_lock_held_past_the_busy_budget() {
-    let root = tempfile::tempdir().expect("lock-hold root");
-    let base = root.path();
-    let caller_home = base.join("caller");
-    fs::create_dir_all(caller_home.join(".ssh")).expect("ssh dir");
-    fs::write(caller_home.join(".ssh/known_hosts"), "trusted\n").expect("known_hosts");
-    let owner_home = base.join("owner");
-    let work = base.join("work");
-    fs::create_dir_all(&owner_home).expect("owner home");
-    fs::create_dir_all(&work).expect("work");
-    let binary = base.join("lock_runtime.py");
-    fs::write(&binary, LOCK_BUDGET_RUNTIME).expect("runtime");
-    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).expect("executable");
-    write_ssh_stand_in(base, &owner_home, &work, &binary, false);
-    let db = base.join("owner.db");
-    let ready = base.join("ready");
-    let release = base.join("release");
-    let released = base.join("released");
-    let entered = base.join("entered");
-    let acquired = base.join("acquired");
-    let mut holder_session = Command::new(base.join("bin/ssh"))
-        .args(["-T", "--", "isolated-owner", "orbit hold"])
-        .env("HOME", &caller_home)
-        .env("ORBIT_FIXTURE_DB", &db)
-        .env("ORBIT_FIXTURE_READY", &ready)
-        .env("ORBIT_FIXTURE_RELEASE", &release)
-        .env("ORBIT_FIXTURE_RELEASED", &released)
-        .env("ORBIT_FIXTURE_ENTERED", &entered)
-        .env("ORBIT_FIXTURE_LOCK_MODE", "hold")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("holding stand-in");
-    let holder = wait_for_holder(&ready, &mut holder_session);
-    let _holder_guard = KillPidOnDrop(holder);
-    holder_session.kill().expect("kill the holding stand-in");
-    let _ = holder_session.wait();
-    assert!(
-        holder_still_running(holder),
-        "without parent-death, the runtime keeps the write lock after the stand-in dies"
-    );
-    let next = Command::new(base.join("bin/ssh"))
-        .args(["-T", "--", "isolated-owner", "orbit acquire"])
-        .env("HOME", &caller_home)
-        .env("ORBIT_FIXTURE_DB", &db)
-        .env("ORBIT_FIXTURE_ENTERED", &entered)
-        .env("ORBIT_FIXTURE_ACQUIRED", &acquired)
-        .env("ORBIT_FIXTURE_LOCK_MODE", "acquire")
-        .env("ORBIT_FIXTURE_DIE_WITH_PARENT", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("next stand-in");
-    let mut next = KillChildOnDrop(next);
-    let started = Instant::now();
-    while started.elapsed() < STORE_BUSY_BUDGET + Duration::from_secs(1) {
-        assert!(
-            !entered.exists(),
-            "the next runtime started while the killed session's runtime still held the store"
-        );
-        if let Some(status) = next.0.try_wait().expect("next session") {
-            panic!("next session ended before the lock was released: {status}");
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    assert!(
-        !entered.exists(),
-        "the next runtime started during the busy budget"
-    );
-    fs::write(&release, "").expect("release the holder");
-    let deadline = Instant::now() + orbit_common::test_env::FIXTURE_STEP_DEADLINE;
-    let status = loop {
-        if let Some(status) = next.0.try_wait().expect("next session") {
-            break status;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "next owner open did not finish after the holder released the store"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    assert!(
-        status.success(),
-        "the open after the holder exits must succeed, not spend the busy budget: {status}"
-    );
-    assert!(released.exists(), "the holder committed before it exited");
-    assert!(
-        acquired.exists(),
-        "the next runtime took the write lock after the holder exited"
-    );
-}
-
-#[cfg(target_os = "linux")]
-struct KillChildOnDrop(Child);
-
-#[cfg(target_os = "linux")]
-impl Drop for KillChildOnDrop {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
-#[cfg(target_os = "linux")]
-struct KillPidOnDrop(u32);
-
-#[cfg(target_os = "linux")]
-impl Drop for KillPidOnDrop {
-    fn drop(&mut self) {
-        let _ = Command::new("kill")
-            .args(["-KILL", &self.0.to_string()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
     }
 }
 

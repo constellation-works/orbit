@@ -11,7 +11,7 @@ use orbit_types::workflow::ReviewAdmission;
 use serde_json::{Value, json};
 
 use super::super::admission::run_review_admission;
-use super::super::{automation_error, lineage_key};
+use super::super::{MAX_RESUME_CHAIN, automation_error, lineage_key, resumes_owner};
 use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
 
@@ -229,35 +229,6 @@ fn claimed_leaf_claim(
         )));
     }
     Ok(Some(leaf.claim.claim_id))
-}
-
-/// Longest resume chain followed back to its first run; a longer chain keys
-/// the lineage on the oldest run reached.
-const MAX_RESUME_CHAIN: usize = 64;
-
-/// Whether `run_id` resumes `owner` through same-job `retry_source_run_id`
-/// links, within the bounded resume chain.
-fn resumes_owner(runtime: &OrbitRuntime, run_id: &str, owner: &str) -> Result<bool, OrbitError> {
-    let Some(mut current) = runtime.get_job_run_backend(run_id)? else {
-        return Ok(false);
-    };
-    let job_id = current.job_id.clone();
-    for _ in 0..MAX_RESUME_CHAIN {
-        let Some(source) = current.retry_source_run_id.clone() else {
-            return Ok(false);
-        };
-        let Some(parent) = runtime.get_job_run_backend(&source)? else {
-            return Ok(false);
-        };
-        if parent.job_id != job_id {
-            return Ok(false);
-        }
-        if parent.run_id == owner {
-            return Ok(true);
-        }
-        current = parent;
-    }
-    Ok(false)
 }
 
 /// The first run of the resume chain `run_id` belongs to. A missing source

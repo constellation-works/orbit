@@ -12,6 +12,7 @@ mod auto_fix;
 mod body;
 mod complete;
 mod delivery;
+pub(in crate::executor::automation::vcs) mod diagnostics;
 mod head_lag;
 mod infrastructure;
 mod merge;
@@ -21,7 +22,9 @@ pub(in crate::executor::automation::vcs) mod source_identity;
 
 pub use answers::PullRequestStatus;
 pub(in crate::executor::automation::vcs) use answers::{CheckState, ReviewDecision};
-pub(in crate::executor::automation::vcs) use answers::{RequiredChecks, read_required_checks};
+pub(in crate::executor::automation::vcs) use answers::{
+    RequiredChecks, read_required_checks_observed,
+};
 pub(in crate::executor::automation::vcs) use answers::{read_pr_status, read_pr_status_before};
 pub(in crate::executor::automation) use attribution::ship_done_attribution;
 pub(in crate::executor::automation::vcs) use body::meaningful_execution_summary;

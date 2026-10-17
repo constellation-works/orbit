@@ -16,8 +16,11 @@
 //
 // The server also reports which run states it counted. `succeeded + failed`
 // is smaller than the run total whenever runs were cancelled, skipped, held,
-// still in flight, or unrecognized, so the summary spells out the excluded
-// bucket rather than letting the two visible numbers imply they add up.
+// still in flight, unrecognized, or rolled up as wrapper echoes, so the
+// summary spells out those buckets rather than letting the two visible
+// numbers imply they add up. A wrapper that failed only because a child
+// failed is already folded into that leaf in `failed`; `cascaded` is the
+// echo rows. The numerator and the denominator both use that folded count.
 
 import { el, syncNodes, fetchJson, requestPanel, getWindow, getWorkspaceRevision, onWorkspaceChange, payloadHonorsWindow, reliabilityWindowFor, wireWindowSelector, syncWindowSelectors, formatUtcDateTime, formatUtcRange } from './common.js';
 
@@ -111,6 +114,7 @@ function renderSummary(payload) {
   const recovery = totals.recovery || {};
 
   const settled = num(counts.succeeded) + num(counts.failed);
+  const cascaded = num(counts.cascaded);
   const excluded =
     num(counts.cancelled) + num(counts.skipped) + num(counts.held) + num(counts.in_flight) + num(counts.unknown);
 
@@ -137,7 +141,9 @@ function renderSummary(payload) {
     statTile(
       "Runs in window",
       String(num(counts.total)),
-      `${settled} settled · ${excluded} not counted`,
+      cascaded > 0
+        ? `${settled} settled · ${cascaded} rolled up · ${excluded} not counted`
+        : `${settled} settled · ${excluded} not counted`,
     ),
   ];
 
@@ -150,16 +156,20 @@ function renderSummary(payload) {
 
   const note = $("reliability-denominator-note");
   if (note) {
-    // States that are terminal-but-not-an-outcome, or not terminal at all, sit
-    // outside the rate. Saying so here is what keeps "success + failed" from
-    // reading as the whole population.
-    note.textContent =
+    // The rate's numerator and denominator both count a failed delivery once.
+    // Wrapper echoes are outside that fraction; cancelled, skipped, held,
+    // in-flight, and unrecognized runs are the other exclusion.
+    const rule =
+      "Each failed delivery counts once: a wrapper that failed only because a child failed is rolled into that leaf, so the numerator and the denominator both omit that echo. ";
+    const rolled = cascaded > 0 ? `${cascaded} wrapper echo(s) are rolled up in this window. ` : "";
+    const settledClause =
+      `Failure rate is over settled deliveries (success + one count per failed delivery = ${settled}). `;
+    const excludedClause =
       excluded > 0
-        ? `Failure rate is over settled runs only (success + failed = ${settled}). ` +
-          `${excluded} further run(s) in this window were cancelled, skipped, held, still in flight, ` +
-          `or in an unrecognized state and are excluded from the denominator.`
-        : `Failure rate is over settled runs only (success + failed = ${settled}). ` +
-          `No cancelled, skipped, held, in-flight, or unrecognized runs in this window.`;
+        ? `${excluded} further run(s) in this window were cancelled, skipped, held, still in flight, ` +
+          "or in an unrecognized state and are excluded from the denominator."
+        : "No cancelled, skipped, held, in-flight, or unrecognized runs in this window.";
+    note.textContent = `${rule}${rolled}${settledClause}${excludedClause}`;
   }
 
   const truncNote = $("reliability-truncation-note");
@@ -237,6 +247,7 @@ function renderBreakdown(payload) {
         { label: "runs", num: true, render: (r) => String(num(r.counts.total)) },
         { label: "settled", num: true, render: (r) => String(num(r.counts.succeeded) + num(r.counts.failed)) },
         { label: "failed", num: true, render: (r) => String(num(r.counts.failed)) },
+        { label: "rolled up", num: true, render: (r) => String(num(r.counts.cascaded)) },
         { label: "failure rate", num: true, render: (r) => rateCell(r.rate) },
       ],
       wsRows,
@@ -267,6 +278,7 @@ function renderBreakdown(payload) {
             { label: "workspace", render: (r) => r.workspace },
             { label: "runs", num: true, render: (r) => String(num(r.counts.total)) },
             { label: "failed", num: true, render: (r) => String(num(r.counts.failed)) },
+            { label: "rolled up", num: true, render: (r) => String(num(r.counts.cascaded)) },
             { label: "failure rate", num: true, render: (r) => rateCell(r.rate) },
           ],
           jobRows,
@@ -305,10 +317,12 @@ function renderOverTime(payload) {
         bucket_start: bucket.bucket_start,
         succeeded: 0,
         failed: 0,
+        cascaded: 0,
         total: 0,
       };
       existing.succeeded += num((bucket.counts || {}).succeeded);
       existing.failed += num((bucket.counts || {}).failed);
+      existing.cascaded += num((bucket.counts || {}).cascaded);
       existing.total += num((bucket.counts || {}).total);
       merged.set(bucket.bucket_start, existing);
     }
@@ -332,6 +346,9 @@ function renderOverTime(payload) {
     const settled = point.succeeded + point.failed;
     const rate = settled > 0 ? point.failed / settled : null;
     const lowSample = settled > 0 && settled < 20;
+    const echoNote = point.cascaded > 0
+      ? `; ${point.cascaded} wrapper echoes rolled into the delivery that failed`
+      : "";
     const bar = el("div", { class: "rel-bar-slot" });
     const fill = el("div", {
       class: `rel-bar${rate == null ? " rel-bar-empty" : lowSample ? " rel-bar-low" : ""}`,
@@ -342,11 +359,11 @@ function renderOverTime(payload) {
     bar.appendChild(fill);
     bar.title =
       rate == null
-        ? `${formatUtcDateTime(point.bucket_start)} — no settled runs (n=0)`
+        ? `${formatUtcDateTime(point.bucket_start)} — no settled runs (n=0)${echoNote}`
         : `${formatUtcDateTime(point.bucket_start)} — ${pctFormatter.format(rate)} failed` +
-          ` (${point.failed}/${settled} settled${lowSample ? ", n too small to be confident" : ""})`;
+          ` (${point.failed}/${settled} settled${lowSample ? ", n too small to be confident" : ""})${echoNote}`;
     bar.dataset.key = `bucket-${point.bucket_start}`;
-    bar.dataset.hash = `${point.failed}-${settled}`;
+    bar.dataset.hash = `${point.failed}-${settled}-${point.cascaded}`;
     return bar;
   });
 

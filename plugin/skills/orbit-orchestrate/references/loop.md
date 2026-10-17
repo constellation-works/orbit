@@ -19,6 +19,15 @@ orbit run history --limit 20 --json
 orbit run show <run-id> --json
 ```
 
+CLI `orbit run readiness`, MCP `orbit_workflow_auto` with `action: "status"`,
+and HTTP `GET /api/workflows/auto/readiness` render the same readiness snapshot.
+For MCP status, `task` accepts one task id or a list, `concurrency` previews a
+ceiling, `limit` defaults to 50 (1–500), and `allow_crew` selects configured
+crews. HTTP accepts comma-separated `task` and `allow_crew` query values plus
+`concurrency` and `limit`. Omitted crews use the live drain's restriction when
+present. All three JSON responses include `replica` and
+`validation_env_warning` (null when absent); CLI text prints a warning when set.
+
 Readiness is a snapshot, not a reservation or promise of dispatch. Request
 bounded lists and project the needed fields; full run bundles can contain
 large provider logs. Keep those logs for targeted failure diagnosis.

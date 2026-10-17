@@ -114,6 +114,17 @@ Removing tests still passes with stale baseline entries; those entries do not ad
 
 Admitted unit tests:
 
+- `orbit-common/src/process/tests/ancestry.rs::native_tree_cpu_counts_reaped_descendants_once`
+  is a criterion 4 native macOS regression check for reaped-descendant CPU
+  accounting. It drives the public `process_tree` and `TreeCpuAccount` APIs
+  in an isolated child and compares cumulative CPU with
+  `getrusage(RUSAGE_CHILDREN)`, covering both short-lived grandchildren and
+  a long-lived child counted once after reaping. It stays beside the existing
+  native calibration, outside recurring gates (`#[ignore]`); fixture-only
+  accounting cannot verify the kernel's reaped-child counters and Mach timebase.
+  The completed implementation measured about 3.5 seconds of workload and
+  demonstrated failure with the previous own-only accounting.
+
 - `orbit-registry/src/tests/workspace_registry.rs` retains two criterion 2
   harnesses. `injected_migration_write_failure_preserves_readable_legacy_registry`
   injects a migration writer error and proves the original bytes remain readable.

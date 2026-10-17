@@ -47,8 +47,11 @@ the host's measured CPU and memory for that minute. Error is forecast minus meas
 is its mean, UNDER how often the forecast was below the measured load, and WORST the largest \
 miss with the minute it forecast. PENDING counts target minutes that have not fully ended at \
 report time, even if partly measured; MISSING counts ended minutes without measurements. \
-MISSING splits into UNSAMPLED, when no delivery run was live in that minute, and GAP, when a \
-delivery run was live but wrote no host row. PENDING plus MISSING is the compatible unmeasured \
+MISSING splits into UNSAMPLED, when no delivery run was live in that minute, PARTIAL, when a \
+delivery overlapped the minute but none was running for all of it, and GAP, when a delivery was \
+running for the whole minute but wrote no host row. The sampler records a host minute only when \
+a worker saw it whole, so the minute a delivery starts or finishes in is PARTIAL, not a sampling \
+defect. PENDING plus MISSING is the compatible unmeasured \
 count. Only ended measured minutes form error pairs. \
 Below, per drain, its shadow passes against what it admitted: WOULD_HOLD counts the \
 tasks it admitted that gap fit would have held, WOULD_ADD those gap fit would have admitted \
@@ -227,6 +230,7 @@ fn accuracy(
         Column::new("PENDING").fixed(),
         Column::new("MISSING").fixed(),
         Column::new("UNSAMPLED").fixed(),
+        Column::new("PARTIAL").fixed(),
         Column::new("GAP").fixed(),
         Column::new("CPU_MEAN_ERR").fixed(),
         Column::new("CPU_UNDER").fixed(),
@@ -246,6 +250,7 @@ fn accuracy(
             Cell::new(offset.pending),
             Cell::new(offset.missing),
             Cell::new(offset.unsampled),
+            Cell::new(offset.partial),
             Cell::new(offset.gap),
         ];
         row.extend(error_cells(&offset.cpu, |cores| {

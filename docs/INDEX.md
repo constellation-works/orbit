@@ -66,7 +66,7 @@ CLI behavior, state layout, or recovery semantics change.
 | [Recover a Corrupted Database](./runbooks/database-recovery.md) | Recover a corrupted Orbit SQLite database from backup, salvage, or regeneration. |
 | [Set Up and Recover a Single-Owner Distributed Drain](./runbooks/distributed-drain.md) | Set up, migrate, run, and recover a single-owner distributed drain — follower pull with owner-only landing, no follower merges. |
 | [Onboard an Executor](./runbooks/executor-onboarding.md) | Add and validate a CLI-agent or deterministic local-shell executor without changing existing users' routing or state. |
-| [Evaluate a forecast cohort](./runbooks/forecast-accuracy.md) | Select an admission forecast cohort and separate idle unsampled minutes from sampling gaps without changing host policy. |
+| [Evaluate a forecast cohort](./runbooks/forecast-accuracy.md) | Select an admission forecast cohort and separate idle unsampled minutes, unrecordable partial minutes, and sampling gaps without changing host policy. |
 | [Check Orbit Health](./runbooks/health-checks.md) | Check Orbit workspace, database, dashboard, log-sink, job-run, and routine-clock health. |
 | [Linux sandbox onboarding and diagnostics](./runbooks/linux-sandbox.md) | Explain automatic Linux Bubblewrap onboarding, distro eligibility, readiness, and native validation status. |
 | [Inspect and Retain Logs](./runbooks/logging.md) | Locate, filter, rotate, and retain Orbit process and routine-sweep logs. |
