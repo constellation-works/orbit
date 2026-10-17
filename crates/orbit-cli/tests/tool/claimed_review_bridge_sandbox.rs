@@ -24,11 +24,17 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+#[cfg(target_os = "linux")]
+use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
+use std::process::Child;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
+#[cfg(target_os = "linux")]
+use std::time::Instant;
 
 use chrono::Utc;
 use orbit_core::OrbitRuntime;
@@ -216,14 +222,80 @@ impl Node {
     }
 }
 
+/// Exec'd around the owner runtime. `PR_SET_PDEATHSIG`/`SIGKILL` survives
+/// `exec`, so the runtime dies with the stand-in even when the broker's
+/// session drop SIGKILLs that pid and cannot run a reaper. The `getppid()==1`
+/// recheck covers the parent dying between `fork` and `prctl`.
+const DIE_WITH_PARENT_WRAPPER: &str = r#"#!/usr/bin/env python3
+import ctypes, os, sys
+if sys.platform.startswith("linux"):
+    libc = ctypes.CDLL(None, use_errno=True)
+    prctl = libc.prctl
+    prctl.argtypes = [ctypes.c_int, ctypes.c_ulong]
+    prctl.restype = ctypes.c_int
+    if prctl(1, 9) != 0:
+        os._exit(1)
+    if os.getppid() == 1:
+        os._exit(1)
+os.execv(sys.argv[1], sys.argv[1:])
+"#;
+
+/// Holds `BEGIN EXCLUSIVE` across stdin EOF, the shutdown-checkpoint shape
+/// that surfaces `database is locked` once the busy timeout expires.
+#[cfg(target_os = "linux")]
+const LOCK_HOLDING_RUNTIME: &str = r#"#!/usr/bin/env python3
+import os, sqlite3, sys, time
+db = os.environ["ORBIT_FIXTURE_DB"]
+ready = os.environ["ORBIT_FIXTURE_READY"]
+connection = sqlite3.connect(db, isolation_level=None, timeout=0)
+connection.execute("BEGIN EXCLUSIVE")
+connection.execute("CREATE TABLE IF NOT EXISTS held(x INTEGER)")
+connection.execute("INSERT INTO held VALUES (1)")
+with open(ready, "w") as handle:
+    handle.write(str(os.getpid()))
+sys.stdin.buffer.read(1)
+time.sleep(30)
+connection.execute("COMMIT")
+"#;
+
 /// An `ssh` stand-in for the follower: it needs the caller's
 /// `~/.ssh/known_hosts`, as the real client does to verify the owner, then
-/// runs the runtime-composed remote argv against the owner's home. A marker
-/// file drops the answer to the next artifact put after the owner commits it.
+/// runs the runtime-composed remote argv against the owner's home. The owner
+/// runtime dies with this process, so a session drop cannot leave it
+/// checkpointing the owner store. A marker file drops the answer to the next
+/// artifact put after the owner commits it.
 fn plant_ssh(base: &Path, owner: &Node) -> PathBuf {
+    write_ssh_stand_in(
+        base,
+        &owner.home,
+        &owner.work,
+        Path::new(env!("CARGO_BIN_EXE_orbit")),
+        true,
+    )
+}
+
+fn write_ssh_stand_in(
+    base: &Path,
+    home: &Path,
+    work: &Path,
+    binary: &Path,
+    release_on_parent_death: bool,
+) -> PathBuf {
     let bin = base.join("bin");
     fs::create_dir_all(&bin).expect("bin");
+    let wrapper = bin.join("die-with-parent.py");
+    fs::write(&wrapper, DIE_WITH_PARENT_WRAPPER).expect("parent-death wrapper");
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).expect("executable");
     let lose = base.join("lose-next-put-answer");
+    let launch = if release_on_parent_death {
+        format!(
+            "[sys.executable, {}, {}] + argv",
+            json!(wrapper),
+            json!(binary)
+        )
+    } else {
+        format!("[{}] + argv", json!(binary))
+    };
     let script = format!(
         r#"#!/usr/bin/env python3
 import json, os, shlex, subprocess, sys, threading
@@ -239,7 +311,7 @@ assert argv.pop(0) == 'orbit'
 env = os.environ.copy()
 env['HOME'] = {home}
 env['USERPROFILE'] = {home}
-child = subprocess.Popen([{binary}] + argv, cwd={work}, env=env,
+child = subprocess.Popen({launch}, cwd={work}, env=env,
     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 puts = set()
 def forward():
@@ -269,14 +341,135 @@ for line in child.stdout:
 child.wait()
 exit_now()
 "#,
-        home = json!(owner.home),
-        work = json!(owner.work),
-        binary = json!(env!("CARGO_BIN_EXE_orbit")),
+        home = json!(home),
+        work = json!(work),
+        launch = launch,
         lose = json!(lose),
     );
     fs::write(bin.join("ssh"), script).expect("ssh stub");
     fs::set_permissions(bin.join("ssh"), fs::Permissions::from_mode(0o755)).expect("executable");
     lose
+}
+
+/// The broker kills the ssh stand-in's pid. Without the parent-death wrapper
+/// the owner runtime keeps its exclusive lock (`database is locked`); with the
+/// wrapper the lock is released and the next open proceeds.
+#[cfg(target_os = "linux")]
+#[test]
+fn ssh_stand_in_releases_the_owner_store_when_the_session_is_killed() {
+    let before = session_kill_leaves_store_locked(false);
+    let after = session_kill_leaves_store_locked(true);
+    assert!(
+        before,
+        "without the parent-death wrapper, killing the stand-in leaves the owner runtime holding \
+         the write lock"
+    );
+    assert!(
+        !after,
+        "with the parent-death wrapper, killing the stand-in releases the owner write lock"
+    );
+}
+
+#[cfg(target_os = "linux")]
+fn session_kill_leaves_store_locked(release_on_parent_death: bool) -> bool {
+    let root = tempfile::tempdir().expect("session root");
+    let base = root.path();
+    let caller_home = base.join("caller");
+    fs::create_dir_all(caller_home.join(".ssh")).expect("ssh dir");
+    fs::write(caller_home.join(".ssh/known_hosts"), "trusted\n").expect("known_hosts");
+    let owner_home = base.join("owner");
+    let work = base.join("work");
+    fs::create_dir_all(&owner_home).expect("owner home");
+    fs::create_dir_all(&work).expect("work");
+    let holder = base.join("runtime.py");
+    fs::write(&holder, LOCK_HOLDING_RUNTIME).expect("holder");
+    fs::set_permissions(&holder, fs::Permissions::from_mode(0o755)).expect("executable");
+    write_ssh_stand_in(base, &owner_home, &work, &holder, release_on_parent_death);
+    let db = base.join("owner.db");
+    let ready = base.join("ready");
+    let mut session = Command::new(base.join("bin/ssh"))
+        .args(["-T", "--", "isolated-owner", "orbit hold"])
+        .env("HOME", &caller_home)
+        .env("ORBIT_FIXTURE_DB", &db)
+        .env("ORBIT_FIXTURE_READY", &ready)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("ssh stand-in");
+    // Keep the stand-in's stdin open until after SIGKILL, as a broker session
+    // is killed while its pipe is still held.
+    let _stdin = session.stdin.take();
+    let pid = wait_for_holder(&ready, &mut session);
+    session.kill().expect("kill the stand-in");
+    let _ = session.wait();
+    let locked = store_stays_locked(&db, pid);
+    if holder_still_running(pid) {
+        let _ = Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .status();
+    }
+    locked
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_holder(ready: &Path, session: &mut Child) -> u32 {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(text) = fs::read_to_string(ready)
+            && let Ok(pid) = text.trim().parse::<u32>()
+        {
+            return pid;
+        }
+        if let Some(status) = session.try_wait().expect("session status") {
+            let mut stderr = String::new();
+            if let Some(mut pipe) = session.stderr.take() {
+                let _ = pipe.read_to_string(&mut stderr);
+            }
+            panic!("stand-in exited {status} before the runtime locked the store: {stderr}");
+        }
+        assert!(
+            Instant::now() < deadline,
+            "owner runtime did not take the write lock"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn store_stays_locked(db: &Path, holder: u32) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let status = Command::new("/usr/bin/python3")
+            .args([
+                "-c",
+                "import sqlite3, sys\nconnection = sqlite3.connect(sys.argv[1], timeout=0.3)\ntry:\n    connection.execute('BEGIN IMMEDIATE')\nexcept sqlite3.OperationalError as error:\n    raise SystemExit(2 if 'locked' in str(error) else 1)\n",
+                db.to_str().expect("utf-8 db path"),
+            ])
+            .status()
+            .expect("probe the owner store");
+        match status.code() {
+            // A pending parent-death signal can still be in flight. One short
+            // wait separates that from an orphan that keeps the write lock.
+            Some(2) if holder_still_running(holder) => {
+                std::thread::sleep(Duration::from_millis(100));
+                if holder_still_running(holder) || Instant::now() >= deadline {
+                    return true;
+                }
+            }
+            Some(2) if Instant::now() >= deadline => return true,
+            Some(2) => std::thread::sleep(Duration::from_millis(50)),
+            Some(0) => return false,
+            other => panic!("store probe exited {other:?}"),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn holder_still_running(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/cmdline"))
+        .map(|command| command.contains("runtime.py"))
+        .unwrap_or(false)
 }
 
 /// The broker's view of the reviewer run, as the step runner builds it.

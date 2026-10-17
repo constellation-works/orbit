@@ -842,7 +842,14 @@ fn a_spawned_remote_is_operator_matched_and_stopped_on_shutdown() {
                 let stub = StubSsh::new(json!({"hostb-ssh": {
                     "attach": null, "spawn": port(&b_server), "bind_gate": "first",
                 }}));
-                let mut a_server = a.server_with_path(operator, stub.bin());
+                let mut a_server = a.server_with_path_envs(
+                    operator,
+                    stub.bin(),
+                    &[(
+                        "ORBIT_TEST_HOST_FORWARD_ATTACH_TIMEOUT_MS",
+                        std::ffi::OsStr::new("300"),
+                    )],
+                );
                 let origin = a_server.origin.clone();
                 let request = thread::spawn(move || {
                     reqwest::blocking::Client::builder()
