@@ -443,17 +443,25 @@ impl OrbitRuntime {
         // Atomic pilot application persists the full assessment in a
         // task-pilot-authored comment carrying its replay receipt. Read that
         // durable record, not the human-readable history summary or an
-        // uncommitted agent result.
+        // uncommitted agent result. `pilot_receipts` is the only
+        // actor-and-receipt filter. This loop still visits every comment,
+        // newest first, so a legacy override on a non-pilot comment newer
+        // than the receipt still counts. The newest receipt settles the
+        // read; an undecodable body is an error, not a skip.
+        let mut receipts = super::pilot_receipts(comments).peekable();
         for comment in comments.iter().rev() {
             // An override written as a comment before typed decisions, after
             // this receipt. Operator validation additionally requires its
             // trusted resolution event.
             legacy_override |=
                 legacy_decisions::pilot_override_comment(comment, &|| self.typed_decisions_since());
-            if comment.by != "task-pilot" {
+            let is_next_receipt = receipts
+                .peek()
+                .is_some_and(|(receipt_comment, _)| std::ptr::eq(*receipt_comment, comment));
+            if !is_next_receipt {
                 continue;
             }
-            let Some(receipt) = comment.receipt() else {
+            let Some((_, receipt)) = receipts.next() else {
                 continue;
             };
             let audit: Value = serde_json::from_str(receipt.body).map_err(|error| {
@@ -621,12 +629,8 @@ impl OrbitRuntime {
                     return Ok(());
                 };
                 let comments = self.get_task_comments(task_id)?;
-                let operation_id = comments
-                    .iter()
-                    .rev()
-                    .filter(|comment| comment.by == "task-pilot")
-                    .find_map(|comment| Some(comment.receipt()?.operation_id))
-                    .ok_or_else(|| {
+                let operation_id =
+                    super::latest_pilot_operation_id(&comments).ok_or_else(|| {
                         OrbitError::Execution("operator handoff has no pilot receipt".into())
                     })?;
                 let Some((mut event, header)) = hold.operator_handoff(operation_id) else {
@@ -680,12 +684,7 @@ impl OrbitRuntime {
         hold: &PilotAdmissionHold,
     ) -> Result<bool, OrbitError> {
         let comments = self.get_task_comments(task_id)?;
-        let Some(operation_id) = comments
-            .iter()
-            .rev()
-            .filter(|comment| comment.by == "task-pilot")
-            .find_map(|comment| Some(comment.receipt()?.operation_id))
-        else {
+        let Some(operation_id) = super::latest_pilot_operation_id(&comments) else {
             return Ok(false);
         };
         let Some((event, _)) = hold.operator_handoff(operation_id) else {
@@ -779,14 +778,9 @@ impl OrbitRuntime {
             }
         }
         let comments = self.get_task_comments(&task.id)?;
-        let operation_id = comments
-            .iter()
-            .rev()
-            .filter(|comment| comment.by == "task-pilot")
-            .find_map(|comment| Some(comment.receipt()?.operation_id))
-            .ok_or_else(|| {
-                OrbitError::Execution("task-pilot admission decision has no pilot receipt".into())
-            })?;
+        let operation_id = super::latest_pilot_operation_id(&comments).ok_or_else(|| {
+            OrbitError::Execution("task-pilot admission decision has no pilot receipt".into())
+        })?;
         let verdict = match stated {
             Some((verdict, _)) if !rescoped => verdict,
             _ => PilotAdmissionVerdict::Rescope,
@@ -827,9 +821,7 @@ impl OrbitRuntime {
     /// pilot assessed and still left without selectors is one it declined to
     /// prepare, so admission stops waiting for it.
     pub(crate) fn task_pilot_assessed(&self, task_id: &str) -> Result<bool, OrbitError> {
-        Ok(self
-            .get_task_comments(task_id)?
-            .iter()
-            .any(|comment| comment.by == "task-pilot" && comment.receipt().is_some()))
+        let comments = self.get_task_comments(task_id)?;
+        Ok(super::pilot_receipts(&comments).next().is_some())
     }
 }

@@ -190,15 +190,11 @@ impl OrbitRuntime {
     /// approval output. A newer assessment replaces these warnings, including
     /// a clean assessment; ordinary comments do not supersede the receipt.
     pub fn task_pilot_blocker_warnings(&self, id: &str) -> Result<Vec<String>, OrbitError> {
-        for comment in self.get_task_comments(id)?.iter().rev() {
-            if comment.by != "task-pilot" {
-                continue;
-            }
-            let Some(receipt) = comment.receipt() else {
-                continue;
-            };
-            let operation = receipt.operation_id;
-            if operation.len() != 64 || !operation.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        let comments = self.get_task_comments(id)?;
+        for (_, receipt) in super::pilot_receipts(&comments) {
+            // A malformed id is not an applied receipt. An unreadable body is
+            // skipped so an older readable receipt can still supply warnings.
+            if !super::is_operation_id(receipt.operation_id) {
                 continue;
             }
             let Ok(audit) = serde_json::from_str::<Value>(receipt.body) else {

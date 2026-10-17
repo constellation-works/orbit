@@ -309,7 +309,7 @@ pub(super) fn apply_task(
                     )
                 });
             let mutation_params = AtomicTaskMutationParams {
-                actor: "task-pilot".to_string(),
+                actor: super::PILOT_ACTOR.to_string(),
                 operation_id: task.operation_id.clone(),
                 expected_context_files: snapshot.context_files.clone(),
                 expected_status: snapshot.status,
@@ -432,7 +432,7 @@ pub(super) fn no_target_assessment_marker(note: &str) -> Option<(TaskStatus, &st
     let (_, marker) = note.split_once(" [no-target-assessed:")?;
     let (marker, _) = marker.split_once(']')?;
     let (status, fingerprint) = marker.split_once(':')?;
-    if fingerprint.len() != 64 || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if !super::is_operation_id(fingerprint) {
         return None;
     }
     Some((status.parse().ok()?, fingerprint))
@@ -577,13 +577,11 @@ fn applied_material(
     task_id: &str,
     operation_id: &str,
 ) -> Result<Option<AppliedTaskMaterial>, OrbitError> {
-    for comment in runtime.get_task_comments(task_id)? {
-        if comment.by != "task-pilot" {
-            continue;
-        }
-        let Some(receipt) = comment.receipt() else {
-            continue;
-        };
+    // Oldest match. `pilot_receipts` is newest first; reversing it preserves
+    // the previous selection when two comments share an operation id. A bad
+    // id is not rejected here, and an undecodable body fails the read.
+    let comments = runtime.get_task_comments(task_id)?;
+    for (_, receipt) in super::pilot_receipts(&comments).rev() {
         if receipt.operation_id != operation_id {
             continue;
         }
@@ -811,10 +809,7 @@ pub(super) fn superseded_task(
         Err(error) => return Err(error),
     };
     let superseded = |reason: &str, detail: &str| {
-        json!({
-            "task_id": task_id, "outcome": "superseded", "reason": reason,
-            "status": current.status, "detail": detail,
-        })
+        super::superseded_outcome(task_id, reason, current.status, detail)
     };
     if ci_sweep && matches!(current.status, TaskStatus::Rejected | TaskStatus::Archived) {
         return Ok(Some(superseded(

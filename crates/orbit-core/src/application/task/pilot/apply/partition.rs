@@ -14,7 +14,7 @@ use super::super::apply_admission::PreparedTaskSnapshot;
 use super::super::persist::{failed_partition, task_outcome};
 use super::input::{PartitionResult, Record};
 use super::task::settle_task;
-use super::{Applied, ApplyContext};
+use super::{Applied, ApplyContext, detail, settled};
 
 /// A prepared partition whose layout the envelope checks accepted.
 pub(super) struct Partition {
@@ -152,13 +152,6 @@ fn assessments<'a>(
     Ok((by_id, normalizations))
 }
 
-fn settled(outcome: &Value) -> bool {
-    matches!(
-        outcome["outcome"].as_str(),
-        Some("applied" | "already_applied" | "superseded")
-    )
-}
-
 fn decision(
     partition: &Partition,
     outcomes: Vec<Value>,
@@ -183,12 +176,7 @@ fn decision(
     };
     let error = outcomes.iter().find_map(|task| {
         (!settled(task))
-            .then(|| {
-                task.get("error")
-                    .and_then(Value::as_str)
-                    .or_else(|| task.get("detail").and_then(Value::as_str))
-                    .map(ToOwned::to_owned)
-            })
+            .then(|| detail(task).map(ToOwned::to_owned))
             .flatten()
     });
     let stale_tasks = outcomes

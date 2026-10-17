@@ -71,6 +71,58 @@ pub(crate) use promotion::{
 };
 pub(crate) use source::requested_base_branch;
 
+use orbit_types::task::{CommentReceipt, TaskComment, TaskStatus};
+use serde_json::{Value, json};
+
+/// Actor that seals a task-pilot replay receipt on its audit comment.
+const PILOT_ACTOR: &str = "task-pilot";
+
+/// Task-pilot audit comments that carry a receipt, newest first.
+///
+/// Double-ended so `applied_material` can walk oldest first. Operation ids
+/// are not proven unique on historical comments: the store refuses a second
+/// atomic apply of the same event type, and a legacy text receipt can still
+/// share an id with a later typed comment.
+fn pilot_receipts(
+    comments: &[TaskComment],
+) -> impl DoubleEndedIterator<Item = (&TaskComment, CommentReceipt<'_>)> + '_ {
+    comments.iter().rev().filter_map(|comment| {
+        if comment.by != PILOT_ACTOR {
+            return None;
+        }
+        comment.receipt().map(|receipt| (comment, receipt))
+    })
+}
+
+/// Operation id of the newest task-pilot receipt comment.
+fn latest_pilot_operation_id(comments: &[TaskComment]) -> Option<&str> {
+    pilot_receipts(comments)
+        .next()
+        .map(|(_, receipt)| receipt.operation_id)
+}
+
+/// Whether `value` is 64 ASCII hex digits.
+///
+/// That is the shape of a pilot operation id. The no-target assessment
+/// marker stores its fingerprint in the same shape and uses this check.
+fn is_operation_id(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// Superseded task outcome whose object is `{task_id, outcome, reason, status, detail}`.
+///
+/// `source_superseded` omits `status`, and a task held by another pilot names
+/// `run_id` instead. Those shapes stay at their call sites.
+fn superseded_outcome(task_id: &str, reason: &str, status: TaskStatus, detail: &str) -> Value {
+    json!({
+        "task_id": task_id,
+        "outcome": "superseded",
+        "reason": reason,
+        "status": status,
+        "detail": detail,
+    })
+}
+
 /// Field carrying the deterministic validation-tool feasibility findings, on
 /// both a prepared task snapshot and the assessment apply reports for it
 /// [ORB-11980].

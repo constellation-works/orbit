@@ -372,11 +372,12 @@ fn admit(
                     // Another pilot, a drain or the operator already admitted
                     // the filed task: the sweep's purpose is met, so its stale
                     // assessment is dropped without failing the sweep.
-                    return Err(json!({
-                        "task_id": task_id, "outcome": "superseded",
-                        "reason": "promoted_elsewhere", "status": assessed.current.status,
-                        "detail": "the CI-sweep task was promoted to backlog elsewhere before admission",
-                    }));
+                    return Err(super::super::superseded_outcome(
+                        task_id,
+                        "promoted_elsewhere",
+                        assessed.current.status,
+                        "the CI-sweep task was promoted to backlog elsewhere before admission",
+                    ));
                 }
             }
             ci_failure_admission::assess(

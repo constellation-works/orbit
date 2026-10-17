@@ -365,11 +365,12 @@ pub(crate) fn prepare(
                         )
                     })?;
                 if member.fingerprint != fingerprints.material {
-                    superseded_during_preparation.push(json!({
-                        "task_id": task_id, "outcome": "superseded",
-                        "reason": "material_changed", "status": task.status,
-                        "detail": "task material changed after its state-trigger claim",
-                    }));
+                    superseded_during_preparation.push(super::superseded_outcome(
+                        &task_id,
+                        "material_changed",
+                        task.status,
+                        "task material changed after its state-trigger claim",
+                    ));
                     continue;
                 }
             }
@@ -497,10 +498,12 @@ fn left_automatic_selection(selected: &Value, task: &Task) -> Option<Value> {
     } else {
         ("task_edited", "task fields changed after selection")
     };
-    Some(json!({
-        "task_id": task.id, "outcome": "superseded", "reason": reason,
-        "status": task.status, "detail": detail,
-    }))
+    Some(super::superseded_outcome(
+        &task.id,
+        reason,
+        task.status,
+        detail,
+    ))
 }
 
 fn fresh_no_target_assessment(

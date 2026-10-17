@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 
 use super::super::member_ready;
 use super::super::source::SourceSnapshot;
-use super::Applied;
 use super::input::{PreparedEcho, PreparedTask, Record};
+use super::{Applied, detail, settled};
 
 pub(super) struct Report<'a> {
     pub(super) workspace_root: &'a Path,
@@ -23,19 +23,6 @@ pub(super) struct Report<'a> {
     pub(super) prior_applied_count: u64,
     pub(super) partition_count: usize,
     pub(super) received_partition_count: usize,
-}
-
-fn settled(task: &Value) -> bool {
-    matches!(
-        task["outcome"].as_str(),
-        Some("applied" | "already_applied" | "superseded")
-    )
-}
-
-fn detail(task: &Value) -> Option<&str> {
-    task.get("error")
-        .and_then(Value::as_str)
-        .or_else(|| task.get("detail").and_then(Value::as_str))
 }
 
 impl Report<'_> {
