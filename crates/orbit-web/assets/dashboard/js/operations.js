@@ -808,7 +808,7 @@ function renderOperations(payload) {
   const inactive = workspace
     ? (payload.retired || []).filter((routine) => routine.plugin_inactive && routine.source === workspace)
     : [];
-  // A replica schedules only worktree GC; its owner schedules the rest.
+  // A replica schedules only worktree GC and store GC on a cron trigger; its owner schedules the rest.
   const ownerOnly = workspace
     ? (payload.owner_only || []).filter((routine) => routine.source === workspace)
     : [];
@@ -845,7 +845,7 @@ function renderOperations(payload) {
   if (ownerOnly.length) {
     body.appendChild(inactivePluginGroup(
       ownerOnly.map((routine) => ({ name: routine.name, detail: routine.target, reason: routine.reason, state: "owner-only" })),
-      "fires", "Owner only", "this replica schedules only worktree GC · enable these on the owner machine",
+      "fires", "Owner only", "this replica schedules only worktree GC and store GC on a cron trigger · enable these on the owner machine",
     ));
   }
   if (workspace) {
