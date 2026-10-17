@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use orbit_store::contracts::{AdmissionLoad, AdmissionRun};
 use orbit_types::workflow::AUTO_TASK_TAG_PREFIX;
 
+use super::host_load::NonTaskMinute;
 use super::{ForecastSeries, HostLoad, HostLoadForecast, ReservedAdmission, RunningDelivery};
 use crate::runtime::host_resource::delivery::resource_class_in;
 use crate::runtime::host_resource::profile::{
@@ -20,11 +21,14 @@ const UNKNOWN_WORK_CLASS: &str = "change";
 
 type PendingSeries = (Vec<f64>, Vec<f64>);
 
-/// The forecast over `0 ..= horizon` minutes from `now`.
+/// The forecast over `0 ..= horizon` minutes from `now`. Its baseline is
+/// `minute`, the host's newest completed minute outside tasks, when there is
+/// one, else `host` now minus what the running deliveries use now.
 pub(crate) fn build_forecast(
     load: &AdmissionLoad,
     profiles: Arc<ProfileSet>,
     host: Option<HostLoad>,
+    minute: Option<NonTaskMinute>,
     horizon: u32,
     now: DateTime<Utc>,
 ) -> HostLoadForecast {
@@ -35,7 +39,10 @@ pub(crate) fn build_forecast(
     let mut memory = vec![0.0; points];
 
     let mut running = Vec::new();
-    for delivery in running_deliveries(load, now) {
+    // What the running deliveries use now, as the reading now includes it.
+    let mut running_cpu = 0.0;
+    let mut running_memory = 0u64;
+    for (delivery, measured) in running_deliveries(load, now) {
         let found = profiles.lookup(&running_lookup(&profiles, &delivery));
         let age = delivery.age_minutes as usize;
         let profile = found.profile.as_deref().filter(|profile| {
@@ -44,6 +51,15 @@ pub(crate) fn build_forecast(
                 .get(age)
                 .is_some_and(|minute| minute.alive > 0.0)
         });
+        if measured {
+            running_cpu += delivery.current_cpu_cores;
+            running_memory = running_memory.saturating_add(delivery.current_memory_bytes);
+        } else if let Some(profile) = profile {
+            // No minute recorded yet: its startup load is what its profile
+            // expects at its age.
+            running_cpu += profile.series[age].cpu_cores;
+            running_memory = running_memory.saturating_add(profile.series[age].memory_bytes);
+        }
         match profile {
             Some(profile) => add_running(profile, age, &mut cpu, &mut memory),
             None => {
@@ -111,19 +127,21 @@ pub(crate) fn build_forecast(
         }
     }
 
-    let running_cpu: f64 = running.iter().map(|d| d.current_cpu_cores).sum();
-    let running_memory = running
-        .iter()
-        .fold(0u64, |sum, d| sum.saturating_add(d.current_memory_bytes));
-    let cpu_baseline = host
-        .and_then(|host| host.cpu_cores)
-        .map(|cores| (cores - running_cpu).max(0.0));
-    let memory_baseline = host.map(|host| host.memory_bytes.saturating_sub(running_memory) as f64);
+    let minute = minute.filter(|_| host.is_some());
+    let (cpu_baseline, memory_baseline) = match minute {
+        Some(minute) => (Some(minute.cpu_cores), Some(minute.memory_bytes)),
+        None => (
+            host.and_then(|host| host.cpu_cores)
+                .map(|cores| (cores - running_cpu).max(0.0)),
+            host.map(|host| host.memory_bytes.saturating_sub(running_memory) as f64),
+        ),
+    };
 
     HostLoadForecast {
         at: now,
         horizon_minutes: horizon,
         host,
+        baseline_minute: minute.map(|minute| minute.minute_at),
         running,
         reservations,
         cpu: series(cpu_baseline, cpu),
@@ -191,9 +209,10 @@ fn has_run(
     })
 }
 
-/// Live delivery runs grouped per workspace and task.
-fn running_deliveries(load: &AdmissionLoad, now: DateTime<Utc>) -> Vec<RunningDelivery> {
-    let mut deliveries: BTreeMap<(String, String), RunningDelivery> = BTreeMap::new();
+/// Live delivery runs grouped per workspace and task, each with whether any
+/// of its runs has recorded a minute.
+fn running_deliveries(load: &AdmissionLoad, now: DateTime<Utc>) -> Vec<(RunningDelivery, bool)> {
+    let mut deliveries: BTreeMap<(String, String), (RunningDelivery, bool)> = BTreeMap::new();
     // Oldest run first, so a chain's first recorded class names the delivery.
     for run in load.runs.iter().filter(|run| run.live) {
         let Some(task_id) = run_task(run) else {
@@ -213,21 +232,26 @@ fn running_deliveries(load: &AdmissionLoad, now: DateTime<Utc>) -> Vec<RunningDe
                     )
                 })
             });
-        let delivery = deliveries
+        let (delivery, measured) = deliveries
             .entry((run.workspace_id.clone(), task_id.to_string()))
-            .or_insert_with(|| RunningDelivery {
-                workspace_id: run.workspace_id.clone(),
-                task_id: task_id.to_string(),
-                run_ids: Vec::new(),
-                work_class: String::new(),
-                complexity: None,
-                admitted_at: run.created_at,
-                age_minutes: 0,
-                profile_source: crate::runtime::host_resource::profile::ProfileSource::None,
-                profile_key: None,
-                current_cpu_cores: 0.0,
-                current_memory_bytes: 0,
-                held_flat: false,
+            .or_insert_with(|| {
+                (
+                    RunningDelivery {
+                        workspace_id: run.workspace_id.clone(),
+                        task_id: task_id.to_string(),
+                        run_ids: Vec::new(),
+                        work_class: String::new(),
+                        complexity: None,
+                        admitted_at: run.created_at,
+                        age_minutes: 0,
+                        profile_source: crate::runtime::host_resource::profile::ProfileSource::None,
+                        profile_key: None,
+                        current_cpu_cores: 0.0,
+                        current_memory_bytes: 0,
+                        held_flat: false,
+                    },
+                    false,
+                )
             });
         delivery.run_ids.push(run.run_id.clone());
         let admitted_at = match class {
@@ -242,6 +266,7 @@ fn running_deliveries(load: &AdmissionLoad, now: DateTime<Utc>) -> Vec<RunningDe
         };
         delivery.admitted_at = delivery.admitted_at.min(admitted_at);
         if let Some(minute) = &run.newest_minute {
+            *measured = true;
             delivery.current_cpu_cores += minute.cpu_cores;
             delivery.current_memory_bytes = delivery
                 .current_memory_bytes
@@ -250,13 +275,13 @@ fn running_deliveries(load: &AdmissionLoad, now: DateTime<Utc>) -> Vec<RunningDe
     }
     deliveries
         .into_values()
-        .map(|mut delivery| {
+        .map(|(mut delivery, measured)| {
             if delivery.work_class.is_empty() {
                 delivery.work_class = UNKNOWN_WORK_CLASS.to_string();
             }
             let seconds = (now - delivery.admitted_at).num_seconds().max(0);
             delivery.age_minutes = u32::try_from(seconds / 60).unwrap_or(u32::MAX);
-            delivery
+            (delivery, measured)
         })
         .collect()
 }

@@ -184,6 +184,14 @@ pub trait ResourceUsageStoreBackend: Send + Sync {
         run_id: &str,
     ) -> Result<Vec<RunResourceMinute>, OrbitError>;
 
+    /// Every run's minutes that started at or after `from` and before `to`,
+    /// across every workspace on the host, oldest first.
+    fn run_resource_minutes_started_between(
+        &self,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Result<Vec<ResourceMinuteLoad>, OrbitError>;
+
     /// Every sampled run of a delivery admitted at or after `since`, across
     /// every workspace on the host, with its minutes and `job_runs` lifecycle.
     fn delivery_run_resources(

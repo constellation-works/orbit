@@ -396,9 +396,11 @@ F(t) = B + Σ over running deliveries i of P_i(a_i + t) · alive_i(a_i + t) / al
   `P_i`. Its expected load at `a_i + t` is scaled by the chance it is still
   running then, given it is running now. A delivery older than its profile's
   last minute contributes its current measured use, held flat.
-- **Baseline `B`.** The host's measured load now, minus the sum of running
-  deliveries' measured use now. That leaves the load that isn't from tasks,
-  such as an IDE or a manual build, and it is held flat over the horizon.
+- **Baseline `B`.** The host's load over its last completed minute, minus
+  the tasks' load over that same minute. That leaves the load that isn't
+  from tasks, such as an IDE or a manual build, and it is held flat over the
+  horizon. Only when no such minute exists is it the host's load now minus
+  the running deliveries' use now.
 - **Host-wide.** The sum runs over live leaves of **every** workspace on the
   host: the `job_runs` table without the workspace filter. Pinned drains,
   explicit `orbit run ship` deliveries and before-landing reviews are all
@@ -418,13 +420,31 @@ and built only under the host admission lock (§5.2):
   of its live runs' newest minutes.
 - **Flat tail.** A delivery past its profile's last minute, or with no
   profile at all, contributes its current use at every minute.
-- **Baseline.** CPU is busy cores over the interval since the previous
-  native tick reading, at least 250 ms for Linux/proc fixtures or 1.1 s for
-  macOS; the first call waits before taking the lock. Memory uses the shared
-  native accounting described in §2. `B`
-  never goes below zero. An unreadable host, or a CPU reading with no ticks
-  since the previous one, leaves that baseline unknown, and the series counts
-  it as zero.
+- **Baseline.** Both sides of `B` are means over the same wall-clock
+  minute, so a momentary spike, or a delivery that started after the
+  minute, does not move it (`forecast/host_load.rs`, read just before the
+  lock):
+  - **Aligned minute.** The newest `host_resource_minutes` row that started
+    within the last 5 minutes and at least 2 minutes 10 seconds ago. By then
+    every run minute overlapping it has ended and been written. Every run's
+    `run_resource_minutes` rows that overlap it, finished runs included, are
+    subtracted, each weighted by the fraction of the host minute it covers.
+    CPU is the minute's mean busy cores and memory its peak used bytes, as
+    §2 records them.
+  - **Reading now.** With no such minute, `B` falls back to the host's load
+    now minus the running deliveries' newest minutes. A delivery that has no
+    minute yet counts at its profile's `cpu(a_i)` and `mem(a_i)` instead, so
+    its startup load is not counted twice: once in `B` and again in its
+    profile. CPU is busy cores over the interval since the previous native
+    tick reading, at least 250 ms for Linux/proc fixtures or 1.1 s for macOS;
+    the first call waits before taking the lock. Memory uses the shared
+    native accounting described in §2.
+
+  `B` never goes below zero. A host that cannot be read now leaves both
+  baselines unknown, and the series count them as zero. On the fallback, a
+  CPU reading with no ticks since the previous one leaves the CPU baseline
+  unknown. `baseline_minute` names the host minute `B` came from, or is null
+  when it came from the reading now.
 - **Output.** `HostLoadForecast`: the CPU (cores) and memory (bytes) series
   for `t = 0 … horizon_cap_minutes`, each with its baseline and its peak and
   minute, plus the running deliveries and reservations with the profile step
@@ -841,8 +861,12 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   and is sometimes wrong. A code change filed without its real size, or a
   task that writes code while tagged `no-diff-expected`, carries the wrong
   profile until the outlier ages out of the window.
-- **The baseline is assumed flat.** Load that isn't from tasks, such as a
-  manual build or an IDE indexing, can change during the horizon.
+- **The baseline is assumed flat, and lags.** Load that isn't from tasks,
+  such as a manual build or an IDE indexing, can change during the horizon.
+  `B` comes from a minute 2 to 5 minutes old, so a manual build that started
+  since then shows only once that minute is recorded; the throttle is the
+  backstop. A run's last, partial minute is weighted as if it covered a whole
+  minute, which can over-subtract and lower `B`.
 - **Only CPU and memory.** Disk I/O and fsync stalls (the Mac), provider
   rate limits and base-branch conflicts are not forecast. The disk throttle,
   provider-limit exclusions and the conflict and footprint checks still

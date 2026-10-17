@@ -157,6 +157,36 @@ impl ResourceUsageStoreBackend for Store {
             .map_err(sqlite_store_error)
     }
 
+    fn run_resource_minutes_started_between(
+        &self,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Result<Vec<ResourceMinuteLoad>, OrbitError> {
+        let conn = self.read()?;
+        let mut statement = conn
+            .prepare(
+                r#"
+                SELECT minute_started_at, cpu_cores, memory_bytes, cpu_accounting
+                FROM run_resource_minutes
+                WHERE minute_started_at >= ?1 AND minute_started_at < ?2
+                ORDER BY minute_started_at
+                "#,
+            )
+            .map_err(sqlite_store_error)?;
+        let rows = statement
+            .query_map(params![stamp(from), stamp(to)], |row| {
+                Ok(ResourceMinuteLoad {
+                    minute_started_at: crate::parse_timestamp(&row.get::<_, String>(0)?)?,
+                    cpu_cores: row.get(1)?,
+                    memory_bytes: unsigned(row.get(2)?),
+                    cpu_accounting: row.get(3)?,
+                })
+            })
+            .map_err(sqlite_store_error)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(sqlite_store_error)
+    }
+
     fn delivery_run_resources(
         &self,
         since: DateTime<Utc>,

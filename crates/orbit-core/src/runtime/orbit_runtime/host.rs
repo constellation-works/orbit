@@ -18,7 +18,7 @@ use crate::runtime::host_resource::accuracy::{
 use crate::runtime::host_resource::delivery::delivery_jobs;
 use crate::runtime::host_resource::forecast::{
     AdmissionReservationRequest, ForecastDecision, HostLoadForecast, HostLoadProbe,
-    RESERVATION_TTL_MINUTES, build_forecast,
+    RESERVATION_TTL_MINUTES, build_forecast, non_task_minute,
 };
 use crate::runtime::host_resource::profile::{
     ProfileBounds, ProfileLookup, ProfileMatch, ProfileSet,
@@ -261,6 +261,7 @@ impl OrbitRuntime {
         let store = self.sqlite_store()?;
         // Any wait for a CPU window happens here, outside the lock.
         self.host_load.prepare();
+        let minute = non_task_minute(&store, now);
         let jobs = delivery_jobs();
         let query = AdmissionLoadQuery {
             now,
@@ -277,6 +278,7 @@ impl OrbitRuntime {
                 load,
                 Arc::clone(&profiles),
                 self.host_load.measure(),
+                minute,
                 horizon,
                 now,
             );

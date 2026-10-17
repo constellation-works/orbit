@@ -186,10 +186,14 @@ impl Fixture {
     }
 
     /// A `hard` delivery of a new task, admitted two minutes ago and still
-    /// running; returns its run.
+    /// running; returns its run. Its worker recorded an idle first minute,
+    /// so the host's 2 GiB in use is all load outside tasks. The minute is
+    /// marked resumed, which keeps it out of the profiles a test seeds once
+    /// the delivery ends.
     fn running_hard_delivery(&self) -> String {
         let task = self.task("running", TaskPriority::Low, TaskComplexity::Hard);
-        running_run(
+        let admitted = Utc::now() - Duration::seconds(130);
+        let run = running_run(
             &self.runtime,
             "task_auto_pipeline",
             json!({
@@ -198,10 +202,30 @@ impl Fixture {
                     "task_id": task,
                     "work_class": "change",
                     "complexity": "hard",
-                    "admitted_at": Utc::now() - Duration::seconds(130),
+                    "admitted_at": admitted,
                 },
             }),
-        )
+        );
+        self.runtime
+            .sqlite_store()
+            .unwrap()
+            .record_run_resource_minute(&RunResourceMinute {
+                workspace_id: self.workspace_id(),
+                run_id: run.clone(),
+                minute_index: 0,
+                minute_started_at: admitted,
+                task_id: task,
+                work_class: "change".to_string(),
+                complexity: Some("hard".to_string()),
+                resumed: true,
+                delivery_admitted_at: Some(admitted),
+                cpu_cores: 0.0,
+                cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
+                memory_bytes: 0,
+                samples: 12,
+            })
+            .unwrap();
+        run
     }
 
     fn drain(&self) -> String {
