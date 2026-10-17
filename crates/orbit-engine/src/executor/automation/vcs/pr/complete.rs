@@ -102,8 +102,8 @@ use super::auto_fix::{
     repair_failed_checks, stopped,
 };
 use super::delivery::{
-    BlockedCheckWait, DeliveryEvidence, DeliveryPin, PrMergeState, checked_pr_state,
-    classify_pr_state,
+    BlockedCheckWait, DeliveryEvidence, DeliveryPin, PrMergeState, UnreportedChecks,
+    checked_pr_state, classify_pr_state,
 };
 use super::head_lag::HeadLag;
 use super::merge::{MergeStrategy, PermittedMerge, resolve_permitted_merge};
@@ -363,6 +363,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     let watch_only = auto_fix.is_some_and(AutoFix::watch_only);
     // Polls of a BLOCKED head that showed no failed and no running check.
     let mut unsettled_polls = 0_u32;
+    let mut unreported = UnreportedChecks::new();
     if let Some(auto_fix) = auto_fix {
         // An earlier round of this run may have published a repaired head,
         // and the executor may have committed a check repair since.
@@ -491,12 +492,13 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
             } else {
                 BlockedCheckWait::Owner(&[])
             },
+            &mut unreported,
             completion_deadline_ms,
         )
         .map_err(|reason| stopped(pr_number, &reason))?;
         if !base_refresh_wait
             && !base_adopted
-            && matches!(state, PrMergeState::Blocked(_))
+            && (matches!(state, PrMergeState::Blocked(_)) || unreported.awaiting_policy_checks())
             && let (Some(auto_fix), Some(candidate)) = (auto_fix, base_candidate.as_ref())
         {
             match super::super::base_refresh::recover(
@@ -909,6 +911,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 waited_seconds,
                 max_wait_seconds,
                 base_race.as_deref(),
+                &unreported,
             ));
         }
         let remaining_seconds = max_wait_seconds.saturating_sub(waited_seconds);
@@ -922,6 +925,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 waited_seconds,
                 max_wait_seconds,
                 base_race.as_deref(),
+                &unreported,
             ));
         }
     }
@@ -932,13 +936,16 @@ fn merge_wait_timeout(
     waited_seconds: u64,
     max_wait_seconds: u64,
     base_race: Option<&str>,
+    unreported: &UnreportedChecks,
 ) -> OrbitError {
     let base_race = base_race
         .map(|race| format!(" after {race}"))
         .unwrap_or_default();
+    let unreported = unreported.timeout_note();
     OrbitError::Execution(format!(
         "pr_complete: timed out after {waited_seconds}s waiting for pull request \
-         #{pr_number} to merge (budget {max_wait_seconds}s){base_race}; the task stays in review"
+         #{pr_number} to merge (budget {max_wait_seconds}s){base_race}{unreported}; the task \
+         stays in review"
     ))
 }
 

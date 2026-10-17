@@ -327,6 +327,14 @@ fn the_forecast_scales_running_deliveries_by_survival_and_adds_reservations() {
         &[&[2.75, 1.25, 1.25][..], &tail].concat(),
         "cpu before the reservation",
     );
+    // x alone is its p90 memory, 4 GiB at minutes 1 to 3, scaled by 1, 1/2,
+    // 1/2, whatever its spread; y holds 0.5 GiB.
+    let memory: Vec<f64> = before.memory.minutes.iter().map(|b| b / GIB_F).collect();
+    assert_series(
+        &memory,
+        &[&[4.5, 2.5, 2.5][..], &[0.5; 8]].concat(),
+        "memory GiB before the reservation",
+    );
 
     fixture.reserve_at(now, "ORB-r", "small");
     let forecast = fixture.forecast_at(now);
@@ -343,8 +351,8 @@ fn the_forecast_scales_running_deliveries_by_survival_and_adds_reservations() {
     );
     assert_eq!(forecast.cpu.peak.minute, 1);
     assert!((forecast.cpu.peak.value - 4.25).abs() < 1e-6);
-    // x: p90 memory 4 GiB at minutes 1 to 3, scaled by 1, 1/2, 1/2; y holds
-    // 0.5 GiB; the reservation adds 1 then 2 GiB.
+    // The reservation's 1 then 2 GiB join x's: the quantile of two deliveries
+    // this far apart reaches the sum of their p90s, its ceiling.
     let memory: Vec<f64> = forecast.memory.minutes.iter().map(|b| b / GIB_F).collect();
     assert_series(
         &memory,
