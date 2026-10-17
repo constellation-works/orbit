@@ -531,16 +531,6 @@ impl<V: 'static> OperationSpec<V> {
         params
     }
 
-    /// Whether the CLI takes a positional `id`, which is also the audit target.
-    pub fn cli_positional(&self) -> Option<&'static ParamSpec> {
-        self.params().find(|param| {
-            matches!(
-                param.cli.map(|binding| binding.kind),
-                Some(CliArgKind::Positional)
-            )
-        })
-    }
-
     /// Whether `field` is an input key this operation does not declare.
     ///
     /// A key is declared when it is a parameter name or alias, a retired
