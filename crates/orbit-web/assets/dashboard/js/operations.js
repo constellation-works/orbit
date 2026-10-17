@@ -1666,7 +1666,7 @@ function autoDrainPhase(payload) {
 }
 
 function renderAutoDrainHead(payload) {
-  const { phase, running, label, pulling, pullLabel } = autoDrainPhase(payload);
+  const { capacity, phase, running, label, pulling, pullLabel } = autoDrainPhase(payload);
   updateDrainIndicators(pulling ? "pulling" : phase, pulling ? pullLabel : label);
   const card = $("auto-drain-panel");
   if (card) {
@@ -1683,6 +1683,10 @@ function renderAutoDrainHead(payload) {
     text.textContent = pulling ? pullLabel
       : phase === "idle" ? (workspaceReadOnlyReason() ? "Read-only" : "Idle") : label;
   }
+  // The window's deadline sits beside its phase; the pill already says when
+  // admissions have stopped.
+  const when = $("auto-drain-when");
+  if (when) when.textContent = !pulling && phase === "draining" ? autoDrainTimeLeft(capacity.ends_at) : "";
   const stateKey = `${phase}:${phase === "winding_down" ? running : ""}`;
   if (announcedDrainState !== null && announcedDrainState !== stateKey && !holdDrainAnnouncement) {
     feedback("auto-drain-operation-feedback", "", `Auto-drain ${label}${phase === "winding_down" ? ` · this window: ${running} still running` : ""}.`);
@@ -1690,51 +1694,54 @@ function renderAutoDrainHead(payload) {
   announcedDrainState = stateKey;
 }
 
-// The live window: what it has admitted, what still runs and, when it was
-// started with approve-proposed, what it approved and held; then its
-// coordinator run and its deadline. Empty when no window or pull drain is live.
+// The live window as one row of figures: what still runs, what it has
+// admitted and, when it was started with approve-proposed, what it approved
+// and held. Its run and deadline live in the footer and header. Empty when no
+// auto window is live.
 function autoDrainWindow(payload) {
-  const { live, capacity, phase, running, pulling, pullLabel } = autoDrainPhase(payload);
-  const block = el("div", { class: "drain-live" });
-  block.id = "auto-drain-live";
-  if (pulling) {
-    block.appendChild(el("div", { class: "drain-run-line" }, [
-      runLink(live.pullRunId, selectedWorkspace()?.id, autoDrainShortRunId(live.pullRunId)),
-      el("span", { class: "drain-run-when", text: pullLabel }),
-    ]));
-    return block;
-  }
-  if (phase === "idle") return null;
+  const { capacity, phase, running, pulling } = autoDrainPhase(payload);
+  if (pulling || phase === "idle") return null;
   const stats = el("dl", { class: "drain-window-stats" });
+  stats.id = "auto-drain-live";
   stats.setAttribute("aria-label", "This window");
   const stat = (key, label, value, detail = "", title = "") => {
-    const tile = el("div", { class: "drain-window-stat", title }, [
+    const figure = el("div", { class: "drain-window-stat", title }, [
       el("dt", { text: label }),
-      el("dd", {}, [String(value), detail ? el("span", { class: "drain-window-stat-detail", text: detail }) : null]),
+      el("dd", { text: String(value) }),
+      detail ? el("span", { class: "drain-window-stat-detail", text: detail }) : null,
     ]);
-    tile.dataset.stat = key;
-    stats.appendChild(tile);
+    figure.dataset.stat = key;
+    stats.appendChild(figure);
   };
   if (capacity.admitted_workers != null) {
-    stat("admitted", "Admitted", capacity.admitted_workers);
-    stat("running", "Still running", running);
+    stat("running", "running", running);
+    stat("admitted", "admitted", capacity.admitted_workers);
   }
   const approvals = autoDrainApprovals(payload.approvals);
-  if (approvals) stat("approved", "Approved", approvals.approved, approvals.held, approvals.title);
-  if (stats.children.length > 0) block.appendChild(stats);
-  if (payload.auto_concurrency?.mode) block.appendChild(el("p", {
-    class: "drain-field-hint",
-    text: `Auto-concurrency: ${payload.auto_concurrency.mode} (${payload.auto_concurrency.source}).`,
-  }));
-  const runId = capacity.drain_status_run_id || live.runId;
-  const when = phase === "draining" ? autoDrainTimeLeft(capacity.ends_at) : "admissions stopped";
-  if (runId || when) {
-    block.appendChild(el("div", { class: "drain-run-line" }, [
-      runId ? runLink(runId, selectedWorkspace()?.id, autoDrainShortRunId(runId)) : el("span"),
-      when ? el("span", { class: "drain-run-when", text: when }) : null,
-    ]));
+  if (approvals) stat("approved", "approved", approvals.approved, approvals.held, approvals.title);
+  return stats.children.length > 0 ? stats : null;
+}
+
+// The card's last row: the coordinator run (or the replica's pull drain), the
+// window's auto-concurrency, and Stop. Its help line follows.
+function autoDrainFoot(payload) {
+  const { live, capacity, phase, pulling } = autoDrainPhase(payload);
+  const runId = pulling ? live.pullRunId : phase === "idle" ? "" : capacity.drain_status_run_id || live.runId;
+  const meta = el("div", { class: "drain-foot-meta" });
+  meta.id = "auto-drain-run";
+  if (runId) meta.appendChild(runLink(runId, selectedWorkspace()?.id, autoDrainShortRunId(runId)));
+  const mode = !pulling && phase !== "idle" ? payload.auto_concurrency?.mode : "";
+  if (mode) {
+    meta.appendChild(el("span", {
+      class: "drain-foot-concurrency",
+      text: `auto-concurrency ${mode}`,
+      title: `Auto-concurrency: ${mode} (${payload.auto_concurrency.source}).`,
+    }));
   }
-  return block;
+  return el("div", { class: "drain-foot" }, [
+    el("div", { class: "drain-foot-row" }, [meta, autoDrainStopButton(payload)]),
+    autoDrainStopNote(payload),
+  ]);
 }
 
 // Whether the live window was started with approve-proposed, and what its
@@ -1756,7 +1763,7 @@ function autoDrainApprovals(approvals) {
   ].filter(Boolean).join("\n");
   return {
     approved: Number.isFinite(approved) ? approved : "—",
-    held: Number.isFinite(held) ? `${held} held` : "",
+    held: Number.isFinite(held) && held > 0 ? `${held} held` : "",
     title,
   };
 }
@@ -2097,8 +2104,8 @@ function autoDrainStopCopy(payload) {
       ? `${AUTO_DRAIN_STOP_CONFIRM} The pull drain ${live.pullRunId} on this replica is stopped too; its admitted leaves stay claimed by their owner.`
       : autoOpen ? AUTO_DRAIN_STOP_CONFIRM : PULL_DRAIN_STOP_CONFIRM;
     const description = autoOpen
-      ? "Stop starting new tasks in this window. Tasks already started keep running; send any completed results to their owner."
-      : "Stop starting new tasks on this replica. Tasks already started keep running; send any completed results to their owner.";
+      ? "Stop starting new tasks in this window. Started tasks keep running; completed results go to their owner."
+      : "Stop starting new tasks on this replica. Started tasks keep running; completed results go to their owner.";
     return { label: "Stop", busy: "Stopping…", aria: "Stop admissions", confirm, description };
   }
   const stoppedBy = (stop) => (stop?.actor ? ` (by ${stop.actor})` : "");
@@ -2229,13 +2236,7 @@ function autoDrainCapacity(capacity, counts, blocked) {
     summary = `A window started now admits up to ${autoDrainPlural(admits, "task")}.`;
   }
   const label = known ? `Workspace: ${busy} of ${limit} leaf slots in use` : "Workspace: capacity unknown";
-  const head = el("div", { class: "drain-capacity-head" }, [
-    el("span", { class: "drain-capacity-label", text: "Workspace leaf slots" }),
-    el("span", { class: "drain-capacity-count mono", text: known ? `${busy} of ${limit} in use` : "capacity unknown" }),
-    Number.isFinite(free)
-      ? el("span", { class: `drain-capacity-free mono${free <= 0 ? " full" : ""}`, text: `${Math.max(0, free)} free` })
-      : null,
-  ]);
+  const full = Number.isFinite(free) && free <= 0;
   const bar = el("div", { class: "drain-capacity-bar" });
   bar.setAttribute("role", "img");
   bar.setAttribute("aria-label", label);
@@ -2257,18 +2258,32 @@ function autoDrainCapacity(capacity, counts, blocked) {
       );
     }
   }
-  const result = el("div", { class: "drain-capacity" }, [head, bar, el("p", { class: "drain-slots", text: summary })]);
   const pipelineCounts = Object.entries(capacity.leaf_occupancy_by_pipeline || {})
     .filter(([, count]) => Number(count) > 0);
   const pipelines = pipelineCounts.map(([pipeline, count]) => [pipeline, Number(count)]);
   // Legacy wrappers can occupy slots without appearing in the pipeline map.
   const other = busy - pipelineCounts.reduce((sum, [, count]) => sum + Number(count), 0);
   if (pipelines.length && other > 0) pipelines.push(["other", other]);
-  if (pipelines.length) {
-    const list = el("ul", { class: "drain-pipeline-occupancy" }, pipelines.map(([pipeline, count]) => el("li", {
-      class: "drain-pipeline mono",
-      text: `${pipeline}: ${autoDrainPlural(count, "slot")}`,
-    })));
+  const byPipeline = pipelines.map(([pipeline, count]) => `${pipeline}: ${autoDrainPlural(count, "slot")}`);
+  // A shortfall the operator should notice reads amber; a stopped window is
+  // the operator's own choice and does not.
+  const held = full && capacity.admissions_stopped !== true;
+  const count = el("span", {
+    class: `drain-capacity-count mono${full ? " full" : ""}`,
+    text: known ? `${busy}/${limit} slots` : "capacity unknown",
+    title: [label, Number.isFinite(free) ? `${Math.max(0, free)} free` : "", ...byPipeline].filter(Boolean).join("\n"),
+  });
+  const result = el("div", { class: "drain-capacity" }, [
+    bar,
+    el("div", { class: "drain-capacity-line" }, [
+      el("p", { class: `drain-slots${held ? " held" : ""}`, text: summary }),
+      count,
+    ]),
+  ]);
+  // One pipeline holding every slot is already in the count's tooltip; a mix
+  // is worth a visible line.
+  if (pipelines.length > 1) {
+    const list = el("ul", { class: "drain-pipeline-occupancy" }, byPipeline.map(text => el("li", { class: "drain-pipeline mono", text })));
     list.setAttribute("aria-label", "Workspace slots by pipeline");
     result.appendChild(list);
   }
@@ -2387,7 +2402,7 @@ function forecastTaskRef(forecast, taskId) {
   const title = forecast.task_titles?.[taskId];
   const link = taskLink(String(taskId), selectedWorkspace()?.id);
   if (!title) return link;
-  return el("span", { class: "drain-forecast-task-name" }, [String(title), " ", link]);
+  return el("span", { class: "drain-forecast-task-name" }, [link, " ", String(title)]);
 }
 
 function forecastHasDecisions(forecast) {
@@ -2403,36 +2418,51 @@ function forecastTime(at) {
   return node;
 }
 
+// Each peak as a meter against its admit threshold: the fill is the peak and
+// the tick the threshold, with both figures beside it. The amount, minute and
+// headroom (in percentage points) are in the row's tooltip and read aloud.
 function forecastPeaks(forecast) {
   const headroom = asForecast(forecast.headroom);
-  const tiles = ["cpu", "memory"].map((resource) => {
+  const rows = ["cpu", "memory"].map((resource) => {
     const peak = asForecast(forecast[`${resource}_peak`]);
     if (!peak || (!Number.isFinite(Number(peak.value)) && !Number.isFinite(Number(peak.percent)))) return null;
-    const figure = Number.isFinite(Number(peak.percent)) ? `${Number(peak.percent).toFixed(1)}%` : "host capacity unknown";
+    const percent = Number(peak.percent);
+    const known = Number.isFinite(percent);
+    const figure = known ? `${percent.toFixed(1)}%` : "host capacity unknown";
     const amount = forecastAmount(resource, peak.value);
     const when = Number.isFinite(Number(peak.minute)) ? `at +${peak.minute}m` : "";
     const admitKey = resource === "cpu" ? "admit_cpu_percent" : "admit_memory_percent";
     const roomKey = resource === "cpu" ? "cpu_percent" : "memory_percent";
-    const admit = headroom
-      ? (Number.isFinite(Number(headroom[admitKey])) ? `admit ${headroom[admitKey]}%` : "admit threshold unknown")
-      : "";
     // An unmeasured host sends its headroom as null, and Number(null) is 0.
+    const admitNumber = headroom?.[admitKey] == null ? NaN : Number(headroom[admitKey]);
+    const admit = headroom
+      ? (Number.isFinite(admitNumber) ? `admit ${headroom[admitKey]}%` : "admit threshold unknown")
+      : "";
     const roomNumber = headroom?.[roomKey] == null ? NaN : Number(headroom[roomKey]);
     const room = headroom ? (Number.isFinite(roomNumber) ? `headroom ${roomNumber.toFixed(1)}` : "headroom unknown") : "";
     const over = Number.isFinite(roomNumber) && roomNumber < 0;
-    return el("div", { class: `drain-forecast-peak${over ? " over" : ""}` }, [
-      el("dt", { text: resource === "cpu" ? "CPU peak" : "Memory peak" }),
-      el("dd", { class: "drain-forecast-figure" }, [
-        figure,
-        amount ? el("span", { class: "drain-forecast-meta", text: ` ${amount}` }) : null,
-        when ? el("span", { class: "drain-forecast-meta", text: ` ${when}` }) : null,
+    const name = resource === "cpu" ? "CPU" : "Memory";
+    const detail = `${name} peak ${[`${figure}${amount ? ` (${amount})` : ""}`, when, admit, room].filter(Boolean).join(" · ")}`;
+    const clamp = value => `${Math.min(100, Math.max(0, value))}%`;
+    const meter = el("span", { class: "drain-forecast-meter", "aria-hidden": "true" }, [
+      known ? el("span", { class: "drain-forecast-fill", style: { width: clamp(percent) } }) : null,
+      Number.isFinite(admitNumber) ? el("span", { class: "drain-forecast-tick", style: { left: clamp(admitNumber) } }) : null,
+    ]);
+    return el("div", { class: `drain-forecast-peak${over ? " over" : ""}`, title: detail }, [
+      el("dt", { text: name }),
+      el("dd", { class: "drain-forecast-bar" }, [meter]),
+      el("dd", { class: "drain-forecast-figure mono" }, [
+        el("span", { "aria-hidden": "true" }, [
+          known ? `${percent.toFixed(1)}%` : "unknown",
+          Number.isFinite(admitNumber) ? el("span", { class: "drain-forecast-threshold", text: ` / ${admitNumber}%` }) : null,
+        ]),
+        el("span", { class: "visually-hidden", text: detail }),
       ]),
-      admit || room ? el("dd", { class: "drain-forecast-threshold", text: [admit, room].filter(Boolean).join(" · ") }) : null,
     ]);
   }).filter(Boolean);
-  if (tiles.length === 0) return null;
-  const list = el("dl", { class: "drain-forecast-peaks" }, tiles);
-  list.setAttribute("aria-label", "Forecast peaks");
+  if (rows.length === 0) return null;
+  const list = el("dl", { class: "drain-forecast-peaks" }, rows);
+  list.setAttribute("aria-label", "Forecast peaks against admit thresholds");
   return list;
 }
 
@@ -2444,11 +2474,14 @@ function forecastDecisions(forecast, hypothetical) {
     if (!task?.task_id) continue;
     const notes = [`profile ${task.profile_source || "unknown"}`];
     if (task.idle_host) notes.push(String(task.idle_host));
-    items.push(el("li", { class: "drain-forecast-task admitted" }, [
+    // An admitted task stays on one line; its full text is the tooltip.
+    const item = el("li", { class: "drain-forecast-task admitted" }, [
       admitVerb,
       forecastTaskRef(forecast, task.task_id),
       ` · ${notes.join(" · ")}`,
-    ]));
+    ]);
+    item.title = item.textContent;
+    items.push(item);
   }
   for (const task of Array.isArray(forecast.skipped) ? forecast.skipped : []) {
     if (!task?.task_id) continue;
@@ -2487,17 +2520,25 @@ function forecastDecisions(forecast, hypothetical) {
   return list;
 }
 
+function forecastHead(label, ...meta) {
+  return el("div", { class: "drain-forecast-head" }, [
+    el("span", { class: "drain-section-label", text: label }),
+    el("span", { class: "drain-forecast-meta" }, meta.filter(Boolean)),
+  ]);
+}
+
 function forecastBlock(forecast, { retained }) {
   const hypothetical = forecast.mode === "shadow";
   const at = forecastBuiltAt(forecast);
   const block = el("div", { class: retained ? "drain-forecast-retained" : "drain-forecast-built" });
   block.dataset.forecastMode = forecast.mode || "";
   block.append(
-    el("div", { class: "drain-forecast-head" }, [
-      el("span", { class: "drain-capacity-label", text: retained ? "Last forecast" : "Admission forecast" }),
+    forecastHead(
+      retained ? "Last forecast" : "Forecast",
       at ? forecastTime(at) : null,
+      at ? " · " : null,
       el("span", { class: `drain-forecast-mode${hypothetical ? " shadow" : ""}`, text: hypothetical ? "shadow · hypothetical" : (forecast.mode || "forecast") }),
-    ]),
+    ),
     ...[forecastPeaks(forecast), forecastDecisions(forecast, hypothetical)].filter(Boolean),
   );
   return block;
@@ -2505,37 +2546,34 @@ function forecastBlock(forecast, { retained }) {
 
 // The last local pass's gap-fit forecast. Readiness puts the pass on
 // `capacity.admission_forecast` and the last forecast that was actually built
-// on `capacity.last_admission_forecast`. A pass that built none still says so.
+// on `capacity.last_admission_forecast`. A pass that built none says so, unless
+// a retained forecast stands in and this pass decided nothing of its own.
 function autoDrainForecast(payload) {
   const capacity = payload?.capacity || {};
   const current = asForecast(capacity.admission_forecast);
   const last = asForecast(capacity.last_admission_forecast);
-  const built = forecastBuiltAt(current);
   const section = el("div", { class: "drain-forecast", role: "group", "aria-label": "Admission forecast" });
-  if (!built) {
-    section.dataset.forecastState = forecastBuiltAt(last) ? "retained" : "none";
-    section.append(
-      el("div", { class: "drain-forecast-head" }, [
-        el("span", { class: "drain-capacity-label", text: "Admission forecast" }),
-      ]),
-      el("p", { class: "drain-forecast-state", text: "no forecast this pass" }),
-    );
-    if (forecastHasDecisions(current)) {
-      const decisions = forecastDecisions(current, current.mode === "shadow");
-      if (decisions) section.append(decisions);
-    }
-    if (forecastBuiltAt(last)) section.append(forecastBlock(last, { retained: true }));
+  if (forecastBuiltAt(current)) {
+    section.dataset.forecastState = "built";
+    section.append(forecastBlock(current, { retained: false }));
     return section;
   }
-  section.dataset.forecastState = "built";
-  section.append(forecastBlock(current, { retained: false }));
+  const retained = forecastBuiltAt(last);
+  section.dataset.forecastState = retained ? "retained" : "none";
+  const decisions = forecastHasDecisions(current) ? forecastDecisions(current, current.mode === "shadow") : null;
+  if (decisions || !retained) {
+    section.append(forecastHead("Forecast", el("span", { class: "drain-forecast-state", text: "no forecast this pass" })));
+    if (decisions) section.append(decisions);
+  }
+  if (retained) section.append(forecastBlock(last, { retained: true }));
   return section;
 }
 
-// The status card reads top to bottom: the live window (if any), the last
-// admission forecast, the slots it competes for and why nothing more starts,
-// any host or provider hold, then Stop. Starting a window is its own card
-// below, hidden in a read-only view.
+// The status card reads top to bottom: the live window's figures (if any),
+// the slots it competes for and why nothing more starts, any host or provider
+// hold, the last admission forecast, then the run and Stop. Its deadline sits
+// in the header. Starting a window is its own card below, hidden in a
+// read-only view.
 function renderAutoDrain(payload) {
   lastAutoDrain = payload;
   setDrainReadiness(payload);
@@ -2560,10 +2598,10 @@ function renderAutoDrain(payload) {
   }
   body.append(...[
     autoDrainWindow(payload),
-    autoDrainForecast(payload),
     autoDrainCapacity(payload.capacity || {}, autoDrainCounts(payload), autoDrainBlocked(payload).length),
     ...holds,
-    el("div", { class: "drain-stop-block" }, [autoDrainStopButton(payload), autoDrainStopNote(payload)]),
+    autoDrainForecast(payload),
+    autoDrainFoot(payload),
   ].filter(Boolean));
   renderAutoDrainStart(payload, reasons);
   if (focusKey) document.querySelector?.(`[data-drain-focus="${focusKey}"]`)?.focus();
@@ -2622,6 +2660,8 @@ function fetchAndRenderAutoDrain() {
       if (start) start.hidden = true;
       const label = $("auto-drain-phase-label");
       if (label) label.textContent = "Fleet";
+      const when = $("auto-drain-when");
+      if (when) when.textContent = "";
       renderFleetIndicator(payload);
     }, "auto-drain-phase-label");
   }

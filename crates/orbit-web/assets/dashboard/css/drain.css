@@ -50,33 +50,29 @@
 
 #auto-drain-body, #auto-drain-start-body { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px 16px; min-width: 0; }
 
+/* The status card's header: title, phase pill, then the window's deadline. */
+#auto-drain-panel > header { justify-content: flex-start; }
+.drain-when { margin-left: auto; color: var(--fg-dim); font: 400 12px var(--font-sans); font-variant-numeric: tabular-nums; }
+.drain-when:empty { display: none; }
+
 /* The panel's "Updated." / "Refreshing…" note stays out of the card;
    only the first load and a failed refresh show. */
 #auto-drain-body > [data-panel-status]:not(.action-error):not(:only-child) { display: none; }
 #auto-drain-body .operations-readonly-note { margin: 0; }
 
-/* The live window: three figures, then its run and deadline. */
-.drain-live { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.drain-window-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 8px; margin: 0; }
-.drain-window-stat {
-  display: flex; flex-direction: column-reverse; gap: 2px; min-width: 0; padding: 9px 10px;
-  border: 1px solid var(--hair); border-radius: 8px; background: var(--bg-well);
-}
-.drain-window-stat dt { color: var(--fg-mute); font: 500 11.5px var(--font-sans); }
-.drain-window-stat dd { margin: 0; color: var(--fg-strong); font: 600 20px var(--font-sans); line-height: 1.2; font-variant-numeric: tabular-nums; }
-.drain-window-stat-detail { margin-left: 6px; color: var(--warn-fg); font-size: 12px; font-weight: 500; }
-.drain-run-line { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 10px; min-width: 0; font-size: 12.5px; }
-.drain-run-line a { font-family: var(--font-mono); font-size: 12px; }
-.drain-run-when { color: var(--fg-dim); font-variant-numeric: tabular-nums; }
+/* The live window: one row of figures, number then word. */
+.drain-window-stats { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; margin: 0; }
+.drain-window-stat { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
+.drain-window-stat dd { order: 1; margin: 0; color: var(--fg-strong); font: 600 20px var(--font-sans); line-height: 1.2; font-variant-numeric: tabular-nums; }
+.drain-window-stat dt { order: 2; color: var(--fg-dim); font: 400 12.5px var(--font-sans); }
+.drain-window-stat-detail { order: 3; color: var(--warn-fg); font-size: 12px; font-weight: 500; }
 
-/* Workspace leaf slots: the count, a bar of one segment per slot (or one
-   fill past 24), what that means for a new window, and the pipelines. */
-.drain-capacity { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.drain-capacity-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 12.5px; }
-.drain-capacity-label { color: var(--fg-soft); font-weight: 500; margin-right: auto; }
-.drain-capacity-count { color: var(--fg); font-size: 12px; }
-.drain-capacity-free { color: var(--fg-dim); font-size: 12px; white-space: nowrap; }
-.drain-capacity-free.full { color: var(--warn-fg); }
+/* Workspace leaf slots: a bar of one segment per slot (or one fill past 24),
+   then why nothing more starts beside the count, and a mix of pipelines. */
+.drain-capacity { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.drain-capacity-line { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-width: 0; }
+.drain-capacity-count { flex: 0 0 auto; color: var(--fg-dim); font-size: 11.5px; white-space: nowrap; }
+.drain-capacity-count.full { color: var(--warn-fg); }
 .drain-capacity-bar { display: flex; gap: 3px; height: 8px; border-radius: 4px; background: var(--bg-well); overflow: hidden; }
 .drain-capacity-bar.segmented { background: transparent; }
 .drain-capacity-seg { flex: 1 1 0; min-width: 2px; border-radius: 2px; background: var(--bg-control); box-shadow: inset 0 0 0 1px var(--hair); }
@@ -84,33 +80,40 @@
 .drain-capacity-seg.over, .drain-capacity-over { background: repeating-linear-gradient(135deg, var(--status-proposed) 0 3px, #3a2a12 3px 6px); box-shadow: none; }
 .drain-capacity-used { background: var(--state-running); border-radius: 3px; }
 .drain-capacity-over { border-radius: 3px; }
-.drain-slots { margin: 0; color: var(--fg-dim); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.drain-slots { margin: 0; min-width: 0; color: var(--fg-dim); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.drain-slots.held { color: var(--warn-fg); }
 .drain-pipeline-occupancy { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .drain-pipeline {
   padding: 1px 7px; border: 1px solid var(--hair); border-radius: 4px; background: var(--bg-well);
   color: var(--fg-dim); font-size: 11px; line-height: 18px; overflow-wrap: anywhere;
 }
 
-/* Last admission forecast: peaks against the admit thresholds, then who fit. */
-.drain-forecast {
-  display: flex; flex-direction: column; gap: 8px; min-width: 0;
-  padding: 10px 12px; border: 1px solid var(--hair); border-radius: 8px; background: var(--bg-well);
-}
-.drain-forecast-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 12.5px; }
-.drain-forecast-when { color: var(--fg-dim); font-variant-numeric: tabular-nums; }
-.drain-forecast-mode { color: var(--fg-mute); font-size: 11.5px; }
+/* Admission forecast: a divider, then peaks as meters against their admit
+   thresholds, then who fit and who was held. */
+.drain-forecast { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding-top: 14px; border-top: 1px solid var(--hair); }
+.drain-forecast:first-child { padding-top: 0; border-top: 0; }
+.drain-forecast-built, .drain-forecast-retained { display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+.drain-forecast-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 10px; }
+.drain-section-label { color: var(--fg-soft); font: 500 12.5px var(--font-sans); }
+.drain-forecast-meta { color: var(--fg-mute); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .drain-forecast-mode.shadow { color: var(--fg-dim); }
-.drain-forecast-state { margin: 0; color: var(--fg-dim); font-size: 12.5px; }
-.drain-forecast-peaks { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin: 0; }
-.drain-forecast-peak { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.drain-forecast-peak dt { color: var(--fg-mute); font: 500 11.5px var(--font-sans); }
-.drain-forecast-peak dd { margin: 0; color: var(--fg-strong); font: 600 13px var(--font-sans); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.drain-forecast-meta, .drain-forecast-threshold { color: var(--fg-dim); font-size: 12px; font-weight: 500; }
-.drain-forecast-peak.over .drain-forecast-threshold { color: var(--warn-fg); }
+.drain-forecast-peaks { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 7px 10px; align-items: center; margin: 0; }
+.drain-forecast-peak { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; min-width: 0; }
+.drain-forecast-peak dt { color: var(--fg-mute); font: 400 11.5px var(--font-sans); }
+.drain-forecast-peak dd { margin: 0; min-width: 0; }
+.drain-forecast-meter { position: relative; display: block; height: 6px; border-radius: 3px; background: var(--bg-well); box-shadow: inset 0 0 0 1px var(--hair); }
+.drain-forecast-fill { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--fg-mute); }
+.drain-forecast-tick { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--fg-strong); }
+.drain-forecast-peak.over .drain-forecast-fill { background: var(--warn-fg); }
+.drain-forecast-figure { color: var(--fg); font-size: 11.5px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.drain-forecast-threshold { color: var(--fg-mute); }
+.drain-forecast-peak.over .drain-forecast-figure { color: var(--warn-fg); }
 .drain-forecast-tasks { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
-.drain-forecast-task { color: var(--fg); font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.drain-forecast-task { color: var(--fg-dim); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.drain-forecast-task.admitted { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .drain-forecast-task.held { color: var(--warn-fg); }
-.drain-forecast-retained { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding-top: 8px; border-top: 1px solid var(--hair); }
+.drain-forecast-task a { font-family: var(--font-mono); font-size: 11.5px; }
+.drain-forecast-retained:not(:first-child) { padding-top: 10px; border-top: 1px dashed var(--hair); }
 
 /* Holds the operator cannot clear from here: amber boxes. */
 .drain-throttle-note, .drain-provider-limit-note, .drain-provider-auth, .drain-crew-note {
@@ -122,8 +125,14 @@
 }
 .drain-provider-auth-fix { font-family: var(--font-mono, ui-monospace, monospace); }
 
-.drain-stop-block { display: flex; flex-direction: column; gap: 8px; padding-top: 14px; border-top: 1px solid var(--hair); }
-.drain-stop-note { margin: 0; font-size: 12px; line-height: 1.5; }
+/* The footer: the window's run and auto-concurrency, Stop, then its help. */
+.drain-foot { display: flex; flex-direction: column; gap: 8px; padding-top: 14px; border-top: 1px solid var(--hair); }
+.drain-foot-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+.drain-foot-meta { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; color: var(--fg-mute); font-size: 11.5px; }
+.drain-foot-meta a { font-family: var(--font-mono); font-size: 12px; }
+
+.drain-foot-row > .drain-stop { flex: 0 0 auto; margin-left: auto; }
+.drain-stop-note { margin: 0; color: var(--fg-mute); font-size: 11.5px; line-height: 1.45; }
 .drain-stop-note.disabled-reason { color: var(--warn-fg); }
 .drain-stop-note[hidden] { display: none; }
 

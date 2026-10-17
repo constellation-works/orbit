@@ -429,7 +429,7 @@ try {
     const rendered = await page.evaluate(() => ({
       card: document.getElementById('auto-drain-panel').dataset.drainState,
       header: document.getElementById('auto-drain-phase-label').textContent,
-      live: document.getElementById('auto-drain-live')?.textContent || '',
+      live: `${document.getElementById('auto-drain-when').textContent} ${document.getElementById('auto-drain-run')?.textContent || ''}`,
       admitted: document.querySelector('#auto-drain-live [data-stat="admitted"] dd')?.textContent,
       running: document.querySelector('#auto-drain-live [data-stat="running"] dd')?.textContent,
       global: document.getElementById('global-drain-state').textContent,
@@ -507,7 +507,7 @@ try {
 
   const timeLeft = async target => {
     await target.evaluate(() => globalThis.setDrainFixturePhase('draining'));
-    return target.locator('#auto-drain-live').textContent();
+    return target.evaluate(() => `${document.getElementById('auto-drain-when').textContent} ${document.getElementById('auto-drain-run').textContent}`);
   };
   const firstBrowser = await timeLeft(page);
   const otherPage = await browser.newPage({ timezoneId: 'America/Los_Angeles' });
@@ -535,7 +535,7 @@ try {
     (await import('/js/common.js')).setWindow('7d');
     await globalThis.setDrainFixturePhase('draining');
   });
-  const drainRunLink = page.locator('#auto-drain-live a.operation-run-link');
+  const drainRunLink = page.locator('#auto-drain-run a.operation-run-link');
   const drainRunUrl = new URL(await drainRunLink.getAttribute('href'), page.url());
   if (drainRunUrl.searchParams.get('workspace') !== 'one' || drainRunUrl.searchParams.get('window') !== '7d' || drainRunUrl.hash !== '#runs?run_id=jrun-20260923-0400-a1') throw new Error(`Drain run link lost its scope: ${drainRunUrl}`);
   const urlBeforeClicks = page.url();
