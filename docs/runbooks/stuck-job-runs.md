@@ -896,11 +896,15 @@ complexity pool instead. See
 
 Sometimes GitHub refuses every push for a while: `! [remote rejected] <branch> ->
 <branch> (Internal Server Error)`, `Service Unavailable`, `Bad Gateway`, `Gateway
-Timeout`, or `remote: Internal Server Error`. Reads and API calls can keep working.
+Timeout`, `missing necessary objects`, or `remote: Internal Server Error`. Reads and API calls can keep working.
 The push step treats these as transient. It retries up to 6 times, waiting 10 s and
-doubling to a 160 s cap, with jitter: at most about 5 minutes in all. The step's output
-records `push_attempts` and `push_waited_ms`. A refusal that names a policy
-(protected branch, `GH013`, a hook, authentication) is permanent and fails at once.
+doubling to a 160 s cap, with jitter: at most about 5 minutes in all. A
+`missing necessary objects` rejection is retried with `--no-thin`, so the next
+pack does not depend on thin-pack bases the server advertised while refs were
+moving. The step's output
+records `push_attempts` and `push_waited_ms`, including that retry. A refusal that names a policy
+(protected branch, `GH013`, a hook, authentication, non-fast-forward) is permanent and fails at once,
+including when that refusal is printed beside `missing necessary objects`.
 
 When the budget runs out, the run does not fail. It ends `held` at that step:
 `orbit run show <run_id>` names `[forge_unavailable]` and the pushed head. Step

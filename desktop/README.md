@@ -25,6 +25,22 @@ dashboard's own host switcher.
   server gets up to 12 seconds to drain before it is killed. On Linux the kernel also stops the
   server if the app crashes. On macOS, a crash that skips Rust's panic hook (a SIGKILL, for example)
   can leave the server running until you stop it yourself.
+- **Menu bar and tray.** The icon's menu shows how many drains are running and how many runs
+  failed in the last 24 hours, with **Open Orbit**, **Restart Dashboard Server**, **Launch at Login**
+  and **Quit Orbit**. On macOS the counts also appear beside the icon (`▶` drains, `✕` failed runs),
+  and closing the window keeps the app in the menu bar; **Quit Orbit** or ⌘Q ends it. On Linux,
+  closing the window quits, because a desktop without an AppIndicator host has no tray to return
+  from. Restarting the server reloads the window once the new server is ready.
+- **Notifications.** Every 20 seconds the app reads its own server's `/api/fleet/drains`,
+  `/api/job-runs/all?state=failed&since=24h` and `/api/tasks/all?status=review`, which cover every
+  workspace on this host. A run that newly appears as failed, or a task that newly appears in review,
+  raises a native notification naming the task title (or the job) and its workspace. More than three
+  at once arrive as one summary. The first read after launch only records what is already there,
+  and a workspace that comes back after being unavailable doesn't re-announce its old failures.
+  Other hosts' runs aren't watched; switch to them in the dashboard. A development build (`cargo
+  run`) posts notifications as Terminal on macOS, because it has no app bundle of its own.
+- **Launch at login.** The menu's checkbox adds or removes a login item: a LaunchAgent on macOS and
+  an autostart `.desktop` entry on Linux. It opens the app normally, window included.
 - **Logs.** Server output goes to `dashboard-server.log` in the app's log directory, readable only by
   you: `~/Library/Logs/works.constellation.orbit.desktop/` on macOS and
   `~/.local/share/works.constellation.orbit.desktop/logs/` on Linux. The log is truncated on launch
@@ -39,7 +55,12 @@ on a shared host that could be another user's process, and a dashboard started w
 The dashboard loads from its own `http://127.0.0.1:<port>` origin, so its Host/Origin checks apply
 unchanged. To Tauri the dashboard is a remote origin: no capability grants it a command, and the
 app's commands are declared in an app manifest, which puts them under the access-control list.
-Only the bundled status page (`capabilities/status-page.json`) can call `status` and `retry`. The
+Only the bundled status page (`capabilities/status-page.json`) can call `status` and `retry`.
+No page is granted the autostart plugin's commands; only the tray menu changes the login item.
+Notifications come from Rust, not from Tauri's notification plugin: that plugin replaces
+`window.Notification` in every page, the dashboard included, which would turn the dashboard's own
+notification button into IPC calls the dashboard isn't allowed to make. The tray and notifications
+read the server with plain loopback GETs; the dashboard page gains nothing. The
 window navigates only to the status page and the running dashboard. Every other link, including
 `target=_blank` links and `window.open`, opens in your default browser.
 
@@ -177,5 +198,5 @@ or have the app check `orbit-desktop-checksums.txt.sig` against the existing rel
 ## Not done yet
 
 - Auto-update (see above) and a Homebrew cask.
-- Native extras: a menu-bar status, notifications for failed runs and tasks ready for review, and
-  launch at login.
+- A monochrome template icon for the macOS menu bar; the tray uses the app icon.
+- Clicking a notification doesn't open the run or task; desktop notifications have no click action.

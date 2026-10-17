@@ -24,6 +24,132 @@ fn expected_item(run: &JobRun) -> Value {
     item
 }
 
+/// Count actual SQLite work through Store's public page boundary. The
+/// progress hook sees every VM instruction, including rows discarded before
+/// LIMIT; returned row counts alone cannot detect a scan of success history.
+fn page_work(
+    store: &orbit_store::Store,
+    query: &orbit_store::contracts::JobRunQuery,
+) -> (Vec<String>, usize) {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    let instructions = Arc::new(AtomicUsize::new(0));
+    let counter = instructions.clone();
+    store.connection().lock().unwrap().progress_handler(
+        1,
+        Some(move || {
+            counter.fetch_add(1, Ordering::Relaxed);
+            false
+        }),
+    );
+    let runs = store.list_job_runs_for_workspace("ws_http_fixture", query);
+    store
+        .connection()
+        .lock()
+        .unwrap()
+        .progress_handler(0, None::<fn() -> bool>);
+    (
+        runs.unwrap().into_iter().map(|run| run.run_id).collect(),
+        instructions.load(Ordering::Relaxed),
+    )
+}
+
+#[test]
+fn multi_state_pages_do_not_scan_unrelated_success_history() {
+    isolated(
+        "job_run_lists::multi_state_pages_do_not_scan_unrelated_success_history",
+        || {
+            use orbit_store::contracts::{JobRunOrder, JobRunQuery};
+
+            let fixture = Fixture::new();
+            let template = fixture.seed_run("template", "list-fixture", JobRunState::Success);
+            let mut measurements = Vec::new();
+            for success_count in [12, 120] {
+                let store = orbit_store::Store::open_in_memory().unwrap();
+                // Five old matching rows and a tiny, growing unrelated history.
+                // Equal timestamps also exercise the run-ID tiebreak across states.
+                for (index, state) in [
+                    JobRunState::Pending,
+                    JobRunState::Running,
+                    JobRunState::Failed,
+                    JobRunState::Timeout,
+                    JobRunState::Interrupted,
+                ]
+                .into_iter()
+                .chain(std::iter::repeat_n(JobRunState::Success, success_count))
+                .enumerate()
+                {
+                    let mut run = template.clone();
+                    run.run_id = format!("jrun-{index:03}");
+                    run.state = state;
+                    run.created_at = template.created_at
+                        + chrono::Duration::seconds(if index < 5 { 0 } else { 1 });
+                    run.started_at = Some(run.created_at);
+                    run.finished_at = state.is_terminal().then_some(run.created_at);
+                    store
+                        .upsert_job_run_for_workspace("ws_http_fixture", &run, None)
+                        .unwrap();
+                }
+                let mut work = Vec::new();
+                for (states, expected) in [
+                    (
+                        vec![JobRunState::Pending, JobRunState::Running],
+                        vec!["jrun-000"],
+                    ),
+                    (
+                        vec![
+                            JobRunState::Failed,
+                            JobRunState::Timeout,
+                            JobRunState::Interrupted,
+                        ],
+                        vec!["jrun-002"],
+                    ),
+                    (vec![JobRunState::Held, JobRunState::Cancelled], vec![]),
+                ] {
+                    // A job filter must not persuade the planner to walk
+                    // that job's success history instead of the state index.
+                    for job_id in [None, Some("list-fixture"), Some("absent")] {
+                        let query = JobRunQuery {
+                            job_id: job_id.map(str::to_owned),
+                            states: states.clone(),
+                            limit: Some(1),
+                            order_by: JobRunOrder::Recency,
+                            include_steps: false,
+                            ..Default::default()
+                        };
+                        let (ids, instructions) = page_work(&store, &query);
+                        if job_id == Some("absent") {
+                            assert!(ids.is_empty());
+                        } else {
+                            assert_eq!(ids, expected);
+                        }
+                        work.push(instructions);
+                    }
+                }
+                measurements.push(work);
+            }
+            if let Some(path) = std::env::var_os("ORBIT_HTTP_RUN_QUERY_WORK_EVIDENCE") {
+                let evidence = json!({
+                    "schema_version": 1,
+                    "sqlite_version": rusqlite::version(),
+                    "unrelated_success_rows": [12, 120],
+                    "page_states": ["active", "failed", "empty (held/cancelled)"],
+                    "job_filters_per_page": [null, "list-fixture", "absent"],
+                    "vm_instructions": measurements,
+                });
+                std::fs::write(path, serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
+            }
+            assert_eq!(
+                measurements[0], measurements[1],
+                "multi-state page work must be independent of unrelated newer success rows (12 versus 120): {measurements:?}"
+            );
+        },
+    );
+}
+
 #[test]
 fn job_run_filters_reconcile_once_and_preserve_pages() {
     isolated(

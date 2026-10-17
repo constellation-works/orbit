@@ -124,7 +124,7 @@ in member manifests with `workspace = true`.
 - **orbit-mcp** implements the MCP transport over `rmcp`: stdio and TCP transports, tool discovery, per-call traces, the SSH stdio proxy, and the federated mux, which routes host-qualified `hm_*/ws_*` selectors to the registered hosts and fails closed. Core owns validation and auditing. Its adapter consumes `McpToolDefinition.rules` rather than matching builtin names: `orbit-tools/src/mcp_rules.rs` owns selector/echo conditions, ID-routing classifications, presentation readers and input-schema decorations. Adapter-owned presentation entrypoints are declared in `orbit-mcp/src/presentation_definition.rs`. These internal rules are separate from client annotations and are not emitted in `tools/list`; custom and plugin definitions default to ordinary transport behavior. Name-based CLI routing uses the same builtin routing metadata, including CLI-only task operations.
 - **orbit-web** serves the HTTP API and embedded dashboard, plus `web connect` over an SSH tunnel and `/api/on/<host>`, which forwards to a registered host's own dashboard over an on-demand SSH tunnel.
 - **orbit-cli** is the clap entry point and client configuration. It assembles MCP, Registry, Web, and Core. The accepting machine always resolves its own state and dispatches through Core.
-- **`desktop/`** is the Tauri desktop shell, a separate Cargo workspace outside the crate graph. It depends on no workspace crate: it runs the installed `orbit web serve` as a child process and shows the dashboard from its loopback address. See [`desktop/README.md`](desktop/README.md).
+- **`desktop/`** is the Tauri desktop shell, a separate Cargo workspace outside the crate graph. It depends on no workspace crate: it runs the installed `orbit web serve` as a child process, shows the dashboard from its loopback address and reads that server's `/api` routes for its tray and notifications. See [`desktop/README.md`](desktop/README.md).
 
 ## orbit-store internals
 
@@ -169,6 +169,14 @@ store's batched `latest_job_runs` contract. The SQLite backend probes the
 per-job creation index in bounded groups and hydrates steps in batches, so a
 catalog refresh does not issue separate run and step queries for each job or
 decode older run history. Empty catalogs require no run-store reads.
+
+Bounded multi-state recency pages select at most the requested limit from
+each distinct state through the workspace/state recency index, then merge
+those candidates by recency and run ID before applying the final limit.
+Active and failed page selection does not scan unrelated success history.
+Other filters apply inside each state selection; counts retain the complete
+matching set. Workspace HTTP lists reconcile stale runs once per request,
+while aggregate lists read the stored rows observationally.
 
 Task delivery observations without a named run prefilter candidate runs in
 SQLite by exact membership in the submitted `input.task_ids` array or equality
