@@ -324,7 +324,7 @@ When a comparable base passes but the candidate names at most three failed tests
 
 ### Hosted CI
 
-Hosted CI runs the full `make ci` on open PRs. Each PR-triggered workflow starts with a checkout-free `Live PR state` job (`pull-requests: read` only); if the PR merged or closed while queued, the build and analysis jobs are skipped under unchanged check names, which GitHub treats as passing. An API error fails the gate rather than admitting an unknown state; a PR that closes after the gate read `open` can still finish. Push, scheduled and manual runs skip the gate, so agent-main/main CI and CodeQL still cover merged changes. `make ci-fast` selects `scripts/test-pr-state-workflows.py` when self-test inputs change; full `make ci` always runs it. The script replays each gate against recorded API responses.
+Hosted CI runs the work of the full `make ci` on open PRs, split across jobs as described below. Each PR-triggered workflow starts with a checkout-free `Live PR state` job (`pull-requests: read` only); if the PR merged or closed while queued, the build and analysis jobs are skipped under unchanged check names, which GitHub treats as passing. An API error fails the gate rather than admitting an unknown state; a PR that closes after the gate read `open` can still finish. Push, scheduled and manual runs skip the gate, so agent-main/main CI and CodeQL still cover merged changes. `make ci-fast` selects `scripts/test-pr-state-workflows.py` when self-test inputs change; full `make ci` always runs it. The script replays each gate against recorded API responses.
 
 The ephemeral Linux runner installs sandbox packages with needrestart's
 per-invocation `NEEDRESTART_MODE=l` (list-only) setting through `sudo env`.
@@ -334,11 +334,55 @@ guarded packaged AppArmor profile checks. See the
 [Ubuntu needrestart manual](https://manpages.ubuntu.com/manpages/noble/man1/needrestart.1.html)
 for the environment override; this does not change a persistent host setting.
 
+The test gate in `ci.yml` runs on parallel runners from one build:
+
+- `Test build` runs `ci-guardrails.sh --test-archive PATH`. It runs the folded
+  workflow test build, then `cargo nextest archive` of the workspace's lib, bin
+  and test targets under the same lint environment, so the archive costs no
+  compile. It then runs
+  [check-nextest-partitions.py](../scripts/check-nextest-partitions.py), which
+  lists the archive once unpartitioned and once per `--partition count:k/N`
+  (`NEXTEST_SHARDS` in `ci.yml`). It fails unless every test the full list
+  selects is in exactly one shard, every shard selects at least one test, and
+  no shard selects a test outside the full list. The job uploads the archive
+  as a one-day artifact.
+- `Test shard k/N` jobs, one per shard, start beside the build and set up
+  their runner. Each waits for `Test build` through
+  [ci-await-jobs.py](../scripts/ci-await-jobs.py), downloads the archive, and
+  runs `cargo nextest run --profile ci --partition count:k/N` from it.
+  Extracting into the checkout puts `target/debug/orbit` and the test binaries
+  at the paths they were built for. Each shard uploads its nextest JUnit report
+  (`target/nextest/ci/junit.xml`) as `nextest-junit-k`, which carries the
+  per-test durations. The Linux sandbox/policy enforcement gate runs from the
+  same archive in shard 1. The shards are separate literal jobs with no
+  matrix, gated on `Live PR state` like the other jobs: Orbit's PR-landing
+  recovery certifies a rerun after a failed gate only for such jobs.
+  `scripts/test-pr-state-workflows.py` runs each shard's nextest step and the
+  Check job's wait with stub tools, and fails unless the shards select
+  `count:1/N` through `count:N/N` once each and the wait names the build and
+  every shard.
+- `Check / Clippy / Test` runs `ci-guardrails.sh --checks`: formatting, every
+  repository guard and self-test, production Clippy, doctests, documentation
+  and the supply-chain gate, with no workspace test build or nextest. It then
+  waits for `Test build` and every shard, and fails as soon as one of them
+  completes without success. Its elapsed time therefore covers the whole gate,
+  including any queue wait for the other jobs' runners. That is the time the
+  15-minute budget and the `ci-budget-watch` auto-task measure, and its
+  conclusion is the gate's result. The wait prints one
+  `ci-await: <job> succeeded started=... completed=... elapsed_s=...` line per
+  job.
+
+Locally, `make ci` keeps the single-process full mode: the folded build, then
+nextest from its binary listing.
+
 `ci-guardrails.sh` repeats its phase breakdown in the final log tail, including
 on failure: format, workflow test listing/build (which folds in the all-targets
 Clippy lint), the exclusive self-test lane, workspace test listing, workspace
 tests, production Clippy, doctests, documentation, supply-chain checks and
-repository guards.
+repository guards. `--test-archive` mode records only
+`workflow-test-list-build`, `workspace-test-archive` and
+`workspace-test-partitions`, and `--checks` mode records every phase except the
+workflow test build and the workspace test phases.
 `guard-pool` times the background pool from its start to its join. In fast mode
 that is the pool's own wall time. In full mode the join follows the workflow
 test build, so `guard-pool` includes the overlapped build.

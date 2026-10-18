@@ -809,6 +809,75 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertIn(["fixture-test-bin", "--list", "fixture_test"], calls)
         self.assertNotIn("-p", [argument for call in calls for argument in call])
 
+    def test_split_ci_modes_together_run_the_full_ci_work(self):
+        """The hosted test-build and Check jobs split the full run between them."""
+        self.prepare_ci()
+        self.init_ci_git()
+        env_log = self.root / "cargo-env.log"
+        self.env["GUARD_TEST_ENV_LOG"] = str(env_log)
+        folded = ["test", "--workspace", "--lib", "--bins", "--tests", "--examples", "--locked",
+                  "--no-run", "--message-format", "json"]
+        archive = str(self.root / "nextest-archive.tar.zst")
+        archive_call = ["nextest", "archive", "--locked", "--workspace", "--lib", "--bins", "--tests",
+                        "--archive-file", archive]
+
+        # --test-archive: the folded build, the archive the shards run, then the
+        # partition guard over that archive. No guard, check or test runs.
+        result = self.run_guard("ci-guardrails.sh", "--test-archive", archive,
+                                env_overrides={"NEXTEST_SHARDS": "3"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertIn(folded, calls)
+        self.assertLess(calls.index(folded), calls.index(archive_call), calls)
+        self.assertFalse(any(call[:2] == ["nextest", "run"] or call[:1] in (["fmt"], ["check"], ["doc"])
+                             or "--doc" in call for call in calls), calls)
+        self.assertEqual((self.guard_calls / "check-nextest-partitions.py").read_text().splitlines(),
+                         ["--shards", "3", "--", "cargo", "nextest", "list", "--archive-file", archive,
+                          "--workspace-remap", str(self.root)])
+        self.assertEqual({path.name for path in self.guard_calls.iterdir()} - {"require-python.sh"},
+                         {"check-nextest-partitions.py"}, "no repository guard or self-test runs")
+        phases = re.findall(r"ci-guardrails-phase: (\S+) wall_seconds=\d+ exit=(\d+)", result.stderr)
+        self.assertEqual(phases, [("workflow-test-list-build", "0"), ("workspace-test-archive", "0"),
+                                  ("workspace-test-partitions", "0")])
+        # The archive and listings must reuse the folded build, not rebuild it.
+        observed = [json.loads(line) for line in env_log.read_text().splitlines()]
+        archived = [row for row in observed if row["argv"] == archive_call]
+        self.assertEqual([row["RUSTC_WORKSPACE_WRAPPER"] for row in archived], ["clippy-driver"])
+        # A partition gap fails the job with the guard's status.
+        self.write_executable(self.scripts / "check-nextest-partitions.py", "#!/bin/sh\nexit 7\n")
+        self.log.write_text("")
+        result = self.run_guard("ci-guardrails.sh", "--test-archive", archive,
+                                env_overrides={"NEXTEST_SHARDS": "3"})
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertIn("ci-guardrails-phase: workspace-test-partitions wall_seconds=", result.stderr)
+
+        # --checks: everything else, with no test build and no nextest.
+        for call in self.guard_calls.iterdir():
+            call.unlink()
+        self.log.write_text("")
+        env_log.write_text("")
+        result = self.run_guard("ci-guardrails.sh", "--checks")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_self_tests(True)
+        self.assertTrue((self.guard_calls / "test-ci-download-verified.py").exists())
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertNotIn(folded, calls)
+        self.assertFalse(any(call[:1] == ["nextest"] for call in calls), calls)
+        for expected in (["fmt", "--all", "--", "--check"], ["check", "--workspace", "--lib", "--bins"],
+                         ["test", "--no-fail-fast", "--workspace", "--doc"], ["doc", "--no-deps", "--workspace"]):
+            self.assertIn(expected, calls)
+        phases = dict(re.findall(r"ci-guardrails-phase: (\S+) wall_seconds=\d+ exit=(\d+)", result.stderr))
+        for phase in ("fmt", "clippy-production", "doctests", "documentation", "repository-guards"):
+            self.assertEqual(phases.get(phase), "0", result.stderr)
+        # The check chain shares the host with the exclusive suites, so it runs
+        # lowered like the build it replaces there.
+        observed = [json.loads(line) for line in env_log.read_text().splitlines()]
+        formatting = next(row for row in observed if row["argv"][:1] == ["fmt"])
+        for row in observed:
+            if row["argv"][:1] in (["check"], ["doc"]) or "--doc" in row["argv"]:
+                self.assertTrue((row["idle"] and not formatting["idle"]) or row["nice"] > formatting["nice"],
+                                (row, formatting))
+
     def test_macos_check_defaults_to_per_package_listing(self):
         # Without --workspace-build (the macOS job and local runs, whose `-p`
         # artifacts are already warm) the per-package listing is unchanged.

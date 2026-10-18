@@ -38,8 +38,8 @@ a host that can create Linux mount namespaces.
 
 ## Ordinary Linux CI compiler objects
 
-The ordinary **Check / Clippy / Test** job in `.github/workflows/ci.yml` installs
-the existing SHA-256-pinned sccache through `scripts/compiler-cache.sh`. This
+The ordinary **Check / Clippy / Test** and **Test build** jobs in
+`.github/workflows/ci.yml` each install the existing SHA-256-pinned sccache through `scripts/compiler-cache.sh`. This
 installation is confined to the ephemeral hosted runner. It restores a separate
 `orbit-ci-compiler-v1` archive into `$RUNNER_TEMP/orbit-ci-compiler-v1`, with a
 2 GiB local LRU limit. The existing `Swatinem/rust-cache` dependency archive and
@@ -51,7 +51,9 @@ Runner context is unavailable in job-level `env`.
 
 `actions/cache/restore` has no post-job save. PR runs can modify their restored
 local copy but never upload it. The explicit `actions/cache/save` step runs only
-after the ordinary build, tests and Linux sandbox gate succeed, on a `push` to
+after the job's own work succeeds: in the Check job, its checks and the awaited
+test build, nextest shards and Linux sandbox gate; in the Test build job, the
+test build and archive. It runs on a `push` to
 `refs/heads/agent-main` in `constellation-works/orbit`, with usable cache setup
 and without an exact archive hit. Failed, cancelled, fork, release-branch and PR
 runs cannot publish compiler objects. No privileged PR workflow or additional
@@ -65,7 +67,8 @@ versions, machine architecture and runner image identity; root and member
 manifests (including profiles), lockfiles, toolchain files, all tracked `.cargo`
 configuration, user Cargo configuration, the workflow, all setup/build scripts
 (including installer and wrapper), and the effective Cargo/Rust/sccache cache
-environment. Hashing all scripts covers flags, feature selections and build
+environment, and the job id: the two jobs compile different units, so each
+keeps its own archive. Hashing all scripts covers flags, feature selections and build
 commands inside helpers. Both the exact key and the sole restore prefix contain
 this digest: incompatible configurations never use a broader restore prefix.
 Only the weekly suffix may differ on a compatible restore.

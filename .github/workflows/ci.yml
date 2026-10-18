@@ -33,6 +33,10 @@ env:
   # restricted local/agent sandboxes, but ubuntu-latest must exercise it.
   ORBIT_REQUIRE_PROTECTED_SSH_REGRESSION: "1"
   NEXTEST_VERSION: 0.9.136
+  # Parallel nextest jobs: the partition guard, each shard's partition and the
+  # Check job's wait read this value; the literal "Test shard k/N" jobs must
+  # match it (scripts/test-pr-state-workflows.py).
+  NEXTEST_SHARDS: "3"
   NEXTEST_LINUX_SHA256: a098eed56f2dd88c7fdca1e554a6b99fa1ffbd2a7a1c41b865700112981f6f52
   CARGO_DENY_VERSION: 0.19.9
   CARGO_DENY_LINUX_SHA256: f1f8eedc2a3ac297c540873f93785d4104b102c0079506b2a6b3221b7ec956af
@@ -111,12 +115,23 @@ jobs:
           rustc +${MSRV} --version | grep -F "${MSRV}"
           cargo +${MSRV} check --workspace --locked
 
+  # [ORB-16695] The test gate is split across runners. "Test build" compiles
+  # the workspace tests once and archives them; NEXTEST_SHARDS "Test shard"
+  # jobs run nextest from that archive, one count partition each, in
+  # parallel. "Check / Clippy / Test" runs formatting, the repository guards
+  # and self-tests, production Clippy, doctests, documentation and the
+  # supply-chain gate beside them, then waits for the build and every shard.
+  # It is the job the 900-second budget measures.
   ci:
     needs: pr-state
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') }}
     name: Check / Clippy / Test
     runs-on: ubuntu-latest
     timeout-minutes: 45 # Budget is 15 minutes (docs/design-patterns/test_strategy.md); allows cold builds and slower test hosts.
+    permissions:
+      contents: read
+      # Read this run's job states while awaiting the test jobs.
+      actions: read
     env:
       SCCACHE_CACHE_SIZE: 2G
       SCCACHE_CLIENT_SIDE: "1"
@@ -171,17 +186,17 @@ jobs:
           toolchain: "1.98.1"
           components: rustfmt, clippy
 
-      # [DANI-10428] Rust 1.98.1 build cache. rust-cache prunes target/
+      # [DANI-10428] Rust 1.98.1 dependency cache. rust-cache prunes target/
       # to dependency artifacts and the registry to crates Cargo.lock still
       # references before saving, so the archive stays far below the 10 GB
       # repo cap instead of evicting every other entry; `shared-key` names the
-      # toolchain rather than the job so any 1.98.1 job that needs the same
-      # artifacts (the sandbox gate below used to be one) restores this entry.
+      # toolchain rather than the job. The Check job checks and documents
+      # dependencies the test build never compiles, so it keeps its own entry.
       # Dependencies stay valid when a test fails, so save on failure too.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         id: rust-cache
         with:
-          shared-key: rust-1.98.1
+          shared-key: rust-1.98.1-checks
           cache-on-failure: true
 
       - name: Configure runner-local compiler objects
@@ -212,7 +227,9 @@ jobs:
           for name in ('config', 'config.toml'):
               path = Path(os.environ.get('CARGO_HOME', str(Path.home() / '.cargo'))) / name
               inputs['cargo-home/' + name] = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+          # Each job compiles its own unit set, so each keeps its own archive.
           identity = dict(
+              job=os.environ.get('GITHUB_JOB'),
               rustc=subprocess.check_output(['rustc', '-vV'], text=True),
               cargo=subprocess.check_output(['cargo', '-V'], text=True),
               clippy=subprocess.check_output(['clippy-driver', '-V'], text=True),
@@ -276,22 +293,6 @@ jobs:
           echo "ORBIT_COMPILER_CACHE_BIN=$cache_bin" >> "$GITHUB_ENV"
           echo "compiler_cache_setup_seconds=$(($(date +%s) - started)) ready=$ready capacity=$SCCACHE_CACHE_SIZE"
 
-      # Each public pinned download allows at most three attempts in one 60s
-      # budget. Attempt diagnostics and backoff remain part of the complete
-      # Check job elapsed time (including failed setup and post actions).
-      - name: Install cargo-nextest
-        run: |
-          set -euo pipefail
-          cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
-          mkdir -p .orbit/tmp
-          download_dir="$(mktemp -d .orbit/tmp/tool-download.XXXXXX)"
-          trap 'python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$download_dir"' EXIT
-          archive="$download_dir/archive"
-          mkdir -p "$cargo_bin"
-          scripts/ci-download-verified.sh "https://get.nexte.st/${NEXTEST_VERSION}/linux" "$NEXTEST_LINUX_SHA256" "$archive"
-          tar zxf "$archive" -C "$cargo_bin"
-          cargo nextest --version | awk -v expected="${NEXTEST_VERSION}" '{print} $1 == "cargo-nextest" && $2 == expected {ok=1} END {exit !ok}'
-
       - name: Install cargo-deny
         run: |
           set -euo pipefail
@@ -324,28 +325,13 @@ jobs:
           tar zxf "$archive" --strip-components=1 -C "$cargo_bin" "ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl/rg"
           rg --version | awk -v expected="${RIPGREP_VERSION}" '{print} $1 == "ripgrep" && $2 == expected {ok=1} END {exit !ok}'
 
-      # [ORB-13017] Same pinned-tarball convention as nextest. Only the uv
-      # binary comes from the network; the plugin fixture's dependency is a
-      # wheel inside the fixture, so the test itself never reaches PyPI.
-      - name: Install uv
-        run: |
-          set -euo pipefail
-          cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
-          mkdir -p .orbit/tmp
-          download_dir="$(mktemp -d .orbit/tmp/tool-download.XXXXXX)"
-          trap 'python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$download_dir"' EXIT
-          archive="$download_dir/archive"
-          mkdir -p "$cargo_bin"
-          scripts/ci-download-verified.sh "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" "$UV_LINUX_SHA256" "$archive"
-          tar zxf "$archive" --strip-components=1 -C "$cargo_bin" uv-x86_64-unknown-linux-gnu/uv
-          uv --version | awk -v expected="${UV_VERSION}" '{print} $1 == "uv" && $2 == expected {ok=1} END {exit !ok}'
-
       # Ubuntu 24.04 can restrict unprivileged user namespaces through AppArmor.
-      # Probe the trusted Bubblewrap first, preparing signed packages if needed,
-      # before the portable suite so probe-gated tests take their live branch.
-      # This may add apt package setup and AppArmor loading before the
-      # guardrails; a setup failure therefore preempts their output. The test
-      # runner shows successful nextest output immediately, increasing log
+      # Probe the trusted Bubblewrap first, preparing signed packages if needed.
+      # Here the live compiler-cache namespace self-test needs it
+      # (ORBIT_COMPILER_CACHE_REQUIRE_NS); in the shard jobs, the probe-gated
+      # portable tests. This may add apt package setup and AppArmor loading
+      # before the guardrails; a setup failure therefore preempts their output.
+      # The shards show successful nextest output immediately, increasing log
       # volume so the live assertions are visible. The profile is ephemeral,
       # and the global user-namespace controls are never changed.
       - name: Prepare and probe Bubblewrap for the Linux boundary tests
@@ -455,61 +441,22 @@ jobs:
         run: |
           set -euo pipefail
           TIMEFORMAT='guardrails_seconds=%R'
-          time ./scripts/ci-guardrails.sh
+          time ./scripts/ci-guardrails.sh --checks
 
-      # [ORB-10009] Linux counterpart of ci-macos.yml's enforcement leg: an
-      # explicit, named gate for orbit-policy's evaluation matrix (incl. the
-      # ORB-00418 symlink-resolution tests), orbit-tools' runtime
-      # fs-enforcement integration tests (the only enforcement layer on Linux
-      # — there is no kernel sandbox), and orbit-exec's Linux fail-closed
-      # contract tests. The live Bubblewrap boundary tests are ignored in the
-      # portable suite, then selected explicitly here: an ubuntu-latest runner
-      # without working user namespaces fails this named gate (their probe
-      # asserts availability) instead of reporting those tests as passed after
-      # an early return.
-      # [DANI-10428] This used to be a separate job that compiled the three
-      # crates under `cargo test -p` feature resolution — a second build of
-      # the same crates. The nextest filterset below selects them out of the
-      # exact `--workspace --lib --bins --tests` artifacts the guardrails step
-      # already built and ran, so the gate costs no compile.
-      # [ORB-16349] The guardrails pass already ran every non-ignored test in
-      # these packages, so the portable selection is not re-run here. The gate
-      # asserts with `cargo nextest list` that it still selects at least one
-      # test, so a retired or renamed package cannot pass on an empty selection.
-      # [ORB-12881] The ignored leg selects orbit-exec's Linux sandbox
-      # integration binary (`linux_sandbox::`), which needs a host with working
-      # Bubblewrap namespaces. It runs over the same artifact set as the list
-      # above it so neither leg triggers a rebuild. nextest exits 4 when its
-      # filterset matches nothing, so a refactor that retires or renames these
-      # tests fails the gate instead of passing on an empty selection; never
-      # add `--no-tests` here.
-      # The uv-locked Python plugin fixture runs in the portable suite above:
-      # the pinned uv binary is installed before Run CI guardrails.
-      # A prior failure in this job (including Bubblewrap preparation or
-      # `Run CI guardrails`) skips this gate; if this step is missing, it did
-      # not pass.
-      # `--profile ci` matches the workspace-tests phase: more test threads
-      # than the 4-vCPU default, with the same named group caps. That phase's
-      # CPU sample is the cpu-util line from ci-guardrails.sh.
-      # Both legs run under the folded build's lint environment
-      # (scripts/with-test-build-lint.sh). Cargo fingerprints it, so without it
-      # each leg would recompile every workspace member.
-      - name: Linux sandbox/policy enforcement gate
+      # The Check job finishes only after the test build and every shard, so
+      # its elapsed time is the whole gate's wall time (the 900-second budget
+      # in docs/design-patterns/test_strategy.md) and its conclusion is the
+      # gate's result. A failed or skipped test job fails it at once.
+      - name: Await the test build and nextest shards
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          lint=./scripts/with-test-build-lint.sh
-          # Count matches by filter-match: test-count is the total for the target set.
-          selected=$("$lint" cargo nextest list --locked --workspace --lib --bins --tests \
-            -E 'package(orbit-exec) | package(orbit-policy) | package(orbit-tools)' \
-            --message-format json |
-            jq '[."rust-suites"[].testcases[] | select(."filter-match".status == "matches")] | length')
-          if [[ "$selected" -eq 0 ]]; then
-            echo "Linux sandbox/policy enforcement gate: the portable filterset selects no tests" >&2
-            exit 1
-          fi
-          "$lint" cargo nextest run --profile ci --no-fail-fast --locked --workspace --lib --bins --tests \
-            --run-ignored only \
-            -E 'package(orbit-exec) & binary(sandbox) & test(/^linux_sandbox::/)'
+          jobs=(--job "Test build")
+          for shard in $(seq 1 "$NEXTEST_SHARDS"); do
+            jobs+=(--job "Test shard $shard/$NEXTEST_SHARDS")
+          done
+          python3 scripts/ci-await-jobs.py "${jobs[@]}"
 
       # [ORB-10126] Confirm disk headroom survived the workspace build/test.
       - name: Report disk usage
@@ -596,3 +543,546 @@ jobs:
             "run_id=${RUN_ID:-} run_attempt=${RUN_ATTEMPT:-} run_url=${run_url}" \
             "event_sha=${EVENT_SHA:-} pr_head_sha=${PR_HEAD_SHA:-} tested_sha=${tested_sha}"
           exit 0
+
+  test-build:
+    needs: pr-state
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') }}
+    name: Test build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SCCACHE_CACHE_SIZE: 2G
+      SCCACHE_CLIENT_SIDE: "1"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+    steps:
+      - name: Admit runner disk space
+        run: |
+          set -euo pipefail
+          started=$SECONDS
+          minimum_kib=$((32 * 1024 * 1024))
+          available_kib() { df -Pk / | awk 'NR == 2 {print $4}'; }
+          echo "runner=${RUNNER_NAME} image=${ImageOS:-unknown}/${ImageVersion:-unknown}"
+          echo "Disk before admission:"
+          df -h /
+          if (( $(available_kib) < minimum_kib )); then
+            for path in /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+              /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+              /usr/local/share/boost /usr/local/share/powershell /usr/share/swift; do
+              sudo rm -rf "$path"
+              if (( $(available_kib) >= minimum_kib )); then
+                break
+              fi
+            done
+          else
+            echo "Cleanup unnecessary: at least 32 GiB available"
+          fi
+          free_kib="$(available_kib)"
+          echo "disk_admission_seconds=$((SECONDS - started)) free_kib=$free_kib minimum_kib=$minimum_kib"
+          df -h /
+          if (( free_kib < minimum_kib )); then
+            echo "::error title=Insufficient runner disk::Need at least 32 GiB free before cache restore and compilation"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # On pull_request, use the PR head SHA: not the branch name
+          # GitHub deletes on merge, and not github.sha (the ephemeral
+          # merge commit). On push, use github.sha directly so a run that
+          # sat queued still builds and reports on the commit that
+          # triggered it, not whatever the branch points to once it starts.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # Rust 1.98.1
+        with:
+          toolchain: "1.98.1"
+          components: clippy
+
+      # [DANI-10428] Rust 1.98.1 build cache. rust-cache prunes target/
+      # to dependency artifacts and the registry to crates Cargo.lock still
+      # references before saving, so the archive stays far below the 10 GB
+      # repo cap instead of evicting every other entry; `shared-key` names the
+      # toolchain rather than the job, so any 1.98.1 job that needs the same
+      # dependency artifacts restores this entry.
+      # Dependencies stay valid when a test fails, so save on failure too.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        id: rust-cache
+        with:
+          shared-key: rust-1.98.1
+          cache-on-failure: true
+
+      - name: Configure runner-local compiler objects
+        id: compiler-env
+        run: |
+          set -euo pipefail
+          # Job-level env cannot access runner context. Export at runtime
+          # before identity, restore and setup consume this separate archive.
+          printf 'SCCACHE_DIR=%s/orbit-ci-compiler-v1\n' "${RUNNER_TEMP:?}" >> "$GITHUB_ENV"
+
+      - name: Identify compiler-object cache
+        id: compiler-key
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, platform, subprocess, time
+          from pathlib import Path
+
+          started = time.time()
+          files = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          # Include every command/setup script: flags and feature selections
+          # buried in helpers must invalidate the archive as well as YAML edits.
+          selected = sorted(p for p in files if p and (
+              Path(p).name in ('Cargo.toml', 'Cargo.lock', 'rust-toolchain', 'rust-toolchain.toml')
+              or '.cargo' in Path(p).parts or p.startswith('scripts/')
+              or p == '.github/workflows/ci.yml'))
+          inputs = {p: hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in selected}
+          for name in ('config', 'config.toml'):
+              path = Path(os.environ.get('CARGO_HOME', str(Path.home() / '.cargo'))) / name
+              inputs['cargo-home/' + name] = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+          # Each job compiles its own unit set, so each keeps its own archive.
+          identity = dict(
+              job=os.environ.get('GITHUB_JOB'),
+              rustc=subprocess.check_output(['rustc', '-vV'], text=True),
+              cargo=subprocess.check_output(['cargo', '-V'], text=True),
+              clippy=subprocess.check_output(['clippy-driver', '-V'], text=True),
+              platform=[platform.system(), platform.machine(), os.environ.get('ImageOS'), os.environ.get('ImageVersion')],
+              inputs=inputs,
+              env={k: v for k, v in sorted(os.environ.items()) if k.startswith(('CARGO_', 'RUST', 'SCCACHE_', 'ORBIT_COMPILER_CACHE'))})
+          digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+          prefix = 'orbit-ci-compiler-v1-' + digest + '-'
+          # One immutable snapshot per compatibility identity per UTC week.
+          # Older compatible snapshots can seed it; no broad restore prefix.
+          key = prefix + str(int(started) // (7 * 24 * 60 * 60))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              print('key=' + key, 'prefix=' + prefix, sep='\n', file=out)
+          with open(os.environ['GITHUB_ENV'], 'a') as out:
+              print('COMPILER_CACHE_RESTORE_STARTED=' + str(int(started)), file=out)
+          print('compiler_cache_identity=' + digest + ' key=' + key)
+          print(identity['rustc'].strip())
+          print('compiler_cache_input_files=' + str(len(inputs)))
+          PY
+
+      - name: Restore compiler objects
+        id: compiler-restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          SEGMENT_DOWNLOAD_TIMEOUT_MINS: "1"
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: ${{ steps.compiler-key.outputs.key }}
+          restore-keys: ${{ steps.compiler-key.outputs.prefix }}
+
+      - name: Set up compiler-object cache
+        id: compiler-setup
+        env:
+          RESTORE_OUTCOME: ${{ steps.compiler-restore.outcome }}
+        run: |
+          set -euo pipefail
+          started=$(date +%s)
+          echo "compiler_cache_restore_seconds=$((started - COMPILER_CACHE_RESTORE_STARTED)) restore_outcome=$RESTORE_OUTCOME"
+          mkdir -p .orbit/tmp
+          install_log=$(mktemp .orbit/tmp/compiler-install.XXXXXX)
+          export TMPDIR="$PWD/.orbit/tmp"
+          cache_bin="$HOME/.orbit/cache/bin/sccache"
+          # The existing installer verifies the pinned archive. Neither its
+          # binary nor setup output is restored from the object archive.
+          ready=false
+          if timeout 60s scripts/compiler-cache.sh setup --install >"$install_log" 2>&1 \
+            && mkdir -p "$SCCACHE_DIR" && [ -w "$SCCACHE_DIR" ] \
+            && SCCACHE_SERVER_UDS=/tmp/orbit-sccache.sock timeout 10s "$cache_bin" --show-stats >>"$install_log" 2>&1 \
+            && SCCACHE_SERVER_UDS=/tmp/orbit-sccache.sock timeout 10s "$cache_bin" --zero-stats >>"$install_log" 2>&1; then
+            ready=true
+          else
+            echo '::warning::Compiler cache unavailable; using ordinary rustc'
+          fi
+          sed -n '1,40p' "$install_log"
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+          if [ "$ready" = false ]; then
+            echo 'ORBIT_COMPILER_CACHE=0' >> "$GITHUB_ENV"
+          fi
+          echo "ORBIT_COMPILER_CACHE_BIN=$cache_bin" >> "$GITHUB_ENV"
+          echo "compiler_cache_setup_seconds=$(($(date +%s) - started)) ready=$ready capacity=$SCCACHE_CACHE_SIZE"
+
+      # Each public pinned download allows at most three attempts in one 60s
+      # budget. Attempt diagnostics and backoff remain part of the test gate's
+      # elapsed time (including failed setup and post actions).
+      - name: Install cargo-nextest
+        run: |
+          set -euo pipefail
+          cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+          mkdir -p .orbit/tmp
+          download_dir="$(mktemp -d .orbit/tmp/tool-download.XXXXXX)"
+          trap 'python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$download_dir"' EXIT
+          archive="$download_dir/archive"
+          mkdir -p "$cargo_bin"
+          scripts/ci-download-verified.sh "https://get.nexte.st/${NEXTEST_VERSION}/linux" "$NEXTEST_LINUX_SHA256" "$archive"
+          tar zxf "$archive" -C "$cargo_bin"
+          cargo nextest --version | awk -v expected="${NEXTEST_VERSION}" '{print} $1 == "cargo-nextest" && $2 == expected {ok=1} END {exit !ok}'
+
+      - name: Report build inputs
+        env:
+          CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          echo "tested_head=$(git rev-parse HEAD) runner=${RUNNER_NAME} image=${ImageOS:-unknown}/${ImageVersion:-unknown} cache_hit=${CACHE_HIT}"
+          rustc --version
+          df -Pk /
+          du -sk target "${CARGO_HOME:-$HOME/.cargo}/registry" 2>/dev/null || true
+
+      # One folded workspace test build (all-targets Clippy lint included),
+      # archived with the `orbit` binary the CLI fixtures execute. The guard
+      # in --test-archive lists the archive once whole and once per count
+      # partition, and fails unless the shards cover every test exactly once.
+      - name: Build and archive workspace tests
+        run: |
+          set -euo pipefail
+          TIMEFORMAT='test_build_seconds=%R'
+          time ./scripts/ci-guardrails.sh --test-archive "$RUNNER_TEMP/nextest-archive.tar.zst"
+          ls -l "$RUNNER_TEMP/nextest-archive.tar.zst"
+
+      # The archive is already zstd-compressed.
+      - name: Upload nextest archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nextest-archive
+          path: ${{ runner.temp }}/nextest-archive.tar.zst
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Report disk usage
+        if: always()
+        run: |
+          df -Pk /
+          du -sk target "${CARGO_HOME:-$HOME/.cargo}/registry" 2>/dev/null || true
+
+      - name: Report compiler-object cache and start save clock
+        if: always()
+        env:
+          CACHE_KEY: ${{ steps.compiler-key.outputs.key }}
+          MATCHED_KEY: ${{ steps.compiler-restore.outputs.cache-matched-key }}
+          CACHE_READY: ${{ steps.compiler-setup.outputs.ready }}
+        run: |
+          set -euo pipefail
+          started=$(date +%s)
+          echo "compiler_cache_key=$CACHE_KEY matched_key=$MATCHED_KEY ready=$CACHE_READY capacity=$SCCACHE_CACHE_SIZE"
+          if [ "$CACHE_READY" = true ]; then
+            # Default wrapper endpoint; namespace controls use their own /tmp.
+            if ! SCCACHE_SERVER_UDS=/tmp/orbit-sccache.sock timeout 10s "$ORBIT_COMPILER_CACHE_BIN" --show-stats 2>&1 | sed -n '1,80p'; then
+              echo 'compiler_cache_stats=unavailable (query failed or timed out)'
+            fi
+          else
+            echo 'compiler_cache_stats=unavailable (ordinary rustc fallback)'
+          fi
+          du -sk "$SCCACHE_DIR" 2>/dev/null || true
+          echo "compiler_cache_report_seconds=$(($(date +%s) - started))"
+          echo "COMPILER_CACHE_SAVE_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+
+      # Restore-only action has no implicit post-job upload. All ordinary
+      # build/test/native gates precede this explicit save; PRs never reach it.
+      - name: Save trusted compiler objects
+        id: compiler-save
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/agent-main' && github.repository == 'constellation-works/orbit' && steps.compiler-setup.outputs.ready == 'true' && steps.compiler-restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        continue-on-error: true
+        timeout-minutes: 2
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: ${{ steps.compiler-key.outputs.key }}
+
+      - name: Report compiler-object save cost
+        if: always()
+        env:
+          SAVE_OUTCOME: ${{ steps.compiler-save.outcome }}
+        run: |
+          if [ -n "${COMPILER_CACHE_SAVE_STARTED:-}" ]; then
+            echo "compiler_cache_save_seconds=$(($(date +%s) - COMPILER_CACHE_SAVE_STARTED)) outcome=$SAVE_OUTCOME"
+          else
+            echo "compiler_cache_save_seconds=unavailable outcome=$SAVE_OUTCOME"
+          fi
+
+  # One job per nextest shard. Orbit's PR-landing recovery certifies each
+  # job a rerun after a failed Live PR state replays as a fresh required
+  # check (crates/orbit-engine .../workflow_dependency.rs). That needs a
+  # literal name, no matrix, and the same pr-state gate as the other jobs,
+  # so each shard waits for the test build itself instead of `needs:` it,
+  # setting up while the build runs. The jobs share one step list; the
+  # count matches NEXTEST_SHARDS (scripts/test-pr-state-workflows.py).
+  test-1:
+    needs: pr-state
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') }}
+    name: Test shard 1/3
+    runs-on: ubuntu-latest
+    # The wait for the test build counts against this budget.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      # The test build's job state, read through the jobs API.
+      actions: read
+    env:
+      SHARD: "1"
+    steps: &test-shard-steps
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # On pull_request, use the PR head SHA: not the branch name
+          # GitHub deletes on merge, and not github.sha (the ephemeral
+          # merge commit). On push, use github.sha directly so a run that
+          # sat queued still builds and reports on the commit that
+          # triggered it, not whatever the branch points to once it starts.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # Rust 1.98.1
+        with:
+          toolchain: "1.98.1"
+
+      - name: Install cargo-nextest
+        run: |
+          set -euo pipefail
+          cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+          mkdir -p .orbit/tmp
+          download_dir="$(mktemp -d .orbit/tmp/tool-download.XXXXXX)"
+          trap 'python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$download_dir"' EXIT
+          archive="$download_dir/archive"
+          mkdir -p "$cargo_bin"
+          scripts/ci-download-verified.sh "https://get.nexte.st/${NEXTEST_VERSION}/linux" "$NEXTEST_LINUX_SHA256" "$archive"
+          tar zxf "$archive" -C "$cargo_bin"
+          cargo nextest --version | awk -v expected="${NEXTEST_VERSION}" '{print} $1 == "cargo-nextest" && $2 == expected {ok=1} END {exit !ok}'
+
+      - name: Install ripgrep
+        run: |
+          set -euo pipefail
+          cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+          mkdir -p .orbit/tmp
+          download_dir="$(mktemp -d .orbit/tmp/tool-download.XXXXXX)"
+          trap 'python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$download_dir"' EXIT
+          archive="$download_dir/archive"
+          mkdir -p "$cargo_bin"
+          scripts/ci-download-verified.sh "https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl.tar.gz" "$RIPGREP_LINUX_SHA256" "$archive"
+          tar zxf "$archive" --strip-components=1 -C "$cargo_bin" "ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl/rg"
+          rg --version | awk -v expected="${RIPGREP_VERSION}" '{print} $1 == "ripgrep" && $2 == expected {ok=1} END {exit !ok}'
+
+      # [ORB-13017] Same pinned-tarball convention as nextest. Only the uv
+      # binary comes from the network; the plugin fixture's dependency is a
+      # wheel inside the fixture, so the test itself never reaches PyPI.
+      - name: Install uv
+        run: |
+          set -euo pipefail
+          cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+          mkdir -p .orbit/tmp
+          download_dir="$(mktemp -d .orbit/tmp/tool-download.XXXXXX)"
+          trap 'python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$download_dir"' EXIT
+          archive="$download_dir/archive"
+          mkdir -p "$cargo_bin"
+          scripts/ci-download-verified.sh "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" "$UV_LINUX_SHA256" "$archive"
+          tar zxf "$archive" --strip-components=1 -C "$cargo_bin" uv-x86_64-unknown-linux-gnu/uv
+          uv --version | awk -v expected="${UV_VERSION}" '{print} $1 == "uv" && $2 == expected {ok=1} END {exit !ok}'
+
+      - name: Prepare and probe Bubblewrap for the Linux boundary tests
+        run: |
+          set -euo pipefail
+          started=$SECONDS
+          package_seconds=0
+          package_started=""
+          probe_seconds=0
+          profile_src=/usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+          profile_dst=/etc/apparmor.d/bwrap-userns-restrict
+          probe_err="$(mktemp)"
+          report_setup() {
+            if [ -n "$package_started" ]; then
+              package_seconds=$((SECONDS - package_started))
+            fi
+            echo "bubblewrap_setup_seconds=$((SECONDS - started)) package_seconds=$package_seconds probe_seconds=$probe_seconds"
+            rm -f "$probe_err"
+          }
+          trap report_setup EXIT
+
+          fail() {
+            echo "::error title=Bubblewrap unavailable::$1"
+            echo "--- diagnostics ---"
+            echo "user: $(id)"
+            echo "kernel.apparmor_restrict_unprivileged_userns=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>&1 || true)"
+            echo "kernel.unprivileged_userns_clone=$(sysctl -n kernel.unprivileged_userns_clone 2>&1 || true)"
+            echo "user.max_user_namespaces=$(sysctl -n user.max_user_namespaces 2>&1 || true)"
+            ls -l /usr/bin/bwrap 2>&1 || true
+            /usr/bin/bwrap --version 2>&1 || true
+            echo "bwrap probe stderr: $(cat "$probe_err" 2>/dev/null || true)"
+            sudo grep -E '^bwrap ' /sys/kernel/security/apparmor/profiles 2>&1 || echo "no bwrap AppArmor profile loaded (or the profile list is unreadable)"
+            exit 1
+          }
+
+          # The same checks Orbit's capability probe makes: the trusted path,
+          # the --bind-fd feature, then a real user+mount namespace.
+          probe() {
+            local help probe_started=$SECONDS result=0
+            : >"$probe_err"
+            if [ ! -x /usr/bin/bwrap ]; then
+              echo "trusted Bubblewrap not available at /usr/bin/bwrap" >"$probe_err"
+              return 1
+            fi
+            help="$(/usr/bin/bwrap --help 2>&1)" || true
+            if ! grep -Fq -- '--bind-fd' <<<"$help"; then
+              echo "Bubblewrap does not support the required --bind-fd" >"$probe_err"
+              return 1
+            fi
+            /usr/bin/bwrap --die-with-parent --new-session --unshare-all --share-net \
+              --ro-bind / / -- /bin/true 2>"$probe_err" || result=$?
+            probe_seconds=$((probe_seconds + SECONDS - probe_started))
+            return "$result"
+          }
+
+          if ! probe; then
+            echo "Initial Bubblewrap probe failed: $(cat "$probe_err")"
+            package_started=$SECONDS
+            sudo apt-get update
+            # The ephemeral runner needs the new sandbox binaries, not restarts
+            # of unrelated image services (PHP's restart previously took 90s).
+            # needrestart's supported list-only mode applies to this install;
+            # the real namespace probe below still judges the installed binary.
+            sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l \
+              apt-get install --yes --no-install-recommends bubblewrap apparmor-profiles
+            package_seconds=$((SECONDS - package_started))
+            package_started=""
+          else
+            echo "Trusted Bubblewrap already supports --bind-fd and real namespaces; package preparation unnecessary"
+          fi
+
+          if probe; then
+            echo "Bubblewrap probe passed without an AppArmor profile"
+          else
+            detail="$(cat "$probe_err")"
+            echo "Bubblewrap probe failed: ${detail}"
+            case "$detail" in
+              *"setting up uid map: Permission denied"*) ;;
+              *) fail "probe failed for a reason the packaged AppArmor profile does not address: ${detail}" ;;
+            esac
+            [ -f "$profile_src" ] || fail "apparmor-profiles did not provide $profile_src"
+            if sudo grep -Eq '^bwrap ' /sys/kernel/security/apparmor/profiles; then
+              fail "a bwrap AppArmor profile is already loaded but the probe fails; refusing to replace it"
+            fi
+            [ ! -e "$profile_dst" ] || fail "$profile_dst already exists; refusing to overwrite it"
+            sudo install -m 0644 "$profile_src" "$profile_dst"
+            sudo /usr/sbin/apparmor_parser -r "$profile_dst"
+            sudo grep -Eq '^bwrap ' /sys/kernel/security/apparmor/profiles \
+              || fail "AppArmor did not report the packaged bwrap profile as loaded"
+            probe || fail "probe still fails after loading the packaged bwrap profile: $(cat "$probe_err")"
+            echo "Bubblewrap probe passed after loading the packaged bwrap-userns-restrict profile"
+          fi
+
+      # The archive exists once the test build succeeds; a failed build
+      # fails this shard at once.
+      - name: Await the test build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci-await-jobs.py --job "Test build"
+
+      - name: Download nextest archive
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: nextest-archive
+          path: ${{ runner.temp }}
+
+      # The archive extracts to target/ under this checkout, the path the test
+      # build compiled against, so `env!("CARGO_BIN_EXE_orbit")` and fixture
+      # paths resolve as they did there. Profile ci raises test-threads above
+      # the 4-vCPU runner default. The sampler prints one cpu-util line and
+      # keeps nextest's exit status.
+      - name: Run nextest shard
+        run: |
+          set -euo pipefail
+          TIMEFORMAT='nextest_shard_seconds=%R'
+          time ./scripts/cpu-utilisation.sh --label nextest -- \
+            cargo nextest run --profile ci --no-fail-fast --success-output immediate \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap "$PWD" --extract-to "$PWD" --extract-overwrite \
+            --partition "count:$SHARD/$NEXTEST_SHARDS"
+
+      # Per-test durations for the slowest-test table in test_strategy.md.
+      - name: Upload nextest timings
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nextest-junit-${{ env.SHARD }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+      # [ORB-10009] Linux counterpart of ci-macos.yml's enforcement leg: an
+      # explicit, named gate for orbit-policy's evaluation matrix (incl. the
+      # ORB-00418 symlink-resolution tests), orbit-tools' runtime
+      # fs-enforcement integration tests (the only enforcement layer on Linux
+      # — there is no kernel sandbox), and orbit-exec's Linux fail-closed
+      # contract tests. The live Bubblewrap boundary tests are ignored in the
+      # portable suite, then selected explicitly here: an ubuntu-latest runner
+      # without working user namespaces fails this named gate (their probe
+      # asserts availability) instead of reporting those tests as passed after
+      # an early return.
+      # [DANI-10428] This used to be a separate job that compiled the three
+      # crates under `cargo test -p` feature resolution — a second build of
+      # the same crates. The nextest filterset below selects them out of the
+      # test build's `--workspace --lib --bins --tests` archive, so the gate
+      # costs no compile. It runs once, in the first shard.
+      # [ORB-16349] The shards already ran every non-ignored test in these
+      # packages, so the portable selection is not re-run here. The gate
+      # asserts with `cargo nextest list` that it still selects at least one
+      # test, so a retired or renamed package cannot pass on an empty selection.
+      # [ORB-12881] The ignored leg selects orbit-exec's Linux sandbox
+      # integration binary (`linux_sandbox::`), which needs a host with working
+      # Bubblewrap namespaces. It runs over the same artifact set as the list
+      # above it so neither leg triggers a rebuild. nextest exits 4 when its
+      # filterset matches nothing, so a refactor that retires or renames these
+      # tests fails the gate instead of passing on an empty selection; never
+      # add `--no-tests` here.
+      # The uv-locked Python plugin fixture runs in the portable suite above:
+      # the pinned uv binary is installed before the shard runs.
+      # A prior failure in this job (including Bubblewrap preparation or the
+      # shard itself) skips this gate; if this step is missing, it did not
+      # pass. `--profile ci` matches the shards: more test threads than the
+      # 4-vCPU default, with the same named group caps.
+      - name: Linux sandbox/policy enforcement gate
+        if: ${{ env.SHARD == '1' }}
+        run: |
+          set -euo pipefail
+          archive=(--archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
+            --workspace-remap "$PWD" --extract-to "$PWD" --extract-overwrite)
+          # Count matches by filter-match: test-count is the total for the target set.
+          selected=$(cargo nextest list "${archive[@]}" \
+            -E 'package(orbit-exec) | package(orbit-policy) | package(orbit-tools)' \
+            --message-format json |
+            jq '[."rust-suites"[].testcases[] | select(."filter-match".status == "matches")] | length')
+          if [[ "$selected" -eq 0 ]]; then
+            echo "Linux sandbox/policy enforcement gate: the portable filterset selects no tests" >&2
+            exit 1
+          fi
+          cargo nextest run --profile ci --no-fail-fast "${archive[@]}" \
+            --run-ignored only \
+            -E 'package(orbit-exec) & binary(sandbox) & test(/^linux_sandbox::/)'
+
+  test-2:
+    needs: pr-state
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') }}
+    name: Test shard 2/3
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    env:
+      SHARD: "2"
+    steps: *test-shard-steps
+
+  test-3:
+    needs: pr-state
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') }}
+    name: Test shard 3/3
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    env:
+      SHARD: "3"
+    steps: *test-shard-steps
