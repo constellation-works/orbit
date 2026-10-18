@@ -219,9 +219,16 @@ const full = {
     { path: 'src/y/', ...rate(4, 20), unclassified: 0 },
   ], causes: [
     { cause: 'sandbox', kind: 'infrastructure', tasks: 7 },
+    { cause: 'manual', kind: 'manual', actor: 'operator', tasks: 40 },
+    { cause: 'base_conflict', kind: 'base_conflict', tasks: 12 },
     { cause: 'unclassified', kind: 'unclassified', tasks: 189 },
     { cause: 'run_failure', kind: 'attributed', tasks: 129 },
-  ] },
+  ], unclassified_events: [
+    { event: 'claim_failed', tasks: 120 },
+    { event: 'claim_release_budget_exhausted', tasks: 50 },
+    { event: 'review_repair_after_merge', tasks: 15 },
+    { event: 'dependency_blocked', tasks: 4 },
+  ], not_failures: 3 },
   rejected: { below_support: 105, rejected_with_run: 8, excluded_without_run: 88, rows: [
     { path: 'src/z/', ...rate(19, 20) },
     { path: 'src/b/', ...rate(2, 18) },
@@ -337,13 +344,36 @@ assert.equal(rowPaths()[rows().indexOf(selectedRow())], 'src/c/', 'a row the new
 assert.ok(rows()[0].querySelector('span.codebase-extra'), 'widenings beyond the tasks show as an extra');
 assert.equal(rows()[1].querySelector('span.codebase-extra'), null);
 
-// Blocked: the cause bar and legend, and a warning because unclassified is the
-// largest share.
+// Blocked: the cause bar and legend, base conflicts and manual blocks by
+// actor in their own buckets, and a warning because unclassified is the
+// largest share, naming its count and top events.
 click(tile('blocked'));
 const legend = part('list').querySelectorAll('li.codebase-cause').map(item => [item.dataset.cause, item.dataset.kind]);
-assert.deepEqual(legend, [['run_failure', 'attributed'], ['unclassified', 'unclassified'], ['sandbox', 'infrastructure']]);
-assert.deepEqual(part('list').querySelector('div.codebase-causebar').children.map(span => span.dataset.kind), ['attributed', 'unclassified', 'infrastructure']);
-assert.ok(part('list').querySelector('div.codebase-hint.warn'), 'unclassified is the largest share');
+assert.deepEqual(legend, [['run_failure', 'attributed'], ['base_conflict', 'base_conflict'], ['unclassified', 'unclassified'], ['sandbox', 'infrastructure'], ['manual', 'manual']]);
+assert.deepEqual(part('list').querySelector('div.codebase-causebar').children.map(span => span.dataset.kind),
+  ['attributed', 'base_conflict', 'unclassified', 'infrastructure', 'manual']);
+const manualItem = part('list').querySelectorAll('li.codebase-cause').find(item => item.dataset.kind === 'manual');
+assert.equal(manualItem.dataset.actor, 'operator');
+assert.match(manualItem.textContent, /^Manual \(operator\) 40set by hand$/, 'a manual block names its actor kind');
+assert.match(part('list').querySelectorAll('li.codebase-cause')[1].textContent, /^Base conflict 12counted on its conflicting paths$/);
+const unknownHint = part('list').querySelector('div.codebase-hint.warn');
+assert.ok(unknownHint, 'unclassified is the largest share');
+assert.match(unknownHint.textContent,
+  /^189 of 377 blocked tasks \(50(\.\d)?%\) carry no recorded cause, so they count against no path\. Most entered blocked through claim_failed \(120\), claim_release_budget_exhausted \(50\), review_repair_after_merge \(15\)\. The rates below only reflect the 129 that a run failure explains\.$/);
+assert.match(part('list').querySelector('p.codebase-note.codebase-not-failure').textContent, /^3 tasks were held for review evidence or cancelled by an operator; those blocks are not failures and are left out\.$/);
+
+// Once unclassified is no longer the largest share, the hint still names the
+// remainder, without the warning.
+const fewUnknown = JSON.parse(JSON.stringify(full));
+fewUnknown.blocked.causes = fewUnknown.blocked.causes.map(cause => cause.cause === 'unclassified' ? { ...cause, tasks: 6 } : cause);
+fewUnknown.blocked.unclassified_events = [{ event: 'claim_failed', tasks: 6 }];
+fewUnknown.blocked.not_failures = 0;
+await serve(fewUnknown);
+assert.equal(part('list').querySelector('div.codebase-hint.warn'), null, 'a minor remainder does not warn');
+assert.match(part('list').querySelector('div.codebase-hint').textContent,
+  /^6 of 194 blocked tasks \(3(\.\d)?%\) carry no recorded cause, so they count against no path\. Most entered blocked through claim_failed \(6\)\.$/);
+assert.equal(part('list').querySelector('p.codebase-note.codebase-not-failure'), null);
+await serve(full);
 
 // Rejected: the counts behind the ranking.
 click(tile('rejected'));

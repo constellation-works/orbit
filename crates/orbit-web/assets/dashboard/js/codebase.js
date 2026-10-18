@@ -41,7 +41,7 @@ const RANKINGS = {
   },
   blocked: {
     label: "Blocked by a run", short: "Blocked", unit: "declared", below: "too few tasks",
-    definition: "Tasks a run failure blocked ÷ tasks that declared the path. Infrastructure causes (auth, sandbox, disk, provider limits) are counted by cause, never against paths.",
+    definition: "Tasks a run failure blocked ÷ tasks that declared the path. Infrastructure causes (auth, sandbox, disk, provider limits) and manual blocks are counted by cause, never against paths; a base conflict counts only against the conflicting paths it recorded.",
   },
   rejected: {
     label: "Rejected after a run", short: "Rejected", unit: "with a run", below: "too few tasks with a run",
@@ -275,10 +275,15 @@ function listEntries(model) {
 }
 
 function causeTotals(data) {
-  const causes = Array.isArray(section(data, "blocked").causes) ? section(data, "blocked").causes : [];
+  const blocked = section(data, "blocked");
+  const causes = Array.isArray(blocked.causes) ? blocked.causes : [];
   const byKind = (kind) => causes.filter((cause) => cause.kind === kind).reduce((sum, cause) => sum + (Number(cause.tasks) || 0), 0);
   const total = causes.reduce((sum, cause) => sum + (Number(cause.tasks) || 0), 0);
-  return { causes, total, attributed: byKind("attributed"), unclassified: byKind("unclassified") };
+  const events = Array.isArray(blocked.unclassified_events) ? blocked.unclassified_events : [];
+  return {
+    causes, total, events, attributed: byKind("attributed"), unclassified: byKind("unclassified"),
+    notFailures: Number(blocked.not_failures) || 0,
+  };
 }
 
 function maxRejected(data) {
@@ -526,17 +531,37 @@ function rankingContent(model, key) {
   return content;
 }
 
-const CAUSE_LABELS = { run_failure: "Run failure", unclassified: "Unclassified" };
-const CAUSE_KINDS = { attributed: "counted against paths", unclassified: "no cause found", infrastructure: "infrastructure" };
+const CAUSE_LABELS = { run_failure: "Run failure", unclassified: "Unclassified", base_conflict: "Base conflict" };
+const CAUSE_KINDS = {
+  attributed: "counted against paths", base_conflict: "counted on its conflicting paths",
+  unclassified: "no cause found", infrastructure: "infrastructure", manual: "set by hand",
+};
+// The unclassified events a hint names.
+const HINT_EVENTS = 3;
 
+// A cause row's label; a manual block names the kind of actor that made it.
 function causeLabel(cause) {
-  const name = CAUSE_LABELS[cause] || String(cause || "").replace(/_/g, " ");
-  return name.charAt(0).toUpperCase() + name.slice(1);
+  const raw = cause && typeof cause === "object" ? cause.cause : cause;
+  const name = CAUSE_LABELS[raw] || String(raw || "").replace(/_/g, " ");
+  const label = name.charAt(0).toUpperCase() + name.slice(1);
+  return cause && cause.actor ? `${label} (${cause.actor})` : label;
+}
+
+function unclassifiedHint(data) {
+  const { causes, total, attributed, unclassified, events } = causeTotals(data);
+  if (unclassified <= 0) return null;
+  const largest = Math.max(0, ...causes.map((cause) => Number(cause.tasks) || 0));
+  const top = events.slice(0, HINT_EVENTS).map((entry) => `${entry.event} (${count(entry.tasks)})`);
+  const named = top.length ? ` Most entered blocked through ${top.join(", ")}.` : "";
+  const text = `${count(unclassified)} of ${count(total)} blocked tasks (${pct(unclassified / total)}) carry no recorded cause, so they count against no path.${named}`;
+  return unclassified === largest
+    ? hint(`${text} The rates below only reflect the ${count(attributed)} that a run failure explains.`, "warn")
+    : hint(text);
 }
 
 function causeNodes(data) {
-  const { causes, total, attributed, unclassified } = causeTotals(data);
-  const order = { attributed: 0, unclassified: 1, infrastructure: 2 };
+  const { causes, total, notFailures } = causeTotals(data);
+  const order = { attributed: 0, base_conflict: 1, unclassified: 2, infrastructure: 3, manual: 4 };
   const ordered = [...causes].sort((a, b) => (order[a.kind] ?? 3) - (order[b.kind] ?? 3) || Number(b.tasks) - Number(a.tasks));
   const shown = ordered.filter((cause) => Number(cause.tasks) > 0);
   const nodes = [];
@@ -544,10 +569,10 @@ function causeNodes(data) {
     const bar = el("div", {
       class: "codebase-causebar",
       role: "img",
-      "aria-label": `${shown.map((cause) => `${causeLabel(cause.cause)} ${cause.tasks}`).join(", ")} of ${total} blocked tasks`,
+      "aria-label": `${shown.map((cause) => `${causeLabel(cause)} ${cause.tasks}`).join(", ")} of ${total} blocked tasks`,
     });
     for (const cause of shown) {
-      const segment = el("span", { title: `${causeLabel(cause.cause)} ${cause.tasks}`, style: { flex: `${Number(cause.tasks)} 1 0` } });
+      const segment = el("span", { title: `${causeLabel(cause)} ${cause.tasks}`, style: { flex: `${Number(cause.tasks)} 1 0` } });
       segment.dataset.kind = cause.kind;
       bar.appendChild(segment);
     }
@@ -557,18 +582,20 @@ function causeNodes(data) {
   for (const cause of ordered) {
     const item = el("li", { class: "codebase-cause" }, [
       el("span", { class: "codebase-dot", "aria-hidden": "true" }),
-      `${causeLabel(cause.cause)} `,
+      `${causeLabel(cause)} `,
       el("span", { class: "codebase-cause-count", text: count(cause.tasks) }),
       el("span", { class: "codebase-cause-kind", text: CAUSE_KINDS[cause.kind] || cause.kind }),
     ]);
     item.dataset.cause = cause.cause;
     item.dataset.kind = cause.kind;
+    if (cause.actor) item.dataset.actor = cause.actor;
     legend.appendChild(item);
   }
   nodes.push(legend);
-  const largest = Math.max(0, ...causes.map((cause) => Number(cause.tasks) || 0));
-  if (unclassified > 0 && unclassified === largest) {
-    nodes.push(hint(`${count(unclassified)} of ${count(total)} blocked tasks (${pct(unclassified / total)}) carry no recognisable cause, so they count against no path. The rates below only reflect the ${count(attributed)} that a run failure explains.`, "warn"));
+  const unknown = unclassifiedHint(data);
+  if (unknown) nodes.push(unknown);
+  if (notFailures > 0) {
+    nodes.push(note(`${plural(notFailures, "task was", "tasks were")} held for review evidence or cancelled by an operator; those blocks are not failures and are left out.`, "codebase-not-failure"));
   }
   return nodes;
 }

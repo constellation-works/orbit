@@ -570,11 +570,20 @@ impl TaskCommitBoundary {
                         params.status = Some(TaskStatus::Blocked);
                         release = true;
                         state.last_event = "claim_failed".into();
-                        state.settlement = Some(ClaimSettlementRecord::of(
+                        let settlement = ClaimSettlementRecord::of(
                             ClaimSettlementKind::Fail,
                             value,
                             Utc::now().to_rfc3339(),
-                        ));
+                        );
+                        params.status_note = Some(
+                            ClaimFailedNote::of(
+                                &settlement,
+                                &claim.executed_on,
+                                state.bound_run.as_ref(),
+                            )
+                            .text(),
+                        );
+                        state.settlement = Some(settlement);
                         state.preserved_candidate =
                             self.preserve_candidate(&claim.task_id, value)?;
                         params.append_history.extend(Self::kept_candidate_entry(
@@ -634,11 +643,18 @@ impl TaskCommitBoundary {
                         provider_limit: failure.provider_limit,
                         owner_busy: failure.owner_busy,
                     });
-                    state.settlement = Some(ClaimSettlementRecord::of(
+                    let settlement = ClaimSettlementRecord::of(
                         ClaimSettlementKind::Release,
                         value,
                         released_at.to_rfc3339(),
-                    ));
+                    );
+                    let failed_note = ClaimFailedNote::of(
+                        &settlement,
+                        &claim.executed_on,
+                        state.bound_run.as_ref(),
+                    )
+                    .text();
+                    state.settlement = Some(settlement);
                     state.preserved_candidate = self.preserve_candidate(&claim.task_id, value)?;
                     params.append_history.extend(Self::kept_candidate_entry(
                         &claim,
@@ -660,7 +676,7 @@ impl TaskCommitBoundary {
                                  {RELEASE_BUDGET_WINDOW_HOURS}h): {reason}"
                             )
                         } else {
-                            reason.to_string()
+                            failed_note
                         });
                         state.last_event = if exhausted {
                             "claim_release_budget_exhausted"

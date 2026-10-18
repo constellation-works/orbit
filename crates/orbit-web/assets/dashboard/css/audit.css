@@ -247,7 +247,8 @@ tr.audit-detail-row td {
 .codebase-definition { margin: 0; max-width: 720px; font-size: 13px; line-height: 1.5; color: var(--fg-dim); }
 .codebase-list > .codebase-hint,
 .codebase-list > .codebase-causebar,
-.codebase-list > .codebase-legend { margin: 0 16px 12px; }
+.codebase-list > .codebase-legend,
+.codebase-list > .codebase-not-failure { margin: 0 16px 12px; }
 .codebase-rows { margin: 0; padding: 0; list-style: none; }
 .codebase-row {
   display: flex;
@@ -361,6 +362,8 @@ tr.audit-detail-row td {
 .codebase-causebar > [data-kind="attributed"], .codebase-cause[data-kind="attributed"] { --cb-color: #c39bff; }
 .codebase-causebar > [data-kind="unclassified"], .codebase-cause[data-kind="unclassified"] { --cb-color: #5b6470; }
 .codebase-causebar > [data-kind="infrastructure"], .codebase-cause[data-kind="infrastructure"] { --cb-color: #3d8bd9; }
+.codebase-causebar > [data-kind="base_conflict"], .codebase-cause[data-kind="base_conflict"] { --cb-color: #e0a458; }
+.codebase-causebar > [data-kind="manual"], .codebase-cause[data-kind="manual"] { --cb-color: #4fb3a9; }
 .codebase-causebar > span { background: var(--cb-color); }
 .codebase-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 0; list-style: none; }
 .codebase-cause { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: #c4cbd4; }
@@ -423,7 +426,8 @@ tr.audit-detail-row td {
   .codebase-list-head { padding: 14px 12px 10px; }
   .codebase-list > .codebase-hint,
   .codebase-list > .codebase-causebar,
-  .codebase-list > .codebase-legend { margin: 0 12px 12px; }
+  .codebase-list > .codebase-legend,
+  .codebase-list > .codebase-not-failure { margin: 0 12px 12px; }
 }
 
 /* Reliability > Tools summary: one column of cards. On a wide screen the

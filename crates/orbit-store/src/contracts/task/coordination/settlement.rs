@@ -105,6 +105,100 @@ impl ClaimSettlementRecord {
     }
 }
 
+/// The status note of the owner's `claim_failed` history entry: what the
+/// leaf's settlement told the owner, in the `key=value` shape of a run
+/// failure's note (`workflow run failed: job=…, run_id=…, error=…`), so task
+/// history and every reader of it see the cause. The settlement record stays
+/// the typed source; claims failed before the note existed record none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimFailedNote {
+    /// The machine the leaf ran on, by name when the claim recorded one.
+    pub host: String,
+    /// The leaf run, on the executing host's store; `None` when the claim
+    /// failed before a leaf was bound.
+    pub run_id: Option<String>,
+    pub evidence: ClaimSettlementEvidence,
+    pub failure_class: Option<orbit_types::workflow::ClaimFailureClass>,
+    pub failed_step_id: Option<String>,
+    /// The settlement's bounded reason, redacted when rendered.
+    pub reason: String,
+}
+
+const CLAIM_FAILED_NOTE_PREFIX: &str = "claimed leaf failed: ";
+
+impl ClaimFailedNote {
+    #[must_use]
+    pub fn of(
+        record: &ClaimSettlementRecord,
+        executed_on: &orbit_types::task::ExecutionLocation,
+        run: Option<&ClaimRun>,
+    ) -> Self {
+        Self {
+            host: executed_on
+                .machine_name
+                .clone()
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| executed_on.machine_id.clone()),
+            run_id: run.map(|run| run.run_id.clone()),
+            evidence: record.evidence,
+            failure_class: record.failure_class,
+            failed_step_id: record.failed_step_id.clone(),
+            reason: record.reason.clone(),
+        }
+    }
+
+    /// The note text. Field values never contain the `, ` separator, and the
+    /// reason, last, is redacted.
+    #[must_use]
+    pub fn text(&self) -> String {
+        let value = |value: Option<&str>| {
+            value
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map_or_else(|| "-".to_string(), |value| value.replace([',', ' '], "_"))
+        };
+        let reason = orbit_common::security::redaction::redact_all(self.reason.trim());
+        format!(
+            "{CLAIM_FAILED_NOTE_PREFIX}host={}, run_id={}, evidence={}, failure_class={}, \
+             failed_step={}, error={}",
+            value(Some(&self.host)),
+            value(self.run_id.as_deref()),
+            self.evidence.as_str(),
+            value(self.failure_class.map(|class| class.as_str())),
+            value(self.failed_step_id.as_deref()),
+            if reason.is_empty() { "-" } else { &reason },
+        )
+    }
+
+    /// Read a note [`Self::text`] wrote; `None` for any other note.
+    #[must_use]
+    pub fn parse(note: &str) -> Option<Self> {
+        let rest = note.strip_prefix(CLAIM_FAILED_NOTE_PREFIX)?;
+        let (header, reason) = rest.split_once(", error=")?;
+        let mut fields = std::collections::BTreeMap::new();
+        for field in header.split(", ") {
+            let (key, value) = field.split_once('=')?;
+            fields.insert(key, Some(value).filter(|value| *value != "-"));
+        }
+        let field = |key: &str| fields.get(key).copied().flatten().map(str::to_string);
+        Some(Self {
+            host: field("host").unwrap_or_default(),
+            run_id: field("run_id"),
+            evidence: ClaimSettlementEvidence::parse(fields.get("evidence").copied().flatten()?)?,
+            failure_class: match field("failure_class") {
+                Some(class) => Some(serde_json::from_value(serde_json::Value::String(class)).ok()?),
+                None => None,
+            },
+            failed_step_id: field("failed_step"),
+            reason: if reason == "-" {
+                String::new()
+            } else {
+                reason.to_string()
+            },
+        })
+    }
+}
+
 /// Which settlement a claimed leaf sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -168,6 +262,22 @@ impl ClaimSettlementEvidence {
             Self::Failure => "failure",
             Self::Summary => "summary",
         }
+    }
+
+    /// The class a wire name names.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        [
+            Self::ProviderUnavailable,
+            Self::BaselineRed,
+            Self::ForgeUnavailable,
+            Self::EvidenceHold,
+            Self::FinalRecovery,
+            Self::Failure,
+            Self::Summary,
+        ]
+        .into_iter()
+        .find(|class| class.as_str() == name)
     }
 }
 

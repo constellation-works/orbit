@@ -772,6 +772,118 @@ fn a_candidate_failure_still_blocks_the_task() {
     );
 }
 
+/// [ORB-16793] The owner's task history says why a follower's leaf blocked
+/// the task: its `claim_failed` entry names the leaf run, the host, the
+/// settlement's evidence and failure classes and the step that failed, with
+/// the reason redacted, so neither an operator nor the codebase analytics
+/// need the claim settlement to read it.
+fn a_failed_leaf_names_its_cause_in_owner_history() {
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let mut synchronized = prepared();
+    synchronized["sync_base"] =
+        json!({"head": BRANCH, "head_sha": HEAD, "base": "main", "base_sha": "b0"});
+    leaf_completed(&pair, &leaf, synchronized);
+    pair.leaf_fails_with(
+        &leaf,
+        "cargo test: 3 tests failed; request sent Bearer fixture-secret-token",
+    );
+
+    let pass = settle_only(&pair, &drain);
+    assert_eq!(pair.owner_status(&task), "blocked", "{pass}");
+    let failure = &settlement_of(&pair, &leaf)["Fail"]["failure"];
+    assert_eq!(failure["class"], "candidate", "{failure}");
+    let failed_step = failure["candidate"]["failed_step_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the kept candidate names its failed step: {failure}"));
+    let executed_on = &pair.owner_claim_for_leaf(&leaf)["claim"]["executed_on"];
+    let host = executed_on["machine_name"]
+        .as_str()
+        .or(executed_on["machine_id"].as_str())
+        .expect("the claim names its host");
+    let owner = pair.owner_task(&task);
+    let entry = owner["history"]
+        .as_array()
+        .and_then(|history| {
+            history
+                .iter()
+                .rev()
+                .find(|entry| entry["event"] == "claim_failed")
+        })
+        .unwrap_or_else(|| panic!("an owner claim_failed entry: {owner:#}"));
+    assert_eq!(entry["to_status"], "blocked", "{entry}");
+    assert_eq!(
+        entry["note"].as_str(),
+        Some(
+            format!(
+                "claimed leaf failed: host={host}, run_id={leaf}, evidence=failure, \
+                 failure_class=candidate, failed_step={failed_step}, error=cargo test: 3 tests \
+                 failed; request sent Bearer [REDACTED_AUTH]"
+            )
+            .as_str()
+        ),
+        "the note carries the settlement's cause, redacted: {entry}"
+    );
+
+    // The Blocked ranking reads the cause off the note, and off the claim's
+    // settlement for an entry written before the note existed.
+    let run_failures = || {
+        let view = pair
+            .wire
+            .owner
+            .run_tool(
+                "orbit.codebase.analytics",
+                json!({"window": "all", "min_support": 1}),
+            )
+            .expect("codebase analytics");
+        view["blocked"]["causes"]
+            .as_array()
+            .and_then(|causes| causes.iter().find(|cause| cause["cause"] == "run_failure"))
+            .map(|cause| (cause["tasks"].clone(), view["blocked"]["causes"].clone()))
+            .expect("a run failure bucket")
+    };
+    let (tasks, causes) = run_failures();
+    assert_eq!(tasks, 1, "a candidate failure is the work's: {causes}");
+    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+        &orbit_store::maintenance::task_registry::task_registry_path(
+            &pair.wire.owner.global_root(),
+        ),
+    )
+    .unwrap();
+    let events = registry
+        .find_task_binding(&task)
+        .unwrap()
+        .expect("owner task binding")
+        .canonical_path
+        .join(orbit_types::task::TASK_EVENTS_FILE_NAME);
+    let rows = std::fs::read_to_string(&events)
+        .unwrap()
+        .lines()
+        .map(|line| {
+            let mut row: Value = serde_json::from_str(line).unwrap();
+            if row["type"] == "claim_failed" {
+                row.as_object_mut().unwrap().remove("note");
+            }
+            format!("{row}\n")
+        })
+        .collect::<String>();
+    std::fs::write(&events, rows).unwrap();
+    assert!(
+        pair.owner_task(&task)["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["event"] == "claim_failed" && entry["note"].is_null())
+    );
+    let (tasks, causes) = run_failures();
+    assert_eq!(
+        tasks, 1,
+        "the settlement explains a note-less entry: {causes}"
+    );
+}
+
 /// Cancelling one launched claimed leaf, as `orbit run cancel <leaf>` and the
 /// dashboard's cancel do, gives its claim back with the operator's reason
 /// and candidate. Only that task is suppressed for the drain window; the
@@ -1516,6 +1628,7 @@ crate::scenario_table!(
     a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew_scenarios,
     a_forge_held_leaf_releases_the_claim_naming_its_head_and_keeps_the_crew,
     a_candidate_failure_still_blocks_the_task,
+    a_failed_leaf_names_its_cause_in_owner_history,
     cancelling_a_launched_claimed_leaf_returns_its_task_to_backlog_with_the_reason,
     cancelling_a_launched_claimed_leaf_with_block_blocks_its_task,
     a_third_budgeted_release_within_a_day_blocks_the_task_with_every_reason,

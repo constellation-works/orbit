@@ -95,6 +95,23 @@ fn append_decided_event(
     to_status: Option<TaskStatus>,
     decision: Option<TaskDecision>,
 ) {
+    append_row(
+        fixture, task_id, at, "system", event, note, to_status, decision,
+    );
+}
+
+/// [`append_decided_event`] by the actor `by`.
+#[allow(clippy::too_many_arguments)]
+fn append_row(
+    fixture: &Fixture,
+    task_id: &str,
+    at: DateTime<Utc>,
+    by: &str,
+    event: &str,
+    note: Option<String>,
+    to_status: Option<TaskStatus>,
+    decision: Option<TaskDecision>,
+) {
     let dir = bundle_dir(fixture.path("").as_path(), task_id).expect("fixture task bundle");
     let path = dir.join(TASK_EVENTS_FILE_NAME);
     let rows = fs::read_to_string(&path).unwrap().lines().count();
@@ -102,7 +119,7 @@ fn append_decided_event(
         schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
         event_id: format!("EV-{:04}", rows + 1),
         at,
-        by: "system".into(),
+        by: by.into(),
         event_type: event.into(),
         note,
         from_status: None,
@@ -123,8 +140,29 @@ fn transition_and_return(
     note: Option<String>,
     to_status: TaskStatus,
 ) {
+    transition_by_and_return(fixture, task_id, "system", event, note, to_status);
+}
+
+/// [`transition_and_return`], the transition written by `by`.
+fn transition_by_and_return(
+    fixture: &Fixture,
+    task_id: &str,
+    by: &str,
+    event: &str,
+    note: Option<String>,
+    to_status: TaskStatus,
+) {
     let now = Utc::now();
-    append_event(fixture, task_id, now, event, note, Some(to_status));
+    append_row(
+        fixture,
+        task_id,
+        now,
+        by,
+        event,
+        note,
+        Some(to_status),
+        None,
+    );
     append_event(
         fixture,
         task_id,
@@ -442,11 +480,11 @@ fn codebase_sections_count_distinct_tasks_and_split_causes() {
             // Blocked: auth infrastructure, unclassified, and a run failure.
             let auth = add(&fixture, "auth block", &["src/blocked.rs"], vec![]);
             transition_and_return(&fixture, &auth, "workflow_run_failed", Some("workflow run failed: job=task_pr_pipeline, run_id=jrun-auth, error_code=provider_unavailable, error=OAuth token expired".into()), TaskStatus::Blocked);
-            let unknown = add(&fixture, "manual block", &["src/blocked.rs"], vec![]);
+            let unknown = add(&fixture, "unrecorded block", &["src/blocked.rs"], vec![]);
             transition_and_return(
                 &fixture,
                 &unknown,
-                "status_changed",
+                "claim_failed",
                 None,
                 TaskStatus::Blocked,
             );
@@ -758,11 +796,19 @@ fn codebase_block_causes_require_failure_evidence() {
                 );
                 *expected_causes.entry(*cause).or_insert(0_u64) += 1;
             }
-            let unknown = add(&fixture, "manual block", &["src/unknown.rs"], vec![]);
+            let manual = add(&fixture, "manual block", &["src/manual.rs"], vec![]);
+            transition_and_return(
+                &fixture,
+                &manual,
+                "status_changed",
+                Some("needs investigation of sandbox authentication module".into()),
+                TaskStatus::Blocked,
+            );
+            let unknown = add(&fixture, "unknown block", &["src/unknown.rs"], vec![]);
             transition_and_return(
                 &fixture,
                 &unknown,
-                "status_changed",
+                "dependency_blocked",
                 Some("needs investigation of sandbox authentication module".into()),
                 TaskStatus::Blocked,
             );
@@ -779,8 +825,13 @@ fn codebase_block_causes_require_failure_evidence() {
             }
             assert_eq!(rate_of(blocked, "src/unknown.rs"), (0, 1));
             assert_eq!(row(blocked, "src/unknown.rs").unwrap()["unclassified"], 1);
+            assert!(
+                row(blocked, "src/manual.rs").is_none(),
+                "a manual block counts against no path: {blocked}"
+            );
             expected_causes.insert("run_failure", work_failures.len() as u64);
             expected_causes.insert("unclassified", 1);
+            expected_causes.insert("manual", 1);
             let actual_causes = blocked["causes"]
                 .as_array()
                 .unwrap()
@@ -793,6 +844,247 @@ fn codebase_block_causes_require_failure_evidence() {
                 })
                 .collect::<std::collections::BTreeMap<_, _>>();
             assert_eq!(actual_causes, expected_causes);
+        },
+    );
+}
+
+/// The note an owner's `claim_failed` entry carries for a claimed leaf's
+/// failure settlement.
+fn claim_failed_note(evidence: &str, class: &str, reason: &str) -> String {
+    format!(
+        "claimed leaf failed: host=mac-follower, run_id=jrun-leaf, evidence={evidence}, \
+         failure_class={class}, failed_step=implement, error={reason}"
+    )
+}
+
+/// [ORB-16793] Every recorded cause of a block is classified from its event
+/// and typed fields: a claimed leaf's settlement classes, run failure
+/// handoffs naming `run=`, base conflicts (counted only on the paths they
+/// recorded), review and validation-environment stops, and manual blocks by
+/// actor kind. Only an entry that records no cause stays unclassified.
+#[test]
+fn codebase_blocked_ranking_classifies_every_recorded_cause() {
+    isolated(
+        "codebase::codebase_blocked_ranking_classifies_every_recorded_cause",
+        || {
+            let fixture = Fixture::new();
+            let block = |path: &str, by: &str, event: &str, note: Option<String>| {
+                let task = add(&fixture, path, &[path], vec![]);
+                transition_by_and_return(&fixture, &task, by, event, note, TaskStatus::Blocked);
+            };
+            let claim = |path: &str, evidence: &str, class: &str, reason: &str| {
+                block(
+                    path,
+                    "hm_follower",
+                    "claim_failed",
+                    Some(claim_failed_note(evidence, class, reason)),
+                );
+            };
+            // Counted against the footprint.
+            claim(
+                "src/claim_candidate.rs",
+                "failure",
+                "candidate",
+                "cargo test failed",
+            );
+            claim(
+                "src/claim_recovery.rs",
+                "final_recovery",
+                "candidate",
+                "escalated",
+            );
+            block(
+                "src/handoff_failed.rs",
+                "system",
+                "pr_failure_handoff",
+                Some(
+                    "failure handoff published PR #7: run=jrun-h, failed_step=validate, \
+                      original_base=b0, target_base=b0, conflicts=none reported"
+                        .into(),
+                ),
+            );
+            block(
+                "src/review_gate.rs",
+                "system",
+                "review_gate_escalation",
+                Some("review gate escalated: run=jrun-r, decision=reject".into()),
+            );
+            block(
+                "src/run_named.rs",
+                "system",
+                "legacy_failure",
+                Some("legacy failure: run=jrun-l, failed_step=implement".into()),
+            );
+            // Infrastructure, by cause.
+            claim(
+                "src/claim_auth.rs",
+                "provider_unavailable",
+                "provider",
+                "OAuth token expired",
+            );
+            claim(
+                "src/claim_provider.rs",
+                "failure",
+                "provider",
+                "CLI unusable",
+            );
+            claim(
+                "src/claim_forge.rs",
+                "forge_unavailable",
+                "transient",
+                "push refused",
+            );
+            claim(
+                "src/claim_red.rs",
+                "baseline_red",
+                "baseline_red",
+                "make test red on base",
+            );
+            block(
+                "src/validation_env.rs",
+                "system",
+                "validation_environment_blocked",
+                Some("required validation lacked a tool in its environment: run=jrun-v".into()),
+            );
+            // Not failures.
+            claim(
+                "src/claim_hold.rs",
+                "evidence_hold",
+                "-",
+                "awaiting evidence",
+            );
+            claim(
+                "src/claim_cancel.rs",
+                "failure",
+                "operator_cancel",
+                "operator cancelled",
+            );
+            // Base conflicts: one names its conflicting path, one names none.
+            let conflicted = add(&fixture, "conflicted", &["src/declared.rs"], vec![]);
+            transition_and_return(
+                &fixture,
+                &conflicted,
+                "pr_conflict_blocked",
+                Some(
+                    "failure handoff published PR #8: run=jrun-c, failed_step=sync_base, \
+                      original_base=b0, target_base=b1, conflicts=src/conflict.rs"
+                        .into(),
+                ),
+                TaskStatus::Blocked,
+            );
+            block(
+                "src/sync_base.rs",
+                "system",
+                "pr_failure_handoff",
+                Some(
+                    "failure handoff published PR #9: run=jrun-s, failed_step=sync_base, \
+                      original_base=b0, target_base=b1, conflicts=none reported"
+                        .into(),
+                ),
+            );
+            // Manual blocks, by who made them.
+            block("src/by_operator.rs", "human:dan", "status_changed", None);
+            block("src/by_agent.rs", "claude", "status_changed", None);
+            block(
+                "src/revoked.rs",
+                "hm_owner",
+                "claim_revoked",
+                Some("recover".into()),
+            );
+            block("src/forced.rs", "system", "forced", None);
+            // No recorded cause: a note-less claim failure with no settlement,
+            // and a field that only ends in `run`.
+            block("src/claim_unknown.rs", "hm_follower", "claim_failed", None);
+            block(
+                "src/source_run.rs",
+                "system",
+                "candidate_resumed",
+                Some("resumed: source_run=jrun-old".into()),
+            );
+
+            let server = fixture.server(false);
+            let response = json_ok(server.get(&format!(
+                "/api/codebase/analytics?{WS}&window=all&min_support=1"
+            )));
+            let blocked = &response["blocked"];
+            for path in [
+                "src/claim_candidate.rs",
+                "src/claim_recovery.rs",
+                "src/handoff_failed.rs",
+                "src/review_gate.rs",
+                "src/run_named.rs",
+                "src/conflict.rs",
+            ] {
+                assert_eq!(
+                    rate_of(blocked, path),
+                    (1, 1),
+                    "{path} is attributed: {blocked}"
+                );
+            }
+            assert!(
+                row(blocked, "src/declared.rs").is_none(),
+                "a base conflict counts only on the paths it recorded: {blocked}"
+            );
+            for path in ["src/claim_unknown.rs", "src/source_run.rs"] {
+                assert_eq!(row(blocked, path).unwrap()["unclassified"], 1, "{path}");
+            }
+            for path in [
+                "src/claim_auth.rs",
+                "src/claim_provider.rs",
+                "src/claim_forge.rs",
+                "src/claim_red.rs",
+                "src/validation_env.rs",
+                "src/claim_hold.rs",
+                "src/claim_cancel.rs",
+                "src/sync_base.rs",
+                "src/by_operator.rs",
+                "src/by_agent.rs",
+                "src/revoked.rs",
+                "src/forced.rs",
+            ] {
+                assert!(
+                    row(blocked, path).is_none(),
+                    "{path} counts against no path: {blocked}"
+                );
+            }
+            let causes = blocked["causes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| {
+                    let name = match row["actor"].as_str() {
+                        Some(actor) => format!("{}:{actor}", row["cause"].as_str().unwrap()),
+                        None => row["cause"].as_str().unwrap().to_string(),
+                    };
+                    (name, row["tasks"].as_u64().unwrap())
+                })
+                .collect::<std::collections::BTreeMap<_, _>>();
+            let expected = [
+                ("auth", 1),
+                ("base_conflict", 2),
+                ("baseline_red", 1),
+                ("environment", 1),
+                ("forge_unavailable", 1),
+                ("manual:agent", 1),
+                ("manual:operator", 2),
+                ("manual:system", 1),
+                ("provider_unavailable", 1),
+                ("run_failure", 5),
+                ("unclassified", 2),
+            ]
+            .into_iter()
+            .map(|(name, tasks)| (name.to_string(), tasks))
+            .collect::<std::collections::BTreeMap<_, _>>();
+            assert_eq!(causes, expected, "{blocked}");
+            assert_eq!(blocked["not_failures"], 2, "{blocked}");
+            assert_eq!(
+                blocked["unclassified_events"],
+                json!([
+                    { "event": "candidate_resumed", "tasks": 1 },
+                    { "event": "claim_failed", "tasks": 1 },
+                ]),
+                "the remaining unclassified blocks name their events"
+            );
         },
     );
 }
