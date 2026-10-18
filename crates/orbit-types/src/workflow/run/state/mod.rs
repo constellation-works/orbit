@@ -10,11 +10,12 @@ mod steering;
 
 pub use drain::{
     CrewExclusion, CrewExclusionSource, DrainAdmissionForecast, DrainAdmissionPass,
-    DrainAdmissionsStop, DrainApprovalReport, DrainCancelRequest, DrainCapacity, DrainWaitingTask,
-    DrainWindowExtension, DrainWorkerLimit, ForecastPeak, GapFitAdmission, GapFitHead,
-    GapFitHeadMiss, GapFitHeadStall, GapFitSkip, PullAdmissionFit, PullAuthExclusion,
-    PullAuthRecovery, PullBreaker, PullCrewPreflight, PullDrainState, PullSinglePass,
-    PullUnfitWork, PullWindowClose, ResourcePressure, ResourceThrottle, TaskCancellationPolicy,
+    DrainAdmissionsStop, DrainApprovalReport, DrainCancelRequest, DrainCapacity, DrainPassCounters,
+    DrainPassObservation, DrainPassOutcome, DrainWaitingTask, DrainWindowExtension,
+    DrainWorkerLimit, ForecastPeak, GapFitAdmission, GapFitHead, GapFitHeadMiss, GapFitHeadStall,
+    GapFitSkip, PullAdmissionFit, PullAuthExclusion, PullAuthRecovery, PullBreaker,
+    PullCrewPreflight, PullDrainState, PullSinglePass, PullUnfitWork, PullWindowClose,
+    ResourcePressure, ResourceThrottle, TaskCancellationPolicy,
 };
 pub use failure::{
     CONTRACT_REFUSAL_MARKER, ClaimFailureClass, OWNER_BUSY_MARKER,

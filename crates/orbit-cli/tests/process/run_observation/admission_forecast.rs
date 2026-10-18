@@ -3,7 +3,10 @@
 use super::*;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{TaskComplexity, TaskStatus, TaskType};
-use orbit_types::workflow::{DrainAdmissionForecast, DrainAdmissionPass, PipelineState};
+use orbit_types::workflow::{
+    DrainAdmissionForecast, DrainAdmissionPass, DrainPassObservation, DrainPassOutcome,
+    PipelineState,
+};
 use serde_json::json;
 
 #[test]
@@ -438,6 +441,138 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
         "{shown}"
     );
     assert_eq!(fixture.snapshot(), snapshot);
+}
+
+/// A drain's cumulative pass counters reach `run show` (JSON and the text
+/// Auto-concurrency section) and the per-drain limiter shares of
+/// `run profiles --accuracy` (JSON and table) without any write.
+#[test]
+fn drain_pass_counters_reach_run_show_and_accuracy_limiters_without_writes() {
+    if !isolated_run_observation(
+        "run_observation::admission_forecast::drain_pass_counters_reach_run_show_and_accuracy_limiters_without_writes",
+    ) {
+        return;
+    }
+    let fixture = Fixture::init();
+    let runtime =
+        OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
+            .unwrap();
+    let id = "jrun-cli-drain-pass-counters";
+    let workspace_id = fixture.workspace_id();
+    let now = chrono::Utc::now();
+    fixture.db().execute(
+        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_auto_pipeline',1,'running','{}',?3,?3,?3,?4)",
+        params![id, workspace_id, now.to_rfc3339(), std::process::id()],
+    ).unwrap();
+    let mut state = PipelineState::new(id.into(), "workspace_auto_pipeline".into(), json!({}));
+    let waiting = |reason: &str| [reason.to_string()].into_iter().collect();
+    for observation in [
+        DrainPassObservation {
+            outcome: DrainPassOutcome::CeilingFull,
+            waiting_reasons: waiting("context_lock_conflict"),
+            ..Default::default()
+        },
+        DrainPassObservation {
+            outcome: DrainPassOutcome::CeilingFull,
+            ..Default::default()
+        },
+        DrainPassObservation {
+            outcome: DrainPassOutcome::GapFitHeld,
+            waiting_reasons: waiting("gap_fit"),
+            ..Default::default()
+        },
+        DrainPassObservation {
+            outcome: DrainPassOutcome::Throttle,
+            throttled: waiting("memory"),
+            ..Default::default()
+        },
+    ] {
+        state.pull_drain.count_admission_pass(&observation, now);
+    }
+    let counters = state.pull_drain.drain_pass_counters.clone().unwrap();
+    runtime.write_run_state(id, &state).unwrap();
+    let snapshot = fixture.snapshot();
+
+    let shown = fixture.json(&["run", "show", id, "--no-reconcile", "--json"]);
+    assert_eq!(
+        shown["pipeline_state"]["drain_pass_counters"],
+        json!(counters),
+        "{shown:#}"
+    );
+    assert_eq!(
+        shown["pipeline_state"]["drain_pass_counters"]["outcomes"],
+        json!({"ceiling_full": 2, "gap_fit_held": 1, "throttle": 1})
+    );
+    let show_text = text(&fixture, &["run", "show", id, "--no-reconcile"]);
+    let line = show_text
+        .lines()
+        .find(|line| line.starts_with("Admission passes:"))
+        .unwrap_or_else(|| panic!("no counter line: {show_text}"));
+    for named in [
+        "4 passes since",
+        "ceiling_full 2 (50%)",
+        "gap_fit_held 1 (25%)",
+        "throttle 1 (25%)",
+        "throttled by memory 1",
+        "context_lock_conflict in 1 (25%)",
+    ] {
+        assert!(line.contains(named), "{named}: {line}");
+    }
+
+    let report = fixture.json(&["run", "profiles", "--accuracy", "--json"]);
+    let limiters = report["limiters"].as_array().unwrap();
+    let drain = limiters
+        .iter()
+        .find(|drain| drain["run_id"] == id)
+        .unwrap_or_else(|| panic!("drain missing from limiters: {report:#}"));
+    assert_eq!(drain["workspace_id"], workspace_id.as_str());
+    assert_eq!(drain["counters"], json!(counters));
+    assert_eq!(drain["shares"]["ceiling_full"], 0.5);
+    assert_eq!(drain["shares"]["gap_fit_held"], 0.25);
+    assert_eq!(drain["shares"]["throttle"], 0.25);
+    assert_eq!(drain["shares"]["admitted"], 0.0);
+    let total: f64 = drain["shares"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|share| share.as_f64().unwrap())
+        .sum();
+    assert_eq!(total, 1.0, "outcome shares must sum to one: {drain:#}");
+    assert_eq!(drain["waiting_shares"]["gap_fit"], 0.25);
+
+    let plain = text(
+        &fixture,
+        &["run", "profiles", "--accuracy", "--format", "plain"],
+    );
+    let row: Vec<&str> = plain
+        .lines()
+        .find(|line| line.starts_with(&format!("{workspace_id}\t{id}\t")))
+        .unwrap_or_else(|| panic!("no limiter row: {plain}"))
+        .split('\t')
+        .collect();
+    assert_eq!(
+        row[2..11],
+        [
+            "4", "0% (0)", "0% (0)", "0% (0)", "25% (1)", "0% (0)", "50% (2)", "25% (1)", "0% (0)"
+        ],
+        "{plain}"
+    );
+    assert_eq!(
+        row[11],
+        "throttled by memory 1; waiting: context_lock_conflict in 1 (25%), gap_fit in 1 (25%)"
+    );
+
+    // A drain with no selected forecast is not in a mode-selected report.
+    let enforce = fixture.json(&[
+        "run",
+        "profiles",
+        "--accuracy",
+        "--mode",
+        "enforce",
+        "--json",
+    ]);
+    assert_eq!(enforce["limiters"], json!([]), "{enforce:#}");
+    assert_eq!(fixture.snapshot(), snapshot, "observation mutated state");
 }
 
 fn text(fixture: &Fixture, args: &[&str]) -> String {

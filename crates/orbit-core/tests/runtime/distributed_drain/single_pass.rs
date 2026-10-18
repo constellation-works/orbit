@@ -464,6 +464,15 @@ fn a_legacy_zero_window_checkpoint_resumed_through_the_job_api_cannot_claim() {
     let mut checkpoint = follower.read_run_state(&source).unwrap().unwrap();
     checkpoint.next_step_index = 1;
     checkpoint.step_states.insert(0, JobRunState::Success);
+    // The source counted its passes; the resumed run carries the counters.
+    checkpoint.pull_drain.count_admission_pass(
+        &orbit_types::workflow::DrainPassObservation {
+            outcome: orbit_types::workflow::DrainPassOutcome::CeilingFull,
+            ..Default::default()
+        },
+        Utc::now(),
+    );
+    let counted = checkpoint.pull_drain.drain_pass_counters.clone();
     follower.write_run_state(&source, &checkpoint).unwrap();
     pair.follower_jobs
         .mark_job_run_running(&source, Utc::now(), std::process::id())
@@ -512,6 +521,16 @@ fn a_legacy_zero_window_checkpoint_resumed_through_the_job_api_cannot_claim() {
     assert_eq!(pass["done"], true, "{pass}");
     assert!(pair.wire.calls("orbit.task.pull").is_empty());
     assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+    assert_eq!(
+        follower
+            .read_run_state(&resumed)
+            .unwrap()
+            .unwrap()
+            .pull_drain
+            .drain_pass_counters,
+        counted,
+        "the resumed run keeps the source's counters, and its settle-only pass adds none"
+    );
     assert!(
         follower
             .read_run_state(&run.run_id)

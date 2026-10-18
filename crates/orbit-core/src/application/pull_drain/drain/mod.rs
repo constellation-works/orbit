@@ -131,6 +131,8 @@ pub(crate) struct RefillPass {
     /// executor. `None` when the pass sent no request, or ended in an error
     /// before one was answered.
     pub(crate) answer: Option<Box<AdmissionReceipt>>,
+    /// The pass stopped because every slot under its ceiling was taken.
+    pub(crate) ceiling_full: bool,
 }
 
 /// How far one admission carried, and what that leaves the pass free to do.

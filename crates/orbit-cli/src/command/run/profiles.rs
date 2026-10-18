@@ -63,6 +63,17 @@ PULL_WOULD_HOLD the shadow requests enforce would have held because no work fit,
 PULL_HELD the enforce requests held for the same reason. \
 `--json` adds every forecast point paired with its measured minute, and names the \
 gap-fit-held task ids.\n\n\
+Last, per drain, what limited its admission passes (`limiters` in `--json`), from the \
+cumulative pass counters on its run state, which survive resume: PASSES counts them, and each \
+outcome column is its share of those passes with the count. Every pass has exactly one \
+outcome, the first that applies of ADMITTED (it started work), FAILED, HELD (an operator stop, \
+a host shutdown, or a pull drain's other reason for sending no request), THROTTLE (host \
+pressure), NO_CANDIDATE (an empty or wholly excluded backlog, or an idle owner), CEILING_FULL, \
+GAP_FIT_HELD and DEFERRED (every candidate deferred on a lock or footprint), so the shares sum \
+to 100%. DETAIL splits HELD by reason and THROTTLE by resource, and gives each waiting \
+reason's share of passes, which overlap. The drains are those with a selected forecast and, \
+without `--mode`, this workspace's drains live since `--since`; their counters cover each \
+drain's whole lineage, not the selected time.\n\n\
 Accuracy selectors compose: `--since` is an inclusive RFC3339 forecast timestamp (default: \
 30 days ago), `--drain` matches an exact drain run id, and `--mode shadow|enforce` matches the \
 recorded mode. Forecast timestamps are bounded by one report-time snapshot. Text and JSON echo the effective \
@@ -219,6 +230,7 @@ fn accuracy(
 ) -> CommandOut {
     use crate::output::table::{Column, Table};
     use comfy_table::Cell;
+    use orbit_types::workflow::DrainPassOutcome;
 
     let report = runtime.forecast_accuracy_selected(selection, report_at)?;
     let doc = serde_json::to_value(&report).map_err(|error| {
@@ -312,12 +324,45 @@ fn accuracy(
             Cell::new(drain.pull_held),
         ]);
     }
+    let mut columns = vec![
+        Column::new("WORKSPACE").fixed(),
+        Column::new("DRAIN").fixed(),
+        Column::new("PASSES").fixed(),
+    ];
+    columns.extend(
+        DrainPassOutcome::ALL
+            .iter()
+            .map(|outcome| Column::new(&outcome.as_str().to_uppercase()).fixed()),
+    );
+    columns.push(Column::new("DETAIL"));
+    let mut limiters =
+        Table::new(columns).empty_message("no drain has counted an admission pass on this host");
+    for drain in &report.limiters {
+        let counters = &drain.counters;
+        let mut row = vec![
+            Cell::new(&drain.workspace_id),
+            Cell::new(&drain.run_id),
+            Cell::new(counters.passes),
+        ];
+        row.extend(DrainPassOutcome::ALL.iter().map(|outcome| {
+            let count = counters.outcome(*outcome);
+            Cell::new(format!("{:.0}% ({count})", counters.share(count) * 100.0))
+        }));
+        let detail = counters.describe_detail();
+        row.push(Cell::new(if detail.is_empty() {
+            "-".to_string()
+        } else {
+            detail
+        }));
+        limiters.add_row(row);
+    }
     Ok(Payload::blocks(
         doc,
         vec![
             Block::text(summary(&report)),
             Block::table(offsets),
             Block::table(drains),
+            Block::table(limiters),
         ],
     )
     .into())

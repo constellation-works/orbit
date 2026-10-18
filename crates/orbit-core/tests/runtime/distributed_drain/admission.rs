@@ -4,7 +4,8 @@ use orbit_core::application::distributed::{DrainEntryPoint, RESOURCE_THROTTLED};
 use orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA;
 use orbit_types::task::HostOs;
 use orbit_types::workflow::{
-    BASELINE_RED_HOLD_EVENT, BaselineRedHold, CONTRACT_REFUSAL_MARKER, PullBreaker,
+    BASELINE_RED_HOLD_EVENT, BaselineRedHold, CONTRACT_REFUSAL_MARKER, DrainPassCounters,
+    DrainPassOutcome, PullBreaker,
 };
 
 use super::*;
@@ -781,6 +782,28 @@ fn three_failed_claims_open_the_breaker_and_a_new_drain_resets_it() {
         "{recorded:?}"
     );
     assert_eq!(recorded.resource_throttle, None, "{recorded:?}");
+    // Every pass counts once: each pass that queued a leaf lost its bind
+    // reply and failed; of the passes that sent no request, the first two
+    // found no slot under their zero ceiling, and the breaker held the next
+    // two, the first of them because the failure it settled opened it.
+    let counters = pass_counters(&pair, &drain);
+    assert_eq!(counters.passes, 7, "{counters:?}");
+    assert_eq!(
+        counters.outcome(DrainPassOutcome::Failed),
+        3,
+        "{counters:?}"
+    );
+    assert_eq!(
+        counters.outcome(DrainPassOutcome::CeilingFull),
+        2,
+        "{counters:?}"
+    );
+    assert_eq!(counters.outcome(DrainPassOutcome::Held), 2, "{counters:?}");
+    assert_eq!(
+        counters.held_by_reason,
+        BTreeMap::from([("circuit_open".to_string(), 2)]),
+        "{counters:?}"
+    );
     pair.follower_jobs
         .mark_job_run_running(&drain, Utc::now(), std::process::id())
         .expect("running drain");
@@ -823,6 +846,17 @@ fn three_failed_claims_open_the_breaker_and_a_new_drain_resets_it() {
     assert_eq!(pair.wire.calls("orbit.task.pull").len(), 4);
     assert_eq!(backlog(&pair), 1);
     assert_eq!(pair.owner_claims().len(), 4);
+}
+
+/// The drain's admission pass counters.
+fn pass_counters(pair: &Pair, drain: &str) -> DrainPassCounters {
+    pair.follower
+        .read_run_state(drain)
+        .unwrap()
+        .unwrap()
+        .pull_drain
+        .drain_pass_counters
+        .expect("the drain counts its passes")
 }
 
 /// The drain's recorded failure breaker, which a pass leaves open or
@@ -1653,6 +1687,17 @@ fn a_throttled_pull_drain_keeps_settling_and_pulls_again_below_resume() {
         .and_then(|pass| pass.resource_throttle)
         .expect("the pull pass records the throttle");
     assert_eq!(recorded.resources[0].percent, 96.0);
+    let counters = pass_counters(&pair, &drain);
+    assert_eq!(
+        counters.outcome(DrainPassOutcome::Throttle),
+        1,
+        "{counters:?}"
+    );
+    assert_eq!(
+        counters.throttle_by_resource,
+        BTreeMap::from([("memory".to_string(), 1)]),
+        "{counters:?}"
+    );
 
     probe.memory(70.0, Utc::now());
     let resumed = pair.pass(&drain);

@@ -158,18 +158,12 @@ impl OrbitRuntime {
         self.sqlite_store()?.record_admission_forecast(record)
     }
 
-    /// How the admission forecasts recorded on this host over the last
-    /// 30 days compare with its measured minutes, and how
-    /// each drain's shadow and enforce decisions compare with what it admitted.
-    pub fn forecast_accuracy(&self) -> Result<ForecastAccuracy, OrbitError> {
-        let report_at = Utc::now();
-        self.forecast_accuracy_selected(AccuracySelection::last_30_days(report_at), report_at)
-    }
-
     /// Read a selected cohort of recorded forecasts, bounded above by `report_at`.
     /// That same snapshot determines whether target minutes have fully ended.
     /// This does not reconcile, prune, sample, or change admission settings.
-    pub fn forecast_accuracy_selected(
+    /// The report's `limiters` are left empty: the drains' pass counters are
+    /// joined by the application's `forecast_accuracy_selected`.
+    pub(crate) fn forecast_accuracy_measured(
         &self,
         selection: AccuracySelection,
         report_at: DateTime<Utc>,
@@ -231,14 +225,15 @@ impl OrbitRuntime {
             .map(|since| store.delivery_run_resources(since))
             .transpose()?
             .unwrap_or_default();
-        Ok(forecast_accuracy(
+        let report = forecast_accuracy(
             &records,
             &minutes,
             &deliveries,
             &resources,
             selection,
             report_at,
-        ))
+        );
+        Ok(report)
     }
 
     /// Read the host's load from `<proc_root>/{stat,meminfo}` instead of
