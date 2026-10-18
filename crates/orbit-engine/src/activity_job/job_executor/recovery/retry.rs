@@ -183,11 +183,18 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
             Some(recovery) => recovery,
             None => return failure.into_result(),
         };
-        match attempt_recovery_activity(step, ctx, &recovery, &failure, attempt, max_attempts) {
-            RecoveryAdmission::Retry => {}
+        let recovery_model = match attempt_recovery_activity(
+            step,
+            ctx,
+            &recovery,
+            &failure,
+            attempt,
+            max_attempts,
+        ) {
+            RecoveryAdmission::Retry(model) => model,
             RecoveryAdmission::Original => return failure.into_result(),
             RecoveryAdmission::Blocked(blocker) => return failure.into_blocked(&blocker),
-        }
+        };
         // [ORB-14822] The agent cannot commit its repair; the host does,
         // and the retry below runs on that commit.
         if recovery.name == STEP_FAILURE_RECOVERY_ACTIVITY {
@@ -205,7 +212,14 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
                             .pointer("/failed_step_input/re_review_on_conflict")
                             .and_then(Value::as_bool)
                             == Some(true);
-                    commit_recovery_repair_for_retry(step, ctx, &recovery, &bound, review_follows)
+                    commit_recovery_repair_for_retry(
+                        step,
+                        ctx,
+                        &recovery,
+                        &bound,
+                        review_follows,
+                        recovery_model.as_deref(),
+                    )
                 });
             if let Err(refusal) = committed {
                 return failure.into_refused_repair(&refusal);

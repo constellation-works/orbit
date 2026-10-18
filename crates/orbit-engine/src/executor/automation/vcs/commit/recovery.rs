@@ -32,6 +32,9 @@ pub(crate) struct RecoveryCommitRequest<'a> {
     /// Exact paths explained by an admitted CI repair, if applicable.
     pub(crate) repair_paths: Option<&'a [String]>,
     pub(crate) task_ids: &'a [String],
+    /// The recovery activity's resolved crew model, which authors the repair
+    /// commit [ORB-16768]. `None` keeps the historical role identity.
+    pub(crate) recovery_model: Option<String>,
     /// The commit step skipped a clean, no-diff-expected candidate: this run
     /// has no route that delivers a change.
     pub(crate) no_diff_route: bool,
@@ -178,7 +181,12 @@ pub(crate) fn commit_recovery_repair(
     if staged.is_empty() {
         return Ok(RecoveryCommit::Clean);
     }
-    git_commit_as(&workspace_path, &message(request), &recovery_author()).map_err(uncommittable)?;
+    git_commit_as(
+        &workspace_path,
+        &message(request),
+        &recovery_author(request.recovery_model.as_deref()),
+    )
+    .map_err(uncommittable)?;
     let commit_sha = git_output(&workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])
         .map_err(uncommittable)?;
     Ok(RecoveryCommit::Committed {

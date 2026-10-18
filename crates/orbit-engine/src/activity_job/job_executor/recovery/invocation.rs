@@ -12,6 +12,9 @@ pub(super) struct RecoveryDispatch {
     pub(super) dispatch: crate::activity_job::dispatcher::DispatchOutcome,
     pub(super) slot: Option<StepRecoveryDecisionSlot>,
     pub(super) observation: Option<RecoveryObservation>,
+    /// The dispatched spec's resolved model: the agent that made the repair,
+    /// which authors the host's repair commit [ORB-16768].
+    pub(super) recovery_model: Option<String>,
 }
 
 /// Ask the host for this invocation's decision slot and name it in the
@@ -163,6 +166,10 @@ pub(super) fn dispatch_recovery(
     let crew_overridden_spec = crew_overridden_recovery_spec(recovery, ctx, &input)
         .map_err(|error| ("crew", error.to_string()))?;
     let spec = crew_overridden_spec.as_ref().unwrap_or(&recovery.spec);
+    let recovery_model = match spec {
+        ActivityV2Spec::AgentLoop(agent) => agent.model.clone(),
+        ActivityV2Spec::Deterministic(_) => None,
+    };
     let dispatch = dispatch_v2_activity_without_run_id_injection(V2DispatchInput {
         activity_name: &recovery.name,
         spec,
@@ -180,6 +187,7 @@ pub(super) fn dispatch_recovery(
                 dispatch,
                 slot,
                 observation,
+                recovery_model,
             })
         }
         Err(error) => Err(("dispatch", error.to_string())),

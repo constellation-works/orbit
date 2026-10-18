@@ -84,14 +84,17 @@ fn a_validate_repair_is_committed_by_the_host_and_retried_on_that_head() {
             git_stdout(worktree, &["show", &format!("{retried}:candidate.txt")]),
             "fixed"
         );
-        // Orbit's process identity commits; the author and trailers record
-        // the recovery that made the change.
+        // Orbit's process identity commits; the author names the recovery
+        // activity's resolved model, and the trailers record the recovery
+        // that made the change [ORB-16768].
         assert_eq!(
             git_stdout(
                 worktree,
                 &["show", "-s", "--format=%an <%ae>|%cn <%ce>", retried]
             ),
-            "orbit-recovery <orbit-recovery@orbit.local>|orbit <orbit@orbit.local>",
+            format!(
+                "orbit[{RECOVERY_MODEL}] <orbit-recovery@orbit.local>|orbit <orbit@orbit.local>"
+            ),
             "{name}"
         );
         let message = git_stdout(worktree, &["show", "-s", "--format=%B", retried]);

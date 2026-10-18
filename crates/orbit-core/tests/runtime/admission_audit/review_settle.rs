@@ -195,9 +195,17 @@ fn fixable_findings_become_one_reviewer_commit_over_the_untouched_implementation
         gated.log("HEAD", "%s").starts_with("review: "),
         "the reviewer commit is `review: <summary>`"
     );
-    assert!(
-        gated.log("HEAD", "%an").contains("reviewer"),
+    // [ORB-16768] The reviewer commit names the reviewer's resolved model
+    // under the reviewer role address, never the implementer's identity.
+    assert_eq!(
+        gated.log("HEAD", "%an <%ae>"),
+        "orbit[review-model] <codex-reviewer@orbit.local>",
         "the reviewer commit is attributed to the reviewer, not the implementer"
+    );
+    assert_ne!(
+        gated.log("HEAD", "%an <%ae>"),
+        gated.log("HEAD^", "%an <%ae>"),
+        "the reviewer and implementer commits stay distinguishable"
     );
     assert!(
         gated

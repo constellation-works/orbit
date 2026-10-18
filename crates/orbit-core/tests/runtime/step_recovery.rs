@@ -41,6 +41,9 @@ use super::dispatch_admission::isolated;
 mod repair_commit;
 
 const ORIGINAL_FAILURE: &str = "required validation is red on the candidate (exit 3; failing: actual_failure). Candidate log: `validation/run-observed/0.json`; base log: `validation/run-observed/0.baseline.json`. Base verdict: passed";
+/// The recovery draw's resolved model, which authors the host's repair
+/// commit [ORB-16768].
+const RECOVERY_MODEL: &str = "gpt-6.1-sol";
 const RETRY_FAILURE: &str = "required validation is still red";
 const TASK: &str = "ORB-1";
 
@@ -306,9 +309,22 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost<'_> {
 
     fn agent_crew_config_for_input(
         &self,
-        _input: &Value,
+        input: &Value,
     ) -> Result<Option<orbit_engine::CrewConfig>, DispatchError> {
-        Ok(None)
+        // The recovery draw resolves a crew model, which authors the host's
+        // repair commit [ORB-16768].
+        let recovery = input
+            .get("crew_config_key")
+            .and_then(Value::as_str)
+            .is_some_and(|key| {
+                key == "workflow.purpose_crews.failure_recovery"
+                    || key == "workflow.purpose_crews.auto_fix"
+            });
+        Ok(recovery.then(|| orbit_engine::CrewConfig {
+            provider: None,
+            model: Some(RECOVERY_MODEL.to_string()),
+            reasoning_effort: None,
+        }))
     }
 
     /// The runtime's registry, without task-store lookups: a follower holds

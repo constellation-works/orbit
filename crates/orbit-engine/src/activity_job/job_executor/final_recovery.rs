@@ -380,17 +380,24 @@ pub(super) fn attempt_final_recovery(
             input
         })
         .and_then(|input| dispatch_final_recovery(ctx, step, activity, &input));
-    let decision = match dispatch {
-        Ok(output) => FinalRecoveryDecision::from_output(Some(&decision_payload(&output))),
-        Err(message) => FinalRecoveryDecision::Escalate {
-            diagnosis: format!(
-                "final recovery activity `{}` did not return a decision: {message}",
-                activity.name
-            ),
-            human_action: "Inspect the failed run and its final-recovery invocation, then move \
-                           the task by hand."
-                .to_string(),
-        },
+    let (decision, recovery_model) = match dispatch {
+        Ok((output, model)) => (
+            FinalRecoveryDecision::from_output(Some(&decision_payload(&output))),
+            model,
+        ),
+        Err(message) => (
+            FinalRecoveryDecision::Escalate {
+                diagnosis: format!(
+                    "final recovery activity `{}` did not return a decision: {message}",
+                    activity.name
+                ),
+                human_action:
+                    "Inspect the failed run and its final-recovery invocation, then move \
+                               the task by hand."
+                        .to_string(),
+            },
+            None,
+        ),
     };
     let (mut decision, mut resume_index, downgrade) = admit_resume_step(job, step_index, decision);
     let commit_index = job.steps[1..=step_index]
@@ -415,6 +422,7 @@ pub(super) fn attempt_final_recovery(
                 .zip(head_before.as_deref())
                 .zip(branch_before.as_deref())
                 .map(|((root, head), branch)| (root, head, branch)),
+            recovery_model.as_deref(),
         )
     {
         decision = FinalRecoveryDecision::Escalate {
@@ -718,16 +726,21 @@ fn final_recovery_input(
     Ok(input)
 }
 
-/// Dispatch the activity under its configured crew, returning its output.
+/// Dispatch the activity under its configured crew, returning its output and
+/// the dispatched spec's resolved model [ORB-16768].
 fn dispatch_final_recovery(
     ctx: &ExecCtx<'_>,
     step: &JobV2Step,
     activity: &ResolvedRecoveryActivity,
     input: &Value,
-) -> Result<Value, String> {
+) -> Result<(Value, Option<String>), String> {
     let mut spec = crew_overridden_recovery_spec(activity, ctx, input)
         .map_err(|error| format!("crew: {error}"))?
         .unwrap_or_else(|| activity.spec.clone());
+    let recovery_model = match &spec {
+        ActivityV2Spec::AgentLoop(agent) => agent.model.clone(),
+        ActivityV2Spec::Deterministic(_) => None,
+    };
     if let ActivityV2Spec::AgentLoop(agent) = &mut spec {
         agent.instruction.push_str(&format!(
             "\n\nFor this failure, resume only from one of these step ids. The first \
@@ -747,7 +760,7 @@ fn dispatch_final_recovery(
     .map_err(|error| error.to_string())?;
     persist_dispatch_invocation(ctx, &activity.name, input, &dispatch);
     if dispatch.success {
-        Ok(dispatch.output)
+        Ok((dispatch.output, recovery_model))
     } else {
         Err(dispatch
             .message
