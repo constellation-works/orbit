@@ -815,6 +815,11 @@ pub struct DrainAdmissionForecast {
     /// admitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_peak: Option<ForecastPeak>,
+    /// The forecast's first hour, before this pass admitted, as a share of
+    /// the host; absent when the host could not be measured, and in records
+    /// written before it was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series: Option<ForecastBuckets>,
     /// Candidates that fit, in the order the pass admitted them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub admitted: Vec<GapFitAdmission>,
@@ -837,6 +842,22 @@ pub struct ForecastPeak {
     /// host could not be measured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub percent: Option<f64>,
+}
+
+/// A forecast's CPU and memory over minutes `0 ..= 60`, one point per
+/// `bucket_minutes`, each as a share of the host's cores or memory.
+///
+/// Point 0 is minute 0 and point `k` the highest minute in
+/// `(bucket_minutes · (k - 1), bucket_minutes · k]`, so a spike shorter than a
+/// bucket still shows and the highest point is the peak whenever the peak
+/// falls within the hour. A forecast whose horizon ends sooner has fewer
+/// points.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ForecastBuckets {
+    /// Minutes between points: 5.
+    pub bucket_minutes: u32,
+    pub cpu_percent: Vec<f64>,
+    pub memory_percent: Vec<f64>,
 }
 
 /// A candidate gap fit admitted.

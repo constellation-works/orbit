@@ -35,8 +35,8 @@
 use chrono::{DateTime, Duration, Utc};
 use orbit_types::task::{NO_DIFF_EXPECTED_TAG, Task};
 use orbit_types::workflow::{
-    DrainAdmissionForecast, ForecastPeak, GapFitAdmission, GapFitHead, GapFitHeadMiss,
-    GapFitHeadStall, GapFitSkip,
+    DrainAdmissionForecast, ForecastBuckets, ForecastPeak, GapFitAdmission, GapFitHead,
+    GapFitHeadMiss, GapFitHeadStall, GapFitSkip,
 };
 
 use crate::runtime::host_resource::delivery::work_class;
@@ -49,6 +49,11 @@ use crate::runtime::host_resource::profile::{ProfileLookup, ResourceProfile};
 /// stall is measured against to count as an improvement. Smaller moves are
 /// baseline noise, which would otherwise restart the count on every pass.
 const IMPROVEMENT_POINTS: f64 = 1.0;
+
+/// The minutes a pass's record keeps of its forecast's curve.
+const SERIES_MINUTES: usize = 60;
+/// The minutes each point of that series covers.
+const SERIES_BUCKET_MINUTES: usize = 5;
 
 /// The effective per-drain auto-concurrency mode when it is not `off`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,6 +157,7 @@ impl HeadWait<'_> {
             forecast_at: None,
             cpu_peak: None,
             memory_peak: None,
+            series: None,
             admitted: Vec::new(),
             skipped: Vec::new(),
             head: self.carried(pending),
@@ -335,12 +341,38 @@ impl<'a> GapFit<'a> {
                     .as_ref()
                     .map(|gap| gap.memory_percent(memory.value)),
             )),
+            series: self.gap.as_ref().map(|gap| ForecastBuckets {
+                bucket_minutes: SERIES_BUCKET_MINUTES as u32,
+                cpu_percent: bucket_maxima(&self.forecast.cpu.minutes, |cores| {
+                    gap.cpu_percent(cores)
+                }),
+                memory_percent: bucket_maxima(&self.forecast.memory.minutes, |bytes| {
+                    gap.memory_percent(bytes)
+                }),
+            }),
             admitted: self.admitted,
             skipped: self.skipped,
             head,
         };
         (record, self.reservations)
     }
+}
+
+/// `minutes` up to [`SERIES_MINUTES`] as `percent` of the host, one point per
+/// [`SERIES_BUCKET_MINUTES`]: minute 0, then the highest minute of each bucket
+/// after it, so no spike falls between points.
+fn bucket_maxima(minutes: &[f64], percent: impl Fn(f64) -> f64) -> Vec<f64> {
+    let hour = &minutes[..minutes.len().min(SERIES_MINUTES + 1)];
+    let Some((first, rest)) = hour.split_first() else {
+        return Vec::new();
+    };
+    std::iter::once(*first)
+        .chain(
+            rest.chunks(SERIES_BUCKET_MINUTES)
+                .map(|bucket| bucket.iter().copied().fold(f64::NEG_INFINITY, f64::max)),
+        )
+        .map(percent)
+        .collect()
 }
 
 /// Whether `miss` improves on `reference`: another resource fails, it fails

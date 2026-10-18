@@ -141,7 +141,7 @@ pub use run::{
     DrainWorkerLimit, FLAKY_VALIDATION_EVENT, FORGE_UNAVAILABLE_ERROR_CODE,
     FORGE_UNAVAILABLE_EXPIRED_EVENT, FORGE_UNAVAILABLE_MARKER, FailureActivityCheckpoint,
     FinalRecoveryCheckpoint, FinalRecoveryKey, FinalRecoveryObservedTask,
-    FinalRecoveryRepairCommit, FinalRecoveryResume, FlakyValidation, ForecastPeak,
+    FinalRecoveryRepairCommit, FinalRecoveryResume, FlakyValidation, ForecastBuckets, ForecastPeak,
     ForgeUnavailableHold, GapFitAdmission, GapFitHead, GapFitHeadMiss, GapFitHeadStall, GapFitSkip,
     HeldCandidate, HeldFailure, HostValidationGates, KNOWN_RED_MARKER, KNOWN_RED_VALIDATION_EVENT,
     KnownRedValidation, LandingMethod, LandingObservation, LandingObservationStatus,
