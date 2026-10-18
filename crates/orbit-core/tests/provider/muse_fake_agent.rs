@@ -15,6 +15,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use orbit_core::OrbitRuntime;
 use orbit_engine::{
@@ -919,8 +920,24 @@ exit 0"#
 
 #[test]
 fn wall_clock_timeout_cancels_the_agent_and_fails_the_step() {
-    let harness = Harness::new("sleep 30\nexit 0");
-    let outcome = dispatch(&harness, spec(1));
+    let harness = Harness::new("touch \"$out/timeout-ready\"\nsleep 30\nexit 0");
+    let ready = harness.dir.path().join("timeout-ready");
+    let clock_ready = ready.clone();
+    let origin = Instant::now();
+    // The deadline starts before spawn. Freeze it until the fake has finished
+    // recording the prompt path, so cancellation cannot race that bookkeeping
+    // on a loaded host. Only supervision time advances; teardown stays real.
+    let outcome = orbit_core::test_support::with_cli_supervision_clock(
+        move || {
+            if clock_ready.exists() {
+                origin + Duration::from_secs(2)
+            } else {
+                origin
+            }
+        },
+        || dispatch(&harness, spec(1)),
+    );
+    assert!(ready.exists(), "fake agent must be ready before timeout");
     assert!(!outcome.success);
     let message = outcome.message.unwrap_or_default();
     assert!(message.contains("timeout") || message.contains("wall-clock"));
