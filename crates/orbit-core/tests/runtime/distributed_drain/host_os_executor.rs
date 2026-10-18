@@ -94,6 +94,108 @@ fn a_linux_follower_leaves_a_muse_crew_and_a_macos_follower_claims_it() {
     assert_eq!(pair.owner_task(&muse)["crew"], "muse-wonder");
 }
 
+/// The only medium crew is macOS-only, so an owner's creation draw is
+/// deterministic.
+const POOL_CREWS: &str = r#"
+[workflow]
+default_crew = "sol"
+medium_complexity_crews = ["muse-wonder"]
+
+[crews.sol]
+model = "gpt-6.1-sol"
+provider = "codex"
+
+[crews.muse-wonder]
+model = "muse-spark-1.3"
+provider = "muse"
+"#;
+
+/// Move every claim lifecycle record in the owner's workspace eight days
+/// into the past, in the owner's own store, as eight quiet days would
+/// leave them.
+fn age_claim_evidence(pair: &Pair) {
+    let owner = &pair.wire.owner;
+    let old = (Utc::now() - chrono::Duration::days(8)).to_rfc3339();
+    let connection = rusqlite::Connection::open(owner.global_root().join("orbit.db")).unwrap();
+    let moved = connection
+        .execute(
+            "UPDATE task_coordination_rows
+             SET payload_json = json_set(payload_json, '$.created_at', ?1, '$.updated_at', ?1)
+             WHERE workspace_id = ?2 AND kind = 'distributed-claim-lifecycle-v1'",
+            rusqlite::params![old, owner.workspace_id().unwrap()],
+        )
+        .unwrap();
+    assert!(moved >= 1, "the follower's claim lifecycle record aged");
+}
+
+/// A Linux owner's creation draw may pick the macOS-only pool crew only
+/// once a registered macOS host actually serves this workspace. Before
+/// the follower ever pulled here, registration alone — the follower's and
+/// an unrelated Mac's alike — changes nothing. The follower's real claim
+/// through owner pull admission is the evidence that counts; when that
+/// evidence ages out of the window, draws fall back again.
+fn a_recent_follower_claim_lets_a_linux_owner_draw_the_macos_only_crew() {
+    let mut pair = Pair::with_configs(POOL_CREWS, POOL_CREWS, &[Some("sol")]);
+    declare_muse_macos(&pair.wire.owner);
+    // The owner as task creation on Linux composes it: this host is Linux,
+    // and the host registry records the follower and an unrelated Mac.
+    let linux_owner = pair
+        .wire
+        .owner
+        .clone()
+        .with_host_os(Some(HostOs::Linux))
+        .with_registered_host_oses([
+            (FOLLOWER.to_string(), HostOs::Macos),
+            ("hm_unrelated".to_string(), HostOs::Macos),
+        ]);
+    let medium = |pair: &Pair, owner: &OrbitRuntime, file: &str| {
+        backlog_task_with_input(
+            owner,
+            &pair.owner_repo,
+            file,
+            None,
+            json!({"complexity": "medium"}),
+        )
+    };
+
+    let before = medium(&pair, &linux_owner, "src/before.rs");
+    assert_eq!(
+        pair.owner_task(&before)["crew"],
+        "sol",
+        "registered Macs with no claim in this workspace change nothing"
+    );
+
+    pair.follower = pair.follower.clone().with_host_os(Some(HostOs::Macos));
+    let drain = pair.start_drain();
+    let _leaf = pair.running_leaf(&drain, 1);
+    assert!(
+        pair.owner_claims()
+            .iter()
+            .any(|claim| claim["claim"]["executed_on"]["machine_id"] == FOLLOWER),
+        "the follower's claim is the owner's durable evidence: {:#?}",
+        pair.owner_claims()
+    );
+
+    let drawn = medium(&pair, &linux_owner, "src/drawn.rs");
+    let drawn_task = pair.owner_task(&drawn);
+    assert_eq!(
+        drawn_task["crew"], "muse-wonder",
+        "a serving macOS follower lets the Linux owner draw the macOS-only crew"
+    );
+    assert_eq!(
+        drawn_task["crew_source"], "pool:medium",
+        "the draw records pool provenance"
+    );
+
+    age_claim_evidence(&pair);
+    let aged = medium(&pair, &linux_owner, "src/aged.rs");
+    assert_eq!(
+        pair.owner_task(&aged)["crew"],
+        "sol",
+        "a follower whose last claim aged out no longer counts as serving"
+    );
+}
+
 /// The shipped muse executor, macOS only, as workspace init installs it.
 fn declare_muse_macos(runtime: &OrbitRuntime) {
     runtime
@@ -119,5 +221,6 @@ fn declare_muse_macos(runtime: &OrbitRuntime) {
 
 crate::scenario_table!(
     a_linux_follower_leaves_a_muse_crew_and_a_macos_follower_claims_it_scenarios,
-    a_linux_follower_leaves_a_muse_crew_and_a_macos_follower_claims_it
+    a_linux_follower_leaves_a_muse_crew_and_a_macos_follower_claims_it,
+    a_recent_follower_claim_lets_a_linux_owner_draw_the_macos_only_crew
 );

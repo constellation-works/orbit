@@ -58,6 +58,15 @@ pub struct OrbitRuntime {
     /// This binary's own by default; a fixture composes another so one process
     /// can stand in for a host of each OS.
     host_os: Option<orbit_types::task::HostOs>,
+    /// Registered remote hosts by machine id with their recorded operating
+    /// system, supplied by the registry-owning composition layer.
+    /// Registration alone does not make a host serve this workspace: a
+    /// registered host counts for creation-time complexity draws only when
+    /// this workspace's own claim records show it pulled work recently (see
+    /// `serving_host_oses`). Admission and activity draws keep checking
+    /// only [`Self::host_os`]. Empty on a standalone runtime, which then
+    /// draws exactly as a single-host owner always has.
+    registered_host_oses: Vec<(String, orbit_types::task::HostOs)>,
     /// The home whose headless browser kit admission reads for `ui` tasks.
     /// `None` is the current user's, read again on every admission pass; a
     /// fixture points it at a home it controls.

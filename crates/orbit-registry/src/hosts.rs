@@ -53,6 +53,12 @@ pub struct HostEntry {
     pub ssh: String,
     /// The host's own `machine.task_prefix`, read from it at registration.
     pub task_prefix: String,
+    /// The host's operating system, read from it at registration. Absent on
+    /// entries registered before discovery reported it: the OS is then
+    /// unknown and the host counts for no `host_os`-limited crew until it is
+    /// removed and added again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_os: Option<orbit_types::task::HostOs>,
 }
 
 /// One row of the legacy destinations file: a route with no name or prefix.

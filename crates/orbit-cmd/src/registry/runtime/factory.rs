@@ -36,7 +36,8 @@ pub struct ResolvedWorkspaceSelection {
 /// that keeps a built runtime to notice an edit without re-opening anything. A
 /// caller that also compares the registry records it resolved (as the MCP
 /// server does) covers same-size edits to those records; the stamp covers the
-/// remaining composition inputs — the rest of the registry file, the
+/// remaining composition inputs — the rest of the workspace registry file,
+/// the host registry that supplies serving-host operating systems, the
 /// checkout's own `config.yaml` task binding, and both `config.toml` layers
 /// the runtime settings (crews, default crew, execution policy, this
 /// machine's `[machine]` identity, and the workspace `[plugin_enablement]`
@@ -45,6 +46,7 @@ pub struct ResolvedWorkspaceSelection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredRuntimeStamp {
     registry: FileStamp,
+    host_registry: FileStamp,
     workspace_binding: FileStamp,
     global_config: FileStamp,
     workspace_config: FileStamp,
@@ -68,6 +70,7 @@ impl RegisteredRuntimeStamp {
     pub fn read(global_root: &Path, checkout: &WorkspaceCheckout) -> Self {
         Self {
             registry: FileStamp::read(&workspace_registry::registry_path_for(global_root)),
+            host_registry: FileStamp::read(&orbit_registry::hosts::hosts_path(global_root)),
             workspace_binding: FileStamp::read(&workspace_config_path(&checkout.orbit_dir)),
             global_config: FileStamp::read(&global_root.join(CONFIG_TOML_FILE)),
             workspace_config: FileStamp::read(&checkout.orbit_dir.join(CONFIG_TOML_FILE)),

@@ -162,6 +162,7 @@ mod task_route {
             machine_id: machine_id.to_string(),
             ssh: name.to_string(),
             task_prefix: prefix.to_string(),
+            host_os: None,
         }
     }
 

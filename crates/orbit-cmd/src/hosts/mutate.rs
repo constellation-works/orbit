@@ -142,6 +142,7 @@ pub fn add_host(
         machine_id: facts.machine_id.clone(),
         ssh: ssh.to_string(),
         task_prefix,
+        host_os: facts.host_os,
     };
     let mut entries = registered(&registry, &migrated).to_vec();
     entries.push(entry.clone());
@@ -316,6 +317,7 @@ fn migrated_entries(
             machine_id: row.machine_id.clone(),
             ssh: row.ssh.clone(),
             task_prefix,
+            host_os: live.facts.host_os,
         });
     }
     Ok(entries)

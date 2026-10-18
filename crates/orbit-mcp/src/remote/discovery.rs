@@ -42,6 +42,13 @@ pub struct HostFacts {
     /// The destination's distributed-drain pull-protocol fingerprint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protocol_fingerprint: Option<String>,
+    /// The destination's host operating system. Additive like the fields
+    /// above: a destination built before it omits it and readers treat the
+    /// OS as unknown, never guessed. An owner records it at registration
+    /// so creation-time crew draws know which OS a host that serves its
+    /// workspace runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_os: Option<orbit_types::task::HostOs>,
 }
 
 impl HostFacts {
@@ -55,6 +62,7 @@ impl HostFacts {
             task_prefix: text("task_prefix"),
             binary_version: text("binary_version"),
             protocol_fingerprint: text("protocol_fingerprint"),
+            host_os: text("host_os").and_then(|value| orbit_types::task::HostOs::parse(&value)),
         })
     }
 

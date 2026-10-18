@@ -608,5 +608,25 @@ pub(super) fn attach_registry_context(
         runtime.with_automation_execution_location(location),
         global_root,
     );
+    // Creation-time crew draws on an owner may count a crew as runnable
+    // when a host serving this workspace can run it, so declare the
+    // registered hosts with their recorded operating systems, by machine
+    // id. The runtime counts a registered host as serving only when this
+    // workspace's own claim records show it pulled here recently;
+    // registration alone never counts. Best-effort: an unreadable host
+    // file leaves the list empty, which is exactly the single-host draw
+    // behaviour, and never fails the open. Entries registered before
+    // discovery reported an OS contribute nothing until re-added.
+    let registered = orbit_registry::hosts::load_host_registry(global_root)
+        .map(|registry| {
+            registry
+                .hosts()
+                .entries()
+                .iter()
+                .filter_map(|entry| entry.host_os.map(|os| (entry.machine_id.clone(), os)))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let runtime = runtime.with_registered_host_oses(registered);
     crate::worker_coordination::attach(runtime)
 }

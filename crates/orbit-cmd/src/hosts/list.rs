@@ -90,6 +90,7 @@ fn local_row(global_root: &Path, identity: &MachineIdentity) -> HostRow {
         error: None,
         binary_version: Some(local_binary_version().to_string()),
         protocol_fingerprint: Some(local_protocol_fingerprint().to_string()),
+        host_os: orbit_types::task::HostOs::current().map(|os| os.as_str().to_string()),
         skew: false,
         skew_fields: Vec::new(),
         workspaces: local_workspaces(global_root),

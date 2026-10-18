@@ -802,9 +802,187 @@ fn init_seeds_host_os_and_preserves_operator_constraints() {
     );
 }
 
+/// The only medium crew is macOS-only, so the draw is deterministic.
+const MUSE_ONLY_POOL: &str = r#"
+[workflow]
+default_crew = "sol"
+medium_complexity_crews = ["muse-wonder"]
+
+[crews.sol]
+model = "gpt-6.1-sol"
+provider = "codex"
+
+[crews.muse-wonder]
+model = "muse-spark-1.3"
+provider = "muse"
+"#;
+
+/// Medium draws sol here; hard's only crew is macOS-only.
+const RERATE_POOL: &str = r#"
+[workflow]
+default_crew = "sol"
+medium_complexity_crews = ["sol"]
+hard_complexity_crews = ["muse-wonder"]
+
+[crews.sol]
+model = "gpt-6.1-sol"
+provider = "codex"
+
+[crews.muse-wonder]
+model = "muse-spark-1.3"
+provider = "muse"
+"#;
+
+/// Record a settled execution claim by `machine_id` in this workspace's
+/// claim rows, as a follower's pull would leave behind, aged `age_days`.
+/// With no lifecycle row the claim reads as legacy: its creation time is
+/// the reservation expiry minus the admission TTL.
+fn seed_claim_evidence(runtime: &OrbitRuntime, machine_id: &str, age_days: i64) {
+    let created = chrono::Utc::now() - chrono::Duration::days(age_days);
+    let expires = created + chrono::Duration::seconds(14_400);
+    let claim_id = format!("claim-evidence-{machine_id}-{age_days}");
+    let payload = json!({
+        "claim_id": claim_id,
+        "task_id": "ORB-EVIDENCE-1",
+        "request_id": claim_id,
+        "executed_on": {"machine_id": machine_id, "machine_name": null},
+        "run_context": {"run_id": "evidence", "job_name": "auto", "machine_name": null},
+        "footprint": [],
+        "reservation_id": claim_id,
+        "reservation_expires_at": expires.to_rfc3339(),
+        "phase": "landed",
+    });
+    let connection = rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();
+    connection
+        .execute(
+            "INSERT INTO task_coordination_rows(workspace_id, kind, row_id, payload_json, journal_id, created_at)
+             VALUES (?1, 'distributed-execution-claim-v1', ?2, ?3, ?2, ?4)",
+            rusqlite::params![
+                runtime.workspace_id().unwrap(),
+                claim_id,
+                payload.to_string(),
+                created.to_rfc3339(),
+            ],
+        )
+        .unwrap();
+}
+
+/// A Linux owner can draw the macOS-only crew at creation and on a
+/// complexity re-rate, with pool provenance, when a registered macOS host
+/// serves this workspace: its execution claim here is recent. The drawn
+/// task then waits on the Linux owner — excluded, never redrawn — and a
+/// macOS host admits it. A registered Mac with no claim here changes
+/// nothing, a follower whose last claim aged out of the window no longer
+/// counts, and an explicit crew is kept either way.
+fn a_linux_owner_with_a_macos_follower_draws_the_macos_only_crew() {
+    const MAC: &str = "hm_fixture_mac";
+    const UNRELATED: &str = "hm_fixture_unrelated";
+    const STALE: &str = "hm_fixture_stale";
+    let (_root, linux) = runtime_on(HostOs::Linux, MUSE_ONLY_POOL);
+    seed_claim_evidence(&linux, MAC, 0);
+    seed_claim_evidence(&linux, STALE, 8);
+    let owner = linux
+        .clone()
+        .with_registered_host_oses([(MAC.to_string(), HostOs::Macos)]);
+    let drawn = add(&owner, "serving-drawn", None, &[]).expect("pool draw");
+    assert_eq!(
+        drawn.crew.as_deref(),
+        Some("muse-wonder"),
+        "a macOS follower serves the workspace, so the draw may pick muse-wonder"
+    );
+    assert_eq!(
+        drawn.crew_source.as_deref(),
+        Some("pool:medium"),
+        "the draw records pool provenance"
+    );
+
+    // The Linux owner itself does not admit it and does not redraw it.
+    let discovered = backlog(&owner);
+    assert!(admitted(&discovered).is_empty(), "{discovered}");
+    let skipped = excluded(&discovered, &drawn.id).expect("drawn task waits");
+    assert_eq!(skipped["reason"], "host_os_mismatch", "{discovered}");
+    assert_eq!(skipped["detail"], WAIT, "{discovered}");
+    assert_eq!(
+        owner.get_task(&drawn.id).unwrap().crew.as_deref(),
+        Some("muse-wonder"),
+        "the pool-drawn muse crew is not redrawn on the Linux owner"
+    );
+
+    // A macOS host admits the same task.
+    let mac = linux.clone().with_host_os(Some(HostOs::Macos));
+    assert_eq!(admitted(&backlog(&mac)), vec![drawn.id.clone()]);
+
+    // No macOS follower: the macOS-only pool is skipped and the default
+    // chain answers, as before. An explicit crew is unaffected either way.
+    let fallback = add(&linux, "no-follower", None, &[]).expect("fallback draw");
+    assert_eq!(fallback.crew.as_deref(), Some("sol"));
+    // A registered Mac with no claim in this workspace changes nothing:
+    // registration alone is not service, even while another host's recent
+    // claim sits in the same store.
+    let unrelated_owner = linux
+        .clone()
+        .with_registered_host_oses([(UNRELATED.to_string(), HostOs::Macos)]);
+    let unrelated = add(&unrelated_owner, "unrelated-mac", None, &[]).expect("fallback draw");
+    assert_eq!(
+        unrelated.crew.as_deref(),
+        Some("sol"),
+        "an unrelated registered Mac never counts as serving"
+    );
+    // A follower whose last claim here is older than the window has aged
+    // out and no longer counts either.
+    let stale_owner = linux
+        .clone()
+        .with_registered_host_oses([(STALE.to_string(), HostOs::Macos)]);
+    let stale = add(&stale_owner, "stale-follower", None, &[]).expect("fallback draw");
+    assert_eq!(
+        stale.crew.as_deref(),
+        Some("sol"),
+        "a follower that stopped pulling ages out of the serving set"
+    );
+    let explicit = add(&linux, "explicit-muse", Some("muse-wonder"), &[]).expect("explicit");
+    assert_eq!(explicit.crew.as_deref(), Some("muse-wonder"));
+
+    // A complexity re-rate on the serving owner redraws into the hard pool's
+    // macOS-only crew; without a follower it falls back to the default.
+    let (_root2, rerate_linux) = runtime_on(HostOs::Linux, RERATE_POOL);
+    seed_claim_evidence(&rerate_linux, MAC, 0);
+    let rerate_owner = rerate_linux
+        .clone()
+        .with_registered_host_oses([(MAC.to_string(), HostOs::Macos)]);
+    let task = add(&rerate_owner, "rerated", None, &[]).expect("medium draw");
+    assert_eq!(task.crew.as_deref(), Some("sol"));
+    rerate_owner
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": task.id, "complexity": "hard", "model": "codex"}),
+        )
+        .expect("complexity re-rate");
+    let rerated = rerate_owner.get_task(&task.id).unwrap();
+    assert_eq!(
+        rerated.crew.as_deref(),
+        Some("muse-wonder"),
+        "the re-rate draw counts the macOS follower as serving"
+    );
+    assert_eq!(rerated.crew_source.as_deref(), Some("pool:hard"));
+
+    let plain = add(&rerate_linux, "rerated-plain", None, &[]).expect("medium draw");
+    rerate_linux
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": plain.id, "complexity": "hard", "model": "codex"}),
+        )
+        .expect("complexity re-rate without a follower");
+    assert_eq!(
+        rerate_linux.get_task(&plain.id).unwrap().crew.as_deref(),
+        Some("sol"),
+        "without a macOS follower the re-rate falls back as before"
+    );
+}
+
 crate::scenario_table!(
     a_linux_host_waits_on_a_muse_crew_and_a_macos_host_admits_it_scenarios,
     a_linux_host_waits_on_a_muse_crew_and_a_macos_host_admits_it,
+    a_linux_owner_with_a_macos_follower_draws_the_macos_only_crew,
     an_empty_os_intersection_is_refused_on_add_and_update,
     an_excluded_default_crew_is_not_pinned,
     a_supported_explicit_run_crew_survives_discovery_and_replay,

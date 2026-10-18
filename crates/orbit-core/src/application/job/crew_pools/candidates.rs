@@ -296,6 +296,29 @@ impl OrbitRuntime {
         complexity: Option<TaskComplexity>,
         pools: &CapturedCrewPools,
     ) -> Result<Option<(Vec<CrewCandidate>, String)>, OrbitError> {
+        self.complexity_pool_candidates_on(complexity, pools, false)
+    }
+
+    /// The creation-time counterpart of [`Self::complexity_pool_candidates`]:
+    /// a crew counts when any host serving with this one can run its
+    /// executor, so an owner whose pool holds a follower-only crew can draw
+    /// it and let the task wait for that follower. Only creation and
+    /// complexity re-rates draw this way; admission, provider holds and
+    /// activity fallbacks keep the executing-host filter above.
+    pub(crate) fn creation_complexity_pool_candidates(
+        &self,
+        complexity: Option<TaskComplexity>,
+        pools: &CapturedCrewPools,
+    ) -> Result<Option<(Vec<CrewCandidate>, String)>, OrbitError> {
+        self.complexity_pool_candidates_on(complexity, pools, true)
+    }
+
+    fn complexity_pool_candidates_on(
+        &self,
+        complexity: Option<TaskComplexity>,
+        pools: &CapturedCrewPools,
+        serving_hosts: bool,
+    ) -> Result<Option<(Vec<CrewCandidate>, String)>, OrbitError> {
         let Some(pool) = complexity
             .and_then(|complexity| pools.get(complexity.as_str()))
             .filter(|pool| !pool.crews.is_empty())
@@ -322,13 +345,22 @@ impl OrbitRuntime {
             return Ok(None);
         }
         // A crew whose executor `host_os` excludes this host is not drawn, so
-        // admission does not select it and then withhold it. Crews with no
-        // declaration stay, with their weights, so an unconstrained pool draws
-        // as before. An explicit crew never reaches this draw.
+        // admission does not select it and then withhold it. The creation
+        // draw (`serving_hosts`) instead keeps a crew any serving host can
+        // run: the assigned task waits for that host rather than being
+        // redrawn here. Crews with no declaration stay, with their weights,
+        // so an unconstrained pool draws as before. An explicit crew never
+        // reaches this draw.
         let declared = self.declared_executor_host_os()?;
+        // Resolve the serving set once: it reads this workspace's claim
+        // records, which no candidate's answer can change.
+        let serving = serving_hosts.then(|| self.serving_host_oses());
         let crews = enabled
             .into_iter()
-            .filter(|candidate| self.crew_runs_on_host(&candidate.crew, &declared))
+            .filter(|candidate| match &serving {
+                Some(oses) => self.crew_runs_on_hosts(&candidate.crew, &declared, oses),
+                None => self.crew_runs_on_host(&candidate.crew, &declared),
+            })
             .collect::<Vec<_>>();
         if crews.is_empty() {
             tracing::info!(
@@ -442,7 +474,7 @@ impl OrbitRuntime {
         let pools = self.capture_auto_crew_pools(&Value::Null)?;
         if let Some(complexity) = complexity
             && let Some((candidates, _)) =
-                self.complexity_pool_candidates(Some(complexity), &pools)?
+                self.creation_complexity_pool_candidates(Some(complexity), &pools)?
         {
             let source = format!("pool:{complexity}");
             let candidates = permitted_candidates(candidates, &source, None)?;
@@ -462,11 +494,13 @@ impl OrbitRuntime {
         if !default.enabled {
             return Ok(None);
         }
-        // An excluded default is not pinned: the field stays unset rather than
-        // assigning a crew this host would then withhold. An explicit crew is
-        // returned above and is never replaced.
+        // A default no serving host can run is not pinned: the field stays
+        // unset rather than assigning a crew every host would withhold. A
+        // default only a follower can run is pinned, like a creation pool
+        // draw, and waits for that follower. An explicit crew is returned
+        // above and is never replaced.
         let declared = self.declared_executor_host_os()?;
-        if !self.crew_runs_on_host(&default, &declared) {
+        if !self.crew_runs_on_serving_host(&default, &declared) {
             return Ok(None);
         }
         Ok(Some(CreationCrewAssignment {
