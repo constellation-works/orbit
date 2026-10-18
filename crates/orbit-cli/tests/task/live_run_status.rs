@@ -56,6 +56,7 @@ fn status_changes_respect_local_run_ownership_and_explicit_force() {
     )
     .unwrap();
     let before = fixture.json(&["task", "show", &id, "--json"]);
+    assert_approve_refused(&fixture, &id, &pending.run_id, &before);
     let input = json!({"id": id, "status": "backlog"}).to_string();
     let refused = fixture
         .command(&["tool", "run", "orbit.task.update", "--input", &input])
@@ -157,6 +158,19 @@ fn status_changes_respect_local_run_ownership_and_explicit_force() {
         fixture.json(&["task", "show", &id, "--json"])["status"],
         "review"
     );
+    // The task still has no job_run_id and no execution claim. Approval must
+    // refuse on the non-terminal run's task_ids alone, without writing a
+    // comment or a history entry.
+    assert!(runtime.get_task(&id).unwrap().job_run_id.is_none());
+    assert!(
+        runtime
+            .inspect_execution_claims()
+            .unwrap()
+            .iter()
+            .all(|inspection| inspection.claim.task_id != id)
+    );
+    let before_review = fixture.json(&["task", "show", &id, "--json"]);
+    assert_approve_refused(&fixture, &id, &run.run_id, &before_review);
     let forced = fixture.json(&[
         "task", "update", &id, "--status", "someday", "--force", "--json",
     ]);
@@ -199,4 +213,104 @@ fn status_changes_respect_local_run_ownership_and_explicit_force() {
         ])["status"],
         "someday"
     );
+    // Retained terminal history does not block the operator approval that
+    // completes review.
+    fixture.json(&[
+        "task",
+        "update",
+        &id,
+        "--status",
+        "in-progress",
+        "--plan",
+        "Approve after the owner run ends.",
+        "--json",
+    ]);
+    runtime
+        .update_task_from_activity(
+            &id,
+            TaskActivityUpdate {
+                status: TaskStatus::Review,
+                expected_status: TaskStatus::InProgress,
+                execution_summary: Some("Ready for approval.".to_string()),
+                comment: None,
+                note: None,
+                agent: None,
+                model: None,
+                calling_run_id: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        fixture.json(&["task", "update", &id, "--approve", "--json"])["status"],
+        "done"
+    );
+
+    // Drain promotion calls approve_task while its own run still lists the
+    // task. That trusted path stays available.
+    let trusted = fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        "Drain approval",
+        "--complexity",
+        "low",
+        "--acceptance-criteria",
+        "Trusted approval stays available",
+        "--json",
+    ]);
+    let trusted_id = trusted["id"].as_str().unwrap();
+    assert!(runtime.get_task(trusted_id).unwrap().job_run_id.is_none());
+    assert!(
+        runtime
+            .inspect_execution_claims()
+            .unwrap()
+            .iter()
+            .all(|inspection| inspection.claim.task_id != trusted_id)
+    );
+    let trusted_run = RuntimeHost::insert_job_run(
+        &runtime,
+        "local-run-fixture",
+        1,
+        Utc::now(),
+        Some(json!({"task_ids": [trusted_id]})),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        runtime
+            .approve_task(trusted_id, Some("drain promotion".to_string()), None)
+            .unwrap()
+            .status,
+        TaskStatus::Backlog
+    );
+    assert_eq!(
+        RuntimeHost::get_job_run(&runtime, &trusted_run.run_id)
+            .unwrap()
+            .unwrap()
+            .state,
+        JobRunState::Pending
+    );
+}
+
+fn assert_approve_refused(fixture: &Fixture, id: &str, run_id: &str, before: &serde_json::Value) {
+    let refused = fixture
+        .command(&[
+            "task",
+            "update",
+            id,
+            "--approve",
+            "--comment",
+            "must not persist",
+            "--note",
+            "must not persist",
+        ])
+        .env("ORBIT_OPERATOR", "1")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        !refused.status.success() && stderr.contains(run_id),
+        "CLI --approve must refuse while local run {run_id} owns the task and name that run: {stderr}"
+    );
+    assert_eq!(fixture.json(&["task", "show", id, "--json"]), *before);
 }

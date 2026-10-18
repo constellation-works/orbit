@@ -2,9 +2,12 @@
 //! warnings, as the CLI and the task tools do. Warnings are identified by the
 //! record they name, never by their wording.
 
+use orbit_core::JobRunState;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_types::task::TaskStatus;
 use serde_json::{Value, json};
+
+use super::support::Server;
 
 use super::support::{Fixture, isolated, json_ok};
 
@@ -263,4 +266,120 @@ fn dashboard_update_of_a_run_owned_task_keeps_the_strict_context_check() {
             );
         },
     );
+}
+
+/// Operator approval refuses while a non-terminal local run lists the task in
+/// `input.task_ids`, and leaves status, comments, and history unchanged. The
+/// task has no `job_run_id` and no execution claim. Once that run is terminal,
+/// the same action approves.
+#[test]
+fn dashboard_approval_refuses_while_a_local_run_owns_the_task() {
+    isolated(
+        "task_writes::dashboard_approval_refuses_while_a_local_run_owns_the_task",
+        || {
+            let fixture = Fixture::new();
+            let proposed = seed(
+                &fixture,
+                "Proposed while a run owns it",
+                TaskStatus::Proposed,
+            );
+            let review = seed(&fixture, "Review while a run owns it", TaskStatus::Backlog);
+            fixture
+                .runtime
+                .update_task_as_human(
+                    &review,
+                    TaskUpdateParams {
+                        status: Some(TaskStatus::InProgress),
+                        ..Default::default()
+                    },
+                    "dashboard-fixture".to_string(),
+                )
+                .expect("move the review fixture to in-progress");
+            fixture
+                .runtime
+                .update_task_as_human(
+                    &review,
+                    TaskUpdateParams {
+                        status: Some(TaskStatus::Review),
+                        execution_summary: Some("Delivered for review.".to_string()),
+                        ..Default::default()
+                    },
+                    "dashboard-fixture".to_string(),
+                )
+                .expect("move the review fixture to review");
+
+            let mut proposed_run = own_pending(&fixture, &proposed);
+            let mut review_run = own_pending(&fixture, &review);
+            for id in [&proposed, &review] {
+                let task = fixture.runtime.get_task(id).expect("task");
+                assert!(task.job_run_id.is_none(), "{id}");
+                assert!(
+                    fixture
+                        .runtime
+                        .inspect_execution_claims()
+                        .expect("claims")
+                        .iter()
+                        .all(|inspection| inspection.claim.task_id != *id),
+                    "{id} has an execution claim"
+                );
+            }
+
+            let server = fixture.server(true);
+            assert_approval_refused(&server, &proposed, &proposed_run.run_id);
+            assert_approval_refused(&server, &review, &review_run.run_id);
+
+            proposed_run.state = JobRunState::Cancelled;
+            review_run.state = JobRunState::Success;
+            fixture.save_run(&proposed_run);
+            fixture.save_run(&review_run);
+
+            let approved = json_ok(server.send(
+                "POST",
+                &format!("/api/tasks/{proposed}/approve{WORKSPACE}"),
+                json!({}),
+            ));
+            assert_eq!(approved["status"], json!("backlog"), "{approved}");
+            let done = json_ok(server.send(
+                "POST",
+                &format!("/api/tasks/{review}/approve{WORKSPACE}"),
+                json!({}),
+            ));
+            assert_eq!(done["status"], json!("done"), "{done}");
+        },
+    );
+}
+
+fn own_pending(fixture: &Fixture, task_id: &str) -> orbit_core::JobRun {
+    let mut run = fixture.seed_run(
+        &format!("jrun-owner-{task_id}"),
+        "fixture",
+        JobRunState::Pending,
+    );
+    run.input = Some(json!({ "task_ids": [task_id] }));
+    fixture.save_run(&run);
+    run
+}
+
+fn assert_approval_refused(server: &Server, id: &str, run_id: &str) {
+    let path = format!("/api/tasks/{id}{WORKSPACE}");
+    let before = json_ok(server.get(&path));
+    let refused = server.send(
+        "POST",
+        &format!("/api/tasks/{id}/approve{WORKSPACE}"),
+        json!({
+            "comment": "must not persist",
+            "note": "must not persist",
+        }),
+    );
+    assert_eq!(refused.status().as_u16(), 400);
+    let body: Value = refused.json().expect("error body");
+    let error = body["error"].as_str().expect("error message");
+    assert!(
+        error.contains(run_id),
+        "dashboard approval must name owning run {run_id}: {body}"
+    );
+    let after = json_ok(server.get(&path));
+    assert_eq!(after["status"], before["status"], "{after}");
+    assert_eq!(after["comments"], before["comments"], "{after}");
+    assert_eq!(after["history"], before["history"], "{after}");
 }

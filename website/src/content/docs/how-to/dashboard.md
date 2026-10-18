@@ -182,7 +182,7 @@ Open a task to see its detail and every action its status allows:
 | Action | Shown for |
 |---|---|
 | **ship** | `backlog`. Runs the workspace's ship mode (`pr` or `local`). Disabled while a ship run for the task is in flight. |
-| **approve** | `proposed` or `review`. |
+| **approve** | `proposed` or `review`. Refused while a non-terminal local run lists the task; the error names that run, and the task, its comments, and its history stay unchanged. Stop the run, then approve. |
 | **reject** | `proposed`, `review`, or `backlog`. |
 | **archive** | Any status except `archived`. |
 | **comment** | Any status. |

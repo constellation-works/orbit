@@ -104,6 +104,9 @@ impl OrbitRuntime {
         })
     }
 
+    /// Trusted approval. Drain promotion calls this while its own run still
+    /// lists the task, so this path does not apply the operator ownership
+    /// guard. Operator surfaces use the guarded approval path.
     pub fn approve_task(
         &self,
         id: &str,
@@ -120,6 +123,34 @@ impl OrbitRuntime {
         comment: Option<String>,
         agent: Option<String>,
         model: Option<String>,
+    ) -> Result<Task, OrbitError> {
+        self.approve_task_locked(id, note, comment, agent, model, false)
+    }
+
+    /// Operator approval (`orbit task update --approve` and the dashboard).
+    ///
+    /// The ownership check runs under the task lock, before any comment or
+    /// history write. A non-terminal local run whose `input.task_ids` lists
+    /// the task refuses both `proposed → backlog` and `review → done`.
+    pub(crate) fn approve_task_guarding_run_ownership(
+        &self,
+        id: &str,
+        note: Option<String>,
+        comment: Option<String>,
+        agent: Option<String>,
+        model: Option<String>,
+    ) -> Result<Task, OrbitError> {
+        self.approve_task_locked(id, note, comment, agent, model, true)
+    }
+
+    fn approve_task_locked(
+        &self,
+        id: &str,
+        note: Option<String>,
+        comment: Option<String>,
+        agent: Option<String>,
+        model: Option<String>,
+        guard_run_ownership: bool,
     ) -> Result<Task, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let note = note.map(|value| redact_all(&value));
@@ -138,6 +169,11 @@ impl OrbitRuntime {
             let task = self.get_task(id)?;
             #[cfg(test)]
             self.apply_transition_read_hook(id)?;
+            if guard_run_ownership
+                && matches!(task.status, TaskStatus::Proposed | TaskStatus::Review)
+            {
+                ensure_status_change_not_run_owned(self, id)?;
+            }
             let implemented_by =
                 implementation_label(&task, effective_label.as_str(), canonical_model.as_deref());
             if task.status == TaskStatus::Review {
