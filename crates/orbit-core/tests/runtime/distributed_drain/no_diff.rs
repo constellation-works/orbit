@@ -1681,6 +1681,61 @@ fn a_published_candidates_string_findings_are_normalized_at_handoff() {
     }
 }
 
+/// A claimed implementer that attributes its task's regression returns the
+/// culprit as `regression_from`, since it cannot write the task's relations.
+/// The shipped claimed pipeline's handoff carries it, and the owner records
+/// the relation when it accepts the handoff, so no operator has to add it
+/// before landing. A handoff naming a culprit the owner cannot resolve is
+/// refused and records nothing [F2026-10-453].
+fn a_claimed_implementers_regression_culprit_is_recorded_at_handoff() {
+    let mut fixture = CleanLeaf::new(false, "review");
+    let owner = fixture.pair.wire.owner.clone();
+    let culprit = owner
+        .run_tool(
+            "orbit.task.add",
+            json!({
+                "title": "The delivery that broke CI",
+                "description": "Landed the failing change.",
+                "complexity": "low", "model": "codex",
+                "workspace": fixture.pair.owner_repo.to_string_lossy(),
+            }),
+        )
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    fixture.input["implementation"]["regression_from"] = json!([culprit]);
+    let handoff = fixture.run_clean_pipeline("task_claimed_pr_pipeline");
+    assert_eq!(handoff.regression_from, vec![culprit.clone()]);
+    assert!(
+        handoff.execution_summary.contains(&culprit),
+        "the summary names the attributed culprit: {}",
+        handoff.execution_summary
+    );
+
+    let prefix = culprit.split('-').next().unwrap();
+    let mut unknown = handoff.clone();
+    unknown.regression_from = vec![format!("{prefix}-999999")];
+    let refused = fixture.settle(&unknown).unwrap_err().to_string();
+    assert!(
+        refused.contains("regression_from attribution was refused"),
+        "{refused}"
+    );
+    assert_eq!(
+        fixture.pair.owner_task(&fixture.task)["relations"],
+        json!([])
+    );
+
+    fixture
+        .settle(&handoff)
+        .expect("the owner accepts the attributed handoff");
+    assert_eq!(
+        fixture.pair.owner_task(&fixture.task)["relations"],
+        json!([{"type": "regression_from", "target": culprit}]),
+        "the owner records the culprit without an operator write"
+    );
+}
+
 fn no_diff_retains_owner_completion_authority() {
     let fixture = CleanLeaf::new(false, "review");
     let handoff = fixture.prepare_handoff();
@@ -3359,6 +3414,7 @@ crate::scenario_table!(
 crate::scenario_table!(
     no_diff_retains_owner_completion_authority_scenarios,
     no_diff_retains_owner_completion_authority,
+    a_claimed_implementers_regression_culprit_is_recorded_at_handoff,
     owner_refuses_changed_no_diff_evidence_base_or_missing_required_checks_without_blocking,
     claimed_no_diff_requires_a_verifier_checkpoint_and_passing_logs
 );

@@ -326,6 +326,9 @@ pub(crate) struct ClaimCommitEffects {
     pub friction: Option<(crate::contracts::FrictionAddParams, String)>,
     pub execution_origin: Option<ExecutionLocation>,
     pub worker_update: Option<ClaimWorkerUpdate>,
+    /// Culprit tasks an accepted handoff attributes the task's regression
+    /// to, added to its relations as `regression_from` in this commit.
+    pub regression_from: Vec<String>,
     /// The claim id and bound run a worker's evidence write was authenticated
     /// against, which the owner stamps on coverage it commits [ORB-15962].
     pub claimed_submission: Option<(String, ClaimRun)>,

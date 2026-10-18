@@ -372,10 +372,13 @@ impl FailureCluster {
              is reproduced and then passes locally."
                 .to_string(),
             "The repository's documented pre-handoff gate passes.".to_string(),
-            "This task carries a `regression_from` relation targeting the task whose landed \
-             commit introduced the failure, or its execution summary states why no task can \
-             be held responsible (no task ID on the culprit commit, or the failure is \
-             infrastructure rather than repository-owned)."
+            "The task whose landed commit introduced the failure is recorded as this task's \
+             `regression_from` relation, or, in claimed execution, returned in the \
+             implementer output's `regression_from` field for the owner to record when it \
+             accepts the handoff, with the culprit commit named in the execution summary. \
+             Otherwise the execution summary states why no task can be held responsible (no \
+             task ID on the culprit commit, or the failure is infrastructure rather than \
+             repository-owned)."
                 .to_string(),
             "If the failure turns out to be infrastructure rather than repository-owned, the \
              execution summary cites concrete evidence for that (a same-commit retry that \
@@ -599,16 +602,21 @@ impl FailureCluster {
              Identify the task whose landed change introduced this failure and record it on \
              this task. Start from the commit the runner checked out and walk back to the \
              newest commit at which the failing command last passed; the commit that broke it \
-             is the culprit. Read the task ID from that commit — squash-merge subjects carry \
-             it as `[<task-id>]` — and confirm with `orbit tool run orbit.task.show --input \
-             '{\"id\":\"<task-id>\"}'` that its change is the one at fault, not a later commit \
-             that merely touched the same file. Then set the relation with `orbit tool run \
-             orbit.task.update --input '{\"id\":\"<this task ID>\",\"relations\":[<existing \
-             relations from orbit.task.show>,{\"type\":\"regression_from\",\"target\":\"<culprit \
-             task ID>\"}]}'` — `relations` replaces the whole list, so carry the existing \
-             entries forward. When the culprit commit carries no task ID, or the failure is \
-             infrastructure rather than repository-owned, record that conclusion and its \
-             evidence in the execution summary instead of blaming a bystander task.\n",
+             is the culprit. The commit the runner checked out is often a later bystander, \
+             not the culprit. Read the task ID from the culprit commit — squash-merge \
+             subjects carry it as `[<task-id>]` — and confirm from that commit's diff that \
+             its change is the one at fault, not a later commit that merely touched the same \
+             file. Then set the relation with `orbit tool run orbit.task.update --input \
+             '{\"id\":\"<this task ID>\",\"relations\":[<existing relations from \
+             orbit.task.show>,{\"type\":\"regression_from\",\"target\":\"<culprit task \
+             ID>\"}]}'` — `relations` replaces the whole list, so carry the existing entries \
+             forward. In claimed execution, where `orbit.task.update` is unavailable, return \
+             `\"regression_from\":[\"<culprit task ID>\"]` in your output instead and name \
+             the culprit commit in the execution summary; the owner checks the target and \
+             records the relation when it accepts the handoff. When the culprit commit \
+             carries no task ID, or the failure is infrastructure rather than \
+             repository-owned, record that conclusion and its evidence in the execution \
+             summary instead of blaming a bystander task.\n",
         );
         out
     }

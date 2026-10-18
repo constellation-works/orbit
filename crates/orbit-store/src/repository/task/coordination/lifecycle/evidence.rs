@@ -7,7 +7,8 @@ use orbit_common::fs::io::atomic_write_bytes;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{
     ArtifactManifestFileV2, ArtifactManifestV2, TASK_ARTIFACT_SCHEMA_VERSION,
-    TASK_ARTIFACTS_DIR_NAME, TASK_COMMENTS_FILE_NAME, TaskArtifact, TaskCommentRowV2,
+    TASK_ARTIFACTS_DIR_NAME, TASK_COMMENTS_FILE_NAME, TaskArtifact, TaskCommentRowV2, TaskRelation,
+    TaskRelationType,
 };
 use orbit_types::workflow::REVIEW_REPORT_HISTORY_ARTIFACT;
 use orbit_types::workflow::automation::{
@@ -42,6 +43,18 @@ impl TaskCommitBoundary {
                     intent.envelope.external_refs.push(reference.clone());
                 }
             }
+            intent.envelope.validate()?;
+        }
+        for target in &effects.regression_from {
+            let relation = TaskRelation {
+                relation_type: TaskRelationType::RegressionFrom,
+                target: target.clone(),
+            };
+            if !intent.envelope.relations.contains(&relation) {
+                intent.envelope.relations.push(relation);
+            }
+        }
+        if !effects.regression_from.is_empty() {
             intent.envelope.validate()?;
         }
         if let Some(run) = binding {

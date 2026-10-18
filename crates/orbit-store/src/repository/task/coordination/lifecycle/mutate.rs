@@ -849,6 +849,7 @@ impl TaskCommitBoundary {
         let mut effects = ClaimCommitEffects {
             execution_origin: Some(claim.executed_on.clone()),
             worker_update: handoff_effects.worker_update,
+            regression_from: handoff_effects.regression_from,
             friction: handoff_effects.friction,
             replacements: handoff_effects.replacements,
             release_reservation: release.then_some(claim.reservation_id),

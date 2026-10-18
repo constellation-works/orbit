@@ -294,6 +294,15 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
   from the final candidate rather than trusted from the implementer output, then a line naming the delivered candidate. Each part is bounded, and a summary whose
   first line is `Outcome: failed` is refused before it becomes a settlement. Acceptance writes it
   as the owner's `execution_summary`.
+- A claimed implementer cannot write its task's relations. When its task asks for a
+  `regression_from` relation (a CI-failure sweep repair asks for one to the culprit task), it
+  returns the culprit task IDs as the output's `regression_from`. The implement step refuses an
+  entry that is not a task ID before any commit, push or PR, and `claim_handoff` refuses the
+  claimed task itself. The handoff carries the IDs as `TaskHandoff.regression_from` and names
+  them in its summary. The owner validates the task's relations with that addition as an
+  ordinary relation write would (a target under a prefix this registry issued must resolve; a
+  foreign prefix is accepted), refuses the settlement otherwise, and records the relations in the
+  acceptance commit. The leaf's reviewer reads the culprit from the implementer's summary.
 - A claimed implementer may change any path the work requires; the frozen footprint is a
   scheduling hint, not a delivery gate. Every added path the admission selectors do not cover
   becomes an owner-validated widening request for an exact `file:` selector. The follower

@@ -81,6 +81,15 @@ spec:
       # Claimed mode: a task comment the implementer would have posted.
       comment:
         type: string
+      # Claimed mode: culprit task IDs the implementer would have recorded as
+      # `regression_from` relations. The handoff carries them and the owner
+      # checks and records them when it accepts the handoff. The implement
+      # step fails an output whose entries are not task IDs before any
+      # commit, push or PR.
+      regression_from:
+        type: array
+        items:
+          type: string
       # Claimed mode: findings the owner refused to file. The handoff
       # attaches them to the claimed task as `unfiled-findings.json`. The
       # engine does not enforce this schema; the implement step fails an
@@ -221,6 +230,11 @@ spec:
       - `comment`: any task comment or leftovers (item 11). A real blocker
         (item 8) is `result.blocker` `{kind, evidence}`, not a status write
         and not only this comment.
+      - `regression_from`: when the task asks you to record a
+        `regression_from` relation, the culprit task IDs as
+        `["<task-id>"]`, with the culprit commit named in
+        `execution_summary`. The owner checks each target and records the
+        relation when it accepts the handoff.
     - In claimed mode, for a clean no-op or already-satisfied base without
       `no-diff-expected`, write the structured
       `no-diff.json` or `already-landed.json` report and every validation log

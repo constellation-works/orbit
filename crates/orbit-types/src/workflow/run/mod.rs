@@ -7,6 +7,7 @@ mod forge_hold;
 mod held_candidate;
 mod id;
 mod implementer_findings;
+mod implementer_regression;
 mod provider_hold;
 mod root_cause;
 mod state;
@@ -42,6 +43,7 @@ pub use forge_hold::{
 pub use held_candidate::{CANDIDATE_HELD_EVENT, CANDIDATE_HELD_MARKER, HeldCandidate};
 pub use id::{RunIdRole, run_id_candidate, run_id_minute_stem, run_id_role};
 pub use implementer_findings::{normalize_unfiled_findings, unfiled_findings_shape_error};
+pub use implementer_regression::{REGRESSION_FROM_FIELD, implementer_regression_from};
 pub use provider_hold::{
     PROVIDER_FAILURE_HOLD_EVENT, PROVIDER_FAILURE_HOLD_MARKER, ProviderCrewOutage,
     ProviderFailureClass, ProviderFailureHold, ProviderLimitFailure, failed_provider,

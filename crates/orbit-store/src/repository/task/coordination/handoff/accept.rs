@@ -212,6 +212,34 @@ impl TaskCommitBoundary {
                     });
             }
         }
+        // A claimed worker cannot write its task's relations or read other
+        // tasks, so the culprits it attributed the regression to are checked
+        // here as an ordinary relation write would be, and recorded as
+        // `regression_from` in this same commit.
+        if !handoff.regression_from.is_empty() {
+            let mut relations = self
+                .bundle_store
+                .read_bundle_lightweight(&auth.task_id)?
+                .envelope
+                .relations;
+            for target in &handoff.regression_from {
+                let relation = orbit_types::task::TaskRelation {
+                    relation_type: orbit_types::task::TaskRelationType::RegressionFrom,
+                    target: target.clone(),
+                };
+                if !relations.contains(&relation) {
+                    relations.push(relation);
+                }
+            }
+            self.registry
+                .validate_task_relations(&self.workspace_id, &auth.task_id, &relations)
+                .map_err(|error| {
+                    invalid(&format!(
+                        "the handoff's regression_from attribution was refused: {error}"
+                    ))
+                })?;
+        }
+        effects.regression_from = handoff.regression_from.clone();
         // The owner admitted these against its pilot's post-deploy finding
         // before this commit; the history entry is the task's owed record.
         if !handoff.owed_criteria.is_empty() {
