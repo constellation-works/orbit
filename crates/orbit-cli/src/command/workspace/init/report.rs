@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use super::super::support::{manages_checkout_local_orbit_files, orbit_gitignore_path};
 use super::WorkspaceInitResult;
+use super::browser_kit::{BrowserKitOutcome, browser_kit_json, browser_kit_line};
 
 const ONBOARDING_FINALIZE_GUIDANCE: &str = "review the managed `.gitignore` entry (Orbit ignores `.orbit/` as per-user state and does not auto-commit or discard operator changes)";
 const RELOCATED_ROOT_ONBOARDING_GUIDANCE: &str = "review generated Orbit definitions in the configured Orbit root before local workflows (Orbit does not auto-commit or discard operator changes)";
@@ -42,6 +43,7 @@ pub(super) struct WorkspaceInitReport {
     allocator: AllocatorOutcome,
     mcp: McpOutcome,
     rules: RulesOutcome,
+    browser_kit: BrowserKitOutcome,
 }
 
 enum AllocatorOutcome {
@@ -71,6 +73,7 @@ pub(super) fn collect_init_report(
     task_id_start: Option<u32>,
     mcp: bool,
     inject_rules: bool,
+    browser_kit: BrowserKitOutcome,
 ) -> Result<WorkspaceInitReport, OrbitError> {
     let onboarding = onboarding_finalize_guidance(&init_result.root, &init_result.orbit_dir);
     let mut checkout_files = BTreeSet::new();
@@ -144,6 +147,7 @@ pub(super) fn collect_init_report(
         allocator,
         mcp: mcp_outcome,
         rules: rules_outcome,
+        browser_kit,
     })
 }
 
@@ -190,6 +194,7 @@ pub(super) fn workspace_init_json(report: &WorkspaceInitReport) -> Value {
         "allocator": allocator_json(&report.allocator),
         "mcp": mcp_json(&report.mcp),
         "rules": rules_json(&report.rules),
+        "browser_kit": browser_kit_json(&report.browser_kit),
     })
 }
 
@@ -322,5 +327,6 @@ pub(super) fn format_workspace_init(report: &WorkspaceInitReport) -> String {
             lines.push(format!("  rules:     {}: {verb}", entry.label));
         }
     }
+    lines.extend(browser_kit_line(&report.browser_kit));
     lines.join("\n")
 }

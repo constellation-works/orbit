@@ -45,6 +45,7 @@ use serde::Serialize;
 use crate::task_store;
 
 mod automation;
+mod browser_kit;
 mod commands;
 mod git_protection;
 mod permissions;

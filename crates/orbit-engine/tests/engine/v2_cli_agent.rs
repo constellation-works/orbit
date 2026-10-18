@@ -436,6 +436,90 @@ fn cli_dispatch_stamps_the_provider_deadline() -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+/// A worker's environment carries the browser kit's locators exactly when the
+/// kit under its HOME passed `verify` at the installed version, and never the
+/// kit's libraries on `LD_LIBRARY_PATH`.
+#[cfg(unix)]
+#[test]
+fn cli_dispatch_hands_workers_only_a_verified_browser_kit() -> Result<(), Box<dyn std::error::Error>>
+{
+    use orbit_exec::browser_kit::{KitLayout, PLAYWRIGHT_VERSION};
+
+    let observe = |home: &Path, run_id: &str| -> Result<String, Box<dyn std::error::Error>> {
+        let tmp_audit = tempfile::tempdir()?;
+        let (writer, _store) = build_writer(tmp_audit.path(), run_id)?;
+        let observed = home.join("observed-env");
+        let fake = fake_cli(
+            "claude",
+            &format!(
+                "#!/bin/sh\ncat > /dev/null\nprintf 'PLAYWRIGHT_BROWSERS_PATH=%s\\nPLAYWRIGHT_MODULE=%s\\nORBIT_BROWSER_KIT_ENV=%s\\nLD_LIBRARY_PATH=%s\\n' \"$PLAYWRIGHT_BROWSERS_PATH\" \"$PLAYWRIGHT_MODULE\" \"$ORBIT_BROWSER_KIT_ENV\" \"$LD_LIBRARY_PATH\" > '{}'\necho '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
+                observed.display()
+            ),
+        )?;
+        let mut host = ScriptHost::new(fake.cli_path());
+        host.admitted_env = vec![("HOME".to_string(), home.display().to_string())];
+        let outcome = dispatch_v2_activity(V2DispatchInput {
+            activity_name: "cli_browser_kit",
+            spec: &ActivityV2Spec::AgentLoop(cli_agent_loop_spec(None)),
+            fs_profile: None,
+            input: serde_json::json!({ "prompt": "hello" }),
+            audit: writer,
+            run_id,
+            host: Some(&host),
+        })?;
+        assert!(outcome.success, "fake claude should exit 0");
+        Ok(fs::read_to_string(&observed)?)
+    };
+
+    let home = tempfile::tempdir()?;
+    let layout = KitLayout::for_home(home.path());
+    let root = layout.root();
+    let package = root.join("kit/node_modules/playwright");
+    fs::create_dir_all(&package)?;
+    fs::write(
+        package.join("package.json"),
+        format!("{{\"version\":\"{PLAYWRIGHT_VERSION}\"}}"),
+    )?;
+    fs::write(package.join("index.mjs"), "")?;
+    let core = root.join("kit/node_modules/playwright-core");
+    fs::create_dir_all(&core)?;
+    fs::write(
+        core.join("browsers.json"),
+        r#"{"browsers":[{"name":"chromium-headless-shell","revision":"1248"}]}"#,
+    )?;
+    let shell = root.join("browsers/chromium_headless_shell-1248");
+    fs::create_dir_all(&shell)?;
+    fs::write(shell.join("INSTALLATION_COMPLETE"), "")?;
+    fs::create_dir_all(root.join("root/usr/lib/x86_64-linux-gnu"))?;
+    fs::write(root.join("env.sh"), "export LD_LIBRARY_PATH=/kit/libs\n")?;
+
+    let unverified = observe(home.path(), "browser-kit-unverified")?;
+    assert_eq!(
+        unverified,
+        "PLAYWRIGHT_BROWSERS_PATH=\nPLAYWRIGHT_MODULE=\nORBIT_BROWSER_KIT_ENV=\nLD_LIBRARY_PATH=\n",
+        "a kit that never passed verify reaches no worker"
+    );
+
+    fs::write(
+        root.join("orbit-kit.json"),
+        format!(
+            "{{\"schema_version\":1,\"playwright_version\":\"{PLAYWRIGHT_VERSION}\",\"chromium_revision\":\"1248\",\"browser_version\":\"156.0.8078.4\",\"verified_at\":\"2026-10-18T00:00:00Z\"}}"
+        ),
+    )?;
+    let verified = observe(home.path(), "browser-kit-verified")?;
+    assert_eq!(
+        verified,
+        format!(
+            "PLAYWRIGHT_BROWSERS_PATH={}\nPLAYWRIGHT_MODULE={}\nORBIT_BROWSER_KIT_ENV={}\nLD_LIBRARY_PATH=\n",
+            layout.browsers().display(),
+            layout.module().display(),
+            layout.env_script().display()
+        ),
+        "a verified kit reaches workers through its locators alone"
+    );
+    Ok(())
+}
+
 /// B: argv carrying an `sk-...` token (via the `--model` flag set by
 /// `claude_cli.rs`) is redacted in the persisted envelope event.
 #[cfg(unix)]

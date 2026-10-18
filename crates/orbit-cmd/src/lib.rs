@@ -24,6 +24,7 @@
 orbit_common::isolate_test_process!();
 
 pub mod agent_rules;
+pub mod browser_kit;
 mod diagnostics;
 mod doctor;
 pub mod hosts;

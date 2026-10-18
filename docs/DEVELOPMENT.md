@@ -622,10 +622,10 @@ orbit gc tmp --workspace my-workspace --confirm          # empty it, keep the di
 
 ## Browser checks on a prepared host
 
-Browser checks need Playwright and Chromium, plus Chromium's shared libraries and a font configuration on Linux. A prepared host has a kit at `~/.local/chromium-deps`; its `env.sh` exports `PLAYWRIGHT_BROWSERS_PATH` and `PLAYWRIGHT_MODULE` (Playwright's `index.mjs`), and on Linux also `LD_LIBRARY_PATH` and `FONTCONFIG_FILE`. Source it first. To build, verify or upgrade the kit on Linux or macOS, see the orbit-setup [browser kit reference](../crates/orbit-core/assets/skills/orbit-setup/references/browser-checks.md). On a host without it, build the kit there rather than installing Playwright into a checkout: `.orbit/tmp/` is cleared, so it holds only a sandboxed run's disposable copy when the kit is absent ([runbook](runbooks/website-validation.md#stage-playwright-and-chromium-without-root)). Skia FontConfig crashes and missing `lib*.so` errors are host evidence, not a failed check.
+Browser checks need Playwright and Chromium, plus Chromium's shared libraries and a font configuration on Linux. A prepared host has a kit at `~/.local/chromium-deps`, built and verified by `orbit browser-kit install` (`status`, `verify` and `remove` manage it; see the orbit-setup [browser kit reference](../crates/orbit-core/assets/skills/orbit-setup/references/browser-checks.md)). Once it is verified, every agent receives `PLAYWRIGHT_BROWSERS_PATH`, `PLAYWRIGHT_MODULE` (Playwright's `index.mjs`) and `ORBIT_BROWSER_KIT_ENV`, the kit's `env.sh`, which on Linux also exports `LD_LIBRARY_PATH` and `FONTCONFIG_FILE` when the kit unpacked them. Source it in the shell that runs the check; in a hand-run shell, source `~/.local/chromium-deps/env.sh`. `orbit doctor` reports a missing, mismatched or unverified kit, unresolved libraries and `node` missing from workers' PATH. On a host without a kit, run `orbit browser-kit install` there rather than installing Playwright into a checkout: `.orbit/tmp/` is cleared, so it holds only a sandboxed run's disposable copy when the kit is absent ([runbook](runbooks/website-validation.md#stage-playwright-and-chromium-without-root)). Skia FontConfig crashes and missing `lib*.so` errors are host evidence, not a failed check.
 
 ```bash
-. ~/.local/chromium-deps/env.sh
+. "${ORBIT_BROWSER_KIT_ENV:-$HOME/.local/chromium-deps/env.sh}"
 node crates/orbit-web/src/tests/dashboard_operations_browser.mjs \
   "$PLAYWRIGHT_MODULE" .orbit/tmp/dashboard-browser
 ```
