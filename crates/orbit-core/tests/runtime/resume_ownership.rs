@@ -543,6 +543,7 @@ fn resume_of_a_lineage_binding_keeps_the_checkpoint_batch_id() {
         vec![orbit_types::workflow::SteeringRound {
             admitted_at: Utc::now(),
             outstanding: Vec::new(),
+            candidate_source: None,
         }],
     );
     fx.jobs.write_run_state(&source, &source_state).unwrap();

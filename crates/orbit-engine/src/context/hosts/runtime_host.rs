@@ -682,28 +682,40 @@ pub trait RuntimeHost: Send + Sync {
     ///
     /// With `workflow.mid_run_steering.enabled` off the host reads nothing
     /// and answers `Disabled`. On, it re-reads the task and its comment log
-    /// and judges them against the run's own watermark; a run that holds no
-    /// watermark for the task counts every operator comment written after
-    /// the run started. The reading comes from those durable records alone,
-    /// never from agent output. A record it cannot read is an error, which
-    /// the gate treats as a refusal. A claimed leaf's host reads the task,
-    /// its comment log and the leaf's watermark from the owner's record,
-    /// never its replica, and an owner it cannot read is such an error.
-    fn steering_gate(&self, run_id: &str, task_id: &str)
-    -> Result<SteeringGateReading, OrbitError>;
+    /// and judges them against the run's own watermark. A run that holds no
+    /// watermark for the task inherits one: from its resume lineage, then
+    /// from `candidate_source`, the run whose candidate it carries past its
+    /// implementer, which must be a run of the task this host recorded. Past
+    /// those it counts every operator comment written after the earliest run
+    /// it reached started. The reading comes from those durable records
+    /// alone, never from agent output. A record it cannot read, or a
+    /// baseline it cannot resolve, is an error, which the gate treats as a
+    /// refusal. A claimed leaf's host reads the task, its comment log and
+    /// the leaf's watermark from the owner's record, never its replica, and
+    /// an owner it cannot read is such an error.
+    fn steering_gate(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        candidate_source: Option<&str>,
+    ) -> Result<SteeringGateReading, OrbitError>;
 
     /// Admit one more promotion-gate steering round of `run_id` for
-    /// `task_id`, whose gate found `outstanding` undelivered.
+    /// `task_id`, whose gate found `outstanding` undelivered from the
+    /// baseline `candidate_source` gave it.
     ///
-    /// The host records an admitted round in the run's state before
-    /// answering, so the round is spent even when its dispatch then fails. It
-    /// refuses once the run spent `workflow.mid_run_steering.max_rounds`, or
-    /// when its last round was admitted for exactly `outstanding`.
+    /// The host records an admitted round, with `candidate_source`, in the
+    /// run's state before answering, so the round is spent even when its
+    /// dispatch then fails, and its first prompt delivers from the gate's
+    /// baseline. It refuses once the run spent
+    /// `workflow.mid_run_steering.max_rounds`, or when its last round was
+    /// admitted for exactly `outstanding`.
     fn admit_steering_round(
         &self,
         run_id: &str,
         task_id: &str,
         outstanding: &[orbit_types::workflow::CommentLogMark],
+        candidate_source: Option<&str>,
     ) -> Result<SteeringRoundAdmission, OrbitError>;
 
     /// Resolve a deny-mode activity's callable tools for one agent launch.

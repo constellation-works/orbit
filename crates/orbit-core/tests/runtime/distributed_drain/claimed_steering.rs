@@ -128,7 +128,7 @@ impl BoundLeaf {
     }
 
     fn gate(&self, task: &str) -> Result<SteeringGateReading, OrbitError> {
-        RuntimeHost::steering_gate(&self.bound, &self.run, task)
+        RuntimeHost::steering_gate(&self.bound, &self.run, task, None)
     }
 }
 
@@ -178,7 +178,7 @@ fn a_claimed_leaf_records_steering_on_its_owner_and_settlement_keeps_it() {
     );
     let found = outstanding(second.gate(&task).unwrap());
     assert_eq!(found, vec![steer], "the inherited baseline");
-    RuntimeHost::admit_steering_round(&second.bound, &second.run, &task, &found).unwrap();
+    RuntimeHost::admit_steering_round(&second.bound, &second.run, &task, &found, None).unwrap();
     let steered = second.prompt(&task);
     let block = steered["steering"]["comments"].as_str().unwrap();
     assert!(block.contains("STEER: rename the flag"), "{block}");
@@ -236,7 +236,7 @@ fn a_claimed_leaf_records_steering_on_its_owner_and_settlement_keeps_it() {
         &PipelineState::new(later.run_id.clone(), later.job_id, json!({})),
     )
     .unwrap();
-    let reading = RuntimeHost::steering_gate(&owner, &later.run_id, &task).unwrap();
+    let reading = RuntimeHost::steering_gate(&owner, &later.run_id, &task, None).unwrap();
     assert_eq!(outstanding(reading), vec![gap]);
 }
 

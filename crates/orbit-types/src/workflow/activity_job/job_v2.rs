@@ -90,6 +90,12 @@ pub struct SteeringGateSpec {
     /// `when:` is false, so the agent step there is dispatched once more
     /// with the steering block.
     pub round: String,
+    /// The earlier top-level step whose output names a carried candidate's
+    /// provenance. When it reports `implement: false`, the run carries the
+    /// candidate of its `source_run_id` past its implementer, so that run's
+    /// steering watermark is the gate's baseline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate: Option<String>,
 }
 
 /// A job's `spec.task_delivery` declaration.

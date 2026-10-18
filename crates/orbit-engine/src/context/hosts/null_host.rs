@@ -696,6 +696,7 @@ pub trait NullRuntimeHost: Send + Sync {
         &self,
         _run_id: &str,
         _task_id: &str,
+        _candidate_source: Option<&str>,
     ) -> Result<SteeringGateReading, OrbitError> {
         Ok(SteeringGateReading::Disabled)
     }
@@ -705,6 +706,7 @@ pub trait NullRuntimeHost: Send + Sync {
         _run_id: &str,
         _task_id: &str,
         _outstanding: &[orbit_types::workflow::CommentLogMark],
+        _candidate_source: Option<&str>,
     ) -> Result<SteeringRoundAdmission, OrbitError> {
         Err(unsupported_runtime_capability("admit_steering_round"))
     }
@@ -1377,16 +1379,18 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
         &self,
         run_id: &str,
         task_id: &str,
+        candidate_source: Option<&str>,
     ) -> Result<SteeringGateReading, OrbitError> {
-        NullRuntimeHost::steering_gate(self, run_id, task_id)
+        NullRuntimeHost::steering_gate(self, run_id, task_id, candidate_source)
     }
     fn admit_steering_round(
         &self,
         run_id: &str,
         task_id: &str,
         outstanding: &[orbit_types::workflow::CommentLogMark],
+        candidate_source: Option<&str>,
     ) -> Result<SteeringRoundAdmission, OrbitError> {
-        NullRuntimeHost::admit_steering_round(self, run_id, task_id, outstanding)
+        NullRuntimeHost::admit_steering_round(self, run_id, task_id, outstanding, candidate_source)
     }
     fn apply_final_recovery(
         &self,
