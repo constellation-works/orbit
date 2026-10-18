@@ -1,8 +1,8 @@
 ---
 type: glossary
 summary: "Glossary — Orbit MCP"
-last_updated: 2026-10-13
-last_validated: 2026-10-13
+last_updated: 2026-10-18
+last_validated: 2026-10-18
 ---
 
 # Glossary — Orbit MCP
@@ -15,7 +15,7 @@ last_validated: 2026-10-13
 | Caller IP | Best-effort first field of `SSH_CONNECTION` for an SSH-originated session. It is not a stable machine identity. |
 | Direct SSH stdio proxy | The policy-free local process that runs `ssh -T` with inherited standard streams and remote `orbit mcp serve`. |
 | `host/local` | Fallback audit label when Orbit cannot derive a persisted machine identity. |
-| Process identity | `process_machine_id` and `process_host_id` derived by the accepting server from its local registry. |
+| Process identity | `process_machine_id` and `process_machine_name` derived by the accepting server from its local registry; `process_host_id` is a legacy alias of `process_machine_name`, read for one release. |
 | Tool-call audit boundary | The single Core seam crossed by every direct-server `tools/call`, including unknown raw names, with one per-call trace and outcome row. Federated discovery and routing are handled by the mux before a destination call. |
 | SSH MCP | A remote MCP session carried directly over SSH stdio and recorded with transport `ssh-mcp`; its authority is selected by the accepting server's startup argv, while the forwarded caller label and observed IP remain audit attribution. |
 | Task-ID prefix route | The federated mux's configured host-registry mapping for id-only calls to id-routed task tools. It does not discover a workspace owner from repository identity. |
