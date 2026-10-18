@@ -16,9 +16,11 @@ const RUNTIME_KEY: &str = "muse";
 /// No `META_API_KEY` appears here. Muse resolves credentials from its
 /// `muse login` state (`auth.json` under its config directory). An operator
 /// who deliberately uses an API key names `META_API_KEY` in
-/// `[execution.env].pass`; Orbit never renders a credential onto argv.
+/// `[execution.env].pass`; Orbit never renders a credential onto argv. The
+/// XDG variables locate Muse state and are safe to pass through as runtime
+/// requirements.
 /// [ORB-16577]
-const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH"];
+const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH", "XDG_CONFIG_HOME", "XDG_DATA_HOME"];
 
 /// Launcher switches pinned for every run. The `muse` launcher otherwise
 /// checks for updates hourly and swaps its binary in the background, and can

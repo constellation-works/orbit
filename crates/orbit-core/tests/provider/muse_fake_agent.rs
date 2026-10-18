@@ -17,7 +17,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use orbit_core::OrbitRuntime;
-use orbit_engine::{DispatchOutcome, V2AuditWriter, V2DispatchInput, dispatch_v2_activity};
+use orbit_engine::{
+    DispatchOutcome, RuntimeHost, V2AuditWriter, V2DispatchInput, dispatch_v2_activity,
+};
 use orbit_types::identity::ReasoningEffort;
 use orbit_types::resource::{EXECUTOR_RESOURCE_SCHEMA_VERSION, ExecutorResource};
 use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, OnDenial, Provider};
@@ -353,6 +355,8 @@ fn run_isolated_test(test_name: &str) -> bool {
         .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
         .env(CHILD, test_name)
         .env("HOME", home.path())
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_DATA_HOME")
         .env("META_API_KEY", FAKE_API_KEY)
         // An outer process cannot re-enable what the executor pins.
         .env("MUSE_NO_AUTO_UPDATE", "0")
@@ -366,6 +370,131 @@ fn run_isolated_test(test_name: &str) -> bool {
         &output.stderr,
     );
     true
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn assert_muse_state_roots_are_granted(harness: &Harness, roots: [&Path; 2]) {
+    #[cfg(target_os = "linux")]
+    let sandbox_kind = ExecutorSandboxKind::LinuxBwrap;
+    #[cfg(target_os = "macos")]
+    let sandbox_kind = ExecutorSandboxKind::MacosSandboxExec;
+    seed_muse_executor(
+        &harness.runtime,
+        &harness.dir.path().join("muse"),
+        Some(sandbox_kind),
+    );
+    let sandbox = harness
+        .runtime
+        .resolve_executor_sandbox("muse", None, Some(harness.dir.path()))
+        .expect("resolve Muse sandbox")
+        .expect("Muse sandbox is configured");
+
+    #[cfg(target_os = "linux")]
+    for root in roots {
+        assert!(
+            sandbox
+                .fs_profile
+                .modify
+                .contains(&root.display().to_string()),
+            "Muse child state root {} must be in its Linux write grants: {:?}",
+            root.display(),
+            sandbox.fs_profile.modify,
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let profile = orbit_exec::compile_macos_sandbox_profile(&sandbox.fs_profile, "muse")
+            .expect("compile Muse sandbox profile");
+        for root in roots {
+            assert!(
+                profile.contains(&root.display().to_string()),
+                "Muse child state root {} must be in its macOS write grants",
+                root.display(),
+            );
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn xdg_state_locations_reach_the_child_and_match_sandbox_grants() {
+    const TEST: &str =
+        "muse_fake_agent::xdg_state_locations_reach_the_child_and_match_sandbox_grants";
+    if run_isolated_test(TEST) {
+        return;
+    }
+
+    let home = PathBuf::from(std::env::var_os("HOME").expect("isolated HOME"));
+    for (case, config_value, data_value) in [
+        ("unset", None, None),
+        ("empty", Some(String::new()), Some(String::new())),
+        (
+            "overridden",
+            Some(home.join("xdg-config").display().to_string()),
+            Some(home.join("xdg-data").display().to_string()),
+        ),
+    ] {
+        let config_root = config_value
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".config"))
+            .join("muse");
+        let data_root = data_value
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".local/share"))
+            .join("muse");
+        std::fs::create_dir_all(&config_root).expect("create Muse config root");
+        std::fs::create_dir_all(&data_root).expect("create Muse data root");
+        std::fs::write(config_root.join("auth.json"), b"fixture auth state")
+            .expect("seed existing Muse auth state");
+
+        let _xdg = orbit_common::test_env::scoped([
+            ("XDG_CONFIG_HOME", config_value.as_deref()),
+            ("XDG_DATA_HOME", data_value.as_deref()),
+        ]);
+        let body = format!(
+            "muse_config_home=\"${{XDG_CONFIG_HOME:-$HOME/.config}}\"\ntest -f \"$muse_config_home/muse/auth.json\" || exit 23\nprintf 'auth-store-visible\\n' > \"$out/auth-visible.txt\"\n{}",
+            success_body(),
+        );
+        let harness = Harness::new(&body);
+        let outcome = dispatch(&harness, spec(60));
+        assert!(
+            outcome.success,
+            "dispatch failed with {case} XDG values: {:?}",
+            outcome.message,
+        );
+        assert_eq!(
+            harness.env_value("XDG_CONFIG_HOME"),
+            config_value,
+            "child config locator for {case} values",
+        );
+        assert_eq!(
+            harness.env_value("XDG_DATA_HOME"),
+            data_value,
+            "child data locator for {case} values",
+        );
+        assert_eq!(harness.read("auth-visible.txt"), "auth-store-visible\n");
+
+        let child_config_root = harness
+            .env_value("XDG_CONFIG_HOME")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".config"))
+            .join("muse");
+        let child_data_root = harness
+            .env_value("XDG_DATA_HOME")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".local/share"))
+            .join("muse");
+        assert_eq!(child_config_root, config_root, "config root for {case}");
+        assert_eq!(child_data_root, data_root, "data root for {case}");
+        assert_muse_state_roots_are_granted(&harness, [&child_config_root, &child_data_root]);
+    }
 }
 
 /// A runtime whose `[execution.env].pass` is `pass`, rooted under `dir`.
