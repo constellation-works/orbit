@@ -48,6 +48,20 @@ def evaluate(expression, event, state="", *, cancelled=False, dependency_skipped
     return bool(eval(expression.strip(), {"__builtins__": {}}, {}))
 
 
+SCOPE = "needs.scope.outputs.mode"
+
+
+def scope_admits(name, job, mode):
+    """Which jobs a ci.yml change scope admits: the scope job always runs, the
+    docs job only for `docs`, and every other scoped job unless `docs` or
+    `skip`. An empty mode (a failed or skipped scope job) admits the full run."""
+    if name == "scope" or SCOPE not in job["if"]:
+        return True
+    if f"{SCOPE} == 'docs'" in job["if"]:
+        return mode == "docs"
+    return mode not in ("docs", "skip")
+
+
 @unittest.skipIf(yaml is None, "PyYAML not installed; the workflow guard skips locally without it")
 class PrStateWorkflowTests(unittest.TestCase):
     def setUp(self):
@@ -152,17 +166,19 @@ os.execv(os.environ["FIXTURE_GH"], [os.environ["FIXTURE_GH"], *args])
         self.assertEqual(match[1], step["id"])
         return result, outputs.get(match[2], "")
 
-    def assert_admission(self, document, event, state, expected, *, cancelled=False):
+    def assert_admission(self, document, event, state, expected, *, cancelled=False, mode="full"):
         for name, job in document["jobs"].items():
             if name == "pr-state":
                 continue
-            with self.subTest(job=name, event=event, state=state, cancelled=cancelled):
+            with self.subTest(job=name, event=event, state=state, cancelled=cancelled, mode=mode):
                 needs = job.get("needs", [])
                 if isinstance(needs, str):
                     needs = [needs]
                 self.assertIn("pr-state", needs, "build jobs must wait for live PR state")
                 self.assertEqual(evaluate(job["if"], event, state, cancelled=cancelled,
-                                          dependency_skipped=event != "pull_request"), expected)
+                                          dependency_skipped=event != "pull_request",
+                                          bindings={SCOPE: mode}),
+                                 expected and scope_admits(name, job, mode))
 
     def test_live_states_admit_open_and_skip_merged_or_closed_jobs(self):
         for name, document in self.workflows.items():
@@ -557,6 +573,108 @@ class NextestShardWorkflowTests(unittest.TestCase):
         self.assertEqual(wait[1::2], ["--job"] * len(awaited))
         self.assertEqual(sorted(awaited), sorted([jobs["test-build"]["name"], *partitions.values()]),
                          "the Check job's elapsed time must cover the test build and every shard")
+
+
+@unittest.skipIf(yaml is None, "PyYAML not installed; the workflow guard skips locally without it")
+class ChangeScopeTests(unittest.TestCase):
+    """Run scripts/ci-change-scope.sh against a stub `gh` serving recorded API
+    answers, and check the ci.yml jobs each resulting mode admits."""
+
+    SHA = "a" * 40
+    HEAD = "b" * 40
+    BEFORE = "c" * 40
+
+    def setUp(self):
+        scratch = ROOT / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(dir=scratch, prefix="change-scope-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.routes = self.root / "routes.json"
+        self.output = self.root / "output"
+        gh = self.root / "bin/gh"
+        gh.parent.mkdir()
+        # The stub answers `gh api [--paginate] <path>` from the routes file;
+        # an unrouted path fails like an API error.
+        gh.write_text(f"""#!{sys.executable}
+import json, sys
+args = [arg for arg in sys.argv[1:] if arg not in ("api", "--paginate")]
+routes = json.load(open({str(self.routes)!r}))
+if args and args[0] in routes:
+    print(json.dumps(routes[args[0]]))
+else:
+    sys.exit(1)
+""")
+        gh.chmod(0o755)
+        self.assertIsNotNone(shutil.which("jq"), "the scope script requires jq, as on the hosted runner")
+
+    def classify(self, event, routes, **env):
+        self.routes.write_text(json.dumps(routes))
+        self.output.write_text("")
+        result = self_test_hang.run(
+            [str(ROOT / "scripts/ci-change-scope.sh")], step="change-scope", cwd=self.root,
+            env=dict(PATH=f"{self.root / 'bin'}:{os.environ['PATH']}", LANG="C", GH_REPO="o/r",
+                     EVENT=event, GITHUB_OUTPUT=str(self.output), **env),
+            text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        [line] = self.output.read_text().splitlines()
+        return line.removeprefix("mode=")
+
+    def pull_request(self, *paths, count=None):
+        files = [{"filename": path} for path in paths]
+        return self.classify("pull_request", {
+            "repos/o/r/pulls/7": {"changed_files": len(paths) if count is None else count},
+            "repos/o/r/pulls/7/files?per_page=100": files,
+        }, PR="7")
+
+    def push(self, *paths, same_tree=False, head_passed=True):
+        routes = {
+            f"repos/o/r/git/commits/{self.SHA}": {"tree": {"sha": "t1"}},
+            f"repos/o/r/commits/{self.SHA}/pulls": [
+                {"merged_at": "2026-10-18T00:00:00Z", "merge_commit_sha": self.SHA, "head": {"sha": self.HEAD}}],
+            f"repos/o/r/git/commits/{self.HEAD}": {"tree": {"sha": "t1" if same_tree else "t2"}},
+            f"repos/o/r/commits/{self.HEAD}/check-runs?check_name=Check%20%2F%20Clippy%20%2F%20Test&filter=latest":
+                {"check_runs": [{"conclusion": "success" if head_passed else "failure",
+                                 "app": {"slug": "github-actions"}}]},
+            f"repos/o/r/compare/{self.BEFORE}...{self.SHA}":
+                {"status": "ahead", "files": [{"filename": path} for path in paths]},
+        }
+        return self.classify("push", routes, SHA=self.SHA, BEFORE=self.BEFORE)
+
+    def test_pull_request_scope(self):
+        self.assertEqual(self.pull_request("README.md", "docs/guide.md"), "docs")
+        # Markdown compiled into a crate or mirrored into the plugin is code.
+        self.assertEqual(self.pull_request("docs/guide.md", "crates/orbit-core/assets/skills/x.md"), "full")
+        self.assertEqual(self.pull_request("plugin/skills/x.md"), "full")
+        self.assertEqual(self.pull_request("docs/guide.md", "crates/orbit-core/src/lib.rs"), "full")
+        # A listing that disagrees with the reported count is not trusted.
+        self.assertEqual(self.pull_request("docs/guide.md", count=2), "full")
+        self.assertEqual(self.classify("pull_request", {}, PR="7"), "full", "an API error runs the full gate")
+
+    def test_push_scope(self):
+        self.assertEqual(self.push("crates/orbit-core/src/lib.rs", same_tree=True), "skip")
+        self.assertEqual(self.push("crates/orbit-core/src/lib.rs"), "full",
+                         "a merged tree the PR never tested runs the full gate")
+        self.assertEqual(self.push("crates/orbit-core/src/lib.rs", same_tree=True, head_passed=False), "full")
+        self.assertEqual(self.push("docs/guide.md"), "docs")
+        self.assertEqual(self.classify("push", {}, SHA=self.SHA, BEFORE=self.BEFORE), "full")
+
+    def test_modes_admit_the_matching_jobs(self):
+        document = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+        jobs = document["jobs"]
+        expected = {
+            "full": {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3"},
+            "": {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3"},
+            "docs": {"scope", "docs"},
+            "skip": {"scope"},
+        }
+        for mode, admitted in expected.items():
+            for event in ("pull_request", "push"):
+                with self.subTest(mode=mode, event=event):
+                    actual = {name for name, job in jobs.items() if name != "pr-state" and evaluate(
+                        job["if"], event, "open", dependency_skipped=event != "pull_request",
+                        bindings={SCOPE: mode})}
+                    self.assertEqual(actual, admitted)
 
 
 if __name__ == "__main__":

@@ -20,11 +20,11 @@ The detailed rules behind [CONTRIBUTING.md](../CONTRIBUTING.md). Read the sectio
 
 ## Validation and CI
 
-For tasks that deliver a diff, `make ci-fast` is the required local gate; in a managed delivery the pipeline's final validation runs it on the final candidate. The required PR checks (Check / Clippy / Test and Test shard 1/3, 2/3 and 3/3) gate lint, rustdoc, goldens and the whole test suite, so the other targets below are focused tools, not blanket pre-handoff gates. Run the ones the change needs:
+For tasks that deliver a diff, there is no required local gate. The required PR checks (Check / Clippy / Test and Test shard 1/3, 2/3 and 3/3) gate formatting, guardrails, lint, rustdoc, goldens and the whole test suite, so the targets below are focused tools, not blanket pre-handoff gates. Run the ones the change needs:
 
 ```bash
 make ci-guards         # static repository guards; no build or network
-make ci-fast           # required: MSRV compile check, formatting, script guardrails; no Rust tests
+make ci-fast           # MSRV compile check, formatting, script guardrails; no Rust tests
 make ci-test-affected  # complete test targets of changed crates and their workspace dependents
 make ci-lint           # clippy for production and all targets, then rustdoc
 make goldens           # CLI/MCP, CI log, sandbox and SQLite ledger schema goldens; UPDATE=1 regenerates
@@ -363,7 +363,15 @@ When a comparable base passes but the candidate names at most three failed tests
 
 ### Hosted CI
 
-Hosted CI runs the work of the full `make ci` on open PRs, split across jobs as described below. Each PR-triggered workflow starts with a checkout-free `Live PR state` job (`pull-requests: read` only); if the PR merged or closed while queued, the build and analysis jobs are skipped under unchanged check names, which GitHub treats as passing. An API error fails the gate rather than admitting an unknown state; a PR that closes after the gate read `open` can still finish. Push, scheduled and manual runs skip the gate, so agent-main/main CI and CodeQL still cover merged changes. `make ci-fast` selects `scripts/test-pr-state-workflows.py` when self-test inputs change; full `make ci` always runs it. The script replays each gate against recorded API responses.
+Hosted CI runs the work of the full `make ci` on open PRs, split across jobs as described below. Each PR-triggered workflow starts with a checkout-free `Live PR state` job (`pull-requests: read` only); if the PR merged or closed while queued, the build and analysis jobs are skipped under unchanged check names, which GitHub treats as passing. An API error fails the gate rather than admitting an unknown state; a PR that closes after the gate read `open` can still finish. Push, scheduled and manual runs skip the gate, so agent-main/main CI and CodeQL still cover merged changes, narrowed in `ci.yml` as described next. `make ci-fast` selects `scripts/test-pr-state-workflows.py` when self-test inputs change; full `make ci` always runs it. The script replays each gate against recorded API responses.
+
+In `ci.yml`, a `Change scope` job ([ci-change-scope.sh](../scripts/ci-change-scope.sh)) narrows each run before build runners start:
+
+- **`docs`**: every changed path, on a PR or in a push, is Markdown outside `crates/` and `plugin/`. Markdown under `crates/` is compiled in as assets, and `plugin/` is the generated skill mirror, so both still take the full gate. Only `Docs guards` runs (`ci-guardrails.sh --static`: doc links and indexes, the skill mirror and the other file and metadata guards).
+- **`skip`**: a push whose commit has exactly the tree of the merged PR's head, when that head's latest `Check / Clippy / Test` succeeded. The same bytes already passed the full gate, so nothing reruns. A merge whose tree differs from what the PR tested still runs in full. With non-strict required checks, most merges differ: the PR was tested against an older base.
+- **`full`**: everything else, including any classification error. The job never fails, and an empty mode admits the full run.
+
+Push runs of `ci.yml` share one group per branch without cancellation, as `ci-macos.yml` does: one run executes, one waits, and a newer push replaces the waiting run. The branch tip is always tested, and a burst of merges never queues a full run per merge. Skipped jobs keep their check names and report as skipped, which required checks and Orbit's landing treat as passing. The macOS, Windows and CodeQL workflows are unaffected. `scripts/test-pr-state-workflows.py` runs the classifier against recorded API answers and checks which jobs each mode admits.
 
 The ephemeral Linux runner installs sandbox packages with needrestart's
 per-invocation `NEEDRESTART_MODE=l` (list-only) setting through `sudo env`.
