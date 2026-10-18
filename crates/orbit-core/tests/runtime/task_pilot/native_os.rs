@@ -538,6 +538,76 @@ fn a_malformed_native_os_finding_is_refused_at_apply() {
     assert_eq!(exclusion(&workspace, &task), None);
 }
 
+/// A portable criterion names no OS or native facility. Citing it in
+/// `required_os` is invalid at apply, and the rejection tells the repair
+/// pilot to leave the finding empty. macOS, Seatbelt and Bubblewrap still
+/// apply (ORB-16630, ORB-16384, ORB-16402).
+fn a_required_os_finding_on_a_portable_criterion_is_refused_at_apply() {
+    let workspace = Workspace::new();
+    let task = backlog_task(
+        &workspace,
+        &[
+            "The README fixture is repaired.",
+            "The owner's machine records the timing.",
+        ],
+        &[],
+    );
+    let applied = apply(
+        &workspace,
+        &task,
+        Some(json!([
+            {"criterion": 1, "os": "macos", "evidence": "Native macOS evidence."},
+            {"criterion": 2, "os": "linux", "evidence": "Native Linux evidence."},
+        ])),
+    );
+    assert_eq!(applied["applied_count"], 0, "{applied}");
+    assert_eq!(applied["repair_count"], 1, "{applied}");
+    let outcome = &applied["task_outcomes"][0];
+    assert_eq!(outcome["outcome"], "invalid", "{applied}");
+    let error = outcome["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("names no OS or native facility")
+            && error.contains("leave required_os empty for portable criteria"),
+        "a portable criterion must not hold a native host (ORB-16630): {applied}"
+    );
+    let repair_errors = applied["repair_partitions"][0]["validation_errors"]
+        .as_array()
+        .unwrap();
+    assert!(
+        repair_errors.iter().any(|entry| {
+            entry.as_str().is_some_and(|message| {
+                message.contains("leave required_os empty for portable criteria")
+            })
+        }),
+        "{applied}"
+    );
+    assert!(tags(&workspace, &task).is_empty(), "{applied}");
+    assert_eq!(exclusion(&workspace, &task), None);
+
+    for (criterion, os) in [
+        ("A macOS launch of the fixture succeeds.", "macos"),
+        ("A Seatbelt profile confines the fixture.", "macos"),
+        ("A Bubblewrap launch of the fixture succeeds.", "linux"),
+    ] {
+        let workspace = Workspace::new();
+        let task = backlog_task(&workspace, &[criterion], &[]);
+        assess(
+            &workspace,
+            &task,
+            Some(json!([{
+                "criterion": 1,
+                "os": os,
+                "evidence": "Only that native host can produce the evidence.",
+            }])),
+        );
+        assert_eq!(
+            tags(&workspace, &task),
+            vec![format!("os:{os}")],
+            "{criterion}"
+        );
+    }
+}
+
 fn a_machine_finding_holds_every_machine_but_the_owner() {
     let mut workspace = Workspace::new();
     let task = backlog_task(
@@ -833,6 +903,7 @@ crate::scenario_table!(
     tagged_unfounded_and_other_os_tasks_keep_their_admission_scenarios,
     tagged_unfounded_and_other_os_tasks_keep_their_admission,
     a_malformed_native_os_finding_is_refused_at_apply,
+    a_required_os_finding_on_a_portable_criterion_is_refused_at_apply,
     a_machine_finding_holds_every_machine_but_the_owner
 );
 

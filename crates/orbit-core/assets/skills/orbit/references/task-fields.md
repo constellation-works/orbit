@@ -150,7 +150,11 @@ other warning kinds stay advisory.
 When a criterion needs execution or evidence that only a native host of one OS
 can produce (a real macOS `sandbox-exec` launch, a Linux Bubblewrap result), the
 pilot records a typed `required_os` finding naming the one-based criterion and
-the OS, and commits it as `native_os_hold` in its assessment audit. When every
+the OS, and commits it as `native_os_hold` in its assessment audit. Apply
+rejects an entry whose criterion text names no OS or native facility (mac,
+macos, darwin, seatbelt, sandbox-exec, linux, bwrap, bubblewrap, windows,
+launchd, systemd, keychain, cgroup) and tells the pilot to leave `required_os`
+empty for a portable criterion. When every
 finding names one OS and the task carries no `os:` tag, the same atomic write
 adds that tag (`os:linux`), so admission routes the task by its tags and a host
 of another OS waits as `host_os_mismatch`. The pilot never removes or replaces
