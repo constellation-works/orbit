@@ -183,8 +183,24 @@ assert.equal(chips().length, 3);
 assert.deepEqual(readings(), [{ k: 'load', v: '-' }, { k: 'mem', v: '-' }, { k: 'disk', v: '-' }]);
 assert.match(chip('disk').title, /age unknown.*Throttle verdict: unknown.*Resource API unavailable/);
 
-// Provider usage rides the same payload: one chip per provider and window,
-// worst first, behind a summary chip that narrow bars show instead.
+// Disk I/O stall: a host that reports it gains an io chip after disk. Once
+// reported, the chip stays through a sample without it and a failed poll, so
+// the bar does not shift; a host switch forgets it.
+renderHostResources({ ...recovered, io: reading(23.4, 'critical'), throttle: true, pressures: [{ resource: 'io full' }] });
+assert.deepEqual(chips().map(node => node.dataset.resource), ['cpu', 'memory', 'disk', 'io'], 'a host with I/O pressure shows an io chip after disk');
+assert.deepEqual(readings()[3], { k: 'io', v: '23%' });
+assert.equal(chip('io').className, 'host-resource critical throttled', 'an io full pressure holds the io chip');
+assert.equal(chip('disk').className, 'host-resource ok', 'io pressure does not mark the disk chip held');
+assert.match(chip('io').title, /stalled on disk I\/O .* Now 23\.4% \(critical\)/, 'the io title explains the measure');
+renderHostResources({ ...recovered, io: null });
+assert.deepEqual(readings()[3], { k: 'io', v: '-' }, 'a sample without io keeps the chip and reads a dash');
+renderHostResources(null);
+assert.equal(chips().length, 4, 'a failed poll keeps the io chip');
+resetHostResources();
+assert.deepEqual(chips().map(node => node.dataset.resource), ['cpu', 'memory', 'disk'], 'a host switch forgets the io chip');
+
+// Provider usage rides the same payload: one chip per provider holding each of
+// its windows, worst first, behind a summary chip that narrow bars show instead.
 const observedToday = new Date().toISOString();
 const usage = extra => ({
   provider: 'claude', scope: null, window: 'five_hour', used_percent: 5, exhausted: false, threshold: 90, gating: true,
@@ -197,20 +213,23 @@ const staleOff = usage({
 });
 const unreported = usage({ scope: 'opus', window: 'seven_day', used_percent: null });
 const limits = [usage({}), usage({ window: 'seven_day', used_percent: 26 }), staleOff];
+const line = node => descendants(node)
+  .filter(child => ['k', 'v', 'provider-usage-window', 'provider-usage-sep', 'provider-usage-flag'].includes(child.className))
+  .map(child => child.textContent.trim()).join(' ');
 const kv = node => Object.fromEntries(['k', 'v'].map(name => [name, descendants(node).find(child => child.className === name)?.textContent.trim()]));
 const providerItems = () => providerChips().filter(node => node.className.includes('provider-usage-item'));
 const providerSummary = () => providerChips().find(node => node.className.includes('provider-usage-summary'));
 const base = 'host-resource provider-usage provider-usage-item';
 renderProviderUsage({ provider_limits: limits });
-assert.deepEqual(providerItems().map(kv), [
-  { k: 'codex', v: '100%' }, { k: 'claude 5h', v: '5%' }, { k: 'claude 7d', v: '26%' },
-], 'one chip per provider and window, worst first');
+assert.deepEqual(providerItems().map(line), ['codex 100% old', 'claude 5% 5h | 26% 7d'],
+  'one chip per provider with its windows side by side, worst provider first');
 assert.deepEqual(providerItems().map(node => node.className), [
-  `${base} critical stale gating-off`, `${base} ok`, `${base} ok`,
+  `${base} critical stale gating-off`, `${base} ok`,
 ], 'stale and gating-off readings are marked in their chip class');
-const [codexChip, fiveHour] = providerItems();
+const [codexChip, claudeChip] = providerItems();
 assert.deepEqual(descendants(codexChip).filter(node => node.className === 'provider-usage-flag').map(node => node.textContent), ['old'], 'a stale reading says so in visible text');
-assert.deepEqual(descendants(fiveHour).filter(node => node.className === 'provider-usage-flag'), [], 'a fresh reading carries no flag');
+assert.deepEqual(descendants(claudeChip).filter(node => node.className === 'provider-usage-flag'), [], 'a fresh reading carries no flag');
+assert.deepEqual(descendants(claudeChip).filter(node => node.className === 'provider-usage-sep').map(node => node.getAttribute('aria-hidden')), ['true'], 'the window divider is not read aloud');
 for (const node of providerItems()) {
   assert.equal(node.getAttribute('role'), 'group');
   assert.equal(node.getAttribute('aria-label'), node.title, 'assistive technology reads the same detail as the title');
@@ -218,9 +237,12 @@ for (const node of providerItems()) {
 assert.match(codexChip.title, /codex primary 100%/);
 assert.match(codexChip.title, /observed 2026-10-14T12:00:00Z \(3d old · stale\)/, 'the title carries the observed time and age');
 assert.match(codexChip.title, /gating off/, 'the title says gating is off');
-assert.match(fiveHour.title, /claude five_hour 5% · observed .* \(today\) · limit 90%/);
+assert.deepEqual(claudeChip.title.split('\n').map(row => row.split(' · ')[0]), ['claude five_hour 5%', 'claude seven_day 26%'], 'the title has one line per window');
+assert.match(claudeChip.title, /claude five_hour 5% · observed .* \(today\) · limit 90%/);
+renderProviderUsage({ provider_limits: [usage({ window: 'seven_day', used_percent: 26 }), usage({})] });
+assert.deepEqual(providerItems().map(line), ['claude 5% 5h | 26% 7d'], 'the 5h window reads before the 7d window whatever the payload order');
 renderProviderUsage({ provider_limits: [unreported, usage({})] });
-assert.deepEqual(providerItems().map(kv), [{ k: 'claude 5h', v: '5%' }, { k: 'claude opus 7d', v: '-' }], 'a missing usage reads as a dash and sorts after known readings');
+assert.deepEqual(providerItems().map(line), ['claude 5% 5h', 'claude opus - 7d'], 'a scope is its own chip; a missing usage reads as a dash and sorts after known readings');
 assert.equal(providerItems()[1].className, `${base} unknown`);
 assert.match(providerItems()[1].title, /claude \[opus\] seven_day usage not reported/);
 renderProviderUsage({ provider_limits: limits });
@@ -229,21 +251,27 @@ assert.equal(providerSummary().className, 'host-resource provider-usage provider
 assert.equal(providerSummary().title.split('\n').length, 3, 'the summary title lists every reading');
 assert.equal(providerSummary().getAttribute('aria-label'), providerSummary().title);
 
-// Near, at and over the limit; a gated reading names its crews.
+// Near, at and over the limit; a gated reading names its crews. A provider's
+// chip takes its worst window's tint.
 renderProviderUsage({ provider_limits: [
-  usage({ used_percent: 85 }),
+  usage({ used_percent: 5 }), usage({ window: 'seven_day', used_percent: 85 }),
   usage({ provider: 'codex', window: 'primary', used_percent: 92, gated: true, crews: ['sol'] }),
 ] });
 assert.deepEqual(providerItems().map(node => node.className), [`${base} critical`, `${base} elevated`]);
 assert.match(providerItems()[0].title, /gated at 92% ≥ 90% until 2026-10-18 03:00Z: sol skipped/);
-assert.deepEqual(providerItems().map(kv), [{ k: 'codex', v: '92%' }, { k: 'claude 5h', v: '85%' }]);
+assert.deepEqual(providerItems().map(line), ['codex 92%', 'claude 5% 5h | 85% 7d']);
 
-// Beyond three windows the rest fold into one chip, so the bar cannot grow.
-renderProviderUsage({ provider_limits: [...limits, unreported, usage({ window: 'weekly_extra', used_percent: 60 })] });
+// Beyond three providers the rest fold into one chip, so the bar cannot grow.
+// Other windows follow 5h and 7d inside their provider's chip.
+renderProviderUsage({ provider_limits: [
+  ...limits, unreported, usage({ window: 'weekly_extra', used_percent: 60 }),
+  usage({ provider: 'gemini', window: 'primary', used_percent: 10 }),
+] });
 assert.equal(providerItems().length, 4);
-assert.deepEqual(kv(providerItems().at(-1)), { k: '+2 more', v: undefined });
+assert.deepEqual(providerItems().slice(0, 3).map(line), ['codex 100% old', 'claude 5% 5h | 26% 7d | 60% weekly extra', 'gemini 10%']);
+assert.deepEqual(kv(providerItems().at(-1)), { k: '+1 more', v: undefined });
 assert.equal(providerItems().at(-1).className, `${base} provider-usage-more unknown`);
-assert.equal(providerItems().at(-1).title.split('\n').length, 5, 'the folded chip lists every reading');
+assert.equal(providerItems().at(-1).title.split('\n').length, 6, 'the folded chip lists every reading');
 
 // No readings keep one placeholder, and say why.
 const placeholder = payload => { renderProviderUsage(payload); const chips = providerChips(); assert.equal(chips.length, 1); assert.equal(chips[0].className, 'host-resource provider-usage unknown'); return chips[0].title; };
@@ -256,7 +284,7 @@ assert.match(placeholder(null), /unavailable/);
 // leaves them alone, a failed poll or a host switch clears them.
 nextResponse = { ok: true, json: async () => ({ ...recovered, provider_limits: limits }) };
 await fetchAndRenderHostResources();
-assert.equal(providerItems().length, 3, 'the poll renders the selected host\'s readings');
+assert.equal(providerItems().length, 2, 'the poll renders the selected host\'s readings');
 const shown = providerChips()[0];
 timers.get(1000)();
 assert.equal(providerChips()[0], shown, 'the staleness tick does not rebuild the provider chips');
@@ -272,11 +300,11 @@ assert.match(providerChips()[0].title, /unavailable/, 'a failed poll does not le
 const otherHost = [usage({ provider: 'codex', window: 'primary', used_percent: 61 })];
 nextResponse = { ok: true, json: async () => ({ ...recovered, provider_limits: otherHost }) };
 await fetchAndRenderHostResources();
-assert.deepEqual(providerItems().map(kv), [{ k: 'codex', v: '61%' }]);
+assert.deepEqual(providerItems().map(line), ['codex 61%']);
 document.hidden = true;
 const requests = urls.length;
 await timers.get(5000)();
 assert.equal(urls.length, requests, 'a hidden tab does not poll host resources or provider usage');
 document.hidden = false;
 
-console.log('three topbar host chips (load, mem, disk): per-chip severity and held state, many paths, fixed text across throttle, unknown/stale and polling, and provider usage chips (stale, gating-off, missing usage, fold, host reset) passed');
+console.log('topbar host chips (load, mem, disk, io where reported): per-chip severity and held state, many paths, fixed text across throttle, unknown/stale and polling, and per-provider usage chips (windows together, stale, gating-off, missing usage, fold, host reset) passed');
