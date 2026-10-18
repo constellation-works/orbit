@@ -188,12 +188,22 @@ fn a_lifecycle_change_after_the_failure_still_refuses_the_decision() {
             )
         }),
         ("a status round trip", &|task| {
-            for status in ["backlog", "in_progress"] {
+            for status in [
+                orbit_core::TaskStatus::Backlog,
+                orbit_core::TaskStatus::InProgress,
+            ] {
                 fixture
                     .runtime
-                    .run_tool(
-                        "orbit.task.update",
-                        json!({"id": task, "status": status, "model": "codex"}),
+                    .clone()
+                    .with_actor(orbit_core::ActorIdentity::human("human:operator"))
+                    .force_update_task_with_identity(
+                        task,
+                        TaskUpdateParams {
+                            status: Some(status),
+                            ..Default::default()
+                        },
+                        None,
+                        None,
                     )
                     .unwrap();
             }

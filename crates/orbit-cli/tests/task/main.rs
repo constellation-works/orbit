@@ -30,6 +30,7 @@ mod context_selector_worktree;
 mod crew_effort_admission;
 mod delivery_remote_source;
 mod friction_lifecycle_cli;
+mod live_run_status;
 mod local_read_projections_cli;
 mod pilot_comments;
 mod reconcile_review;

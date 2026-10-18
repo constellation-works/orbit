@@ -10,12 +10,14 @@
 //! changes through them.
 
 use orbit_common::OrbitError;
+use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::JobRunState;
 use std::collections::HashSet;
 
 use crate::OrbitRuntime;
 use crate::application::job::running_run_has_verified_owner;
+use crate::runtime::run_input::recorded_task_ids;
 
 use super::params::TaskUpdateParams;
 
@@ -31,6 +33,40 @@ pub(crate) const FORCED_STATUS_EVENT: &str = "forced";
 /// pipeline's own completion, the settlement is not an edge of the table
 /// below: the forge's merge, not a caller's claim, is its evidence.
 pub const EXTERNAL_MERGE_SETTLED_EVENT: &str = "external_merge_settled";
+
+/// Refuse an ordinary surface's status change while a local run owns the
+/// task. Call under the task write lock, before recording any field edits.
+/// The run's submitted selection is authoritative even when admission has
+/// not yet bound `task.job_run_id`, and local runs need no execution claim.
+pub(crate) fn ensure_status_change_not_run_owned(
+    runtime: &OrbitRuntime,
+    id: &str,
+) -> Result<(), OrbitError> {
+    // Observe stored state without orphan reconciliation or step hydration.
+    // Do not cap history: a newer terminal (or singular-task) run must not
+    // hide an older non-terminal run whose task_ids includes this task.
+    let runs = runtime
+        .stores()
+        .jobs()
+        .list_job_runs_filtered(&JobRunQuery {
+            task_id: Some(id.to_string()),
+            include_steps: false,
+            ..Default::default()
+        })?;
+    if let Some(run) = runs.into_iter().find(|run| {
+        !run.state.is_terminal()
+            && run
+                .input
+                .as_ref()
+                .is_some_and(|input| recorded_task_ids(input).contains(&id))
+    }) {
+        return Err(OrbitError::InvalidInput(format!(
+            "status change refused: local run '{}' still owns this task ({}); stop the run first or use --force to override",
+            run.run_id, run.state
+        )));
+    }
+    Ok(())
+}
 
 /// Whether `from -> to` is a legal lifecycle edge.
 ///

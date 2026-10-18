@@ -73,15 +73,13 @@ fn fresh_review(fixture: &mut Fixture, hold: &ReviewEvidenceHold) -> String {
         .unwrap();
     fixture
         .runtime
-        .update_task_with_identity(
+        .apply_task_automation_update(
             &fixture.task_id,
-            orbit_core::application::task::TaskUpdateParams {
+            orbit_engine::TaskAutomationUpdate {
                 status: Some(TaskStatus::InProgress),
-                job_run_id: Some(Some(next.run_id.clone())),
+                job_run_id: Some(next.run_id.clone()),
                 ..Default::default()
             },
-            Some("codex".into()),
-            None,
         )
         .unwrap();
     fixture.input["job_run_id"] = json!(next.run_id);
@@ -354,15 +352,13 @@ fn start_fresh_run(fixture: &mut Fixture) {
     assert_ne!(next.run_id, previous.run_id);
     fixture
         .runtime
-        .update_task_with_identity(
+        .apply_task_automation_update(
             &fixture.task_id,
-            orbit_core::application::task::TaskUpdateParams {
+            orbit_engine::TaskAutomationUpdate {
                 status: Some(TaskStatus::InProgress),
-                job_run_id: Some(Some(next.run_id.clone())),
+                job_run_id: Some(next.run_id.clone()),
                 ..Default::default()
             },
-            Some("codex".into()),
-            None,
         )
         .unwrap();
     fixture.input["job_run_id"] = json!(next.run_id);
@@ -1148,14 +1144,16 @@ fn a_late_review_handoff_cannot_overwrite_an_operator_block() {
     let fixture = Fixture::new();
     fixture
         .runtime
-        .update_task_with_identity(
+        .clone()
+        .with_actor(orbit_core::ActorIdentity::human("human:operator"))
+        .force_update_task_with_identity(
             &fixture.task_id,
             orbit_core::application::task::TaskUpdateParams {
                 status: Some(TaskStatus::Blocked),
                 comment: Some("Operator holds delivery".into()),
                 ..Default::default()
             },
-            Some("codex".into()),
+            None,
             None,
         )
         .unwrap();

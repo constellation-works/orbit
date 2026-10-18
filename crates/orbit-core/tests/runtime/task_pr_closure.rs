@@ -695,7 +695,20 @@ fn a_requeue_while_the_tasks_run_is_live_closes_nothing() {
         )
         .expect("bind the run");
 
-    fx.update(json!({ "id": task_id, "status": "backlog", "model": "codex" }));
+    // A live run requires an explicit operator override; its PRs still stay open.
+    fx.runtime
+        .clone()
+        .with_actor(orbit_core::ActorIdentity::human("human:operator"))
+        .force_update_task_with_identity(
+            &task_id,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .expect("force requeue under the live run");
 
     assert!(
         fx.forge.closed_numbers().is_empty(),
@@ -764,7 +777,20 @@ fn a_requeue_while_a_resumed_retry_is_live_closes_nothing() {
         "resume leaves the task bound to the terminal source"
     );
 
-    fx.update(json!({ "id": task_id, "status": "backlog", "model": "codex" }));
+    // A live run requires an explicit operator override; its PRs still stay open.
+    fx.runtime
+        .clone()
+        .with_actor(orbit_core::ActorIdentity::human("human:operator"))
+        .force_update_task_with_identity(
+            &task_id,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .expect("force requeue under the live run");
 
     assert_eq!(
         fx.runtime.get_task(&task_id).unwrap().status,
