@@ -4,6 +4,15 @@ on:
   push:
     tags:
       - "v*"
+  # Desktop-only backfill for a release that already exists: builds the
+  # desktop bundles from the tag's source with this workflow and attaches the
+  # missing ones under the same publication rules. It runs no CLI job.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to attach missing desktop bundles to, like v0.29.0
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -14,6 +23,9 @@ env:
 jobs:
   build-release:
     name: Build ${{ matrix.slug }}
+    # Only a tag push releases the CLI. A desktop backfill skips this job, and
+    # with it every job that needs publish-release.
+    if: ${{ github.event_name == 'push' }}
     runs-on: ${{ matrix.runs_on }}
     permissions:
       contents: read
@@ -99,6 +111,7 @@ jobs:
     # build runs through `docker run` rather than a job container because
     # JavaScript actions cannot run inside an Alpine container on arm64.
     name: Build bundled Bubblewrap ${{ matrix.arch }}
+    if: ${{ github.event_name == 'push' }}
     runs-on: ${{ matrix.runs_on }}
     permissions:
       contents: read
@@ -146,14 +159,99 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  desktop-preflight:
+    # Plans the desktop build. Secrets can't be read in a job-level `if:`, so
+    # this job checks the six Apple Developer ID secrets and builds the
+    # build-desktop matrix: the Linux legs always, the macOS leg only when
+    # every secret is present, so a release never ships an unsigned or
+    # unnotarized macOS app and never holds back Linux for want of one.
+    # ORBIT_DESKTOP_RELEASE = false turns the desktop jobs off for tag pushes.
+    name: Plan desktop bundles
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      enabled: ${{ steps.plan.outputs.enabled }}
+      tag: ${{ steps.plan.outputs.tag }}
+      macos: ${{ steps.plan.outputs.macos }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Plan desktop legs
+        id: plan
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_TAG: ${{ inputs.tag }}
+          DESKTOP_RELEASE: ${{ vars.ORBIT_DESKTOP_RELEASE }}
+          GH_TOKEN: ${{ github.token }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            tag="$DISPATCH_TAG"
+          else
+            tag="$GITHUB_REF_NAME"
+          fi
+          # The tag reaches checkout refs and asset names; never echo it
+          # before it is known to be a plain release tag.
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            echo "desktop bundles need a vMAJOR.MINOR.PATCH release tag with an optional prerelease suffix" >&2
+            exit 1
+          fi
+
+          enabled=true
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            # A backfill only adds assets to a release that already exists.
+            gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName >/dev/null || {
+              echo "no GitHub Release exists for $tag; cut the release with a tag push instead" >&2
+              exit 1
+            }
+          elif [ "${DESKTOP_RELEASE:-}" = false ]; then
+            enabled=false
+            echo "::notice title=Desktop bundles off::ORBIT_DESKTOP_RELEASE is false, so $tag attaches no desktop bundles"
+            echo "Desktop bundles are off: ORBIT_DESKTOP_RELEASE is false." >> "$summary"
+          fi
+
+          missing=()
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
+            APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            [ -n "${!name:-}" ] || missing+=("$name")
+          done
+          # ubuntu-22.04 keeps the Linux bundles' glibc floor at 2.35, as for the CLI.
+          legs='{"slug":"linux-x86_64","target":"x86_64-unknown-linux-gnu","rust_targets":"x86_64-unknown-linux-gnu","runs_on":"ubuntu-22.04","bundles":"deb,appimage"}'
+          legs+=',{"slug":"linux-arm64","target":"aarch64-unknown-linux-gnu","rust_targets":"aarch64-unknown-linux-gnu","runs_on":"ubuntu-22.04-arm","bundles":"deb,appimage"}'
+          if [ "${#missing[@]}" -eq 0 ]; then
+            macos=true
+            legs='{"slug":"macos-universal","target":"universal-apple-darwin","rust_targets":"aarch64-apple-darwin,x86_64-apple-darwin","runs_on":"macos-15","bundles":"app,dmg"},'"$legs"
+          else
+            macos=false
+            if [ "$enabled" = true ]; then
+              message="macOS desktop bundle skipped: missing Apple signing secrets ${missing[*]} (see desktop/README.md#one-time-setup). The Linux bundles still ship."
+              echo "::warning title=macOS desktop bundle skipped::$message"
+              echo "$message" >> "$summary"
+            fi
+          fi
+          {
+            echo "enabled=$enabled"
+            echo "tag=$tag"
+            echo "macos=$macos"
+            echo "matrix={\"include\":[$legs]}"
+          } >> "$GITHUB_OUTPUT"
+
   build-desktop:
-    # Desktop app bundles (desktop/, a separate Cargo workspace). Opt-in with
-    # the ORBIT_DESKTOP_RELEASE repository variable, because the macOS bundle
-    # needs Apple Developer ID secrets the repository may not have yet. The CLI
+    # Desktop app bundles (desktop/, a separate Cargo workspace), built from
+    # the release tag's source. desktop-preflight picks the legs. The CLI
     # release never waits on these jobs; publish-desktop attaches the bundles
     # to the release afterwards.
     name: Build desktop ${{ matrix.slug }}
-    if: ${{ vars.ORBIT_DESKTOP_RELEASE == 'true' }}
+    needs: desktop-preflight
+    if: ${{ needs.desktop-preflight.outputs.enabled == 'true' }}
     runs-on: ${{ matrix.runs_on }}
     # First-time notarization of a new app can take hours on Apple's side.
     timeout-minutes: 180
@@ -161,33 +259,18 @@ jobs:
       contents: read
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - slug: macos-universal
-            target: universal-apple-darwin
-            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
-            runs_on: macos-15
-            bundles: app,dmg
-          # ubuntu-22.04 keeps the bundles' glibc floor at 2.35, as for the CLI.
-          - slug: linux-x86_64
-            target: x86_64-unknown-linux-gnu
-            rust_targets: x86_64-unknown-linux-gnu
-            runs_on: ubuntu-22.04
-            bundles: deb,appimage
-          - slug: linux-arm64
-            target: aarch64-unknown-linux-gnu
-            rust_targets: aarch64-unknown-linux-gnu
-            runs_on: ubuntu-22.04-arm
-            bundles: deb,appimage
+      matrix: ${{ fromJSON(needs.desktop-preflight.outputs.matrix) }}
     env:
       TARGET: ${{ matrix.target }}
       BUNDLES: ${{ matrix.bundles }}
+      RELEASE_TAG: ${{ needs.desktop-preflight.outputs.tag }}
       # Keep in step with desktop.yml.
       TAURI_CLI_VERSION: 2.12.3
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: refs/tags/${{ needs.desktop-preflight.outputs.tag }}
           persist-credentials: false
 
       - name: Set up Rust
@@ -217,8 +300,8 @@ jobs:
         run: |
           set -euo pipefail
           desktop_version="$(awk -F'"' '/^version[[:space:]]*=/ { print $2; exit }' desktop/Cargo.toml)"
-          if [ "v$desktop_version" != "$GITHUB_REF_NAME" ]; then
-            echo "desktop/Cargo.toml version $desktop_version does not match tag $GITHUB_REF_NAME" >&2
+          if [ "v$desktop_version" != "$RELEASE_TAG" ]; then
+            echo "desktop/Cargo.toml version $desktop_version does not match tag $RELEASE_TAG" >&2
             exit 1
           fi
 
@@ -234,7 +317,9 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          # A release never ships an unsigned or unnotarized macOS app.
+          # desktop-preflight adds this leg only with every secret present;
+          # check again so a release never ships an unsigned or unnotarized
+          # macOS app.
           missing=0
           for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
             APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
@@ -459,13 +544,20 @@ jobs:
           generate_release_notes: true
 
   publish-desktop:
-    # Attaches the desktop bundles to the release publish-release created,
-    # with their own signed checksum manifest, so a desktop failure never
-    # holds back the CLI assets. Re-running it after a fix adds the missing
-    # assets, retaining published bytes when a retry rebuilds different bundles.
+    # Attaches the desktop bundles to the release publish-release created (or,
+    # for a backfill, the existing release), with their own signed checksum
+    # manifest, so a desktop failure never holds back the CLI assets. It runs
+    # only when every planned leg succeeded: a failed Linux leg stops it, and
+    # a macOS leg the preflight left out does not. Re-running it after a fix
+    # adds the missing assets, retaining published bytes when a retry
+    # rebuilds different bundles.
     name: Attach desktop bundles
-    needs: [publish-release, build-desktop]
-    if: ${{ vars.ORBIT_DESKTOP_RELEASE == 'true' }}
+    needs: [desktop-preflight, publish-release, build-desktop]
+    if: >-
+      ${{ !cancelled()
+        && needs.desktop-preflight.outputs.enabled == 'true'
+        && needs.build-desktop.result == 'success'
+        && (needs.publish-release.result == 'success' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -487,16 +579,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ORBIT_RELEASE_SIGNING_KEY_PEM: ${{ secrets.ORBIT_RELEASE_SIGNING_KEY_PEM }}
+          RELEASE_TAG: ${{ needs.desktop-preflight.outputs.tag }}
+          DESKTOP_MACOS: ${{ needs.desktop-preflight.outputs.macos }}
         run: |
           set -euo pipefail
-          expected_assets=(
-            orbit-desktop-universal-apple-darwin.dmg
+          macos_bundle=orbit-desktop-universal-apple-darwin.dmg
+          bundles=(
             orbit-desktop-x86_64-unknown-linux-gnu.deb
             orbit-desktop-x86_64-unknown-linux-gnu.AppImage
             orbit-desktop-aarch64-unknown-linux-gnu.deb
             orbit-desktop-aarch64-unknown-linux-gnu.AppImage
-            orbit-desktop-version.txt
           )
+          case "$DESKTOP_MACOS" in
+            true) bundles+=("$macos_bundle") ;;
+            false) ;;
+            *)
+              echo "desktop-preflight did not say whether macOS was built" >&2
+              exit 1
+              ;;
+          esac
+          # The signed set is exactly what this run built, plus the version file.
+          expected_assets=("${bundles[@]}" orbit-desktop-version.txt)
           manifest=orbit-desktop-checksums.txt
           signature="$manifest.sig"
           published_assets="$(mktemp)"
@@ -504,24 +607,29 @@ jobs:
           signing_key="$(mktemp)"
           trap 'rm -f "$published_assets" "$candidate_manifest" "$signing_key"' EXIT
 
-          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --json assets --jq '.assets[].name' > "$published_assets"
           has_asset() { grep -Fxq -- "$1" "$published_assets"; }
+          if [ "$DESKTOP_MACOS" = false ] && has_asset "$macos_bundle"; then
+            # A manifest without it would leave a published bundle unsigned.
+            echo "the release already has $macos_bundle, but this run built no macOS bundle; add the Apple signing secrets and re-run" >&2
+            exit 1
+          fi
 
           # Published bytes are authoritative. Replace only LOCAL copies before
           # hashing, including metadata left by an interrupted upload. Never
           # clobber a release asset, even if this run rebuilt different bytes.
           for asset in "${expected_assets[@]}" "$manifest" "$signature"; do
             if has_asset "$asset"; then
-              gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
                 --pattern "$asset" --dir dist --clobber
             fi
           done
           if ! has_asset orbit-desktop-version.txt; then
             # The update check uses this signed file to tie bundles to the tag.
-            printf '%s\n' "${GITHUB_REF_NAME#v}" > dist/orbit-desktop-version.txt
+            printf '%s\n' "${RELEASE_TAG#v}" > dist/orbit-desktop-version.txt
           fi
-          [ "$(cat dist/orbit-desktop-version.txt)" = "${GITHUB_REF_NAME#v}" ] || {
+          [ "$(cat dist/orbit-desktop-version.txt)" = "${RELEASE_TAG#v}" ] || {
             echo "published desktop version does not match the release tag" >&2
             exit 1
           }
@@ -534,7 +642,8 @@ jobs:
           (cd dist && sha256sum "${expected_assets[@]}" | sort -k 2) > "$candidate_manifest"
           if has_asset "$manifest"; then
             # Older partial uploads may already have a manifest. Preserve it
-            # only if it describes exactly the bytes we can publish now.
+            # only if it describes exactly the bytes we can publish now. A
+            # Linux-only manifest never gains a macOS bundle later.
             cmp "$candidate_manifest" "dist/$manifest" || {
               echo "published desktop checksums conflict with available bundles; fix forward in a new release" >&2
               exit 1
@@ -564,7 +673,7 @@ jobs:
           # and a manifest uploaded without its signature is safe to resume.
           for asset in "${expected_assets[@]}" "$manifest" "$signature"; do
             if ! has_asset "$asset"; then
-              gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" "dist/$asset"
+              gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" "dist/$asset"
             fi
           done
 

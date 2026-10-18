@@ -20,13 +20,16 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github/workflows/release.yml"
-DESKTOP_BUNDLES = (
-    "orbit-desktop-universal-apple-darwin.dmg",
+MACOS_BUNDLE = "orbit-desktop-universal-apple-darwin.dmg"
+LINUX_BUNDLES = (
     "orbit-desktop-x86_64-unknown-linux-gnu.deb",
     "orbit-desktop-x86_64-unknown-linux-gnu.AppImage",
     "orbit-desktop-aarch64-unknown-linux-gnu.deb",
     "orbit-desktop-aarch64-unknown-linux-gnu.AppImage",
 )
+DESKTOP_BUNDLES = (MACOS_BUNDLE, *LINUX_BUNDLES)
+APPLE_SECRETS = ("APPLE_CERTIFICATE", "APPLE_CERTIFICATE_PASSWORD", "APPLE_SIGNING_IDENTITY",
+                 "APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID")
 DESKTOP_VERSION = "orbit-desktop-version.txt"
 DESKTOP_MANIFEST = "orbit-desktop-checksums.txt"
 DESKTOP_SIGNATURE = DESKTOP_MANIFEST + ".sig"
@@ -47,6 +50,16 @@ class ReleaseWorkflowTests(unittest.TestCase):
                              if step.get("id") == "metadata")
         self.tap = self.jobs["bump-homebrew-tap"]
         self.tap_runs = [step for step in self.tap["steps"] if "run" in step]
+        self.preflight = self.jobs["desktop-preflight"]["steps"][0]
+        # Values of the non-secret expressions desktop steps bind to env.
+        self.bindings = {
+            "${{ github.event_name }}": "push",
+            "${{ inputs.tag }}": "",
+            "${{ vars.ORBIT_DESKTOP_RELEASE }}": "",
+            "${{ needs.desktop-preflight.outputs.tag }}": "v1.2.3",
+            "${{ needs.desktop-preflight.outputs.macos }}": "true",
+        }
+        self.apple_secrets = {name: f"offline-{name.lower()}" for name in APPLE_SECRETS}
         self.outputs = dict(version="1.2.3-rc.1",
                             darwin_arm_asset="orbit-aarch64-apple-darwin.tar.gz",
                             darwin_arm_sha="a" * 64,
@@ -71,6 +84,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 env[key] = "offline-test-token"
             elif value == "${{ secrets.ORBIT_RELEASE_SIGNING_KEY_PEM }}":
                 env[key] = self.signing_key.read_text()
+            elif value in self.bindings:
+                env[key] = self.bindings[value]
+            elif (secret := re.fullmatch(r"\$\{\{ secrets\.(APPLE_\w+) \}\}", value)):
+                env[key] = self.apple_secrets.get(secret[1], "")
             else:
                 self.fail(f"unsupported workflow env binding: {key}")
         env.update(values)
@@ -84,6 +101,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         return result.stdout.strip()
 
     def prepare_desktop(self):
+        if hasattr(self, "remote"):
+            return
         self.remote = self.root / "release"
         self.remote.mkdir()
         self.upload_log = self.root / "uploads.jsonl"
@@ -116,7 +135,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
             remote = Path(os.environ["FAKE_RELEASE"])
             assert args[0] == "release", args
             command, tag = args[1:3]
-            assert tag == "v1.2.3", args
+            if tag != "v1.2.3":
+                sys.exit("release not found")
             options = args[3:]
             def option(name):
                 index = options.index(name)
@@ -125,10 +145,15 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 return value
             assert option("--repo") == "offline/orbit", args
             if command == "view":
-                assert option("--json") == "assets", args
-                assert option("--jq") == ".assets[].name", args
+                fields = option("--json")
+                if fields == "tagName":
+                    assert option("--jq") == ".tagName", args
+                    print(tag)
+                else:
+                    assert fields == "assets", args
+                    assert option("--jq") == ".assets[].name", args
+                    print("\\n".join(sorted(p.name for p in remote.iterdir())))
                 assert not options, args
-                print("\\n".join(sorted(p.name for p in remote.iterdir())))
             elif command == "download":
                 name = option("--pattern")
                 destination = Path(option("--dir")) / name
@@ -153,7 +178,22 @@ class ReleaseWorkflowTests(unittest.TestCase):
         gh.chmod(0o755)
         self.env.update(PATH=str(binary_dir) + os.pathsep + self.env["PATH"],
                         FAKE_RELEASE=str(self.remote), FAKE_UPLOAD_LOG=str(self.upload_log),
-                        GITHUB_REF_NAME="v1.2.3", GITHUB_REPOSITORY="offline/orbit")
+                        GITHUB_REPOSITORY="offline/orbit")
+
+    def plan_desktop(self, **values):
+        """Run desktop-preflight; return its outputs, or None when it fails."""
+        self.prepare_desktop()
+        self.output.write_text("")
+        summary = self.root / "summary.md"
+        summary.write_text("")
+        values.setdefault("GITHUB_REF_NAME", "v1.2.3")
+        result = self.run_script(self.preflight, GITHUB_OUTPUT=str(self.output),
+                                 GITHUB_STEP_SUMMARY=str(summary), **values)
+        self.plan_log = result.stdout + result.stderr + summary.read_text()
+        if result.returncode:
+            self.assertEqual(self.output.read_text(), "", "a failed plan must publish no outputs")
+            return None
+        return dict(line.split("=", 1) for line in self.output.read_text().splitlines())
 
     def publish_desktop(self):
         for step in self.jobs["publish-desktop"]["steps"]:
@@ -167,7 +207,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         return [json.loads(line) for line in self.upload_log.read_text().splitlines()] \
             if self.upload_log.exists() else []
 
-    def assert_desktop_authenticated(self):
+    def assert_desktop_authenticated(self, bundles=DESKTOP_BUNDLES):
         result = subprocess.run(
             ["openssl", "dgst", "-sha256", "-verify", str(self.root / "npm/release-signing.pub"),
              "-signature", str(self.remote / DESKTOP_SIGNATURE), str(self.remote / DESKTOP_MANIFEST)],
@@ -176,7 +216,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         digests = {name: digest for digest, name in
                    (line.split("  ") for line in
                     (self.remote / DESKTOP_MANIFEST).read_text().splitlines())}
-        self.assertEqual(set(digests), {*DESKTOP_BUNDLES, DESKTOP_VERSION})
+        self.assertEqual(set(digests), {*bundles, DESKTOP_VERSION})
         for name, digest in digests.items():
             self.assertEqual(digest, hashlib.sha256((self.remote / name).read_bytes()).hexdigest(),
                              f"signed manifest must authenticate published {name}")
@@ -273,6 +313,89 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(self.uploaded_names(), [dmg, DESKTOP_MANIFEST])
         self.assertEqual({path.name: path.read_bytes() for path in self.remote.iterdir()}, original)
         self.assert_desktop_authenticated()
+
+    def test_desktop_plan_builds_linux_always_and_macos_only_with_every_apple_secret(self):
+        # Each matrix key a build-desktop step reads must come from the plan.
+        used = set(re.findall(r"matrix\.(\w+)", json.dumps(self.jobs["build-desktop"])))
+        for missing in ((), ("APPLE_TEAM_ID",), APPLE_SECRETS):
+            for opt_in in ("", "true"):
+                with self.subTest(missing=missing, ORBIT_DESKTOP_RELEASE=opt_in):
+                    self.bindings["${{ vars.ORBIT_DESKTOP_RELEASE }}"] = opt_in
+                    self.apple_secrets = {name: "" if name in missing else "set"
+                                          for name in APPLE_SECRETS}
+                    plan = self.plan_desktop()
+                    self.assertIsNotNone(plan, self.plan_log)
+                    self.assertEqual(plan["enabled"], "true",
+                                     "an unset opt-in must not suppress the Linux bundles")
+                    self.assertEqual(plan["tag"], "v1.2.3")
+                    self.assertEqual(plan["macos"], "false" if missing else "true")
+                    legs = json.loads(plan["matrix"])["include"]
+                    for leg in legs:
+                        self.assertEqual(set(leg), used)
+                    # The legs package exactly the bundles publish-desktop signs.
+                    built = {f"orbit-desktop-{leg['target']}.{suffix}" for leg in legs
+                             for suffix in (("dmg",) if leg["runs_on"].startswith("macos")
+                                            else ("deb", "AppImage"))}
+                    self.assertEqual(built, set(LINUX_BUNDLES) if missing
+                                     else set(DESKTOP_BUNDLES))
+                    for name in missing:
+                        self.assertIn(name, self.plan_log,
+                                      "a skipped macOS leg must name the missing secret")
+
+    def test_desktop_opt_out_turns_off_tag_pushes_but_not_a_backfill(self):
+        self.bindings["${{ vars.ORBIT_DESKTOP_RELEASE }}"] = "false"
+        plan = self.plan_desktop()
+        self.assertEqual(plan and plan["enabled"], "false", self.plan_log)
+        self.bindings.update({"${{ github.event_name }}": "workflow_dispatch",
+                              "${{ inputs.tag }}": "v1.2.3"})
+        plan = self.plan_desktop(GITHUB_REF_NAME="agent-main")
+        self.assertEqual(plan and (plan["enabled"], plan["tag"]), ("true", "v1.2.3"),
+                         self.plan_log)
+
+    def test_desktop_backfill_needs_an_existing_release_and_a_plain_tag(self):
+        self.bindings["${{ github.event_name }}"] = "workflow_dispatch"
+        for tag in ("v1.2.4", "", "agent-main", "v1.2.3\nmacos=true", 'v1.2.3$(touch sentinel)',
+                    "v1.2.3\n::warning::injected"):
+            with self.subTest(tag=tag):
+                self.bindings["${{ inputs.tag }}"] = tag
+                self.assertIsNone(self.plan_desktop(GITHUB_REF_NAME="v1.2.3"), self.plan_log)
+                self.assertNotIn("::warning::injected", self.plan_log)
+                self.assertFalse((self.root / "sentinel").exists())
+
+    def test_desktop_linux_only_publication_and_later_macos_conflict(self):
+        self.prepare_desktop()
+        self.bindings["${{ needs.desktop-preflight.outputs.macos }}"] = "false"
+        (self.root / "dist" / MACOS_BUNDLE).unlink()
+        result = self.publish_desktop()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(set(self.uploaded_names()),
+                         {*LINUX_BUNDLES, DESKTOP_VERSION, DESKTOP_MANIFEST, DESKTOP_SIGNATURE})
+        self.assert_desktop_authenticated(LINUX_BUNDLES)
+        published = {path.name: path.read_bytes() for path in self.remote.iterdir()}
+
+        # A Linux-only retry verifies the release without uploading again.
+        self.upload_log.write_text("")
+        self.assertEqual(self.publish_desktop().returncode, 0)
+        self.assertEqual(self.uploaded_names(), [])
+
+        # A macOS bundle built later cannot join the published manifest.
+        self.bindings["${{ needs.desktop-preflight.outputs.macos }}"] = "true"
+        (self.root / "dist" / MACOS_BUNDLE).write_bytes(b"signed later")
+        result = self.publish_desktop()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.uploaded_names(), [])
+        self.assertEqual({path.name: path.read_bytes() for path in self.remote.iterdir()},
+                         published)
+
+    def test_desktop_linux_only_run_refuses_a_published_macos_bundle(self):
+        # A Linux-only manifest would leave the published DMG unauthenticated.
+        self.prepare_desktop()
+        (self.remote / MACOS_BUNDLE).write_bytes(b"orphan DMG from a partial upload")
+        self.bindings["${{ needs.desktop-preflight.outputs.macos }}"] = "false"
+        result = self.publish_desktop()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.uploaded_names(), [])
+        self.assertEqual({path.name for path in self.remote.iterdir()}, {MACOS_BUNDLE})
 
     def test_metadata_accepts_release_and_prerelease_tags(self):
         for tag in ("v0.0.0", "v12.34.56", "v1.2.3-rc.1", "v1.2.3-alpha-beta.2"):

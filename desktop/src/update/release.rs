@@ -3,9 +3,10 @@
 //! The app lists the repository's recent GitHub releases and picks the newest
 //! stable one, above the running version, that carries the desktop manifest,
 //! its signature, the version file and this platform's bundle. Releases
-//! without desktop assets (made while `ORBIT_DESKTOP_RELEASE` is off, or
-//! whose desktop jobs failed or haven't finished) are skipped, so they never
-//! hide an older release that has them.
+//! without them (made with the desktop jobs off, without the macOS bundle
+//! for want of Apple signing secrets, or whose desktop jobs failed or
+//! haven't finished) are skipped, so they never hide an older release that
+//! has them.
 //!
 //! The manifest is signed, and it lists the version file's digest. Asset names
 //! carry no version, so the version file is what ties a signed asset set to a

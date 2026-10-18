@@ -32,7 +32,7 @@ fn version(text: &str) -> Version {
 
 #[test]
 fn skips_releases_without_desktop_assets() {
-    // The newest releases were cut with ORBIT_DESKTOP_RELEASE off, or before
+    // The newest releases were cut with the desktop jobs off, or before
     // publish-desktop finished; the older one still has a full set.
     let releases = json!([
         release("v0.31.0", &["orbit-checksums.txt"]),
@@ -50,6 +50,36 @@ fn skips_releases_without_desktop_assets() {
             "orbit-desktop-x86_64-unknown-linux-gnu.deb"
         ),
         None
+    );
+}
+
+#[test]
+fn a_linux_only_release_updates_linux_while_macos_keeps_looking() {
+    // Cut without the Apple signing secrets: full signed metadata, no DMG.
+    let linux = "orbit-desktop-x86_64-unknown-linux-gnu.AppImage";
+    let releases = json!([
+        release(
+            "v0.30.0",
+            &[
+                MANIFEST,
+                SIGNATURE,
+                VERSION_FILE,
+                linux,
+                "orbit-desktop-x86_64-unknown-linux-gnu.deb",
+            ],
+        ),
+        release(
+            "v0.29.0",
+            &[MANIFEST, SIGNATURE, VERSION_FILE, BUNDLE, linux]
+        ),
+    ]);
+    assert_eq!(
+        newest_update(&releases, version("0.28.3"), linux),
+        Some(version("0.30.0"))
+    );
+    assert_eq!(
+        newest_update(&releases, version("0.28.3"), BUNDLE),
+        Some(version("0.29.0"))
     );
 }
 
