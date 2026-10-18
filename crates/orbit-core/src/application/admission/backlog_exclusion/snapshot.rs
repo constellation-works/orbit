@@ -199,7 +199,8 @@ pub(super) fn backlog_snapshot_in_mode(
     // A task this host's OS cannot run is left for a host that can. Read every
     // pass, so a retagged backlog task is honoured at its next admission.
     backlog.retain(|task| {
-        let Some(exclusion) = host_os_exclusion(runtime, task, &executor_host_os, pools) else {
+        let Some(exclusion) = host_os_exclusion(runtime, task, &executor_host_os, pools, None)
+        else {
             return true;
         };
         excluded.push(exclusion);

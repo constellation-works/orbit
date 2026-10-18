@@ -67,6 +67,18 @@ impl OrbitRuntime {
         pools: &CapturedCrewPools,
         limits: &BTreeMap<String, ExecutorOsLimit>,
     ) -> Option<String> {
+        self.task_host_os_wait_with_admitted_crew(task, pools, limits, None)
+    }
+
+    /// A frozen run selection replaces the automatic fallback, while the
+    /// task's stored crew and OS tags remain constraints on discovery.
+    pub(crate) fn task_host_os_wait_with_admitted_crew(
+        &self,
+        task: &Task,
+        pools: &CapturedCrewPools,
+        limits: &BTreeMap<String, ExecutorOsLimit>,
+        admitted_crew: Option<&str>,
+    ) -> Option<String> {
         match TaskOsRequirement::for_crew(&task.tags, task.crew.as_deref(), limits) {
             Ok(requirement) => {
                 if let Some(wait) = requirement.unsatisfied_reason(self.host_os()) {
@@ -74,6 +86,12 @@ impl OrbitRuntime {
                 }
             }
             Err(reason) => return Some(reason),
+        }
+        if let Some(crew) = admitted_crew {
+            return match TaskOsRequirement::for_crew(&task.tags, Some(crew), limits) {
+                Ok(requirement) => requirement.unsatisfied_reason(self.host_os()),
+                Err(reason) => Some(reason),
+            };
         }
         if limits.is_empty() {
             return None;

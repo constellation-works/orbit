@@ -46,8 +46,10 @@ pub(super) fn host_os_exclusion(
     task: &Task,
     limits: &BTreeMap<String, ExecutorOsLimit>,
     pools: &CapturedCrewPools,
+    admitted_crew: Option<&str>,
 ) -> Option<BacklogTaskExclusion> {
-    let reason = runtime.task_host_os_wait(task, pools, limits)?;
+    let reason =
+        runtime.task_host_os_wait_with_admitted_crew(task, pools, limits, admitted_crew)?;
     Some(BacklogTaskExclusion {
         id: task.id.clone(),
         reason: BacklogTaskExclusionReason::HostOsMismatch,
