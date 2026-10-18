@@ -39,13 +39,13 @@ fn old_shape_history_keeps_streaks_and_keys_and_round_trips() {
     orbit_common::fs::io::create_private_dir_all(parent).expect("history directory");
 
     // Today's writer emitted this shape. Keys are `Value`'s display of the
-    // id, so a string id is quoted and a missing job is `-`. One count and
-    // one landing gap are malformed and must be dropped on their own.
+    // id, so a string id is quoted and a missing job is `-`. Malformed count
+    // and landing-gap entries must be dropped without losing their neighbors.
     let fixture = json!({
         "note": "ignored",
         "schema_version": "ignored",
         "landing_gaps": {
-            "bad-gap": {"last_sweep_id": "only"},
+            "bad-gap": [2, "sweep-a"],
             "branch/workflow/job": {"consecutive_sweeps": 4, "last_sweep_id": "sweep-a"}
         },
         "counts": {
@@ -55,6 +55,7 @@ fn old_shape_history_keeps_streaks_and_keys_and_round_trips() {
             "malformed": {"consecutive_sweeps": "nope"},
             "7/-/check": {"consecutive_sweeps": 2, "last_sweep_id": "sweep-a"},
             "42/24/job_log_truncated": {"consecutive_sweeps": 2, "last_sweep_id": "sweep-a"},
+            "42/24/logs": [2, "sweep-a"],
             "\"run-7\"/\"99\"/logs": {"consecutive_sweeps": 2, "last_sweep_id": "sweep-a"}
         }
     });
@@ -83,6 +84,7 @@ fn old_shape_history_keeps_streaks_and_keys_and_round_trips() {
         vec![
             json!({"run_id": "run-7", "job_id": "99", "operation": "logs"}),
             json!({"run_id": 42, "job_id": 24, "operation": "job_log_truncated"}),
+            json!({"run_id": 42, "job_id": 24, "operation": "logs"}),
             json!({"run_id": 7, "operation": "check"}),
             json!({"run_id": 8, "job_id": 9}),
             json!({"run_id": "42", "job_id": "24", "operation": "job_log_truncated"}),
@@ -96,8 +98,15 @@ fn old_shape_history_keeps_streaks_and_keys_and_round_trips() {
             .iter()
             .all(|error| error["consecutive_sweeps"] == json!(3))
     );
-    assert_eq!(observed.retryable.len(), 1);
-    assert_eq!(observed.retryable[0]["run_id"], json!("42"));
+    assert_eq!(observed.retryable.len(), 2);
+    assert_eq!(observed.retryable[0]["run_id"], json!(42));
+    assert_eq!(observed.retryable[0]["operation"], json!("logs"));
+    assert_eq!(observed.retryable[1]["run_id"], json!("42"));
+    assert!(observed.persistent.iter().any(|error| {
+        error["run_id"] == json!(42)
+            && error["operation"] == json!("job_log_truncated")
+            && error["consecutive_sweeps"] == json!(3)
+    }));
 
     save(&path, &history).expect("save observed history");
     assert_eq!(
@@ -108,6 +117,7 @@ fn old_shape_history_keeps_streaks_and_keys_and_round_trips() {
                 "\"42\"/\"24\"/job_log_truncated": {"consecutive_sweeps": 1, "last_sweep_id": "sweep-b"},
                 "\"run-7\"/\"99\"/logs": {"consecutive_sweeps": 3, "last_sweep_id": "sweep-b"},
                 "42/24/job_log_truncated": {"consecutive_sweeps": 3, "last_sweep_id": "sweep-b"},
+                "42/24/logs": {"consecutive_sweeps": 1, "last_sweep_id": "sweep-b"},
                 "7/-/check": {"consecutive_sweeps": 3, "last_sweep_id": "sweep-b"},
                 "8/9/": {"consecutive_sweeps": 3, "last_sweep_id": "sweep-b"}
             },
@@ -124,4 +134,39 @@ fn old_shape_history_keeps_streaks_and_keys_and_round_trips() {
     );
     assert_eq!(streaks["branch/workflow/job"], 5);
     assert_eq!(streaks["bad-gap"], 1);
+
+    fs::write(
+        &path,
+        json!([
+            {"counts": {"42/24/logs": {"consecutive_sweeps": 2, "last_sweep_id": "sweep-a"}}},
+            {"landing_gaps": {"branch/workflow/job": {"consecutive_sweeps": 2, "last_sweep_id": "sweep-a"}}}
+        ])
+        .to_string(),
+    )
+    .expect("write top-level array");
+    let mut history = load(&path);
+    let observed = history.observe(
+        vec![json!({"run_id": 42, "job_id": 24, "operation": "logs"})],
+        "sweep-c",
+    );
+    assert_eq!(observed.retryable.len(), 1);
+    assert_eq!(observed.retryable[0]["operation"], json!("logs"));
+    assert!(observed.persistent.is_empty());
+    let streaks = history.observe_landing_gaps(
+        &BTreeSet::from(["branch/workflow/job".to_string()]),
+        "sweep-c",
+    );
+    assert_eq!(streaks["branch/workflow/job"], 1);
+    save(&path, &history).expect("save history after array recovery");
+    let saved: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).expect("read saved history"))
+            .expect("valid saved history");
+    assert_eq!(
+        saved["counts"]["42/24/logs"]["consecutive_sweeps"],
+        json!(1)
+    );
+    assert_eq!(
+        saved["landing_gaps"]["branch/workflow/job"]["consecutive_sweeps"],
+        json!(1)
+    );
 }

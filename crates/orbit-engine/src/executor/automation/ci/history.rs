@@ -48,8 +48,8 @@ struct SweepCount {
 }
 
 /// Persisted `retryable_history.json`. Parsed once in [`load`] and written
-/// whole in [`save`]. Map values that are not one [`SweepCount`] are dropped
-/// on their own; the rest of the file still loads.
+/// whole in [`save`]. Map values that are not object-shaped [`SweepCount`]s
+/// are dropped on their own; the rest of the file still loads.
 #[derive(Debug, Serialize, Deserialize)]
 struct RetryableHistoryFile {
     #[serde(skip_deserializing, default = "history_schema_version")]
@@ -163,19 +163,12 @@ fn next_count(prior: Option<&SweepCount>, sweep_id: &str) -> u64 {
 }
 
 /// A count map, or anything else (which loads as no counts). One entry that
-/// is not a [`SweepCount`] is skipped; its neighbours stay.
+/// is not an object-shaped [`SweepCount`] is skipped; its neighbours stay.
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum LenientCounts {
-    Map(BTreeMap<String, MaybeSweepCount>),
+    Map(BTreeMap<String, Value>),
     Other(IgnoredAny),
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum MaybeSweepCount {
-    Count(SweepCount),
-    Skip(IgnoredAny),
 }
 
 fn lenient_counts<'de, D>(deserializer: D) -> Result<BTreeMap<String, SweepCount>, D::Error>
@@ -185,22 +178,16 @@ where
     Ok(match LenientCounts::deserialize(deserializer)? {
         LenientCounts::Map(entries) => entries
             .into_iter()
-            .filter_map(|(key, entry)| match entry {
-                MaybeSweepCount::Count(count) => Some((key, count)),
-                MaybeSweepCount::Skip(_) => None,
+            .filter_map(|(key, entry)| {
+                entry.is_object().then_some(entry).and_then(|entry| {
+                    serde_json::from_value::<SweepCount>(entry)
+                        .ok()
+                        .map(|count| (key, count))
+                })
             })
             .collect(),
         LenientCounts::Other(_) => BTreeMap::new(),
     })
-}
-
-/// Object or any other JSON. A non-object document is an empty history, the
-/// same as a file that simply has no counts.
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum ParsedHistoryFile {
-    File(RetryableHistoryFile),
-    Other(IgnoredAny),
 }
 
 /// Fields [`error_key`] reads. `run_id` and `job_id` stay in JSON display
@@ -282,9 +269,17 @@ pub(super) fn history_path(data_root: &Path) -> Option<PathBuf> {
 /// a persistent error fails a few more sweeps before it degrades again.
 pub(super) fn load(path: &Path) -> RetryableHistory {
     match std::fs::read_to_string(path) {
-        Ok(text) => match serde_json::from_str::<ParsedHistoryFile>(&text) {
-            Ok(ParsedHistoryFile::File(file)) => RetryableHistory::from(file),
-            Ok(ParsedHistoryFile::Other(_)) => RetryableHistory::default(),
+        Ok(text) => match serde_json::from_str::<Value>(&text) {
+            Ok(value) if value.is_object() => {
+                match serde_json::from_value::<RetryableHistoryFile>(value) {
+                    Ok(file) => RetryableHistory::from(file),
+                    Err(error) => {
+                        tracing::warn!(path = %path.display(), %error, "ignoring unreadable CI sweep retryable history");
+                        RetryableHistory::default()
+                    }
+                }
+            }
+            Ok(_) => RetryableHistory::default(),
             Err(error) => {
                 tracing::warn!(path = %path.display(), %error, "ignoring unreadable CI sweep retryable history");
                 RetryableHistory::default()
