@@ -83,6 +83,13 @@ impl LandingWorkers {
                 }
                 Err(error) => return Err(error),
             };
+            // Darwin inherits O_NONBLOCK from this fixture's listener. Accept
+            // proves a connection is queued, not that the substitute has
+            // written its identity. SO_RCVTIMEO does not make a nonblocking
+            // read wait, so own_count returned EAGAIN (errno 35) under
+            // parallel load before the second worker's identity line arrived
+            // [F2026-10-457].
+            stream.set_nonblocking(false)?;
             stream.set_read_timeout(Some(Duration::from_secs(5)))?;
             stream.set_write_timeout(Some(Duration::from_secs(5)))?;
             let mut reader = std::io::BufReader::new(stream);
