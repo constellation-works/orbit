@@ -443,8 +443,9 @@ failure settles the batch again until another explicit reissue.
 
 Any refusal aborts the whole request before the write, naming every reason that
 applied: `unknown_consumer`, `member_consumer`, `owned_elsewhere`,
-`branch_changed`, `repository_changed`, `owner_changed`, `coverage_changed`,
+`ownership_unresolved`, `branch_changed`, `repository_changed`, `owner_changed`, `coverage_changed`,
 `coverage_unverifiable`, `active_execution`, `settings_unchanged`,
+`recovery_mode_conflict` (replay combined with adopt or reissue),
 `no_settled_action`, `action_evidenced`, `definition_changed` (a reissue that
 does not also adopt the identity it would run under) or `missing_authorization`
 (no reason or actor). A change of workspace, owner machine, repository, branch
@@ -556,7 +557,7 @@ contact the network to rediscover it.
 
 A recorded stall that outlives `automation.stall_window_minutes` (default 60) is
 logged once at `warn` and filed once as friction; before that window it is
-recorded but quiet. A stall clears itself only when the orphaned revision is
+recorded but quiet. A `history_diverged` stall clears itself only when the orphaned revision is
 provably reachable from the branch head again, which moves no debt and needs no
 audit.
 

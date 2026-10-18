@@ -29,7 +29,7 @@ Without this contract, an implementation will key selectors on renameable `host_
 
 ## Destination membership file
 
-Remote federated membership is the machine-global host file `~/.orbit/hosts.toml`, written by `orbit host add` and owned by host-registry ([host-commands](../../host-registry/specs/host-commands.md), [ORB-14448]). It is not part of workspace `config.toml` or `workspaces.json`. Each entry supplies the `ssh` target and `machine_id` the mux routes by; its `name` and `task_prefix` are host-registry fields the mux does not read. Local workspaces require no entry: federated serve always includes the accepting machine. A missing file or an empty `hosts` list is a valid local-only configuration.
+Remote federated membership is the machine-global host file `~/.orbit/hosts.toml`, written by `orbit host add` and owned by host-registry ([host-commands](../../host-registry/specs/host-commands.md), [ORB-14448]). It is not part of workspace `config.toml` or `workspaces.json`. Each entry supplies the `ssh` target and `machine_id` the mux routes by; its `name` is a host-registry field the mux does not read, and `task_prefix` builds the task-ID routing table the mux uses for id-only task calls. Local workspaces require no entry: federated serve always includes the accepting machine. A missing file or an empty `hosts` list is a valid local-only configuration.
 
 ```toml
 schema_version = 1
@@ -41,7 +41,7 @@ ssh = "orbit-linux"
 task_prefix = "AL"
 ```
 
-The host file is validated at config load, before the gateway advertises tools or accepts any `tools/call`: a duplicate `machine_id` makes the whole file invalid with `ambiguous_destination`, and every other host-file invariant (unique names and prefixes, valid SSH target, no entry for the local machine) fails closed with its host-registry code.
+The host file is validated at config load, before the gateway advertises tools or accepts any `tools/call`: a duplicate `machine_id` makes the whole file invalid with `ambiguous_destination`, and every other host-file invariant fails closed with its own code: `host_name_conflict` (duplicate name), `task_prefix_conflict` (duplicate prefix), `host_is_local` (an entry naming this machine), or `invalid_input` (malformed SSH target or identity field).
 
 **Legacy file, one release.** While `~/.orbit/mcp-destinations.toml` is the only file, its rows are the membership:
 
@@ -118,8 +118,8 @@ Federated `orbit_workspace_list` is a **new session-unbound response shape**, no
 
 Implemented in [ORB-11014] as `orbit mcp serve --mode federated`
 (`crates/orbit-mcp/src/federated/`), with implicit local membership in
-[ORB-11044]. Remote membership is loaded once at startup from the destinations
-file; the accepting machine is always prepended. Every list call then probes
+[ORB-11044]. Remote membership is loaded once at startup from the host file
+(`hosts.toml`, or the legacy `mcp-destinations.toml` while it is the only file); the accepting machine is always prepended. Every list call then probes
 each destination live — local in-process, remotes over the v1 SSH argv — and
 caches nothing. The response envelope is `{"workspaces": [...]}` — no envelope
 `machine_id`. After [ORB-11015] the mux advertises the canonical MCP tool
