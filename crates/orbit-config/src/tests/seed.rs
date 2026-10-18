@@ -43,6 +43,7 @@ fn every_family_combination_seeds_valid_defaults_pools_and_enabled_flags() {
         "cursor",
         "pi",
         "opencode",
+        "muse",
     ];
     for mask in 0u32..(1 << families.len()) {
         let detected = families
@@ -82,6 +83,22 @@ fn every_family_combination_seeds_valid_defaults_pools_and_enabled_flags() {
             assert!(
                 !crew.assignment.model.trim().is_empty(),
                 "crew `{name}` has a model"
+            );
+        }
+        // A lane appended later must not move a host's default crew or pools:
+        // with any earlier family detected, adding `muse` changes neither.
+        // [ORB-16577]
+        if detected.contains(&"muse") && detected.len() > 1 {
+            let without = ConfigSeed::from_families(detected.iter().filter(|f| **f != "muse"));
+            assert_eq!(
+                seed.recommended_default_crew(),
+                without.recommended_default_crew(),
+                "families {detected:?}: detecting muse moved the default crew"
+            );
+            assert_eq!(
+                seed.complexity_pools(),
+                without.complexity_pools(),
+                "families {detected:?}: detecting muse changed the complexity pools"
             );
         }
         for (key, pool) in POOL_KEYS.into_iter().zip(pools(&config)) {

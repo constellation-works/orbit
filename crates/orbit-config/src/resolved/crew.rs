@@ -8,7 +8,7 @@ use orbit_common::model_defaults::{
     ANTIGRAVITY_DEFAULT_MODEL, CLAUDE_DEFAULT_STRONG, CLAUDE_DEFAULT_WEAK, CLAUDE_FABLE_MODEL,
     CLAUDE_HAIKU_MODEL, CODEX_ASTRA_MODEL, CODEX_LUNA_MODEL, CODEX_SOL_MODEL,
     COPILOT_DEFAULT_MODEL, CURSOR_DEFAULT_MODEL, GEMINI_CREW_MODEL, GROK_DEFAULT_MODEL,
-    OPENCODE_DEFAULT_MODEL, PI_DEFAULT_MODEL,
+    MUSE_DEFAULT_MODEL, OPENCODE_DEFAULT_MODEL, PI_DEFAULT_MODEL,
 };
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::{Crew, CrewAssignment, ReasoningEffort, validate_antigravity_model};
@@ -166,6 +166,7 @@ pub(crate) fn default_crews() -> BTreeMap<String, Crew> {
         ("cursor", CURSOR_DEFAULT_MODEL, "cursor"),
         ("pi", PI_DEFAULT_MODEL, "pi"),
         ("opencode", OPENCODE_DEFAULT_MODEL, "opencode"),
+        ("muse", MUSE_DEFAULT_MODEL, "muse"),
     ] {
         crews.insert(
             name.to_string(),
@@ -345,7 +346,7 @@ fn effort_accepted_values(provider: &str, model: Option<&str>) -> &'static str {
             Some("grok-4.5") => "low, medium, high",
             _ => "omit the key",
         },
-        "claude" | "codex" | "pi" => ReasoningEffort::VALUES,
+        "claude" | "codex" | "pi" | "muse" => ReasoningEffort::VALUES,
         _ => "omit the key",
     }
 }

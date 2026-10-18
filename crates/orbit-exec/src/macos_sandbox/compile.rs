@@ -271,6 +271,20 @@ fn compile_macos_sandbox_profile_with_env(
             ));
         }
     }
+    // Muse Code keeps its settings and `auth.json` login under its XDG config
+    // root, tracing/plugins/skills under its XDG data root, and its session
+    // name authority under Application Support. Granted only to the active
+    // Muse executor; `META_API_KEY` is an explicit environment opt-in and
+    // needs no additional path. [ORB-16577]
+    if Provider::parse(provider).ok() == Some(Provider::Muse) {
+        for state_dir in super::provider_dirs::muse_state_dirs(home, xdg_config_home, xdg_data_home)
+        {
+            out.push_str(&format!(
+                "(allow file-write* (subpath \"{}\"))\n",
+                super::sbpl_filter::sbpl_escape(&state_dir.display().to_string())
+            ));
+        }
+    }
     super::provider_dirs::emit_claude_home_json_allows(home, claude_config_dir, &mut out);
     super::provider_dirs::emit_grok_state_file_allows(home, grok_home, &mut out);
 

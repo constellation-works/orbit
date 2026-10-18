@@ -570,7 +570,7 @@ A crew is one provider-model assignment. An activity uses the crew named in its 
 
 | Field | Required | Values |
 |---|---|---|
-| `provider` | Yes | `claude`, `codex`, `antigravity`, `gemini`, `grok`, `copilot`, `cursor`, `pi`, `opencode`. See [provider identity](#provider-identity-and-resolution). |
+| `provider` | Yes | `claude`, `codex`, `antigravity`, `gemini`, `grok`, `copilot`, `cursor`, `pi`, `opencode`, `muse`. See [provider identity](#provider-identity-and-resolution). |
 | `model` | Yes | Model ID passed to the provider CLI. |
 | `enabled` | No | Default `true`. `false` keeps the crew defined and listed but refuses to run it; see [disabled crews](#disabled-crews). |
 | `effort` | No | Reasoning effort (below). Omitted leaves the provider's default. |
@@ -604,12 +604,13 @@ provider = "gemini"
 | `cursor` | `cursor-agent` | `cursor` (`gpt-5`) | `cursor` |
 | `pi` | `pi` | `pi` (`sonnet`) | `pi` |
 | `opencode` | `opencode` | `opencode` (`anthropic/claude-sonnet-4-5`) | `opencode` |
+| `muse` | `muse` | `muse` (`muse-spark-1.3`) | `muse` |
 
 **Reasoning effort.** Choose capability with the model, then tune `effort` within it.
 
 | Provider | Accepted `effort` | Rendered as |
 |---|---|---|
-| `claude`, `codex`, `pi` | `low`, `medium`, `high`, `xhigh`, `max` | `--effort` · `model_reasoning_effort` · `--thinking` |
+| `claude`, `codex`, `pi`, `muse` | `low`, `medium`, `high`, `xhigh`, `max` | `--effort` · `model_reasoning_effort` · `--thinking` · `--reasoning-effort` |
 | `antigravity` | `low`, `medium`, `high` | `--effort` |
 | `opencode` | `high`, `max` | `--variant` |
 | `grok` (`grok-4.7`, `grok-4.6`) | `low`, `medium`, `high`, `xhigh` | `--reasoning-effort` |
@@ -733,12 +734,13 @@ Every `provider` string (a crew's, an activity's inline `provider`, setup detect
 | `pi` | `pi` | [Pi CLI](#pi-cli) |
 | `antigravity` | `agy` | [Antigravity CLI](#antigravity-cli) |
 | `opencode` | `opencode` | [OpenCode CLI](#opencode-cli) |
+| `muse` | `muse` | [Muse Code CLI](#muse-code-cli) |
 | `ollama` | — | Recognized but unsupported at the Orbit CLI entry point (`provider.unsupported`). |
 | `openai_compat` (`openai-compat`) | — | HTTP-only, no CLI runtime; selecting it fails. |
 
 - Parsing ignores case and surrounding whitespace.
 - Deprecated aliases resolve with an `orbit.config.crew` warning: `anthropic` → `claude`, `openai`/`chatgpt` → `codex`, `google` → `gemini`, `xai` → `grok`.
-- `copilot`, `cursor`, `pi`, `antigravity` and `opencode` have no aliases, and the model vendor a lane runs (a Claude model through Copilot) never changes the provider.
+- `copilot`, `cursor`, `pi`, `antigravity`, `opencode` and `muse` have no aliases, and the model vendor a lane runs (a Claude model through Copilot) never changes the provider.
 - The cross-repo Worker executor runs only `claude`, `codex`, `gemini` and `grok`; a Worker-routed step naming another lane is refused, not re-pointed.
 
 **Audit attribution.** Process audit maps `ORBIT_AGENT_NAME` and `ORBIT_AGENT_MODEL` to an agent family. An invalid pair (`copilot` with a `claude-*` model) or an agent envelope with no identity records `unknown` with a warning. An agent envelope (non-empty name and model, truthy `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_TASK_ACTOR_KIND=agent`) takes precedence over `ORBIT_ACTOR`, the operator override and the OS username. This affects recorded identity only, not command authorization.
@@ -768,14 +770,14 @@ An explicit selection that cannot run fails with a stable diagnostic and never f
 
 - `provider openai_compat is unsupported by the Orbit CLI entry point (HTTP-only)`
 - `provider ollama is unsupported by the Orbit CLI entry point`
-- `unknown provider '<x>'; expected one of claude, codex, gemini, grok, copilot, ollama, openai_compat, cursor, pi, antigravity, opencode`
+- `unknown provider '<x>'; expected one of claude, codex, gemini, grok, copilot, ollama, openai_compat, cursor, pi, antigravity, opencode, muse`
 - A selected lane whose binary is missing fails permanently, naming the binary.
 
 ---
 
 ## Provider CLI notes
 
-For every lane: Orbit passes `--model` from the crew and sends the prompt on **stdin**, never argv (process listings and audit see argv). The Orbit OS sandbox is the filesystem boundary, and provider-specific write grants apply only while that provider runs. Credentials reach the agent only through [`[execution.env].pass`](#executionenv--the-agent-subprocess-environment); Orbit never puts a key on argv. A lane without native or Orbit-managed MCP reaches Orbit tools with `orbit tool run <tool> --input '<json>'` through its shell tool, under the same grants.
+For every lane: Orbit passes `--model` from the crew and sends the prompt on **stdin**, never argv (process listings and audit see argv). Muse Code, which cannot read stdin, gets the prompt in a private file instead ([below](#muse-code-cli)). The Orbit OS sandbox is the filesystem boundary, and provider-specific write grants apply only while that provider runs. Credentials reach the agent only through [`[execution.env].pass`](#executionenv--the-agent-subprocess-environment); Orbit never puts a key on argv. A lane without native or Orbit-managed MCP reaches Orbit tools with `orbit tool run <tool> --input '<json>'` through its shell tool, under the same grants.
 
 `orbit tool run` selects a workspace from any directory with `workspace` in the JSON input or the global `--workspace` flag: a name, `ws_*` ID, absolute local checkout path, or local `hm_*/ws_*` selector from the federated listing. A selector for another host fails locally, naming it; run the command on that owner host. Unparseable JSON or an unreadable `--input-file` is reported before workspace selection, runtime open or migration, so an input typo never migrates the checkout.
 
@@ -841,6 +843,22 @@ Background commands cannot be turned off for a headless run. `agy` 1.3.3 has no 
 | Sandbox | Write: `$XDG_DATA_HOME/opencode`, the config root (`$OPENCODE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/opencode`), `$XDG_STATE_HOME/opencode` and `$XDG_CACHE_HOME/opencode`. |
 
 Orbit does not write OpenCode's `opencode.json` MCP config and `orbit mcp init` has no OpenCode target; Orbit tools go through the shell tool. Only assistant `text` parts are read; a terminal `error` event or non-zero exit fails the step. No provider token usage is reported.
+
+### Muse Code CLI
+
+`muse` runs Muse Code, Meta's terminal coding agent. The contract below was observed on Muse Code 1.4.10 (`1.4.10-R6427.1`, macOS): `muse exec --help` and offline `--provider echo` runs only, with no authenticated run.
+
+| | |
+|---|---|
+| Install | `~/.local/bin/muse`, a launcher that execs `~/.local/bin/muse-bin-<version>`; check with `muse --version`. Init detects `muse` on `PATH` and enables the `muse` crew. Orbit sets `MUSE_NO_AUTO_UPDATE=1` and `MUSE_LOGIN=0` for every run (an outer value cannot override them), so a run never swaps the binary under running work or starts a device login; upgrade with the launcher yourself. |
+| Auth | `muse login` (Meta account, browser device code) once, outside Orbit. The login is the file `auth.json` under the config root (`$XDG_CONFIG_HOME/muse`, else `~/.config/muse`), not a macOS keychain item, so Muse gets no keychain carve-out. Or `pass = ["META_API_KEY"]`, which Muse prefers; `muse auth set --api-key-stdin` also works. Orbit never logs in or forwards `META_API_KEY` unless `pass` names it. |
+| Model | A catalog id (`muse-spark-1.3`); `muse model-profile show <model> [--effort <tier>]` resolves one. `effort` renders as `--reasoning-effort`; Muse accepts `none` … `ultra`, which covers every Orbit effort, and any other value is refused at config load. |
+| Prompt | `muse exec` does not read stdin (piped stdin alone exits 2, `missing prompt`) and refuses `--prompt-file /dev/stdin` (`not a regular file`). Orbit writes the prompt to a mode-0600 file with an unpredictable name in the run's scratch directory (`<worktree>/.orbit/tmp/`), passes `--prompt-file <path>`, and deletes the file when the invocation ends, whatever its outcome. The envelope never reaches argv; the audit keeps the prompt in the invocation's stdin blob. An activity profile that cannot read the worktree cannot read the file either, and the run fails. |
+| Flags | `exec --json --approval-mode never --disable-request-user-input --no-foreign-personal-context --disable-reminders --no-session-log`. `--approval-mode never` and `--disable-request-user-input`: nobody can answer mid-turn, and neither is a security boundary. `--no-foreign-personal-context`: Muse otherwise loads your Claude Code and Codex personal rules and skills. `--disable-reminders`: otherwise every turn spawns skill, goal and verify reminder child agents. `--no-session-log`: no session log per run (this also disables Muse's local session messaging). `--trust-workspace` is not passed: a worktree is content Orbit does not vouch for, so its Muse skills and rules stay unloaded and agent delegation stays off; the envelope directs the agent to read `AGENTS.md`. `--max-model-steps` and `--disable-web-tools` are not passed; the activity deadline bounds the run. |
+| Sandbox | Write: the config root and `$XDG_DATA_HOME/muse` (else `~/.local/share/muse`: tracing, plugins, skills); on macOS also `~/Library/Application Support/Muse` (session-name authority). Muse's own sandbox is on by default with network `proxy-only`; under Orbit's sandbox (or `sandbox: off`) Orbit appends `--disable-sandbox`, because a second Seatbelt profile cannot be applied inside Orbit's and Orbit's profile is the filesystem boundary. `--yolo` is never passed. |
+| MCP | Muse has a native MCP client (`mcpServers` in `settings.json`, or `-c KEY=VALUE` per run), but per-run injection of Orbit's server was not verified, so Orbit passes no `-c` and never writes `settings.json`; Orbit tools go through `orbit tool run` on `PATH`. `orbit mcp init` has no Muse target. |
+
+Orbit reads only `payload.text` of the last `run.terminal.completed` record, and only when its `payload.terminal` is `completed`. `failed`, `cancelled` and unknown values (the field is wire-open) fail the step, as do a missing terminal record, a stdout line that is not a JSON record with a `payload_type`, and a non-zero exit even with a completed record. The prompt echoes (`run.lifecycle.started`, `turn.input.user`), partial `run.output.delta` text and child-task records never count as completion. The terminal record carries no usage, so no provider token usage is reported. `muse serve` (MSP over stdio) is not used.
 
 ### MCP client registration
 
@@ -1225,7 +1243,7 @@ The macOS profile allows `pseudo-tty`, `/dev/ptmx` (read, write, ioctl), and rea
 
 An executor may declare `spec.auth_probe`. Only a pull drain's **auth-excluded** providers run it: never at drain start, for healthy crews, after the window closes, or for capacity or refusal exclusions. The first attempt is due ten minutes after the failed leaf; failures wait twenty, then thirty minutes (the cap). A pass durably acknowledges those auth failures and re-admits the provider's crews within the window; it never clears a preflight, capacity, crew or host exclusion. Without a probe the exclusion lasts the whole window: re-login and start a new drain. Owner-local drains use timed, task-specific [provider holds](#provider-failure-holds) instead. Drain-side view: [distributed drain runbook](runbooks/distributed-drain.md).
 
-Only the shipped **claude** executor declares one: a minimal `claude -p --model haiku` call with built-in and MCP tools disabled ([CLI contract](https://code.claude.com/docs/en/cli-reference)), a one-line prompt on stdin, and success on exit zero plus `ORBIT_AUTH_OK` on stdout. Each attempt costs one model request. `claude auth status` is not used: cached status can lag a real 401 and may refresh shared OAuth credentials. Codex, Gemini, Antigravity, Grok, Copilot, Cursor, Pi and OpenCode declare none (their minimal model-call and success contracts are not established); local-shell has no provider authentication.
+Only the shipped **claude** executor declares one: a minimal `claude -p --model haiku` call with built-in and MCP tools disabled ([CLI contract](https://code.claude.com/docs/en/cli-reference)), a one-line prompt on stdin, and success on exit zero plus `ORBIT_AUTH_OK` on stdout. Each attempt costs one model request. `claude auth status` is not used: cached status can lag a real 401 and may refresh shared OAuth credentials. Codex, Gemini, Antigravity, Grok, Copilot, Cursor, Pi, OpenCode and Muse declare none (their minimal model-call and success contracts are not established); local-shell has no provider authentication.
 
 Seeding preserves existing operator executor definitions; to opt in, add the declaration to the installed definition and start a drain:
 

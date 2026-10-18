@@ -6,6 +6,7 @@ mod inspection_tools;
 mod launcher;
 mod orchestrator;
 mod plugin_broker;
+mod prompt_file;
 mod response_diagnostics;
 /// Sandbox-aware child creation. `pub(crate)` because the deterministic
 /// `local_shell` action reuses the same spawn seam rather than growing a second

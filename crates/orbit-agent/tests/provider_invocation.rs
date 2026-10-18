@@ -111,6 +111,14 @@ const CLI_CASES: &[CliCase] = &[
         effort_flag: Some("--variant"),
     },
     CliCase {
+        provider: "muse",
+        binary: "muse",
+        model: "fixture-model",
+        emitted_model: "fixture-model",
+        model_flag: "--model",
+        effort_flag: Some("--reasoning-effort"),
+    },
+    CliCase {
         provider: "mock",
         binary: "mock-agent",
         model: "",
@@ -196,9 +204,22 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
                     let mut extras = spec.required_env_vars.to_vec();
                     extras.push("ORBIT_WORKSPACE_CLAIM_TOKEN");
                     let env = allowlisted_child_env(&pass, &extras);
+                    // A provider that cannot read stdin names a prompt-file
+                    // flag; deliver the prompt the way the runner does.
+                    let mut args = spec.args.clone();
+                    let piped: &[u8] = match spec.prompt_file_flag {
+                        Some(flag) => {
+                            let prompt_file = dir.join("prompt-file");
+                            fs::write(&prompt_file, &spec.stdin).expect("prompt file");
+                            args.push(flag.to_string());
+                            args.push(prompt_file.display().to_string());
+                            &[]
+                        }
+                        None => &spec.stdin,
+                    };
                     let mut child = ChildGuard(
                         Command::new(&spec.program)
-                            .args(&spec.args)
+                            .args(&args)
                             .current_dir(&dir)
                             .env_clear()
                             .envs(env)
@@ -214,7 +235,7 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
                         .stdin
                         .take()
                         .expect("provider stdin")
-                        .write_all(&spec.stdin)
+                        .write_all(piped)
                         .expect("send prompt then close pipe");
                     assert!(
                         child.wait(WAIT).success(),
@@ -235,7 +256,15 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
                         case.provider
                     );
                     let stdin = fs::read_to_string(dir.join("stdin")).unwrap();
-                    let prompt = if case.provider == "antigravity" {
+                    let prompt = if let Some(flag) = spec.prompt_file_flag {
+                        assert!(stdin.is_empty(), "{} also piped its prompt", case.provider);
+                        let path = args
+                            .windows(2)
+                            .find(|pair| pair[0] == flag)
+                            .map(|pair| pair[1].clone())
+                            .expect("prompt file argument");
+                        fs::read_to_string(path).expect("prompt file bytes")
+                    } else if case.provider == "antigravity" {
                         let event: Value =
                             serde_json::from_str(&stdin).expect("Antigravity user event");
                         assert_eq!(event["event"], "user");
@@ -281,6 +310,14 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
                             "{} dropped admitted {key}",
                             case.provider
                         );
+                    }
+                    if case.provider == "muse" {
+                        for pinned in [("MUSE_NO_AUTO_UPDATE", "1"), ("MUSE_LOGIN", "0")] {
+                            assert!(
+                                vars.contains(&pinned),
+                                "Muse launcher must never self-update or start a login: {pinned:?}"
+                            );
+                        }
                     }
                     if case.provider == "claude" {
                         assert!(

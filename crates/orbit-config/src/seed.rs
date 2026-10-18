@@ -29,9 +29,9 @@ pub(crate) const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("../assets/default
 /// Antigravity occupies Gemini's previous default-provider slot so a host
 /// with `agy` prefers the current Google terminal CLI. Legacy `gemini` stays
 /// later so enterprise Gemini CLI-only hosts still seed. Copilot, Cursor, and
-/// Pi remain appended after the original families, and OpenCode after those,
+/// Pi remain appended after the original families, then OpenCode, then Muse,
 /// so adding a lane never reorders an existing host's preference.
-/// [ORB-10946] [ORB-10945] [ORB-11296] [ORB-11299] [ORB-11295]
+/// [ORB-10946] [ORB-10945] [ORB-11296] [ORB-11299] [ORB-11295] [ORB-16577]
 const CREW_FAMILY_PREFERENCE: &[&str] = &[
     "claude",
     "codex",
@@ -42,6 +42,7 @@ const CREW_FAMILY_PREFERENCE: &[&str] = &[
     "cursor",
     "pi",
     "opencode",
+    "muse",
 ];
 
 /// The crew each family's default lane runs on, in [`CREW_FAMILY_PREFERENCE`]
@@ -57,6 +58,7 @@ const DEFAULT_CREW_BY_FAMILY: &[(&str, &str)] = &[
     ("cursor", "cursor"),
     ("pi", "pi"),
     ("opencode", "opencode"),
+    ("muse", "muse"),
 ];
 
 /// Seeded `workflow.*_complexity_crews` pools, keyed by detected codex/claude
@@ -166,7 +168,7 @@ impl ConfigSeed {
     /// the detected families. Codex and claude pick a base row; grok is
     /// appended to medium; a Google CLI is appended to low, `antigravity` when
     /// `agy` is present and `gemini` otherwise. Families with no pool rule
-    /// (copilot, cursor, pi, opencode) leave their pools as they are, and an
+    /// (copilot, cursor, pi, opencode, muse) leave their pools as they are, and an
     /// empty pool routes to `default_crew`.
     pub fn complexity_pools(&self) -> [Vec<&'static str>; 4] {
         let (codex, claude) = (self.has_family("codex"), self.has_family("claude"));
