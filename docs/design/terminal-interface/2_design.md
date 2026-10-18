@@ -1,8 +1,8 @@
 ---
 title: Terminal Interface — Design
 owner: claude
-last_updated: 2026-10-12
-last_validated: 2026-10-12
+last_updated: 2026-10-18
+last_validated: 2026-10-18
 status: Accepted
 feature: terminal-interface
 doc_role: design
@@ -26,7 +26,7 @@ This document describes what `orbit-cli` renders today. It is deliberately a rec
 
 ## 2. Table Construction
 
-`output/table.rs` owns a `Table` type that buffers rows and renders them itself; `comfy_table` is an implementation detail it never hands out. `Table::add_row` is the only row constructor and caps every row at `Row::max_height(1)`, so the unbounded path that made a row span three or four lines is unreachable from a command module [ORB-10567]. The 31 command source files that construct tables use either `build_table(&headers)` (all columns plain text) or `Table::new(vec![Column…])` when a column is an identifier, a number, or a path.
+`output/table.rs` owns a `Table` type that buffers rows and renders them itself; `comfy_table` is an implementation detail it never hands out. `Table::add_row` is the only row constructor, and rendering caps every row at `Row::max_height(1)`, so the unbounded path that made a row span three or four lines is unreachable from a command module [ORB-10567]. The 31 command source files that construct tables use either `build_table(&headers)` (all columns plain text) or `Table::new(vec![Column…])` when a column is an identifier, a number, or a path.
 
 Rendering applies the `NOTHING` preset with `ContentArrangement::Disabled`, two-space right padding on every column but the last, and a dim header row. Widths are computed from the result set: natural widths first, then flexible columns shrink widest-first to a floor of 8, then flexible columns drop from the right with a notice on stderr. Fixed columns never move. Overflow truncates with `…` — tail truncation is `comfy_table`'s, middle truncation (`Column::path`) is applied before the grid sees the cell.
 
@@ -36,7 +36,7 @@ Two selection rules run before layout: a column whose value is identical in ever
 
 The last hand-padded list is gone. `orbit audit list` used to print each event through `print_audit_event_line` in `command/audit/support.rs`, a single `println!` with the format string `"[{}] {:<8} {:<6} {}:{:<20} {}ms"` — literal widths that held only while every value fit, no header, and a left-aligned duration carrying its unit per row. It now builds a `Table` with computed widths, a header, a `filtered` flag per filterable column, and a right-aligned `DURATION (ms)` [ORB-10570]. Satisfies [./specs/table-rendering.md](./specs/table-rendering.md) §2 and §3.
 
-15 modules under `command/` still call `println!` directly for some part of their output — detail views, field labels, confirmations — so line output remains a pattern rather than an isolated case. Record output is nevertheless centralized: command payloads go through `output::render`, while the remaining prose paths use `output::color`, whose `colored` backend is overridden from the sink at startup.
+No module under `command/` calls `println!` or `print!` any longer. Seventeen modules still write prose to stderr with `eprintln!` (prompts, warnings, deprecation notices), and `output::render` is the only code that writes a command's output to stdout. Command payloads go through `output::render`, while the remaining prose paths use `output::color` (24 modules), whose `colored` backend is overridden from the sink at startup.
 
 The audit view still demonstrates the difference between the two renderings. [ORB-10228] added trusted session-context fields (`workspace_id`, `caller_machine_id`, `transport`, `mcp_call_id`) to `audit_event_to_json`; the human table does not expose those fields, while the shared payload keeps them available to JSON consumers.
 
@@ -46,7 +46,7 @@ The audit view still demonstrates the difference between the two renderings. [OR
 
 The eight per-domain wrappers this replaced (`status_color`/`_cell`, `priority_color`/`_cell`, `job_state_color`/`_cell`, `doctor_status_color_cell`, `task_type_color_cell`) are gone, and with them the two-edit cost visible in the history — [T20260427-43] added a `friction` arm to two functions, [ORB-10202] removed it from two — and the `backlog` drift between the pair. Adding a status is now one line in one table. Satisfies [./specs/color-and-styling.md](./specs/color-and-styling.md) §1 [One Semantic Color Vocabulary, Gated at the Sink](./4_decisions.md#one-semantic-color-vocabulary-gated-at-the-sink).
 
-**Still diverges on §3's palette depth.** `comfy_table` renders `Color::Green` through `crossterm` as `\e[38;5;10m`, a 256-color code, while `colored` renders the same role as `\e[32m`. The spec asks for 16-color ANSI only; the two backends therefore still disagree about the *shade*, though no longer about *whether* to emit. **Still diverges on §3's uniform-filter rule**: a column the caller filtered on stays on screen but is still painted, in every list command.
+**Still diverges on §3's palette depth.** `comfy_table` renders `Color::Green` through `crossterm` as `\e[38;5;10m`, a 256-color code. `Table::render_at` rewrites that form for the four role colors to the 16-color bright code `\e[92m`, while `colored` renders the same role as `\e[32m`. The spec asks for 16-color ANSI, which both backends now emit, so they still disagree about the *shade* (bright against normal), though no longer about *whether* to emit. **Still diverges on §3's uniform-filter rule**: a column the caller filtered on stays on screen but is still painted, in every list command.
 
 ## 5. Sink Resolution
 
@@ -68,7 +68,7 @@ A global `--format auto|table|plain|json|ndjson` is accepted on every command th
 
 ## 7. Empty States and Errors
 
-Table-backed empty results print their configured empty-state line to stderr and leave stdout empty, including `command/policy/list.rs`. The hidden legacy `command/task/artifacts.rs` path still prints a human sentence for task artifacts.
+Table-backed empty results print their configured empty-state line to stderr and leave stdout empty, as `crates/orbit-cli/tests/output/table_rendering.rs` asserts for `task list`. The hidden legacy `command/task/artifacts.rs` path still prints a human sentence for task artifacts.
 
 Errors are routed through `main.rs::print_error`, which emits the JSON error payload when the command declared a JSON preference *or* the sink resolved a JSON mode, and a plain message otherwise. **Both go to stderr, in every mode** [ORB-10570]. This is a breaking change for any script that parsed the error object off stdout; the exit code (`1`, or `2` for a clap usage error) was already the reliable signal and is unchanged.
 
@@ -100,7 +100,7 @@ Built-binary tests cover the global JSON shorthand at every command level, confl
 
 **The sink is no longer a process global.** [ORB-10586] changed `Execute::execute` to return a payload, which gave the renderer a call site to take the sink as a parameter; `sink::install`/`sink::active` are deleted and two in-process invocations can render against different sinks. [The Output Sink Is a Process Global, Not a Renderer Parameter](./4_decisions.md#the-output-sink-is-a-process-global-not-a-renderer-parameter) recorded the global as the decision and is superseded by that change, not amended by it — its reasoning ("`Execute::execute` takes no renderer argument") stopped being true rather than being outweighed.
 
-**A mutation command still writes its own prose.** `CommandOutput::Silent` means "no records", and the commands that return it — `task update`, `workspace init`, the confirmations — still `println!` their human report directly. That is not a second rendering path for *records*, but it does mean `--format json` on a mutation yields prose, and spec §5's "stdout carries the payload and nothing else" is not yet true of them.
+**Mutations write no stdout prose.** `CommandOutput::Silent` means "no records", and `output::render` returns without writing for it. No command body writes to stdout itself, and the only print-family output in `command/` goes to stderr, so `--format json` on a mutation leaves stdout empty and spec §5's "stdout carries the payload and nothing else" holds for it.
 
 **Nothing rejects a new `Silent` command that prints records.** The trait makes returning a payload the obvious thing to do, but a command that builds a table and prints it itself would still compile — `Table::emit` is `pub(crate)`, so it is reachable from `command/`.
 
