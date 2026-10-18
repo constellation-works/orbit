@@ -6,16 +6,18 @@ cd "$repo_root"
 
 # Modes: the default full run (`make ci`); --fast (`make ci-fast`); the offline
 # file/metadata-only --static (`make ci-guards`); and the two
-# halves of the split hosted workflow (.github/workflows/ci.yml). --checks runs
+# parts of the split hosted workflow (.github/workflows/ci.yml). --checks runs
 # everything except the workspace test build and nextest. --test-archive PATH
-# runs only the workspace test build, archives its test binaries for the
-# parallel nextest shards, and proves the shards cover every test.
+# runs only the workspace test build and archives its test binaries for the
+# parallel nextest shards. --test-partitions PATH proves the shards' count
+# partitions of that archive cover every test.
 fast=false
 static=false
 checks=false
 archive=""
+partitions=false
 usage() {
-  echo "usage: ci-guardrails.sh [--fast | --static | --checks | --test-archive PATH]" >&2
+  echo "usage: ci-guardrails.sh [--fast | --static | --checks | --test-archive PATH | --test-partitions PATH]" >&2
   exit 2
 }
 case "${1:-}" in
@@ -23,8 +25,9 @@ case "${1:-}" in
   --fast) fast=true ;;
   --static) fast=true; static=true ;;
   --checks) checks=true ;;
-  --test-archive)
+  --test-archive | --test-partitions)
     [[ -n "${2:-}" ]] || usage
+    [[ "$1" == --test-partitions ]] && partitions=true
     archive="$2"
     shift
     ;;
@@ -134,21 +137,25 @@ run_phase() {
 export GIT_OPTIONAL_LOCKS=0
 
 # The hosted test-build job: the folded workspace test build, then an archive
-# of its test binaries and the `orbit` binary the CLI fixtures execute, then
-# the partition guard. The shard jobs run nextest from that archive, one count
-# partition each, and the Check job (--checks) runs everything else. Archiving
-# and listing run under the folded build's lint environment, so neither
-# recompiles; the listings read the archive itself, so the guard proves what
-# the shards receive. NEXTEST_SHARDS (ci.yml) is the shard count.
+# of its test binaries and the `orbit` binary the CLI fixtures execute. The
+# shard jobs run nextest from that archive, one count partition each, and the
+# Check job (--checks) runs everything else. Archiving runs under the folded
+# build's lint environment, so it does not recompile. After the job uploads
+# the archive, --test-partitions runs the partition guard over the archive
+# itself, so the guard proves what the shards receive while they already run.
+# NEXTEST_SHARDS (ci.yml) is the shard count.
+if [[ "$partitions" == true ]]; then
+  # nextest extracts the archive for each listing; keep it in the checkout.
+  TMPDIR="$guard_logs" run_phase workspace-test-partitions \
+    "$repo_root/scripts/check-nextest-partitions.py" --shards "${NEXTEST_SHARDS:?set NEXTEST_SHARDS}" -- \
+    cargo nextest list --archive-file "$archive" --workspace-remap "$repo_root"
+  exit 0
+fi
 if [[ -n "$archive" ]]; then
   lint="$repo_root/scripts/with-test-build-lint.sh"
   run_phase workflow-test-list-build "$repo_root/scripts/check-ci-macos.sh" --workspace-build
   run_phase workspace-test-archive "$lint" cargo nextest archive --locked \
     --workspace --lib --bins --tests --archive-file "$archive"
-  # nextest extracts the archive for each listing; keep it in the checkout.
-  TMPDIR="$guard_logs" run_phase workspace-test-partitions \
-    "$repo_root/scripts/check-nextest-partitions.py" --shards "${NEXTEST_SHARDS:?set NEXTEST_SHARDS}" -- \
-    cargo nextest list --archive-file "$archive" --workspace-remap "$repo_root"
   exit 0
 fi
 

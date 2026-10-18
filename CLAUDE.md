@@ -11,7 +11,7 @@ Loaded as both `AGENTS.md` and `CLAUDE.md`.
 - Don't touch `CHANGELOG.md` during tasks; it is compiled at release time ([`RELEASING.md`](RELEASING.md)).
 - Update affected docs in the same PR as the code. Stale docs are a review blocker.
 - Every test must exercise behavior. Don't write text-matching tests — `include_str!` plus `contains()` over source, assets, or UI copy pins wording, breaks on every edit, and proves nothing runs. The only exception is a narrow structural safety guard (CSP, sanitizer wrapper, no raw `innerHTML`) whose assertion message names what it protects.
-- The complete **Check / Clippy / Test** CI job has a hard budget of **under 15 minutes of elapsed wall time**. Maximize coverage of critical Orbit behaviors, security boundaries and recovery paths within that budget. Every test must protect a named observable guarantee and earn its runtime; test count alone is not a quality or speed target. Follow [test_strategy.md](docs/design-patterns/test_strategy.md) for coverage priorities, retirement evidence and timing measurements.
+- The complete **Check / Clippy / Test** CI job has a hard budget of **at most 10 minutes (600 seconds) of elapsed wall time**, measured at p90 over PR runs with runner queue wait reported separately. Maximize coverage of critical Orbit behaviors, security boundaries and recovery paths within that budget. Every test must protect a named observable guarantee and earn its runtime; test count alone is not a quality or speed target. Follow [test_strategy.md](docs/design-patterns/test_strategy.md) for coverage priorities, retirement evidence and timing measurements.
 
 ## Branching
 

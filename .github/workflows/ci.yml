@@ -192,13 +192,13 @@ jobs:
   # parallel. "Check / Clippy / Test" runs formatting, the repository guards
   # and self-tests, production Clippy, doctests, documentation and the
   # supply-chain gate beside them, then waits for the build and every shard.
-  # It is the job the 900-second budget measures.
+  # It is the job the 600-second budget measures.
   ci:
     needs: [pr-state, scope]
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
     name: Check / Clippy / Test
     runs-on: ubuntu-latest
-    timeout-minutes: 45 # Budget is 15 minutes (docs/design-patterns/test_strategy.md); allows cold builds and slower test hosts.
+    timeout-minutes: 45 # Budget is 10 minutes (docs/design-patterns/test_strategy.md); allows cold builds, slower test hosts and runner queue wait.
     permissions:
       contents: read
       # Read this run's job states while awaiting the test jobs.
@@ -515,9 +515,10 @@ jobs:
           time ./scripts/ci-guardrails.sh --checks
 
       # The Check job finishes only after the test build and every shard, so
-      # its elapsed time is the whole gate's wall time (the 900-second budget
+      # its elapsed time is the whole gate's wall time (the 600-second budget
       # in docs/design-patterns/test_strategy.md) and its conclusion is the
-      # gate's result. A failed or skipped test job fails it at once.
+      # gate's result. A failed or skipped test job fails it at once, and a
+      # partition-guard failure after the archive upload fails the test build.
       - name: Await the test build and nextest shards
         env:
           GH_TOKEN: ${{ github.token }}
@@ -804,9 +805,7 @@ jobs:
           du -sk target "${CARGO_HOME:-$HOME/.cargo}/registry" 2>/dev/null || true
 
       # One folded workspace test build (all-targets Clippy lint included),
-      # archived with the `orbit` binary the CLI fixtures execute. The guard
-      # in --test-archive lists the archive once whole and once per count
-      # partition, and fails unless the shards cover every test exactly once.
+      # archived with the `orbit` binary the CLI fixtures execute.
       - name: Build and archive workspace tests
         run: |
           set -euo pipefail
@@ -814,7 +813,8 @@ jobs:
           time ./scripts/ci-guardrails.sh --test-archive "$RUNNER_TEMP/nextest-archive.tar.zst"
           ls -l "$RUNNER_TEMP/nextest-archive.tar.zst"
 
-      # The archive is already zstd-compressed.
+      # The archive is already zstd-compressed. The shards start on this
+      # step's success, so keep its name in step with their wait.
       - name: Upload nextest archive
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -823,6 +823,13 @@ jobs:
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
+
+      # Lists the uploaded archive once whole and once per count partition,
+      # and fails unless the shards cover every test exactly once. It runs
+      # after the upload, beside the shards rather than ahead of them, and a
+      # failure here fails this job and so the Check job's wait.
+      - name: Prove the shards cover every test
+        run: ./scripts/ci-guardrails.sh --test-partitions "$RUNNER_TEMP/nextest-archive.tar.zst"
 
       - name: Report disk usage
         if: always()
@@ -882,6 +889,8 @@ jobs:
   # so each shard waits for the test build itself instead of `needs:` it,
   # setting up while the build runs. The jobs share one step list; the
   # count matches NEXTEST_SHARDS (scripts/test-pr-state-workflows.py).
+  # agent-main's ruleset requires these exact names: renaming a shard, or
+  # changing NEXTEST_SHARDS, needs the same ruleset change before merge.
   test-1:
     needs: [pr-state, scope]
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
@@ -1043,12 +1052,13 @@ jobs:
             echo "Bubblewrap probe passed after loading the packaged bwrap-userns-restrict profile"
           fi
 
-      # The archive exists once the test build succeeds; a failed build
-      # fails this shard at once.
-      - name: Await the test build
+      # The archive exists once the test build's upload step succeeds; the
+      # partition guard after it runs beside the shards. A build that fails
+      # before the upload fails this shard at once.
+      - name: Await the nextest archive
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/ci-await-jobs.py --job "Test build"
+        run: python3 scripts/ci-await-jobs.py --job "Test build" --step "Upload nextest archive"
 
       - name: Download nextest archive
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -1103,7 +1113,9 @@ jobs:
       # [ORB-12881] The ignored leg selects orbit-exec's Linux sandbox
       # integration binary (`linux_sandbox::`), which needs a host with working
       # Bubblewrap namespaces. It runs over the same artifact set as the list
-      # above it so neither leg triggers a rebuild. nextest exits 4 when its
+      # above it so neither leg triggers a rebuild. Both legs read the shard's
+      # extraction of the archive (target/nextest/*-metadata.json) instead of
+      # extracting the archive twice more. nextest exits 4 when its
       # filterset matches nothing, so a refactor that retires or renames these
       # tests fails the gate instead of passing on an empty selection; never
       # add `--no-tests` here.
@@ -1117,10 +1129,11 @@ jobs:
         if: ${{ env.SHARD == '1' }}
         run: |
           set -euo pipefail
-          archive=(--archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
-            --workspace-remap "$PWD" --extract-to "$PWD" --extract-overwrite)
+          reuse=(--binaries-metadata target/nextest/binaries-metadata.json
+            --cargo-metadata target/nextest/cargo-metadata.json
+            --workspace-remap "$PWD" --target-dir-remap "$PWD/target")
           # Count matches by filter-match: test-count is the total for the target set.
-          selected=$(cargo nextest list "${archive[@]}" \
+          selected=$(cargo nextest list "${reuse[@]}" \
             -E 'package(orbit-exec) | package(orbit-policy) | package(orbit-tools)' \
             --message-format json |
             jq '[."rust-suites"[].testcases[] | select(."filter-match".status == "matches")] | length')
@@ -1128,7 +1141,7 @@ jobs:
             echo "Linux sandbox/policy enforcement gate: the portable filterset selects no tests" >&2
             exit 1
           fi
-          cargo nextest run --profile ci --no-fail-fast "${archive[@]}" \
+          cargo nextest run --profile ci --no-fail-fast "${reuse[@]}" \
             --run-ignored only \
             -E 'package(orbit-exec) & binary(sandbox) & test(/^linux_sandbox::/)'
 

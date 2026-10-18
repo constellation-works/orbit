@@ -916,8 +916,8 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         archive_call = ["nextest", "archive", "--locked", "--workspace", "--lib", "--bins", "--tests",
                         "--archive-file", archive]
 
-        # --test-archive: the folded build, the archive the shards run, then the
-        # partition guard over that archive. No guard, check or test runs.
+        # --test-archive: the folded build, then the archive the shards run.
+        # No guard, check or test runs.
         result = self.run_guard("ci-guardrails.sh", "--test-archive", archive,
                                 env_overrides={"NEXTEST_SHARDS": "3"})
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -926,22 +926,31 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertLess(calls.index(folded), calls.index(archive_call), calls)
         self.assertFalse(any(call[:2] == ["nextest", "run"] or call[:1] in (["fmt"], ["check"], ["doc"])
                              or "--doc" in call for call in calls), calls)
+        self.assertEqual({path.name for path in self.guard_calls.iterdir()} - {"require-python.sh"},
+                         set(), "no repository guard, self-test or partition guard runs")
+        phases = re.findall(r"ci-guardrails-phase: (\S+) wall_seconds=\d+ exit=(\d+)", result.stderr)
+        self.assertEqual(phases, [("workflow-test-list-build", "0"), ("workspace-test-archive", "0")])
+        # The archive must reuse the folded build, not rebuild it.
+        observed = [json.loads(line) for line in env_log.read_text().splitlines()]
+        archived = [row for row in observed if row["argv"] == archive_call]
+        self.assertEqual([row["RUSTC_WORKSPACE_WRAPPER"] for row in archived], ["clippy-driver"])
+
+        # --test-partitions: only the partition guard, over that archive.
+        self.log.write_text("")
+        result = self.run_guard("ci-guardrails.sh", "--test-partitions", archive,
+                                env_overrides={"NEXTEST_SHARDS": "3"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.log.read_text(), "", "the partition guard neither builds nor archives")
         self.assertEqual((self.guard_calls / "check-nextest-partitions.py").read_text().splitlines(),
                          ["--shards", "3", "--", "cargo", "nextest", "list", "--archive-file", archive,
                           "--workspace-remap", str(self.root)])
         self.assertEqual({path.name for path in self.guard_calls.iterdir()} - {"require-python.sh"},
                          {"check-nextest-partitions.py"}, "no repository guard or self-test runs")
         phases = re.findall(r"ci-guardrails-phase: (\S+) wall_seconds=\d+ exit=(\d+)", result.stderr)
-        self.assertEqual(phases, [("workflow-test-list-build", "0"), ("workspace-test-archive", "0"),
-                                  ("workspace-test-partitions", "0")])
-        # The archive and listings must reuse the folded build, not rebuild it.
-        observed = [json.loads(line) for line in env_log.read_text().splitlines()]
-        archived = [row for row in observed if row["argv"] == archive_call]
-        self.assertEqual([row["RUSTC_WORKSPACE_WRAPPER"] for row in archived], ["clippy-driver"])
+        self.assertEqual(phases, [("workspace-test-partitions", "0")])
         # A partition gap fails the job with the guard's status.
         self.write_executable(self.scripts / "check-nextest-partitions.py", "#!/bin/sh\nexit 7\n")
-        self.log.write_text("")
-        result = self.run_guard("ci-guardrails.sh", "--test-archive", archive,
+        result = self.run_guard("ci-guardrails.sh", "--test-partitions", archive,
                                 env_overrides={"NEXTEST_SHARDS": "3"})
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertIn("ci-guardrails-phase: workspace-test-partitions wall_seconds=", result.stderr)

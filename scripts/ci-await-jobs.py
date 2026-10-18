@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Wait for other jobs of this workflow run and fail unless each succeeds.
 
-usage: ci-await-jobs.py --job NAME [--job NAME ...]
+usage: ci-await-jobs.py --job NAME [--job NAME ...] [--step NAME]
                         [--poll-seconds S] [--timeout-seconds S]
 
 The Check / Clippy / Test job runs this after its own checks, naming the test
@@ -11,20 +11,28 @@ and its conclusion stays the gate's result. It reads the run's jobs through
 `gh api` (GH_TOKEN, GITHUB_REPOSITORY and GITHUB_RUN_ID from the runner), using
 the latest attempt of each job. A job that completes with any conclusion but
 success fails the wait at once. API errors are retried until the timeout.
+
+With --step, a job also counts as done once its step of that name succeeds,
+while its later steps still run. The shard jobs wait this way for the test
+build's archive upload, not for the partition guard after it. A step that
+concludes without success, or a job that completes without success before the
+step succeeded, fails the wait at once.
 """
 
 import argparse
 from datetime import datetime
+import json
 import os
 import subprocess
 import sys
 import time
 
-FIELDS = ".jobs[] | [.name, .status, .conclusion // \"\", .started_at // \"\", .completed_at // \"\", .html_url // \"\"] | @tsv"
+FIELDS = (".jobs[] | {name, status, conclusion, started_at, completed_at, html_url,"
+          " steps: [.steps[]? | {name, status, conclusion}]}")
 
 
 def list_jobs(repository, run_id):
-    """Return {name: (status, conclusion, started, completed, url)}, or None on an API error."""
+    """Return {name: job}, or None on an API error."""
     result = subprocess.run(
         ["gh", "api", "--paginate", "--jq", FIELDS,
          f"repos/{repository}/actions/runs/{run_id}/jobs?filter=latest&per_page=100"],
@@ -35,8 +43,9 @@ def list_jobs(repository, run_id):
         return None
     jobs = {}
     for line in result.stdout.splitlines():
-        name, *rest = line.split("\t")
-        jobs[name] = tuple(rest)
+        if line.strip():
+            job = json.loads(line)
+            jobs[job["name"]] = job
     return jobs
 
 
@@ -44,7 +53,7 @@ def elapsed(started, completed):
     try:
         start = datetime.fromisoformat(started.replace("Z", "+00:00"))
         end = datetime.fromisoformat(completed.replace("Z", "+00:00"))
-    except ValueError:
+    except (AttributeError, ValueError):
         return "unknown"
     return str(int((end - start).total_seconds()))
 
@@ -52,6 +61,7 @@ def elapsed(started, completed):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--job", action="append", required=True, dest="jobs")
+    parser.add_argument("--step")
     parser.add_argument("--poll-seconds", type=float, default=15)
     parser.add_argument("--timeout-seconds", type=float, default=2400)
     args = parser.parse_args()
@@ -65,7 +75,19 @@ def main():
         if jobs is not None:
             pending = []
             for name in args.jobs:
-                status, conclusion, started, completed, url = jobs.get(name, ("missing",) + ("",) * 4)
+                job = jobs.get(name, {"status": "missing"})
+                status, conclusion, url = job["status"], job.get("conclusion"), job.get("html_url")
+                started, completed = job.get("started_at") or "", job.get("completed_at") or ""
+                step = next((step for step in job.get("steps") or [] if step.get("name") == args.step), None)
+                if status != "completed" and step is not None and step.get("status") == "completed":
+                    if step.get("conclusion") != "success":
+                        print(f"ci-await: {name} step '{args.step}' concluded "
+                              f"{step.get('conclusion') or 'without a conclusion'}: {url}", file=sys.stderr)
+                        return 1
+                    if name not in reported:
+                        reported.add(name)
+                        print(f"ci-await: {name} step '{args.step}' succeeded started={started}")
+                    continue
                 if status != "completed":
                     pending.append(f"{name} ({status})")
                     continue
@@ -78,7 +100,8 @@ def main():
                     print(f"ci-await: {name} succeeded started={started} completed={completed} "
                           f"elapsed_s={elapsed(started, completed)}")
             if not pending:
-                print(f"ci-await: all {len(args.jobs)} awaited jobs succeeded")
+                reached = f" or passed step '{args.step}'" if args.step else ""
+                print(f"ci-await: all {len(args.jobs)} awaited jobs succeeded{reached}")
                 return 0
         if time.monotonic() >= deadline:
             waiting = ", ".join(pending) if jobs is not None else "every job (listing unavailable)"

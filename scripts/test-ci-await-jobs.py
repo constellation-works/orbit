@@ -16,10 +16,15 @@ SCRIPTS = Path(__file__).resolve().parent
 EXPECTED = ["Test build", "Test shard 1/2", "Test shard 2/2"]
 
 
-def job(name, status="completed", conclusion="success"):
+def job(name, status="completed", conclusion="success", steps=()):
     return {"name": name, "status": status, "conclusion": conclusion if status == "completed" else None,
             "started_at": "2026-10-18T10:00:00Z", "completed_at": "2026-10-18T10:04:10Z",
-            "html_url": f"https://example.invalid/{name.replace(' ', '-')}"}
+            "html_url": f"https://example.invalid/{name.replace(' ', '-')}",
+            "steps": [{"name": step, "status": step_status, "conclusion": step_conclusion}
+                      for step, step_status, step_conclusion in steps]}
+
+
+UPLOAD = "Upload nextest archive"
 
 
 class AwaitJobsTests(unittest.TestCase):
@@ -74,9 +79,11 @@ os.execv({real_gh!r}, [{real_gh!r}, *args])
                         GH_CONFIG_DIR=str(self.root / "gh-config"), GITHUB_REPOSITORY="fixture/orbit",
                         GITHUB_RUN_ID="4242")
 
-    def wait(self, *responses, timeout="10"):
+    def wait(self, *responses, timeout="10", jobs=EXPECTED, step=None):
         self.responses[:] = responses
-        arguments = [argument for name in EXPECTED for argument in ("--job", name)]
+        arguments = [argument for name in jobs for argument in ("--job", name)]
+        if step is not None:
+            arguments += ["--step", step]
         return self_test_hang.run(
             [sys.executable, str(SCRIPTS / "ci-await-jobs.py"), *arguments,
              "--poll-seconds", "0.01", "--timeout-seconds", timeout],
@@ -99,6 +106,18 @@ os.execv({real_gh!r}, [{real_gh!r}, *args])
         self.assertTrue(all(path.startswith("/repos/fixture/orbit/actions/runs/4242/jobs?")
                             and "filter=latest" in path for path in self.requests), self.requests)
 
+        # A shard starts once the build's upload step succeeds, while the
+        # build's partition guard still runs.
+        self.requests.clear()
+        uploading = [job("Test build", "in_progress", steps=[("Build", "completed", "success"),
+                                                            (UPLOAD, "in_progress", None)])]
+        uploaded = [job("Test build", "in_progress", steps=[("Build", "completed", "success"),
+                                                           (UPLOAD, "completed", "success")])]
+        result = self.wait(uploading, uploaded, jobs=["Test build"], step=UPLOAD)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"ci-await: Test build step '{UPLOAD}' succeeded", result.stdout)
+        self.assertEqual(len(self.requests), 2)
+
     def test_a_failed_or_skipped_job_fails_without_waiting_for_the_rest(self):
         for conclusion in ("failure", "skipped", "cancelled"):
             with self.subTest(conclusion=conclusion):
@@ -107,6 +126,18 @@ os.execv({real_gh!r}, [{real_gh!r}, *args])
                                     job("Test shard 2/2", "in_progress")])
                 self.assertEqual(result.returncode, 1, result.stdout)
                 self.assertIn(f"Test shard 1/2 concluded {conclusion}", result.stderr)
+                self.assertEqual(len(self.requests), 1)
+        # A shard must not run against a build that failed or skipped its
+        # upload, nor wait out its timeout for an upload that never comes.
+        for build in (job("Test build", "in_progress", steps=[(UPLOAD, "completed", "skipped")]),
+                      job("Test build", conclusion="failure", steps=[(UPLOAD, "completed", "skipped")]),
+                      job("Test build", conclusion="failure", steps=[(UPLOAD, "queued", None)])):
+            with self.subTest(build=build):
+                self.requests.clear()
+                result = self.wait([build], jobs=["Test build"], step=UPLOAD)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn("Test build", result.stderr)
+                self.assertIn("concluded", result.stderr)
                 self.assertEqual(len(self.requests), 1)
 
     def test_a_job_that_never_completes_times_out_by_name(self):
