@@ -59,7 +59,8 @@ The queue is a logical owner-side query, not a required maintained table:
 
 Each participant must meet all workspace execution requirements. The owner checks a task's
 `os:` tags against the executor's declared OS; mismatches stay in the backlog with an
-`os_unavailable` diagnostic. A request also declares the crews its
+`os_unavailable` diagnostic. It admits a task tagged `ui` only to an executor that declares a
+verified browser kit (`browser_kit`); others stay with a `browser_kit_unavailable` diagnostic. A request also declares the crews its
 executor can run (`crews`, below) [ORB-13941], and the owner skips a ready candidate whose crew the executor
 cannot run — its own `task.crew`, or the executor's `default_crew` for a task naming none. The
 skipped task keeps its place in the owner's order for the owner or another follower. The owner
@@ -106,6 +107,7 @@ defined in [design §4.1](../2_design.md#41-read-only-admission-probe).
 | `run_context` | object | Calling drain's `run_id`, `job_name`, and diagnostic `host_id` |
 | `crews` | object, optional | Executor crew capability: `runnable` (crew names its window preflight found runnable; absent means unrestricted), `default_crew` (what a task naming no crew runs as there; absent admits no crew-less task) and `excluded` (`{crew, source, reason}` crews it will not run for the rest of its window). Absent: every crew is admissible |
 | `os` | enum, optional | Executor host OS: `linux`, `macos` or `windows`. A task carrying `os:` tags is admitted only to an executor whose OS one of them names. Absent (an OS outside that set): only tasks without an `os:` tag are admissible |
+| `browser_kit` | bool, optional | Whether the executor's host has a verified headless browser kit (`orbit browser-kit verify` passed against the installed version). A task tagged `ui` is admitted only to an executor that declares one. Absent: `false`, so a request without the field is offered no `ui` task |
 | `admissible` | object, optional | The work the executor's host load forecast has room for, sent under `machine.auto_concurrency` `enforce` ([auto-concurrency §6](../../auto-concurrency/2_design.md#6-pull-drains)): `keys` (`{work_class, complexity}` pairs, `work_class` `change` or `no-diff`, `complexity` absent for unset) and `templates` (`auto-task:` template names). A template task is admissible when its template is listed, any other task when its work class and complexity are. Absent: every task is admissible |
 
 The caller persists the request before sending it. One drain run uses many request IDs. There is
@@ -172,7 +174,7 @@ the receipt's diagnostics fill `drain_last_pass` as a local drain's classifier d
 the receipt's `queue_depth`; `deferred` lists footprint holds (`context_lock_conflict`, the holder
 in `blocked_by`) and other owner holds (`owner_hold`); `excluded` lists unmet dependencies
 (`dependency_not_done`, the unfinished tasks in `blocked_by`), `os:` waits (`host_os_mismatch`),
-unrunnable crews (`crew_unavailable`) and work the host has no room for (`capacity_unavailable`), both lists bounded to 20 with `deferred_total` and `excluded_total` the full counts; and
+browser-kit waits for `ui` tasks (`browser_kit_missing`), unrunnable crews (`crew_unavailable`) and work the host has no room for (`capacity_unavailable`), both lists bounded to 20 with `deferred_total` and `excluded_total` the full counts; and
 `waiting_by_reason` counts every kept-off task by code. `waiting_recorded_at` dates the owner's
 answer. A pass that sends no request (throttled, settlement held, breaker open, window closed,
 owner unreachable), or whose requests all claim, keeps the previous diagnostics and their date
@@ -238,7 +240,9 @@ for a pull drain as for a local one.
    excludes [ORB-15573]. An admitted task carries `resume_candidate`, the candidate the owner kept from
    the task's last claim, unless its spec changed or an operator discarded it since. Before the crew check, skip a candidate whose `os:` tags name no OS the request's `os`
    declares, and record it in `os_unavailable` with the wait (`waits for a macos host
-   (os:macos); the executor runs linux`). An `os:*` tag outside the reserved namespace, which
+   (os:macos); the executor runs linux`). Then skip a candidate tagged `ui` (exactly, ignoring
+   case) when the request does not declare `browser_kit`, and record it in
+   `browser_kit_unavailable` with the wait, which names `orbit browser-kit install`. An `os:*` tag outside the reserved namespace, which
    task writes reject but an older stored task may carry, is satisfied by no executor.
    `no-diff-expected` tasks are claimable by a remote executor: its claimed leaf hands off
    `NoDiff`, files findings on the owner through the claimed-owner broker and opens no PR
@@ -397,6 +401,7 @@ with the current executor; preserve it for explicit recovery rather than rewriti
 | `deferred_conflicts[]` | Conflict exclusions with blocking tasks/reservations and selectors; `blocked_by` names the holder when known |
 | `crew_unavailable[]` | Ready candidates skipped because the executor cannot run their crew, with the reason; omitted when empty |
 | `os_unavailable[]` | Ready candidates skipped because their `os:` tags name no OS the executor runs, with the wait; omitted when empty |
+| `browser_kit_unavailable[]` | Ready candidates tagged `ui` skipped because the request declares no verified browser kit, with the wait; omitted when empty |
 | `capacity_unavailable[]` | Ready candidates skipped because the request's `admissible` leaves them out, with the work the forecast had no room for; omitted when empty |
 | `invalid_candidates[]` | Invalid dependency or lock-surface exclusions with reasons; `blocked_by` names the unfinished dependencies |
 | `idle` | No claim created by this request |

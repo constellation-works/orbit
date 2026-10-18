@@ -67,7 +67,7 @@ fn runtime_on(os: HostOs, config: &str) -> (TempDir, OrbitRuntime) {
 }
 
 /// The shipped muse executor: macOS only. Other providers stay undeclared.
-fn declare_muse_macos(runtime: &OrbitRuntime) {
+pub(crate) fn declare_muse_macos(runtime: &OrbitRuntime) {
     runtime
         .upsert_executor_def(&ExecutorDef {
             name: "muse".to_string(),

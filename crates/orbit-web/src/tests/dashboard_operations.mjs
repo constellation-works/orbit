@@ -316,6 +316,13 @@ readinessTasks.push({ task_id: 'ORB-40', status: 'backlog', eligible: false, rea
 await fetchAndRenderOperations();
 assert(drainReadinessFor('ORB-40')?.pool === 'other' && drainReadinessFor('ORB-40').title.includes('waits for a macos host (os:macos)'), `an OS wait is named for its row: ${JSON.stringify(drainReadinessFor('ORB-40'))}`);
 readinessTasks.splice(-1);
+// A `ui` task on a host without a verified browser kit says so, and its title
+// names the install command.
+const kitWait = 'waits for a host with the browser kit (ui); run `orbit browser-kit install` on a host that runs workers to give it one';
+readinessTasks.push({ task_id: 'ORB-41', status: 'backlog', eligible: false, reason: 'browser_kit_missing', detail: kitWait });
+await fetchAndRenderOperations();
+assert(drainReadinessFor('ORB-41')?.pool === 'other' && drainReadinessFor('ORB-41').badge.text === 'needs browser kit' && drainReadinessFor('ORB-41').title.includes(kitWait), `a browser-kit wait is named for its row: ${JSON.stringify(drainReadinessFor('ORB-41'))}`);
+readinessTasks.splice(-1);
 
 const modeInput = () => startNode('auto-drain-mode');
 assert(modeInput().value === '' && !modeInput().disabled, 'mode defaults to inherited host policy');
