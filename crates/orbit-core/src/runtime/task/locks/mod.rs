@@ -3,6 +3,7 @@
 mod audit;
 mod commands;
 mod index;
+mod unlocked;
 
 pub(crate) use audit::{emit_expired_reservation_events, emit_task_lock_release_event};
 pub(crate) use commands::{
@@ -14,3 +15,4 @@ pub(crate) use index::{
     lock_holder_index, merge_task_lock_conflicts, requested_task_files_indexed,
     task_lock_conflicts_indexed, task_lock_overlaps,
 };
+pub(crate) use unlocked::UnlockedContextPaths;

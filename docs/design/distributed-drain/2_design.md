@@ -102,6 +102,19 @@ ordinary entry using its own `context_files`, and sequencing is expressed with d
   `allow_missing_context` governs explicit operator existence checks and records the exact
   creation intent task-pilot honours; it never affects admission. Admission, reservation,
   status locks and task reads share `runtime/task/mod.rs::declared_context_files` [ORB-12490].
+- An entry matching `workflow.unlocked_context_paths` (default `["**/*.md"]`, matched against
+  the selector's anchor path) stays in the task's context, so the agent envelope still lists
+  it, but takes no context lock. `runtime/task/locks/index.rs::lock_context_files_for_task`
+  and the indexed reservation surface leave it out, so local drain waves, readiness,
+  `list_backlog_tasks`, `orbit task eligible`, surface reservations, lock contention and
+  `reserve_locks` never conflict on it. Two tasks sharing only such a file beside their own
+  code run together, and landing reconciles the text by merge and conflict recovery. A task
+  whose every declared entry matches (a docs-only rewrite) keeps them all locked: two rewrites
+  of one document are where a text merge can silently produce contradictory prose. Its lock does not hold back a mixed task that only
+  touches the same file, because that task does not request it. Build and CI definitions and
+  code never match the default. `[]` locks every entry. Owner pull admission still checks a
+  claim's full declared footprint against in-flight tasks, so a remote claim may wait on a
+  shared Markdown file that a local wave admits.
 - A task filed by a review (tagged `code-review`, `delivery-code-review`, `qa-full-sweep`,
   `qa-sweep` or `security-review`) keeps selectors the finding names as substantive change
   targets. Read-only evidence belongs in the description, not the lock footprint; incidental
@@ -1320,6 +1333,7 @@ Acceptance criteria, not reported as passing.
 | Merge succeeds, owner crashes before completion | Reconcile pinned PR and merge evidence before done or retry |
 | Recovery with an uncertain external merge | Reassignment waits for merge-intent reconciliation |
 | No-diff/already-landed delivery | Typed evidence and completion authority still required |
+| Two backlog tasks share only a Markdown file beside distinct code | Both join one local wave and are ready; an in-progress holder of the file excludes neither; each reservation holds only its code; the envelope still lists the file. Two docs-only tasks on one file still conflict, and `workflow.unlocked_context_paths = []` restores the conflict for the mixed pair |
 | In-progress `no-diff-expected` task overlaps a backlog task | Backlog task stays eligible; no `context_lock_conflict` names the tagged task; ordinary overlaps still conflict ([ORB-14247]) |
 | Critical or high-priority task waits on several locks that free one at a time | It reserves its surface: lower-ranked backlog work overlapping it waits as `surface_reserved` naming it, non-overlapping work admits, and it takes the wave once its locks free. At most two reserve per pass; nothing persists between passes ([ORB-14310]) |
 | Backlog task with no `context_files` in a multi-slot local drain or discovery ship | Waits for this host's task pilot (`awaiting_footprint`), else runs only with no other leaf in flight (`awaiting_exclusive_slot`) and holds the tree while it runs; single-slot runs, explicit ship and owner pull admission keep admitting it on the next pass ([ORB-15191]) |

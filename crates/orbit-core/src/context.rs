@@ -447,6 +447,9 @@ pub(crate) struct OrbitRuntimeSettings {
     /// `[workflow.tag_instructions]`: the files that replace or disable
     /// Orbit's shipped per-tag instructions.
     tag_instructions: orbit_config::TagInstructionSettings,
+    /// `workflow.unlocked_context_paths`: declared context that takes no
+    /// context lock.
+    unlocked_context_paths: crate::runtime::task::locks::UnlockedContextPaths,
 }
 
 impl OrbitRuntimeSettings {
@@ -481,6 +484,7 @@ impl OrbitRuntimeSettings {
         worktree_parked_reclaim_after_hours: u64,
         mid_run_steering: orbit_config::MidRunSteeringSettings,
         tag_instructions: orbit_config::TagInstructionSettings,
+        unlocked_context_paths: crate::runtime::task::locks::UnlockedContextPaths,
     ) -> Self {
         Self {
             persistence,
@@ -512,6 +516,7 @@ impl OrbitRuntimeSettings {
             worktree_parked_reclaim_after_hours,
             mid_run_steering,
             tag_instructions,
+            unlocked_context_paths,
         }
     }
 
@@ -521,6 +526,12 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn tag_instructions(&self) -> &orbit_config::TagInstructionSettings {
         &self.tag_instructions
+    }
+
+    pub(crate) fn unlocked_context_paths(
+        &self,
+    ) -> &crate::runtime::task::locks::UnlockedContextPaths {
+        &self.unlocked_context_paths
     }
 
     pub(crate) fn set_host_shutdown_hold_minutes(&mut self, minutes: u32) {

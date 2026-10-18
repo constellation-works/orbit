@@ -268,6 +268,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
         &claimed,
         &snapshot.task_lookup,
         runtime.paths().repo_root.as_path(),
+        runtime.unlocked_context_paths(),
     );
     // [ORB-15191] Work with no footprint waits for its pilot or goes alone,
     // unless this drain runs one leaf at a time.
@@ -277,6 +278,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
             examined,
             &snapshot.task_lookup,
             runtime.paths().repo_root.as_path(),
+            runtime.unlocked_context_paths(),
             &holders,
             free_slots,
             FootprintGuard {
@@ -846,7 +848,7 @@ fn admit_through_section(
             footprint: if task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG) {
                 Vec::new()
             } else {
-                lock_context_files_for_task(task, workspace_root)
+                lock_context_files_for_task(task, workspace_root, runtime.unlocked_context_paths())
             },
         })
         .collect::<Vec<_>>();
@@ -865,7 +867,12 @@ fn admit_through_section(
         if let (Some(claim), Some(task)) =
             (admission.blocked_by, task_lookup.get(&admission.task_id))
         {
-            selection.refuse_claimed(task, &claim, workspace_root);
+            selection.refuse_claimed(
+                task,
+                &claim,
+                workspace_root,
+                runtime.unlocked_context_paths(),
+            );
         }
     }
     Ok(())
