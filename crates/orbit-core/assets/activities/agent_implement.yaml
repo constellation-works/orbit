@@ -510,11 +510,13 @@ spec:
         The already-landed report needs schema_version 1, task_id, run_id,
         tested_head, covering_commit, covering_task_id (this task or covering
         sibling), scope (title, description, acceptance_criteria, plan,
-        context_files, tags, relations, required_tools, type, comments),
-        required_commands, criteria_evidence, validation. Use flat
-        validation[] objects with sibling fields command, outcome, role,
-        log_artifact. criteria_evidence is an array of non-empty strings, one
-        per acceptance criterion in order (never objects). Each required
+        context_files, tags, relations, required_tools, type, comments; each
+        comment carries only at, by and message, so drop the receipt ids such
+        as operation_id that orbit.task.show adds), required_commands,
+        criteria_evidence, validation. Use flat validation[] objects with
+        sibling fields command, outcome, role, log_artifact. criteria_evidence
+        is an array of non-empty strings, one per acceptance criterion in
+        order (never objects). Each required
         command's validation[] entry has outcome "passed" and role
         "required"; the role vocabulary is required, expected_failure,
         excluded, superseded, diagnostic.

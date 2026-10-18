@@ -120,6 +120,11 @@ required validation logs. A success summary alone does not satisfy that gate.
 `already-landed.json` has `schema_version` 1, `task_id`, `run_id`,
 `tested_head`, `covering_commit`, `covering_task_id`, `scope`,
 `required_commands`, `validation` and `criteria_evidence`; unknown fields are
+refused. `scope` must equal the task's current scope exactly: `title`,
+`description`, `acceptance_criteria`, `plan`, `context_files`, `tags`,
+`relations`, `required_tools`, `type` and `comments`, where each comment is
+reduced to `at`, `by` and `message`. Drop the receipt ids (`operation_id`)
+that `orbit.task.show` adds to comments; a comment with any extra field is
 refused. `criteria_evidence` is an array of non-empty strings, one per
 acceptance criterion in order, never objects. Each `validation[]` entry
 flattens `command`, `outcome`, `role` and `log_artifact` as siblings; every

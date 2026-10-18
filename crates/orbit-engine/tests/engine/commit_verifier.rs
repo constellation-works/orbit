@@ -42,6 +42,13 @@ impl VerifierHost {
         }
     }
 
+    fn set_comments(&self, task_id: &str, comments: Vec<TaskComment>) {
+        self.comments
+            .lock()
+            .unwrap()
+            .insert(task_id.to_string(), comments);
+    }
+
     fn set_artifacts(&self, task_id: &str, artifacts: Vec<TaskArtifact>) {
         self.artifacts
             .lock()
@@ -965,6 +972,168 @@ fn commit_verifier_keeps_refusing_unaccepted_already_landed_evidence() {
     }
 }
 
+/// A report copied from `task.show` carries receipt ids on each comment. The
+/// scope comparison stays exact, but the refusal must say which key differs
+/// and what shape a comment takes, without echoing task content [F2026-10-449].
+fn commit_verifier_refusal_names_the_differing_already_landed_scope_key() {
+    let temp = tempdir().expect("create tempdir");
+    init_git_repo(temp.path());
+    let head = git_head(temp.path());
+    let host = VerifierHost::new(temp.path(), fixture_task());
+    let at = Utc::now();
+    host.set_comments(
+        TASK_ID,
+        vec![TaskComment {
+            at,
+            by: "task-pilot".into(),
+            message: "secret-comment-text".into(),
+            operation_id: Some("op-receipt-1".into()),
+        }],
+    );
+    let comment = |extra: Option<(&str, Value)>| {
+        let mut comment = json!({"at": at, "by": "task-pilot", "message": "secret-comment-text"});
+        if let Some((key, value)) = extra {
+            comment[key] = value;
+        }
+        comment
+    };
+
+    let message = already_landed_refusal(&host, temp.path(), &head, |report| {
+        report["scope"]["comments"] =
+            json!([comment(Some(("operation_id", json!("op-receipt-1"))))]);
+    });
+    for expected in [
+        "already_landed_unverified",
+        "scope.comments",
+        "`at`, `by` and `message`",
+        "operation_id",
+    ] {
+        assert!(
+            message.contains(expected),
+            "a comment carrying a receipt id must be refused naming {expected}, got: {message}"
+        );
+    }
+    assert!(
+        !message.contains("secret-comment-text") && !message.contains("op-receipt-1"),
+        "the refusal must name keys only, never task content, got: {message}"
+    );
+
+    let message = already_landed_refusal(&host, temp.path(), &head, |report| {
+        report["scope"]["comments"] = json!([{"at": at, "by": "task-pilot", "message": "edited"}]);
+    });
+    assert!(
+        message.contains("scope.comments") && !message.contains("edited"),
+        "a changed comment message must stay refused as a comments difference, got: {message}"
+    );
+
+    let message = already_landed_refusal(&host, temp.path(), &head, |report| {
+        report["scope"]["comments"] = json!([comment(None)]);
+        report["scope"]["title"] = json!("Renamed Task");
+    });
+    assert!(
+        message.contains("scope.title") && !message.contains("scope.comments"),
+        "a changed title must be refused naming title only, got: {message}"
+    );
+    assert!(
+        !message.contains("Renamed Task"),
+        "the refusal must not echo the reported value, got: {message}"
+    );
+
+    let accepted = {
+        let mut artifacts = valid_already_landed_artifacts(&head);
+        let mut report: Value = serde_json::from_slice(&artifacts[0].content).unwrap();
+        report["scope"]["comments"] = json!([comment(None)]);
+        artifacts[0] = artifact("already-landed.json", report);
+        artifacts
+    };
+    host.set_artifacts(TASK_ID, accepted);
+    let result = action(&host, &commit_input(temp.path(), &head))
+        .expect("a scope reduced to at, by and message must be accepted");
+    assert_eq!(result["decision"], "verified_already_landed");
+}
+
+/// Identity, lineage, ancestry and scope-anchor refusals stay in force
+/// alongside the scope diagnostic [F2026-10-449].
+fn commit_verifier_keeps_refusing_already_landed_identity_and_covering_mismatches() {
+    let temp = tempdir().expect("create tempdir");
+    init_git_repo(temp.path());
+    let marked = git_head(temp.path());
+    fs::write(temp.path().join("other.txt"), "x\n").expect("write file");
+    git_output(temp.path(), &["add", "other.txt"]);
+    git_output(temp.path(), &["commit", "-m", "unmarked follow-up"]);
+    let unmarked = git_head(temp.path());
+    let default_branch = git_output(temp.path(), &["rev-parse", "--abbrev-ref", "HEAD"]);
+    git_output(temp.path(), &["checkout", "-q", "-b", "side", &marked]);
+    fs::write(temp.path().join("side.txt"), "y\n").expect("write file");
+    git_output(temp.path(), &["add", "side.txt"]);
+    git_output(temp.path(), &["commit", "-m", "side branch [T1]"]);
+    let side = git_head(temp.path());
+    git_output(temp.path(), &["checkout", "-q", &default_branch]);
+    let head = unmarked.clone();
+
+    let host = VerifierHost::new(temp.path(), fixture_task());
+    type Mutation = Box<dyn Fn(&mut Value)>;
+    let side_commit = side.clone();
+    let marked_commit = marked.clone();
+    let other_head = marked.clone();
+    let cases: Vec<(&str, &str, Mutation)> = vec![
+        (
+            "wrong task id",
+            "evidence must identify this task",
+            Box::new(|r| r["task_id"] = json!("T2")),
+        ),
+        (
+            "missing covering task id",
+            "evidence must identify this task",
+            Box::new(|r| r["covering_task_id"] = json!(" ")),
+        ),
+        (
+            "run outside the retry lineage",
+            "validation belongs to a different run",
+            Box::new(|r| r["run_id"] = json!("jrun-unrelated")),
+        ),
+        (
+            "tested HEAD other than the owner-observed base",
+            "tested HEAD is not the owner-observed base",
+            Box::new(move |r| r["tested_head"] = json!(other_head)),
+        ),
+        (
+            "covering commit that is not an ancestor",
+            "not a verified ancestor",
+            Box::new(move |r| r["covering_commit"] = json!(side_commit)),
+        ),
+        (
+            "covering commit without the task marker",
+            "no matching task delivery marker",
+            Box::new(|_| {}),
+        ),
+    ];
+    for (case, expected, mutate) in cases {
+        let message = already_landed_refusal(&host, temp.path(), &head, |report| {
+            report["covering_commit"] = json!(head);
+            report["tested_head"] = json!(head);
+            mutate(report);
+        });
+        assert!(
+            message.contains(expected),
+            "{case} must stay refused with `{expected}`, got: {message}"
+        );
+    }
+
+    // A marked ancestor with undeclared scope fails closed on the covering scope.
+    let mut task = fixture_task();
+    task.context_files = Vec::new();
+    let host = VerifierHost::new(temp.path(), task);
+    let message = already_landed_refusal(&host, temp.path(), &head, |report| {
+        report["covering_commit"] = json!(marked_commit);
+        report["scope"]["context_files"] = json!([]);
+    });
+    assert!(
+        message.contains("covering scope is empty or changed since landing"),
+        "an empty declared context_files must stay refused, got: {message}"
+    );
+}
+
 /// A clean tree at the pinned HEAD with neither route artifact must name both
 /// routes, so a task that correctly changed nothing is pointed at no-diff.json
 /// [F2026-10-169]. The reason keeps its already_landed_unverified prefix.
@@ -1335,6 +1504,14 @@ fn commit_evidence_contracts_3() {
             (
                 "commit_verifier_keeps_refusing_unaccepted_already_landed_evidence",
                 commit_verifier_keeps_refusing_unaccepted_already_landed_evidence,
+            ),
+            (
+                "commit_verifier_refusal_names_the_differing_already_landed_scope_key",
+                commit_verifier_refusal_names_the_differing_already_landed_scope_key,
+            ),
+            (
+                "commit_verifier_keeps_refusing_already_landed_identity_and_covering_mismatches",
+                commit_verifier_keeps_refusing_already_landed_identity_and_covering_mismatches,
             ),
             (
                 "commit_verifier_clean_tree_without_evidence_names_both_routes",
