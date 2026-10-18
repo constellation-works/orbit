@@ -104,6 +104,10 @@ cargo test --locked --no-default-features --test watcher_notifications
 These tests exercise the same polling and notification decisions as the app, with in-memory
 request and notification adapters; they do not display native notifications.
 
+The update installer also builds without the webview stack. On Linux, run its controlled
+overlapping-download regressions with
+`cargo test --locked --no-default-features --test update_install`.
+
 Run it in development (from `desktop/`):
 
 ```bash
@@ -225,7 +229,9 @@ from your `orbit` CLI, which `orbit update` upgrades. The app updates only its o
   closed. The signed manifest also lists `orbit-desktop-version.txt`, and that file must name the
   release's own tag. Asset names carry no version, so this check stops an older signed set from
   being passed off as a newer release. The bundle is checked against its signed SHA-256 after it
-  downloads, before anything is replaced.
+  downloads, before anything is replaced. Each attempt stages its own file, and only that checked
+  file can replace the app or the saved download, so a second copy installing at the same time
+  cannot publish an unfinished one.
 - **Prompting.** A verified update raises one notification, and the tray item becomes
   **Install Orbit X.Y.Z…**. Choosing it opens a confirmation dialog. Nothing is downloaded or
   installed until you choose **Install**. An unreachable GitHub stays silent unless you asked for
