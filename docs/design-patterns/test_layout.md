@@ -161,6 +161,24 @@ For modules already migrated to the *nested* anti-pattern (`<file>/tests/<topic>
 
 Tests assert what the code guarantees (parses, required fields present, ships disabled, structural safeguards, tool reachability). Crew, model, schedule, complexity and prompt wording are policy owned by config and prompts; a test may not pin them unless it cites the incident it guards.
 
+## Admission fixture construction
+
+The cancellation and claimed-recovery fixtures share the test-only
+`application::test_support::{admission_request, admission_receipt}` constructors.
+These deserialize the required wire fields and use the contract's serde defaults
+for unrelated optional capability and evidence metadata. The request helper uses
+the fixture caller version and current protocol schema; callers explicitly set
+`caller_before_pr` and `review_gate` with struct update syntax. Keep request/run
+identity, the ship contract, claim identity and phase, task, lineage and local
+admission transitions at the scenario call site.
+
+An additive optional wire field with a neutral serde default should require no
+edits to these call sites or helpers. A scenario exercising that field must set
+it explicitly. Do not add production `Default` implementations, change wire
+defaults, or hide scenario-specific authority and cancellation setup to simplify
+fixtures. Existing behavioral scenarios cover the helpers; source-text checks
+and speculative fixture-only tests add no behavioral guarantee.
+
 ## Audit migrations
 
 Orbit-core's existing behavioral cases now share the runtime integration binary's
