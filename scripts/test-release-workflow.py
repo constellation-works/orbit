@@ -7,9 +7,11 @@ import json
 import os
 from pathlib import Path
 import re
+import socket
 import subprocess
 import tempfile
 import textwrap
+import threading
 import unittest
 
 try:
@@ -45,7 +47,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.env = dict(PATH=os.environ["PATH"], LANG="C", TMPDIR=str(self.root),
                         GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
-        self.jobs = yaml.safe_load(WORKFLOW.read_text())["jobs"]
+        document = yaml.safe_load(WORKFLOW.read_text())
+        self.workflow = document
+        self.workflow_name = document["name"]
+        self.jobs = document["jobs"]
         self.metadata = next(step for step in self.jobs["publish-release"]["steps"]
                              if step.get("id") == "metadata")
         self.tap = self.jobs["bump-homebrew-tap"]
@@ -72,7 +77,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             f"{'b' * 64}  {self.outputs['darwin_intel_asset']}\n")
         self.output = self.root / "output"
 
-    def run_script(self, step, **values):
+    def run_script(self, step, cwd=None, timeout=10, **values):
         # Resolve the actual step env bindings, as Actions does, without ever
         # substituting expressions into Bash source.
         env = dict(self.env)
@@ -92,7 +97,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 self.fail(f"unsupported workflow env binding: {key}")
         env.update(values)
         return subprocess.run(["bash", "-e", "-o", "pipefail", "-c", step["run"]],
-                              cwd=self.root, env=env, text=True, capture_output=True, timeout=10)
+                              cwd=cwd or self.root, env=env, text=True, capture_output=True,
+                              timeout=timeout)
 
     def git(self, *arguments):
         result = subprocess.run(["git", *arguments], cwd=self.root, env=self.env,
@@ -135,7 +141,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
             remote = Path(os.environ["FAKE_RELEASE"])
             assert args[0] == "release", args
             command, tag = args[1:3]
-            if tag != "v1.2.3":
+            accepted = os.environ.get("FAKE_ACCEPT_TAGS", "v1.2.3").split(",")
+            if tag not in accepted:
                 sys.exit("release not found")
             options = args[3:]
             def option(name):
@@ -145,6 +152,17 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 return value
             assert option("--repo") == "offline/orbit", args
             if command == "view":
+                # Optional same-process gate so two publishers can prove they
+                # both reached gh before either uploads. Unset in every other test.
+                barrier = os.environ.get("FAKE_GH_BARRIER")
+                if barrier:
+                    import socket
+                    gate = socket.socket(socket.AF_UNIX)
+                    gate.settimeout(15)
+                    gate.connect("\\0" + barrier)
+                    gate.sendall(os.environ.get("FAKE_GH_BARRIER_LABEL", "publish").encode())
+                    assert gate.recv(1) == b"+"
+                    gate.close()
                 fields = option("--json")
                 if fields == "tagName":
                     assert option("--jq") == ".tagName", args
@@ -195,32 +213,81 @@ class ReleaseWorkflowTests(unittest.TestCase):
             return None
         return dict(line.split("=", 1) for line in self.output.read_text().splitlines())
 
-    def publish_desktop(self):
+    def publish_desktop(self, cwd=None, timeout=10, **values):
         for step in self.jobs["publish-desktop"]["steps"]:
             if "run" in step:
-                result = self.run_script(step)
+                result = self.run_script(step, cwd=cwd, timeout=timeout, **values)
                 if result.returncode:
                     return result
         return result
+
+    def require_desktop_publish_serialization(self):
+        """The job concurrency group is the cross-run lock GitHub holds for the whole job."""
+        self.assertIsNone(self.workflow.get("concurrency"),
+                          "only publish-desktop waits; other release jobs keep running")
+        for name, job in self.jobs.items():
+            if name == "publish-desktop":
+                continue
+            self.assertNotIn("concurrency", job,
+                             f"{name} stays outside desktop publication serialization")
+        concurrency = self.jobs["publish-desktop"].get("concurrency")
+        self.assertIsInstance(concurrency, dict,
+                              "tag pushes, dispatches and reruns share one publish-desktop group")
+        self.assertIs(concurrency.get("cancel-in-progress"), False,
+                      "an active publish-desktop uploader must finish; a later attempt must not cancel it")
+        self.assertEqual(concurrency.get("queue"), "max",
+                         "every waiting publisher for one tag stays queued behind the active uploader")
+        group = concurrency.get("group")
+        self.assertIsInstance(group, str)
+        expressions = {" ".join(expr.split())
+                       for expr in re.findall(r"\$\{\{\s*([^}]+?)\s*\}\}", group)}
+        self.assertEqual(expressions, {"github.workflow", "needs.desktop-preflight.outputs.tag"},
+                         "the group follows the preflight tag inside this workflow, for every trigger")
+        return group
+
+    def desktop_publish_group(self, tag):
+        group = self.require_desktop_publish_serialization()
+        rendered = re.sub(r"\$\{\{\s*github\.workflow\s*\}\}", str(self.workflow_name), group)
+        rendered = re.sub(r"\$\{\{\s*needs\.desktop-preflight\.outputs\.tag\s*\}\}", tag, rendered)
+        self.assertNotIn("${{", rendered, rendered)
+        self.assertIn(str(self.workflow_name), rendered)
+        self.assertIn(tag, rendered)
+        return rendered
+
+    def stage_release_checkout(self, root: Path) -> Path:
+        """A second tag's tree: local bundles, the release public key, and an empty release."""
+        dist = root / "dist"
+        dist.mkdir(parents=True)
+        for name in DESKTOP_BUNDLES:
+            (dist / name).write_bytes(f"rebuilt {name}".encode())
+        public_key = root / "npm" / "release-signing.pub"
+        public_key.parent.mkdir(parents=True)
+        public_key.write_bytes((self.root / "npm" / "release-signing.pub").read_bytes())
+        remote = root / "release"
+        remote.mkdir()
+        return remote
 
     def uploaded_names(self):
         return [json.loads(line) for line in self.upload_log.read_text().splitlines()] \
             if self.upload_log.exists() else []
 
-    def assert_desktop_authenticated(self, bundles=DESKTOP_BUNDLES):
+    def assert_desktop_authenticated(self, bundles=DESKTOP_BUNDLES, root=None, remote=None,
+                                     version="1.2.3"):
+        root = self.root if root is None else root
+        remote = self.remote if remote is None else remote
         result = subprocess.run(
-            ["openssl", "dgst", "-sha256", "-verify", str(self.root / "npm/release-signing.pub"),
-             "-signature", str(self.remote / DESKTOP_SIGNATURE), str(self.remote / DESKTOP_MANIFEST)],
+            ["openssl", "dgst", "-sha256", "-verify", str(root / "npm/release-signing.pub"),
+             "-signature", str(remote / DESKTOP_SIGNATURE), str(remote / DESKTOP_MANIFEST)],
             text=True, capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         digests = {name: digest for digest, name in
                    (line.split("  ") for line in
-                    (self.remote / DESKTOP_MANIFEST).read_text().splitlines())}
+                    (remote / DESKTOP_MANIFEST).read_text().splitlines())}
         self.assertEqual(set(digests), {*bundles, DESKTOP_VERSION})
         for name, digest in digests.items():
-            self.assertEqual(digest, hashlib.sha256((self.remote / name).read_bytes()).hexdigest(),
+            self.assertEqual(digest, hashlib.sha256((remote / name).read_bytes()).hexdigest(),
                              f"signed manifest must authenticate published {name}")
-        self.assertEqual((self.remote / DESKTOP_VERSION).read_text(), "1.2.3\n")
+        self.assertEqual((remote / DESKTOP_VERSION).read_text(), f"{version}\n")
 
     def test_desktop_fresh_and_complete_publication(self):
         self.prepare_desktop()
@@ -396,6 +463,159 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.uploaded_names(), [])
         self.assertEqual({path.name for path in self.remote.iterdir()}, {MACOS_BUNDLE})
+
+    def test_overlapping_same_tag_publishers_wait_and_refuse_an_unlisted_dmg(self):
+        # GitHub holds the concurrency group for the whole job. This lock is
+        # that admission: the full plan cannot enter the publish script while
+        # the Linux-only plan holds the tag, then it refuses before uploading.
+        self.prepare_desktop()
+        group = self.desktop_publish_group("v1.2.3")
+        self.assertNotEqual(group, self.desktop_publish_group("v9.9.9"))
+        self.bindings["${{ needs.desktop-preflight.outputs.macos }}"] = "false"
+        (self.root / "dist" / MACOS_BUNDLE).unlink()
+        lock = threading.Lock()
+        holding = threading.Event()
+        excluded = threading.Event()
+        proceed = threading.Event()
+        results = {}
+
+        def run_linux():
+            owns = False
+            try:
+                lock.acquire()
+                owns = True
+                holding.set()
+                if not proceed.wait(15):
+                    raise TimeoutError("linux publisher was not released to upload")
+                results["linux"] = self.publish_desktop()
+            except Exception as exc:
+                results["linux_error"] = exc
+            finally:
+                holding.set()
+                if owns:
+                    lock.release()
+
+        def run_full():
+            owns = False
+            try:
+                if not holding.wait(15):
+                    raise TimeoutError("linux publisher never held the tag group")
+                acquired = lock.acquire(blocking=False)
+                results["entered_during_linux"] = acquired
+                if acquired:
+                    lock.release()
+                    return
+                excluded.set()
+                lock.acquire()
+                owns = True
+                self.bindings["${{ needs.desktop-preflight.outputs.macos }}"] = "true"
+                (self.root / "dist" / MACOS_BUNDLE).write_bytes(b"signed later")
+                results["full"] = self.publish_desktop()
+            except Exception as exc:
+                results["full_error"] = exc
+            finally:
+                excluded.set()
+                if owns:
+                    lock.release()
+
+        linux = threading.Thread(target=run_linux)
+        full = threading.Thread(target=run_full)
+        linux.start()
+        full.start()
+        try:
+            self.assertTrue(excluded.wait(15), results)
+            self.assertFalse(results.get("entered_during_linux"),
+                             "full publisher entered while linux held the tag group")
+        finally:
+            proceed.set()
+            linux.join(20)
+            full.join(20)
+        self.assertFalse(linux.is_alive() or full.is_alive(), "publisher thread did not finish")
+        self.assertNotIn("linux_error", results, results.get("linux_error"))
+        self.assertNotIn("full_error", results, results.get("full_error"))
+        self.assertEqual(results["linux"].returncode, 0, results["linux"].stderr)
+        self.assertNotEqual(results["full"].returncode, 0, results["full"].stdout)
+        self.assertNotIn(MACOS_BUNDLE, self.uploaded_names(),
+                         "the waiting full plan must refuse before uploading the DMG")
+        self.assertNotIn(MACOS_BUNDLE, {path.name for path in self.remote.iterdir()})
+        self.assert_desktop_authenticated(LINUX_BUNDLES)
+        published = {path.name: path.read_bytes() for path in self.remote.iterdir()}
+        # A complete Linux-only retry still uploads nothing and keeps those bytes.
+        self.upload_log.write_text("")
+        self.bindings["${{ needs.desktop-preflight.outputs.macos }}"] = "false"
+        self.assertEqual(self.publish_desktop().returncode, 0)
+        self.assertEqual(self.uploaded_names(), [])
+        self.assertEqual({path.name: path.read_bytes() for path in self.remote.iterdir()}, published)
+
+    def test_distinct_release_tags_publish_desktop_side_by_side(self):
+        # Different groups must not take the same lock: both publishers reach
+        # gh release view before either is released, then each signs its own tag.
+        self.prepare_desktop()
+        self.assertNotEqual(self.desktop_publish_group("v1.2.3"),
+                            self.desktop_publish_group("v9.9.9"))
+        other = self.root / "other-tag"
+        other_remote = self.stage_release_checkout(other)
+        barrier_name = f"orbit-desktop-{os.getpid()}-tags"
+        listening = threading.Event()
+        labels = []
+        errors = {}
+
+        def serve():
+            listener = socket.socket(socket.AF_UNIX)
+            connections = []
+            try:
+                listener.bind("\0" + barrier_name)
+                listener.listen(2)
+                listener.settimeout(15)
+                listening.set()
+                for _ in range(2):
+                    connection, _ = listener.accept()
+                    connections.append(connection)
+                    labels.append(connection.recv(64).decode())
+                for connection in connections:
+                    connection.sendall(b"+")
+            except Exception as exc:
+                errors["barrier"] = exc
+            finally:
+                listening.set()
+                for connection in connections:
+                    connection.close()
+                listener.close()
+
+        def publish(tag, cwd, remote, accept):
+            try:
+                errors[tag] = self.publish_desktop(
+                    cwd=cwd, timeout=20,
+                    FAKE_GH_BARRIER=barrier_name,
+                    FAKE_GH_BARRIER_LABEL=tag,
+                    FAKE_ACCEPT_TAGS=accept,
+                    FAKE_RELEASE=str(remote),
+                    FAKE_UPLOAD_LOG=str(cwd / "uploads.jsonl"),
+                    RELEASE_TAG=tag,
+                )
+            except Exception as exc:
+                errors[tag] = exc
+
+        server = threading.Thread(target=serve)
+        server.start()
+        self.assertTrue(listening.wait(5), "overlap barrier did not start listening")
+        first = threading.Thread(target=publish, args=("v1.2.3", self.root, self.remote, "v1.2.3"))
+        second = threading.Thread(target=publish, args=("v9.9.9", other, other_remote, "v9.9.9"))
+        first.start()
+        second.start()
+        first.join(25)
+        second.join(25)
+        server.join(5)
+        self.assertFalse(first.is_alive() or second.is_alive() or server.is_alive())
+        self.assertNotIn("barrier", errors, errors.get("barrier"))
+        self.assertEqual(set(labels), {"v1.2.3", "v9.9.9"},
+                         "both tags must be inside gh before either upload continues")
+        for tag in ("v1.2.3", "v9.9.9"):
+            result = errors[tag]
+            self.assertIsInstance(result, subprocess.CompletedProcess, result)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_desktop_authenticated()
+        self.assert_desktop_authenticated(root=other, remote=other_remote, version="9.9.9")
 
     def test_metadata_accepts_release_and_prerelease_tags(self):
         for tag in ("v0.0.0", "v12.34.56", "v1.2.3-rc.1", "v1.2.3-alpha-beta.2"):

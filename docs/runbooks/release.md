@@ -218,6 +218,13 @@ A release that already carries a Linux-only manifest can't gain a macOS bundle
 this way. That is a manifest conflict by design: fix forward, and macOS ships
 in the next release.
 
+A backfill, a tag-push publish, and a rerun for the same tag attach assets one
+at a time. The publisher already uploading finishes, and the others wait. The
+waiting run then sees the finished manifest, so a full plan that follows a
+Linux-only publish stops before uploading the macOS disk image. A different
+tag publishes on its own. Each waiting attempt stays queued until the active
+publisher finishes.
+
 Running a backfill against a real release is an operator decision. Check the
 release's assets afterwards with the verification commands in
 [desktop/README.md](../../desktop/README.md#releases).
