@@ -217,7 +217,7 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
                     Ok(created) => created,
                     Err(error)
                         if attempt < operations::GITHUB_TRANSIENT_ATTEMPTS
-                            && operations::is_transient_github_failure(&error.to_string()) =>
+                            && operations::is_transient(&error) =>
                     {
                         tracing::warn!(
                             attempt,

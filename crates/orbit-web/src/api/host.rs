@@ -220,7 +220,9 @@ pub(crate) fn host_error_code(error: &OrbitError) -> &str {
         OrbitError::OutcomeUnknown { .. } => "outcome_unknown",
         OrbitError::RemoteTool { code, .. } => code.as_str(),
         OrbitError::ProcessTimeout { .. } => "process_timeout",
-        OrbitError::Execution(_) | OrbitError::ExecutionTimeout { .. } => "execution_failed",
+        OrbitError::Execution(_)
+        | OrbitError::PrivateVcs(_)
+        | OrbitError::ExecutionTimeout { .. } => "execution_failed",
         OrbitError::WorkspaceError(_) => "workspace_error",
         OrbitError::Io(_)
         | OrbitError::StorageAccessDenied {

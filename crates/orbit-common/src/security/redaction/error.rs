@@ -183,6 +183,11 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             candidate.covering_commit = redact(&candidate.covering_commit);
             OrbitError::CandidateAbsorbed(candidate)
         }
+        OrbitError::PrivateVcs(mut failure) => {
+            failure.operation = redact(&failure.operation);
+            failure.message = redact(&failure.message);
+            OrbitError::PrivateVcs(failure)
+        }
         OrbitError::ExecutionTimeout {
             timeout_ms,
             message,

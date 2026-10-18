@@ -2,7 +2,7 @@
 use super::super::{completion_deadline::Deadline, operations};
 use super::{
     answers::{PullRequestStatus, RequiredChecks},
-    auto_fix::{AutoFix, stopped},
+    auto_fix::{AutoFix, stopped, stopped_by},
 };
 use crate::context::RuntimeHost;
 use orbit_common::OrbitError;
@@ -117,7 +117,7 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
                 operations::CI_PREREQUISITE_OBSERVE,
                 json!({"workspace_path":workspace,"evidence":evidence,"deadline_ms":deadline_ms}),
             )
-            .map_err(|error| stopped(pr, &error.to_string()))?;
+            .map_err(|error| stopped_by(pr, &error.to_string(), &error))?;
         record(host, auto_fix, evidence, "observation", &observed)?;
         if deadline.remaining().is_err() {
             return Err(stopped(
@@ -145,9 +145,10 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
         )
         .and_then(|response| RequiredChecks::from_response(&response))
         .map_err(|error| {
-            stopped(
+            stopped_by(
                 pr,
                 &format!("its required checks could not be read: {error}"),
+                &error,
             )
         })?;
     if policy.head_sha != head {
@@ -169,7 +170,7 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
             "no completion deadline remains for infrastructure recovery",
         ));
     }
-    let response = host.run_private_vcs_operation(operations::CI_PREREQUISITE_EVIDENCE, json!({"workspace_path":workspace,"pr":pr,"head_sha":head,"head_branch":status.head_branch,"base_branch":status.base_branch,"deadline_ms":deadline_ms})).map_err(|error| stopped(pr, &error.to_string()))?;
+    let response = host.run_private_vcs_operation(operations::CI_PREREQUISITE_EVIDENCE, json!({"workspace_path":workspace,"pr":pr,"head_sha":head,"head_branch":status.head_branch,"base_branch":status.base_branch,"deadline_ms":deadline_ms})).map_err(|error| stopped_by(pr, &error.to_string(), &error))?;
     if response.get("evidence") == Some(&Value::Null) {
         return Ok(InfrastructureStep::None);
     }
@@ -193,7 +194,7 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
                 operations::CI_PREREQUISITE_OBSERVE,
                 json!({"workspace_path":workspace,"evidence":reservation.evidence,"deadline_ms":deadline_ms}),
             )
-            .map_err(|error| stopped(pr, &error.to_string()))?;
+            .map_err(|error| stopped_by(pr, &error.to_string(), &error))?;
             Ok(InfrastructureStep::Wait)
         }
         PrInfrastructureAdmission::Reserved(reservation) => {
@@ -238,7 +239,7 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
                     operations::CI_PREREQUISITE_OBSERVE,
                     json!({"workspace_path":workspace,"evidence":evidence,"deadline_ms":deadline_ms}),
                 )
-                .map_err(|error| stopped(pr, &error.to_string()))?;
+                .map_err(|error| stopped_by(pr, &error.to_string(), &error))?;
             record(host, auto_fix, &evidence, "observation", &observed)?;
             Ok(InfrastructureStep::Wait)
         }

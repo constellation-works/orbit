@@ -3,8 +3,8 @@ use thiserror::Error;
 
 use super::{
     ArtifactOrigin, CandidateAbsorbed, ClaimRefusalKind, DependencyNotDelivered, FrictionNotLocal,
-    HostRegistryCode, NotFoundKind, RecoverableVcsConflict, SqliteContention, StorageLayer,
-    WorkspaceClaimHeld,
+    HostRegistryCode, NotFoundKind, PrivateVcsFailure, RecoverableVcsConflict, SqliteContention,
+    StorageLayer, WorkspaceClaimHeld,
 };
 
 #[derive(Debug, Error, Serialize)]
@@ -164,6 +164,12 @@ pub enum OrbitError {
     /// carries the timeout class so callers never read it from the text.
     #[error("execution failed: {message}")]
     ExecutionTimeout { timeout_ms: u64, message: String },
+    /// A private automation VCS operation failed. Displays and serializes
+    /// exactly as [`Self::Execution`]; the failure class is decided where the
+    /// provider's diagnostic is read, so callers never read it from the text.
+    #[error("execution failed: {}", .0.message)]
+    #[serde(rename = "Execution", serialize_with = "serialize_private_vcs_failure")]
+    PrivateVcs(Box<PrivateVcsFailure>),
     /// A child process exceeded its deadline. The supervisor signalled the
     /// owned process group and reaped the leader; descendants that remained in
     /// that group were signalled with it.
@@ -338,4 +344,11 @@ fn serialize_absorbed_candidate<S: serde::Serializer>(
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     serializer.serialize_str(&candidate.to_string())
+}
+
+fn serialize_private_vcs_failure<S: serde::Serializer>(
+    failure: &PrivateVcsFailure,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&failure.message)
 }

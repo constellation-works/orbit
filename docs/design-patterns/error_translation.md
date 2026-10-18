@@ -61,6 +61,12 @@ and codes exactly like the variant it refines:
 - `ExecutionTimeout { timeout_ms, message }`: an execution failure caused by a
   deadline. It reads and codes as `Execution`. Query it with `is_timeout()`,
   which also covers `ProcessTimeout`.
+- `PrivateVcs(PrivateVcsFailure { operation, class, message })`: a failed
+  private automation VCS operation. The engine reads the provider's stderr
+  once, where the process failed, into a `PrivateVcsFailureClass`. It reads,
+  codes and serializes as `Execution`. Query it with `private_vcs_failure()`.
+  An Orbit diagnostic that reports such a failure keeps its class only when
+  it is rebuilt from the cause; plain `Execution` text is never transient.
 
 Each wildcard match in another crate must name the new variant wherever it
 names the twin, because `OrbitError` is `#[non_exhaustive]` and an unnamed

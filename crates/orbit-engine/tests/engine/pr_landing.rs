@@ -605,9 +605,10 @@ fn pr_open_permanent_create_failures_never_retry_or_look_up_again() {
 
 fn assert_create_failure(host: &DeliveryHost, error: &OrbitError, diagnostic: &str) {
     let expected = format!("private automation VCS PR create failed: {diagnostic}");
-    assert!(
-        matches!(error, OrbitError::Execution(message) if message == &expected),
-        "create must preserve the underlying diagnostic: {error}"
+    assert_eq!(
+        error.to_string(),
+        format!("execution failed: {expected}"),
+        "create must preserve the underlying diagnostic"
     );
     let comments = host.comments(TASK_ID);
     assert_eq!(comments.len(), 1);

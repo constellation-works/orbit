@@ -6,7 +6,8 @@ mod orbit_error;
 pub use classification::{LOCK_BUSY_ERROR_CODE, is_lock_busy_message};
 pub use kinds::{
     ArtifactOrigin, ArtifactOriginMode, CandidateAbsorbed, ClaimRefusalKind, ConflictedFile,
-    DependencyNotDelivered, FrictionNotLocal, HostRegistryCode, NotFoundKind,
-    RecoverableVcsConflict, SqliteContention, StorageLayer, WorkspaceClaimHeld,
+    DependencyNotDelivered, FrictionNotLocal, HostRegistryCode, NotFoundKind, PrivateVcsFailure,
+    PrivateVcsFailureClass, RecoverableVcsConflict, SqliteContention, StorageLayer,
+    WorkspaceClaimHeld,
 };
 pub use orbit_error::OrbitError;

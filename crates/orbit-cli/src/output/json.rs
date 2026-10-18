@@ -125,7 +125,9 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::OwnerNegotiation(_) => "owner_negotiation",
         OrbitError::OutcomeUnknown { .. } => "outcome_unknown",
         OrbitError::RemoteTool { code, .. } => code.as_str(),
-        OrbitError::Execution(_) | OrbitError::ExecutionTimeout { .. } => "execution_failed",
+        OrbitError::Execution(_)
+        | OrbitError::PrivateVcs(_)
+        | OrbitError::ExecutionTimeout { .. } => "execution_failed",
         OrbitError::ProcessTimeout { .. } => "process_timeout",
         OrbitError::WorkerContainmentUnavailable { .. } => "worker_containment_unavailable",
         OrbitError::TaskBundleCorrupt { .. } => "task_bundle_corrupt",

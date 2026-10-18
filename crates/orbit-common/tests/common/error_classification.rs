@@ -123,3 +123,26 @@ fn absorbed_candidate_preserves_the_execution_display_and_wire_contract() {
         "the error wire shape must remain Execution(string)"
     );
 }
+
+#[test]
+fn private_vcs_failure_preserves_the_execution_display_and_wire_contract() {
+    let message = "completion_observation_unavailable: execution failed: private automation VCS \
+                   pr.status failed: HTTP 502";
+    let typed = OrbitError::PrivateVcs(Box::new(orbit_common::PrivateVcsFailure {
+        operation: "pr.status".into(),
+        class: orbit_common::PrivateVcsFailureClass::CompletionObservationUnavailable,
+        message: message.into(),
+    }));
+    let legacy = OrbitError::Execution(message.into());
+    assert_eq!(
+        typed.to_string(),
+        legacy.to_string(),
+        "operators and final recovery evidence read the unchanged message"
+    );
+    assert_eq!(
+        serde_json::to_string(&typed).unwrap(),
+        serde_json::to_string(&legacy).unwrap(),
+        "the error wire shape must remain Execution(string)"
+    );
+    assert!(legacy.private_vcs_failure().is_none());
+}
