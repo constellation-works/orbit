@@ -41,6 +41,11 @@ pub(in crate::adapter::tool_host) fn control(
             "auto_concurrency is a start setting".into(),
         ));
     }
+    if action != "start" && input.get("review").is_some() {
+        return Err(OrbitError::InvalidInput(format!(
+            "`review` is a start setting; {action} does not accept it"
+        )));
+    }
     let claim = optional_string(&input, "claim_token")?;
     let workspace = input["workspace"].clone();
     if action != "stop" && input.get("force").is_some() {
@@ -104,6 +109,7 @@ pub(in crate::adapter::tool_host) fn control(
                 })
                 .transpose()?
                 .unwrap_or(false);
+            let review = super::super::workflow_tools::review_layer(&input)?;
             let run = runtime.submit_workspace_auto_run_with_mode(
                 Some(seconds),
                 concurrency,
@@ -123,9 +129,11 @@ pub(in crate::adapter::tool_host) fn control(
                             .map_err(|error| OrbitError::InvalidInput(error.to_string()))
                     })
                     .transpose()?,
+                review,
             )?;
             let mut started = json!({"action":"start","run_id":run.run_id,"state":if run.queued {"queued"} else {"submitted"},
                 "completion":completion.as_input_value(),"approve_proposed":approve_proposed,"submitted_at":run.submitted_at});
+            started["review"] = runtime.run_review_layer(&run.run_id)?;
             started["auto_concurrency"] = runtime.run_auto_concurrency(&run.run_id)?;
             runtime
                 .submission_notices(SubmissionKind::Drain)

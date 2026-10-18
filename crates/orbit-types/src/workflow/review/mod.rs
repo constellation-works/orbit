@@ -24,8 +24,8 @@ mod tests;
 pub use admission::{
     CommitIdentity, DEFAULT_REVIEW_MINUTES, REVIEW_ADMISSION_KEY, REVIEW_BASELINE_ARTIFACT,
     REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
-    REVIEW_REPORT_ARTIFACT, ReviewAdmission, ReviewBudget, ReviewCrewPoolMember, ReviewTiming,
-    is_reserved_review_artifact,
+    REVIEW_REPORT_ARTIFACT, REVIEW_REQUEST_KEY, REVIEW_RUN_OPTION_SOURCE, ReviewAdmission,
+    ReviewBudget, ReviewCrewPoolMember, ReviewLayer, ReviewTiming, is_reserved_review_artifact,
 };
 pub use certificate::{
     HostCandidateOverride, HostGateResult, HostKnownRed, LandingTransformation, ReviewCertificate,

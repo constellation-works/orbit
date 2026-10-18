@@ -86,12 +86,18 @@ pub(crate) fn list_backlog_tasks(
             })?,
             None => workspace_ship_mode(runtime),
         };
+        let review = crate::application::review::input_run_review_admission(runtime, input)
+            .map_err(|error| DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message: error.to_string(),
+            })?;
         let mut snapshot = backlog_snapshot_in_mode(
             runtime,
             action,
             allowlist_from_input(runtime, action, input)?.as_ref(),
             &pools,
             mode,
+            review.as_ref(),
         )?;
         // [ORB-15191] A ship that fans out to more than one task holds work
         // with no footprint to the drain's rule: it waits for its pilot, or

@@ -29,12 +29,16 @@ impl ShipMode {
 #[command(
     about = "Ship backlog or explicitly selected tasks through the gated task pipeline",
     override_usage = "orbit run ship [<TASK_ID>...] [OPTIONS]",
-    after_help = "Examples:\n  orbit run ship\n  orbit run ship T123\n  orbit run ship T123 T456 --mode local\n  orbit run ship T123 --base main\n  orbit run ship T123 --allow-crew sol\n  orbit run ship T123 --complete\n\n\
+    after_help = "Examples:\n  orbit run ship\n  orbit run ship T123\n  orbit run ship T123 T456 --mode local\n  orbit run ship T123 --base main\n  orbit run ship T123 --allow-crew sol\n  orbit run ship T123 --complete\n  orbit run ship T123 --review before-landing\n\n\
                   Shipment is asynchronous: this prints the durable run ID and returns. The\n\
                   eventual outcome is not known when it does.\n\n\
                   `--allow-crew` restricts an explicit shipment to configured crews. It does\n\
                   not reassign tasks or select a fallback: an excluded current or later-resolved\n\
                   crew is refused before its provider starts.\n\n\
+                  `--review` adds a second-agent review before landing to this run only. It\n\
+                  can only add review: the layer workspace policy already applies is accepted\n\
+                  unchanged, and the other layer, an unset `operation.review_crew` and\n\
+                  local-only delivery are refused before the run starts.\n\n\
                   Inspect submitted runs with `orbit run history -j task_auto_pipeline` and\n\
                   `orbit run show <RUN_ID>`."
 )]
@@ -66,6 +70,15 @@ pub struct ShipCommand {
     /// fails before a run is created. Omitted, shipment remains unrestricted.
     #[arg(long = "allow-crew", value_name = "CREW", value_delimiter = ',')]
     pub allow_crew: Vec<String>,
+    /// Add this review layer before landing to this run when workspace
+    /// policy applies none: `before-pr` holds PR creation for a reviewer,
+    /// `before-landing` reviews the open PR before it lands. The layer
+    /// `review.before_pr` or `review.before_landing` already applies is
+    /// accepted unchanged; the other one is refused, as are an unset
+    /// `operation.review_crew` and local-only delivery. Omitted, workspace
+    /// policy decides.
+    #[arg(long, value_enum, value_name = "LAYER")]
+    pub review: Option<orbit_types::workflow::ReviewLayer>,
     /// Require a systemd user scope for this run and every worker it starts.
     /// Overrides machine.worker_containment_strict for this invocation.
     #[arg(long)]
@@ -102,6 +115,7 @@ impl Execute for ShipCommand {
             self.claim_token.as_deref(),
             orbit_types::workflow::JobRunTrigger::cli(),
             self.strict_worker_containment,
+            self.review,
         )?;
         let run = WorkflowDispatchResult {
             workflow_alias: SHIP_WORKFLOW,

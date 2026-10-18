@@ -174,11 +174,19 @@ pub fn explain_workspace_auto_readiness(
     } else {
         runtime.crew_allowlist(allowed_crews)?
     };
+    // The live local drain's captured review, so a local-route task its
+    // `--review` holds reads as held here too.
+    let review = active_drain
+        .as_ref()
+        .map(|drain| orbit_types::workflow::ReviewAdmission::from_run_input(&drain.input))
+        .transpose()?
+        .flatten();
     let mut snapshot = backlog_snapshot(
         runtime,
         "explain_workspace_auto_readiness",
         allowlist.as_ref(),
         &pools,
+        review.as_ref(),
     )
     .map_err(|error| OrbitError::Execution(format!("read readiness snapshot: {error}")))?;
     let live_leaves = read_live_leaf_runs(runtime)?;

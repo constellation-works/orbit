@@ -37,9 +37,12 @@ mod switches;
 #[cfg(test)]
 mod tests;
 
+pub use admission::pull_review_request_refusal;
 pub(crate) use admission::{
-    install_review_admission, local_route_before_landing_conflict, local_route_before_pr_conflict,
-    run_review_admission, upgrade_resume_admission_mismatch,
+    admit_review_request, input_run_review_admission, install_review_admission,
+    local_route_before_landing_conflict, local_route_before_pr_conflict,
+    local_route_run_option_refusal, review_layer_json, run_review_admission,
+    upgrade_resume_admission_mismatch,
 };
 pub(crate) use coverage::exclusions;
 pub(crate) use fulfilment::fulfil_review_evidence;

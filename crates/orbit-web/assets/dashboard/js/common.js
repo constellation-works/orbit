@@ -975,6 +975,18 @@ export function postJson(path, body) {
   return requestJson(path, "POST", body);
 }
 
+// A run's captured review layer before landing and what decided it, as the
+// `Review:` line of `orbit run show` reads: `run-option` is the run's own
+// `--review`, `claim` a claimed leaf's owner, anything else a policy layer.
+export function reviewLayerText(layer) {
+  if (!layer?.timing) return "";
+  const source = layer.source || "unknown";
+  const origin = source === "run-option" ? "run option --review"
+    : source === "claim" ? "the owner's claim"
+    : `workspace policy, ${source}`;
+  return `${layer.timing} (${origin})`;
+}
+
 // A drain or ship receipt's notices, one line each, as `orbit run auto` and
 // `orbit run ship` print them: `warning` (host throttle, validation
 // environment, backlog for another OS, unset execution.env.pass variables)

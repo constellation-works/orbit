@@ -17,7 +17,7 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
 #[command(
     about = "Drain the workspace backlog for a window",
     override_usage = "orbit run auto [OPTIONS]",
-    after_help = "Examples:\n  orbit run auto\n  orbit run auto --medium-complexity-crews grok,sol\n  orbit run auto --for 4h\n  orbit run auto --for 4h --concurrency 8\n  orbit run auto --for 4h --complete\n  orbit run auto --for 4h --auto-fix\n  orbit run auto --for 4h --approve-proposed\n  orbit run auto --stop\n  orbit run auto --pull hm_owner/ws_orbit --for 8h --concurrency 3\n  orbit run auto --pull hm_owner/ws_orbit --for 8h --allow-crew sol,luna\n\n\
+    after_help = "Examples:\n  orbit run auto\n  orbit run auto --medium-complexity-crews grok,sol\n  orbit run auto --for 4h\n  orbit run auto --for 4h --concurrency 8\n  orbit run auto --for 4h --complete\n  orbit run auto --for 4h --auto-fix\n  orbit run auto --for 4h --approve-proposed\n  orbit run auto --for 2h --review before-landing\n  orbit run auto --stop\n  orbit run auto --pull hm_owner/ws_orbit --for 8h --concurrency 3\n  orbit run auto --pull hm_owner/ws_orbit --for 8h --allow-crew sol,luna\n\n\
                   The drain re-lists the whole backlog every pass.\n\
                   Owner/local drains count every in-flight child against `--concurrency` and\n\
                   refill a slot as soon as its child finishes.\n\
@@ -66,6 +66,12 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
                   A task tagged `no-auto-approve` is never approved automatically; it is held\n\
                   with that reason until a human approves it.\n\
                   Approval does not bypass `--allow-crew` or the complexity pools.\n\n\
+                  `--review` adds a second-agent review before landing to every task this\n\
+                  window admits, when workspace policy applies none. It can only add review:\n\
+                  the layer `review.before_pr` or `review.before_landing` already applies is\n\
+                  accepted unchanged, and the other layer, an unset `operation.review_crew`, a\n\
+                  workspace that delivers locally and `--pull` are refused before the drain\n\
+                  starts. With it, a backlog task routed to local delivery is held, not started.\n\n\
                   Complexity pools select only for tasks without an explicit crew.\n\
                   The tiers are low, medium, hard and xhard; xhard is the reserved top tier.\n\
                   Each CLI pool replaces its matching workflow pool for this drain.\n\
@@ -147,6 +153,15 @@ pub struct AutoCommand {
     /// still decides that. Off by default.
     #[arg(long)]
     pub auto_fix: bool,
+    /// Add this review layer before landing to the window when workspace
+    /// policy applies none; every task it admits inherits it. `before-pr`
+    /// holds PR creation for a reviewer, `before-landing` reviews the open PR
+    /// before it lands. The layer workspace policy already applies is
+    /// accepted unchanged; the other one is refused, as are an unset
+    /// `operation.review_crew`, local delivery and `--pull` (the owner decides
+    /// the review of its claims). Omitted, workspace policy decides.
+    #[arg(long, value_enum, value_name = "LAYER")]
+    pub review: Option<orbit_types::workflow::ReviewLayer>,
     /// Restrict this run to these configured crews, e.g. when a provider is
     /// unavailable or its budget is spent. Repeatable and comma-separated.
     /// Every name must be configured here; an unknown or empty one fails
@@ -212,7 +227,7 @@ pub struct AutoCommand {
     /// start a drain.
     #[arg(
         long,
-        conflicts_with_all = ["for_duration", "concurrency", "auto_concurrency", "complete", "approve_proposed", "auto_fix", "allow_crew", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews", "pull"]
+        conflicts_with_all = ["for_duration", "concurrency", "auto_concurrency", "complete", "approve_proposed", "auto_fix", "review", "allow_crew", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews", "pull"]
     )]
     pub stop: bool,
 }
@@ -223,6 +238,11 @@ impl Execute for AutoCommand {
             return execute_stop(runtime, self.claim_token.as_deref());
         }
         if let Some(selector) = self.pull.as_deref() {
+            if self.review.is_some() {
+                return Err(orbit_core::OrbitError::InvalidInput(
+                    orbit_core::application::review::pull_review_request_refusal().into(),
+                ));
+            }
             let for_seconds = self
                 .for_duration
                 .as_deref()
@@ -295,6 +315,7 @@ impl Execute for AutoCommand {
                 .map(str::parse)
                 .transpose()
                 .map_err(|message: &str| orbit_core::OrbitError::InvalidInput(message.into()))?,
+            self.review,
         )?;
         let run = WorkflowDispatchResult {
             workflow_alias: AUTO_WORKFLOW,

@@ -5,7 +5,7 @@ use super::final_recovery::MAX_DECISION_TEXT_CHARS;
 use super::review::{
     REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION, REVIEW_REPORT_ARTIFACT,
     REVIEW_REPORT_HISTORY_ARTIFACT, REVIEW_REPORT_HISTORY_LIMIT, REVIEW_REPORT_HISTORY_VERSION,
-    RecordGap, ValidationOutcome,
+    REVIEW_REQUEST_KEY, RecordGap, ValidationOutcome,
 };
 use super::{JobRunState, RunEvent};
 
@@ -189,4 +189,9 @@ pub enum ReviewAdmissionError {
         REVIEW_CONTRACT_VERSION
     )]
     UnsupportedContractVersion { found: u32 },
+    #[error(
+        "invalid `{}` run input: expected before-pr or before-landing, got {found}",
+        REVIEW_REQUEST_KEY
+    )]
+    MalformedRequest { found: String },
 }

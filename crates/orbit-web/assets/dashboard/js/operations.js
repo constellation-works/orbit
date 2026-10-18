@@ -1,6 +1,6 @@
 // Routine-definition, host clock, and auto-task operations [ORB-10875, ORB-10876].
 
-import { normalizeTaskStatus, captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, isAggregateView, onWorkspaceChange, postJson, runHref, statusPill, submissionNoticeLines, fmtDuration, bindTaskLink } from './common.js';
+import { normalizeTaskStatus, captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, isAggregateView, onWorkspaceChange, postJson, reviewLayerText, runHref, statusPill, submissionNoticeLines, fmtDuration, bindTaskLink } from './common.js';
 import { navigateToRun, setActiveTab } from './router.js';
 import { renderAutomation } from './automation.js';
 import { FLEET_CACHE_MS, fetchFleetDrains, fleetDrainLabel, peekFleetDrains, renderFleetDrains } from './fleet-drains.js';
@@ -26,6 +26,8 @@ let autoDrainMode = "";
 let autoDrainComplete = false;
 let autoDrainApproveProposed = false;
 let autoDrainAutoFix = false;
+// "" keeps workspace review policy; otherwise the layer this window adds.
+let autoDrainReview = "";
 // Set while Start or Stop is refreshing the card after reporting its result, so
 // the state change that result caused is not announced over the result.
 let holdDrainAnnouncement = false;
@@ -1640,6 +1642,11 @@ function autoDrainReasons(payload) {
       : payload.controls_authorized !== true
         ? "Auto-fix requires an authorized operator session."
         : ""),
+    // A pull replica's owner decides the review of the claims it hands out
+    // (`--pull` refuses `--review`).
+    review: workspaceReason || (payload.replica === true
+      ? "A pull replica's owner decides the review of its claims; add review on the owner machine."
+      : ""),
     // Stop is also the settle-only pass (`orbit run auto --stop`): it delivers
     // recorded settlements and needs no live window, so only a read-only view
     // or a missing operator session blocks it.
@@ -2029,6 +2036,34 @@ function autoDrainAutoFixControl(payload, reasons) {
   ]);
 }
 
+const AUTO_DRAIN_REVIEW_HELP = "Adds a second-agent review before landing to every task this window admits. It can only add review: the layer workspace policy already applies is kept, and the other layer is refused.";
+
+// Review before landing for this window only: workspace policy by default, or
+// a layer the window adds. Workspace configuration is unchanged.
+function autoDrainReviewControl(payload, reasons) {
+  const label = el("label", { class: "drain-field-label", text: "Review before landing" });
+  label.htmlFor = "auto-drain-review";
+  const select = el("select", { class: "drain-mode-select" });
+  select.id = "auto-drain-review";
+  select.dataset.drainFocus = "review";
+  for (const [value, text] of [["", "Workspace policy"], ["before-pr", "Add before-PR review"], ["before-landing", "Add before-landing review"]]) {
+    const option = el("option", { text });
+    option.value = value;
+    select.appendChild(option);
+  }
+  // Keep an unavailable selected layer clearable after the view changes.
+  select.disabled = Boolean(reasons.review) && !autoDrainReview;
+  select.value = autoDrainReview;
+  select.addEventListener("change", () => {
+    autoDrainReview = select.value;
+    renderAutoDrain(payload);
+  });
+  return el("div", { class: "drain-field" }, [label, select,
+    el("p", { class: `drain-field-hint${reasons.review ? " warn" : ""}`, text: reasons.review
+      || (autoDrainReview ? AUTO_DRAIN_REVIEW_HELP : "The workspace's review.before_pr and review.before_landing settings decide.") }),
+  ]);
+}
+
 // Why Start is off, in one place so typing in the concurrency field can
 // re-evaluate it without a rebuild.
 function autoDrainStartBlocked(payload) {
@@ -2038,7 +2073,8 @@ function autoDrainStartBlocked(payload) {
     || !autoDrainConcurrencyValid()
     || (autoDrainComplete && Boolean(reasons.complete))
     || (autoDrainApproveProposed && Boolean(reasons.approve))
-    || (autoDrainAutoFix && Boolean(reasons.autoFix));
+    || (autoDrainAutoFix && Boolean(reasons.autoFix))
+    || (Boolean(autoDrainReview) && Boolean(reasons.review));
 }
 
 function autoDrainStartButton(payload, form) {
@@ -2066,11 +2102,13 @@ function autoDrainStartButton(payload, form) {
       : "Shipped tasks stay in review; a separate action completes them.";
     const approveProposed = autoDrainApproveProposed;
     const autoFix = autoDrainAutoFix;
+    const review = autoDrainReview;
     const mode = payload.controls_authorized === true && payload.replica !== true ? autoDrainMode : "";
     const confirmText = [
       `Start a bounded auto-delivery window in workspace "${workspace?.name || workspace?.id}"?`,
       `Duration: ${duration} · Concurrency: ${autoDrainConcurrency || "runtime default"}`,
       `Auto-concurrency: ${mode || "inherit host at submission"}`,
+      `Review before landing: ${review ? `add ${review} review` : "workspace policy"}`,
       `Currently eligible: ${counts.eligible} · waiting: ${counts.waiting}`,
       "",
       completeLine,
@@ -2084,13 +2122,14 @@ function autoDrainStartButton(payload, form) {
     try {
       const body = { for_duration: duration, complete: autoDrainComplete, approve_proposed: approveProposed, auto_fix: autoFix };
       if (mode) body.auto_concurrency = mode;
+      if (review) body.review = review;
       if (autoDrainConcurrency) body.concurrency = Number(autoDrainConcurrency);
       const result = await postJson(visit.path("/api/workflows/auto"), body);
       if (!visit.isCurrent()) return;
       const runId = result?.run_id ?? null;
       const state = result?.state ?? "submitted";
       const completion = result?.completion ?? "review";
-      feedback("auto-drain-operation-feedback", "success", [`Run ${runId ?? "(no run id)"} ${state} (completion: ${completion}).${result?.approve_proposed === true ? " Approving qualifying proposed tasks." : ""}`, ...(result?.auto_fix === true ? ["Auto-fix PR blockers enabled."] : []), ...(result?.auto_concurrency?.mode ? [`Auto-concurrency: ${result.auto_concurrency.mode} (${result.auto_concurrency.source}).`] : []), ...submissionNoticeLines(result)].join("\n"));
+      feedback("auto-drain-operation-feedback", "success", [`Run ${runId ?? "(no run id)"} ${state} (completion: ${completion}).${result?.approve_proposed === true ? " Approving qualifying proposed tasks." : ""}`, ...(result?.auto_fix === true ? ["Auto-fix PR blockers enabled."] : []), ...(result?.auto_concurrency?.mode ? [`Auto-concurrency: ${result.auto_concurrency.mode} (${result.auto_concurrency.source}).`] : []), ...(result?.review?.timing ? [`Review before landing: ${reviewLayerText(result.review)}.`] : []), ...submissionNoticeLines(result)].join("\n"));
       await refreshDrainAfterAction();
     } catch (error) {
       if (visit.isCurrent()) feedback("auto-drain-operation-feedback", "error", error.status
@@ -2673,6 +2712,7 @@ function renderAutoDrainStart(payload, reasons) {
     autoDrainCompletionControl(payload, reasons),
     autoDrainApproveControl(payload, reasons),
     autoDrainAutoFixControl(payload, reasons),
+    autoDrainReviewControl(payload, reasons),
     form.problem,
     autoDrainStartButton(payload, form),
   );

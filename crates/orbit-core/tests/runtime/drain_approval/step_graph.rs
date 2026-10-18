@@ -179,6 +179,7 @@ fn backlog_work_is_admitted_while_the_approval_pilot_runs_and_the_drain_waits_fo
             true,
             false,
             Some(orbit_types::workflow::AutoConcurrencyMode::Enforce),
+            None,
         )
         .unwrap()
         .run_id;
