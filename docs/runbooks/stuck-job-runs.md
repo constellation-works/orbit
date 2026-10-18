@@ -886,7 +886,8 @@ them with `threshold` `off` and `gated` false, and `orbit doctor`'s
 `provider-limits:<provider>` row says gating is off. No reading then limits
 a crew. A later run that actually fails on a usage limit still records the
 task's provider failure hold, which is the signal that paid credits have run
-out. Removing the `off` entry gates the same readings again. An explicitly
+out. Removing the `off` entry gates the same readings again. A task whose crew was drawn from a purpose pool moves to another enabled
+member of that pool. An explicitly
 crewed task waits by default; with
 `workflow.provider_limit_explicit_crews = "pool"` it is drawn from its
 complexity pool instead. See

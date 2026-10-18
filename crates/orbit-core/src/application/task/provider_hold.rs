@@ -3,9 +3,9 @@
 //! Run finalization holds a task whose run its provider failed
 //! (`runtime::task::provider_hold`). While the hold stands, the task's crew is
 //! drawn from the crews it does not exclude: its own crew or pool first, then
-//! its complexity pool, then the workspace default. When the hold excludes
-//! every one, the local drain's backlog snapshot defers the task until the
-//! hold's `not_before`.
+//! the other enabled members of its purpose pool, then its complexity pool,
+//! then the workspace default. When the hold excludes every one, the local
+//! drain's backlog snapshot defers the task until the hold's `not_before`.
 //!
 //! [ORB-14697] A usage-limit hold on a task whose crew is its explicit choice
 //! follows `workflow.provider_limit_explicit_crews`: under `wait` it does not
@@ -25,7 +25,9 @@ use orbit_types::task::Task;
 use orbit_types::workflow::{ProviderFailureClass, ProviderFailureHold};
 
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::{CapturedCrewPools, CrewCandidate};
+use crate::application::job::crew_pools::{
+    CapturedCrewPools, CrewCandidate, PURPOSE_SOURCE_PREFIX,
+};
 use crate::runtime::task::provider_hold::same_provider;
 
 impl OrbitRuntime {
@@ -82,7 +84,8 @@ impl OrbitRuntime {
     /// when the hold excludes every crew it could run as. A hold that excludes
     /// no crew at all leaves nothing to narrow, so it is `None` as well.
     /// `candidates` and `source` are the draw without the hold; the fallbacks
-    /// are the task's complexity pool, then the workspace default.
+    /// are the task's purpose pool, then its complexity pool, then the
+    /// workspace default.
     pub(crate) fn provider_held_candidates(
         &self,
         task: &Task,
@@ -119,6 +122,16 @@ impl OrbitRuntime {
             && self.explicit_task_crew(task)?
         {
             return Ok(None);
+        }
+        // A collapsed `purpose:` assignment names only the chosen member.
+        // Retry the pool's other enabled members before the complexity pool.
+        if source.starts_with(PURPOSE_SOURCE_PREFIX)
+            && let Some((pool, pool_source)) = self.purpose_assignment_candidates(task)?
+        {
+            let pool = permitted(&pool);
+            if drawable(&pool) {
+                return Ok(Some((pool, held(&pool_source))));
+            }
         }
         if let Some((pool, pool_source)) =
             self.complexity_pool_candidates(task.complexity, pools)?

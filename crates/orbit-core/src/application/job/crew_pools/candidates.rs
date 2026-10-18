@@ -167,10 +167,11 @@ impl OrbitRuntime {
     /// former inspects the candidates without drawing a random ticket.
     ///
     /// [ORB-14266] A standing provider failure hold removes the crews it
-    /// excludes from the draw, falling back to the complexity pool and then
-    /// the default. [ORB-14697] This host's provider limits then remove the
-    /// limited crews, falling back to the complexity pool only. An explicit
-    /// crew is the caller's decision and ignores both.
+    /// excludes from the draw, falling back to the task's purpose pool, then
+    /// the complexity pool, then the default. [ORB-14697] This host's provider
+    /// limits then remove the limited crews, falling back to that purpose pool
+    /// and then the complexity pool only. An explicit crew is the caller's
+    /// decision and ignores both.
     pub(crate) fn auto_task_crew_candidates(
         &self,
         task: &Task,
@@ -223,6 +224,9 @@ impl OrbitRuntime {
                         && Some(candidate.crew.name.as_str()) == task.crew.as_deref()
                 })
             {
+                // Keep the assigned member while it can run. A hold or a usage
+                // limit retries the rest of this pool before the complexity
+                // pool; collapsing here is what makes that retry necessary.
                 return Ok((
                     vec![sole_candidate(candidate.crew.clone())],
                     source.unwrap_or_default(),

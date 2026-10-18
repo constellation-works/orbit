@@ -271,7 +271,9 @@ in this order:
 
 1. An explicit crew on the task, auto-task template or activity input, used as
    it is.
-2. The purpose's pool, when it has an enabled member.
+2. The purpose's pool, when it has an enabled member. A provider usage limit
+   or failure hold on the assigned member redraws from the pool's other
+   enabled members, keeping their weights, before the route below.
 3. The route the purpose had before purpose pools: the complexity pool named
    above, else `default_crew`.
 
@@ -312,7 +314,7 @@ warning. A `[crews.system]` table you define is an ordinary crew.
 | `workflow.provider_limit_max_used_pct` | integer · **Default:** `90`<br>Delivery admission skips a crew while a live usage window of its provider, or of its model, is exhausted or used at or above this percent. `100` skips only on exhaustion. |
 | `workflow.provider_limit_overrides` | array&lt;string&gt; · **Default:** `[]`<br>Per-provider thresholds replacing `workflow.provider_limit_max_used_pct`, each `provider:percent` or `provider:off` (record readings without gating admission), such as `["claude:80", "grok:100", "codex:off"]`. |
 | `workflow.provider_limit_budgets` | array&lt;string&gt; · **Default:** `[]`<br>Rolling budgets for providers that report no usage, each `provider:<amount><usd\|tokens>/<n><h\|d>`, such as `["grok:30usd/5h"]`. Counts this host's Orbit runs only. |
-| `workflow.provider_limit_explicit_crews` | string · **Default:** `wait`<br>A task whose explicit crew is limited waits in the backlog (`wait`), or is drawn from the unlimited members of its complexity pool (`pool`). |
+| `workflow.provider_limit_explicit_crews` | string · **Default:** `wait`<br>A task whose explicit crew is limited waits in the backlog (`wait`), or is drawn from the unlimited members of its complexity pool (`pool`). A purpose-sourced crew is not an explicit pin; it redraws within its purpose pool first. |
 | `workflow.required_validation_commands` | array&lt;string&gt; · **Default:** `[]`<br>Commands every delivered candidate must pass. Owner PR and local deliveries run them before push or merge; a distributed claim must pass them before this owner accepts its handoff. Empty means no required check on any path: nothing runs and a claimed handoff carries no validation logs. |
 | `workflow.distributed_completion` | string · **Default:** `review`<br>How far this owner takes an accepted distributed handoff: `review` waits for an operator's Approve handoff; `done` lands it through the owner's landing job, as `orbit run auto --complete` does. |
 | `workflow.task_pilot_freshness.material_fields` | array&lt;string&gt; · **Default:** `title`, `description`, `criteria`, `plan`, `selectors`<br>Task fields whose edit makes an accepted task-pilot assessment stale. Also accepts `tags`, `crew`, `tools`, `type`, `complexity`, `relations`, `dependencies`, `instructions`. |

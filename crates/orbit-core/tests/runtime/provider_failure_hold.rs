@@ -135,6 +135,26 @@ impl Fixture {
         self.task_with_crew(Some(crew))
     }
 
+    /// An admissible backlog task carrying `tags`, pinned to `crew` when one is given.
+    pub(super) fn tagged_task(&self, tags: &[&str], crew: Option<&str>) -> orbit_core::Task {
+        std::fs::write(self.repo.join("feature.txt"), "feature\n").unwrap();
+        self.runtime
+            .add_task(TaskAddParams {
+                title: "Provider failure fixture".to_string(),
+                description: "A task whose run fails on its provider.".to_string(),
+                acceptance_criteria: vec!["Delivered.".to_string()],
+                plan: "1. Deliver it.".to_string(),
+                context_files: vec!["file:feature.txt".to_string()],
+                complexity: TaskComplexity::Medium,
+                task_type: Some(TaskType::Bug),
+                status: Some(TaskStatus::Backlog),
+                tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
+                crew: crew.map(ToOwned::to_owned),
+                ..Default::default()
+            })
+            .unwrap()
+    }
+
     /// An admissible backlog task, pinned to `crew` when one is given.
     fn task_with_crew(&self, crew: Option<&str>) -> String {
         std::fs::write(self.repo.join("feature.txt"), "feature\n").unwrap();
