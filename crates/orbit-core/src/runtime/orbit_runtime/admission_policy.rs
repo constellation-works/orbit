@@ -1,10 +1,11 @@
-//! Last-known-good admission policy, refreshed once at each pass boundary.
+//! Last-known-good workflow settings: admission snapshots at pass boundaries,
+//! and steering refreshed at prompt and promotion checkpoints.
 
 use std::path::Path;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use orbit_config::{AutoConcurrencySettings, ProviderLimitPolicy};
+use orbit_config::{AutoConcurrencySettings, MidRunSteeringSettings, ProviderLimitPolicy};
 
 use super::OrbitRuntime;
 use crate::runtime::config_path::{CONFIG_TOML_FILE, validated_existing_config_root};
@@ -13,6 +14,7 @@ use crate::runtime::config_path::{CONFIG_TOML_FILE, validated_existing_config_ro
 pub(super) struct AdmissionPolicy {
     auto_concurrency: AutoConcurrencySettings,
     provider_limit: ProviderLimitPolicy,
+    mid_run_steering: MidRunSteeringSettings,
 }
 
 pub(super) struct CachedPolicy {
@@ -40,10 +42,15 @@ impl OrbitRuntime {
         if let Some(policy) = &self.admission_policy_snapshot {
             return policy.clone();
         }
+        self.refresh_workflow_policy()
+    }
+
+    fn refresh_workflow_policy(&self) -> Arc<AdmissionPolicy> {
         let initial = || {
             Arc::new(AdmissionPolicy {
                 auto_concurrency: self.context.settings().auto_concurrency().clone(),
                 provider_limit: self.context.settings().provider_limit().clone(),
+                mid_run_steering: self.context.settings().mid_run_steering(),
             })
         };
         let mut cache = self
@@ -68,6 +75,7 @@ impl OrbitRuntime {
         let policy = match (self.config_loader)() {
             Ok(config) => Arc::new(AdmissionPolicy {
                 provider_limit: config.snapshot.provider_limit_policy(),
+                mid_run_steering: config.snapshot.mid_run_steering(),
                 auto_concurrency: config.auto_concurrency,
             }),
             Err(error) => {
@@ -81,6 +89,12 @@ impl OrbitRuntime {
             policy: policy.clone(),
         });
         policy
+    }
+
+    pub(super) fn current_mid_run_steering(&self) -> MidRunSteeringSettings {
+        // Unlike admission decisions, enablement applies to runs already in
+        // flight. Do not pin it to a drain pass's admission snapshot.
+        self.refresh_workflow_policy().mid_run_steering
     }
 
     /// Pin both policies for this pass so all decisions use one config version.

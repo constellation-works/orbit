@@ -3,8 +3,9 @@
 //! prompt records in the run's state the newest task comment that prompt
 //! carried, as its comment-log position and recorded timestamp. Off by
 //! default, the prompt and the run's state are untouched; on, the run's
-//! first prompt is the same and only the run's state gains the watermark,
-//! which never moves backwards and belongs to one run. Every later prompt of
+//! first prompt records a snapshot and delivers any outstanding guidance from
+//! its inherited or post-dispatch baseline. The watermark never moves backwards
+//! and belongs to one run. Every later prompt of
 //! the run leads with one bounded steering block of the operator comments
 //! past the watermark, records a `steering_delivered` task history event and
 //! advances the watermark past what it carried in full. Before `commit`, the
@@ -24,6 +25,7 @@ use tempfile::TempDir;
 
 mod claimed;
 mod gate;
+mod replay;
 
 const ENABLED: &str = "[workflow.mid_run_steering]\nenabled = true\n";
 
@@ -73,18 +75,23 @@ impl Fixture {
 
     /// A running pipeline with persisted state, as the engine seeds it.
     fn run(&self, retry_of: Option<&str>) -> String {
+        self.run_at(retry_of, Utc::now())
+    }
+
+    /// Supply dispatch time without sleeping through the incident's delay.
+    fn run_at(&self, retry_of: Option<&str>, dispatched: DateTime<Utc>) -> String {
         let run = self
             .jobs
             .insert_job_run(
                 "task_pr_pipeline",
                 1,
-                Utc::now(),
+                dispatched,
                 Some(json!({ "task_id": self.task })),
                 retry_of.map(str::to_string),
             )
             .unwrap();
         self.jobs
-            .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+            .mark_job_run_running(&run.run_id, dispatched, std::process::id())
             .unwrap();
         let state = PipelineState::new(run.run_id.clone(), run.job_id, json!({}));
         self.jobs.write_run_state(&run.run_id, &state).unwrap();

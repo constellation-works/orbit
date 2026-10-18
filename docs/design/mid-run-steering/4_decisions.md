@@ -1,9 +1,9 @@
 ---
 title: Mid-Run Operator Steering — Decisions
-owner: muse
-last_updated: 2026-10-17
-last_validated: 2026-10-17
-status: Draft
+owner: codex
+last_updated: 2026-10-18
+last_validated: 2026-10-18
+status: Accepted
 feature: mid-run-steering
 doc_role: decisions
 type: design
@@ -16,7 +16,7 @@ related_artifacts: [ORB-16577, ORB-10499, ORB-10382]
 
 # Mid-Run Operator Steering — Decisions
 
-Record non-obvious decisions here by title. Task references carry provenance; superseded decisions remain in place so their original reasoning stays legible. See [CONVENTIONS.md §4](../CONVENTIONS.md#4-decisions) for the admission rule and required `Cost:` line. This folder is a design proposal: the entries below bind the proposed mechanism if it is built, and are themselves under review with it.
+Record non-obvious decisions here by title. Task references carry provenance; superseded decisions remain in place so their original reasoning stays legible. See [CONVENTIONS.md §4](../CONVENTIONS.md#4-decisions) for the admission rule and required `Cost:` line. The decision below governs the implemented safe-point mechanism and any future extensions; the unimplemented directions remain in [3_vision.md](./3_vision.md).
 
 ## Steer running work through the durable task record, never a side channel
 

@@ -3,8 +3,9 @@
 //! steering block (`docs/design/mid-run-steering/2_design.md` §2).
 //!
 //! A run's first task-context prompt for a task is its snapshot: the host
-//! records the newest comment it carried as the run's watermark. Every later
-//! prompt the run builds for the task — a recovery attempt, a repair round,
+//! records the newest comment it carried as the run's watermark, delivering
+//! any outstanding guidance from its inherited or post-dispatch baseline.
+//! Every later prompt the run builds for the task — a recovery attempt, a repair round,
 //! final recovery, a re-dispatch — is a safe point. There the host re-reads
 //! the comment log, and operator comments the run has not yet delivered form
 //! the block, oldest first. Building that prompt is the delivery: the host
@@ -71,10 +72,10 @@ impl OrbitRuntime {
     /// `step_id` builds for `task` from `comments`, and return the steering
     /// block that prompt carries ahead of the task, if any.
     ///
-    /// Without a watermark this is the run's snapshot, unless the promotion
-    /// gate admitted a steering round: that first prompt delivers from the
-    /// inherited baseline instead of covering comments its bounded task
-    /// context may omit. With a watermark, operator comments past it
+    /// Without a watermark a persisted run delivers from its inherited or
+    /// post-dispatch baseline before recording its snapshot. This includes
+    /// runs enabled mid-flight, whose bounded task context may omit unseen
+    /// guidance. With a watermark, operator comments past it
     /// that no earlier block carried in full are delivered. A safe point with
     /// none builds the prompt as the snapshot does. A task that refuses
     /// implementer writes is not steered, since its step is stopping; its
@@ -94,19 +95,18 @@ impl OrbitRuntime {
             .and_then(|state| state.steering_rounds.get(&task.id)?.last());
         let pending = if let Some(watermark) = &watermark {
             pending_operator_comments(watermark, comments)
-        } else if let Some(round) = round {
-            // A carried candidate or checkpointed resume can first build a
-            // prompt in a steering round. Its ordinary task context is
-            // bounded, so taking a fresh snapshot here could cover comments
-            // that context omitted. Deliver from the baseline the gate
-            // inherited, from the candidate source it admitted the round
-            // with, including comments since the gate read.
+        } else if state.is_some() {
+            // A run enabled mid-flight has no watermark either. Its first
+            // enabled prompt must use the same baseline as the gate, even
+            // before a round, or a bounded snapshot could silently cover
+            // guidance omitted from ordinary task context. An admitted
+            // round also carries the candidate source the gate inherited.
             let outstanding: BTreeSet<_> = self
                 .inherited_outstanding(
                     run_id,
                     &task.id,
                     comments,
-                    round.candidate_source.as_deref(),
+                    round.and_then(|round| round.candidate_source.as_deref()),
                 )?
                 .into_iter()
                 .collect();
