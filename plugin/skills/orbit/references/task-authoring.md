@@ -153,20 +153,8 @@ site, a desktop app UI) `ui`. Topical tags such as `dashboard` or `website`
 may stay alongside it, but `ui` is the one tooling reads; don't invent
 variants (`web-ui`, `frontend`). Its delivery owes screenshots of each changed
 view as task artifacts ([task-execution.md](task-execution.md#screenshots-of-a-ui-change)),
-and its reviewer checks them.
-
-The tag also routes the task to a host with a verified headless browser kit
-(the orbit-setup browser-checks reference). Admission reads the kit every
-time it considers the task. A local drain, ship discovery and `orbit run ship`
-start the task only on a host whose kit is verified, and an owner hands a
-pull-drain claim only to a follower that reports one. Elsewhere the task stays
-in `backlog` as `browser_kit_missing`, with the wait named in readiness,
-`orbit run show` and the dashboard Drain card (`waits for a host with the
-browser kit (ui)`, naming `orbit browser-kit install`), and `orbit doctor`
-warns on a host whose own kit is what the task waits for. The requirement
-combines with `os:` tags and the crew's executor OS: a host must satisfy all
-of them, and the OS wait is named first. Only the exact `ui` tag routes,
-ignoring case.
+and its reviewer checks them. Browser-kit host routing will read the tag once
+it ships; today it routes nothing.
 
 When task-pilot finds a task's criteria or context files are user-facing UI
 and the task has no `ui` tag, it adds one; QA sweeps add it to the UI

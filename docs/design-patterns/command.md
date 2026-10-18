@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Command Pattern"
-last_validated: 2026-10-18
+last_validated: 2026-10-13
 ---
 # Command Pattern
 
@@ -33,7 +33,7 @@ Two codebase-specific shapes carry non-obvious lessons; everything else is strai
 
 ## Reference: host-action dispatcher (`OrbitPipelineInvokeTool`)
 
-The most common shape in the `orbit.*` namespace. The struct declares the schema; execution delegates to an `OrbitToolHost` via an action enum. Abridged from `crates/orbit-tools/src/builtin/orbit/pipeline/invoke.rs`, with the catalog-job branch and the managed-run admission guard in `execute` elided:
+The most common shape in the `orbit.*` namespace. The struct declares the schema; execution delegates to an `OrbitToolHost` via an action enum. From `crates/orbit-tools/src/builtin/orbit/pipeline/invoke.rs`:
 
 ```rust
 pub struct OrbitPipelineInvokeTool;
@@ -42,8 +42,6 @@ impl Tool for OrbitPipelineInvokeTool {
     fn schema(&self) -> ToolSchema { /* params + identity_params() */ }
 
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
-        // Elided: early returns for `default_input` catalog runs and for managed
-        // runs without a sanctioned child admission.
         super::super::execute_host_action(ctx, input, OrbitBuiltinAction::PipelineInvoke)
     }
 }

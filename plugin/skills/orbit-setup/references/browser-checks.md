@@ -52,20 +52,6 @@ kit's unpacked libraries and fonts: Orbit never puts them on every worker's
 verified kit (none installed, never verified, or changed since its last
 pass), workers receive none of the three.
 
-## Which tasks need it
-
-A task tagged `ui` runs only on a host whose kit is verified. A local drain,
-ship discovery and `orbit run ship` start it only there, and a pull-drain
-owner hands it only to a follower that reports a verified kit. Admission reads
-the kit on every pass, so a kit installed mid-window counts at the next one.
-Elsewhere the task stays in `backlog` as `browser_kit_missing`, with the wait
-(`waits for a host with the browser kit (ui)`, naming `orbit browser-kit
-install`) in readiness, `orbit run show` and the dashboard Drain card. A kit
-that is installed but not verified, or changed since its last pass, does not
-count. On a single host without a kit, install it there; until then `orbit
-doctor` warns about the waiting tasks. The orbit skill's task-authoring
-reference (UI tag) covers the tag itself.
-
 ## Layout and pin
 
 ```text
@@ -118,7 +104,7 @@ headless shell with `ldd` and closes any gap one of three ways:
 
 ## Diagnose
 
-`orbit doctor` reports the kit in up to four rows, each with its fix:
+`orbit doctor` reports the kit in three rows, each with its fix:
 
 - `browser-kit`: missing (informational: many hosts never check UI),
   installed at another version than the pin, missing its browser revision or
@@ -127,9 +113,6 @@ headless shell with `ldd` and closes any gap one of three ways:
 - `browser-kit-node`: whether `node` is on the login-shell PATH every agent's
   PATH ends with, and on the scheduler service's PATH. A `node` only in your
   interactive shell does not reach workers.
-- `browser-kit-backlog`: a warning, shown only while backlog tasks tagged `ui`
-  that this host could otherwise start wait because its kit is not verified.
-  It names them; a task whose `os:` tags exclude this host is not counted.
 
 `verify` serves a page on loopback, screenshots it into `verify/smoke.png`
 and records the pass in `orbit-kit.json`. Starting verification clears any

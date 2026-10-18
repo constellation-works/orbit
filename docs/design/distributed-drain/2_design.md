@@ -160,12 +160,7 @@ machine with a `Machine requirement:` reason.
 `os:windows`; several mean any one) name no OS the executor runs, recording it in the receipt's
 `os_unavailable`. The tags are parsed once, by `orbit_types::task::TaskOsRequirement`, which the
 owner's local drain, ship discovery and `orbit run ship` read too, so a task no current host can
-run stays in the backlog with the wait named rather than being claimed and failed. A task tagged
-`ui` also needs a host with a verified headless browser kit: each request declares
-`AdmissionRequest::browser_kit`, read from the follower's kit for every request, and the owner
-records a `ui` candidate it skips in `browser_kit_unavailable`. A request without the field
-declares no kit. The field is part of the request fingerprint, so a follower built before it is
-refused as `protocol_skew` until it upgrades, and is never offered a `ui` task. The crew
+run stays in the backlog with the wait named rather than being claimed and failed. The crew
 filter [ORB-13941]: each
 request carries the executor's crew capability (`AdmissionRequest::crews`), and the owner skips a
 ready candidate whose crew the executor cannot run — its own `task.crew`, or the executor's
@@ -476,7 +471,7 @@ the receipt's diagnostics fill `drain_last_pass` as a local drain's classifier d
 the receipt's `queue_depth`; `deferred` lists footprint holds (`context_lock_conflict`, the holder
 in `blocked_by`) and other owner holds (`owner_hold`); `excluded` lists unmet dependencies
 (`dependency_not_done`, the unfinished tasks in `blocked_by`), `os:` waits (`host_os_mismatch`),
-browser-kit waits for `ui` tasks (`browser_kit_missing`), unrunnable crews (`crew_unavailable`) and work the host has no room for (`capacity_unavailable`), both lists bounded to 20 with `deferred_total` and `excluded_total` the full counts; and
+unrunnable crews (`crew_unavailable`) and work the host has no room for (`capacity_unavailable`), both lists bounded to 20 with `deferred_total` and `excluded_total` the full counts; and
 `waiting_by_reason` counts every kept-off task by code. `waiting_recorded_at` dates the owner's
 answer. A pass that sends no request (throttled, settlement held, breaker open, window closed,
 owner unreachable), or whose requests all claim, keeps the previous diagnostics and their date

@@ -20,7 +20,6 @@
 //! [`FORGE_UNAVAILABLE_MARKER`] in its failure text, the form the engine
 //! reads it back from.
 
-use super::failure_classification_text;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -39,9 +38,7 @@ pub const FORGE_UNAVAILABLE_EXPIRED_EVENT: &str = "forge_unavailable_expired";
 #[must_use]
 pub fn is_forge_unavailable(error_code: Option<&str>, message: Option<&str>) -> bool {
     error_code == Some(FORGE_UNAVAILABLE_ERROR_CODE)
-        || message.is_some_and(|message| {
-            failure_classification_text(message).contains(FORGE_UNAVAILABLE_MARKER)
-        })
+        || message.is_some_and(|message| message.contains(FORGE_UNAVAILABLE_MARKER))
 }
 
 /// Which push the forge refused, and for how long.
@@ -80,7 +77,6 @@ impl ForgeUnavailableHold {
     /// The hold a failure message carries, if any.
     #[must_use]
     pub fn from_text(text: &str) -> Option<Self> {
-        let text = failure_classification_text(text);
         let (_, rest) = text.split_once(FORGE_UNAVAILABLE_MARKER)?;
         serde_json::Deserializer::from_str(rest.trim_start())
             .into_iter::<Self>()

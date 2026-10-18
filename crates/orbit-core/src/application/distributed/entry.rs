@@ -378,7 +378,6 @@ impl crate::OrbitRuntime {
             ship: ship.clone(),
             crews: None,
             os: None,
-            browser_kit: false,
             admissible: None,
         };
         orbit_store::admission_refusal(&identity, &request, owner_binary_version())

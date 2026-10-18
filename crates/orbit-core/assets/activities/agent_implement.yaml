@@ -588,6 +588,15 @@ spec:
       such a write appears.
     - Terminal handling is unchanged: if the re-read shows the task is
       terminal or refuses writes, stop under the Terminal-task guard.
+    - When `input.steering_round` is present, the promotion gate refused
+      to commit this run's candidate because operator steering had not
+      reached it. The checkout already holds that candidate, uncommitted:
+      continue from it rather than starting over, apply the operator
+      comments `input.steering_round.outstanding` names (carried in
+      `task.steering`, or in `task.comments` when no block leads the
+      task), and rerun the checks the change affects. The round and its
+      budget are the host's record; nothing you return spends or refunds
+      one.
   tool_disallow_list:
     - orbit.agent.invoke
     - orbit.auto_task.add

@@ -6,6 +6,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// Task history event, and the bracketed marker of its run's failure, for a
+/// task the promotion gate blocked because operator steering stayed
+/// undelivered after the run's steering rounds.
+pub const STEERING_UNCONSUMED_EVENT: &str = "steering_unconsumed";
+
+/// The bracketed marker form of [`STEERING_UNCONSUMED_EVENT`].
+pub const STEERING_UNCONSUMED_MARKER: &str = "[steering_unconsumed]";
+
 /// One comment's identity in a task's append-only comment log.
 ///
 /// Marks order by `position` first: the log only grows, so a later comment
@@ -92,4 +100,19 @@ impl SteeringWatermark {
         self.comment.is_some_and(|mark| position <= mark.position)
             || self.delivered.iter().any(|mark| mark.position == position)
     }
+}
+
+/// One promotion-gate steering round a run admitted for a task
+/// (`docs/design/mid-run-steering/2_design.md` §3).
+///
+/// The host records it before the round's agent step is dispatched again, so
+/// the round is spent even when that dispatch fails before any prompt is
+/// built.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SteeringRound {
+    /// When the host admitted the round.
+    pub admitted_at: DateTime<Utc>,
+    /// The operator comments the gate found undelivered when it admitted the
+    /// round, oldest first.
+    pub outstanding: Vec<CommentLogMark>,
 }

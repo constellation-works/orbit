@@ -7,7 +7,6 @@ use std::time::SystemTime;
 use orbit_config::{AutoConcurrencySettings, ProviderLimitPolicy};
 
 use super::OrbitRuntime;
-use crate::runtime::config_path::{CONFIG_TOML_FILE, validated_existing_config_root};
 
 #[derive(Clone)]
 pub(super) struct AdmissionPolicy {
@@ -20,15 +19,8 @@ pub(super) struct CachedPolicy {
     policy: Arc<AdmissionPolicy>,
 }
 
-/// Modification stamp of a layer's `config.toml`. The layer root is validated
-/// before the fixed leaf is probed; `None` means the layer has no config file.
-fn stamp(root: &Path) -> std::io::Result<Option<(SystemTime, u64)>> {
-    let Some(validated_root) = validated_existing_config_root(root)
-        .map_err(|error| std::io::Error::other(error.to_string()))?
-    else {
-        return Ok(None);
-    };
-    match std::fs::metadata(validated_root.join(CONFIG_TOML_FILE)) {
+fn stamp(path: &Path) -> std::io::Result<Option<(SystemTime, u64)>> {
+    match std::fs::metadata(path) {
         Ok(metadata) => Ok(Some((metadata.modified()?, metadata.len()))),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
@@ -53,9 +45,9 @@ impl OrbitRuntime {
         let previous = cache
             .as_ref()
             .map_or_else(initial, |cached| cached.policy.clone());
-        let stamps = match stamp(&self.global_root())
-            .and_then(|global| stamp(&self.shared_root()).map(|workspace| [global, workspace]))
-        {
+        let stamps = match stamp(&self.global_root().join("config.toml")).and_then(|global| {
+            stamp(&self.shared_root().join("config.toml")).map(|workspace| [global, workspace])
+        }) {
             Ok(stamps) => stamps,
             Err(error) => {
                 tracing::warn!(%error, "could not inspect admission configuration; keeping previous policy");

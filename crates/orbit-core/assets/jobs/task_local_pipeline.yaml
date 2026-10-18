@@ -41,6 +41,19 @@ spec:
   # phase; any other decision is applied by Orbit's deterministic applier.
   # An empty crew pool skips it.
   final_recovery_activity: final_recovery
+  # Mid-run steering's promotion gate (docs/design/mid-run-steering/2_design.md
+  # §3). With `workflow.mid_run_steering.enabled`, the run does not reach
+  # `commit` while an operator comment past its steering watermark is
+  # undelivered. Each refusal spends one of `workflow.mid_run_steering.max_rounds`
+  # steering rounds: `implement_bundle` runs again, even for a carried
+  # candidate, so the implementer's next prompt carries the steering block onto
+  # the candidate still uncommitted in this worktree. When no round is left, or
+  # the last one delivered nothing, the task is blocked as `steering_unconsumed`
+  # naming the outstanding comments. An unreadable gate or a task gone terminal
+  # stops the run before `commit` as well. Steering off, nothing is read.
+  steering_gate:
+    before: commit
+    round: implement_bundle
   default_input:
     task_ids: []
     auto_push: false

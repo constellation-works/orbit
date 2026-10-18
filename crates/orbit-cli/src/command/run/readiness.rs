@@ -181,8 +181,8 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
             let claimed = blocking_claims(&task["blocking_claims"])
                 .map(|claims| format!(" claimed-on={claims}"))
                 .unwrap_or_default();
-            // A host-OS wait names the host, a browser-kit wait the install
-            // command, and a native-OS requirement the tag to add. A local-route review hold names the remedy, and
+            // A host-OS wait names the host, and a native-OS requirement the
+            // tag to add. A local-route review hold names the remedy, and
             // a provider limit its window, reset and skipped crews. A task
             // with no footprint names its wait and fix [ORB-15191], and an
             // unverified review finding the verification job to run. Other
@@ -190,7 +190,6 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
             let host = matches!(
                 reason,
                 "host_os_mismatch"
-                    | "browser_kit_missing"
                     | "native_os_required"
                     | "unverified_review_finding"
                     | "local_route_before_pr"

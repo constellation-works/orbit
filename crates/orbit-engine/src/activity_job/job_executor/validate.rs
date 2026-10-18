@@ -144,6 +144,19 @@ pub fn validate_job(job: &JobV2) -> Result<(), DispatchError> {
              `resolve_job_catalog_refs_for_execution` at load time before dispatch"
         )));
     }
+    if let Some(gate) = &job.steering_gate {
+        let position = |id: &str| job.steps.iter().position(|step| step.id == id);
+        if !matches!(
+            (position(&gate.round), position(&gate.before)),
+            (Some(round), Some(before)) if round < before
+        ) {
+            return Err(DispatchError::JobValidation(format!(
+                "job steering_gate: `round` (`{}`) must name a top-level step before the \
+                 top-level step `before` names (`{}`)",
+                gate.round, gate.before
+            )));
+        }
+    }
     for step in &job.steps {
         validate_step(step)?;
     }

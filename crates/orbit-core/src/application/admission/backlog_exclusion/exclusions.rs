@@ -1,9 +1,6 @@
 use std::collections::BTreeMap;
 
-use orbit_types::task::{
-    ExecutorOsLimit, ReadinessGap, ReadinessStage, Task, browser_kit_wait, readiness_gaps,
-    requires_browser_kit,
-};
+use orbit_types::task::{ExecutorOsLimit, ReadinessGap, ReadinessStage, Task, readiness_gaps};
 
 use super::super::auto_admission::{DeferralReason, DeferredAdmission};
 use super::super::pass_error::PassError;
@@ -59,28 +56,6 @@ pub(super) fn host_os_exclusion(
         conflicts: Vec::new(),
         crew: None,
         detail: Some(reason),
-    })
-}
-
-/// The exclusion for a `ui` task on a host whose browser kit is not
-/// verified (`kit_verified`, read once per admission pass).
-///
-/// Shared by automatic selection and the explicit ship override, like
-/// [`host_os_exclusion`], so a drain, ship discovery and `orbit run ship`
-/// withhold the same tasks and name the same wait.
-pub(super) fn browser_kit_exclusion(
-    task: &Task,
-    kit_verified: bool,
-) -> Option<BacklogTaskExclusion> {
-    if kit_verified || !requires_browser_kit(&task.tags) {
-        return None;
-    }
-    Some(BacklogTaskExclusion {
-        id: task.id.clone(),
-        reason: BacklogTaskExclusionReason::BrowserKitMissing,
-        conflicts: Vec::new(),
-        crew: None,
-        detail: Some(browser_kit_wait()),
     })
 }
 

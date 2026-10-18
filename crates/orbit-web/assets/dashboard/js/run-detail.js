@@ -537,7 +537,7 @@ function buildCrewWindow(window) {
 
 // Reason codes whose `detail` adds useful context to the shared Drain card label.
 const WAITING_DETAIL_REASONS = new Set([
-  "host_os_mismatch", "browser_kit_missing", "native_os_required", "local_route_before_pr", "local_route_before_landing", "crew_unavailable", "owner_hold",
+  "host_os_mismatch", "native_os_required", "local_route_before_pr", "local_route_before_landing", "crew_unavailable", "owner_hold",
   "invalid_candidate",
 ]);
 
@@ -545,7 +545,6 @@ const KEPT_OFF_CAUSES = {
   context_lock_conflict: "footprint holds",
   dependency_not_done: "unmet dependencies",
   host_os_mismatch: "for another OS",
-  browser_kit_missing: "needing a host with the browser kit",
   native_os_required: "needing native evidence from another OS",
   crew_unavailable: "needing a crew this host cannot run",
   owner_hold: "held on the owner",

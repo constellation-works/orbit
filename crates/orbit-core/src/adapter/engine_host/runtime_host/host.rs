@@ -8,8 +8,9 @@ use orbit_engine::{
     CrewConfig, DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
     FinalRecoveryApplication, FinalRecoveryApplied, PluginBrokerHandle, PluginBrokerRun,
     RebaseRecoveryAttemptScope, ResolvedActivityTools, ResolvedCliExecutor, ResolvedSandbox,
-    ResolvedShellExecutor, RuntimeHost, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
-    StepRecoveryDecisionSlot, TaskActivityUpdate, TaskAutomationUpdate,
+    ResolvedShellExecutor, RuntimeHost, SteeringGateReading, SteeringRoundAdmission,
+    StepRecoveryDecisionRead, StepRecoveryDecisionRequest, StepRecoveryDecisionSlot,
+    TaskActivityUpdate, TaskAutomationUpdate,
 };
 use orbit_store::contracts::{
     InvocationQuery, InvocationRecord, JobRunStepParams, TaskReservationReleaseReason,
@@ -23,7 +24,7 @@ use orbit_types::task::{
 };
 use orbit_types::telemetry::{InvocationTrace, ProviderLimitObservation};
 use orbit_types::workflow::{
-    DeferralProbe, JobRun, JobRunStartOutcome, JobRunState, NamespaceProbe,
+    CommentLogMark, DeferralProbe, JobRun, JobRunStartOutcome, JobRunState, NamespaceProbe,
 };
 use serde_json::Value;
 
@@ -848,6 +849,23 @@ impl RuntimeHost for OrbitRuntime {
 
     fn mid_run_steering_enabled(&self) -> bool {
         self.mid_run_steering().enabled
+    }
+
+    fn steering_gate(
+        &self,
+        run_id: &str,
+        task_id: &str,
+    ) -> Result<SteeringGateReading, OrbitError> {
+        self.steering_gate_reading(run_id, task_id)
+    }
+
+    fn admit_steering_round(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        outstanding: &[CommentLogMark],
+    ) -> Result<SteeringRoundAdmission, OrbitError> {
+        OrbitRuntime::admit_steering_round(self, run_id, task_id, outstanding)
     }
 
     fn run_deferral_probe(

@@ -55,13 +55,6 @@ pub(crate) enum BacklogTaskExclusionReason {
     /// for a host that does — a follower pulling from this owner, say — and
     /// `detail` names the wait (`waits for a macos host (os:macos)`).
     HostOsMismatch,
-    /// The task is tagged `ui` and this host has no verified headless browser
-    /// kit to render its change. It stays in `backlog` for a host that has
-    /// one — a follower whose request declares a kit, say — and `detail`
-    /// names the wait and the install command. Checked after
-    /// [`Self::HostOsMismatch`], so a task this host's OS cannot run names
-    /// that wait first.
-    BrowserKitMissing,
     GroupMemberConflict,
     /// An `epic`-tagged root that declared no `context_files` of its own while
     /// its descendants did. Admission no longer inherits their surface, so the

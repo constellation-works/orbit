@@ -57,6 +57,13 @@ pub struct JobV2 {
     pub final_recovery_activity: Option<String>,
     #[serde(skip)]
     pub resolved_final_recovery_activity: Option<ActivityV2>,
+    /// Mid-run steering's promotion gate: with
+    /// `workflow.mid_run_steering.enabled`, the run does not start the
+    /// `before` step while an operator comment past its steering watermark
+    /// is undelivered, and reruns from `round` instead, a bounded number of
+    /// times. Absent, or with steering off, no gate runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steering_gate: Option<SteeringGateSpec>,
     /// Runs of this job allowed to execute at once; later submissions wait
     /// `pending` in submission order. `0` imposes no job-level ceiling, for a
     /// job whose callers already bound how many runs they start.
@@ -69,6 +76,20 @@ pub struct JobV2 {
 
 fn is_false(value: &bool) -> bool {
     !value
+}
+
+/// A job's `spec.steering_gate` declaration
+/// (`docs/design/mid-run-steering/2_design.md` §3).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SteeringGateSpec {
+    /// The top-level step the gate runs before, while the candidate is still
+    /// uncommitted in its worktree.
+    pub before: String,
+    /// The earlier top-level step a steering round runs again, even when its
+    /// `when:` is false, so the agent step there is dispatched once more
+    /// with the steering block.
+    pub round: String,
 }
 
 /// A job's `spec.task_delivery` declaration.

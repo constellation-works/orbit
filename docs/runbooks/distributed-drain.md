@@ -212,17 +212,7 @@ current host can run stays in the backlog, never claimed, with the wait named
 show`, the Drain card, and the follower's idle receipt (`os_unavailable`). So
 an `os:macos` repair filed on a Linux owner waits for a macOS follower instead
 of blocking the owner's worker. Retag with `orbit.task.update` to reroute a
-backlog task; running or claimed work is not moved.
-
-A task tagged `ui` needs a host whose headless browser kit is verified
-(`orbit browser-kit status`). Each pull request declares whether the
-follower's kit is verified (`browser_kit`, read for every request), and the
-owner hands a `ui` task only to a follower that declares one; the owner's own
-drain checks its own kit. The task otherwise stays in the backlog as
-`browser_kit_missing`, with a wait that names `orbit browser-kit install`, in
-the owner's readiness, `orbit run show`, the Drain card and the follower's idle
-receipt (`browser_kit_unavailable`). It combines with `os:` tags: a host must
-satisfy both. Owner and followers must
+backlog task; running or claimed work is not moved. Owner and followers must
 deploy the same protocol revision (currently 10, as defined by
 `DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA`; OS matching arrived in revision 4). Empty
 `workflow.required_validation_commands` means no required check, as on an
@@ -2066,8 +2056,8 @@ A pull drain also records what its owner kept off this host. When a request is a
 the receipt's diagnostics fill `drain_last_pass` as a local drain's classifier does: `queued` is
 the receipt's `queue_depth`; `deferred` lists footprint holds (`context_lock_conflict`, the holder
 in `blocked_by`) and other owner holds (`owner_hold`); `excluded` lists unmet dependencies
-(`dependency_not_done`, the unfinished tasks in `blocked_by`), `os:` waits (`host_os_mismatch`),
-browser-kit waits for `ui` tasks (`browser_kit_missing`) and unrunnable crews (`crew_unavailable`), both lists bounded to 20 with `deferred_total` and `excluded_total` the full counts; and
+(`dependency_not_done`, the unfinished tasks in `blocked_by`), `os:` waits (`host_os_mismatch`) and
+unrunnable crews (`crew_unavailable`), both lists bounded to 20 with `deferred_total` and `excluded_total` the full counts; and
 `waiting_by_reason` counts every kept-off task by code. `waiting_recorded_at` dates the owner's
 answer. A pass that sends no request (throttled, settlement held, breaker open, window closed,
 owner unreachable), or whose requests all claim, keeps the previous diagnostics and their date

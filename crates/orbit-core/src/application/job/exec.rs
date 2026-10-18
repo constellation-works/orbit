@@ -879,6 +879,8 @@ pub(super) fn seeded_resume_state(source_state: &PipelineState, run: &JobRun) ->
     // A steering watermark names what this run's own prompts carried; the
     // resumed run's agents have seen nothing yet.
     seeded.steering_watermarks.clear();
+    // Steering rounds are the source run's budget, not the resumed run's.
+    seeded.steering_rounds.clear();
     if let Some(pipeline) = seeded.pipeline.as_object_mut() {
         pipeline.remove(orbit_engine::review_gate::INTERRUPTED_REVIEW_KEY);
     }

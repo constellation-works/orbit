@@ -443,8 +443,7 @@ impl crate::OrbitRuntime {
                     step.error_code.as_deref()
                         == Some(orbit_types::workflow::PROVIDER_UNAVAILABLE_ERROR_CODE)
                         || step.error_message.as_deref().is_some_and(|message| {
-                            orbit_types::workflow::failure_classification_text(message)
-                                .contains(orbit_types::workflow::PROVIDER_UNAVAILABLE_MARKER)
+                            message.contains(orbit_types::workflow::PROVIDER_UNAVAILABLE_MARKER)
                         })
                 })
             })

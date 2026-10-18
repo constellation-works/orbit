@@ -572,13 +572,13 @@ define_config_settings! {
     },
     workflow_mid_run_steering_enabled: bool => bool {
         key: "workflow.mid_run_steering.enabled", value_type: "bool",
-        description: "Record which task comments each agent prompt embedding task context included, as the run's steering watermark, and deliver operator comments written after it at the run's later prompts (default false). The promotion gate is not implemented yet.",
+        description: "Record which task comments each agent prompt embedding task context included, as the run's steering watermark, and deliver operator comments written after it at the run's later prompts; the shipped delivery pipelines do not commit while one is undelivered (default false).",
         section: ConfigSection::Delivery, order: 140,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
     },
     workflow_mid_run_steering_max_rounds: u8 => u8 {
         key: "workflow.mid_run_steering.max_rounds", value_type: "integer",
-        description: "Steering rounds a run may consume at the promotion gate before it holds as `steering_unconsumed` (1..=10, default 2). Reserved: no gate reads it yet.",
+        description: "Steering rounds a run may consume at the promotion gate before it holds as `steering_unconsumed` (1..=10, default 2).",
         section: ConfigSection::Delivery, order: 141,
         resolve: |raw: Option<u8>| resolve_mid_run_steering_max_rounds(raw),
     },

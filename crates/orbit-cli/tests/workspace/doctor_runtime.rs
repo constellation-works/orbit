@@ -212,59 +212,6 @@ fn cleanup_preserves_a_lock_held_by_a_live_process() {
     drop(file);
 }
 
-/// A host without a verified browser kit must not leave its `ui` backlog
-/// waiting unexplained: doctor warns, naming the waiting task and the install
-/// command. A topical tag such as `dashboard` waits for nothing.
-fn browser_kit_backlog_warns_while_ui_tasks_wait_for_this_hosts_kit() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let kit_home = temp.path().join("kit-home");
-    fs::create_dir_all(&kit_home).expect("create kit home");
-    let runtime = workspace_runtime(&temp).with_browser_kit_home(&kit_home);
-    let backlog = |title: &str, tag: &str| {
-        let file = format!("{title}.txt");
-        fs::write(runtime.paths().repo_root.join(&file), "fixture\n").expect("context file");
-        runtime
-            .add_task(TaskAddParams {
-                title: title.to_string(),
-                description: "Browser-kit routing fixture.".to_string(),
-                acceptance_criteria: vec!["Doctor names the wait.".to_string()],
-                plan: "Render the change.".to_string(),
-                tags: vec![tag.to_string()],
-                complexity: orbit_core::TaskComplexity::Medium,
-                context_files: vec![format!("file:{file}")],
-                status: Some(orbit_core::TaskStatus::Backlog),
-                ..Default::default()
-            })
-            .expect("add task")
-            .id
-    };
-    let ui = backlog("ui", "ui");
-    let topical = backlog("topical", "dashboard");
-
-    let rows = doctor_report_probes()
-        .find(|probe| probe.name == "browser-kit")
-        .expect("browser-kit probe")
-        .run(&runtime, false);
-    let warning = rows
-        .iter()
-        .find(|row| row.check_name == "browser-kit-backlog")
-        .unwrap_or_else(|| panic!("no backlog row: {rows:?}"));
-    assert_eq!(
-        warning.status,
-        WorkspaceDoctorStatus::Warning,
-        "{warning:?}"
-    );
-    assert!(warning.message.contains(&ui), "{warning:?}");
-    assert!(!warning.message.contains(&topical), "{warning:?}");
-    assert!(
-        warning
-            .remediation
-            .as_deref()
-            .is_some_and(|fix| fix.contains("`orbit browser-kit install`")),
-        "{warning:?}"
-    );
-}
-
 #[test]
 fn doctor_runtime_contracts() {
     if crate::isolated_test::run_in_child("doctor_runtime::doctor_runtime_contracts") {
@@ -274,10 +221,6 @@ fn doctor_runtime_contracts() {
         (
             "task_relations_reports_a_canonical_dangling_edge_the_index_lost",
             task_relations_reports_a_canonical_dangling_edge_the_index_lost as fn(),
-        ),
-        (
-            "browser_kit_backlog_warns_while_ui_tasks_wait_for_this_hosts_kit",
-            browser_kit_backlog_warns_while_ui_tasks_wait_for_this_hosts_kit as fn(),
         ),
         #[cfg(unix)]
         (
