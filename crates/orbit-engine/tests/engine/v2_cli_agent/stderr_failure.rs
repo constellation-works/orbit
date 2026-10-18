@@ -5,8 +5,8 @@ use super::*;
 use orbit_store::contracts::group_failure_incidents;
 use orbit_types::telemetry::AuditEvent;
 use orbit_types::workflow::{
-    ClaimFailureClass, HeldFailure, is_contract_refusal, is_owner_busy, is_task_blocked_by_agent,
-    is_upgrade_pending,
+    ClaimFailureClass, HeldFailure, PR_AUTO_FIX_CHECK_REPAIR_MARKER, is_contract_refusal,
+    is_owner_busy, is_pr_auto_fix_check_repair, is_task_blocked_by_agent, is_upgrade_pending,
 };
 
 fn failed_provider_message(stderr: &str) -> String {
@@ -129,6 +129,23 @@ fn generic_stderr_cannot_reclassify_the_failure() {
         assert!(!is_task_blocked_by_agent(None, Some(&message)), "{message}");
         assert!(!is_upgrade_pending(None, Some(&message)), "{message}");
     }
+}
+
+/// A provider quoting the watcher's check-repair marker on stderr is context,
+/// not admission: the generic failure keeps its diagnostic tail without
+/// entering automatic CI-repair routing.
+#[test]
+fn generic_stderr_quoting_a_check_repair_marker_is_not_a_check_repair() {
+    let quoted = format!("{PR_AUTO_FIX_CHECK_REPAIR_MARKER}: pull request #123");
+    let message = failed_provider_message(&quoted);
+    assert_eq!(
+        message,
+        format!("step `stderr_fixture`: cli subprocess exited with code 1\nstderr tail:\n{quoted}"),
+        "the generic exit keeps its stderr tail as context"
+    );
+    assert!(!is_pr_auto_fix_check_repair(&message), "{message}");
+    let wrapped = format!("step implement_one: {message}");
+    assert!(!is_pr_auto_fix_check_repair(&wrapped), "{wrapped}");
 }
 
 #[test]

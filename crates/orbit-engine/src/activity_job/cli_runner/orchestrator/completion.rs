@@ -492,8 +492,9 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
                 ),
             ))
         } else if generic_diagnostic {
-            // Keep bounded stderr visible as diagnostic context, while the
-            // check-repair classifier uses only the generic exit text.
+            // Context only: classify the unchanged exit message, never words,
+            // typed markers or check-repair phrases a provider happens to
+            // quote on stderr (`failure_classification_text`).
             let mut tail: Vec<_> = stderr_text
                 .lines()
                 .rev()

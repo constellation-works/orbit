@@ -7,8 +7,8 @@ pub const CLI_STDERR_TAIL_SEPARATOR: &str = "\nstderr tail:\n";
 ///
 /// Wrappers may prefix a step or run name. Only the generic exit format can
 /// introduce this suffix; provider-specific diagnostics retain their existing
-/// classification. Stderr can quote denial words or typed failure markers
-/// without acquiring control-plane meaning.
+/// classification. Stderr can quote denial words, typed failure markers or the
+/// check-repair handoff without acquiring control-plane meaning.
 #[must_use]
 pub fn failure_classification_text(message: &str) -> &str {
     let Some((failure, _)) = message.split_once(CLI_STDERR_TAIL_SEPARATOR) else {
