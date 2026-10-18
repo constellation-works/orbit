@@ -59,7 +59,7 @@ Verify the seams against the current checkout before editing. These are the auth
 | Provider terminal-output reduction | `crates/orbit-agent/src/providers/<provider>/<provider>_output.rs` | Reduce the provider protocol to trustworthy terminal response bytes before the common completion-envelope parser. Reject stale, partial, malformed, or failed frames. |
 | Child lifecycle, cancellation, and cleanup | `crates/orbit-engine/src/activity_job/cli_runner/`; `crates/orbit-common/src/process/supervisor/` | Reuse the v2 runner and supervisor. Do not add provider-owned process spawning or cleanup. |
 | Deterministic shell input and output | `crates/orbit-engine/src/executor/automation/shell.rs` — `local_shell`, `parse_shell_config`, `compose_argv` | Keep argv in static activity config. Run an actual shell only when `shell` and `script` are declared explicitly. |
-| OS sandbox / provider home grant | `crates/orbit-core/src/adapter/engine_host/actions/sandbox/provider_state.rs`; `crates/orbit-exec/src/macos_sandbox/provider_dirs.rs`; `crates/orbit-exec/src/macos_sandbox/compile.rs` | Give only the active provider's required state directory a write grant. Keep the activity `fsProfile` authoritative for the worktree. On macOS, a state-directory grant is not a login: Claude, Copilot, Cursor, and Antigravity keep their default login in the user keychain and receive a narrow `$HOME/Library/Keychains` read carve-out. |
+| OS sandbox / provider home grant | `crates/orbit-core/src/adapter/engine_host/actions/sandbox/provider_state.rs`; `crates/orbit-exec/src/macos_sandbox/provider_dirs.rs`; `crates/orbit-exec/src/macos_sandbox/compile.rs` | Give only the active provider's required state directory a write grant. Keep the activity `fsProfile` authoritative for the worktree. On macOS, a state-directory grant is not a login: Claude, Copilot, Cursor, Antigravity, and Muse keep their default login in the user keychain and receive a narrow `$HOME/Library/Keychains` read carve-out. |
 | End-to-end fixtures | `crates/orbit-core/tests/provider/pi_fake_agent.rs`, `crates/orbit-core/tests/provider/antigravity_fake_agent.rs`, `crates/orbit-core/tests/provider/opencode_fake_agent.rs`, `crates/orbit-core/tests/provider/muse_fake_agent.rs`, `crates/orbit-engine/tests/engine/v2_local_shell.rs` | Exercise the real v2 dispatch seam with fakes; add output/error/timeout/cancellation cases. |
 
 ## Add a CLI-agent executor
@@ -107,8 +107,9 @@ On macOS, Orbit's `macos-sandbox-exec` profile denies `$HOME/Library/Keychains` 
 | `copilot` | login keychain item `github-copilot-app` | `COPILOT_GITHUB_TOKEN` via `[execution.env].pass` |
 | `cursor` | login keychain items `cursor-access-token` / `cursor-refresh-token` | `CURSOR_API_KEY` via `[execution.env].pass`, or log in with `AGENT_CLI_CREDENTIAL_STORE=file` and pass that variable too (it writes `$HOME/.cursor/auth.json`, the CLI re-reads the variable on every run, and setting it later does not migrate an existing keychain login) |
 | `antigravity` | Antigravity CLI (`agy`) OAuth token in the login keychain | No file-store override is documented |
+| `muse` | `auth.json` under its config root, plus the login keychain, which `muse exec` reads (`muse serve` does not) | `META_API_KEY` via `[execution.env].pass` |
 
-Muse Code is file-backed: `muse login` writes `auth.json` under its config root, which its state grant already covers, so it has no keychain carve-out.
+Muse Code shows why a state directory alone does not prove a CLI file-backed: `muse login` writes `auth.json`, yet under a keychain deny `muse exec` reports `missing meta credentials` for a valid login.
 
 A failed keychain-backed step records Orbit's diagnosis — sandbox hid the item versus a real logout — on the run error and the task's `workflow_run_failed` note, not only `exited with code 1`. Do not document a provider as file-backed on macOS from its state directory alone; inspect the CLI's credential store.
 

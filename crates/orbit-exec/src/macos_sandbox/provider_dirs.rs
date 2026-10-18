@@ -213,8 +213,9 @@ pub(crate) fn opencode_state_dirs(env: OpencodeDirEnv<'_>) -> Vec<PathBuf> {
 ///    plugins, and skills.
 /// 3. `$HOME/Library/Application Support/Muse` — the session-name authority.
 ///
-/// The login is the `auth.json` file, not a login-keychain item, so Muse is
-/// not a keychain provider. Like the other per-lane entries, this is gated on
+/// `muse login` writes `auth.json` here, but `muse exec` also reads the login
+/// keychain, so Muse is a keychain provider as well; that read-only carve-out
+/// lives in `compile.rs`. Like the other per-lane entries, this is gated on
 /// the active provider by its caller so an unrelated lane is not handed
 /// Muse's credential store.
 pub(crate) fn muse_state_dirs(

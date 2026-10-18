@@ -95,6 +95,7 @@ fn keychain_auth_failure_marker(provider: &str) -> Option<&'static str> {
         // and the live cursor-agent 2026.09.10 wording (`run agent login first`).
         Provider::Cursor => Some("Authentication required. Please run"),
         Provider::Antigravity => Some("authentication required"),
+        Provider::Muse => Some("missing meta credentials"),
         _ => None,
     }
 }
