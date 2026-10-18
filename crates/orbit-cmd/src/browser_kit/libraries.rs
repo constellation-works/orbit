@@ -204,14 +204,25 @@ fn unpack(
         create_private_dir_all(dir)
             .map_err(|error| OrbitError::Io(format!("create {}: {error}", dir.display())))?;
     }
-    let before = deb_files(&debs)?;
     if !packages.is_empty() {
         download(&packages, &debs, progress)?;
     }
-    for deb in deb_files(&debs)?
-        .into_iter()
-        .filter(|deb| !before.contains(deb))
-    {
+    let mut unpacked = Vec::new();
+    for deb in deb_files(&debs)? {
+        // apt names archives <package>_<version>_<architecture>.deb. Retry
+        // selected cached archives too: a previous download may have completed
+        // before extraction failed or was interrupted. Leave unrelated cache
+        // entries alone; an already-resolved kit never reaches this step.
+        let Some((package, _)) = deb
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.split_once('_'))
+        else {
+            continue;
+        };
+        if !packages.iter().any(|wanted| wanted == package) {
+            continue;
+        }
         let mut command = Command::new("dpkg-deb");
         command.arg("-x").arg(&deb).arg(&root);
         let output = run_probe(&mut command, PROBE_DEADLINE)?;
@@ -222,11 +233,14 @@ fn unpack(
                 String::from_utf8_lossy(&output.stderr).trim()
             )));
         }
+        unpacked.push(package.to_string());
     }
     if fonts_needed {
         write_fonts_conf(layout)?;
     }
-    Ok(packages)
+    unpacked.sort();
+    unpacked.dedup();
+    Ok(unpacked)
 }
 
 /// What Playwright's `install-deps --dry-run chromium` names.
