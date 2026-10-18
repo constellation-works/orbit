@@ -476,11 +476,63 @@ fn forged_agent_output_neither_advances_nor_fakes_delivery() {
     assert_eq!(fx.watermark(&run).comment, mark(1, claim));
 }
 
+fn steering_instruction_is_byte_inert_when_disabled_and_appended_when_enabled() {
+    // The host flag reflects the workspace config, default off.
+    let mut fx = Fixture::new("");
+    assert!(
+        !RuntimeHost::mid_run_steering_enabled(&fx.runtime),
+        "steering defaults off"
+    );
+    fx.reconfigure(ENABLED);
+    assert!(
+        RuntimeHost::mid_run_steering_enabled(&fx.runtime),
+        "the enabled config reaches dispatch"
+    );
+    assert!(
+        fx.deliveries().is_empty(),
+        "checking the flag records no delivery"
+    );
+
+    for name in [
+        "agent_implement",
+        "agent_review_repair",
+        "final_recovery",
+        "step_failure_recovery",
+    ] {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("assets/activities/{name}.yaml"));
+        let asset = orbit_engine::load_activity_asset(&std::fs::read_to_string(path).unwrap())
+            .unwrap_or_else(|err| panic!("{name} loads: {err}"));
+        let orbit_types::workflow::activity_job::ActivityV2Spec::AgentLoop(spec) = asset.spec.spec
+        else {
+            panic!("{name} must dispatch an agent");
+        };
+        let extra = spec
+            .steering_instruction
+            .as_deref()
+            .unwrap_or_else(|| panic!("{name} declares a steering checkpoint re-read"));
+        assert!(!extra.trim().is_empty(), "{name}: steering text is present");
+        assert_eq!(
+            spec.envelope_instruction(false),
+            spec.instruction,
+            "{name}: with steering disabled the rendered prompt is byte-identical \
+             to the base instruction (byte-inert guarantee)"
+        );
+        assert_eq!(
+            spec.envelope_instruction(true),
+            format!("{}\n\n{}", spec.instruction, extra),
+            "{name}: with steering enabled the checkpoint re-read is appended \
+             after the base instruction"
+        );
+    }
+}
+
 crate::scenario_table!(
     mid_run_steering_watermark_scenarios,
     steering_off_writes_nothing_and_on_leaves_the_prompt_unchanged,
     steering_on_records_the_newest_comment_by_position_and_never_moves_back,
-    two_runs_of_one_task_hold_independent_watermarks
+    two_runs_of_one_task_hold_independent_watermarks,
+    steering_instruction_is_byte_inert_when_disabled_and_appended_when_enabled
 );
 
 crate::scenario_table!(

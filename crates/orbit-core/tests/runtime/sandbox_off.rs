@@ -161,6 +161,7 @@ fn dispatch_codex(
     let spec = ActivityV2Spec::AgentLoop(AgentLoopSpec {
         tool_disallow_list: None,
         instruction: "Return the requested response envelope.".to_string(),
+        steering_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: None,

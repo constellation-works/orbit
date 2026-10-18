@@ -49,6 +49,12 @@ pub struct AgentLoopSpec {
     /// System prompt / instruction delivered to the agent loop.
     #[serde(default)]
     pub instruction: String,
+    /// Advisory mid-run steering checkpoint re-read, appended to
+    /// [`Self::instruction`] only when the workspace enables
+    /// `workflow.mid_run_steering`. Absent or disabled, the rendered
+    /// instruction is byte-identical to `instruction` alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steering_instruction: Option<String>,
     /// Tool allowlist (§6). Custom activities keep this exact allowlist
     /// contract. An empty list with no `tool_disallow_list` is deprecated:
     /// asset load warns and enforcement keeps its legacy behaviour until the
@@ -718,6 +724,24 @@ pub enum OnDenial {
     Terminate,
     /// Continue the loop with the structured tool-result error.
     Continue,
+}
+
+impl AgentLoopSpec {
+    /// The instruction bytes for one envelope. With steering disabled, or
+    /// with no `steering_instruction` declared, this is exactly
+    /// `instruction`; with steering enabled and a declared paragraph, it is
+    /// `instruction`, a blank line, then that paragraph.
+    pub fn envelope_instruction(
+        &self,
+        mid_run_steering_enabled: bool,
+    ) -> std::borrow::Cow<'_, str> {
+        match (&self.steering_instruction, mid_run_steering_enabled) {
+            (Some(extra), true) if !extra.trim().is_empty() => {
+                std::borrow::Cow::Owned(format!("{}\n\n{}", self.instruction, extra))
+            }
+            _ => std::borrow::Cow::Borrowed(&self.instruction),
+        }
+    }
 }
 
 const fn default_max_iterations() -> u32 {

@@ -149,6 +149,9 @@ pub(crate) fn run_cli_backend_for_step(
     let sandbox = prepared_sandbox.effective;
 
     let mut envelope_spec = spec.clone();
+    envelope_spec.instruction = envelope_spec
+        .envelope_instruction(host.mid_run_steering_enabled())
+        .into_owned();
     if let Some(tools) = &inspection_tools {
         envelope_spec.instruction.push_str("\n\n");
         envelope_spec.instruction.push_str(tools.instruction);
