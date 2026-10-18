@@ -240,14 +240,26 @@ pub(crate) fn run_show_payload(
                 .unwrap_or_default(),
         ));
     }
+    let mut displayed_build_budget_waits = HashSet::new();
     for process in &provider_processes {
-        if let Some(waits) = &process.build_budget_waits {
-            header.push_str(&format!(
-                "\nBuild-budget waits ({}): count {}; total {:.3}s; longest {:.3}s; queued wall {:.3}s; deadline extended {:.3}s.",
-                process.step_id.as_deref().unwrap_or("agent"), waits.count,
-                waits.total_ms as f64 / 1000.0, waits.longest_ms as f64 / 1000.0,
-                waits.queued_wall_ms as f64 / 1000.0, waits.deadline_extension_ms as f64 / 1000.0,
-            ));
+        let Some(waits) = &process.build_budget_waits else {
+            continue;
+        };
+        if waits.count == 0 && waits.deadline_extension_ms == 0 {
+            continue;
+        }
+        let line = format!(
+            "Build-budget waits ({}): count {}; total {:.3}s; longest {:.3}s; queued wall {:.3}s; deadline extended {:.3}s.",
+            process.step_id.as_deref().unwrap_or("agent"),
+            waits.count,
+            waits.total_ms as f64 / 1000.0,
+            waits.longest_ms as f64 / 1000.0,
+            waits.queued_wall_ms as f64 / 1000.0,
+            waits.deadline_extension_ms as f64 / 1000.0,
+        );
+        if displayed_build_budget_waits.insert(line.clone()) {
+            header.push('\n');
+            header.push_str(&line);
         }
     }
     for id in orbit_core::application::job::job_run_task_ids(&run) {

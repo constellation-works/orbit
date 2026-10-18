@@ -128,12 +128,17 @@ pub(crate) fn format_root_cause_lines(causes: &[RunRootCause]) -> Vec<String> {
             } else {
                 "Additional root cause:"
             };
-            format!(
+            let mut lines = format!(
                 "{label} run={} step={} error={}",
                 cause.run_id,
                 cause.step.as_deref().unwrap_or("-"),
                 cause.message.as_deref().unwrap_or("-"),
-            )
+            );
+            lines.push_str(&format!("\nLogs: orbit run logs {}", cause.run_id));
+            if let Some(step) = cause.step.as_deref() {
+                lines.push_str(&format!(" -s {step}"));
+            }
+            lines
         })
         .collect()
 }
