@@ -1,6 +1,6 @@
-//! `orbit browser-kit status`, its `orbit doctor` row and the `workspace init`
-//! offer over fixture kits in a disposable HOME. Nothing here downloads:
-//! each fixture lays out the files a real kit has.
+//! Browser-kit CLI reports, onboarding and install recovery in a disposable
+//! HOME. Fixtures lay out the kit and stub external installer commands;
+//! nothing here downloads packages or runs a real browser.
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -298,4 +298,189 @@ fn workspace_init_offers_the_kit_for_a_web_ui_without_installing_it() {
     let kit = init(&ready);
     assert_eq!(kit["status"], "ready", "{kit}");
     assert_eq!(kit["web_ui"], "package.json", "{kit}");
+}
+
+#[cfg(target_os = "linux")]
+mod library_recovery {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn executable(bin: &Path, name: &str, body: &str) {
+        let path = bin.join(name);
+        fs::write(&path, format!("#!/bin/sh\nset -eu\n{body}\n")).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// Real CLI installs with deterministic package-manager and Node stand-ins:
+    /// cached downloads survive interruption/failure and only extracted packages
+    /// enter the report. No network, system package manager or browser is run.
+    #[test]
+    fn install_recovers_cached_archives_and_reports_successful_extractions() {
+        if crate::isolated_test::run_in_child(
+            "browser_kit::library_recovery::install_recovers_cached_archives_and_reports_successful_extractions",
+        ) {
+            return;
+        }
+        let release = fs::read_to_string("/etc/os-release").unwrap_or_default();
+        if !release.lines().any(|line| {
+            line.split_once('=').is_some_and(|(key, value)| {
+                matches!(key, "ID" | "ID_LIKE")
+                    && value
+                        .trim_matches(['\"', '\''])
+                        .split_whitespace()
+                        .any(|id| matches!(id, "debian" | "ubuntu"))
+            })
+        }) {
+            #[allow(
+                clippy::print_stderr,
+                reason = "the test gate must see when this host lacks the Debian/Ubuntu install path"
+            )]
+            {
+                eprintln!("SKIP: no-root browser-kit package recovery requires Debian or Ubuntu");
+            }
+            return;
+        }
+
+        for case in ["cached", "failed-extraction", "fresh", "unavailable"] {
+            let fixture = WorkCheckout::new();
+            fs::create_dir_all(&fixture.work).unwrap();
+            let root = write_kit(
+                &fixture.home,
+                &FixtureKit {
+                    version: PLAYWRIGHT_VERSION,
+                    browser_installed: true,
+                    verified_version: None,
+                },
+            );
+            let layout = KitLayout::for_home(&fixture.home);
+            let shell = layout.browsers().join(format!(
+                "chromium_headless_shell-{REVISION}/chrome-headless-shell-linux64"
+            ));
+            fs::create_dir_all(&shell).unwrap();
+            fs::write(shell.join("chrome-headless-shell"), "fixture").unwrap();
+            fs::create_dir_all(layout.debs()).unwrap();
+            let archive = layout.debs().join("libneeded_1_amd64.deb");
+            if case == "cached" {
+                fs::write(&archive, "cached package\n").unwrap();
+            }
+            let unrelated = layout.debs().join("libunrelated_1_amd64.deb");
+            fs::write(&unrelated, "unrelated cache\n").unwrap();
+            let bin = fixture.work.join("bin");
+            fs::create_dir(&bin).unwrap();
+            executable(
+                &bin,
+                "node",
+                r#"
+case "$2" in
+  install-deps) printf 'Missing system dependencies (1):\n  libneeded\n' ;;
+  -e) : > "$ORBIT_BROWSER_KIT_SCREENSHOT"
+      printf '{"text":"kit ok","version":"fixture"}\n' ;;
+  *) exit 90 ;;
+esac"#,
+            );
+            executable(
+                &bin,
+                "apt-get",
+                r#"
+[ "$1" = download ] && [ "$2" = libneeded ]
+echo download >> "$KIT_TEST_ROOT/calls"
+[ "$KIT_TEST_CASE" != unavailable ] || exit 1
+[ -f libneeded_1_amd64.deb ] || printf 'cached package\n' > libneeded_1_amd64.deb"#,
+            );
+            executable(
+                &bin,
+                "dpkg-deb",
+                r#"
+[ "$1" = -x ]
+case "$2" in */libneeded_1_amd64.deb) ;; *) exit 91 ;; esac
+echo extract >> "$KIT_TEST_ROOT/calls"
+if [ "$KIT_TEST_FAIL" = 1 ]; then echo 'fixture extraction failed' >&2; exit 1; fi
+mkdir -p "$3/usr/lib/x86_64-linux-gnu"
+: > "$3/usr/lib/x86_64-linux-gnu/libneeded.so""#,
+            );
+            executable(
+                &bin,
+                "ldd",
+                r#"
+case ":${LD_LIBRARY_PATH:-}:" in
+  *":$KIT_TEST_ROOT/root/usr/lib/x86_64-linux-gnu:"*)
+    [ ! -f "$KIT_TEST_ROOT/root/usr/lib/x86_64-linux-gnu/libneeded.so" ] || exit 0 ;;
+esac
+echo 'libneeded.so => not found'"#,
+            );
+            executable(&bin, "fc-list", "echo fixture-font");
+            executable(&bin, "dpkg-query", "exit 1");
+            for name in ["npm", "sudo", "apt-cache"] {
+                executable(
+                    &bin,
+                    name,
+                    "echo unexpected >> \"$KIT_TEST_ROOT/calls\"; exit 92",
+                );
+            }
+            let install = |fail: bool| {
+                orbit(&fixture)
+                    .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+                    .env("KIT_TEST_ROOT", &root)
+                    .env("KIT_TEST_CASE", case)
+                    .env("KIT_TEST_FAIL", if fail { "1" } else { "0" })
+                    .args(["browser-kit", "install", "--json"])
+                    .output()
+                    .unwrap()
+            };
+            if case == "failed-extraction" {
+                let failed = install(true);
+                assert!(!failed.status.success(), "{case}: {failed:?}");
+                assert!(
+                    String::from_utf8_lossy(&failed.stderr).contains("fixture extraction failed"),
+                    "{failed:?}"
+                );
+                assert!(!layout.verification_file().exists());
+                assert!(
+                    failed.stdout.is_empty(),
+                    "failed extraction emits an error, not an install report: {failed:?}"
+                );
+                assert_eq!(fs::read_to_string(&archive).unwrap(), "cached package\n");
+            }
+            let output = install(false);
+            let report = json_stdout(&output);
+            if case == "unavailable" {
+                assert!(!output.status.success(), "{case}: {output:?}");
+                assert_eq!(report["libraries"]["unpacked_packages"], json!([]));
+                assert_eq!(report["libraries"]["unresolved"], json!(["libneeded.so"]));
+                assert_eq!(report["verification"], Value::Null);
+            } else {
+                assert!(output.status.success(), "{case}: {output:?}");
+                assert_eq!(
+                    report["libraries"]["unpacked_packages"],
+                    json!(["libneeded"])
+                );
+                assert_eq!(report["libraries"]["unresolved"], json!([]));
+                assert_eq!(report["status"]["verified"], true);
+                assert_eq!(fs::read_to_string(&archive).unwrap(), "cached package\n");
+                let calls = fs::read_to_string(root.join("calls")).unwrap();
+                let expected = if case == "failed-extraction" {
+                    "download\nextract\ndownload\nextract\n"
+                } else {
+                    "download\nextract\n"
+                };
+                assert_eq!(calls, expected, "{case}");
+                let adopted = install(false);
+                assert!(adopted.status.success(), "{case}: {adopted:?}");
+                assert_eq!(
+                    json_stdout(&adopted)["libraries"]["unpacked_packages"],
+                    json!([])
+                );
+                assert_eq!(
+                    fs::read_to_string(root.join("calls")).unwrap(),
+                    calls,
+                    "ready kits skip package work"
+                );
+            }
+            assert_eq!(fs::read_to_string(&unrelated).unwrap(), "unrelated cache\n");
+            assert_eq!(
+                fs::read_to_string(root.join("env.sh")).unwrap(),
+                "# written by the operator\n"
+            );
+        }
+    }
 }
