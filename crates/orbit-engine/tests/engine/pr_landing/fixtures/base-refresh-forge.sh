@@ -1,6 +1,12 @@
 #!/bin/sh
 # Deterministic authenticated provider for isolated public-boundary regressions.
 set -eu
+# A loaded host holds the first exec of a newly written provider, queued
+# behind every other new image (ORB-15293). Fixtures prime that assessment
+# with this sentinel before any timed read. It must not touch forge state.
+if [ "${1:-}" = __prime__ ]; then
+    exit 0
+fi
 forge='__FORGE__'
 remote=$(cat "$forge/remote")
 slug=$(cat "$forge/slug")

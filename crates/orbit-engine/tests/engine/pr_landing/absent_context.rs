@@ -48,6 +48,15 @@ fn setup_with_context(sandbox: &Path, source: &str, context: &str) -> (Fixture, 
         .replace("Protected (rust)", context),
     )
     .unwrap();
+    // `handoff_land` with `max_wait_seconds: 0` reads PR status under the 15s
+    // default process budget (`landing.rs` skips the recovery deadline, and
+    // `Deadline::remaining` still clamps a passed deadline to that budget).
+    // The first exec of this image is the host-wide assessment queue
+    // (`test_env::prime_executable`, ORB-15293). Land it here, before that read.
+    fs::set_permissions(&provider, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut prime = Command::new(&provider);
+    prime.arg("__prime__");
+    test_env::prime_executable(&mut prime);
     let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
     (fx, host)
 }
