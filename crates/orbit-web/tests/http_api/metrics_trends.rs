@@ -2,8 +2,10 @@
 //! task transitions and filed defects, bucketed on the clock and scoped to the
 //! workspace.
 
+use std::io::Write;
+
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::application::task::TaskAddParams;
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{JobRunState, JobRunStep, JobTargetType};
 use orbit_store::contracts::InvocationInsertParams;
 use orbit_types::task::{TaskComplexity, TaskRelation, TaskRelationType, TaskStatus, TaskType};
@@ -507,6 +509,121 @@ fn add_typed(
         .unwrap()
         .id
         .to_string()
+}
+
+#[test]
+fn defect_trend_refreshes_types_preserved_by_older_writers() {
+    isolated(
+        "metrics_trends::defect_trend_refreshes_types_preserved_by_older_writers",
+        || {
+            let mut observed = Vec::new();
+            let mut expected = Vec::new();
+            for (name, from, to, cause, total, fix_for_fix, regression) in [
+                (
+                    "feature to bug",
+                    TaskType::Feature,
+                    TaskType::Bug,
+                    false,
+                    1,
+                    0,
+                    0,
+                ),
+                (
+                    "bug to feature",
+                    TaskType::Bug,
+                    TaskType::Feature,
+                    false,
+                    0,
+                    0,
+                    0,
+                ),
+                (
+                    "cause becomes bug",
+                    TaskType::Feature,
+                    TaskType::Bug,
+                    true,
+                    2,
+                    1,
+                    0,
+                ),
+                (
+                    "cause becomes feature",
+                    TaskType::Bug,
+                    TaskType::Feature,
+                    true,
+                    1,
+                    0,
+                    1,
+                ),
+            ] {
+                let started = std::time::Instant::now();
+                writeln!(std::io::stderr(), "scenario: {name}").unwrap();
+                let fixture = Fixture::new();
+                let task = add_typed(&fixture, from, &[], None);
+                if cause {
+                    add_typed(&fixture, TaskType::Bug, &[], Some(&task));
+                }
+                fixture
+                    .runtime
+                    .update_task_as_human(
+                        &task,
+                        TaskUpdateParams {
+                            task_type: Some(to),
+                            ..Default::default()
+                        },
+                        "fixture".into(),
+                    )
+                    .unwrap();
+
+                // Warm persisted freshness proofs with the canonical type,
+                // then restart the reader so its first comparison must check
+                // the row fingerprint rather than an in-process envelope.
+                let server = fixture.server(false);
+                json_ok(server.get(&format!("/api/tasks?{WS}")));
+                drop(server);
+
+                // The pre-registry-v2 upsert updates every known column,
+                // including updated_at, but preserves the existing task_type.
+                // Restore exactly that mismatch without introducing NULLs.
+                let index =
+                    rusqlite::Connection::open(fixture.global.join("tasks").join("index.sqlite"))
+                        .unwrap();
+                assert_eq!(
+                    index
+                        .execute(
+                            "UPDATE task_bundle_index SET task_type = ?1 WHERE task_id = ?2",
+                            (from.to_string(), &task),
+                        )
+                        .unwrap(),
+                    1
+                );
+                drop(index);
+
+                let server = fixture.server(false);
+                for _ in 0..2 {
+                    let day =
+                        json_ok(server.get(&format!("/api/diagnostics/defects?since=24h&{WS}")));
+                    observed.push((
+                        name,
+                        day["current"]["total"].clone(),
+                        day["current"]["lineage"]["fix_for_fix"].clone(),
+                        day["current"]["lineage"]["regression"].clone(),
+                    ));
+                    expected.push((name, json!(total), json!(fix_for_fix), json!(regression)));
+                }
+                writeln!(
+                    std::io::stderr(),
+                    "scenario: {name} row elapsed {:.3}s",
+                    started.elapsed().as_secs_f64()
+                )
+                .unwrap();
+            }
+            assert_eq!(
+                observed, expected,
+                "each read uses canonical task and cause types"
+            );
+        },
+    );
 }
 
 #[test]

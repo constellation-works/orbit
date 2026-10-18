@@ -71,20 +71,19 @@ impl TaskV2Store {
         self.registry.defect_filings(&self.workspace_id, since)
     }
 
-    /// One-time rebuild after registry v2 added `task_type` as a nullable
-    /// column. Best effort, like [`Self::ensure_complexity_indexed`]: rows a
-    /// refused or failed repair leaves `NULL` are simply not counted as bugs.
+    /// Older writers leave new rows' type NULL and preserve existing rows'
+    /// type even when the canonical type changes. Check every row, including
+    /// named causes, against its envelope before using the defect projection.
+    /// Repair stays best effort: unreadable bundles or a refused repair leave
+    /// the projection serving the index it already holds.
     fn ensure_task_type_indexed(&self) -> Result<(), OrbitError> {
-        if !self
-            .registry
-            .workspace_index_has_null_task_type(&self.workspace_id)?
-        {
+        if matches!(self.validate_index(), Ok(Some(_))) {
             return Ok(());
         }
         if let Some(ticket) = self.admit_index_repair()?
             && let Ok(bundles) = self.bundle_store.list_bundles()
         {
-            self.attempt_index_repair(ticket, &bundles, "task_type column unpopulated");
+            self.attempt_index_repair(ticket, &bundles, "missing or stale defect projection");
         }
         Ok(())
     }
@@ -153,8 +152,8 @@ impl TaskV2Store {
     /// `Some(unsettled)` means the index is usable; `unsettled` names the
     /// registered tasks whose bundle a concurrent writer holds, which a
     /// selection must leave out. `None` means a row is missing or disagrees
-    /// with its envelope — on `updated_at` or on any field listing filters or
-    /// orders by — and the caller must rebuild or scan bundles instead.
+    /// with its envelope — on `updated_at` or on a listing or defect projection
+    /// field — and the caller must rebuild or scan bundles instead.
     ///
     /// Each registered task costs one metadata probe. Its envelope is parsed
     /// again only when neither the in-process [`EnvelopeCache`] nor a stamp

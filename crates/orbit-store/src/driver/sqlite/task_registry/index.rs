@@ -237,27 +237,6 @@ impl TaskRegistryStore {
         Ok(exists != 0)
     }
 
-    /// True when this workspace still has index rows whose `task_type` column
-    /// was added by registry v2 and has not been written yet (`NULL`).
-    pub fn workspace_index_has_null_task_type(
-        &self,
-        partition_id: &str,
-    ) -> Result<bool, OrbitError> {
-        let partition_id = validate_partition_id(partition_id)?;
-        let conn = self.read()?;
-        let exists: i64 = conn
-            .prepare_cached(
-                "SELECT EXISTS(
-                    SELECT 1 FROM task_bundle_index
-                    WHERE workspace_id = ?1 AND task_type IS NULL
-                 )",
-            )
-            .map_err(sqlite_store_error)?
-            .query_row([partition_id], |row| row.get(0))
-            .map_err(sqlite_store_error)?;
-        Ok(exists != 0)
-    }
-
     /// Indexed `bug` tasks created at or after `since` (all of them for
     /// `None`), oldest first, with their tags and the indexed type of each
     /// `regression_from` target.

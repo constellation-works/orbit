@@ -236,10 +236,23 @@ has run.
 
 Registry v2, `index_task_type`, is `Additive`: it adds a nullable
 `task_bundle_index.task_type` column and an index on workspace, type and
-creation time, for the defect trend. Existing rows stay `NULL` until that
-trend's first read rebuilds the workspace's index from bundles. A binary
-without the entry keeps writing the registry; its upserts leave the column as
-it was and its inserts leave it `NULL` for the same rebuild.
+creation time, for the defect trend. A binary without the entry keeps writing
+the registry; its upserts preserve the column's previous value and its inserts
+leave it `NULL`. Before reading defects, the newer binary checks the generated
+index against canonical envelopes, including nullable `task_type` in both the
+comparison and persisted freshness fingerprints. A missing or stale type
+requests a best-effort workspace index rebuild from bundles. This covers both
+type-change directions and changes to named causes used for fix-for-fix
+classification, without an unrelated insert or manual reindex. Unchanged
+envelopes reuse freshness proofs; adding type to the fingerprint invalidates
+older proofs once.
+
+Repair retains the existing bounded best-effort policy: a read-only registry,
+unreadable bundle, or refused rebuild (for example, a dangling relation) can
+leave the defect projection stale. Fix unresolved edges or restore their
+targets; `orbit doctor` identifies them. An envelope or unresolved-target change
+re-admits a refused repair. The shipped entry remains additive; no schema or
+writer floor changes are required for this reader-side freshness check.
 
 A registry whose ledger is newer than the binary is decided from its record,
 as in §3: additive-newer stays writable; read-compatible-newer opens with

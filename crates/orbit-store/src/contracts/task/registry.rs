@@ -105,6 +105,8 @@ pub struct TaskIndexKey {
 pub struct IndexedTaskRow {
     pub status: String,
     pub priority: String,
+    /// Nullable until a newer reader repairs rows written before registry v2.
+    pub task_type: Option<String>,
     pub job_run_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -114,9 +116,9 @@ pub struct IndexedTaskRow {
 }
 
 impl IndexedTaskRow {
-    /// Whether the index row projects exactly the fields listing filters and
-    /// orders by, so a selection answered from the index agrees with the
-    /// envelope — including an edit that kept `updated_at` but changed a tag or parent.
+    /// Whether listing and defect projection fields agree with the envelope,
+    /// including edits that kept `updated_at` or preserved a stale type in an
+    /// older writer's upsert.
     pub fn matches(&self, envelope: &TaskEnvelopeV2) -> bool {
         let tags = normalize_task_tags(envelope.tags.clone());
         let child_of_targets = envelope
@@ -129,6 +131,7 @@ impl IndexedTaskRow {
             && self.created_at == envelope.created_at.to_rfc3339()
             && self.status == envelope.status.to_string()
             && self.priority == envelope.priority.to_string()
+            && self.task_type.as_deref() == Some(envelope.task_type.to_string().as_str())
             && self.job_run_id == envelope.job_run_id
             && tags.len() == self.tags.len()
             && tags.iter().all(|tag| self.tags.contains(tag))
@@ -137,8 +140,8 @@ impl IndexedTaskRow {
 
     /// Every field [`Self::matches`] compares, in one string. A persisted
     /// envelope stamp is recorded against it, so any rewrite of the row
-    /// retires the stamp. Older fingerprints without parent targets fail to
-    /// match, even when the task has no parent, and cost a fresh parse.
+    /// retires the stamp. Older fingerprints without task type fail to match
+    /// and cost a fresh parse.
     pub fn fingerprint(&self) -> String {
         let tags = self.tags.iter().cloned().collect::<Vec<_>>().join("\u{1f}");
         let parents = self
@@ -155,6 +158,7 @@ impl IndexedTaskRow {
             self.updated_at.as_str(),
             tags.as_str(),
             parents.as_str(),
+            self.task_type.as_deref().unwrap_or(""),
         ]
         .join("\u{1e}")
     }
