@@ -176,7 +176,11 @@ try {
         const fallback = page.locator('.artifact-preview .artifact-error');
         await until(`${name} rendered or refused`, async () => await fallback.count() > 0
           || (await image.count() > 0 && await image.evaluate(node => node.complete && node.naturalWidth > 0)));
-        assert(await fallback.count() === 0, `${name}: the image must render under the dashboard CSP, not fall back to "${await fallback.first().textContent().catch(() => '')}"; CSP reports: ${violations.join('; ')}`);
+        // Read the fallback text only when refused: a healthy render has no
+        // .artifact-error, and a waiting read would stall until its timeout.
+        const refused = await fallback.count() > 0;
+        const reason = refused ? await fallback.first().textContent().catch(() => '') : '';
+        assert(!refused, `${name}: the image must render under the dashboard CSP, not fall back to "${reason}"; CSP reports: ${violations.join('; ')}`);
         assert(await image.evaluate(node => node.naturalWidth) === 1, `${name}: the image decodes to its 1px source`);
         const src = await image.getAttribute('src');
         assert(src.startsWith('blob:'), `${name}: the image renders from a blob URL`);
