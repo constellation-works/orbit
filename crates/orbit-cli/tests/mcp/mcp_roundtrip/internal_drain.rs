@@ -65,11 +65,12 @@ fn public_drain_calls_and_spoofed_initialize_are_refused_and_audited() {
             .collect::<BTreeSet<_>>();
         assert_eq!(
             names.len(),
-            30,
+            32,
             "the reviewed 37-tool surface loses five protocol tools and seven tools \
              folded into their siblings, then gains `orbit_task_eligible`, \
              `orbit_task_review_reset`, `orbit_task_reconcile_review`, \
-             `orbit_task_retry_handoff` and `orbit_task_requeue`"
+             `orbit_task_retry_handoff`, `orbit_task_requeue` and the read-only \
+             `orbit_codebase_analytics` and `orbit_codebase_show`"
         );
         assert!(
             names.contains("orbit_task_retry_handoff"),
