@@ -5,7 +5,7 @@ tags: [operations, rust, cache, worktrees, sandbox, linux]
 paths: ["scripts/rustc-compiler-cache.sh", "scripts/compiler-cache.sh", "scripts/test-compiler-cache.sh", "scripts/test-compiler-cache-namespaces.sh", "scripts/bench-compiler-cache.sh", "scripts/cross-revision-check.sh", "scripts/test-cross-revision-check.sh", ".cargo/config.toml"]
 related_features: [policy-sandbox, executors]
 related_artifacts: [ORB-11259, ORB-11755, ORB-11981]
-last_validated: 2026-10-11
+last_validated: 2026-10-18
 ---
 
 # Share Rust dependency compilation across worker worktrees
@@ -437,9 +437,10 @@ sccache can cache the rustc invocations this checkout's wrapper forwards.
 `cargo_incremental = true` leaves `CARGO_INCREMENTAL` untouched; pinned sccache
 `0.17.0` then rejects those invocations, so turn the compiler cache off
 (`ORBIT_COMPILER_CACHE=0`) before opting in. An incremental directory already
-in a target is not deleted. Baseline result schema 9 includes the workspace output
-bindings in a new versioned cache key so earlier results cannot certify the new execution contract; old records
-are retained at their earlier keys. These targets are rebuildable host state;
+in a target is not deleted. Baseline results are keyed by schema version,
+currently 10. Schema 9 added the workspace output bindings to the versioned
+cache key so earlier results cannot certify the new execution contract; old
+records are retained at their earlier keys. These targets are rebuildable host state;
 configuration does not delete old output or shared caches. Native Linux and macOS
 collectors preserve run attribution, base-cache locks and scratch leases. macOS
 uses readable no-follow directory descriptors and descriptor-bound permission
