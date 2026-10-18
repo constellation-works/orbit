@@ -293,7 +293,8 @@ fn report_correction(ctx: &ExecCtx<'_>, input: &Value) -> Option<String> {
 }
 
 /// Fail an implementer step whose `unfiled_findings` breaks the shape
-/// `agent_implement` declares [ORB-14927].
+/// `agent_implement` declares [ORB-14927], or whose `regression_from` is not
+/// a list of task IDs.
 ///
 /// The engine does not enforce `output_schema_json`, and the claim handoff
 /// would otherwise be the first to reject the field, after the candidate is
@@ -309,16 +310,25 @@ fn reject_malformed_implementer_findings(
     if !success || !is_implementer_step(step, target) {
         return (success, message);
     }
-    match orbit_types::workflow::unfiled_findings_shape_error(output) {
-        Some(defect) => (
+    if let Some(defect) = orbit_types::workflow::unfiled_findings_shape_error(output) {
+        return (
             false,
             Some(format!(
                 "{}: {defect}. Return `unfiled_findings` \
                  as `[{{\"title\": ..., \"description\": ...}}]`.",
                 orbit_types::workflow::CONTRACT_REFUSAL_MARKER
             )),
+        );
+    }
+    match orbit_types::workflow::implementer_regression_from(output) {
+        Err(defect) => (
+            false,
+            Some(format!(
+                "{}: {defect}. Return `regression_from` as `[\"<culprit task ID>\"]`.",
+                orbit_types::workflow::CONTRACT_REFUSAL_MARKER
+            )),
         ),
-        None => (success, message),
+        Ok(_) => (success, message),
     }
 }
 

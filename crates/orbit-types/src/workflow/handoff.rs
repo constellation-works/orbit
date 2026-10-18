@@ -154,6 +154,13 @@ pub struct TaskHandoff {
     /// its own pilot finding when it accepts the handoff.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub owed_criteria: Vec<super::OwedCriterion>,
+    /// Culprit tasks the claimed implementer attributed this task's
+    /// regression to (its `regression_from` output). A claimed worker cannot
+    /// write its task's relations, so the owner checks each target against
+    /// its own workspace and records the `regression_from` relations when it
+    /// accepts the handoff.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub regression_from: Vec<String>,
 }
 
 /// Captured command output in an owner-accessible task artifact, never an agent reply.

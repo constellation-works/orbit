@@ -1565,6 +1565,7 @@ fn handoff_with_logs(
         validation: vec![],
         footprint_widening: vec![],
         owed_criteria: vec![],
+        regression_from: vec![],
     };
     let artifacts = commands
         .iter()

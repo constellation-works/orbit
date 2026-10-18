@@ -722,7 +722,13 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   the claim fence refuses them once the claim is no longer active
   (`stale_claim`). Inside the sandbox, any other owner call is refused
   (`claimed_owner_bridge_refused`) and none is tried over SSH. The claimed
-  implement step is still not granted `orbit.task.update` (above).
+  implement step is still not granted `orbit.task.update` (above). A claimed
+  task that must record a `regression_from` relation (a CI-failure sweep
+  repair) returns the culprit task IDs as its implementer output's
+  `regression_from`, and the owner records the relation when it accepts the
+  handoff. A settlement refused with `regression_from attribution was
+  refused` names a target the owner cannot resolve. Retries cannot change
+  that, so recover the claim and requeue the task.
   The broker does not carry `orbit.search`, so a claimed review files its
   findings without a duplicate search, and the owner's triage dedupes them.
   A finding the owner still refuses arrives as the claimed task's

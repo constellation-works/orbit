@@ -101,6 +101,29 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
             OrbitError::InvalidInput(format!("invalid implementer output: {defect}"))
         })?
         .unwrap_or_default();
+    let regression_from = implementation_output(input)
+        .map(orbit_types::workflow::implementer_regression_from)
+        .transpose()
+        .map_err(|defect| {
+            OrbitError::InvalidInput(format!("invalid implementer output: {defect}"))
+        })?
+        .unwrap_or_default();
+    if regression_from.contains(&context.task_id) {
+        return Err(refused(
+            "the implementer named the claimed task as its own regression culprit",
+        ));
+    }
+    if !regression_from.is_empty() {
+        execution_summary.push_str(&format!(
+            "\n\nRegression attributed to {}; the owner records each as this task's \
+             `regression_from` relation when it accepts this handoff.",
+            regression_from
+                .iter()
+                .map(|target| format!("`{target}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     if !owed_criteria.is_empty() {
         execution_summary.push_str(&format!(
             "\n\nOwed after deploy: {}.",
@@ -134,6 +157,7 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
         )?
         .1,
         owed_criteria,
+        regression_from,
     };
     host.record_claim_handoff(&handoff)?;
 

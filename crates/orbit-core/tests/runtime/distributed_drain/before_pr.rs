@@ -403,6 +403,7 @@ impl ReviewedHandoff {
             validation: vec![],
             footprint_widening: vec![],
             owed_criteria: vec![],
+            regression_from: vec![],
         };
         if !commands.is_empty() {
             git(&repo, &["checkout", "-q", &branch]);

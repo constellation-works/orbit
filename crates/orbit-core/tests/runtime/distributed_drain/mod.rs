@@ -94,6 +94,7 @@ mod post_deploy;
 mod provider_limit;
 mod rebased_landing;
 mod recovery;
+mod regression_attribution;
 mod settlement;
 mod single_pass;
 mod unavailable_hold;
@@ -1231,6 +1232,7 @@ fn handoff(record: &LocalPullAdmission) -> TaskHandoff {
         validation: vec![],
         footprint_widening: vec![],
         owed_criteria: vec![],
+        regression_from: vec![],
     }
 }
 

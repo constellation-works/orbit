@@ -170,7 +170,10 @@ task's finding may also name the task that introduced it as `regression_from` ([
 friction may name only the claimed task as the one it was found during. A request field the call does not need, or an
 internal (`_`-prefixed) field, is refused. The activity's own tool policy still applies.
 Claimed mode keeps `orbit.task.update` denied, while `orbit.task.show` remains available as a
-read scoped to the claimed task.
+read scoped to the claimed task. The claimed task's own `regression_from` relation does not cross
+the broker either: the implementer returns the culprit in its output, and the owner records the
+relation when it accepts the handoff ([distributed-drain design](../distributed-drain/2_design.md),
+claimed-mode implementation).
 
 The broker holds no copy of the claimed task, so it admits a `regression_from` relation by shape
 alone. The owner decides. It accepts one only when the claimed task carries the provenance tag of
