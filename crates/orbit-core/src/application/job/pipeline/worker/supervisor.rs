@@ -283,10 +283,16 @@ impl PipelineWorkerSupervisor {
         worker_log_reader: File,
         actor: Option<&str>,
     ) -> Result<(), OrbitError> {
+        #[cfg(feature = "test-support")]
+        let worker_pid = child.id();
         let settled = self.observe_startup(run_id, child, worker_log, worker_log_reader, actor);
         announce_worker_exit();
         #[cfg(feature = "test-support")]
-        crate::application::job::pipeline::wait::record_worker_exit(run_id);
+        crate::application::job::pipeline::wait::record_worker_exit(
+            self.workspace(),
+            run_id,
+            worker_pid,
+        );
         settled
     }
 

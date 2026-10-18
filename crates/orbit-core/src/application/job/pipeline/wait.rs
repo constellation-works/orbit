@@ -100,27 +100,31 @@ pub(super) fn announce_worker_exit() {
 }
 
 #[cfg(feature = "test-support")]
-static OBSERVED_WORKER_EXITS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static OBSERVED_WORKER_EXITS: Mutex<Vec<(PathBuf, String, u32)>> = Mutex::new(Vec::new());
 
 /// Record that the startup observer for `run_id` finished all of its
 /// post-reap work (test support only; production builds keep no record).
 #[cfg(feature = "test-support")]
-pub(super) fn record_worker_exit(run_id: &str) {
+pub(super) fn record_worker_exit(workspace: &Path, run_id: &str, worker_pid: u32) {
     OBSERVED_WORKER_EXITS
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .push(run_id.to_string());
+        .push((workspace.to_path_buf(), run_id.to_string(), worker_pid));
 }
 
-/// Whether the startup observer for `run_id` has finished all of its
-/// post-reap work in this process. Only recorded under `test-support`.
+/// Whether this workspace's startup observer for `run_id` and `worker_pid`
+/// has finished all of its post-reap work in this process. Run IDs are
+/// workspace-local, and two observers of the same run can own different
+/// workers. Only recorded under `test-support`.
 #[cfg(feature = "test-support")]
-pub fn pipeline_worker_observer_completed(run_id: &str) -> bool {
+pub fn pipeline_worker_observer_completed(workspace: &Path, run_id: &str, worker_pid: u32) -> bool {
     OBSERVED_WORKER_EXITS
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .iter()
-        .any(|observed| observed == run_id)
+        .any(|(observed_workspace, observed_run, observed_pid)| {
+            observed_workspace == workspace && observed_run == run_id && *observed_pid == worker_pid
+        })
 }
 
 /// Sleep for up to `duration` while the count still equals `exits_seen`.

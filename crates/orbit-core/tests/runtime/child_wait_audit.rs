@@ -458,7 +458,11 @@ impl Drop for Fixture {
             let settle_deadline = Instant::now() + Duration::from_secs(10);
             loop {
                 let settled = workers.iter().all(|worker| {
-                    orbit_core::test_support::pipeline_worker_observer_completed(&worker.run)
+                    orbit_core::test_support::pipeline_worker_observer_completed(
+                        &self.repo,
+                        &worker.run,
+                        worker.pid,
+                    )
                 });
                 if settled {
                     break;
@@ -676,6 +680,13 @@ fn a_child_wait_row_names_the_child_and_why_and_only_failures_are_incidents() {
         let root = fixture.root.path().to_path_buf();
         let pids = fixture.worker_pids();
         let cleaned = fixture.cleaned.clone();
+        let observers: Vec<_> = fixture
+            .workers
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|worker| (worker.run.clone(), worker.pid))
+            .collect();
         // All substitutes are still behind the observation handshake after
         // their markers were written, including the genuine live timeout row.
         assert!(pids.iter().all(|pid| !reaped(*pid)));
@@ -694,6 +705,18 @@ fn a_child_wait_row_names_the_child_and_why_and_only_failures_are_incidents() {
         // identity, without a new test, production seam, deadline or sleep.
         for panic in [false, true] {
             let fixture = Fixture::new();
+            // Completed observers from another workspace must not satisfy
+            // this fixture's teardown, even when its run IDs are reused.
+            for (run, pid) in &observers {
+                assert!(
+                    !orbit_core::test_support::pipeline_worker_observer_completed(
+                        &fixture.repo,
+                        run,
+                        *pid,
+                    ),
+                    "observer completion must belong to the worker's workspace"
+                );
+            }
             let _ = fixture.observe(json!([]), 60, |runtime, child| {
                 runtime.cancel_job_run(child).unwrap();
             });
