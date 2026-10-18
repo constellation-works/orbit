@@ -2,6 +2,7 @@ mod agent_blocker;
 mod baseline;
 mod deferred_sandbox;
 mod delivery;
+mod diagnostic;
 mod flaky;
 mod forge_hold;
 mod held_candidate;
@@ -36,6 +37,7 @@ pub use delivery::{
     LandingMethod, LandingObservation, LandingObservationStatus, RUN_DELIVERY_EVIDENCE_SOURCE,
     RUN_DELIVERY_SCHEMA_VERSION, RunDeliveryObservation, RunDeliveryStatus,
 };
+pub use diagnostic::{CLI_STDERR_TAIL_SEPARATOR, failure_classification_text};
 pub use forge_hold::{
     FORGE_UNAVAILABLE_ERROR_CODE, FORGE_UNAVAILABLE_EXPIRED_EVENT, FORGE_UNAVAILABLE_MARKER,
     ForgeUnavailableHold, is_forge_unavailable,

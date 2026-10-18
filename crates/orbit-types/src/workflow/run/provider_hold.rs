@@ -243,6 +243,7 @@ impl ProviderFailureHold {
     /// (the failed run resolved none); its backoff still stands.
     #[must_use]
     pub fn from_text(text: &str) -> Option<Self> {
+        let text = super::failure_classification_text(text);
         let (_, rest) = text.split_once(PROVIDER_FAILURE_HOLD_MARKER)?;
         serde_json::Deserializer::from_str(rest.trim_start())
             .into_iter::<Self>()

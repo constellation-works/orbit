@@ -15,6 +15,7 @@
 //! claim goes back to its owner, and the leaf holds on the provider and the
 //! reset it reported ([`HeldFailure::of_claimed_leaf`]).
 
+use super::failure_classification_text;
 use serde::{Deserialize, Serialize};
 
 use super::baseline::{BASELINE_RED_ERROR_CODE, is_baseline_red_failure};
@@ -77,7 +78,9 @@ impl HeldFailure {
             return Some(Self::BaselineRed);
         }
         let pending = error_code == Some(REVIEW_DECISION_PENDING_ERROR_CODE)
-            || message.is_some_and(|message| message.contains(REVIEW_LANDING_DECISION_PENDING));
+            || message.is_some_and(|message| {
+                failure_classification_text(message).contains(REVIEW_LANDING_DECISION_PENDING)
+            });
         pending.then_some(Self::DecisionPending)
     }
 
