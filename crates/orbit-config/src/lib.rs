@@ -82,6 +82,9 @@ mod roots;
 mod seed;
 mod store;
 mod tag_instructions;
+mod unknown;
+
+pub use unknown::{UnknownConfigKey, unknown_config_keys_at, unknown_config_keys_present};
 
 use std::io::Read;
 use std::path::{Path, PathBuf};

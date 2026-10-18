@@ -483,6 +483,26 @@ impl ConfigStore {
         Ok(self.remove_path(key))
     }
 
+    /// Remove a diagnosed unknown key or whole table from this document.
+    ///
+    /// Rechecks the staged document so a stale diagnosis cannot remove a known
+    /// setting. Literal dots in TOML keys remain separate from path separators.
+    pub fn remove_unknown_key(
+        &mut self,
+        key: &crate::UnknownConfigKey,
+    ) -> Result<bool, OrbitError> {
+        let document = toml::from_str(&self.doc.to_string())
+            .map_err(|error| OrbitError::InvalidInput(format!("invalid staged config: {error}")))?;
+        if !crate::unknown_config_keys_present(&document)
+            .iter()
+            .any(|current| current.segments == key.segments)
+        {
+            return Ok(false);
+        }
+        let segments: Vec<_> = key.segments.iter().map(String::as_str).collect();
+        Ok(self.remove_segments(&segments))
+    }
+
     /// Remove a whole `[crews.<name>]` table, reporting whether it existed.
     ///
     /// Crew tables are dynamically named, so they are not registry keys and
@@ -508,6 +528,10 @@ impl ConfigStore {
     /// table and the leaf exists.
     fn remove_path(&mut self, key: &str) -> bool {
         let segments: Vec<&str> = key.split('.').collect();
+        self.remove_segments(&segments)
+    }
+
+    fn remove_segments(&mut self, segments: &[&str]) -> bool {
         let Some((last, ancestors)) = segments.split_last() else {
             return false;
         };

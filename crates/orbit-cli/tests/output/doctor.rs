@@ -953,6 +953,17 @@ system_crew = \"sol\"
 
 [scoring]
 enabled = false
+
+[task.approval]
+delegate_approval = true
+
+[workflow.future]
+enabled = true
+
+[plugins.future]
+arbitrary = { nested = true }
+
+[future]
 ";
     fs::write(&workspace_config, workspace_body).expect("workspace config");
 
@@ -991,6 +1002,22 @@ enabled = false
         "doctor names the removed key and its file: {reported_rows:?}"
     );
     assert!(
+        ["task.approval", "workflow.future", "future"]
+            .iter()
+            .all(|key| retired.iter().any(|row| mentions_key_and_file(
+                row,
+                key,
+                &workspace_config
+            ))),
+        "doctor names unknown tables and their file: {reported_rows:?}"
+    );
+    assert!(
+        !retired
+            .iter()
+            .any(|row| mentions_key_and_file(row, "plugins.future", &workspace_config)),
+        "plugin namespaces are owned by plugins: {reported_rows:?}"
+    );
+    assert!(
         retired.iter().all(|row| row["remediation"]
             .as_str()
             .is_some_and(|text| text.contains("--fix-retired-config-keys"))),
@@ -1024,8 +1051,17 @@ enabled = false
         "the repair keeps the neighboring key: {updated}"
     );
     assert!(
-        !updated.contains("system_crew") && !updated.contains("enabled"),
+        !updated.contains("system_crew")
+            && !updated.contains("enabled")
+            && !updated.contains("[future]")
+            && !updated.contains("delegate_approval"),
         "the repair removes only the retired keys: {updated}"
+    );
+    let parsed: Value = serde_json::to_value(updated.parse::<toml::Value>().expect("updated TOML"))
+        .expect("json config");
+    assert_eq!(
+        parsed["plugins"]["future"]["arbitrary"]["nested"], true,
+        "plugin config survives cleanup"
     );
     assert_eq!(
         fs::read_to_string(&global_config).expect("global config"),
@@ -1052,9 +1088,9 @@ enabled = false
     let again_repair = row(&again, "fix-retired-config-keys");
     assert_eq!(again_repair["status"], "ok", "{again_repair}");
     assert!(
-        again_repair["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("No retired or deprecated config keys")),
+        again_repair["message"].as_str().is_some_and(
+            |message| message.contains("No retired, deprecated or unknown config keys")
+        ),
         "{again_repair}"
     );
     assert_eq!(
@@ -1735,5 +1771,61 @@ fn doctor_keeps_a_missing_cli_an_error_for_an_unrestricted_executor() {
             |remediation| remediation.contains(&format!("Install the '{launcher}' CLI"))
         ),
         "{crew}"
+    );
+}
+
+/// Unknown-only files must enter the existing locked, backed-up repair flow.
+#[test]
+fn doctor_fixes_unknown_config_without_retired_keys() {
+    let fixture = WorkCheckout::new();
+    let global_dir = fixture.home.join(".orbit");
+    fs::create_dir_all(&global_dir).expect("global root");
+    let global = global_dir.join("config.toml");
+    let workspace = fixture.work.join(".orbit/config.toml");
+    let global_body = "[workflow]\nbase_branc = 'stale'\nbase_branch = 'main'\n";
+    let workspace_body = "# keep this note\n[workflow]\nbase_branch = 'agent-main'\n[future]\n";
+    fs::write(&global, global_body).expect("global config");
+    fs::write(&workspace, workspace_body).expect("workspace config");
+    let diagnosis = rows(&doctor(&fixture, &[]));
+    assert!(
+        diagnosis.iter().any(
+            |row| mentions_key_and_file(row, "workflow.base_branc", &global)
+                && row["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("workflow.base_branch"))
+        ),
+        "{diagnosis:?}"
+    );
+    assert!(
+        diagnosis
+            .iter()
+            .any(|row| mentions_key_and_file(row, "future", &workspace)),
+        "{diagnosis:?}"
+    );
+    let repaired = rows(&doctor(&fixture, &["--fix-retired-config-keys"]));
+    assert_eq!(row(&repaired, "fix-retired-config-keys")["status"], "ok");
+    assert_eq!(row(&repaired, "retired-config-keys")["status"], "ok");
+    assert_eq!(
+        fs::read_to_string(global_dir.join("config.toml.bak")).expect("global backup"),
+        global_body
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.work.join(".orbit/config.toml.bak")).expect("workspace backup"),
+        workspace_body
+    );
+    let updated: toml::Value = fs::read_to_string(&global)
+        .expect("global")
+        .parse()
+        .expect("TOML");
+    assert_eq!(updated["workflow"]["base_branch"].as_str(), Some("main"));
+    assert!(updated["workflow"].get("base_branc").is_none());
+    let updated = fs::read_to_string(&workspace).expect("workspace");
+    assert!(updated.contains("# keep this note"));
+    assert!(
+        updated
+            .parse::<toml::Value>()
+            .expect("TOML")
+            .get("future")
+            .is_none()
     );
 }

@@ -46,7 +46,7 @@ use orbit_types::workflow::{
 use serde::{Deserialize, Serialize};
 
 use crate::layering::{set_value_at_path, value_at_path};
-use crate::registry::{deprecated_key_note, read_optional, removed_key_note};
+use crate::registry::read_optional;
 
 /// Version of the resolved-policy shape captured into run records. Bump when
 /// a captured field is added, removed, or changes meaning so an older
@@ -81,34 +81,11 @@ pub const LEGACY_REVIEW_POLICY_KEY: &str = "operation.review_policy";
 /// The retired lineage minutes, translated to [`REVIEW_MINUTES_KEY`].
 pub const LEGACY_REVIEW_MINUTES_KEY: &str = "operation.review_minutes";
 
-/// Commands settlement may rerun to confirm a red-base claim [ORB-14434].
-/// Not review policy: [`crate::ConfigSnapshot`] reads it, not
-/// [`OperationLayer`].
-const REVIEW_BASELINE_COMMANDS_KEY: &str = "review.baseline_commands";
-
-/// The opt-in review-finding verification gate [ORB-15760]. Not review
-/// policy either: [`crate::ConfigSnapshot`] reads it.
-const REVIEW_VERIFY_FINDINGS_KEY: &str = "review.verify_findings";
-
 /// Checks a claimed leaf's host owes for the paths it changed.
 pub const REVIEW_HOST_EVIDENCE_KEY: &str = "review.host_evidence";
 
-/// Every live `[review]` key, as the unknown-key guard sees it.
-const REVIEW_KEYS: &[&str] = &[
-    REVIEW_BEFORE_PR_KEY,
-    REVIEW_BEFORE_LANDING_KEY,
-    REVIEW_BEFORE_LANDING_HOSTS_KEY,
-    REVIEW_MINUTES_KEY,
-    REVIEW_BASELINE_COMMANDS_KEY,
-    REVIEW_VERIFY_FINDINGS_KEY,
-    REVIEW_HOST_EVIDENCE_KEY,
-];
-
 /// The crew, or crew pool, of automatic review.
 pub const REVIEW_CREW_KEY: &str = "operation.review_crew";
-
-/// Every live `[operation]` key, as the unknown-key guard sees it.
-const OPERATION_KEYS: &[&str] = &[REVIEW_CREW_KEY];
 
 /// `operation.review_crew` as written: one crew name, or a pool of
 /// `name[:weight]` entries [ORB-15195]. A single name is a one-member pool.
@@ -265,15 +242,17 @@ pub struct OperationLayer {
 }
 
 impl OperationLayer {
-    /// Read the review keys of one translated document. Unknown keys and
-    /// out-of-range values fail rather than being ignored: a misspelled
-    /// review setting that silently resolved to off would be a surprising
-    /// statement. Deprecated and removed `[operation]` keys are the
-    /// exception: the loader warns about them by name, so a `config.toml`
-    /// written before their retirement keeps loading.
+    /// Read review preferences. Unknown fields are diagnosed by the config
+    /// loader and ignored so different binary versions can share a file.
+    /// Known fields still validate their types, values and policy constraints.
     pub fn from_document(document: &toml::Value, config_path: &Path) -> Result<Self, OrbitError> {
-        reject_unknown_keys(document, "operation", OPERATION_KEYS, true)?;
-        reject_unknown_keys(document, "review", REVIEW_KEYS, false)?;
+        for table in ["operation", "review"] {
+            if document.get(table).is_some_and(|value| !value.is_table()) {
+                return Err(OrbitError::InvalidInput(format!(
+                    "[{table}] must be a table"
+                )));
+            }
+        }
 
         Ok(Self {
             review_before_pr: read_optional(document, REVIEW_BEFORE_PR_KEY, config_path)?,
@@ -305,39 +284,6 @@ impl OperationLayer {
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }
-}
-
-/// Refuse a key of `[table]` that is not live (`known`) and, when
-/// `retired_allowed`, not a deprecated or removed key either.
-fn reject_unknown_keys(
-    document: &toml::Value,
-    table: &str,
-    known: &[&str],
-    retired_allowed: bool,
-) -> Result<(), OrbitError> {
-    let Some(value) = document.as_table().and_then(|root| root.get(table)) else {
-        return Ok(());
-    };
-    let entries = value
-        .as_table()
-        .ok_or_else(|| OrbitError::InvalidInput(format!("[{table}] must be a table")))?;
-    for key in entries.keys() {
-        let qualified = format!("{table}.{key}");
-        let retired = retired_allowed
-            && (deprecated_key_note(&qualified).is_some()
-                || removed_key_note(&qualified).is_some());
-        if !known.contains(&qualified.as_str()) && !retired {
-            return Err(OrbitError::InvalidInput(format!(
-                "[{table}] has unknown key '{key}'; expected one of: {}",
-                known
-                    .iter()
-                    .map(|known| known.trim_start_matches(table).trim_start_matches('.'))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )));
-        }
-    }
-    Ok(())
 }
 
 /// The fully resolved review preferences with per-field provenance.

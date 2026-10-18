@@ -41,6 +41,21 @@ orbit config keys              # every settable key, with type and description
 If the workspace file does not exist yet, add `--fresh` to start it empty or
 `--seed-from-global` to start from a copy of the global file.
 
+## Unknown settings
+
+Unknown keys and tables load with a warning naming their file and path, plus a
+nearby known key when available. Each file and path warns once per process.
+Unknown tables, including empty ones, are reported as a whole. Known section
+headers, plugin settings and registered table-valued settings stay under their
+own validation. Unknown `[operation]` and `[review]` fields also warn; known
+values still validate normally.
+
+`orbit doctor` lists unknown settings alongside retired keys.
+`orbit doctor --fix-retired-config-keys` backs up each affected file and removes
+those entries, preserving known settings and translated review preferences.
+Check the list first when sharing config with a newer binary: that version
+may still use an entry this version does not recognise.
+
 ## Host registry
 
 `~/.orbit/hosts.toml` registers the remote Orbit installations this machine

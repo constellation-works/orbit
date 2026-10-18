@@ -232,7 +232,6 @@ fn invalid_legacy_values_still_fail_closed() {
     for body in [
         "[operation]\nreview_policy = \"before_pr\"\n",
         "[operation]\nreview_minutes = 0\n",
-        "[review]\nbefore_pr = true\nreviewers = 2\n",
     ] {
         review_layers_write_config(workspace.path(), body);
         assert!(

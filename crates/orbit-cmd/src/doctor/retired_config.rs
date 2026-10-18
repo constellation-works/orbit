@@ -1,4 +1,4 @@
-//! Retired and deprecated `config.toml` keys that warn on every load.
+//! Retired, deprecated and unknown `config.toml` settings.
 //!
 //! Diagnosis lists each key with the file that still sets it. The repair
 //! migrates translated review settings within each file before removing the
@@ -13,7 +13,7 @@ use orbit_common::security::redaction::redact_home_dir;
 use orbit_config::{
     CompatibilityConfigKeyDisposition, ConfigScope, ConfigStore, REVIEW_BEFORE_PR_KEY,
     REVIEW_MINUTES_KEY, compatibility_config_keys_at, compatibility_config_keys_present,
-    translate_legacy_review_keys,
+    translate_legacy_review_keys, unknown_config_keys_at, unknown_config_keys_present,
 };
 use orbit_core::OrbitRuntime;
 
@@ -30,7 +30,7 @@ struct ConfigLayer {
 /// One key the repair deleted, and the backup of the file it came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemovedRetiredConfigKey {
-    /// Registry key that was removed.
+    /// Config key or table that was removed.
     pub key: String,
     /// Config file the key was removed from.
     pub config_path: PathBuf,
@@ -41,10 +41,10 @@ pub struct RemovedRetiredConfigKey {
 /// Outcome of `--fix-retired-config-keys`.
 ///
 /// An empty `removed` list means both config files were already free of
-/// retired and deprecated keys, and nothing was written.
+/// retired, deprecated and unknown keys, and nothing was written.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RetiredConfigKeyRepair {
-    /// Keys removed, in file order then registry order.
+    /// Keys removed, in file order: compatibility keys, then unknown paths.
     pub removed: Vec<RemovedRetiredConfigKey>,
 }
 
@@ -53,6 +53,31 @@ pub(super) fn doctor_check_retired_config_keys(
 ) -> Vec<WorkspaceDoctorResult> {
     let mut warnings = Vec::new();
     for layer in config_layers(runtime) {
+        match unknown_config_keys_at(&layer.path) {
+            Ok(keys) => {
+                for key in keys {
+                    let hint = key
+                        .suggestion
+                        .map(|suggestion| format!("; did you mean {suggestion}?"))
+                        .unwrap_or_default();
+                    warnings.push(actionable_check(
+                        CHECK,
+                        WorkspaceDoctorStatus::Warning,
+                        format!(
+                            "{} is set in {} (unknown and ignored){hint}",
+                            key.key,
+                            layer.path.display()
+                        ),
+                        FIX.to_string(),
+                    ));
+                }
+            }
+            Err(error) => warnings.push(check(
+                CHECK,
+                WorkspaceDoctorStatus::Warning,
+                format!("cannot read {}: {error}", layer.path.display()),
+            )),
+        }
         match compatibility_config_keys_at(&layer.path) {
             Ok(keys) => {
                 for key in keys {
@@ -80,7 +105,7 @@ pub(super) fn doctor_check_retired_config_keys(
         vec![check(
             CHECK,
             WorkspaceDoctorStatus::Ok,
-            "no retired or deprecated config keys".to_string(),
+            "no retired, deprecated or unknown config keys".to_string(),
         )]
     } else {
         warnings
@@ -150,7 +175,9 @@ fn prepare_layer<'a>(
     runtime: &OrbitRuntime,
     layer: &'a ConfigLayer,
 ) -> Result<Option<PlannedRepair<'a>>, OrbitError> {
-    if compatibility_config_keys_at(&layer.path)?.is_empty() {
+    if compatibility_config_keys_at(&layer.path)?.is_empty()
+        && unknown_config_keys_at(&layer.path)?.is_empty()
+    {
         return Ok(None);
     }
     let original = fs::read_to_string(&layer.path).map_err(|error| {
@@ -166,6 +193,7 @@ fn prepare_layer<'a>(
         ))
     })?;
     let keys = compatibility_config_keys_present(&document);
+    let unknown = unknown_config_keys_present(&document);
     // Even a masked after-landing value requires an explicit operator choice:
     // deleting the masking layer could otherwise change the enabled consumer.
     if document
@@ -199,6 +227,11 @@ fn prepare_layer<'a>(
     for key in keys {
         if store.unset_value(key.key)? {
             removed_keys.push(key.key.to_string());
+        }
+    }
+    for key in unknown {
+        if store.remove_unknown_key(&key)? {
+            removed_keys.push(key.key);
         }
     }
     validate_edited(runtime, layer.scope, &store)?;
