@@ -49,7 +49,7 @@ use orbit_engine::{
 use orbit_exec::{LoginShell, ValidationEnvPolicy, ValidationEnvironment};
 use orbit_types::task::{
     ContextWideningStep, ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskArtifact,
-    TaskComment, TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,
+    TaskComment, TaskDecision, TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,
     push_external_ref_if_missing,
 };
 use orbit_types::workflow::activity_job::{ActivityV2, ActivityV2Spec, DeterministicSpec};
@@ -4792,6 +4792,7 @@ fn a_candidate_failing_only_known_red_tests_proceeds_and_records_them() {
                     .into_iter()
                     .collect::<Vec<_>>()
             };
+            let mut legacy_history = false;
             for &(case, base, candidate_tests, known_red) in KNOWN_RED_CASES {
                 let fx = Fixture::with_red_tests(sandbox, base, candidate_tests);
                 let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
@@ -4805,9 +4806,19 @@ fn a_candidate_failing_only_known_red_tests_proceeds_and_records_them() {
                     .history(TASK_ID)
                     .into_iter()
                     .filter(|entry| entry.event == KNOWN_RED_VALIDATION_EVENT)
-                    .map(|entry| {
-                        KnownRedValidation::from_text(entry.note.as_deref().unwrap_or_default())
-                            .expect("the note carries its record")
+                    .map(|entry| match entry.decision {
+                        Some(TaskDecision::KnownRedValidation(known)) => {
+                            assert!(
+                                entry
+                                    .note
+                                    .as_deref()
+                                    .is_some_and(|note| note.starts_with(&known.text(""))),
+                                "{case}: the note still carries the record: {:?}",
+                                entry.note
+                            );
+                            known
+                        }
+                        other => panic!("{case}: the known red is a typed decision: {other:?}"),
                     })
                     .collect::<Vec<_>>();
 
@@ -4879,6 +4890,14 @@ fn a_candidate_failing_only_known_red_tests_proceeds_and_records_them() {
                     vec![record],
                     "{case}: the task's history records it"
                 );
+                // Every other case reads history an older binary wrote: the
+                // record in the note alone, which `pr_open` still lists.
+                legacy_history = !legacy_history;
+                if legacy_history {
+                    for entry in host.history.lock().unwrap().values_mut().flatten() {
+                        entry.decision = None;
+                    }
+                }
 
                 action(
                     &host,
@@ -8099,7 +8118,7 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
                     from_status: None,
                     to_status: None,
                     operation_id: None,
-                    decision: None,
+                    decision: Some(TaskDecision::FlakyValidation(record.clone())),
                 }],
                 ..Default::default()
             },

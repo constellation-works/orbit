@@ -2,7 +2,7 @@ use std::path::Path;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_types::task::{TaskComment, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{CANDIDATE_HELD_EVENT, HeldCandidate};
 use serde_json::{Value, json};
 
@@ -70,7 +70,7 @@ fn held_history(held: &HeldCandidate) -> TaskHistoryEntry {
         from_status: None,
         to_status: None,
         operation_id: None,
-        decision: None,
+        decision: Some(TaskDecision::CandidateHeld(held.clone())),
     }
 }
 

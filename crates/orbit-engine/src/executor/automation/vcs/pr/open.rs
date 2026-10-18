@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
+use orbit_types::task::TaskHistoryEntry;
 use orbit_types::workflow::{
     FLAKY_VALIDATION_EVENT, FlakyValidation, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation,
 };
@@ -152,7 +153,7 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
         base_sha,
         input,
         (KNOWN_RED_VALIDATION_EVENT, "known_red"),
-        KnownRedValidation::from_text,
+        KnownRedValidation::from_entry,
         |record| ValidationRecord {
             command: &record.command,
             run_id: &record.run_id,
@@ -168,7 +169,7 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
         base_sha,
         input,
         (FLAKY_VALIDATION_EVENT, "flaky"),
-        FlakyValidation::from_text,
+        FlakyValidation::from_entry,
         |record| ValidationRecord {
             command: &record.command,
             run_id: &record.run_id,
@@ -551,7 +552,7 @@ fn collect_validation_records<H: RuntimeHost + ?Sized, T: DeserializeOwned>(
     base_sha: &str,
     input: &Value,
     (event, key): (&str, &str),
-    parse: fn(&str) -> Option<T>,
+    parse: fn(&TaskHistoryEntry) -> Option<T>,
     fields: impl Fn(&T) -> ValidationRecord<'_>,
 ) -> Vec<T> {
     let kind = key.replace('_', "-");
@@ -587,7 +588,7 @@ fn collect_validation_records<H: RuntimeHost + ?Sized, T: DeserializeOwned>(
         for record in history
             .iter()
             .filter(|entry| entry.event == event)
-            .filter_map(|entry| entry.note.as_deref().and_then(parse))
+            .filter_map(parse)
         {
             insert_matching(record);
         }

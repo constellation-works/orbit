@@ -2482,6 +2482,24 @@ fn a_deferral_of_a_replica_only_gate_is_refused_naming_the_owners_gates() {
     }
 }
 
+/// The known-red record a `known_red_validation` history event of a task's
+/// JSON view carries as its typed decision, beside the record's note.
+fn known_red_decision(event: &Value) -> orbit_types::workflow::KnownRedValidation {
+    assert_eq!(event["decision"]["kind"], "known_red_validation", "{event}");
+    let Ok(orbit_types::task::TaskDecision::KnownRedValidation(known)) =
+        serde_json::from_value(event["decision"].clone())
+    else {
+        panic!("the decision is a known red: {event}");
+    };
+    assert!(
+        event["note"]
+            .as_str()
+            .is_some_and(|note| note.starts_with(&known.text(""))),
+        "the note still carries the record: {event}"
+    );
+    known
+}
+
 /// [ORB-15427] A claimed clean-base leaf whose required command fails only
 /// with tests its base fails too hands off a known-red log instead of
 /// releasing the claim, and the owner takes none of it on the leaf's word:
@@ -2491,7 +2509,7 @@ fn a_deferral_of_a_replica_only_gate_is_refused_naming_the_owners_gates() {
 /// the claim instead [ORB-15566], with nothing recorded as known red.
 #[test]
 fn a_claimed_known_red_log_is_accepted_only_on_the_owners_own_base_run() {
-    use orbit_types::workflow::{KNOWN_RED_VALIDATION_EVENT, KnownRedValidation};
+    use orbit_types::workflow::KNOWN_RED_VALIDATION_EVENT;
 
     if !isolated(
         module_path!(),
@@ -2544,7 +2562,7 @@ fn a_claimed_known_red_log_is_accepted_only_on_the_owners_own_base_run() {
             .unwrap()
             .iter()
             .filter(|event| event["event"] == KNOWN_RED_VALIDATION_EVENT)
-            .map(|event| KnownRedValidation::from_text(event["note"].as_str().unwrap()).unwrap())
+            .map(known_red_decision)
             .collect::<Vec<_>>();
         if owner_base_red {
             let settled = settled.expect("the owner's base run fails the reported test");
@@ -2581,7 +2599,7 @@ fn a_claimed_known_red_log_is_accepted_only_on_the_owners_own_base_run() {
 #[test]
 fn a_macos_leaf_known_red_report_is_not_contradicted_by_a_linux_owner_base() {
     use orbit_types::task::HostOs;
-    use orbit_types::workflow::{KNOWN_RED_VALIDATION_EVENT, KnownRedValidation};
+    use orbit_types::workflow::KNOWN_RED_VALIDATION_EVENT;
 
     if !isolated(
         module_path!(),
@@ -2621,15 +2639,15 @@ fn a_macos_leaf_known_red_report_is_not_contradicted_by_a_linux_owner_base() {
         "the leaf's delivery stays this attempt"
     );
     let task = fixture.pair.owner_task(&fixture.task);
-    let notes = task["history"]
+    let events = task["history"]
         .as_array()
         .unwrap()
         .iter()
         .filter(|event| event["event"] == KNOWN_RED_VALIDATION_EVENT)
-        .map(|event| event["note"].as_str().unwrap().to_string())
         .collect::<Vec<_>>();
-    assert_eq!(notes.len(), 1, "{notes:?}");
-    let known = KnownRedValidation::from_text(&notes[0]).unwrap();
+    assert_eq!(events.len(), 1, "{events:?}");
+    let known = known_red_decision(events[0]);
+    let note = events[0]["note"].as_str().unwrap();
     assert_eq!(known.command, red.command());
     assert_eq!(known.base_sha, fixture.base);
     assert_eq!(
@@ -2637,9 +2655,8 @@ fn a_macos_leaf_known_red_report_is_not_contradicted_by_a_linux_owner_base() {
         vec![RedCheck::FAILURE.to_string()]
     );
     assert!(
-        notes[0].contains("macos") && notes[0].contains("linux"),
-        "the acceptance names the OS mismatch: {}",
-        notes[0]
+        note.contains("macos") && note.contains("linux"),
+        "the acceptance names the OS mismatch: {note}"
     );
     assert!(
         task["history"]

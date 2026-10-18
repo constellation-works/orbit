@@ -45,7 +45,7 @@ use std::time::Instant;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
-use orbit_types::task::{ContextWideningStep, TaskHistoryEntry};
+use orbit_types::task::{ContextWideningStep, TaskDecision, TaskHistoryEntry};
 use orbit_types::workflow::handoff::HandoffArtifactRef;
 use orbit_types::workflow::{
     BaselineRedFailures, BaselineRedHold, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation,
@@ -433,8 +433,8 @@ fn attribute_reviewed_paths<H: RuntimeHost + ?Sized>(
     Ok(changed.into_iter().collect())
 }
 
-/// Record `known` on each delivered task's history, the note `pr_open` reads
-/// for the pull request.
+/// Record `known` on each delivered task's history, the decision `pr_open`
+/// reads for the pull request.
 fn record_known_red<H: RuntimeHost + ?Sized>(
     host: &H,
     task_ids: &[String],
@@ -463,7 +463,7 @@ fn record_known_red<H: RuntimeHost + ?Sized>(
                     from_status: None,
                     to_status: None,
                     operation_id: None,
-                    decision: None,
+                    decision: Some(TaskDecision::KnownRedValidation(known.clone())),
                 }],
                 ..TaskAutomationUpdate::default()
             },

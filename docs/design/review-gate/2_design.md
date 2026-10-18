@@ -676,8 +676,8 @@ the certificate's `known_red` records the command, record id, base, final
 candidate, run and tests, and coverage (`validation_evidence`) counts a
 failed required record only through an entry bound to the certificate's
 own base and final candidate. Each task's history gets the
-`known_red_validation` note `pr_open` reads. One held check anywhere in the
-review still holds it. A candidate
+`known_red_validation` event whose typed decision `pr_open` reads. One held
+check anywhere in the review still holds it. A candidate
 that adds failures keeps its verdict (`baseline_exceeded`). Once the host
 refutes the claim, its run on the final candidate decides the check
 [ORB-15122]. A pass there, with no open finding and no pending external

@@ -187,7 +187,7 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<CodebaseFacts, OrbitError> 
             .iter()
             .filter(|entry| entry.event == CONTEXT_FILES_WIDENED_EVENT)
             .filter_map(|entry| {
-                let widening = ContextFilesWidening::from_note(entry.note.as_deref()?)?;
+                let widening = ContextFilesWidening::from_entry(entry)?;
                 let anchors = widening
                     .selectors
                     .iter()

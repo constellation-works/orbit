@@ -128,12 +128,7 @@ fn lifecycle_digest(
         history
             .iter()
             .filter(|entry| entry.event == CONTEXT_FILES_WIDENED_EVENT && entry.at > observed_at)
-            .filter_map(|entry| {
-                entry
-                    .note
-                    .as_deref()
-                    .and_then(ContextFilesWidening::from_note)
-            })
+            .filter_map(ContextFilesWidening::from_entry)
             .filter(|widening| widening.step == ContextWideningStep::Recovery)
             .flat_map(|widening| widening.selectors)
             .collect::<Vec<_>>()

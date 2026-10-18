@@ -12,6 +12,7 @@ use chrono::Utc;
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_core::{TaskComplexity, TaskStatus};
 use orbit_engine::{RuntimeHost, execute_deterministic_action};
+use orbit_types::task::TaskDecision;
 use orbit_types::workflow::{
     BASELINE_RED_HOLD_EVENT, BaselineRedFailures, BaselineRedHold, HostCandidateOverride,
     HostKnownRed, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation, PipelineState,
@@ -1277,11 +1278,19 @@ fn assert_known_red(fixture: &Fixture, passed: &Value, tests: &[&str]) {
         .unwrap()
         .into_iter()
         .filter(|entry| entry.event == KNOWN_RED_VALIDATION_EVENT)
-        .filter_map(|entry| {
-            entry
-                .note
-                .as_deref()
-                .and_then(KnownRedValidation::from_text)
+        .map(|entry| match entry.decision {
+            Some(TaskDecision::KnownRedValidation(known)) => {
+                assert!(
+                    entry
+                        .note
+                        .as_deref()
+                        .is_some_and(|note| note.starts_with(&known.text(""))),
+                    "the note still carries the record: {:?}",
+                    entry.note
+                );
+                known
+            }
+            other => panic!("the known red is a typed decision: {other:?}"),
         })
         .collect::<Vec<_>>();
     assert_eq!(recorded, vec![expected.validation], "the task's history");

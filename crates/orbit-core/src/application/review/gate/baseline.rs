@@ -70,7 +70,7 @@ use orbit_automation::review::{in_scope, same_host_command, validation_evidence}
 use orbit_common::OrbitError;
 use orbit_engine::review_gate::{BaseFailureVerdict, ReplayBudget, verify_base_failure};
 use orbit_types::record::OrbitEvent;
-use orbit_types::task::TaskHistoryEntry;
+use orbit_types::task::{TaskDecision, TaskHistoryEntry};
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
     BaselineRedHold, CommitIdentity, HostCandidateOverride, HostKnownRed,
@@ -519,7 +519,7 @@ pub(super) fn baseline_red_refusal(holds: &[BaselineRedHold], attempt_id: &str) 
 
 /// Record each known-red check a passed review counted [ORB-15546] on every
 /// reviewed task's history, as delivery validation records its own
-/// [ORB-15375]: the note `pr_open` reads for the pull request. [ORB-15630]
+/// [ORB-15375]: the decision `pr_open` reads for the pull request. [ORB-15630]
 /// A host gate's known red is the claim's own validation verdict, which
 /// `pr_open` and the handoff already carry, so it is not recorded twice.
 pub(super) fn record_known_red(
@@ -558,7 +558,7 @@ pub(super) fn record_known_red(
                             from_status: None,
                             to_status: None,
                             operation_id: None,
-                            decision: None,
+                            decision: Some(TaskDecision::KnownRedValidation(record.clone())),
                         }],
                         ..Default::default()
                     },

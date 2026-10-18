@@ -50,7 +50,7 @@ use orbit_core::{
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
 use orbit_types::policy::Role;
-use orbit_types::task::{CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep};
+use orbit_types::task::{CONTEXT_FILES_WIDENED_EVENT, ContextWideningStep, TaskDecision};
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 use orbit_types::workflow::{JobRunState, JobRunTrigger, PipelineState};
 use serde_json::{Value, json};
@@ -1345,8 +1345,14 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
             );
             assert_eq!(widened.by, "system");
             assert_eq!(widened.event, CONTEXT_FILES_WIDENED_EVENT);
-            let widening =
-                ContextFilesWidening::from_note(widened.note.as_deref().unwrap()).unwrap();
+            let Some(TaskDecision::ContextFilesWidened(widening)) = &widened.decision else {
+                panic!("the widening is a typed decision: {widened:?}");
+            };
+            assert_eq!(
+                widened.note.as_deref(),
+                Some(serde_json::to_string(widening).unwrap().as_str()),
+                "the note is unchanged beside the decision"
+            );
             assert_eq!(widening.run_id, run.run_id);
             assert_eq!(widening.step, ContextWideningStep::Review);
             assert_eq!(widening.activity, "review_gate_settle");

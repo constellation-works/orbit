@@ -731,9 +731,10 @@ owns delivery:
 - *Held owner-local candidates* ([ORB-14905]). An owner-local run whose failure handoff holds a
   committed candidate without judging it — `held_baseline_red`, `blocked_validation_environment`,
   `held_provider_failure` — pushes it to the same `refs/orbit/candidates/<task>/<run>` on
-  `origin` and records a `candidate_held` history entry whose note carries the typed
-  `HeldCandidate` (run, machine, branch, head, `durable_ref` or `carry_failure`, spec digest)
-  after `[candidate_held]`. The handoff output carries `carry` (`durable` or `failed`) with
+  `origin` and records a `candidate_held` history entry whose typed decision is the
+  `HeldCandidate` (run, machine, branch, head, `durable_ref` or `carry_failure`, spec digest);
+  its note carries the same record after `[candidate_held]` for people and older binaries, and
+  admission reads the note only for an entry written before typed decisions. The handoff output carries `carry` (`durable` or `failed`) with
   `durable_ref` or `carry_failure`, and its comment says whether the candidate is on `origin` or
   host-local, with the push diagnostic. A refused push never stops the hold. While the task's
   `job_run_id` still names that run, admission offers the held candidate to the task's next

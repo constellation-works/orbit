@@ -6,7 +6,7 @@ use chrono::Utc;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, ExecutionLocation,
-    Task, TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,
+    Task, TaskDecision, TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,
 };
 use orbit_types::tool::WorkerInvocation;
 use orbit_types::workflow::JobRun;
@@ -44,12 +44,7 @@ impl CommitTestHost {
             .unwrap()
             .iter()
             .filter(|entry| entry.event == CONTEXT_FILES_WIDENED_EVENT)
-            .filter_map(|entry| {
-                entry
-                    .note
-                    .as_deref()
-                    .and_then(ContextFilesWidening::from_note)
-            })
+            .filter_map(ContextFilesWidening::from_entry)
             .collect()
     }
 
@@ -232,13 +227,13 @@ impl orbit_engine::test_support::NullRuntimeHost for CommitTestHost {
             return Ok(added);
         }
         task.context_files.extend(added.iter().cloned());
-        let note = serde_json::to_string(&ContextFilesWidening {
+        let widening = ContextFilesWidening {
             run_id: run_id.to_string(),
             step,
             activity: activity.to_string(),
             selectors: added.clone(),
-        })
-        .unwrap();
+        };
+        let note = serde_json::to_string(&widening).unwrap();
         self.history.lock().unwrap().push((
             task_id.to_string(),
             TaskHistoryEntry {
@@ -249,7 +244,7 @@ impl orbit_engine::test_support::NullRuntimeHost for CommitTestHost {
                 from_status: None,
                 to_status: None,
                 operation_id: None,
-                decision: None,
+                decision: Some(TaskDecision::ContextFilesWidened(widening)),
             },
         ));
         Ok(added)

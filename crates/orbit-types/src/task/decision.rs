@@ -6,12 +6,17 @@
 //! Records written before the field existed carry the decision in text; each
 //! reader keeps its own isolated legacy reader for them.
 //!
+//! A record a reader acts on through more than one consumer has one
+//! `from_entry` reader beside its type, which reads the decision and consults
+//! the record's legacy note reader only for an entry with no decision.
+//!
 //! [`TaskHistoryEntry::decision`]: super::TaskHistoryEntry::decision
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::TaskStatus;
+use super::{ContextFilesWidening, TaskStatus};
+use crate::workflow::{FlakyValidation, HeldCandidate, KnownRedValidation};
 
 /// History event the final-recovery applier records its decision on.
 pub const FINAL_RECOVERY_DECIDED_EVENT: &str = "final_recovery_decided";
@@ -48,6 +53,18 @@ pub enum TaskDecision {
         /// Why the drain held it.
         classification: String,
     },
+    /// Where a candidate an owner-local run held is, recorded on the
+    /// `candidate_held` event.
+    CandidateHeld(HeldCandidate),
+    /// Selectors appended for paths an agent changed, recorded on the
+    /// `context_files_widened` event.
+    ContextFilesWidened(ContextFilesWidening),
+    /// A required command that failed only with tests its base fails too,
+    /// recorded on the `known_red_validation` event.
+    KnownRedValidation(KnownRedValidation),
+    /// Tests a candidate failed and then passed in one isolated replay,
+    /// recorded on the `flaky_validation` event.
+    FlakyValidation(FlakyValidation),
 }
 
 /// What the final-recovery applier did with a decision.
