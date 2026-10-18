@@ -19,6 +19,8 @@ use orbit_types::workflow::{
 };
 use serde_json::Value;
 
+const CLI_STDERR_TAIL_SEPARATOR: &str = "\nstderr tail:\n";
+
 use crate::context::RuntimeHost;
 
 use super::super::super::dispatcher::{
@@ -422,8 +424,9 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
                         bounded_diagnostic(diagnostic, redaction)
                     )
                 })
-            })
-            .unwrap_or_else(exit_message);
+            });
+        let generic_diagnostic = diagnostic.is_none();
+        let diagnostic = diagnostic.unwrap_or_else(exit_message);
         // [ORB-13941] A provider that could not authenticate is unusable on
         // this host, not a failed attempt at the work. Only text the provider
         // wrote about itself is read, never the agent's transcript; the typed
@@ -490,6 +493,22 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
                     bounded_diagnostic(&refusal, redaction)
                 ),
             ))
+        } else if generic_diagnostic {
+            // Keep bounded stderr visible as diagnostic context, while the
+            // check-repair classifier uses only the generic exit text.
+            let mut tail: Vec<_> = stderr_text
+                .lines()
+                .rev()
+                .filter(|line| !line.trim().is_empty())
+                .take(4)
+                .collect();
+            tail.reverse();
+            let tail = bounded_diagnostic(&tail.join("\n"), redaction);
+            Some(if tail.is_empty() {
+                diagnostic
+            } else {
+                format!("{diagnostic}{CLI_STDERR_TAIL_SEPARATOR}{tail}")
+            })
         } else {
             Some(diagnostic)
         }
