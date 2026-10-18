@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
+use orbit_config::{ConfigRoots, OperationLayerSource, ResolvedConfig};
 use orbit_core::DOCTOR_FINDINGS_MESSAGE_PREFIX;
 use rusqlite::Connection;
 use serde_json::Value;
@@ -1114,6 +1115,150 @@ arbitrary = { nested = true }
     );
 }
 
+/// Live `[[review.host_evidence]]` rules are not unknown keys, so the repair
+/// leaves them in each layer that states them and removes only the neighbouring
+/// unknown key. A workspace list replaces the global one; an explicit empty
+/// workspace list clears it, and both must survive repeated repair.
+#[test]
+fn doctor_retired_repair_keeps_host_evidence_rules_in_each_layer() {
+    if crate::isolated_test::run_in_child(
+        "doctor::doctor_retired_repair_keeps_host_evidence_rules_in_each_layer",
+    ) {
+        return;
+    }
+    const SEATBELT: &str = "[[review.host_evidence]]\nkind = \"host_sandbox_test\"\n\
+        name = \"Seatbelt\"\npaths = [\"crates/orbit-exec/**\"]\nos = \"macos\"\n\
+        command = \"cargo test -p orbit-exec --test seatbelt\"\n\
+        artifact = \"evidence/seatbelt-macos.json\"\n";
+    const CODEQL: &str = "[[review.host_evidence]]\nkind = \"codeql\"\n\
+        name = \"Rust CodeQL (Linux)\"\npaths = [\"**/*.rs\"]\nos = \"linux\"\n\
+        command = \"scripts/codeql-rust-local.sh\"\nartifact = \"evidence/codeql.json\"\n";
+    for (workspace_body, expected_names) in [
+        (
+            format!("[review]\nreviewers = 3\n{CODEQL}"),
+            vec!["Rust CodeQL (Linux)"],
+        ),
+        (
+            "[review]\nhost_evidence = []\nreviewers = 3\n".to_string(),
+            vec![],
+        ),
+    ] {
+        let fixture = WorkCheckout::new();
+        let global_dir = fixture.home.join(".orbit");
+        fs::create_dir_all(&global_dir).expect("global root");
+        let global_config = global_dir.join("config.toml");
+        let global_body = format!("[review]\nreviewers = 2\n{SEATBELT}");
+        fs::write(&global_config, &global_body).expect("global config");
+        let workspace_dir = fixture.work.join(".orbit");
+        let workspace_config = workspace_dir.join("config.toml");
+        fs::write(&workspace_config, &workspace_body).expect("workspace config");
+
+        let before = effective_host_evidence(&fixture);
+        assert_eq!(before.0, OperationLayerSource::Workspace, "before repair");
+        assert_eq!(before.1, expected_names, "before repair");
+
+        let reported = rows(&doctor(&fixture, &[]));
+        let retired = reported
+            .iter()
+            .filter(|row| row["check"] == "retired-config-keys")
+            .collect::<Vec<_>>();
+        assert!(
+            retired.iter().all(|row| !row["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("review.host_evidence")),
+            "live host rules are not reported as unknown: {reported:?}"
+        );
+        for config in [&global_config, &workspace_config] {
+            assert!(
+                retired
+                    .iter()
+                    .any(|row| mentions_key_and_file(row, "review.reviewers", config)),
+                "doctor names the neighbouring unknown key and its file: {reported:?}"
+            );
+        }
+
+        let fixed = rows(&doctor(&fixture, &["--fix-retired-config-keys"]));
+        assert_eq!(
+            row(&fixed, "fix-retired-config-keys")["status"],
+            "ok",
+            "{fixed:?}"
+        );
+        assert_eq!(
+            effective_host_evidence(&fixture),
+            before,
+            "the effective rules survive the repair"
+        );
+        for (path, original) in [
+            (&global_config, &global_body),
+            (&workspace_config, &workspace_body),
+        ] {
+            let original_doc: toml::Value = toml::from_str(original).expect("original TOML");
+            let updated: toml::Value =
+                toml::from_str(&fs::read_to_string(path).expect("updated config"))
+                    .expect("updated TOML");
+            assert_eq!(
+                updated["review"]["host_evidence"],
+                original_doc["review"]["host_evidence"],
+                "{}",
+                path.display()
+            );
+            assert!(
+                updated["review"].get("reviewers").is_none(),
+                "{}",
+                path.display()
+            );
+        }
+        for dir in [&global_dir, &workspace_dir] {
+            assert_eq!(
+                backup_names(dir),
+                vec!["config.toml.bak".to_string()],
+                "{}",
+                dir.display()
+            );
+        }
+        assert_eq!(
+            fs::read_to_string(global_dir.join("config.toml.bak")).expect("global backup"),
+            global_body
+        );
+        assert_eq!(
+            fs::read_to_string(workspace_dir.join("config.toml.bak")).expect("workspace backup"),
+            workspace_body
+        );
+
+        let settled = (
+            fs::read(&global_config).expect("global config"),
+            fs::read(&workspace_config).expect("workspace config"),
+        );
+        let again = rows(&doctor(&fixture, &["--fix-retired-config-keys"]));
+        assert_eq!(
+            row(&again, "fix-retired-config-keys")["status"],
+            "ok",
+            "{again:?}"
+        );
+        assert_eq!(
+            effective_host_evidence(&fixture),
+            before,
+            "a repeat repair keeps the effective rules"
+        );
+        assert_eq!(
+            (
+                fs::read(&global_config).expect("global config"),
+                fs::read(&workspace_config).expect("workspace config"),
+            ),
+            settled,
+            "a second run does not rewrite either config"
+        );
+        for dir in [&global_dir, &workspace_dir] {
+            assert_eq!(
+                backup_names(dir),
+                vec!["config.toml.bak".to_string()],
+                "a second run writes no further backup"
+            );
+        }
+    }
+}
+
 /// The repair preserves translated review values in their original layer,
 /// including explicit modern overrides, and keeps the first backup on retry.
 #[test]
@@ -1295,6 +1440,20 @@ fn effective_review(fixture: &WorkCheckout) -> (Value, Value) {
         serde_json::from_slice::<Value>(&output.stdout).unwrap()["value"].clone()
     };
     (get("review.before_pr"), get("review.minutes"))
+}
+
+/// The review host rules a resolved load gives effect to, with the layer that set them.
+fn effective_host_evidence(fixture: &WorkCheckout) -> (OperationLayerSource, Vec<String>) {
+    let config = ResolvedConfig::load(&ConfigRoots::new(
+        fixture.home.join(".orbit"),
+        fixture.work.join(".orbit"),
+    ))
+    .expect("resolved config");
+    let rules = config.operation.review_host_evidence;
+    (
+        rules.source,
+        rules.value.into_iter().map(|rule| rule.name).collect(),
+    )
 }
 
 fn mentions_key_and_file(row: &Value, key: &str, file: &std::path::Path) -> bool {
