@@ -182,12 +182,19 @@ impl OrbitRuntime {
             claim_token,
             trigger,
             false,
+            None,
         )
     }
 
     /// Submit a ship run with a CLI-only strict containment override.
     /// The marker is persisted with this run's input; its worker passes the
     /// policy through the environment to any child workers it starts.
+    ///
+    /// [ORB-16572] `review` is the run's `--review` request: a review layer
+    /// before landing this run adds where workspace policy applies none. It is
+    /// refused here, before any run exists, on the local route, against the
+    /// other workspace layer, or without a reviewer crew; the layer workspace
+    /// policy already applies is accepted unchanged.
     #[allow(clippy::too_many_arguments)]
     pub fn submit_ship_run_with_containment(
         &self,
@@ -200,6 +207,7 @@ impl OrbitRuntime {
         claim_token: Option<&str>,
         trigger: JobRunTrigger,
         strict_containment: bool,
+        review: Option<orbit_types::workflow::ReviewLayer>,
     ) -> Result<PipelineInvokeResult, OrbitError> {
         self.validate_strict_worker_containment(strict_containment)?;
         self.require_workspace_claim("orbit.workflow.ship", claim_token)?;
@@ -232,6 +240,12 @@ impl OrbitRuntime {
         if strict_containment {
             input["__worker_containment_strict"] = json!(true);
         }
+        crate::application::review::admit_review_request(
+            self,
+            &mut input,
+            review,
+            mode == crate::application::workflow::ShipMode::Local,
+        )?;
         // Validate explicit selections before inspecting runs or creating a
         // pipeline record. Auto mode intentionally carries no task ids: the
         // worker discovers eligible backlog tasks after it starts.
@@ -270,7 +284,16 @@ impl OrbitRuntime {
                     &format!("explicit ship task '{task_id}'"),
                 )?;
             }
-            self.resolve_admitted_delivery_route(std::slice::from_ref(&task), mode, &forge)?;
+            let route =
+                self.resolve_admitted_delivery_route(std::slice::from_ref(&task), mode, &forge)?;
+            if let Some(layer) = review
+                && route.delivers_locally()
+            {
+                return Err(OrbitError::InvalidInput(format!(
+                    "explicit ship task '{task_id}' is routed to local-only delivery: {}",
+                    crate::application::review::local_route_run_option_refusal(layer)
+                )));
+            }
         }
         if let Some(conflict) = self.in_flight_ship_run_for_tasks(task_ids)? {
             return Err(conflict);
@@ -310,6 +333,11 @@ impl OrbitRuntime {
     /// `auto_fix` (`--auto-fix`) authorizes the drain's PR leaves to repair
     /// failed required checks and merge conflicts on their pull requests. It
     /// is repair authority only; `completion` alone authorizes merging.
+    ///
+    /// [ORB-16572] `review` (`--review`) adds a review layer before landing to
+    /// the window where workspace policy applies none; every child it admits
+    /// inherits the captured layer. It is refused before submission when the
+    /// workspace delivers locally, and as on ship otherwise.
     #[allow(clippy::too_many_arguments)]
     pub fn submit_workspace_auto_run_with_mode(
         &self,
@@ -325,6 +353,7 @@ impl OrbitRuntime {
         approve_proposed: bool,
         auto_fix: bool,
         auto_concurrency: Option<orbit_types::workflow::AutoConcurrencyMode>,
+        review: Option<orbit_types::workflow::ReviewLayer>,
     ) -> Result<PipelineInvokeResult, OrbitError> {
         self.validate_strict_worker_containment(strict_containment)?;
         self.require_workspace_claim("orbit.workflow.auto", claim_token)?;
@@ -356,6 +385,12 @@ impl OrbitRuntime {
         if strict_containment {
             input["__worker_containment_strict"] = json!(true);
         }
+        crate::application::review::admit_review_request(
+            self,
+            &mut input,
+            review,
+            self.automatic_delivery_ship_mode() == crate::application::workflow::ShipMode::Local,
+        )?;
         self.submit_pipeline_run_with_trigger(workflow.job_id, input, None, actor, trigger)
     }
 

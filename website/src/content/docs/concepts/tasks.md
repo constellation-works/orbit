@@ -152,5 +152,33 @@ reviews show their time limit, and after-landing shows when its next batch is
 due. After-landing review is independent of the choice between before-PR and
 before-landing review.
 
+### Adding review to one run
+
+`orbit run ship` and `orbit run auto` accept `--review before-pr` or
+`--review before-landing`. The dashboard's **Start a window** card has the same
+choice under **Review before landing**. The option adds a review layer to that
+run only and leaves workspace configuration unchanged. It can only add review,
+never remove or swap it:
+
+| Workspace policy | `--review before-pr` | `--review before-landing` |
+|---|---|---|
+| Applies no layer | Adds before-PR review | Adds before-landing review |
+| `review.before_pr = true` | Accepted; policy already applies it | Refused, naming the key and its source |
+| `review.before_landing = true` | Refused, naming the key and its source | Accepted; policy already applies it |
+
+Before any run is created, Orbit also refuses the option when:
+
+- `operation.review_crew` is unset, because there is no reviewer crew to run it;
+- the run uses local-only delivery, which has no pull request to review; or
+- the run is a pull drain (`orbit run auto --pull`), because the owner decides
+  review for the claims it hands out.
+
+In a drain, a task routed to local-only delivery waits in the backlog for the
+window and is not started. Child runs inherit the layer from their parent, and
+a resumed run keeps the layer it captured. `orbit run show` reports the layer
+and its origin on its `Review:` line, and the dashboard's run detail page shows
+it in the **review** cell. The option never adds after-landing review, which
+stays the `delivery-code-review` auto-task.
+
 Write testable acceptance criteria. Prefer "command X exits successfully" or
 "file Y contains Z" over "the behavior feels better."

@@ -5,7 +5,7 @@ use orbit_types::task::{
     EpicHierarchyNode, Task, TaskReferenceIndex, TaskStatus, inherited_only_epic_roots,
     task_dependencies_ready_with_index,
 };
-use orbit_types::workflow::ShipMode;
+use orbit_types::workflow::{REVIEW_RUN_OPTION_SOURCE, ReviewAdmission, ReviewLayer, ShipMode};
 
 use super::super::pass_error::PassError;
 use super::super::surface_reservation::{
@@ -40,12 +40,14 @@ pub(crate) fn workspace_ship_mode(runtime: &OrbitRuntime) -> ShipMode {
 }
 
 /// The drain's snapshot: admitted work is delivered in the workspace's ship
-/// mode.
+/// mode. `review` is the admitting run's captured review admission, when
+/// there is one.
 pub(crate) fn backlog_snapshot(
     runtime: &OrbitRuntime,
     action: &str,
     allowlist: Option<&CrewAllowlist>,
     pools: &CapturedCrewPools,
+    review: Option<&ReviewAdmission>,
 ) -> Result<BacklogSnapshot, PassError> {
     backlog_snapshot_in_mode(
         runtime,
@@ -53,6 +55,7 @@ pub(crate) fn backlog_snapshot(
         allowlist,
         pools,
         workspace_ship_mode(runtime),
+        review,
     )
 }
 
@@ -64,6 +67,7 @@ pub(super) fn backlog_snapshot_in_mode(
     allowlist: Option<&CrewAllowlist>,
     pools: &CapturedCrewPools,
     mode: ShipMode,
+    review: Option<&ReviewAdmission>,
 ) -> Result<BacklogSnapshot, PassError> {
     // The population is materialized once, by moving the selection into the
     // lookup. Everything below borrows from it: the backlog is a vector of
@@ -269,8 +273,21 @@ pub(super) fn backlog_snapshot_in_mode(
     // more specific reason. PR delivery skips this, and turning the switch
     // off (workspace overriding global included) clears it. A PR drain holds
     // only the tasks a `delivery:task_local_pipeline` tag routes locally.
+    // [ORB-16572] A layer the admitting run added with `--review` holds them
+    // too: its children inherit it whatever the policy says.
     let policy = runtime.operation_policy();
-    let local_route_review = if policy.review_before_pr.value {
+    let run_option_layer = review
+        .filter(|admission| admission.timing_source == REVIEW_RUN_OPTION_SOURCE)
+        .and_then(|admission| ReviewLayer::from_timing(admission.timing));
+    let local_route_review = if let Some(layer) = run_option_layer {
+        Some((
+            match layer {
+                ReviewLayer::BeforePr => BacklogTaskExclusionReason::LocalRouteBeforePr,
+                ReviewLayer::BeforeLanding => BacklogTaskExclusionReason::LocalRouteBeforeLanding,
+            },
+            crate::application::review::local_route_run_option_refusal(layer),
+        ))
+    } else if policy.review_before_pr.value {
         Some((
             BacklogTaskExclusionReason::LocalRouteBeforePr,
             crate::application::review::local_route_before_pr_conflict(

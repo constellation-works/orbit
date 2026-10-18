@@ -10,7 +10,7 @@ use orbit_common::governance::authorization::{
 use orbit_common::protocol::tool_input::parse_duration_seconds;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::job::{DrainAdmissionsStopRequest, SubmissionKind};
-use orbit_types::workflow::JobRunTrigger;
+use orbit_types::workflow::{JobRunTrigger, ReviewLayer};
 use serde_json::{Value, json};
 
 use super::super::routines::{
@@ -37,6 +37,11 @@ pub(in crate::api) struct ShipBody {
     /// branch, else `[workflow] base_branch`.
     #[serde(default)]
     base: Option<String>,
+    /// [ORB-16572] `"before-pr"` or `"before-landing"`: a review layer this
+    /// run adds where workspace policy applies none, mirroring `--review`.
+    /// Omitted keeps workspace policy.
+    #[serde(default)]
+    review: Option<ReviewLayer>,
     /// [ORB-10709] Token for this workspace's exclusive claim, when another
     /// operator holds one.
     #[serde(default)]
@@ -73,7 +78,7 @@ pub(in crate::api) async fn ship_workflow_action(
         None => workspace_default_ship_mode(&runtime),
     };
     match blocking("ship workflow", move || {
-        let invoke = runtime.submit_ship_run(
+        let invoke = runtime.submit_ship_run_with_containment(
             mode,
             body.base.as_deref(),
             &body.task_ids,
@@ -85,6 +90,9 @@ pub(in crate::api) async fn ship_workflow_action(
             Some("dashboard"),
             body.claim_token.as_deref(),
             JobRunTrigger::dashboard(),
+            // Strict worker containment is a CLI-only flag.
+            false,
+            body.review,
         )?;
         let mut shipped = json!({
             "workflow": "ship",
@@ -93,6 +101,7 @@ pub(in crate::api) async fn ship_workflow_action(
             "state": if invoke.queued { "queued" } else { "submitted" },
             "submitted_at": invoke.submitted_at,
         });
+        shipped["review"] = runtime.run_review_layer(&invoke.run_id)?;
         runtime
             .submission_notices(SubmissionKind::Ship {
                 explicit: !body.task_ids.is_empty(),
@@ -144,6 +153,12 @@ pub(in crate::api) struct AutoDrainBody {
     /// `--auto-fix`. Off by default; does not authorize completion or merging.
     #[serde(default)]
     auto_fix: bool,
+    /// [ORB-16572] Review layer before landing this window adds where
+    /// workspace policy applies none, mirroring `--review`; every task it
+    /// admits inherits it. It only strengthens review, so it needs no
+    /// operator grant. Omitted keeps workspace policy.
+    #[serde(default)]
+    review: Option<ReviewLayer>,
     /// [ORB-10709] Token for this workspace's exclusive claim, when another
     /// operator holds one.
     #[serde(default)]
@@ -187,7 +202,7 @@ fn parse_drain_duration_seconds(raw: &str) -> Result<u64, String> {
 /// (`POST /workflows/auto?workspace=<id>`).
 ///
 /// Dashboard counterpart to `orbit run auto --for <duration> [--concurrency
-/// N] [--complete] [--approve-proposed] [--auto-fix]`, reusing the same drain-submission
+/// N] [--complete] [--approve-proposed] [--auto-fix] [--review <layer>]`, reusing the same drain-submission
 /// runtime path the CLI does. `?workspace` is required: a missing or blank selector returns 400
 /// `workspace_required` and starts nothing, including when the server has a
 /// default workspace (`Ws` would otherwise select that default).
@@ -262,6 +277,7 @@ pub(in crate::api) async fn auto_drain_workflow_action(
             approve_proposed,
             auto_fix,
             body.auto_concurrency,
+            body.review,
         )?;
         let mut started = json!({
             "workflow": "auto",
@@ -274,6 +290,7 @@ pub(in crate::api) async fn auto_drain_workflow_action(
             "auto_fix": auto_fix,
         });
         started["auto_concurrency"] = runtime.run_auto_concurrency(&invoke.run_id)?;
+        started["review"] = runtime.run_review_layer(&invoke.run_id)?;
         runtime
             .submission_notices(SubmissionKind::Drain)
             .insert_into(&mut started);

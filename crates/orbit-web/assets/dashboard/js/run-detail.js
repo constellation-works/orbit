@@ -12,7 +12,7 @@
 // (re-exported by app's routerContext), formatters, run-action builders (from runs.js),
 // and setRunDetailSubtab (from router.js) for the Gantt click-to-steps behavior.
 
-import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, formatDate, formatClock, elapsedDurationInfo, bindTaskLink } from './common.js';
+import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, formatDate, formatClock, elapsedDurationInfo, bindTaskLink, reviewLayerText } from './common.js';
 import { buildExecutionProvenance } from './distributed.js';
 import { drainWaitBadge } from './drain-waits.js';
 import { runTaskLinks } from './runs.js';
@@ -305,6 +305,9 @@ export function renderRunDetailMeta() {
   addCell("started", run.started_at ? fmtAbsTime(run.started_at) : "-");
   addCell("finished", run.finished_at ? fmtAbsTime(run.finished_at) : "-");
   addCell("duration", recordDurationText(run));
+  // ORB-16572: a delivery run's captured review layer and whether workspace
+  // policy or the run's own `--review` decided it.
+  if (run.review_layer) addCell("review", reviewLayerText(run.review_layer));
   // ORB-12516: with more than one execution host, a run id alone no longer says
   // where it ran. The store field is the truth; a row without one is *unknown*,
   // never assumed to be this machine.

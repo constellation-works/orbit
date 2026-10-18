@@ -12,6 +12,16 @@ use crate::workflow::ReviewAdmissionError;
 /// refused, so a later preference edit cannot weaken an active gate.
 pub const REVIEW_ADMISSION_KEY: &str = "review";
 
+/// The run-input key carrying the review layer an operator asked one run to
+/// add with `--review` [ORB-16572]. Unlike [`REVIEW_ADMISSION_KEY`] it is a
+/// request, not a decision: submission resolves it against workspace policy,
+/// and it can only add a layer the policy does not apply.
+pub const REVIEW_REQUEST_KEY: &str = "review_request";
+
+/// [`ReviewAdmission::timing_source`] when a run's `--review` option, not
+/// configuration, decided its timing.
+pub const REVIEW_RUN_OPTION_SOURCE: &str = "run-option";
+
 /// Version of the review evidence contract. Bump when the manifest,
 /// verdict, or certificate shape changes meaning so older evidence is never
 /// reinterpreted as coverage.
@@ -75,6 +85,76 @@ impl ReviewTiming {
             ReviewTiming::BeforePr => "before-pr",
             ReviewTiming::BeforeLanding => "before-landing",
             ReviewTiming::AfterLanding => "after-landing",
+        }
+    }
+}
+
+/// A review layer before landing that one run may add with `--review`
+/// [ORB-16572]. It strengthens workspace policy only: the layer the policy
+/// already applies is a no-op, and the other layer is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+#[serde(rename_all = "kebab-case")]
+pub enum ReviewLayer {
+    /// Hold PR creation for a reviewer, as `review.before_pr` does.
+    BeforePr,
+    /// Review the open PR before it lands, as `review.before_landing` does.
+    BeforeLanding,
+}
+
+impl ReviewLayer {
+    /// The option spelling.
+    pub fn as_str(self) -> &'static str {
+        self.timing().as_str()
+    }
+
+    /// The timing this layer captures.
+    pub fn timing(self) -> ReviewTiming {
+        match self {
+            ReviewLayer::BeforePr => ReviewTiming::BeforePr,
+            ReviewLayer::BeforeLanding => ReviewTiming::BeforeLanding,
+        }
+    }
+
+    /// The layer a captured timing is, if it is one before landing.
+    pub fn from_timing(timing: ReviewTiming) -> Option<Self> {
+        match timing {
+            ReviewTiming::BeforePr => Some(ReviewLayer::BeforePr),
+            ReviewTiming::BeforeLanding => Some(ReviewLayer::BeforeLanding),
+            ReviewTiming::None | ReviewTiming::AfterLanding => None,
+        }
+    }
+
+    /// The workspace configuration key that applies this layer.
+    pub fn config_key(self) -> &'static str {
+        match self {
+            ReviewLayer::BeforePr => "review.before_pr",
+            ReviewLayer::BeforeLanding => "review.before_landing",
+        }
+    }
+
+    /// Read the layer a run input requests under [`REVIEW_REQUEST_KEY`]. A
+    /// present value that names no layer is an error, never ignored.
+    pub fn from_run_input(input: &Value) -> Result<Option<Self>, ReviewAdmissionError> {
+        match input.get(REVIEW_REQUEST_KEY) {
+            None | Some(Value::Null) => Ok(None),
+            Some(raw) => serde_json::from_value(raw.clone()).map(Some).map_err(|_| {
+                ReviewAdmissionError::MalformedRequest {
+                    found: raw.to_string(),
+                }
+            }),
+        }
+    }
+}
+
+impl std::str::FromStr for ReviewLayer {
+    type Err = &'static str;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        match raw {
+            "before-pr" => Ok(ReviewLayer::BeforePr),
+            "before-landing" => Ok(ReviewLayer::BeforeLanding),
+            _ => Err("review must be before-pr or before-landing"),
         }
     }
 }

@@ -2079,6 +2079,10 @@
           "type": "boolean",
           "description": "Start only: explicitly authorize automatic completion for all tasks admitted by this window; default false keeps review. Does not approve proposed tasks"
         },
+        "review": {
+          "type": "string",
+          "description": "Start only: add this review layer before landing (before-pr or before-landing) to the window when workspace policy applies none; every task it admits inherits it. The layer policy already applies is accepted unchanged; the other layer, an unset operation.review_crew and a workspace that delivers locally are refused. It can only add review. Omitted keeps workspace policy"
+        },
         "approve_proposed": {
           "type": "boolean",
           "description": "Start only: each pass pilots qualifying proposed tasks (tagged no-diff-expected, or with context_files and an assessed complexity) and approves into backlog those with no duplicate, already-landed, conflict or warning finding, including tasks filed during the window. Tasks tagged no-auto-approve are never approved. Others stay proposed; status reports approved and held counts. Default false"
@@ -2292,6 +2296,10 @@
             }
           ],
           "description": "Optional configured crews this explicit shipment may dispatch; excluded crews are rejected before provider invocation."
+        },
+        "review": {
+          "type": "string",
+          "description": "Optional review layer before landing (`before-pr` or `before-landing`) this run adds when workspace policy applies none. The layer policy already applies is accepted unchanged; the other layer, an unset operation.review_crew and local-only delivery are refused before the run starts. It can only add review. Omitted keeps workspace policy."
         },
         "claim_token": {
           "type": "string",

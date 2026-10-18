@@ -29,6 +29,13 @@ Options:
       --auto-fix
           Repair the pull requests this drain opens when a required check fails on their head or their branch conflicts with its base: the run's repair pipeline fixes, validates and pushes the repair, then watches the new head. Repair crews come from `workflow.purpose_crews.auto_fix`, else `workflow.low_complexity_crews`. This never merges; `--complete` still decides that. Off by default
 
+      --review <LAYER>
+          Add this review layer before landing to the window when workspace policy applies none; every task it admits inherits it. `before-pr` holds PR creation for a reviewer, `before-landing` reviews the open PR before it lands. The layer workspace policy already applies is accepted unchanged; the other one is refused, as are an unset `operation.review_crew`, local delivery and `--pull` (the owner decides the review of its claims). Omitted, workspace policy decides
+
+          Possible values:
+          - before-pr:      Hold PR creation for a reviewer, as `review.before_pr` does
+          - before-landing: Review the open PR before it lands, as `review.before_landing` does
+
       --allow-crew <CREW>
           Restrict this run to these configured crews, e.g. when a provider is unavailable or its budget is spent. Repeatable and comma-separated. Every name must be configured here; an unknown or empty one fails before anything is dispatched. Omitted, the drain runs every crew, as before. This is scoped to this run's window only — no workspace configuration is changed, no task is reassigned, and nothing another invocation is already running is cancelled. With `--pull`, only tasks on these crews are claimed from the owner
 
@@ -83,6 +90,7 @@ Examples:
   orbit run auto --for 4h --complete
   orbit run auto --for 4h --auto-fix
   orbit run auto --for 4h --approve-proposed
+  orbit run auto --for 2h --review before-landing
   orbit run auto --stop
   orbit run auto --pull hm_owner/ws_orbit --for 8h --concurrency 3
   orbit run auto --pull hm_owner/ws_orbit --for 8h --allow-crew sol,luna
@@ -138,6 +146,13 @@ approved. Each approval's history note names the drain run. Other tasks stay pro
 A task tagged `no-auto-approve` is never approved automatically; it is held
 with that reason until a human approves it.
 Approval does not bypass `--allow-crew` or the complexity pools.
+
+`--review` adds a second-agent review before landing to every task this
+window admits, when workspace policy applies none. It can only add review:
+the layer `review.before_pr` or `review.before_landing` already applies is
+accepted unchanged, and the other layer, an unset `operation.review_crew`, a
+workspace that delivers locally and `--pull` are refused before the drain
+starts. With it, a backlog task routed to local delivery is held, not started.
 
 Complexity pools select only for tasks without an explicit crew.
 The tiers are low, medium, hard and xhard; xhard is the reserved top tier.

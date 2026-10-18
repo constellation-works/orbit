@@ -82,7 +82,8 @@ fn ship(
     let allowed_crews = parse_optional_string_array_field(&input, "allowed_crews")?;
     let actor = actor(runtime, agent.as_deref(), model.as_deref());
     let claim_token = optional_string(&input, "claim_token")?;
-    let invoke = runtime.submit_ship_run(
+    let review = review_layer(&input)?;
+    let invoke = runtime.submit_ship_run_with_containment(
         mode,
         base.as_deref(),
         &task_ids,
@@ -93,6 +94,9 @@ fn ship(
         Some(&actor),
         claim_token.as_deref(),
         trigger,
+        // Strict worker containment is a CLI-only flag.
+        false,
+        review,
     )?;
     let mut shipped = json!({
         "workflow": "ship",
@@ -107,6 +111,18 @@ fn ship(
         })
         .insert_into(&mut shipped);
     Ok(shipped)
+}
+
+/// The optional `review` layer a ship or drain start adds [ORB-16572].
+pub(super) fn review_layer(
+    input: &Value,
+) -> Result<Option<orbit_types::workflow::ReviewLayer>, OrbitError> {
+    optional_string(input, "review")?
+        .map(|raw| {
+            raw.parse()
+                .map_err(|message: &str| OrbitError::InvalidInput(message.into()))
+        })
+        .transpose()
 }
 
 /// One run: the record, the child Runs it dispatched, and what it is doing

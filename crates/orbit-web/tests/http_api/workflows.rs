@@ -1691,3 +1691,63 @@ fn run_input(fixture: &Fixture, started: &Value) -> Value {
         .and_then(|run| run.input)
         .expect("persisted run input")
 }
+
+const REVIEW_CREW: &str = "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n\n\
+     [workflow]\ndefault_crew = \"reviewers\"\n\n[operation]\nreview_crew = \"reviewers\"\n";
+
+/// A dashboard drain start can add a review layer for that run, and its
+/// receipt names the captured layer; ship refuses a layer local-only delivery
+/// cannot run, and a value outside the two layers is a parse error.
+#[test]
+fn auto_start_and_ship_accept_a_strengthen_only_review_option() {
+    isolated(
+        "workflows::auto_start_and_ship_accept_a_strengthen_only_review_option",
+        || {
+            let fixture = notice_fixture(REVIEW_CREW);
+            let explicit = backlog_task(&fixture, "explicit", &[]);
+            let server = fixture.server(false);
+
+            let started = json_ok(server.send(
+                "POST",
+                &format!("/api/workflows/auto?workspace={WS}"),
+                json!({"for_duration":"1m","review":"before-landing"}),
+            ));
+            assert_eq!(
+                started["review"],
+                json!({"timing":"before-landing","source":"run-option"}),
+                "{started}"
+            );
+            assert_eq!(
+                run_input(&fixture, &started)["review_request"],
+                "before-landing",
+                "a resume or replay re-resolves from the persisted request: {started}"
+            );
+
+            let before = run_ids(&fixture);
+            let refused = server.send(
+                "POST",
+                &format!("/api/workflows/ship?workspace={WS}"),
+                json!({"task_ids":[explicit.id],"mode":"local","review":"before-pr"}),
+            );
+            let status = refused.status().as_u16();
+            let value: Value = refused.json().expect("JSON error body");
+            assert!((400..500).contains(&status), "{status} {value}");
+            assert!(
+                value["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("--review before-pr")),
+                "{value}"
+            );
+            assert_eq!(run_ids(&fixture), before, "a refused ship persists no run");
+
+            assert_parse_error(
+                server.send(
+                    "POST",
+                    &format!("/api/workflows/auto?workspace={WS}"),
+                    json!({"for_duration":"1m","review":"after-landing"}),
+                ),
+                "unknown variant",
+            );
+        },
+    );
+}

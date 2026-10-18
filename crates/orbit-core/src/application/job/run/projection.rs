@@ -197,6 +197,16 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
             "source": input.get("auto_concurrency_source").and_then(Value::as_str).unwrap_or("explicit"),
         });
     }
+    // [ORB-16572] The captured review layer and what decided it: workspace
+    // policy, or the run's `--review` option.
+    if let Some(admission) = run
+        .input
+        .as_ref()
+        .and_then(|input| orbit_types::workflow::ReviewAdmission::from_run_input(input).ok())
+        .flatten()
+    {
+        value["review_layer"] = crate::application::review::review_layer_json(&admission);
+    }
     value["task_ids"] = json!((!task_ids.is_empty()).then_some(task_ids));
     value["drain_window_extension"] = drain_window_extension;
     // [ORB-14777] Pass-listed variables the submitting process did not hold.

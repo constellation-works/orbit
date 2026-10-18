@@ -203,7 +203,10 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
     let allowlist = allowlist_from_input(runtime, action, input)?;
     // The same snapshot readiness reads, so the two cannot disagree about the
     // eligible population before they even reach the selection rule.
-    let mut snapshot = backlog_snapshot(runtime, action, allowlist.as_ref(), &pools)?;
+    let review = crate::application::review::input_run_review_admission(runtime, input)
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
+    let mut snapshot =
+        backlog_snapshot(runtime, action, allowlist.as_ref(), &pools, review.as_ref())?;
     // A live leaf may carry a task that has since closed; its claim and its
     // light slot still count.
     snapshot

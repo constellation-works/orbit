@@ -73,6 +73,7 @@ mod review_gate_audit;
 mod review_held_resume;
 mod review_record_ids;
 mod review_report_revisions;
+mod review_run_option;
 mod sandbox_off;
 mod search_hydration;
 mod security_alert_sweep;

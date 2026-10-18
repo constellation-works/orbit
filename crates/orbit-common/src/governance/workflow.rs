@@ -59,6 +59,12 @@ const AUTO_CONCURRENCY_MODES: &[EnumValue] = &[
     EnumValue::plain("enforce"),
 ];
 
+/// The review layers a run's `review` option may add [ORB-16572].
+const REVIEW_LAYERS: &[EnumValue] = &[
+    EnumValue::plain("before-pr"),
+    EnumValue::plain("before-landing"),
+];
+
 const RUN_ID_PARAM: ParamSpec = required(mcp_only("id", ParamType::String, "Job run ID."));
 
 const CLAIM_TOKEN_PARAM: ParamSpec = mcp_only(
@@ -142,6 +148,11 @@ const AUTO: OperationSpec<WorkflowVerb> = OperationSpec {
             "complete",
             ParamType::Boolean,
             "Start only: explicitly authorize automatic completion for all tasks admitted by this window; default false keeps review. Does not approve proposed tasks",
+        ),
+        mcp_only(
+            "review",
+            ParamType::Enum(REVIEW_LAYERS),
+            "Start only: add this review layer before landing (before-pr or before-landing) to the window when workspace policy applies none; every task it admits inherits it. The layer policy already applies is accepted unchanged; the other layer, an unset operation.review_crew and a workspace that delivers locally are refused. It can only add review. Omitted keeps workspace policy",
         ),
         mcp_only(
             "approve_proposed",
@@ -283,6 +294,11 @@ const SHIP: OperationSpec<WorkflowVerb> = OperationSpec {
             "allowed_crews",
             ParamType::StringList,
             "Optional configured crews this explicit shipment may dispatch; excluded crews are rejected before provider invocation.",
+        ),
+        mcp_only(
+            "review",
+            ParamType::Enum(REVIEW_LAYERS),
+            "Optional review layer before landing (`before-pr` or `before-landing`) this run adds when workspace policy applies none. The layer policy already applies is accepted unchanged; the other layer, an unset operation.review_crew and local-only delivery are refused before the run starts. It can only add review. Omitted keeps workspace policy.",
         ),
         CLAIM_TOKEN_PARAM,
         MODEL_PARAM,

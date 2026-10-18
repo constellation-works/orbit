@@ -31,6 +31,7 @@ orbit run extend <run-id> --for 4h         # lengthen a live drain's window in p
 orbit run readiness                        # explain current auto-drain eligibility, read-only
 orbit run readiness <task-id> --json        # explain selected task IDs as JSON
 orbit run ship <task-id> --complete  # ... and also carry it through to `done`
+orbit run ship <task-id> --review before-landing # ... and review the PR before it lands
 orbit run ship-sweep --dry-run      # what every registered workspace would ship
 ```
 
@@ -592,6 +593,27 @@ configuration.
   is not piloted again until it changes.
 - `--approve-proposed` with `--pull` is refused before anything is submitted:
   a follower does not approve another host's tasks.
+
+### Per-run review
+
+`orbit run ship --review before-pr|before-landing` and `orbit run auto --review
+...` (MCP `orbit_workflow_ship` and `orbit_workflow_auto` `start` with `review`)
+add a second-agent review before landing to one run. Use it when the user asks
+for review on specific work and the workspace applies none. It only adds review
+and never changes configuration:
+
+- If workspace policy already applies the same layer, the option is accepted
+  unchanged. If policy applies the other layer, it is refused, naming the key
+  and its source.
+- It is refused before anything is submitted when `operation.review_crew` is
+  unset, on local-only delivery (`--mode local`, or a local ship mode for a
+  drain), and with `--pull`, where the owner decides review for its claims.
+- A drain with the option holds tasks routed to local-only delivery in the
+  backlog instead of starting them. Child runs inherit the layer, and a resume
+  keeps it.
+- `orbit run show` prints the captured layer and its origin on the `Review:`
+  line (`.run.review_layer` in JSON).
+- After-landing review stays the `delivery-code-review` auto-task.
 
 ### Auto-fix authorization
 
