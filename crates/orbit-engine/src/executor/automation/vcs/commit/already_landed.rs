@@ -79,10 +79,12 @@ impl Verifier for AlreadyLanded {
                 "evidence must identify this task and a covering delivery",
             ));
         }
-        if evidence.scope != scope(task, &host.get_task_comments(&task.id)?) {
-            return Err(Self::refused(
-                "task scope changed; revalidate the current requirements, selectors and comments",
-            ));
+        let expected_scope = scope(task, &host.get_task_comments(&task.id)?);
+        if evidence.scope != expected_scope {
+            return Err(Self::refused(scope_changed(
+                &evidence.scope,
+                &expected_scope,
+            )));
         }
         if !run_in_lineage(host, run_id, &evidence.run_id)? {
             return Err(Self::refused(
@@ -125,6 +127,36 @@ impl Verifier for AlreadyLanded {
             "validation_provenance": validation_provenance,
         }))
     }
+}
+
+/// Refusal for a report whose `scope` is not the task's current scope. It
+/// names the first differing key (sorted) so a report copied from `task.show`
+/// is not mistaken for a substantive task edit. Only key names appear; task
+/// content never does.
+fn scope_changed(reported: &Value, expected: &Value) -> String {
+    let (reported, expected) = (reported.as_object(), expected.as_object());
+    let mut keys: Vec<&String> = reported
+        .into_iter()
+        .chain(expected)
+        .flat_map(|scope| scope.keys())
+        .collect();
+    keys.sort();
+    keys.dedup();
+    let differing = keys
+        .into_iter()
+        .find(|key| reported.and_then(|s| s.get(*key)) != expected.and_then(|s| s.get(*key)));
+    let mut message = String::from("task scope changed");
+    match differing {
+        Some(key) => message.push_str(&format!(" at scope.{key}")),
+        None => message.push_str("; scope must be a JSON object"),
+    }
+    message.push_str("; revalidate the current requirements, selectors and comments");
+    if differing.is_some_and(|key| key == "comments") {
+        message.push_str(
+            "; scope.comments must list the task's comments with only `at`, `by` and `message` per comment (drop receipt fields such as `operation_id` that task.show adds)",
+        );
+    }
+    message
 }
 
 /// Field-contract reminders for a report that failed to decode. Type and role

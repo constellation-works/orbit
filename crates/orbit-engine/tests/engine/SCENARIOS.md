@@ -242,6 +242,8 @@ after the wrapper signals that its queue interval earned the capped credit.
 ### `commit_verifier::commit_evidence_contracts_3`
 
 - `commit_verifier_keeps_refusing_unaccepted_already_landed_evidence`
+- `commit_verifier_refusal_names_the_differing_already_landed_scope_key`
+- `commit_verifier_keeps_refusing_already_landed_identity_and_covering_mismatches`
 - `commit_verifier_clean_tree_without_evidence_names_both_routes`
 - `no_diff_expected_commits_an_unexpected_diff_and_skips_a_clean_tree`
 - `clean_doc_duties_task_completes_local_and_pr_pipeline_commit_with_no_diff_evidence`
