@@ -478,6 +478,9 @@ fn write(
         Ok(ApplyTaskOutcome::Stale(reason, detail)) => {
             return Err(stale_task(&task_id, reason, &detail));
         }
+        Ok(ApplyTaskOutcome::Invalid(detail)) => {
+            return Err(task_outcome(&task_id, "invalid", Some(detail)));
+        }
         Ok(ApplyTaskOutcome::Superseded(outcome)) => return Err(outcome),
         Err(error) => return Err(refused(&task_id, "apply_failed")(error)),
     };
