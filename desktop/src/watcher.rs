@@ -55,8 +55,11 @@ impl Seen {
         }
     }
 
-    /// Items not in the previous read. An item of a workspace that was
-    /// unavailable then is old news returning, not a change.
+    /// Failed runs not in the previous read. An item of a workspace that was
+    /// unavailable then is old news returning, not a new failure. That also
+    /// hides a failure first seen after recovery; review polling does not use
+    /// this rule, because a task that enters review during the outage must
+    /// still be announced.
     fn added<'a>(&self, listing: &'a Listing) -> Vec<&'a Item> {
         listing
             .items
@@ -65,6 +68,23 @@ impl Seen {
                 !self.keys.contains(&item.key) && !self.unavailable.contains(&item.key.0)
             })
             .collect()
+    }
+
+    /// Remember this review read. Keys the server could not re-read stay
+    /// remembered, so a task that never left review is not announced when its
+    /// workspace returns. A key that was never seen is still new.
+    fn remember(&self, listing: &Listing) -> Self {
+        let mut keys: HashSet<(String, String)> =
+            listing.items.iter().map(|item| item.key.clone()).collect();
+        for key in &self.keys {
+            if listing.unavailable.contains(&key.0) {
+                keys.insert(key.clone());
+            }
+        }
+        Self {
+            keys,
+            unavailable: listing.unavailable.clone(),
+        }
     }
 }
 
@@ -113,14 +133,23 @@ impl Watcher {
         }
         if let Some(listing) = &review {
             if let Some(seen) = &self.review_seen {
+                let added: Vec<&Item> = listing
+                    .items
+                    .iter()
+                    .filter(|item| !seen.keys.contains(&item.key))
+                    .collect();
                 announce(
-                    &seen.added(listing),
+                    &added,
                     "Ready for review",
                     "tasks ready for review",
                     &mut notify,
                 );
             }
-            self.review_seen = Some(Seen::of(listing));
+            let next = match &self.review_seen {
+                Some(seen) => seen.remember(listing),
+                None => Seen::of(listing),
+            };
+            self.review_seen = Some(next);
         }
         summary
     }
@@ -158,13 +187,19 @@ fn failed_runs(body: &Value) -> Listing {
     Listing {
         items,
         total: body["total"].as_u64(),
-        unavailable: body["unavailable"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|entry| entry["workspace_id"].as_str().map(str::to_string))
-            .collect(),
+        unavailable: unavailable_ids(body),
     }
+}
+
+/// Workspaces a successful aggregate could not read. An absent `unavailable`
+/// key means every source answered.
+fn unavailable_ids(body: &Value) -> HashSet<String> {
+    body["unavailable"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry["workspace_id"].as_str().map(str::to_string))
+        .collect()
 }
 
 /// Only a complete cursor walk may replace the review baseline. A later page
@@ -184,6 +219,7 @@ fn review_snapshot(get: &mut impl FnMut(&str) -> Option<Value>) -> Option<Listin
         body["items"].as_array()?;
         let page = review_tasks(&body);
         listing.total = listing.total.or(page.total);
+        listing.unavailable.extend(page.unavailable);
         listing.items.extend(
             page.items
                 .into_iter()
@@ -221,7 +257,7 @@ fn review_tasks(body: &Value) -> Listing {
     Listing {
         items,
         total: body["total"].as_u64(),
-        unavailable: HashSet::new(),
+        unavailable: unavailable_ids(body),
     }
 }
 

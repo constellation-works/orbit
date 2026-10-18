@@ -6,6 +6,7 @@ use orbit_core::{OrbitRuntime, TaskStatus};
 use orbit_types::task::{
     ArtifactManifestV2, TASK_ARTIFACT_MANIFEST_FILE_NAME, TASK_ARTIFACTS_DIR_NAME, TaskArtifact,
 };
+use orbit_types::workspace::{Workspace, WorkspaceCheckout};
 use reqwest::blocking::Response;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -610,6 +611,125 @@ fn task_list_and_detail_carry_readiness_for_proposed_and_backlog_only() {
 
 fn body_json(response: Response) -> Value {
     response.json().expect("JSON body")
+}
+
+#[test]
+fn aggregate_tasks_name_inactive_and_unopenable_workspaces_as_unavailable() {
+    isolated(
+        "task_contracts::aggregate_tasks_name_inactive_and_unopenable_workspaces_as_unavailable",
+        || {
+            let fixture = Fixture::new();
+            let task = seed_backlog_task(&fixture.runtime, "Visible task");
+            let server = fixture.server(false);
+            let healthy = tasks_all(&server);
+            drop(server);
+
+            assert_eq!(
+                healthy["unavailable"],
+                json!([]),
+                "a healthy aggregate reports availability as an empty list"
+            );
+            let mut keys: Vec<_> = healthy
+                .as_object()
+                .expect("object")
+                .keys()
+                .cloned()
+                .collect();
+            keys.sort();
+            assert_eq!(
+                keys,
+                [
+                    "items",
+                    "limit",
+                    "next_cursor",
+                    "offset",
+                    "total",
+                    "truncated",
+                    "unavailable",
+                ]
+                .map(str::to_string)
+            );
+            assert!(
+                healthy["items"]
+                    .as_array()
+                    .expect("items")
+                    .iter()
+                    .any(|row| row["id"].as_str() == Some(task.id.as_str()))
+            );
+
+            let path = orbit_registry::workspace_registry::registry_path_for(&fixture.global);
+            let mut registry =
+                orbit_registry::workspace_registry::load_registry_from(&path).expect("registry");
+            let missing = fixture.path("missing-repo");
+            push_checkout(
+                &mut registry,
+                "ws_stale",
+                "stale",
+                missing.clone(),
+                missing.join(".orbit"),
+            );
+            let unreadable = fixture.path("unreadable");
+            let unreadable_orbit = unreadable.join(".orbit");
+            std::fs::create_dir_all(&unreadable_orbit).expect("unreadable checkout");
+            push_checkout(
+                &mut registry,
+                "ws_unopenable",
+                "unopenable",
+                unreadable,
+                unreadable_orbit,
+            );
+            orbit_registry::workspace_registry::save_registry_to(&registry, &path)
+                .expect("save registry");
+
+            let server = fixture.server(false);
+            let body = tasks_all(&server);
+            let unavailable = body["unavailable"].as_array().expect("unavailable");
+            let mut ids: Vec<_> = unavailable
+                .iter()
+                .map(|entry| {
+                    assert_eq!(entry["error"], "workspace is unavailable");
+                    assert!(entry["workspace_name"].is_string());
+                    entry["workspace_id"]
+                        .as_str()
+                        .expect("workspace id")
+                        .to_string()
+                })
+                .collect();
+            ids.sort();
+            assert_eq!(ids, ["ws_stale", "ws_unopenable"]);
+            assert!(
+                body["items"].as_array().expect("items").iter().any(|row| {
+                    row["id"].as_str() == Some(task.id.as_str())
+                        && row["workspace_id"].as_str() == Some("ws_http_fixture")
+                }),
+                "the readable workspace stays in the aggregate"
+            );
+        },
+    );
+}
+
+fn tasks_all(server: &Server) -> Value {
+    let response = server.get("/api/tasks/all");
+    let status = response.status();
+    let body: Value = response.json().expect("tasks/all JSON");
+    assert_eq!(status, StatusCode::OK, "{body}");
+    body
+}
+
+fn push_checkout(
+    registry: &mut orbit_types::workspace::WorkspaceRegistry,
+    id: &str,
+    name: &str,
+    repo: std::path::PathBuf,
+    orbit_dir: std::path::PathBuf,
+) {
+    let mut workspace: Workspace = registry.workspaces[0].clone();
+    workspace.id = id.to_string();
+    workspace.name = name.to_string();
+    registry.workspaces.push(workspace);
+    registry
+        .checkouts
+        .push(WorkspaceCheckout::owner(id.to_string(), repo, orbit_dir));
 }
 
 #[test]

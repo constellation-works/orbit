@@ -180,11 +180,17 @@ fn fleet_drain_row(pinned: &Pinned, entry: &crate::state::WsEntry) -> Value {
 /// Each task object is tagged with its owning workspace (`workspace_id` /
 /// `workspace_name`, plus the home-abbreviated `workspace_root` path added in
 /// ORB-00037) so the frontend can badge the row and show the full location in
-/// the task's Details box. Inactive (stale-path) workspaces are skipped, as are
-/// any that fail to open — the aggregate view stays available even when one
-/// workspace is broken. Status/tag/type/search filters, limit, and cursor have
-/// the same semantics as `/api/tasks`; selection happens independently in each
-/// workspace before one global `created_at DESC, id ASC` merge.
+/// the task's Details box. Inactive workspaces, workspaces that fail to open,
+/// and workspaces whose task read fails stay out of `items` and are named in
+/// `unavailable` (`workspace_id`, `workspace_name`, `error`), the same object
+/// `/api/job-runs/all` uses. One unreadable task row marks that workspace
+/// unavailable for the response while rows that did read stay in `items`. The
+/// aggregate stays available when one workspace is broken. `unavailable` is an
+/// empty array when every source answered. Status/tag/type/search filters,
+/// limit, and cursor have the same semantics as `/api/tasks`; selection happens
+/// independently in each available workspace before one global
+/// `created_at DESC, id ASC` merge. `total` still sums only workspaces that
+/// answered.
 pub(super) async fn list_all_tasks(
     State(state): State<DashboardState>,
     RawQuery(raw_query): RawQuery,
@@ -476,15 +482,42 @@ fn all_tasks_json(
     let mut candidates = Vec::new();
     let mut total = 0;
     let mut remaining = 0;
-    for entry in pinned.entries().iter().filter(|entry| entry.active) {
-        let Ok(runtime) = pinned.runtime_for(&entry.id) else {
+    let mut unavailable = Vec::new();
+    let mut unavailable_ids = HashSet::new();
+    for entry in pinned.entries() {
+        if !entry.active {
+            record_unavailable(
+                &mut unavailable,
+                &mut unavailable_ids,
+                entry,
+                "workspace is unavailable",
+            );
             continue;
+        }
+        let runtime = match pinned.runtime_for(&entry.id) {
+            Ok(runtime) => runtime,
+            Err(_) => {
+                tracing::warn!(workspace = %entry.id, "fleet task list could not open a workspace");
+                record_unavailable(
+                    &mut unavailable,
+                    &mut unavailable_ids,
+                    entry,
+                    "failed to open workspace",
+                );
+                continue;
+            }
         };
         // One broken workspace must not take down the fleet-wide list.
         let page = match workspace_task_keys(&runtime, query) {
             Ok(page) => page,
             Err(error) => {
                 tracing::warn!(workspace = %entry.id, %error, "fleet task list skipped a workspace");
+                record_unavailable(
+                    &mut unavailable,
+                    &mut unavailable_ids,
+                    entry,
+                    &error.to_string(),
+                );
                 continue;
             }
         };
@@ -529,6 +562,14 @@ fn all_tasks_json(
                     %error,
                     "fleet task list skipped an unreadable task row"
                 );
+                // The dropped row would look like a new review task when it
+                // returns, unless this read says the workspace was incomplete.
+                record_unavailable(
+                    &mut unavailable,
+                    &mut unavailable_ids,
+                    entry,
+                    &error.to_string(),
+                );
             }
         }
     }
@@ -567,7 +608,25 @@ fn all_tasks_json(
         "truncated": total > values.len(),
         "offset": offset,
         "next_cursor": next_cursor,
+        "unavailable": unavailable,
     }))
+}
+
+/// One source `/api/tasks/all` could not read. The first recording wins so a
+/// workspace with several unreadable rows is named once.
+fn record_unavailable(
+    unavailable: &mut Vec<Value>,
+    recorded: &mut HashSet<String>,
+    entry: &crate::state::WsEntry,
+    error: &str,
+) {
+    if recorded.insert(entry.id.clone()) {
+        unavailable.push(json!({
+            "workspace_id": entry.id,
+            "workspace_name": entry.name,
+            "error": error,
+        }));
+    }
 }
 
 /// One workspace's candidates for the merge, as ids and creation times. A
