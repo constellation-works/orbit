@@ -16,8 +16,9 @@ export GIT_AUTHOR_NAME=Forge GIT_AUTHOR_EMAIL=forge@example.invalid
 export GIT_COMMITTER_NAME=Forge GIT_COMMITTER_EMAIL=forge@example.invalid
 printf '%s\n' "$*" >> "$forge/calls"
 # One injected provider failure: the fault-nth (default first) command
-# naming fault-match.
-if [ -f "$forge/fault-match" ] && [ ! -f "$forge/fault-hit" ]; then
+# naming fault-match. fault-repeat keeps failing subsequent matching calls
+# to exercise retry exhaustion before observation recovery.
+if [ -f "$forge/fault-match" ] && { [ ! -f "$forge/fault-hit" ] || [ -f "$forge/fault-repeat" ]; }; then
     case "$*" in *"$(cat "$forge/fault-match")"*)
         seen=$(($(cat "$forge/fault-seen" 2>/dev/null || echo 0) + 1))
         echo "$seen" > "$forge/fault-seen"

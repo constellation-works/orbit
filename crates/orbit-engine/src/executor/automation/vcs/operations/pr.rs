@@ -374,9 +374,9 @@ pub(super) fn pr_merge_capabilities(input: &Value) -> Result<Value, OrbitError> 
         ))
     })?;
 
-    let repository = execute(
+    let repository = execute_with_transient_retry(
         "gh",
-        vec![
+        &[
             "repo".to_string(),
             "view".to_string(),
             "--json".to_string(),
@@ -407,9 +407,9 @@ pub(super) fn pr_merge_capabilities(input: &Value) -> Result<Value, OrbitError> 
     })?;
 
     let query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){autoMergeAllowed mergeCommitAllowed rebaseMergeAllowed squashMergeAllowed pullRequest(number:$number){baseRefName baseRef{branchProtectionRule{requiresLinearHistory}}}}}";
-    let response = execute(
+    let response = execute_with_transient_retry(
         "gh",
-        vec![
+        &[
             "api".to_string(),
             "graphql".to_string(),
             "-f".to_string(),

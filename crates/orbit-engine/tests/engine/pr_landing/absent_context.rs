@@ -381,6 +381,52 @@ fn refresh_diagnostics(
     )
 }
 
+#[test]
+fn completion_retries_transient_repository_and_merge_policy_lookups() {
+    isolated(
+        "absent_context::completion_retries_transient_repository_and_merge_policy_lookups",
+        |sandbox| {
+            for matched in ["repo view", "autoMergeAllowed"] {
+                in_fresh_row(sandbox, |row| {
+                    let (fx, host) = setup(row, NEW);
+                    fs::write(fx.forge.join("base-applied"), "current").unwrap();
+                    fs::write(fx.forge.join("fault-match"), matched).unwrap();
+                    fs::write(
+                        fx.forge.join("fault-stderr"),
+                        "Post \"https://api.github.com/graphql\": net/http: TLS handshake timeout",
+                    )
+                    .unwrap();
+
+                    let completed = action(&host, "pr_complete", &fx.complete_input())
+                        .expect("a one-shot read failure must recover within completion");
+
+                    assert!(fx.forge.join("fault-hit").exists(), "{matched}");
+                    assert_eq!(
+                        fx.forge_calls()
+                            .iter()
+                            .filter(|call| call.contains(matched))
+                            .count(),
+                        2,
+                        "{matched}: the failed read is retried once"
+                    );
+                    assert_eq!(completed["merge"]["merged"], true, "{matched}");
+                    assert_eq!(host.status(TASK_ID), TaskStatus::Done, "{matched}");
+                    assert_eq!(host.landings().len(), 1, "{matched}");
+                    assert_eq!(
+                        fs::read_to_string(fx.forge.join("mutations")).unwrap(),
+                        "merge\n",
+                        "{matched}: one merge and no branch update"
+                    );
+                    assert!(
+                        host.comments(TASK_ID).is_empty(),
+                        "{matched}: no failure recorded"
+                    );
+                });
+            }
+        },
+    );
+}
+
 /// [ORB-16307] Only a transport failure of an authenticated read made before
 /// any mutation, within the cumulative budget, is a resumable completion
 /// observation. Permanent or credential refusals, an exhausted budget and
@@ -423,6 +469,11 @@ fn transient_prerequisite_read_resumes_only_before_any_mutation() {
                     let (fx, host) = setup(row, NEW);
                     fs::write(fx.forge.join("fault-match"), matched).unwrap();
                     fs::write(fx.forge.join("fault-stderr"), stderr).unwrap();
+                    if matched == "autoMergeAllowed" {
+                        // Merge-policy reads retry in-process. Exhaust those
+                        // attempts before checking resumable observation rules.
+                        fs::write(fx.forge.join("fault-repeat"), "repeat").unwrap();
+                    }
                     // Under auto-fix a blocked head's current-gates read makes the
                     // same snapshot reads before absent-context recovery, and its
                     // failure only leaves the wait unrefined. Inject the fault
@@ -485,6 +536,13 @@ fn transient_prerequisite_read_resumes_only_before_any_mutation() {
                         fx.forge.join("fault-hit").exists(),
                         "{case}: the injected read ran: {failure}"
                     );
+                    if matched == "autoMergeAllowed" {
+                        assert_eq!(
+                            fx.forge_state("fault-seen").as_deref(),
+                            Some("3"),
+                            "{case}: persistent merge-policy failures stop at three attempts"
+                        );
+                    }
                     assert_eq!(
                         failure.contains("completion_observation_unavailable:"),
                         resumable,
