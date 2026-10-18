@@ -16,7 +16,7 @@ The detailed rules behind [CONTRIBUTING.md](../CONTRIBUTING.md). Read the sectio
 | Running a mutating `orbit` command by hand for QA, from a managed lane | [Manual QA from a managed lane](#manual-qa-from-a-managed-lane) |
 | Changing the dashboard or website | [Dashboard fixtures](#dashboard-http-integration-fixtures), [Browser checks](#browser-checks-on-a-prepared-host) |
 | Changing the desktop app in `desktop/` | [Desktop app](#desktop-app) |
-| Changing toolchains, platforms or dependencies | [MSRV](#toolchain-msrv), [Windows](#windows-compile-check), [Supply-chain](#supply-chain-cargo-deny), [Vendored JS](#vendored-dashboard-javascript) |
+| Changing toolchains, platforms or dependencies | [MSRV](#toolchain-msrv), [Windows](#windows), [Supply-chain](#supply-chain-cargo-deny), [Vendored JS](#vendored-dashboard-javascript) |
 
 ## Validation and CI
 
@@ -39,17 +39,18 @@ in `.github/workflows/ci-macos.yml` and run `make check-ci-macos`. This lists
 actual compiled tests, including the workspace feature set, so a filter cannot
 silently become a zero-test pass.
 
-The Windows, macOS and website workflows run their real jobs on every open
-PR, including docs-only changes, so requiring those checks cannot leave a PR
-pending because of workflow path filters. Their check names stay stable:
-`Windows cargo check (x86_64-pc-windows-msvc)`, `macOS Clippy (informational)`,
+The macOS and CodeQL workflows do not run on pull requests: GitHub's
+hosted-runner concurrency was the merge bottleneck, and none of their checks is
+required. They run on `agent-main` and `main` pushes (CodeQL also weekly), and a
+failure there becomes a repair task, as a CodeQL alert does. Website checks run
+on pull requests only when they change `website/**`, `CHANGELOG.md` or the
+website workflow, and on `main` pushes with the same paths. Their check names stay stable:
+`macOS Clippy (informational)`,
 `macOS Sandbox` and `Check and build`. The historical `informational` label
 does not weaken Clippy: the job runs `make ci-lint` and fails on errors.
-`scripts/check-ci-macos.sh` requires an unfiltered PR event and retains exact
-target/filter listings and native execution evidence validation. Push filters
-and branch selection remain independent; website pushes still run only on
-`main` for website, changelog or website-workflow changes. Push runs of
-`ci-macos.yml` share one group per branch with cancellation off: one run
+`scripts/check-ci-macos.sh` requires the workflow to run on `agent-main` pushes and retains exact
+target/filter listings and native execution evidence validation. Push runs of
+`ci-macos.yml` and `codeql.yml` share one group per branch with cancellation off: one run
 executes and one waits, and a newer push replaces the waiting run. An
 intermediate commit can therefore get no macOS run, while the newest commit
 always does. Scheduled and dispatch runs keep a group per run. Required-check
@@ -834,11 +835,9 @@ Letting `cargo` or a rustup proxy auto-install into a workspace `RUSTUP_HOME` us
 
 Bump the pinned toolchain in one PR: the toolchain file and those CI steps together, plus fixes for new compiler or Clippy diagnostics, with `make ci-fast` and `make ci-lint` passing on the new version. Leave the `msrv` job on the declared minimum. If a change needs a newer compiler or a dependency raises the MSRV, update `rust-version` and both `MSRV` variables in that same PR.
 
-## Windows compile check
+## Windows
 
-Windows is supported through [WSL2](runbooks/windows-wsl2.md). Native Windows is compile-checked only: `.github/workflows/ci-windows.yml` runs `cargo check --workspace --locked --all-targets --target x86_64-pc-windows-msvc` on every open PR, so test targets must compile there, but no test runs.
-
-The `x86_64-pc-windows-msvc` Rust target is a host prerequisite. An operator must install it outside the managed executor sandbox with `rustup target add x86_64-pc-windows-msvc`; once installed, the compile check only needs a writable Cargo target directory. A managed lane must not write to `~/.rustup` or install a global toolchain. If the target is absent, record the Windows cross-check as not run and give the reason, inspect the relevant source and platform-specific code paths, and rely on the PR's Windows Compile Check job for the cross-target result.
+Orbit supports macOS and Linux. On Windows the supported route is the Linux build inside [WSL2](runbooks/windows-wsl2.md). Native Windows is not built or checked in CI.
 
 - Code using Unix-only APIs (`libc`, `std::os::fd`, `std::os::unix`) sits behind `#[cfg(unix)]`; its `#[cfg(not(unix))]` counterpart returns an explicit unsupported error or `Unknown` and never invents Windows semantics.
 - Tests that need those APIs or drive a `#!/bin/sh` fake are gated `#[cfg(unix)]` at the narrowest level (test, module, or `#![cfg(unix)]` for a POSIX-only file). Gate them; never delete them.

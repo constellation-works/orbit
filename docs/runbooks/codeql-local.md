@@ -8,7 +8,7 @@ last_validated: 2026-10-18
 
 # Run local Rust CodeQL for code-scanning repairs and security changes
 
-Hosted CodeQL analyses every pull request and `agent-main` push. Use this
+Hosted CodeQL analyses `agent-main` pushes (not pull requests). Use this
 procedure before handoff only when the agent guide (`CLAUDE.md`, "Local Rust
 CodeQL checks") requires it: a code-scanning or CodeQL repair, a task tagged
 `security` or `security-review`, or a change to `.github/codeql/**` or

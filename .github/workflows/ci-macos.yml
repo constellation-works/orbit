@@ -10,7 +10,6 @@ name: macOS Platform
 on:
   push:
     branches: [main, agent-main]
-  pull_request:
 
 # Superseded PR heads must not compete with their replacement, so each PR has
 # one cancelling group. Push runs share one group per branch and are never

@@ -58,7 +58,6 @@ fn prerequisite_bounds_entire_repeated_failed_job() {
                 "actual_ci",
                 "actual_codeql",
                 "actual_macos",
-                "actual_windows",
                 "actual_website",
             ] {
                 in_fresh_row(sandbox, |row| {
@@ -107,7 +106,6 @@ fn prerequisite_bounds_entire_repeated_failed_job() {
                                 "actual_ci" => "ci.yml",
                                 "actual_codeql" => "codeql.yml",
                                 "actual_macos" => "ci-macos.yml",
-                                "actual_windows" => "ci-windows.yml",
                                 "actual_website" => "website-check.yml",
                                 _ => unreachable!(),
                             };
@@ -215,7 +213,6 @@ fn prerequisite_bounds_entire_repeated_failed_job() {
                             | "legacy_binding"
                             | "legacy_output" => "Analyze (rust)",
                             "actual_macos" => "macOS Sandbox",
-                            "actual_windows" => "Windows cargo check (x86_64-pc-windows-msvc)",
                             "actual_website" => "Check and build",
                             _ => unreachable!(),
                         };

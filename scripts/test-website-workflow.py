@@ -59,10 +59,10 @@ class WebsiteWorkflowTests(unittest.TestCase):
                 with self.subTest(event=event, path=path):
                     self.assertTrue(self.selects_website_checks(event, [path]))
 
-    def test_unrelated_changes_select_pr_checks_but_not_push_checks(self):
+    def test_unrelated_changes_select_no_website_checks(self):
         for path in ("README.md", "crates/orbit-exec/src/lib.rs"):
             with self.subTest(path=path):
-                self.assertTrue(self.selects_website_checks("pull_request", [path]))
+                self.assertFalse(self.selects_website_checks("pull_request", [path]))
                 self.assertFalse(self.selects_website_checks("push", [path]))
 
 
