@@ -8,7 +8,8 @@ only.
 `HANG_CEILING_SECONDS` matches the fixture-step deadline (120s): no correct
 local fixture step approaches it. A step that exits is returned however long
 it took. A step still running at the ceiling is killed, and the error names
-the step or command.
+the step or command. Leader exit does not skip that kill: surviving group
+members that still hold the output pipes are signaled too.
 
 `timeout` overrides the ceiling for the hang demonstration. Production
 callers omit it. Timeouts that are themselves the assertion do not belong
@@ -33,8 +34,9 @@ SUBPROCESS_JOIN_SECONDS = HANG_CEILING_SECONDS + 15
 
 
 def _kill_group(proc):
-    if proc.poll() is not None:
-        return
+    # Signal the group before reaping the leader. A descendant can still hold
+    # the inherited stdout and stderr pipes after the leader has exited, and
+    # only the group signal terminates that descendant.
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
