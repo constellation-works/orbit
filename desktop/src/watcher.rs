@@ -9,6 +9,8 @@
 //! keeps the baseline from its last answer, so those items are not announced
 //! again when it returns, and the missing answer makes that count unavailable
 //! instead of adding zero.
+//! Fleet phases and holds are compared per workspace. Baseline-red task holds
+//! come from each available workspace's readiness snapshot, not fleet labels.
 
 use std::collections::{HashMap, HashSet};
 
@@ -127,12 +129,40 @@ fn scope(key: &ItemKey) -> (String, String) {
 struct HostMemory {
     failed_seen: Option<Seen>,
     review_seen: Option<Seen>,
+    workspaces: HashMap<String, WorkspaceMemory>,
+}
+
+#[derive(Default)]
+struct WorkspaceMemory {
+    phase: Option<String>,
+    holds: Option<HashSet<String>>,
+    task_holds: Option<HashSet<String>>,
+}
+
+struct DrainRead {
+    count: usize,
+    workspaces: Vec<WorkspaceRead>,
+}
+
+struct WorkspaceRead {
+    item: Item,
+    phase: String,
+    holds: Option<Vec<Item>>,
+    task_holds: Option<TaskHolds>,
+}
+
+struct TaskHolds {
+    items: Vec<Item>,
+    /// A bounded readiness listing may omit tasks. Only observed tasks can
+    /// clear a remembered hold unless the snapshot covers the entire backlog.
+    observed: HashSet<String>,
+    complete: bool,
 }
 
 /// One host's answers for this poll. `None` means that route did not answer.
 struct HostRead {
     name: String,
-    drains: Option<usize>,
+    drains: Option<DrainRead>,
     failed: Option<Listing>,
     review: Option<Listing>,
 }
@@ -194,7 +224,8 @@ impl Watcher {
             }
             let failed_route =
                 format!("job-runs/all?state=failed&since={FAILED_SINCE}&limit={PAGE}");
-            let drains = get(&api_path(host, "fleet/drains")).map(|body| running_drains(&body));
+            let drains = get(&api_path(host, "fleet/drains"))
+                .and_then(|body| drain_snapshot(&mut get, host, &body));
             let failed =
                 get(&api_path(host, &failed_route)).map(|body| failed_runs(&body, &host.name));
             let review = review_snapshot(&mut get, host);
@@ -208,8 +239,37 @@ impl Watcher {
 
         let mut new_failed = Vec::new();
         let mut new_review = Vec::new();
+        let mut finished_drains = Vec::new();
+        let mut new_holds = Vec::new();
+        let mut new_task_holds = Vec::new();
         for read in &reads {
             let memory = self.memory.entry(read.name.clone()).or_default();
+            if let Some(drains) = &read.drains {
+                for workspace in &drains.workspaces {
+                    let seen = memory
+                        .workspaces
+                        .entry(workspace.item.key.workspace.clone())
+                        .or_default();
+                    if workspace.phase == "idle"
+                        && seen.phase.as_deref().is_some_and(is_running_phase)
+                    {
+                        finished_drains.push(workspace.item.clone());
+                    }
+                    seen.phase = Some(workspace.phase.clone());
+                    if let Some(holds) = &workspace.holds {
+                        remember_holds(&mut seen.holds, holds, None, &mut new_holds);
+                    }
+                    if let Some(holds) = &workspace.task_holds {
+                        let partial = (!holds.complete).then_some(&holds.observed);
+                        remember_holds(
+                            &mut seen.task_holds,
+                            &holds.items,
+                            partial,
+                            &mut new_task_holds,
+                        );
+                    }
+                }
+            }
             if let Some(listing) = &read.failed {
                 if let Some(seen) = &memory.failed_seen {
                     new_failed.extend(seen.added(listing).into_iter().cloned());
@@ -247,6 +307,27 @@ impl Watcher {
             show_host,
             &mut notify,
         );
+        announce(
+            &finished_drains,
+            "Drain finished",
+            "drains finished",
+            show_host,
+            &mut notify,
+        );
+        announce(
+            &new_holds,
+            "Drain held",
+            "drain holds",
+            show_host,
+            &mut notify,
+        );
+        announce(
+            &new_task_holds,
+            "Task held",
+            "tasks held",
+            show_host,
+            &mut notify,
+        );
 
         let any = reads
             .iter()
@@ -261,7 +342,11 @@ impl Watcher {
             };
         }
         PollSummary::Live {
-            drains: sum_optional(reads.iter().map(|read| read.drains)),
+            drains: sum_optional(
+                reads
+                    .iter()
+                    .map(|read| read.drains.as_ref().map(|d| d.count)),
+            ),
             failed: sum_optional(
                 reads
                     .iter()
@@ -343,12 +428,110 @@ fn encode_segment(name: &str) -> String {
 /// Workspaces whose drain is admitting work, pulling or winding down.
 fn running_drains(body: &Value) -> usize {
     rows(body)
-        .filter(|row| {
-            row["phase"]
-                .as_str()
-                .is_some_and(|phase| !matches!(phase, "idle" | "unavailable"))
-        })
+        .filter(|row| row["phase"].as_str().is_some_and(is_running_phase))
         .count()
+}
+
+fn is_running_phase(phase: &str) -> bool {
+    matches!(phase, "draining" | "pulling" | "winding_down")
+}
+
+fn drain_snapshot(
+    get: &mut impl FnMut(&str) -> Option<Value>,
+    host: &PollHost,
+    body: &Value,
+) -> Option<DrainRead> {
+    body["items"].as_array()?;
+    let mut workspaces = Vec::new();
+    let mut seen = HashSet::new();
+    for row in rows(body) {
+        let (Some(id), Some(phase)) = (row["workspace_id"].as_str(), row["phase"].as_str()) else {
+            continue;
+        };
+        if (phase != "idle" && !is_running_phase(phase)) || !seen.insert(id) {
+            continue;
+        }
+        let item = Item::new(&host.name, id, "drain", "Drain", &workspace_name(row));
+        let holds = row["holds"].as_array().map(|holds| {
+            let mut seen = HashSet::new();
+            holds
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|label| seen.insert(*label))
+                .map(|label| Item::new(&host.name, id, label, label, &item.workspace))
+                .collect()
+        });
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("workspace", id)
+            .append_pair("limit", "500")
+            .finish();
+        let task_holds = get(&api_path(
+            host,
+            &format!("workflows/auto/readiness?{query}"),
+        ))
+        .as_ref()
+        .and_then(|body| task_holds(body, &item));
+        workspaces.push(WorkspaceRead {
+            item,
+            phase: phase.to_string(),
+            holds,
+            task_holds,
+        });
+    }
+    Some(DrainRead {
+        count: running_drains(body),
+        workspaces,
+    })
+}
+
+fn task_holds(body: &Value, workspace: &Item) -> Option<TaskHolds> {
+    let tasks = body["tasks"].as_array()?;
+    let mut observed = HashSet::new();
+    let mut items = Vec::new();
+    for task in tasks {
+        let Some(id) = task["task_id"].as_str().filter(|id| !id.is_empty()) else {
+            continue;
+        };
+        if observed.insert(id.to_string()) && task["reason"] == "baseline_red_hold" {
+            items.push(Item::new(
+                &workspace.key.host,
+                &workspace.key.workspace,
+                id,
+                "Held until the base branch passes",
+                &workspace.workspace,
+            ));
+        }
+    }
+    Some(TaskHolds {
+        complete: body["total"]
+            .as_u64()
+            .is_some_and(|total| total <= observed.len() as u64),
+        observed,
+        items,
+    })
+}
+
+/// First reads establish a baseline. Partial task reads retain omitted holds;
+/// a successful observation that a task is no longer held clears its key.
+fn remember_holds(
+    previous: &mut Option<HashSet<String>>,
+    items: &[Item],
+    partial: Option<&HashSet<String>>,
+    added: &mut Vec<Item>,
+) {
+    let mut keys: HashSet<String> = items.iter().map(|item| item.key.id.clone()).collect();
+    if let Some(seen) = previous {
+        added.extend(
+            items
+                .iter()
+                .filter(|item| !seen.contains(&item.key.id))
+                .cloned(),
+        );
+        if let Some(observed) = partial {
+            keys.extend(seen.iter().filter(|id| !observed.contains(*id)).cloned());
+        }
+    }
+    *previous = Some(keys);
 }
 
 fn failed_runs(body: &Value, host: &str) -> Listing {
