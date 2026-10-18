@@ -124,7 +124,7 @@ use self::crews::crew_window;
 use self::input::{bool_input, single_pass_input, u64_input};
 use self::owner::{ProbeVerdict, captured_before_pr, probe};
 use self::record::{
-    breaker_refusal, protocol_skew_failure, record_admission_fit, record_breaker,
+    PullPass, breaker_refusal, protocol_skew_failure, record_admission_fit, record_breaker,
     refused_settlements,
 };
 use super::drain::{
@@ -276,6 +276,8 @@ pub(crate) fn pull_refill(
     let mut error: Option<String> = None;
     // What the owner said to the requests this pass sent [ORB-14475].
     let mut idle_receipt = None;
+    // Whether the refill stopped on a full ceiling.
+    let mut ceiling_full = false;
     // What this window can run: its preflight, minus every crew a leaf has
     // since found unusable [ORB-13941]. Read by the refill after it has
     // reconciled, so a leaf this pass settles already counts.
@@ -459,6 +461,7 @@ pub(crate) fn pull_refill(
                 refilled = true;
                 admitted = pass.admitted;
                 idle_receipt = pass.answer;
+                ceiling_full = pass.ceiling_full;
                 if let Some(failure) = pass.error {
                     if let OrbitError::ProtocolSkew(message) = failure {
                         return Err(protocol_skew_failure(
@@ -704,6 +707,19 @@ pub(crate) fn pull_refill(
         None if admitted > 0 => OwnerAnswer::Claimed,
         None => OwnerAnswer::None,
     };
+    // A pass whose window is closed only settles, so it is not counted.
+    let observation = window_open.then(|| {
+        PullPass {
+            admitted: admitted > 0,
+            failed: error.is_some(),
+            degraded,
+            refusal: refusal.as_deref(),
+            throttle: resource.throttle.as_ref(),
+            ceiling_full,
+            owner_idle: idle_receipt.is_some(),
+        }
+        .observe()
+    });
     // [ORB-15637] The refusal is recorded on the pass, so `orbit run show`
     // and readiness name it: an open breaker otherwise looks like an idle
     // owner.
@@ -715,6 +731,7 @@ pub(crate) fn pull_refill(
             error.as_deref(),
             None,
             owner_answer,
+            observation,
         )
         .map_err(|error| failed(format!("pull drain could not record pass health: {error}")))?;
     admitting &= !health.degraded;

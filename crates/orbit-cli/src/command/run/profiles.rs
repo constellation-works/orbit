@@ -28,7 +28,10 @@ covers the key's last `machine.auto_concurrency.profile_window` completed delive
 last 30 days. `auto-task:<template>` profiles have no complexity.\n\n\
 HORIZON is the minute at which fewer than one in ten deliveries is still running, capped at \
 `horizon_cap_minutes`. PEAK_CPU is the highest mean cores before it and PEAK_MEM the highest \
-90th-percentile memory, each with the minute it occurs. SPREAD says how far deliveries disagree \
+90th-percentile memory, each with the minute it occurs. CPU_P50, CPU_P90, MEM_P50 and MEM_P90 \
+are the nearest-rank 50th and 90th percentiles of each delivery's own highest minute. They stay \
+high when deliveries peak in different minutes, so they can be several times PEAK_CPU; a sparse \
+profile still shows them from however many deliveries it has. SPREAD says how far deliveries disagree \
 with that average (per-minute standard deviation over mean, for CPU and memory): near 0 is a \
 profile stable enough to forecast with, near or above 1 one that is not. DELIVERIES marks a key \
 with fewer than `min_profile_deliveries` as sparse; a lookup for it falls back to a wider \
@@ -38,8 +41,8 @@ delivery used more than 1 core for 2 minutes in a row: work that should make no 
 building. The deliveries behind each flag are named below the table. Templates that build by \
 design, such as qa-sweep, are never flagged.\n\n\
 `--json` emits every profile with its full per-minute series (alive, cpu_cores, cpu_stddev, \
-memory_bytes, memory_mean_bytes, memory_stddev_bytes), its deliveries and its flagged \
-deliveries.\n\n\
+memory_bytes, memory_mean_bytes, memory_stddev_bytes), its deliveries, its flagged \
+deliveries, and `delivery_peak_cpu` and `delivery_peak_memory_bytes` (`p50` and `p90`).\n\n\
 `--accuracy` reports instead how well the host load forecast held up, from what drains in \
 effective auto-concurrency mode `shadow` or `enforce` recorded each admission pass over the last \
 30 days by default: the forecast 5, 10, 20 and 30 minutes ahead, counting what the pass admitted, against \
@@ -63,6 +66,17 @@ PULL_WOULD_HOLD the shadow requests enforce would have held because no work fit,
 PULL_HELD the enforce requests held for the same reason. \
 `--json` adds every forecast point paired with its measured minute, and names the \
 gap-fit-held task ids.\n\n\
+Last, per drain, what limited its admission passes (`limiters` in `--json`), from the \
+cumulative pass counters on its run state, which survive resume: PASSES counts them, and each \
+outcome column is its share of those passes with the count. Every pass has exactly one \
+outcome, the first that applies of ADMITTED (it started work), FAILED, HELD (an operator stop, \
+a host shutdown, or a pull drain's other reason for sending no request), THROTTLE (host \
+pressure), NO_CANDIDATE (an empty or wholly excluded backlog, or an idle owner), CEILING_FULL, \
+GAP_FIT_HELD and DEFERRED (every candidate deferred on a lock or footprint), so the shares sum \
+to 100%. DETAIL splits HELD by reason and THROTTLE by resource, and gives each waiting \
+reason's share of passes, which overlap. The drains are those with a selected forecast and, \
+without `--mode`, this workspace's drains live since `--since`; their counters cover each \
+drain's whole lineage, not the selected time.\n\n\
 Accuracy selectors compose: `--since` is an inclusive RFC3339 forecast timestamp (default: \
 30 days ago), `--drain` matches an exact drain run id, and `--mode shadow|enforce` matches the \
 recorded mode. Forecast timestamps are bounded by one report-time snapshot. Text and JSON echo the effective \
@@ -123,7 +137,11 @@ impl Execute for RunProfilesArgs {
             Column::new("DELIVERIES").fixed(),
             Column::new("HORIZON").fixed(),
             Column::new("PEAK_CPU").fixed(),
+            Column::new("CPU_P50").fixed(),
+            Column::new("CPU_P90").fixed(),
             Column::new("PEAK_MEM").fixed(),
+            Column::new("MEM_P50").fixed(),
+            Column::new("MEM_P90").fixed(),
             Column::new("SPREAD").fixed(),
             Column::new("BUILD_FLAG"),
         ])
@@ -144,10 +162,20 @@ impl Execute for RunProfilesArgs {
                     "{:.1} cores @ +{}m",
                     profile.peak_cpu_cores.value, profile.peak_cpu_cores.minute
                 )),
+                Cell::new(format!("{:.1}", profile.delivery_peak_cpu.p50)),
+                Cell::new(format!("{:.1}", profile.delivery_peak_cpu.p90)),
                 Cell::new(format!(
                     "{:.1} GiB @ +{}m",
                     profile.peak_memory_bytes.value as f64 / GIB,
                     profile.peak_memory_bytes.minute
+                )),
+                Cell::new(format!(
+                    "{:.1} GiB",
+                    profile.delivery_peak_memory_bytes.p50 as f64 / GIB
+                )),
+                Cell::new(format!(
+                    "{:.1} GiB",
+                    profile.delivery_peak_memory_bytes.p90 as f64 / GIB
                 )),
                 Cell::new(format!(
                     "cpu {:.2} mem {:.2}",
@@ -219,6 +247,7 @@ fn accuracy(
 ) -> CommandOut {
     use crate::output::table::{Column, Table};
     use comfy_table::Cell;
+    use orbit_types::workflow::DrainPassOutcome;
 
     let report = runtime.forecast_accuracy_selected(selection, report_at)?;
     let doc = serde_json::to_value(&report).map_err(|error| {
@@ -312,12 +341,45 @@ fn accuracy(
             Cell::new(drain.pull_held),
         ]);
     }
+    let mut columns = vec![
+        Column::new("WORKSPACE").fixed(),
+        Column::new("DRAIN").fixed(),
+        Column::new("PASSES").fixed(),
+    ];
+    columns.extend(
+        DrainPassOutcome::ALL
+            .iter()
+            .map(|outcome| Column::new(&outcome.as_str().to_uppercase()).fixed()),
+    );
+    columns.push(Column::new("DETAIL"));
+    let mut limiters =
+        Table::new(columns).empty_message("no drain has counted an admission pass on this host");
+    for drain in &report.limiters {
+        let counters = &drain.counters;
+        let mut row = vec![
+            Cell::new(&drain.workspace_id),
+            Cell::new(&drain.run_id),
+            Cell::new(counters.passes),
+        ];
+        row.extend(DrainPassOutcome::ALL.iter().map(|outcome| {
+            let count = counters.outcome(*outcome);
+            Cell::new(format!("{:.0}% ({count})", counters.share(count) * 100.0))
+        }));
+        let detail = counters.describe_detail();
+        row.push(Cell::new(if detail.is_empty() {
+            "-".to_string()
+        } else {
+            detail
+        }));
+        limiters.add_row(row);
+    }
     Ok(Payload::blocks(
         doc,
         vec![
             Block::text(summary(&report)),
             Block::table(offsets),
             Block::table(drains),
+            Block::table(limiters),
         ],
     )
     .into())

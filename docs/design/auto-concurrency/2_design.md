@@ -8,7 +8,7 @@ feature: auto-concurrency
 doc_role: design
 summary: Proposed mechanism for predictive admission — per-task CPU and memory sampling from Linux worker scopes and the macOS process tree, resource profiles per workspace, work class and complexity, a host-wide load forecast with admission reservations, gap-fit admission under the existing throttle, and a shadow-first rollout.
 tags: [auto-concurrency, drain, capacity, admission]
-paths: ["crates/orbit-core/src/application/job/pipeline/worker/scope.rs", "crates/orbit-core/src/application/job/pipeline/worker/usage.rs", "crates/orbit-core/src/application/job/pipeline/worker/delivery_class.rs", "crates/orbit-core/src/application/admission/auto_admission.rs", "crates/orbit-core/src/application/admission/gap_fit.rs", "crates/orbit-core/src/application/workspace_auto/classify.rs", "crates/orbit-core/src/application/pull_drain/refill/**", "crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-store/src/driver/sqlite/admission_load_store.rs", "crates/orbit-config/src/registry/settings/machine.rs", "crates/orbit-core/src/application/distributed/work_fit.rs", "crates/orbit-store/src/contracts/task/coordination/admission.rs"]
+paths: ["crates/orbit-core/src/application/job/pipeline/worker/scope.rs", "crates/orbit-core/src/application/job/pipeline/worker/usage.rs", "crates/orbit-core/src/application/job/pipeline/worker/delivery_class.rs", "crates/orbit-core/src/application/admission/auto_admission.rs", "crates/orbit-core/src/application/admission/gap_fit.rs", "crates/orbit-core/src/application/workspace_auto/classify.rs", "crates/orbit-core/src/application/workspace_auto/limiters.rs", "crates/orbit-core/src/application/pull_drain/refill/**", "crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-store/src/driver/sqlite/admission_load_store.rs", "crates/orbit-config/src/registry/settings/machine.rs", "crates/orbit-core/src/application/distributed/work_fit.rs", "crates/orbit-store/src/contracts/task/coordination/admission.rs"]
 related_features: [auto-concurrency, distributed-drain]
 related_artifacts: [ORB-15757, ORB-15774]
 ---
@@ -407,6 +407,22 @@ Implemented in `runtime/host_resource/profile/` (`build.rs`, `lookup.rs`,
   over the deliveries alive then. A profile's spread is the summed deviation
   over the summed mean before the horizon, for CPU and memory: near 0 means
   the deliveries agree, near 1 or above that one minute's mean says little.
+- **Per-delivery peaks.** Each delivery's peak is its highest single minute
+  of cores and of memory, over its whole series. The profile reports the
+  nearest-rank p50 and p90 of those peaks as `delivery_peak_cpu` and
+  `delivery_peak_memory_bytes` (`{p50, p90}`). Nearest rank is the
+  `ceil(n · p)`-th smallest value, the same rule as a minute's memory
+  percentile: one delivery reports that peak for both, and two report the
+  lower as p50 and the higher as p90. `orbit run profiles` prints them as
+  CPU_P50, CPU_P90, MEM_P50 and MEM_P90. Averaging deliveries minute by
+  minute blurs peaks that fall at different times, so PEAK_CPU (the highest
+  per-minute mean before the horizon) can be several times lower; a
+  2026-10-16 to 2026-10-18 read of dk-server-2 had change/hard at 2.4 mean
+  cores against delivery peaks of p50 5.7 and p90 9.8. A profile with fewer
+  deliveries than `min_profile_deliveries` is still rendered, with whatever
+  quantiles those deliveries allow. The forecast keeps using the per-minute
+  mean and memory percentile; these columns are for sizing ceilings and
+  build budgets.
 - **Heaviest** means the most expected core-minutes before the horizon,
   `Σ cpu(m)·alive(m)`, then the highest memory peak.
 - **Caching.** Profiles change only when a delivery finishes, so they are
@@ -864,10 +880,11 @@ Limitations:
 |---|---|
 | Machine config | Host defaults in `[machine.auto_concurrency]` in `crates/orbit-config/src/registry/settings/machine.rs`: `mode` (`off` / `shadow` / `enforce`, default `off`), `admit_cpu_percent` (90, forecast utilization as a percentage of host cores), `admit_memory_percent` (75, forecast non-reclaimable memory as a percentage of host memory), `profile_window` (50 completed deliveries), `min_profile_deliveries` (10), `horizon_cap_minutes` (120 minutes), `head_max_wait_minutes` (30 minutes), `head_stuck_passes` (20 passes, §5.3). `admit_memory_percent` stays below the global `workflow.resource_throttle.memory_high_percent`; CPU utilization is not compared with the throttle's CPU percentage because the default Linux throttle CPU source is load-based and can exceed 100%. `workflow.resource_throttle.cpu_source = "utilization"` selects busy tick accounting for the throttle with independent high/resume marks. |
 | `drain_last_pass` | Implemented for local drains (§5.1): an `admission_forecast` block with the peak forecast over the horizon, admitted and skipped candidates with the failing minute and resource and their profile source, and whether the head is being protected, with its miss and, once protected, its stall (§5.3) |
-| `orbit run show` | Implemented: an `Admission:` line from the recorded pass, e.g. `forecast — skipped heavy candidate (cpu 94% at +6m)`, with candidate titles, shadow decisions labelled hypothetical, and a protected head named by the starvation guard; a `Stuck head:` line while that head is stuck (§5.3). After an idle pass, it names the last built forecast's timestamp, decisions and peaks, and says the current pass built none. JSON preserves `pipeline_state.drain_last_pass.admission_forecast` and retains built history in `pipeline_state.drain_last_forecast`. |
+| `drain_pass_counters` | Implemented for local and pull drains: cumulative per-drain counters on the run state that say why each admission pass admitted nothing. Every counted pass adds one to `passes` and to exactly one of `outcomes`, the first that applies. A local pass is `admitted` (it started work), `held` (an operator stop or a scheduled host shutdown), `throttle` (host pressure), `no_candidate` (an empty or wholly excluded backlog), `ceiling_full` (no free slot; no forecast is built or recorded), `gap_fit_held` (enforce gap fit held every candidate) or `deferred` (every candidate deferred on a lock or footprint); a pass deferred because the store was locked (`lock_busy`) is `failed`. A pull pass with its admission window open is `admitted`, `failed` (the pass errored), `held` (the reason it sent no request: the failure breaker's `pass_failures`, the refusal code such as `circuit_open`, or `admissions_stopped`), `throttle`, `gap_fit_held` (`forecast_no_headroom`, judged before a slot is allocated), `ceiling_full` or `no_candidate` (the owner answered idle); settle-only, cancelling and protocol-skew passes are not counted. `held_by_reason` and `throttle_by_resource` (`cpu`, `memory`, `io`, `disk`) split those two outcomes; `waiting_by_reason` counts the passes in which at least one task waited for a reason (a backlog exclusion, a deferral, `gap_fit`, or an idle owner's reasons), so its entries overlap. `since` and `last_counted_at` bound the counted passes. Resume copies the checkpoint, so the counters cover the drain's whole lineage. |
+| `orbit run show` | Implemented: an `Admission:` line from the recorded pass, e.g. `forecast — skipped heavy candidate (cpu 94% at +6m)`, with candidate titles, shadow decisions labelled hypothetical, and a protected head named by the starvation guard; a `Stuck head:` line while that head is stuck (§5.3). After an idle pass, it names the last built forecast's timestamp, decisions and peaks, and says the current pass built none. JSON preserves `pipeline_state.drain_last_pass.admission_forecast` and retains built history in `pipeline_state.drain_last_forecast`. The Auto-concurrency section adds an `Admission passes:` line from `drain_pass_counters`, e.g. `12 passes since 2026-10-18 07:00Z: ceiling_full 7 (58%), admitted 3 (25%), held 2 (17%); held by circuit_open 2; waiting: context_lock_conflict in 9 (75%)`, and JSON carries `pipeline_state.drain_pass_counters`. |
 | `orbit run readiness` | Implemented: the last pass's host forecast peaks, headroom below the current admission thresholds, each judged candidate's profile source and wait, and a stuck head (§5.3). JSON adds `capacity.admission_forecast` and `tasks[].admission_forecast` for the current pass, plus `capacity.last_admission_forecast` for retained built history. Idle passes show that history without changing eligibility; without either recorded block, output is unchanged. See [observing admission](../../CONFIG.md#machineauto_concurrency--host-forecast-admission). |
-| `orbit run profiles` | Implemented: the profiles per workspace, work class and complexity: deliveries (sparse below `min_profile_deliveries`), horizon, peak CPU and memory and when they occur, and the CPU and memory spread. Flags no-diff profiles with build-like load and names the deliveries behind each flag (§3.2). `--json` for the full series |
-| `orbit run profiles --accuracy` | Implemented (§8.1): composable forecast-time `--since`, exact `--drain` and recorded `--mode` cohorts; mature measured pairs, pending and missing counts per offset, with missing split into unsampled (no delivery live), partial (a delivery overlapped the minute but none saw it whole) and gap (a delivery ran for the whole minute and wrote no host row); shadow decisions and enforce admissions, gap-fit holds and pull holds per drain. `--json` includes the effective selection and raw pairs |
+| `orbit run profiles` | Implemented: the profiles per workspace, work class and complexity: deliveries (sparse below `min_profile_deliveries`), horizon, peak CPU and memory and when they occur, the nearest-rank p50 and p90 of each delivery's single-minute peak CPU and memory (CPU_P50, CPU_P90, MEM_P50, MEM_P90; these stay high when peaks fall in different minutes, unlike the mean-series peak, and a sparse profile still shows them; §3.3), and the CPU and memory spread. Flags no-diff profiles with build-like load and names the deliveries behind each flag (§3.2). `--json` includes `delivery_peak_cpu` and `delivery_peak_memory_bytes` (`p50`, `p90`) with the full series |
+| `orbit run profiles --accuracy` | Implemented (§8.1): composable forecast-time `--since`, exact `--drain` and recorded `--mode` cohorts; mature measured pairs, pending and missing counts per offset, with missing split into unsampled (no delivery live), partial (a delivery overlapped the minute but none saw it whole) and gap (a delivery ran for the whole minute and wrote no host row); shadow decisions and enforce admissions, gap-fit holds and pull holds per drain; each drain's limiter shares from `drain_pass_counters`. `--json` includes the effective selection, raw pairs and `limiters` |
 | Per-drain mode | Implemented for local drains: CLI `--auto-concurrency off|shadow|enforce`, registered MCP `orbit.workflow.auto` start `auto_concurrency`, and dashboard HTTP start `auto_concurrency` all use Core submission. At durable admission, `input.auto_concurrency_source` records explicit or configured mode. Explicit overrides survive resume/restart; configured local and pull drains follow the host mode on the next admission pass. Each pass snapshots `[machine.auto_concurrency]` and effective `workflow.provider_limit_*` policy, with global/workspace config mtimes caching resolution. Changes to mode, thresholds, profile bounds or provider overrides need no restart. Invalid config warns and retains both last-known-good policies until a valid edit. Running leaves continue. Throttle, ceilings and accuracy lineage retain their existing behavior. Stop/resize and explicit pull overrides are refused before effects. |
 | Dashboard | Implemented: an operator launch choice of inherited host mode, off, shadow or enforce. The form reads current inherited host mode from readiness, sends the actual option, and shows the receipt's durable effective mode; the live window shows its current effective mode. The Drain card shows the recorded forecast from readiness: its time, CPU and memory peaks against the current admit thresholds, headroom, admitted tasks with their profile source, and a candidate enforce held. A pass that built none says `no forecast this pass` and shows `last_admission_forecast` when readiness has one. Shadow decisions are labelled hypothetical. Analytics › Resources (`GET /api/resource-profiles`) charts the selected workspace's profiles on the host per work class, complexities overlaid: mean CPU with a ±1 sd band, p90 and mean memory and the alive share against minutes since admission, in cores and GiB or percent of host with the admit thresholds ([user interface](../user-interface/2_design.md#5b-analytics--resources)). Forecast curves against measured load with running tasks stacked remain future work. |
 
@@ -879,9 +896,11 @@ first.
 1. **Record.** Add per-task sampling and the host minute series. No change to
    admission. Profiles need a few days of deliveries.
 2. **Profiles report.** `orbit run profiles`. It shows whether profiles are
-   stable enough to forecast with: how spread out each minute is, and how
-   spikes line up across deliveries. It also flags no-diff work that builds
-   (§3.2), so those defects get fixed before profiles absorb them.
+   stable enough to forecast with: how spread out each minute is, how
+   spikes line up across deliveries, and the p50 and p90 of each delivery's
+   own single-minute peak beside the averaged peak (§3.3). It also flags
+   no-diff work that builds (§3.2), so those defects get fixed before
+   profiles absorb them.
 3. **Shadow.** `mode = shadow` computes forecasts and decisions every pass
    and records them, but admits as today. A report compares each forecast at
    +5, +10, +20 and +30 minutes with the measured host series, and the
@@ -1056,6 +1075,18 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   `PULL_HELD` counts the same `forecast_no_headroom` outcome on enforce
   requests. Pull request counts are separate from the distinct local-task
   `WOULD_HOLD`, `WOULD_ADD` and `GAP_HELD` sets.
+- **Limiters**, per drain, from its `drain_pass_counters` (§7), joined in
+  `workspace_auto/limiters.rs`: `PASSES`, then each outcome's share of
+  those passes with its count (`ADMITTED`, `FAILED`, `HELD`, `THROTTLE`,
+  `NO_CANDIDATE`, `CEILING_FULL`, `GAP_FIT_HELD`, `DEFERRED`), which sum to
+  100%, and `DETAIL`: held passes by reason, throttled passes by resource,
+  and each waiting reason's overlapping share. JSON `limiters[]` carries
+  `workspace_id`, `run_id`, the `counters`, every outcome's share in
+  `shares` and `waiting_shares`. The drains are those with a selected
+  forecast and, without `--mode`, this workspace's local and pull drains
+  created by `report_at` and not finished before `since`, matching
+  `--drain`. A drain that has counted no pass is left out. The counters
+  cover the drain's whole lineage, not the selected forecast window.
 
 ## 9. Concerns & Honest Limitations
 

@@ -12,7 +12,7 @@ use orbit_types::workflow::{AUTO_TASK_TAG_PREFIX, auto_task_builds_by_design};
 
 use super::{
     BUILD_LIKE_CORES, BUILD_LIKE_MINUTES, BaseClass, BuildLikeDelivery, ProfileDelivery,
-    ProfileKey, ProfileMinute, ProfilePeak, ProfileSet, ResourceProfile,
+    ProfileKey, ProfileMinute, ProfilePeak, ProfileQuantile, ProfileSet, ResourceProfile,
 };
 
 /// `alive` below this ends the horizon: the 90th-percentile duration.
@@ -345,6 +345,7 @@ fn profile(
     } else {
         Vec::new()
     };
+    let (delivery_peak_cpu, delivery_peak_memory_bytes) = delivery_peak_quantiles(window);
     ResourceProfile {
         sparse: count < bounds.min_deliveries,
         key,
@@ -353,6 +354,8 @@ fn profile(
         horizon_minutes: horizon,
         peak_cpu_cores,
         peak_memory_bytes,
+        delivery_peak_cpu,
+        delivery_peak_memory_bytes,
         expected_core_minutes,
         cpu_spread,
         memory_spread,
@@ -408,13 +411,50 @@ fn stddev(values: &[f64]) -> f64 {
         .sqrt()
 }
 
+/// Nearest-rank p50 and p90 of each delivery's highest single minute.
+///
+/// The peak is that delivery's own max, over its whole series, so two
+/// deliveries that spike in different minutes keep both spikes. The series
+/// peaks above are means and per-minute percentiles, which blur them.
+fn delivery_peak_quantiles(window: &[&Delivery]) -> (ProfileQuantile<f64>, ProfileQuantile<u64>) {
+    let mut cpu: Vec<f64> = window
+        .iter()
+        .map(|delivery| delivery.cpu.iter().copied().fold(0.0, f64::max))
+        .collect();
+    let mut memory: Vec<u64> = window
+        .iter()
+        .map(|delivery| delivery.memory.iter().copied().max().unwrap_or(0))
+        .collect();
+    cpu.sort_by(f64::total_cmp);
+    memory.sort_unstable();
+    (
+        ProfileQuantile {
+            p50: ranked(&cpu, (1, 2)),
+            p90: ranked(&cpu, (9, 10)),
+        },
+        ProfileQuantile {
+            p50: ranked(&memory, (1, 2)),
+            p90: ranked(&memory, (9, 10)),
+        },
+    )
+}
+
 /// Nearest-rank percentile `numerator / denominator` of sorted `values`.
-fn percentile(sorted: &[u64], (numerator, denominator): (usize, usize)) -> u64 {
-    if sorted.is_empty() {
-        return 0;
+fn percentile(sorted: &[u64], fraction: (usize, usize)) -> u64 {
+    ranked(sorted, fraction)
+}
+
+fn ranked<T: Copy + Default>(sorted: &[T], fraction: (usize, usize)) -> T {
+    quantile_index(sorted.len(), fraction).map_or(T::default(), |index| sorted[index])
+}
+
+/// Index of the nearest-rank percentile `numerator/denominator` in a sorted slice.
+fn quantile_index(len: usize, (numerator, denominator): (usize, usize)) -> Option<usize> {
+    if len == 0 {
+        return None;
     }
-    let rank = (sorted.len() * numerator).div_ceil(denominator);
-    sorted[rank.clamp(1, sorted.len()) - 1]
+    let rank = (len * numerator).div_ceil(denominator);
+    Some(rank.clamp(1, len) - 1)
 }
 
 fn ratio(numerator: f64, denominator: f64) -> f64 {

@@ -19,7 +19,9 @@ use orbit_store::contracts::{
 use orbit_store::friction_store::FrictionStore;
 use orbit_tools::ToolContext;
 use orbit_types::record::FrictionRecord;
-use orbit_types::workflow::{DrainAdmissionForecast, JobRun, JobRunState};
+use orbit_types::workflow::{
+    DrainAdmissionForecast, DrainPassCounters, DrainPassOutcome, JobRun, JobRunState,
+};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -333,6 +335,17 @@ fn recorded(runtime: &OrbitRuntime, drain: &str, output: &Value) -> DrainAdmissi
     record
 }
 
+/// The drain's admission pass counters.
+fn counters(runtime: &OrbitRuntime, drain: &str) -> DrainPassCounters {
+    runtime
+        .read_run_state(drain)
+        .unwrap()
+        .unwrap()
+        .pull_drain
+        .drain_pass_counters
+        .expect("the drain counts its passes")
+}
+
 fn ids(entries: impl IntoIterator<Item = String>) -> Vec<String> {
     entries.into_iter().collect()
 }
@@ -619,7 +632,8 @@ fn a_live_local_drain_refreshes_only_its_inherited_mode() {
 
 /// `max_active_leaf_runs` is enforced before gap fit: with one free slot,
 /// two candidates that both fit admit one, and the other is queued, not
-/// skipped.
+/// skipped. With the slot taken, the next pass builds no forecast and counts
+/// as `ceiling_full`.
 fn the_ceiling_holds_before_gap_fit() {
     let fixture = Fixture::new("enforce", "");
     fixture.seed_profiles();
@@ -635,6 +649,28 @@ fn the_ceiling_holds_before_gap_fit() {
         vec![first]
     );
     assert!(record.skipped.is_empty(), "{record:#?}");
+
+    fixture.running_hard_delivery();
+    let full = classify(&fixture.runtime, &drain, 1);
+    assert_eq!(admitted(&full), Vec::<String>::new(), "{full:#}");
+    assert!(
+        recorded(&fixture.runtime, &drain, &full)
+            .forecast_at
+            .is_none(),
+        "a full ceiling builds no forecast"
+    );
+    let counted = counters(&fixture.runtime, &drain);
+    assert_eq!(counted.passes, 2, "{counted:?}");
+    assert_eq!(
+        counted.outcome(DrainPassOutcome::Admitted),
+        1,
+        "{counted:?}"
+    );
+    assert_eq!(
+        counted.outcome(DrainPassOutcome::CeilingFull),
+        1,
+        "{counted:?}"
+    );
 }
 
 /// Sustained pressure holds the pass whatever the forecast says: nothing is
@@ -732,7 +768,7 @@ fn a_starving_head_holds_backfill_until_it_fits() {
 }
 
 /// When gap fit refuses every candidate while the backlog has work, the pass
-/// waits the short poll, not the idle wait.
+/// waits the short poll, not the idle wait, and counts as `gap_fit_held`.
 fn a_pass_gap_fit_refuses_entirely_polls() {
     let fixture = Fixture::new("enforce", "");
     fixture.seed_profiles();
@@ -747,6 +783,18 @@ fn a_pass_gap_fit_refuses_entirely_polls() {
     let record = recorded(&fixture.runtime, &drain, &pass);
     assert_eq!(record.skipped[0].task_id, heavy);
     let _: DateTime<Utc> = record.forecast_at.unwrap();
+    let counted = counters(&fixture.runtime, &drain);
+    assert_eq!(counted.passes, 1, "{counted:?}");
+    assert_eq!(
+        counted.outcome(DrainPassOutcome::GapFitHeld),
+        1,
+        "{counted:?}"
+    );
+    assert_eq!(
+        counted.waiting_by_reason.get("gap_fit"),
+        Some(&1),
+        "{counted:?}"
+    );
 }
 
 /// `shadow` and `enforce` passes each record the forecast at the offsets

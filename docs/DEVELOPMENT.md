@@ -45,7 +45,11 @@ does not weaken Clippy: the job runs `make ci-lint` and fails on errors.
 `scripts/check-ci-macos.sh` requires an unfiltered PR event and retains exact
 target/filter listings and native execution evidence validation. Push filters
 and branch selection remain independent; website pushes still run only on
-`main` for website, changelog or website-workflow changes. Required-check
+`main` for website, changelog or website-workflow changes. Push runs of
+`ci-macos.yml` share one group per branch with cancellation off: one run
+executes and one waits, and a newer push replaces the waiting run. An
+intermediate commit can therefore get no macOS run, while the newest commit
+always does. Scheduled and dispatch runs keep a group per run. Required-check
 settings are managed separately in the repository's provider rules.
 
 The task and MCP CLI integration binaries use named contract tables, with

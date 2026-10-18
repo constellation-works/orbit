@@ -231,6 +231,15 @@ population whose sparsity and spread still limit confidence. See the
 30 days and pruned by `orbit gc runs --apply`. See
 [auto-concurrency §8.1](design/auto-concurrency/2_design.md#81-the-accuracy-report).
 
+Each drain also counts why its admission passes admitted nothing, in
+`pipeline_state.drain_pass_counters`: every pass is one of `admitted`,
+`failed`, `held`, `throttle`, `no_candidate`, `ceiling_full`, `gap_fit_held`
+or `deferred`, with held passes split by reason, throttled passes by
+resource, and the reasons tasks waited. `orbit run show <drain>` prints them
+as an `Admission passes:` line, and `orbit run profiles --accuracy` gives each
+drain's limiter shares (`limiters` in `--json`). The counters survive resume
+([auto-concurrency §7](design/auto-concurrency/2_design.md#7-surfaces-and-configuration)).
+
 CPU utilization is bounded at 100% and is not compared with the resource
 throttle's CPU percentage. The auto-concurrency memory forecast and the
 resource throttle's memory percentage both measure non-reclaimable memory.

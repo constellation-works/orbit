@@ -27,6 +27,12 @@
 //!   (`fit_skipped`). A task held on one pass and admitted on another counts
 //!   in both. Pull drains separately count enforce requests held because no
 //!   work fit. Shadow columns stay on shadow passes only.
+//! - **Limiters.** Per drain, what limited its admission passes, from the
+//!   cumulative pass counters on its run state: each outcome's share of its
+//!   counted passes, which sum to one, and each waiting reason's share of
+//!   them, which overlap. The selection picks the drains — those with a
+//!   selected forecast and, without `mode`, this workspace's drains live at
+//!   or after `since` — but the counters cover each drain's whole lineage.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -34,6 +40,7 @@ use chrono::{DateTime, Duration, DurationRound, Utc};
 use orbit_store::contracts::{
     AdmissionForecastRecord, DeliveryRunInterval, DeliveryRunResources, HostResourceMinute,
 };
+use orbit_types::workflow::{DrainPassCounters, DrainPassOutcome};
 use serde::Serialize;
 
 use super::forecast::ACCURACY_OFFSETS;
@@ -78,6 +85,8 @@ pub struct ForecastAccuracy {
     pub offsets: Vec<OffsetAccuracy>,
     /// Shadow decisions against actual admissions, per drain.
     pub drains: Vec<DrainShadowDecisions>,
+    /// What limited each selected drain's admission passes.
+    pub limiters: Vec<DrainLimiters>,
     /// Every finalized forecast/measured-minute pair, oldest first.
     pub pairs: Vec<ForecastPair>,
 }
@@ -187,6 +196,41 @@ pub struct DrainShadowDecisions {
     pub pull_would_hold: u64,
     /// Enforce pull requests held because no work fit (`forecast_no_headroom`).
     pub pull_held: u64,
+}
+
+/// What limited one drain's admission passes.
+#[derive(Debug, Clone, Serialize)]
+pub struct DrainLimiters {
+    pub workspace_id: String,
+    pub run_id: String,
+    pub counters: DrainPassCounters,
+    /// Each outcome's passes as a share of `counters.passes`, `0..=1`; every
+    /// outcome is present and they sum to one.
+    pub shares: BTreeMap<DrainPassOutcome, f64>,
+    /// Each waiting reason's passes as a share of `counters.passes`. A pass
+    /// can count under several reasons.
+    pub waiting_shares: BTreeMap<String, f64>,
+}
+
+impl DrainLimiters {
+    pub fn new(workspace_id: String, run_id: String, counters: DrainPassCounters) -> Self {
+        let shares = DrainPassOutcome::ALL
+            .into_iter()
+            .map(|outcome| (outcome, counters.share(counters.outcome(outcome))))
+            .collect();
+        let waiting_shares = counters
+            .waiting_by_reason
+            .iter()
+            .map(|(reason, passes)| (reason.clone(), counters.share(*passes)))
+            .collect();
+        Self {
+            workspace_id,
+            run_id,
+            counters,
+            shares,
+            waiting_shares,
+        }
+    }
 }
 
 /// The report over preselected `records` against the host's measured `minutes`.
@@ -319,6 +363,7 @@ pub(crate) fn forecast_accuracy(
         forecasts: records.len() as u64,
         offsets,
         drains: shadow_decisions(records),
+        limiters: Vec::new(),
         pairs,
     }
 }
