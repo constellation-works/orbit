@@ -271,6 +271,7 @@ impl RuntimeHost for OrbitRuntime {
         if self.worker_invocation().is_some() {
             if update.status == TaskStatus::Done {
                 let task = self.get_task(task_id)?;
+                crate::application::task::ensure_post_deploy_criteria_met(self, &task)?;
                 crate::application::task::ensure_completion_run_stopped(
                     self,
                     &task,

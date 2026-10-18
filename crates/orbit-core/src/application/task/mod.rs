@@ -108,7 +108,7 @@ pub use lifecycle::{
     task_status_transition_required_field,
 };
 pub(crate) use lifecycle::{
-    ensure_completion_run_stopped, ensure_task_has_execution_plan,
+    ensure_completion_run_stopped, ensure_post_deploy_criteria_met, ensure_task_has_execution_plan,
     in_progress_transition_requires_plan, is_operator_rescue_close,
 };
 pub(crate) use paths::context_workspace_root;

@@ -135,6 +135,7 @@ pub(crate) fn ensure_status_change_allowed(
     }
 
     if target == TaskStatus::Done {
+        ensure_post_deploy_criteria_met(runtime, task)?;
         ensure_completion_run_stopped(
             runtime,
             task,
@@ -184,6 +185,28 @@ pub(crate) fn ensure_status_change_allowed(
         )),
         _ => Ok(()),
     }
+}
+
+/// Every ordinary completion writer checks the same persisted measurement
+/// record under the task lock. A successful run or review cannot substitute
+/// for an operator's post-deploy result, including on a reused candidate.
+/// Only the explicitly audited human force path may bypass this precondition.
+pub(crate) fn ensure_post_deploy_criteria_met(
+    runtime: &OrbitRuntime,
+    task: &Task,
+) -> Result<(), OrbitError> {
+    let owed = runtime.outstanding_owed_criteria(&task.id, None)?;
+    if owed.is_empty() {
+        return Ok(());
+    }
+    Err(OrbitError::PolicyDenied(format!(
+        "completion requires an operator's post-deploy met record for criteria {}; \
+         owed or failed measurements cannot complete",
+        owed.iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    )))
 }
 
 /// Refuse completion while a linked implementation run (or a recorded child)
