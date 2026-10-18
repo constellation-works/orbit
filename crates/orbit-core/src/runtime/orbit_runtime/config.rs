@@ -158,10 +158,10 @@ impl OrbitRuntime {
         self.context.settings().workflow_auto_ship()
     }
 
-    /// The resolved `[workflow.mid_run_steering]` settings. Steering is off
-    /// unless a config layer enables it.
+    /// The current last-known-good `[workflow.mid_run_steering]` settings,
+    /// refreshed at prompt and gate checkpoints. Steering defaults off.
     pub fn mid_run_steering(&self) -> orbit_config::MidRunSteeringSettings {
-        self.context.settings().mid_run_steering()
+        self.current_mid_run_steering()
     }
 
     /// The resolved `[operation]` review preferences (layered over the

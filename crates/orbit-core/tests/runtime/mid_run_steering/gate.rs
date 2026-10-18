@@ -9,7 +9,7 @@
 //! reading, its rounds, delivery and the `steering_unconsumed` hold are all
 //! the runtime's own records.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use orbit_common::OrbitError;
@@ -103,6 +103,9 @@ pub(super) struct Pipeline<'a> {
     /// The run `candidate_resume` names as the candidate's source.
     source: Option<String>,
     pub(super) on_implement: OnImplement,
+    /// Replay fixtures keep provider work scripted but execute the real
+    /// commit action against this disposable checkout and pinned base.
+    pub(super) candidate: Option<(PathBuf, String)>,
     /// The gate reads a task that does not exist, so every read fails.
     unreadable: bool,
     /// The owner a claimed leaf's binding reaches. With one, the implement
@@ -125,6 +128,7 @@ impl<'a> Pipeline<'a> {
             implement: true,
             source: None,
             on_implement: Box::new(|_, _| {}),
+            candidate: None,
             unreadable: false,
             owner: None,
             round_read_fails: false,
@@ -235,8 +239,8 @@ impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
         Ok(match label.as_str() {
             "worktree" => json!({
                 "job_run_id": self.run,
-                "workspace_path": self.fx.workspace,
-                "base_sha": "base",
+                "workspace_path": self.candidate.as_ref().map_or(&self.fx.workspace, |(repo, _)| repo),
+                "base_sha": self.candidate.as_ref().map_or("base", |(_, base)| base.as_str()),
                 "base_ref": "main",
                 "prior_job_run_id": null,
                 "prior_foreign_run": null,
@@ -267,6 +271,18 @@ impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
                 };
                 (self.on_implement)(self.fx, built);
                 json!({})
+            }
+            "commit" if self.candidate.is_some() => {
+                return orbit_engine::execute_deterministic_action(
+                    &self.runtime(),
+                    "git_commit",
+                    &json!({}),
+                    input,
+                    false,
+                    &std::collections::HashMap::new(),
+                    None,
+                )
+                .map_err(|error| DispatchError::CliInvocationFailed(error.to_string()));
             }
             _ => json!({ "probed": label }),
         })
@@ -379,13 +395,40 @@ fn steering_off_and_nothing_outstanding_leave_both_pipelines_as_they_are() {
         let mut outcomes = Vec::new();
         for job in [&job, &ungated] {
             let mut host = Pipeline::new(&fx, &run);
-            host.on_implement = Box::new(|fx, _| {
+            let checkpoint_run = run.clone();
+            host.on_implement = Box::new(move |fx, _| {
                 fx.operator_comment("STEER: written while steering is off.");
+                let state = serde_json::to_value(fx.state(&checkpoint_run)).unwrap();
+                let task = serde_json::to_value(fx.runtime.get_task(&fx.task).unwrap()).unwrap();
+                let history =
+                    serde_json::to_value(fx.runtime.get_task_history(&fx.task).unwrap()).unwrap();
+                let prompt = fx.prompt(&checkpoint_run, "validate_repair");
+                assert!(prompt.get("steering").is_none());
+                assert_eq!(
+                    serde_json::to_value(fx.state(&checkpoint_run)).unwrap(),
+                    state
+                );
+                assert_eq!(
+                    serde_json::to_value(fx.runtime.get_task(&fx.task).unwrap()).unwrap(),
+                    task
+                );
+                assert_eq!(
+                    serde_json::to_value(fx.runtime.get_task_history(&fx.task).unwrap()).unwrap(),
+                    history
+                );
             });
             let outcome = host.execute(job, None);
             assert!(outcome.success, "{pipeline}: {outcome:?}");
             assert_eq!(host.labels(), expected, "{pipeline}");
             assert!(fx.state(&run).steering_rounds.is_empty());
+            assert!(fx.state(&run).steering_watermarks.is_empty());
+            assert!(
+                host.prompts
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|prompt| prompt.get("steering").is_none())
+            );
             outcomes.push(outcome.pipeline);
         }
         assert_eq!(

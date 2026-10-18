@@ -1,9 +1,9 @@
 ---
 title: Mid-Run Operator Steering — Vision
-owner: muse
-last_updated: 2026-10-17
-last_validated: 2026-10-17
-status: Draft
+owner: codex
+last_updated: 2026-10-18
+last_validated: 2026-10-18
+status: Accepted
 feature: mid-run-steering
 doc_role: vision
 type: design
@@ -16,7 +16,7 @@ related_artifacts: [ORB-16577, ORB-10499]
 
 # Mid-Run Operator Steering — Vision
 
-Forward-looking: where steering could go once the safe-point version in [2_design.md](./2_design.md) exists and has operational history. Everything here is speculation until a task adopts it; nothing in this doc is a commitment or a schedule.
+Forward-looking: where steering could go now that the safe-point version in [2_design.md](./2_design.md) is implemented. Operational history still needs to accumulate. Everything here is speculation until a task adopts it; nothing in this doc is a commitment or a schedule. Native session injection, interrupt urgency, UI delivery states and automation-authored steering remain out of scope and unfiled unless an operator requests them. Accepted status records that boundary, not implementation of these ideas.
 
 ## 1. Open Questions
 
@@ -41,7 +41,7 @@ Interactive coding agents have always had steering — a human typing into a liv
 
 ## 3. What May Be Distinctive
 
-Steering through the system of record rather than a live socket: the comment, the watermark, the delivery event and the gate verdict are all durable artifacts a later reviewer (or a different host settling a claimed leaf) can re-read and re-verify. Most agent harnesses treat mid-run guidance as ephemeral session state that dies with the process; here it would survive crashes, resumes and host changes like every other Orbit decision input.
+Steering through the system of record rather than a live socket: the comment, the watermark, the delivery event and the gate verdict are all durable artifacts a later reviewer (or a different host settling a claimed leaf) can re-read and re-verify. Most agent harnesses treat mid-run guidance as ephemeral session state that dies with the process; here the safe-point records survive crashes, resumes and host changes like every other Orbit decision input.
 
 ## 4. References
 
