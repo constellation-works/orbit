@@ -60,3 +60,8 @@ test-group = 'mcp-contracts'
 [profile.ci]
 test-threads = 6
 retries = 0
+
+# Per-test durations for the slowest-test table in
+# docs/design-patterns/test_strategy.md. Each CI shard uploads its report.
+[profile.ci.junit]
+path = "junit.xml"

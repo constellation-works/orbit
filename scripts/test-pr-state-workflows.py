@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -285,6 +286,15 @@ class CompilerCacheWorkflowTests(unittest.TestCase):
                                              and ready == "true" and hit != "true")
         cache_steps = [s for s in self.job["steps"] if s.get("uses", "").startswith("actions/cache")]
         self.assertEqual(cache_steps, [restore, save], "compiler objects must have no implicit upload action")
+        # The test-build job compiles with the same cache contract.
+        for name, job in self.document["jobs"].items():
+            steps = {step["id"]: step for step in job["steps"] if step.get("id", "").startswith("compiler-")}
+            if steps:
+                with self.subTest(job=name):
+                    self.assertEqual(steps, {key: value for key, value in self.steps.items()
+                                             if key.startswith("compiler-")},
+                                     "every job's compiler-object steps must match the Check job's")
+                    self.assertEqual(job["env"]["SCCACHE_CACHE_SIZE"], self.job["env"]["SCCACHE_CACHE_SIZE"])
         self.assertEqual(restore["with"]["path"], "${{ env.SCCACHE_DIR }}")
         self.assertEqual(save["with"]["path"], restore["with"]["path"])
         self.assertEqual(save["with"]["key"], restore["with"]["key"])
@@ -318,8 +328,10 @@ class CompilerCacheWorkflowTests(unittest.TestCase):
                 changed = self.run_step(step)[0]
                 self.assertNotEqual(changed["prefix"], baseline["prefix"])
                 path.write_text("original\n")
+        # GITHUB_JOB: the Check and test-build jobs compile different units,
+        # so each saves its own archive instead of racing for one key.
         for name in ("FIXTURE_COMPILER", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_PROFILE_TEST_DEBUG",
-                     "CARGO_BUILD_TARGET", "CARGO_FEATURE_EXPERIMENT", "ImageVersion"):
+                     "CARGO_BUILD_TARGET", "CARGO_FEATURE_EXPERIMENT", "ImageVersion", "GITHUB_JOB"):
             with self.subTest(env=name):
                 self.env[name] = "different"
                 self.assertNotEqual(self.run_step(step)[0]["prefix"], baseline["prefix"])
@@ -365,6 +377,68 @@ case "$1" in --show-stats|--zero-stats) exit "${FIXTURE_STATS_EXIT:-0}";; *) exi
         outputs, exports, _ = self.run_step(step)
         self.assertEqual(outputs["ready"], "false")
         self.assertEqual(exports["ORBIT_COMPILER_CACHE"], "0")
+
+
+@unittest.skipIf(yaml is None, "PyYAML not installed; the workflow guard skips locally without it")
+class NextestShardWorkflowTests(unittest.TestCase):
+    """Run the shard steps with stub tools: the shard jobs and the Check job's wait agree."""
+
+    def setUp(self):
+        scratch = ROOT / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(dir=scratch, prefix="nextest-shards-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.document = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+        self.calls = self.root / "calls"
+        # Each stub records its argv, one JSON list per line. It names the real
+        # interpreter: the python3 stub shadows it on PATH.
+        record = f"#!{sys.executable}\nimport json, sys\nopen({str(self.calls)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        for path in (self.root / "bin/python3", self.root / "scripts/cpu-utilisation.sh"):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(record)
+            path.chmod(0o755)
+
+    def run_step(self, job, name):
+        step = next(step for step in job["steps"] if step.get("name") == name)
+        self.calls.write_text("")
+        env = dict(PATH=f"{self.root / 'bin'}:{os.environ['PATH']}", RUNNER_TEMP=str(self.root),
+                   **self.document["env"], **job.get("env", {}))
+        result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", step["run"]], cwd=self.root,
+                                env={key: str(value) for key, value in env.items()},
+                                text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return [json.loads(line) for line in self.calls.read_text().splitlines()]
+
+    def test_shard_jobs_partition_once_each_and_the_check_job_awaits_all_of_them(self):
+        shards = int(self.document["env"]["NEXTEST_SHARDS"])
+        jobs = self.document["jobs"]
+        shard_jobs = {job_id: job for job_id, job in jobs.items() if job_id.startswith("test-")
+                      and job_id != "test-build"}
+        self.assertGreater(shards, 1)
+        partitions = {}
+        for job_id, job in shard_jobs.items():
+            with self.subTest(job=job_id):
+                self.assertNotIn("strategy", job, "Orbit's rerun certification needs literal shard jobs")
+                self.assertEqual(job["steps"], shard_jobs["test-1"]["steps"], "every shard runs the same steps")
+                [nextest] = self.run_step(job, "Run nextest shard")
+                self.assertEqual(nextest[:4], ["--label", "nextest", "--", "cargo"])
+                self.assertIn("--no-fail-fast", nextest)
+                self.assertNotIn("--run-ignored", nextest)
+                partition = nextest[nextest.index("--partition") + 1]
+                self.assertNotIn(partition, partitions, f"{job_id} repeats {partitions.get(partition)}'s shard")
+                partitions[partition] = job["name"]
+                [wait] = self.run_step(job, "Await the test build")
+                self.assertEqual(wait[1:], ["--job", "Test build"])
+        self.assertEqual(sorted(partitions), sorted(f"count:{k}/{shards}" for k in range(1, shards + 1)),
+                         "the shard jobs must select every count partition of NEXTEST_SHARDS")
+        self.assertEqual(sorted(partitions.values()), sorted(f"Test shard {k}/{shards}" for k in range(1, shards + 1)))
+        [wait] = self.run_step(jobs["ci"], "Await the test build and nextest shards")
+        self.assertEqual(wait[0], "scripts/ci-await-jobs.py")
+        awaited = wait[2::2]
+        self.assertEqual(wait[1::2], ["--job"] * len(awaited))
+        self.assertEqual(sorted(awaited), sorted([jobs["test-build"]["name"], *partitions.values()]),
+                         "the Check job's elapsed time must cover the test build and every shard")
 
 
 if __name__ == "__main__":

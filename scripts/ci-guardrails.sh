@@ -4,20 +4,35 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
+# Modes: the default full run (`make ci`); --fast (`make ci-fast`); and the two
+# halves of the split hosted workflow (.github/workflows/ci.yml). --checks runs
+# everything except the workspace test build and nextest. --test-archive PATH
+# runs only the workspace test build, archives its test binaries for the
+# parallel nextest shards, and proves the shards cover every test.
 fast=false
+checks=false
+archive=""
+usage() {
+  echo "usage: ci-guardrails.sh [--fast | --checks | --test-archive PATH]" >&2
+  exit 2
+}
 case "${1:-}" in
   "") ;;
   --fast) fast=true ;;
-  *)
-    echo "usage: ci-guardrails.sh [--fast]" >&2
-    exit 2
+  --checks) checks=true ;;
+  --test-archive)
+    [[ -n "${2:-}" ]] || usage
+    archive="$2"
+    shift
     ;;
+  *) usage ;;
 esac
+[[ $# -le 1 ]] || usage
 
 # Several guardrail scripts shell out to ripgrep; a missing `rg` degrades
 # them silently (empty search results read as "clean" or, worse, as false
 # violations). Fail fast instead. [ORB-10021]
-if ! command -v rg >/dev/null 2>&1; then
+if [[ -z "$archive" ]] && ! command -v rg >/dev/null 2>&1; then
   echo "ci-guardrails: ripgrep (rg) is required; install it before running" >&2
   exit 1
 fi
@@ -114,6 +129,25 @@ run_phase() {
 }
 
 export GIT_OPTIONAL_LOCKS=0
+
+# The hosted test-build job: the folded workspace test build, then an archive
+# of its test binaries and the `orbit` binary the CLI fixtures execute, then
+# the partition guard. The shard jobs run nextest from that archive, one count
+# partition each, and the Check job (--checks) runs everything else. Archiving
+# and listing run under the folded build's lint environment, so neither
+# recompiles; the listings read the archive itself, so the guard proves what
+# the shards receive. NEXTEST_SHARDS (ci.yml) is the shard count.
+if [[ -n "$archive" ]]; then
+  lint="$repo_root/scripts/with-test-build-lint.sh"
+  run_phase workflow-test-list-build "$repo_root/scripts/check-ci-macos.sh" --workspace-build
+  run_phase workspace-test-archive "$lint" cargo nextest archive --locked \
+    --workspace --lib --bins --tests --archive-file "$archive"
+  # nextest extracts the archive for each listing; keep it in the checkout.
+  TMPDIR="$guard_logs" run_phase workspace-test-partitions \
+    "$repo_root/scripts/check-nextest-partitions.py" --shards "${NEXTEST_SHARDS:?set NEXTEST_SHARDS}" -- \
+    cargo nextest list --archive-file "$archive" --workspace-remap "$repo_root"
+  exit 0
+fi
 
 run_self_tests=true
 if [[ "$fast" == true ]]; then
@@ -436,6 +470,8 @@ exclusive_lane_pid=$!
   run_guard "$repo_root/scripts/test-validate-agent-plugin.sh"
   run_guard "$repo_root/scripts/test-make-install.py"
   run_guard "$repo_root/scripts/test-cross-revision-check.sh"
+  run_guard "$repo_root/scripts/test-check-nextest-partitions.py"
+  run_guard "$repo_root/scripts/test-ci-await-jobs.py"
   run_guard "$repo_root/scripts/test-cpu-utilisation.py"
   drain_pool
   reap_waiting_guard
@@ -443,7 +479,23 @@ exclusive_lane_pid=$!
 ) >"$guard_logs/pool.out" 2>"$guard_logs/pool.err" &
 guard_pool_pid=$!
 
-if [[ "$fast" == false ]]; then
+# Every Cargo command that compiles workspace members after the folded build
+# runs under its lint environment. Cargo fingerprints it, so without it the
+# nextest pass and doctests would recompile the whole workspace.
+lint="$repo_root/scripts/with-test-build-lint.sh"
+
+if [[ "$checks" == true ]]; then
+  # The hosted Check job builds no test binaries: the test-build job does, and
+  # the shard jobs run nextest. The check chain starts beside the pool and the
+  # exclusive lane, in the idle class like the build it replaces there, so the
+  # exclusive suites keep normal-priority CPU to themselves. Doctests build
+  # their own libraries here under the same lint environment.
+  start_check_chain
+  join_guard_pool
+  join_exclusive_lane
+  guards_joined=$SECONDS
+  join_check_chain
+elif [[ "$fast" == false ]]; then
   # Enumerating workflow tests compiles their targets; keep it out of ci-fast.
   # --workspace-build lists them from the same `--workspace --lib --bins
   # --tests` artifacts the nextest pass below runs, instead of a per-crate
@@ -463,10 +515,6 @@ if [[ "$fast" == false ]]; then
   join_guard_pool
   join_exclusive_lane
   guards_joined=$SECONDS
-  # Every later Cargo command that compiles workspace members runs under the
-  # folded build's lint environment. Cargo fingerprints it, so without it the
-  # nextest pass and doctests would recompile the whole workspace.
-  lint="$repo_root/scripts/with-test-build-lint.sh"
   if cargo nextest --version >/dev/null 2>&1; then
     # List the folded build's test binaries (fresh, so nothing compiles), then
     # run nextest from that listing. The run invokes no Cargo build and holds
@@ -490,6 +538,9 @@ if [[ "$fast" == false ]]; then
     run_check_chain || checks_status=$?
     if [[ "$failed" -eq 0 ]]; then failed="$checks_status"; fi
   fi
+fi
+
+if [[ "$fast" == false ]]; then
   # Supply-chain gate: dependency advisories + license allow-list (deny.toml).
   # [ORB-00416] [ORB-11983] Soft-presence like nextest above — CI installs a pinned version;
   # local runs without the tool warn instead of hard-failing. It may fetch the
@@ -501,7 +552,7 @@ if [[ "$fast" == false ]]; then
   fi
 fi
 
-# Fast mode joins here; full mode already joined before its tests.
+# Fast mode joins here; the other modes already joined.
 if [[ "$fast" == true ]]; then
   join_guard_pool
   join_exclusive_lane

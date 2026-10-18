@@ -667,8 +667,16 @@ class VerifiedDownloadTests(unittest.TestCase):
             thread.join()
 
     def _workflow_steps(self):
+        # Several jobs install the same tools; each copy must be the one tested.
         workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-        return {step.get("name"): step for step in workflow["jobs"]["ci"]["steps"]}
+        steps = {}
+        for job in workflow["jobs"].values():
+            for step in job["steps"]:
+                name = step.get("name")
+                if name in steps and (name or "").startswith("Install "):
+                    self.assertEqual(step, steps[name], f"every copy of {name!r} must match")
+                steps.setdefault(name, step)
+        return steps
 
     def _ensure_cargo_shim(self):
         cargo = self.bin / "cargo"

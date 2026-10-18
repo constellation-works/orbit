@@ -135,12 +135,12 @@ class CpuUtilisationTests(unittest.TestCase):
         self.assertRegex(result.stderr.strip(), LIVE_LINE)
 
     def test_ci_profile_is_defined(self):
-        """The Check job runs nextest --profile ci, so the profile table must exist."""
+        """CI runs nextest --profile ci, so the profile table must exist."""
         config = tomllib.loads((ROOT / ".config" / "nextest.toml").read_text())
         self.assertIn(
             "ci",
             config["profile"],
-            "the Check job runs nextest --profile ci (ci.yml, ci-guardrails.sh); the table must exist",
+            "the nextest shard jobs and ci-guardrails.sh run nextest --profile ci; the table must exist",
         )
 
 
