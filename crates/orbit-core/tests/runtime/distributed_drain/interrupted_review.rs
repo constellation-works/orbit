@@ -120,10 +120,18 @@ fn a_cancelled_review_keeps_its_repair_and_findings_for_the_next_claim() {
         head,
         "the repair sits on the reviewed candidate"
     );
-    let identity = git(&origin, &["log", "-1", "--format=%an|%cn", &repair]);
+    let identity = git(
+        &origin,
+        &["log", "-1", "--format=%an <%ae>|%cn <%ce>", &repair],
+    );
     let (author, committer) = identity.trim().split_once('|').unwrap();
-    assert!(author.ends_with("-reviewer"), "{identity}");
-    assert_eq!(committer, "orbit", "{identity}");
+    // [ORB-16768] The detached repair names the reviewer's resolved model
+    // under the reviewer role address; the committer stays Orbit.
+    assert_eq!(
+        author, "orbit[gpt-6.1-sol] <codex-reviewer@orbit.local>",
+        "{identity}"
+    );
+    assert_eq!(committer, "orbit <orbit@orbit.local>", "{identity}");
     assert_eq!(
         git(&origin, &["show", &format!("{repair}:src/f0.rs")]),
         REPAIRED

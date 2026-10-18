@@ -238,7 +238,7 @@ everything the reviewer left uncommitted as one second commit on top of it:
 ```text
 <implementation commit(s)>     authored by the implementer
 review: <first line of the reviewer summary> [<task ids>]
-                               authored <family>-reviewer, Orbit committer
+                               authored orbit[<reviewer model>], <family>-reviewer@orbit.local, Orbit committer
     Findings: F1, F2
     Paths: src/a.rs, docs/b.md
     Orbit-Review-Attempt: <attempt id>
@@ -728,8 +728,9 @@ predate the attempt are ignored, the rest merge into the most severe verdict
 with every distinct finding and validation record — (none, a wrong attempt,
 another contract version, or an unreadable report is `incomplete`), commits every
 uncommitted change as the one reviewer commit (§3.1) authored
-`<family>-reviewer <<family>-reviewer@orbit.local>` with the Orbit committer
-and the `Orbit-Review-Attempt` and `Orbit-Review-Crew` trailers, widens the
+`orbit[<reviewer model>] <<family>-reviewer@orbit.local>` (falling back to
+`<family>-reviewer <<family>-reviewer@orbit.local>` when the model is unknown)
+with the Orbit committer and the `Orbit-Review-Attempt` and `Orbit-Review-Crew` trailers, widens the
 tasks' selectors with an exact `file:` entry for every repaired path they do
 not cover, declared in a finding or not, with one `context_files_widened`
 history entry (step `review`), and cross-checks the claim. The reviewer may

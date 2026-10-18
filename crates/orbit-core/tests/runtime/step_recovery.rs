@@ -41,6 +41,9 @@ use super::dispatch_admission::isolated;
 mod repair_commit;
 
 const ORIGINAL_FAILURE: &str = "required validation is red on the candidate (exit 3; failing: actual_failure). Candidate log: `validation/run-observed/0.json`; base log: `validation/run-observed/0.baseline.json`. Base verdict: passed";
+/// The recovery draw's resolved model, which authors the host's repair
+/// commit [ORB-16768].
+const RECOVERY_MODEL: &str = "gpt-6.1-sol";
 const RETRY_FAILURE: &str = "required validation is still red";
 const TASK: &str = "ORB-1";
 
@@ -117,6 +120,8 @@ struct Case<'a> {
     read_failure: bool,
     claimed: bool,
     change_validation_env: bool,
+    /// Withhold the recovery crew model to exercise the historical author.
+    recovery_model: Option<&'static str>,
     /// Runs on the fresh worktree before the job starts.
     prepare: fn(&Path),
     /// Steps that ran before `validate`, as `(id, recorded output)`: a
@@ -135,6 +140,7 @@ impl Default for Case<'_> {
             read_failure: false,
             claimed: false,
             change_validation_env: false,
+            recovery_model: Some(RECOVERY_MODEL),
             prepare: |_| {},
             before: Vec::new(),
         }
@@ -201,6 +207,8 @@ struct RecoveryHost<'a> {
     read_failure: bool,
     claimed: bool,
     change_validation_env: bool,
+    /// Withhold the recovery crew model to exercise the historical author.
+    recovery_model: Option<&'static str>,
     deliveries: AtomicUsize,
     hooks: Mutex<Vec<(String, Value)>>,
     task_writes: AtomicUsize,
@@ -306,9 +314,25 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost<'_> {
 
     fn agent_crew_config_for_input(
         &self,
-        _input: &Value,
+        input: &Value,
     ) -> Result<Option<orbit_engine::CrewConfig>, DispatchError> {
-        Ok(None)
+        // The recovery draw resolves a crew model, which authors the host's
+        // repair commit [ORB-16768]. No crew exercises the historical fallback.
+        let Some(model) = self.recovery_model else {
+            return Ok(None);
+        };
+        let recovery = input
+            .get("crew_config_key")
+            .and_then(Value::as_str)
+            .is_some_and(|key| {
+                key == "workflow.purpose_crews.failure_recovery"
+                    || key == "workflow.purpose_crews.auto_fix"
+            });
+        Ok(recovery.then(|| orbit_engine::CrewConfig {
+            provider: None,
+            model: Some(model.to_string()),
+            reasoning_effort: None,
+        }))
     }
 
     /// The runtime's registry, without task-store lookups: a follower holds
@@ -517,6 +541,7 @@ fn run(fixture: &Fixture, case: &Case<'_>) -> Observed {
         read_failure: case.read_failure,
         claimed: case.claimed,
         change_validation_env: case.change_validation_env,
+        recovery_model: case.recovery_model,
         deliveries: AtomicUsize::new(0),
         hooks: Mutex::new(Vec::new()),
         task_writes: AtomicUsize::new(0),

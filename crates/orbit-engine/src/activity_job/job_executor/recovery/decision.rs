@@ -10,8 +10,9 @@ use orbit_types::workflow::activity_job::StepRecoveryDecisionRecord;
 
 /// What a recovery invocation admits for its failed step.
 pub(super) enum RecoveryAdmission {
-    /// Make the post-recovery attempt.
-    Retry,
+    /// Make the post-recovery attempt. Carries the dispatched recovery's
+    /// resolved model, which authors the host's repair commit [ORB-16768].
+    Retry(Option<String>),
     /// Return the original failure.
     Original,
     /// Fail the step as the blocker recovery declared [ORB-14268].
@@ -45,42 +46,46 @@ pub(super) fn attempt_recovery_activity(
         Err(error) => Err(("authorization", error.to_string())),
     };
 
-    let (recovery_succeeded, failure_phase, error_message, output, read) = match result {
-        Ok(RecoveryDispatch {
-            dispatch,
-            slot,
-            observation,
-        }) => {
-            let error_message = (!dispatch.success).then(|| {
-                redacted_recovery_diagnostic(dispatch.message.as_deref().unwrap_or(
-                    "recovery activity returned an unsuccessful outcome without a diagnostic",
-                ))
-            });
-            // Only a completed invocation's decision is read. Its response
-            // body stays advisory and never reaches this gate.
-            let decision = slot
-                .as_ref()
-                .filter(|_| dispatch.success)
-                .map(|slot| read_recovery_decision(ctx, slot, observation.as_ref()));
-            (
-                dispatch.success,
-                (!dispatch.success).then(|| "activity".to_string()),
-                error_message,
-                Some(bounded_recovery_input(
-                    &ctx.run_id,
-                    orbit_common::security::redaction::redact_all_json(dispatch.output),
-                )),
-                decision,
-            )
-        }
-        Err((phase, message)) => (
-            false,
-            Some(phase.to_string()),
-            Some(redacted_recovery_diagnostic(&message)),
-            None,
-            None,
-        ),
-    };
+    let (recovery_succeeded, failure_phase, error_message, output, read, recovery_model) =
+        match result {
+            Ok(RecoveryDispatch {
+                dispatch,
+                slot,
+                observation,
+                recovery_model,
+            }) => {
+                let error_message = (!dispatch.success).then(|| {
+                    redacted_recovery_diagnostic(dispatch.message.as_deref().unwrap_or(
+                        "recovery activity returned an unsuccessful outcome without a diagnostic",
+                    ))
+                });
+                // Only a completed invocation's decision is read. Its response
+                // body stays advisory and never reaches this gate.
+                let decision = slot
+                    .as_ref()
+                    .filter(|_| dispatch.success)
+                    .map(|slot| read_recovery_decision(ctx, slot, observation.as_ref()));
+                (
+                    dispatch.success,
+                    (!dispatch.success).then(|| "activity".to_string()),
+                    error_message,
+                    Some(bounded_recovery_input(
+                        &ctx.run_id,
+                        orbit_common::security::redaction::redact_all_json(dispatch.output),
+                    )),
+                    decision,
+                    recovery_model,
+                )
+            }
+            Err((phase, message)) => (
+                false,
+                Some(phase.to_string()),
+                Some(redacted_recovery_diagnostic(&message)),
+                None,
+                None,
+                None,
+            ),
+        };
     let (decision, blocker) = match read {
         Some((decision, blocker)) => (Some(decision), blocker),
         None => (None, None),
@@ -90,11 +95,13 @@ pub(super) fn attempt_recovery_activity(
     let admission = match (&decision, blocker) {
         _ if !recovery_succeeded => RecoveryAdmission::Original,
         (_, Some(blocker)) => RecoveryAdmission::Blocked(blocker),
-        (None, None) => RecoveryAdmission::Retry,
-        (Some(decision), None) if decision.retry_admitted => RecoveryAdmission::Retry,
+        (None, None) => RecoveryAdmission::Retry(recovery_model),
+        (Some(decision), None) if decision.retry_admitted => {
+            RecoveryAdmission::Retry(recovery_model)
+        }
         (Some(_), None) => RecoveryAdmission::Original,
     };
-    let retry_admitted = matches!(admission, RecoveryAdmission::Retry);
+    let retry_admitted = matches!(admission, RecoveryAdmission::Retry(_));
     if let Some(decision) = decision.as_ref().filter(|_| !retry_admitted) {
         tracing::warn!(
             target: "orbit.engine.job_executor",

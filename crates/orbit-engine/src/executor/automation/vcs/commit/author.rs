@@ -45,18 +45,46 @@ impl GitAuthor {
 /// The reviewer's own agent-family identity [ORB-11333]. Repair commits
 /// are never amended into implementer commits; this author string is what
 /// keeps the two distinguishable through squash and rebase evidence.
+///
+/// [ORB-16768] The name also carries the reviewer's resolved model, so the
+/// repair stays attributable to the agent that made it: the role address is
+/// unchanged.
 pub(super) fn reviewer_author(reviewer_model: &str) -> GitAuthor {
     let family = implementer_family(reviewer_model).unwrap_or_else(|| author_slug(reviewer_model));
-    GitAuthor::new(
-        format!("{family}-reviewer"),
-        format!("{family}-reviewer@orbit.local"),
-    )
+    match repair_model(reviewer_model) {
+        Some(model) => GitAuthor::new(
+            format!("orbit[{model}]"),
+            format!("{family}-reviewer@orbit.local"),
+        ),
+        None => GitAuthor::new(
+            format!("{family}-reviewer"),
+            format!("{family}-reviewer@orbit.local"),
+        ),
+    }
 }
 
 /// The author of a step recovery's working-tree repair, which Orbit commits
 /// for the agent: the recovery sandbox keeps Git metadata read-only.
-pub(super) fn recovery_author() -> GitAuthor {
-    GitAuthor::new("orbit-recovery", "orbit-recovery@orbit.local")
+///
+/// [ORB-16768] The name carries the recovery activity's resolved crew model,
+/// so the repair stays attributable to the agent that made it. Without a
+/// model it keeps the historical role identity.
+pub(super) fn recovery_author(recovery_model: Option<&str>) -> GitAuthor {
+    match recovery_model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    {
+        Some(model) => GitAuthor::new(format!("orbit[{model}]"), "orbit-recovery@orbit.local"),
+        None => GitAuthor::new("orbit-recovery", "orbit-recovery@orbit.local"),
+    }
+}
+
+/// The bare model inside a repair author label: the text after the
+/// `provider / model` separator when one is present, else the whole label.
+/// `None` when nothing names a model.
+fn repair_model(label: &str) -> Option<&str> {
+    let model = label.rsplit(" / ").next().map(str::trim).unwrap_or("");
+    (!model.is_empty()).then_some(model)
 }
 
 pub(super) fn git_author_for_task(task: &Task) -> Option<GitAuthor> {

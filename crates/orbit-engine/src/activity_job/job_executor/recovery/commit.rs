@@ -31,11 +31,12 @@ pub(super) fn commit_recovery_repair_for_retry(
     recovery: &ResolvedRecoveryActivity,
     bound: &Value,
     review_follows: bool,
+    recovery_model: Option<&str>,
 ) -> Result<(), RecoveryCommitRefusal> {
     if !matches!(deterministic_action(step), Some(action) if action != "git_commit") {
         return Ok(());
     }
-    commit_recovery_repair_after_commit(step, ctx, recovery, bound, review_follows)
+    commit_recovery_repair_after_commit(step, ctx, recovery, bound, review_follows, recovery_model)
 }
 
 /// Shared adoption boundary for step retry and final-recovery resume. The
@@ -47,6 +48,7 @@ pub(in crate::activity_job::job_executor) fn commit_recovery_repair_after_commit
     recovery: &ResolvedRecoveryActivity,
     bound: &Value,
     review_follows: bool,
+    recovery_model: Option<&str>,
 ) -> Result<(), RecoveryCommitRefusal> {
     let pipeline = ctx.pipeline_snapshot();
     let outputs = pipeline
@@ -112,6 +114,7 @@ pub(in crate::activity_job::job_executor) fn commit_recovery_repair_after_commit
         failed_step_id: &step.id,
         recovery_activity: &recovery.name,
         task_ids: &task_ids,
+        recovery_model: recovery_model.map(str::to_string),
         repair_paths: bound
             .get("ci_repair_paths")
             .and_then(Value::as_array)
@@ -167,6 +170,7 @@ fn deterministic_action(step: &JobV2Step) -> Option<&str> {
 /// engine handed to final recovery. The ordinary commit boundary still owns
 /// repairs before commit; committed candidates use the existing host repair
 /// guards before any index mutation, then the recorded head rewinds delivery.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::activity_job::job_executor) fn commit_final_recovery_repair(
     ctx: &ExecCtx<'_>,
     step: &JobV2Step,
@@ -175,6 +179,7 @@ pub(in crate::activity_job::job_executor) fn commit_final_recovery_repair(
     task_id: &str,
     worktree: &RunWorktree,
     source_before: Option<(&std::path::Path, &str, &str)>,
+    recovery_model: Option<&str>,
 ) -> Result<(), RecoveryCommitRefusal> {
     let pipeline = ctx.pipeline_snapshot();
     let Some(checkpoint) = pipeline
@@ -228,5 +233,6 @@ pub(in crate::activity_job::job_executor) fn commit_final_recovery_repair(
             "task_id": task_id, "workspace_path": worktree.workspace_path,
         }),
         false,
+        recovery_model,
     )
 }
