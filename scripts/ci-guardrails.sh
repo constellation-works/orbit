@@ -4,21 +4,24 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
-# Modes: the default full run (`make ci`); --fast (`make ci-fast`); and the two
+# Modes: the default full run (`make ci`); --fast (`make ci-fast`); the offline
+# file/metadata-only --static (`make ci-guards`); and the two
 # halves of the split hosted workflow (.github/workflows/ci.yml). --checks runs
 # everything except the workspace test build and nextest. --test-archive PATH
 # runs only the workspace test build, archives its test binaries for the
 # parallel nextest shards, and proves the shards cover every test.
 fast=false
+static=false
 checks=false
 archive=""
 usage() {
-  echo "usage: ci-guardrails.sh [--fast | --checks | --test-archive PATH]" >&2
+  echo "usage: ci-guardrails.sh [--fast | --static | --checks | --test-archive PATH]" >&2
   exit 2
 }
 case "${1:-}" in
   "") ;;
   --fast) fast=true ;;
+  --static) fast=true; static=true ;;
   --checks) checks=true ;;
   --test-archive)
     [[ -n "${2:-}" ]] || usage
@@ -149,8 +152,15 @@ if [[ -n "$archive" ]]; then
   exit 0
 fi
 
+# Static guards may read Cargo metadata but must never fetch registries.
+if [[ "$static" == true ]]; then
+  export CARGO_NET_OFFLINE=true
+fi
+
 run_self_tests=true
-if [[ "$fast" == true ]]; then
+if [[ "$static" == true ]]; then
+  run_self_tests=false
+elif [[ "$fast" == true ]]; then
   # Match ci-test-affected's delivery-base override and merge-base fallback.
   base=""
   if [[ -n "${CI_TEST_BASE:-}" ]]; then
@@ -185,13 +195,15 @@ fi
 
 # Selection must precede Cargo and repository guards: these mandatory fixtures
 # import yaml even though the standalone local workflow linter can warn/skip.
-if [[ "$run_self_tests" == true ]]; then
+if [[ "$run_self_tests" == true || "$static" == true ]]; then
   "$repo_root/scripts/require-python.sh" --yaml
 fi
 
 # --fast runs formatting and script guardrails, never the Rust test suite.
 # `make ci-test-affected` supplies the separate pre-handoff test gate.
-run_phase fmt cargo fmt --all -- --check
+if [[ "$static" == false ]]; then
+  run_phase fmt cargo fmt --all -- --check
+fi
 
 # Repository guards and self-tests share one sliding-window pool. Its width is
 # the build budget's cargo job count, the same number Cargo receives, so guard
@@ -294,8 +306,19 @@ reap_waiting_guard() {
 # unlike fixture-only self-tests.
 skipped() {
   local name="${1##*/}"
+  if [[ "$static" == true ]]; then
+    case "$name" in
+      check-workflow-action-pins.sh | check-desktop-ui.sh | smoke-plugin-install.sh)
+        # Network checks, Node behavior tests and scratch installations stay
+        # in --fast/full mode, outside the file/metadata-only lane.
+        return 0
+        ;;
+    esac
+  fi
   if [[ "$name" == test-* && "$name" != test-qa-full-sweep.py && "$run_self_tests" == false ]]; then
-    echo "ci-guardrails: SKIPPED $name (self-test inputs unchanged)"
+    if [[ "$static" == false ]]; then
+      echo "ci-guardrails: SKIPPED $name (self-test inputs unchanged)"
+    fi
     return 0
   fi
   return 1
@@ -391,20 +414,22 @@ start_check_chain() {
 # before the workspace tests start. Each suite is mostly one process, so the
 # lane leaves most of the host to that lowered work.
 guard_phase_started=$SECONDS
-exclusive_started=$SECONDS
-(
-  # The report trap belongs to the parent shell, not to the lane.
-  trap - EXIT
-  slot_prefix=exclusive-
-  run_exclusive_guard "$repo_root/scripts/test-build-budget.sh"
-  run_exclusive_guard "$repo_root/scripts/test-ci-fast-guards.py"
-  run_exclusive_guard "$repo_root/scripts/test-ci-test-affected.py"
-  run_exclusive_guard "$repo_root/scripts/test-codeql-rust-local.py"
-  run_exclusive_guard "$repo_root/scripts/test-compiler-cache.sh"
-  run_exclusive_guard "$repo_root/scripts/test-compiler-cache-namespaces.sh"
-  exit "$failed"
-) >"$guard_logs/exclusive.out" 2>"$guard_logs/exclusive.err" &
-exclusive_lane_pid=$!
+if [[ "$static" == false ]]; then
+  exclusive_started=$SECONDS
+  (
+    # The report trap belongs to the parent shell, not to the lane.
+    trap - EXIT
+    slot_prefix=exclusive-
+    run_exclusive_guard "$repo_root/scripts/test-build-budget.sh"
+    run_exclusive_guard "$repo_root/scripts/test-ci-fast-guards.py"
+    run_exclusive_guard "$repo_root/scripts/test-ci-test-affected.py"
+    run_exclusive_guard "$repo_root/scripts/test-codeql-rust-local.py"
+    run_exclusive_guard "$repo_root/scripts/test-compiler-cache.sh"
+    run_exclusive_guard "$repo_root/scripts/test-compiler-cache-namespaces.sh"
+    exit "$failed"
+  ) >"$guard_logs/exclusive.out" 2>"$guard_logs/exclusive.err" &
+  exclusive_lane_pid=$!
+fi
 
 (
   # The report trap belongs to the parent shell, not to the pool.
@@ -419,7 +444,11 @@ exclusive_lane_pid=$!
   # Start the longer repository scans first; the pool keeps pool_width running.
   run_guard "$repo_root/scripts/check-orphan-modules.sh"
   run_guard "$repo_root/scripts/check-workflow-action-pins.sh"
-  run_guard "$repo_root/scripts/test-qa-full-sweep.py" --check
+  if [[ "$static" == true ]]; then
+    run_guard "$repo_root/scripts/test-qa-full-sweep.py" --check --static
+  else
+    run_guard "$repo_root/scripts/test-qa-full-sweep.py" --check
+  fi
   run_guard "$repo_root/scripts/check-error-translation.sh"
   run_guard "$repo_root/scripts/check-unused-dependencies.py"
   run_guard "$repo_root/scripts/check-doc-links.py"

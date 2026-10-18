@@ -23,6 +23,7 @@ The detailed rules behind [CONTRIBUTING.md](../CONTRIBUTING.md). Read the sectio
 For tasks that deliver a diff, run these gates before implementation handoff or before-PR review:
 
 ```bash
+make ci-guards         # static repository guards; no build or network
 make ci-fast           # MSRV compile check, formatting, script guardrails; no Rust tests
 make ci-test-affected  # complete test targets of changed crates and their workspace dependents
 make ci-lint           # clippy for production and all targets, then rustdoc
@@ -65,6 +66,36 @@ claimed mode. Run only commands the task's own brief requires; a QA sweep may
 build and run the product, and a review may reproduce a finding when its brief
 asks for it. Keep the brief's evidence artifacts and execution summary.
 
+- `make ci-guards` (or `scripts/ci-guardrails.sh --static`) runs the file and
+  metadata-only subset of the fast repository guards before candidate handoff.
+  It includes unit-test admissions, QA surface inventory, public artifact IDs,
+  test shell waits, dependency direction, orphan modules, doc links and indexes,
+  and the skill mirror check. The QA inventory uses `--check --static` to omit
+  its fixture self-tests and explicitly request offline metadata. Cargo is used
+  only for metadata, with `CARGO_NET_OFFLINE=true`; no compilation, formatting,
+  Rust tests or network requests run. It needs Python 3.11+, PyYAML, ripgrep and
+  an installed Cargo toolchain. The networked workflow action-pin check, Node UI
+  behavior tests, scratch plugin installation, and all fixture self-tests remain
+  in `make ci-fast` and full CI. The command uses the same bounded pool, names
+  failing guards, returns a nonzero status on failure, and prints per-guard and
+  total wall times. This early check does not replace any required delivery gate.
+  For a diff, run it and fix its findings even when `make ci-fast` is reserved for
+  pipeline final validation. Run `cargo fmt --all -- --check` in Rust workspaces,
+  including test targets. Include changed test files when applying rustfmt fixes,
+  and check them explicitly with `rustfmt --check --edition <edition> <path> ...`
+  using their crate's edition; do not limit formatting to production files.
+  For Rust changes, also mirror both `ci-lint` Clippy
+  passes and warnings-denied rustdoc for each changed crate, sequentially:
+
+  ```bash
+  scripts/build-budget.py -- cargo clippy -p <crate> --lib --bins -- -D warnings -D clippy::disallowed_methods
+  scripts/build-budget.py -- cargo clippy -p <crate> --all-targets -- -D warnings -A clippy::disallowed_methods
+  RUSTDOCFLAGS="-D warnings" scripts/build-budget.py -- cargo doc --no-deps -p <crate>
+  ```
+
+  Replace `<crate>` with the package name. Keep the whole final-validation
+  commands with the pipeline. These scoped checks cover production channel
+  restrictions, test targets, and private/broken documentation links.
 - `make ci-fast` runs independent repository script checks through a background pool. Its width is the build budget's Cargo job count (`scripts/build-budget.py --cargo-jobs`: `ORBIT_CARGO_JOBS`, then `CARGO_BUILD_JOBS`, then the `cargo-jobs` file, default 4), so guard fan-out never exceeds the same budget Cargo receives. The pool is a sliding window over launch order: a new guard starts only when the oldest launched guard finishes, even if later guards finished earlier, so a slow early guard keeps the slots of those finished guards occupied until it ends. Each script's output is captured separately and printed in launch order, per-script wall times are printed, and every failing script is named before the first failure's exit code is returned. Fixture self-tests run only when their inputs change: `scripts/`, `.github/`, `Makefile`, `.cargo/`, the root Cargo manifest/lockfile, `install.sh`, `RELEASING.md`, `plugin/`, `npm/`, `.agents/` or `.claude-plugin/`. Self-tests that assert wall-clock time or timeouts, measure build-budget admission, or drive a real Cargo target run one at a time, at normal priority, in a separate exclusive lane: `test-build-budget.sh`, `test-ci-fast-guards.py`, `test-ci-test-affected.py`, `test-codeql-rust-local.py`, `test-compiler-cache.sh` and `test-compiler-cache-namespaces.sh`. The lane starts after formatting, beside the pool. Each pool guard and, in full mode, the workflow test build starts in Linux's idle scheduling class, with a direct `nice -n 19` launch where idle scheduling is unavailable. Priority changes apply to the launching command itself, so macOS workers need no permission to renice a parent process. Nice scheduling lowers competition for CPU; Linux's idle class uses only CPU time the exclusive suites leave idle. `test-ci-download-verified.py` spends nearly all of its wall time in fixed slow-child and hang delays, so it starts beside the pool, outside its window, and is reaped after the pool drains. Its helper deadlines run on an injected clock, and a fixture step fails only after 120 s without output. Every other guard and self-test shares the pool. In full mode the pool and the exclusive lane overlap the workflow test build. Both join before the workspace tests start, the pool first, so no guard shares the host with their elapsed-time and timeout assertions and a pool failure stays the job's exit status. Nothing in the pool depends on that build or takes the Cargo build lock. Selection uses the same `CI_TEST_BASE` override and merge-base fallback as affected tests and includes committed, staged, unstaged, deleted and untracked paths. If Git cannot resolve the base or diff, every self-test runs. The QA sweep inventory check still runs for crates-only changes because it reads live CLI/MCP/web surfaces. Full `make ci` always runs all self-tests. The MSRV compile check is timed on its own, separate from those scripts: make prints `ci-fast: MSRV check <seconds> s` for `cargo +<MSRV> check --workspace --locked`, and each guardrail keeps its own `ci-guardrails: <name> <seconds> s` line.
 - `make ci-fast` passing says nothing about the Rust tests. Focused test filters help you investigate but do not replace `make ci-test-affected`: an existing test can encode behavior your change breaks even when your new tests pass.
 - Run Cargo-based gates (`ci-fast`, `ci-test-affected`, `goldens`, `ci-lint`, `cargo test` / `nextest`) one at a time when they share a target directory, or give each its own `CARGO_TARGET_DIR`. Concurrent gates in one target can rebuild `target/debug/orbit` under running generation-bound fixtures and fail them.
