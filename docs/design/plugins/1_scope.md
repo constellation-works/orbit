@@ -566,7 +566,7 @@ manifest requests them. Orbit then sets:
 
 ```
 ORBIT_HOST_API=1  ORBIT_VERSION=0.24.0  ORBIT_PLUGIN=graph  ORBIT_PLUGIN_VERSION=…
-ORBIT_PLUGIN_ROOT=…  ORBIT_PLUGIN_STATE=…  ORBIT_PLUGIN_CALLBACK=<legacy token>
+ORBIT_PLUGIN_ROOT=…  ORBIT_PLUGIN_STATE=…  ORBIT_PLUGIN_CALLBACK=descriptor-required
 ORBIT_PLUGIN_CALLBACK_FD=3
 ORBIT_TOOL_NAME=graph.recommend  ORBIT_TOOL_CWD=…  ORBIT_WORKSPACE_ROOT=…
 ORBIT_ALLOWED_TOOLS=orbit.task.show,orbit.search  ORBIT_PROC_ALLOWED_PROGRAMS=git
@@ -574,9 +574,10 @@ ORBIT_ALLOWED_TOOLS=orbit.task.show,orbit.search  ORBIT_PROC_ALLOWED_PROGRAMS=gi
 
 `ORBIT_PLUGIN_CALLBACK_FD` names the inherited descriptor carrying this backend's host-issued
 callback credential; its value is `3`, and the value itself is not a credential. Keep descriptor
-3 open in the backend and any descendant that needs callbacks. `ORBIT_PLUGIN_CALLBACK` is a
-retired token-based identity kept for legacy compatibility; the descriptor record is the current
-callback identity.
+3 open in the backend and any descendant that needs callbacks. The host no longer issues
+an environment token as a callback credential. `ORBIT_PLUGIN_CALLBACK` carries only a
+non-secret marker: without a valid descriptor it causes refusal, including after an
+unsandboxed descendant detaches from its original process tree. It grants no authority.
 
 stdin:  `{"schema_version":1,"tool":"graph.recommend","input":{…},"context":{"workspace_root":…,"agent":…,"model":…,"config":{…},"task_id":…,"job_run_id":…,"secrets":{"<name>":{"value":…,"version":…}}}}`
 
@@ -740,19 +741,15 @@ the same device and inode in the host-owned session directory; a forged file is 
 The descriptor survives `setsid`, `exec` and a cleared environment when the backend keeps it
 open. `ORBIT_PLUGIN_CALLBACK_FD` selects the descriptor number, defaulting to 3.
 
-The deprecated token/process-ancestry path is accepted only while
-`plugin.legacy_callback_identity` is enabled (off by default). On that path a token is accepted
-only when its record's pid is the caller, its parent, or its process group (backends spawn with
-`process_group(0)`). A token carried past that ancestry, such as after `setsid`, is a mismatch;
-one matching no session is missing. Start time is checked when a *scan* proposes a record
-(rejecting pid reuse): a confined child cannot read another process's `/proc`.
+The retired environment token and process ancestry never authorize a callback. A caller
+presenting only the old token, or matching a live backend session without a valid descriptor,
+is refused even when the session directory is readable. Start time is checked when a scan
+matches a record, rejecting pid reuse.
 
 **A confined child with no credential is refused, not promoted.** Backends cannot list
 `state/plugin-callbacks/` (§4.3), so a caller that cannot is inside a plugin sandbox and, with
-no valid descriptor or accepted legacy credential, is refused on both entry points. Clearing
-the child environment (`env -i`) retains identity when fd 3 stays open; closing that descriptor
-loses the current credential. With the legacy flag enabled, ancestry alone identifies a
-backend only where that directory is readable (unsandboxed backends, in-process dispatch).
+no valid descriptor, is refused on both entry points. Clearing the child environment
+(`env -i`) retains identity when fd 3 stays open; closing that descriptor loses the credential.
 Identity never reads another process's `environ`.
 
 ### 4.3 Sandboxing

@@ -188,35 +188,6 @@ pub(super) fn is_token_hex(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-/// A credential that names no live session, or a session the sandbox keeps
-/// out of this caller's reach.
-pub fn invalid_callback_credential(plugin: Option<&str>) -> OrbitError {
-    OrbitError::PolicyDenied(match plugin {
-        Some(plugin) => format!(
-            "plugin '{plugin}' callback credential is missing or invalid; a backend the host \
-             launched cannot reach Orbit without the host-issued session"
-        ),
-        None => "plugin callback credential is missing or invalid; a backend the host launched \
-             cannot reach Orbit without the host-issued session"
-            .to_string(),
-    })
-}
-
-/// A token that resolves to a session belonging to another process.
-pub fn mismatched_callback_credential(token: &str, ancestry: Option<&str>) -> OrbitError {
-    OrbitError::PolicyDenied(match ancestry {
-        Some(ancestry) => format!(
-            "plugin callback credential for '{token}' does not match the live backend process \
-             '{ancestry}'"
-        ),
-        None => format!(
-            "plugin callback credential for '{token}' is not held by the calling process; a \
-             host-issued session identifies the backend it was minted for and its descendants, \
-             and is not transferable"
-        ),
-    })
-}
-
 /// A credential this host has stopped honouring.
 pub fn retired_callback_credential(plugin: Option<&str>) -> OrbitError {
     let who = match plugin {
@@ -226,9 +197,7 @@ pub fn retired_callback_credential(plugin: Option<&str>) -> OrbitError {
     OrbitError::PolicyDenied(format!(
         "{who} only the retired callback credential; identity is the session record the host \
          hands the backend on file descriptor {PLUGIN_CALLBACK_FD}, which a backend must keep \
-         open across `setsid`, `exec` and any wrapper script. Set \
-         `plugin.legacy_callback_identity = true` to accept the environment token and process \
-         ancestry for one more release"
+         open across `setsid`, `exec` and any wrapper script"
     ))
 }
 
