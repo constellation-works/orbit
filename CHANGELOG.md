@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.29.0 — 2026-10-18
+
+### Breaking Changes
+
+- **`orbit logs` removed**: the hidden top-level `orbit logs <run-id>` compatibility command is gone → use `orbit run show` for steps and `orbit run logs` for raw output. ([ORB-16506])
+- **`orbit run ship-local` removed**: the hidden refusal-only alias now fails as an unknown command → use `orbit run ship --mode local`. ([ORB-16505])
+- **`orbit tool list --include-hidden` removed**: the hidden alias no longer parses → use `orbit tool list --all`. ([ORB-16456])
+- **Scoreboard API reduced**: `GET /api/scoreboard` now returns the `GET /api/cost` subset with deprecation headers, dropping `agents`, `highlights`, `notable_completions` and `coverage`, until its 2026-11-12 sunset → read `/api/cost`. `scoring.enabled` is ignored. ([ORB-15922])
+- **Forecast memory threshold must sit below the throttle**: config load now rejects `machine.auto_concurrency.admit_memory_percent` (default 75) at or above `workflow.resource_throttle.memory_high_percent`, even with auto-concurrency off → keep the throttle above 75 or lower the admit percent. ([ORB-15769])
+
+### Highlights
+
+- **Muse Code executor**: Meta's Muse Code joins the built-in executors as the `muse` lane on macOS, with a seeded crew, `orbit init` detection and sandbox grants for its state directories. Existing crews and pools are unchanged. ([ORB-16577])
+- **Forecast-based admission**: with `machine.auto_concurrency.mode` set to `shadow` or `enforce`, drains fit deliveries against measured CPU and memory profiles and shared host reservations. `orbit run profiles --accuracy` reports how good the forecasts were, and `orbit run auto --auto-concurrency` picks the mode per window. ([ORB-15772])
+- **Fleet drain overview**: the dashboard's All workspaces view shows every registered host and workspace's drain, with phase, slots in use, eligible work and the most common wait reason. Clicking a row switches to that host and workspace. ([ORB-16360])
+- **Review for one run**: `orbit run auto|ship --review before-pr|before-landing` adds a review layer to a single run without changing workspace policy. It can only strengthen the configured review, and run details show the layer used. ([ORB-16572])
+- **Auto-fix PR blockers**: `orbit run auto --auto-fix` repairs a delivery PR's failed required checks and branch conflicts through the existing recovery and validation path. It never merges; `--complete` stays the merge authority. ([ORB-16070])
+- **Post-deploy criteria stay owed**: criteria that can only be measured on the deployed build are recorded as owed instead of failing the delivery, and repair handoffs or ordinary completion can't drop them. ([ORB-16514])
+
 ## 0.28.3 — 2026-10-12
 
 ### Highlights
