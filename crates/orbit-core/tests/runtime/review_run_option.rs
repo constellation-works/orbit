@@ -300,18 +300,62 @@ fn a_run_option_adds_review_that_children_and_resumes_keep() {
         "{held}"
     );
 
-    // The layer the workspace already applies is accepted unchanged.
-    let (_root, applied) = open(
-        ShipMode::Pr,
-        &format!("{CREW}[review]\nbefore_landing = true\n"),
-        true,
+    // A matching workspace layer remains accepted with its provenance when
+    // a reviewer is configured, on both ship and auto.
+    for (policy, review, timing) in [
+        ("before_pr", ReviewLayer::BeforePr, "before-pr"),
+        (
+            "before_landing",
+            ReviewLayer::BeforeLanding,
+            "before-landing",
+        ),
+    ] {
+        let (_root, applied) = open(
+            ShipMode::Pr,
+            &format!("{CREW}[review]\n{policy} = true\n"),
+            true,
+        );
+        ship(&applied, ShipMode::Pr, Some(review)).expect_err("the worker never starts");
+        assert_eq!(
+            layer(&applied, &submitted(&applied, "task_auto_pipeline")),
+            json!({"timing": timing, "source": "workspace"}),
+        );
+        drain(&applied, Some(review)).expect_err("the worker never starts");
+        assert_eq!(
+            layer(&applied, &submitted(&applied, "workspace_auto_pipeline")),
+            json!({"timing": timing, "source": "workspace"}),
+        );
+    }
+}
+
+/// A same-layer request still checks the reviewer preflight on both ship and
+/// auto, before either path persists a run.
+fn same_layer_requests_require_a_reviewer_before_any_run() {
+    let crewless = CREW.replace(
+        "[operation]\nreview_crew = \"reviewers\"",
+        "[operation]\nreview_crew = []",
     );
-    ship(&applied, ShipMode::Pr, Some(ReviewLayer::BeforeLanding))
-        .expect_err("the worker never starts");
-    assert_eq!(
-        layer(&applied, &submitted(&applied, "task_auto_pipeline")),
-        json!({"timing": "before-landing", "source": "workspace"}),
-    );
+    assert_ne!(crewless, CREW, "the fixture removes only the reviewer crew");
+
+    for (policy, review) in [
+        ("before_pr", ReviewLayer::BeforePr),
+        ("before_landing", ReviewLayer::BeforeLanding),
+    ] {
+        let config = format!("{crewless}[review]\n{policy} = true\n");
+        let (_root, runtime) = open(ShipMode::Pr, &config, true);
+        for refused in [
+            refusal(ship(&runtime, ShipMode::Pr, Some(review))),
+            refusal(drain(&runtime, Some(review))),
+        ] {
+            assert!(
+                refused.contains("operation.review_crew is unset")
+                    && refused.contains("configure operation.review_crew")
+                    && refused.contains(&format!("review.{policy} (workspace)")),
+                "{refused}"
+            );
+            assert_eq!(runs(&runtime), 0, "a refusal persists no run");
+        }
+    }
 }
 
 /// The other workspace layer, a missing reviewer crew and the local route
@@ -338,11 +382,15 @@ fn conflicting_or_unrunnable_requests_are_refused_before_any_run() {
     }
 
     let (_root, crewless) = open(ShipMode::Pr, "", false);
-    let refused = refusal(ship(&crewless, ShipMode::Pr, Some(ReviewLayer::BeforePr)));
-    assert!(
-        refused.contains("operation.review_crew is unset"),
-        "{refused}"
-    );
+    for refused in [
+        refusal(ship(&crewless, ShipMode::Pr, Some(ReviewLayer::BeforePr))),
+        refusal(drain(&crewless, Some(ReviewLayer::BeforeLanding))),
+    ] {
+        assert!(
+            refused.contains("operation.review_crew is unset"),
+            "{refused}"
+        );
+    }
 
     let (_root, local) = open(ShipMode::Local, CREW, false);
     for refused in [
@@ -404,5 +452,6 @@ fn requests_outside_a_delivery_run_are_refused() {
 crate::scenario_table!(
     review_run_option_refusals,
     conflicting_or_unrunnable_requests_are_refused_before_any_run,
+    same_layer_requests_require_a_reviewer_before_any_run,
     requests_outside_a_delivery_run_are_refused
 );
