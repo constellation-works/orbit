@@ -376,7 +376,8 @@ impl OrbitRuntime {
             .map_err(Into::into)
     }
 
-    /// Resolve the crew a dispatch will run, refusing a disabled one.
+    /// Resolve the crew a dispatch will run, refusing a disabled one or a
+    /// workspace default whose executor cannot run on this host.
     ///
     /// Every path that launches a provider — task start, run and activity
     /// dispatch, pool candidates — resolves through here, so
@@ -390,6 +391,23 @@ impl OrbitRuntime {
     ) -> Result<Crew, OrbitError> {
         let (crew, source) = self.select_configured_crew(cli_override, task_crew)?;
         if crew.enabled {
+            // Explicit names are also used to enumerate pools before their OS
+            // filter runs. Keep those assignments intact; only the automatic
+            // default fallback is refused here, at the seam shared by task
+            // draws, activity draws and direct dispatch.
+            if source == ProviderSource::WorkspaceDefault {
+                let limits = self.executor_host_os_limits()?;
+                let requirement =
+                    orbit_types::task::TaskOsRequirement::for_crew(&[], Some(&crew.name), &limits)
+                        .map_err(OrbitError::InvalidInput)?;
+                if let Some(wait) = requirement.unsatisfied_reason(self.host_os()) {
+                    return Err(OrbitError::PolicyDenied(format!(
+                        "workflow.default_crew `{}` {wait}; configure a default or pool with an \
+                         executor that supports this host, or run on a supported host",
+                        crew.name,
+                    )));
+                }
+            }
             return Ok(crew);
         }
         let origin = match source {

@@ -1,13 +1,12 @@
 use std::collections::BTreeMap;
 
-use orbit_types::task::{
-    ExecutorOsLimit, ReadinessGap, ReadinessStage, Task, TaskOsRequirement, readiness_gaps,
-};
+use orbit_types::task::{ExecutorOsLimit, ReadinessGap, ReadinessStage, Task, readiness_gaps};
 
 use super::super::auto_admission::{DeferralReason, DeferredAdmission};
 use super::super::pass_error::PassError;
 use super::{BacklogTaskConflict, BacklogTaskExclusion, BacklogTaskExclusionReason};
 use crate::OrbitRuntime;
+use crate::application::job::crew_pools::CapturedCrewPools;
 use crate::application::task::PilotAdmissionHold;
 
 /// A ship's exclusion for a task the unknown-footprint rule withheld. A
@@ -35,8 +34,8 @@ pub(super) fn footprint_exclusion(deferred: DeferredAdmission) -> BacklogTaskExc
 }
 
 /// The exclusion for a task whose effective OS requirement this host does not
-/// satisfy: its `os:` tags intersected with its assigned crew's executor
-/// `host_os`.
+/// satisfy: its tags and assigned crew, or an unsupported default reached
+/// after the automatic route has no usable pool.
 ///
 /// Shared by automatic selection and the explicit ship override, so a drain,
 /// ship discovery and a gate carrying a named task withhold the same tasks and
@@ -46,11 +45,9 @@ pub(super) fn host_os_exclusion(
     runtime: &OrbitRuntime,
     task: &Task,
     limits: &BTreeMap<String, ExecutorOsLimit>,
+    pools: &CapturedCrewPools,
 ) -> Option<BacklogTaskExclusion> {
-    let reason = match TaskOsRequirement::for_crew(&task.tags, task.crew.as_deref(), limits) {
-        Ok(requirement) => requirement.unsatisfied_reason(runtime.host_os())?,
-        Err(reason) => reason,
-    };
+    let reason = runtime.task_host_os_wait(task, pools, limits)?;
     Some(BacklogTaskExclusion {
         id: task.id.clone(),
         reason: BacklogTaskExclusionReason::HostOsMismatch,

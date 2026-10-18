@@ -196,25 +196,18 @@ impl OrbitRuntime {
     /// Each backlog task whose effective OS requirement this host does not
     /// satisfy, with the wait: `ORB-12 waits for a macos host (os:macos)`.
     ///
-    /// The requirement is the task's `os:` tags intersected with its assigned
-    /// crew's executor `host_os`. A drain start reports these, so a drain that
-    /// starts nothing on this host does not read as an empty backlog.
+    /// The requirement includes the assigned crew's executor `host_os`, or
+    /// the default when no supported pool can run it. A drain reports these,
+    /// so one that starts nothing does not read as an empty backlog.
     pub fn host_os_backlog_waits(&self) -> Result<Vec<String>, OrbitError> {
-        let host = self.host_os();
         let limits = self.executor_host_os_limits()?;
+        let pools = self.auto_crew_pools_for_input(&serde_json::Value::Null)?;
         let mut waits = Vec::new();
         for task in self.list_task_metadata()? {
             if task.status != orbit_types::task::TaskStatus::Backlog {
                 continue;
             }
-            let wait = match orbit_types::task::TaskOsRequirement::for_crew(
-                &task.tags,
-                task.crew.as_deref(),
-                &limits,
-            ) {
-                Ok(requirement) => requirement.unsatisfied_reason(host),
-                Err(reason) => Some(reason),
-            };
+            let wait = self.task_host_os_wait(&task, &pools, &limits);
             if let Some(wait) = wait {
                 waits.push(format!("{} {wait}", task.id));
             }
