@@ -385,8 +385,7 @@ pub(crate) fn hold_is_current(
     task: &Task,
     hold: &ReviewEvidenceHold,
 ) -> Result<bool, OrbitError> {
-    if !runtime.task_run_is_local(task)
-        || task.status != TaskStatus::InProgress
+    if task.status != TaskStatus::InProgress
         || hold.schema_version != 1
         || combined_task_meaning_digest(&[(
             task.id.to_string(),
@@ -400,7 +399,13 @@ pub(crate) fn hold_is_current(
     let Some(owner) = task.job_run_id.as_deref() else {
         return Ok(false);
     };
-    if owner != hold.run_id && !super::resumes_owner(runtime, &hold.run_id, owner)? {
+    // A follower's held leaf is linked by its own run ID. Only a local binding
+    // may walk the held run's chain in this store; a foreign binding must match
+    // the held run exactly, so a same-ID local run never stands in for it.
+    if owner != hold.run_id
+        && (!runtime.task_run_is_local(task)
+            || !super::resumes_owner(runtime, &hold.run_id, owner)?)
+    {
         return Ok(false);
     }
     let history = runtime.get_task_history(&task.id)?;
