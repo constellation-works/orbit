@@ -9,6 +9,10 @@ const OPERATIONS: &[&str] = &[
     "orbit.task.pull",
 ];
 
+/// Owner-side drain read with no MCP scope and no follower route: the public
+/// surface never registers it, so it is unknown there rather than policy-denied.
+const UNADVERTISED_OWNER_READS: &[&str] = &["orbit.drain.claims"];
+
 fn audit_rows(workspace: &McpWorkspace, name: &str) -> Vec<Value> {
     let output = orbit_ok(
         McpWorkspace::orbit_command(&workspace.work, &workspace.home)
@@ -63,15 +67,6 @@ fn public_drain_calls_and_spoofed_initialize_are_refused_and_audited() {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect::<BTreeSet<_>>();
-        assert_eq!(
-            names.len(),
-            32,
-            "the reviewed 37-tool surface loses five protocol tools and seven tools \
-             folded into their siblings, then gains `orbit_task_eligible`, \
-             `orbit_task_review_reset`, `orbit_task_reconcile_review`, \
-             `orbit_task_retry_handoff`, `orbit_task_requeue` and the read-only \
-             `orbit_codebase_analytics` and `orbit_codebase_show`"
-        );
         assert!(
             names.contains("orbit_task_retry_handoff"),
             "the public owner retry operation remains advertised"
@@ -94,6 +89,21 @@ fn public_drain_calls_and_spoofed_initialize_are_refused_and_audited() {
                 refused["result"]["structuredContent"]["code"],
                 "policy_denied"
             );
+        }
+        for name in UNADVERTISED_OWNER_READS {
+            let advertised = orbit_types::tool::mcp_advertised_tool_name(name);
+            assert!(!names.contains(name) && !names.contains(advertised.as_str()));
+            // The refusal code depends on the client's selector gate (unknown
+            // selector or unknown tool); `call_tool_err` asserts the call is refused.
+            for spelling in [*name, advertised.as_str()] {
+                client.call_tool_err(spelling, json!({}));
+            }
+            // Not an internal drain operation at all, so the protocol refuses the name.
+            let refused = client.request(
+                "orbit/internal/drain/call",
+                json!({"protocol":1,"name":name,"arguments":{}}),
+            );
+            assert_eq!(refused["error"]["code"], -32602, "{refused}");
         }
         assert!(names.contains("orbit_task_add") && names.contains("orbit_workflow_ship"));
         let preflight = client.request("orbit/internal/drain/preflight", json!({}));

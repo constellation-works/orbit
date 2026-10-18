@@ -2,6 +2,7 @@
 #![allow(missing_docs)]
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
@@ -329,7 +330,14 @@ async fn generic_kernel_round_trips_initialize_list_call_and_error() {
         .list_tools(Default::default())
         .await
         .expect("cached tools/list");
-    assert_eq!(listed.tools.len(), 2);
+    assert_eq!(
+        listed
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_ref())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["demo_echo", "demo_inspect"])
+    );
     assert_eq!(listed_again, listed);
     let tool = listed
         .tools
@@ -641,7 +649,14 @@ async fn presentation_wire_preserves_dispatch_context_and_refuses_hidden_or_mism
         .await
         .expect("client");
     let listed = client.peer().list_tools(None).await.expect("tools");
-    assert_eq!(listed.tools.len(), 3);
+    assert_eq!(
+        listed
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_ref())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["orbit_task_show", "orbit_ui_inspect", "orbit_ui_open"])
+    );
     let selected = client
         .peer()
         .call_tool(call(
