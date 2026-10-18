@@ -2,7 +2,7 @@
 title: Auto-concurrency — Overview
 owner: claude
 last_updated: 2026-10-13
-last_validated: 2026-10-13
+last_validated: 2026-10-18
 status: Draft
 feature: auto-concurrency
 doc_role: overview

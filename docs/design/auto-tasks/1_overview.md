@@ -2,7 +2,7 @@
 title: Auto-tasks — Overview
 owner: claude
 last_updated: 2026-10-12
-last_validated: 2026-10-13
+last_validated: 2026-10-18
 status: Accepted
 feature: auto-tasks
 doc_role: overview
