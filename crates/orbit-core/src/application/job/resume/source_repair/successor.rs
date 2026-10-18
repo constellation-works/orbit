@@ -30,6 +30,9 @@ impl OrbitRuntime {
         source: &JobRun,
         task: &Task,
     ) -> Result<SourceRepairSuccessor, OrbitError> {
+        if !self.task_run_is_local(task) {
+            return Err(refuse("newer task binding belongs to another machine"));
+        }
         let id = task
             .job_run_id
             .as_deref()

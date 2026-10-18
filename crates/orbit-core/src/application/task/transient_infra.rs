@@ -277,7 +277,7 @@ impl OrbitRuntime {
                     return Ok(None);
                 }
             },
-            None if self.run_published_through_pipeline(&scanned.run_id)? => {
+            None if self.run_published_through_pipeline(&task)? => {
                 self.refuse_transient_infra_requeue(
                     scanned,
                     "the run published through its own pipeline steps with no failure-handoff \
