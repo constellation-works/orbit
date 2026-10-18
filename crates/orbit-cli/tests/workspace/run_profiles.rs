@@ -108,6 +108,57 @@ impl Fixture {
         cores: &[f64],
         cpu_accounting: &str,
     ) {
+        let memory = vec![GIB; cores.len()];
+        self.insert_delivery(
+            run_id,
+            task_id,
+            class,
+            complexity,
+            hours_ago,
+            cores,
+            &memory,
+            cpu_accounting,
+        );
+    }
+
+    /// One finished delivery; minute `i` uses `cores[i]` and `memory_bytes[i]`.
+    #[allow(clippy::too_many_arguments)]
+    fn delivery_load(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        class: &str,
+        complexity: &str,
+        hours_ago: i64,
+        cores: &[f64],
+        memory_bytes: &[i64],
+    ) {
+        assert_eq!(cores.len(), memory_bytes.len());
+        self.insert_delivery(
+            run_id,
+            task_id,
+            class,
+            complexity,
+            hours_ago,
+            cores,
+            memory_bytes,
+            "linux-cgroup-v1",
+        );
+    }
+
+    /// Insert one finished single-run delivery and its per-minute rows.
+    #[allow(clippy::too_many_arguments)]
+    fn insert_delivery(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        class: &str,
+        complexity: &str,
+        hours_ago: i64,
+        cores: &[f64],
+        memory_bytes: &[i64],
+        cpu_accounting: &str,
+    ) {
         let db = Connection::open(self.home.join(".orbit/orbit.db")).unwrap();
         let admitted = Utc::now() - chrono::Duration::hours(hours_ago);
         let stamp = |minutes: i64| {
@@ -121,7 +172,7 @@ impl Fixture {
             params![run_id, stamp(0), stamp(cores.len() as i64)],
         )
         .unwrap();
-        for (index, cpu) in cores.iter().enumerate() {
+        for (index, (cpu, memory)) in cores.iter().zip(memory_bytes).enumerate() {
             db.execute(
                 "INSERT INTO run_resource_minutes (workspace_id, run_id, minute_index, \
                      minute_started_at, task_id, work_class, complexity, resumed, \
@@ -136,7 +187,7 @@ impl Fixture {
                     complexity,
                     stamp(0),
                     cpu,
-                    GIB,
+                    memory,
                     cpu_accounting
                 ],
             )
@@ -471,6 +522,17 @@ fn profiles_report_tabulates_profiles_emits_series_and_flags_building_no_diff_wo
         );
         assert_eq!(point["memory_bytes"], GIB);
     }
+    // Both deliveries peak at 2 cores and 1 GiB, so the quantiles match the
+    // averaged peak. The profile is sparse (2 < min_profile_deliveries) and
+    // still carries the fields.
+    assert_eq!(
+        change["delivery_peak_cpu"],
+        serde_json::json!({"p50": 2.0, "p90": 2.0})
+    );
+    assert_eq!(
+        change["delivery_peak_memory_bytes"],
+        serde_json::json!({"p50": GIB, "p90": GIB})
+    );
     assert!(change["build_like"].as_array().unwrap().is_empty());
     let review = profiles
         .iter()
@@ -481,6 +543,16 @@ fn profiles_report_tabulates_profiles_emits_series_and_flags_building_no_diff_wo
     assert_eq!(flagged[0]["task_id"], "ORB-3");
     assert_eq!(flagged[0]["run_ids"], serde_json::json!(["jrun-review"]));
     assert_eq!(flagged[0]["from_minute"], 1);
+    // One delivery: both quantiles are that delivery's own peak.
+    assert_eq!(review["sparse"], true);
+    assert_eq!(
+        review["delivery_peak_cpu"],
+        serde_json::json!({"p50": 3.0, "p90": 3.0})
+    );
+    assert_eq!(
+        review["delivery_peak_memory_bytes"],
+        serde_json::json!({"p50": GIB, "p90": GIB})
+    );
 
     let plain = fixture.stdout(&["run", "profiles", "--format", "plain"]);
     let rows: Vec<Vec<&str>> = plain
@@ -498,7 +570,11 @@ fn profiles_report_tabulates_profiles_emits_series_and_flags_building_no_diff_wo
                 "2 (sparse)",
                 "3m",
                 "2.0 cores @ +0m",
+                "2.0",
+                "2.0",
                 "1.0 GiB @ +0m",
+                "1.0 GiB",
+                "1.0 GiB",
                 "cpu 0.00 mem 0.00",
                 "-",
             ],
@@ -509,7 +585,11 @@ fn profiles_report_tabulates_profiles_emits_series_and_flags_building_no_diff_wo
                 "1 (sparse)",
                 "3m",
                 "3.0 cores @ +2m",
+                "3.0",
+                "3.0",
                 "1.0 GiB @ +0m",
+                "1.0 GiB",
+                "1.0 GiB",
                 "cpu 0.00 mem 0.00",
                 "build-like (1)",
             ],
@@ -521,6 +601,142 @@ fn profiles_report_tabulates_profiles_emits_series_and_flags_building_no_diff_wo
             .lines()
             .any(|line| line.trim() == "ORB-3 from +1m, peak 3.0 cores (runs jrun-review)"),
         "the flag names the delivery behind it: {plain}"
+    );
+}
+
+/// Two deliveries that peak in different minutes: the mean-series CPU peak
+/// is below both per-delivery quantiles, and a one-delivery sparse profile
+/// still renders with p50 equal to p90.
+#[test]
+fn profiles_report_shows_per_delivery_peak_quantiles_above_the_mean_peak() {
+    if crate::isolated_test::run_in_child(
+        "run_profiles::profiles_report_shows_per_delivery_peak_quantiles_above_the_mean_peak",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    // Minute 0 is A's spike; minute 1 is B's. The per-minute mean is 5.5
+    // then 3.5, so PEAK_CPU is 5.5. Each delivery's own peak is 10 and 6,
+    // nearest-rank p50 6 and p90 10.
+    fixture.delivery_load(
+        "jrun-early",
+        "ORB-early",
+        "change",
+        "hard",
+        5,
+        &[10.0, 1.0],
+        &[8 * GIB, GIB],
+    );
+    fixture.delivery_load(
+        "jrun-late",
+        "ORB-late",
+        "change",
+        "hard",
+        4,
+        &[1.0, 6.0],
+        &[2 * GIB, 4 * GIB],
+    );
+    // Fewer than min_profile_deliveries, and only one minute: both quantiles
+    // are that delivery's peak.
+    fixture.delivery_load(
+        "jrun-once",
+        "ORB-once",
+        "no-diff",
+        "medium",
+        3,
+        &[1.5],
+        &[3 * GIB],
+    );
+
+    let doc: Value = serde_json::from_str(&fixture.stdout(&["run", "profiles", "--json"])).unwrap();
+    let profiles = doc["profiles"].as_array().unwrap();
+    assert_eq!(profiles.len(), 2, "{doc:#}");
+    let change = profiles
+        .iter()
+        .find(|profile| profile["key"]["work_class"] == "change")
+        .unwrap();
+    assert_eq!(change["sparse"], true);
+    assert_eq!(change["delivery_count"], 2);
+    assert_eq!(change["peak_cpu_cores"]["minute"], 0);
+    assert_eq!(change["peak_cpu_cores"]["value"], serde_json::json!(5.5));
+    assert_eq!(
+        change["delivery_peak_cpu"],
+        serde_json::json!({"p50": 6.0, "p90": 10.0})
+    );
+    let peak = change["peak_cpu_cores"]["value"].as_f64().unwrap();
+    let p50 = change["delivery_peak_cpu"]["p50"].as_f64().unwrap();
+    let p90 = change["delivery_peak_cpu"]["p90"].as_f64().unwrap();
+    assert!(
+        peak < p50 && peak < p90,
+        "mean-series peak {peak} is below per-delivery p50 {p50} and p90 {p90}"
+    );
+    // With two deliveries a minute's memory p90 is the higher value, so the
+    // series peak equals the higher delivery peak (8 GiB) and p50 is the lower.
+    assert_eq!(
+        change["peak_memory_bytes"]["value"],
+        serde_json::json!(8 * GIB)
+    );
+    assert_eq!(
+        change["delivery_peak_memory_bytes"],
+        serde_json::json!({"p50": 4 * GIB, "p90": 8 * GIB})
+    );
+
+    let once = profiles
+        .iter()
+        .find(|profile| profile["key"]["work_class"] == "no-diff")
+        .unwrap();
+    assert_eq!(once["sparse"], true);
+    assert_eq!(once["delivery_count"], 1);
+    assert_eq!(
+        once["delivery_peak_cpu"],
+        serde_json::json!({"p50": 1.5, "p90": 1.5})
+    );
+    assert_eq!(
+        once["delivery_peak_memory_bytes"],
+        serde_json::json!({"p50": 3 * GIB, "p90": 3 * GIB})
+    );
+
+    let plain = fixture.stdout(&["run", "profiles", "--format", "plain"]);
+    let rows: Vec<Vec<&str>> = plain
+        .lines()
+        .filter(|line| line.starts_with("ws_fixture\t"))
+        .map(|line| line.split('\t').collect())
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            vec![
+                "ws_fixture",
+                "change",
+                "hard",
+                "2 (sparse)",
+                "2m",
+                "5.5 cores @ +0m",
+                "6.0",
+                "10.0",
+                "8.0 GiB @ +0m",
+                "4.0 GiB",
+                "8.0 GiB",
+                "cpu 0.78 mem 0.60",
+                "-",
+            ],
+            vec![
+                "ws_fixture",
+                "no-diff",
+                "medium",
+                "1 (sparse)",
+                "1m",
+                "1.5 cores @ +0m",
+                "1.5",
+                "1.5",
+                "3.0 GiB @ +0m",
+                "3.0 GiB",
+                "3.0 GiB",
+                "cpu 0.00 mem 0.00",
+                "-",
+            ],
+        ],
+        "{plain}"
     );
 }
 

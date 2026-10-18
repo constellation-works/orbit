@@ -28,7 +28,10 @@ covers the key's last `machine.auto_concurrency.profile_window` completed delive
 last 30 days. `auto-task:<template>` profiles have no complexity.\n\n\
 HORIZON is the minute at which fewer than one in ten deliveries is still running, capped at \
 `horizon_cap_minutes`. PEAK_CPU is the highest mean cores before it and PEAK_MEM the highest \
-90th-percentile memory, each with the minute it occurs. SPREAD says how far deliveries disagree \
+90th-percentile memory, each with the minute it occurs. CPU_P50, CPU_P90, MEM_P50 and MEM_P90 \
+are the nearest-rank 50th and 90th percentiles of each delivery's own highest minute. They stay \
+high when deliveries peak in different minutes, so they can be several times PEAK_CPU; a sparse \
+profile still shows them from however many deliveries it has. SPREAD says how far deliveries disagree \
 with that average (per-minute standard deviation over mean, for CPU and memory): near 0 is a \
 profile stable enough to forecast with, near or above 1 one that is not. DELIVERIES marks a key \
 with fewer than `min_profile_deliveries` as sparse; a lookup for it falls back to a wider \
@@ -38,8 +41,8 @@ delivery used more than 1 core for 2 minutes in a row: work that should make no 
 building. The deliveries behind each flag are named below the table. Templates that build by \
 design, such as qa-sweep, are never flagged.\n\n\
 `--json` emits every profile with its full per-minute series (alive, cpu_cores, cpu_stddev, \
-memory_bytes, memory_mean_bytes, memory_stddev_bytes), its deliveries and its flagged \
-deliveries.\n\n\
+memory_bytes, memory_mean_bytes, memory_stddev_bytes), its deliveries, its flagged \
+deliveries, and `delivery_peak_cpu` and `delivery_peak_memory_bytes` (`p50` and `p90`).\n\n\
 `--accuracy` reports instead how well the host load forecast held up, from what drains in \
 effective auto-concurrency mode `shadow` or `enforce` recorded each admission pass over the last \
 30 days by default: the forecast 5, 10, 20 and 30 minutes ahead, counting what the pass admitted, against \
@@ -134,7 +137,11 @@ impl Execute for RunProfilesArgs {
             Column::new("DELIVERIES").fixed(),
             Column::new("HORIZON").fixed(),
             Column::new("PEAK_CPU").fixed(),
+            Column::new("CPU_P50").fixed(),
+            Column::new("CPU_P90").fixed(),
             Column::new("PEAK_MEM").fixed(),
+            Column::new("MEM_P50").fixed(),
+            Column::new("MEM_P90").fixed(),
             Column::new("SPREAD").fixed(),
             Column::new("BUILD_FLAG"),
         ])
@@ -155,10 +162,20 @@ impl Execute for RunProfilesArgs {
                     "{:.1} cores @ +{}m",
                     profile.peak_cpu_cores.value, profile.peak_cpu_cores.minute
                 )),
+                Cell::new(format!("{:.1}", profile.delivery_peak_cpu.p50)),
+                Cell::new(format!("{:.1}", profile.delivery_peak_cpu.p90)),
                 Cell::new(format!(
                     "{:.1} GiB @ +{}m",
                     profile.peak_memory_bytes.value as f64 / GIB,
                     profile.peak_memory_bytes.minute
+                )),
+                Cell::new(format!(
+                    "{:.1} GiB",
+                    profile.delivery_peak_memory_bytes.p50 as f64 / GIB
+                )),
+                Cell::new(format!(
+                    "{:.1} GiB",
+                    profile.delivery_peak_memory_bytes.p90 as f64 / GIB
                 )),
                 Cell::new(format!(
                     "cpu {:.2} mem {:.2}",

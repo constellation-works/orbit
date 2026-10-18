@@ -18,6 +18,10 @@
 //!   then, each with its spread; memory also keeps its mean, from which the
 //!   forecast sums several deliveries' memory. The horizon is the first
 //!   minute `alive` falls below 0.1, capped at `horizon_cap_minutes`.
+//! - **Delivery peaks.** The nearest-rank p50 and p90 of each delivery's own
+//!   highest minute, for cores and for memory. Averaging minute by minute
+//!   blurs peaks that fall at different times, so these quantiles can be
+//!   several times the series peak. A sparse profile still reports them.
 //!
 //! Profiles change only when a delivery finishes, so `ResourceProfileCache`
 //! keeps them across admission passes and rebuilds when a freshness probe
@@ -132,6 +136,18 @@ pub struct ProfilePeak<T> {
     pub value: T,
 }
 
+/// Nearest-rank p50 and p90 of one measurement over a profile's deliveries.
+///
+/// Rank is `ceil(n · p)`, the same rule as a minute's memory percentile: the
+/// value at index `ceil(n · p) - 1` of the sorted peaks. One delivery reports
+/// that delivery's peak for both; two report the lower as p50 and the higher
+/// as p90.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct ProfileQuantile<T> {
+    pub p50: T,
+    pub p90: T,
+}
+
 /// One key's resource profile.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ResourceProfile {
@@ -144,6 +160,14 @@ pub struct ResourceProfile {
     pub horizon_minutes: u32,
     pub peak_cpu_cores: ProfilePeak<f64>,
     pub peak_memory_bytes: ProfilePeak<u64>,
+    /// Nearest-rank p50 and p90 of each delivery's highest single-minute
+    /// core count, over its whole series. These stay high when deliveries
+    /// peak in different minutes; [`Self::peak_cpu_cores`] is the peak of
+    /// the per-minute mean and can be much lower.
+    pub delivery_peak_cpu: ProfileQuantile<f64>,
+    /// Nearest-rank p50 and p90 of each delivery's highest single-minute
+    /// memory, in bytes.
+    pub delivery_peak_memory_bytes: ProfileQuantile<u64>,
     /// Expected core-minutes before the horizon, `Σ cpu(m)·alive(m)`. The
     /// fallback chain's "heaviest" profile has the most.
     pub expected_core_minutes: f64,
