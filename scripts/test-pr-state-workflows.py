@@ -477,7 +477,8 @@ def _owned_state(pid, marker):
     try:
         command = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\x00", b" ")
         stat = Path(f"/proc/{pid}/stat").read_text()
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
+        # A process that exits between open and read fails with ESRCH.
         return None
     if marker.encode() not in command:
         return None
