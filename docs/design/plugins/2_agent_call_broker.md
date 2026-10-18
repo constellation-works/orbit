@@ -250,9 +250,9 @@ PID and, on Linux, its Bubblewrap PID namespace, and then blocks in `spawn_with_
 the provider exits. That process is outside the sandbox and stays alive for the whole agent
 run. It already holds the run's authoritative context: run ID, task ID, workspace, the
 activity's tool allowlist (`ORBIT_ACTIVITY_TOOLS`), and the resolved filesystem profile the
-agent was sandboxed with. Nothing in Orbit listens on a local socket today: the only listeners
-are the TCP ones behind `orbit web serve` and `orbit mcp listen`. So there is no existing
-authenticated channel to reuse, and the broker is new.
+agent was sandboxed with. The per-run broker supplies the authenticated local socket; the
+TCP listeners behind `orbit web serve` and `orbit mcp listen` are separate and are not reused
+for this channel.
 
 The broker is a bounded listener thread owned by that process. It starts before the agent is
 spawned, and when the agent exits it is torn down together with any in-flight backend process
@@ -400,11 +400,13 @@ service side regardless.
   no worktree gets no broker, with a warning.
 - A worker parses the §4.3 request. `schema_version`, `tool`, an object `input` and an
   absolute `cwd` are required; `workspace` defaults to none, `entry_point` to `cli` and
-  `dry_run` to false. Anything else is `plugin_broker_invalid_request`.
+  `dry_run` to false. A missing or invalid required field, or an invalid optional field,
+  is `plugin_broker_invalid_request`; unrecognized fields are ignored.
 - The request is refused with `plugin_broker_refused` when its `cwd` does not resolve inside
   the run's worktree, it names a workspace other than the run's, it asks for a dry run (the
-  nested `orbit` answers those itself), or it names a tool that is neither a plugin tool nor
-  one of the five read-only `github.*` tools (§3). The run's policy applies fail-closed: an activity whose allowlist names nothing admits no
+  nested `orbit` answers those itself), or it names a tool outside the plugin tools, the
+  five read-only `github.*` tools and `CLAIMED_OWNER_TOOLS` (§3). Claimed-owner calls also pass
+  the claim-specific scope checks described above. The run's policy applies fail-closed: an activity whose allowlist names nothing admits no
   brokered call, where an in-process call with no activity would be unrestricted.
 - The call runs through the same audited dispatch and tool chokepoint as an in-process call,
   with an `agent` session, the run's allowlist or deny policy, and the backend's `context`
