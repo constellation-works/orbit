@@ -9,7 +9,7 @@ paths: ["crates/orbit-exec/src/build_sandbox/**", "crates/orbit-tools/src/plugin
 related_features: [plugins, policy-sandbox]
 related_artifacts: [ORB-12878, ORB-12843, ORB-12874, ORB-12816]
 last_updated: 2026-10-04
-last_validated: 2026-10-13
+last_validated: 2026-10-18
 ---
 
 # Threat model: install-time spec.build for source-built plugins
@@ -418,7 +418,7 @@ deterministic, matching the archive-digest finding that already exists.
 | Commit fetch and `HEAD` check (§3.1) | `crates/orbit-tools/src/plugin/source.rs` (`fetch_git_commit`) |
 | Profiles, probes, supervision (§3.2–§3.4) | `orbit-exec` `build_sandbox/` (`linux.rs`, `macos.rs`, `supervise.rs`); goldens `plugin_build_{fetch,offline}` |
 | Plan, environment, build directory, outputs, digest (§3.4–§3.6) | `orbit-tools` `plugin/build/` |
-| Consent, pin `artifact_digest` check at install (§3.7, §3.8) | `orbit-core` `application/plugin/build.rs`, called from `install.rs` |
+| Consent, pin `artifact_digest` check at install (§3.7, §3.8) | `orbit-core` `application/plugin/build.rs`, called from `application/plugin/install/flow.rs` |
 | Build record on the row (schema v35 `build_json`) and witness (§3.6) | `orbit-store` `plugin_store.rs`; `orbit-core` `runtime/plugin/build_witness.rs`, checked in the load pass |
 | Sync never builds; pin drift (§3.7) | `orbit-core` `application/plugin/lifecycle/sync.rs` |
 | Doctor and `plugin show` (§3.9) | `orbit-core` `application/plugin/inspect/doctor.rs`; the `plugin-builds` row of `orbit doctor` |
