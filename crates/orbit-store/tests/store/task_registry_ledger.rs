@@ -14,6 +14,10 @@
 
 const PARTITION: &str = "ws_prior";
 
+/// The registry ledger this binary ships, as `(version, name)`. Every entry
+/// is additive, so adoption applies all of them and keeps the pre-ledger fence.
+const SHIPPED: [(u32, &str); 2] = [(1, "registry_baseline"), (2, "index_task_type")];
+
 fn task_registry_ledger_isolated(test: &str) -> bool {
     const MARKER: &str = "ORBIT_TASK_REGISTRY_LEDGER_CHILD";
     if std::env::var(MARKER).as_deref() == Ok(test) {
@@ -75,8 +79,12 @@ fn populated(root: &Path) -> PathBuf {
 /// too: pre-ledger binaries created them only on first record.
 fn as_pre_ledger(path: &Path, user_version: u32, action_keys: bool) {
     let conn = Connection::open(path).unwrap();
-    conn.execute_batch("DROP TABLE schema_meta; DROP TABLE task_envelope_stamps;")
-        .unwrap();
+    conn.execute_batch(
+        "DROP TABLE schema_meta; DROP TABLE task_envelope_stamps;
+         DROP INDEX idx_task_bundle_index_workspace_type_created;
+         ALTER TABLE task_bundle_index DROP COLUMN task_type;",
+    )
+    .unwrap();
     if !action_keys {
         conn.execute_batch("DROP TABLE task_action_keys").unwrap();
     }
@@ -158,20 +166,22 @@ fn passes_pre_ledger_acceptance(conn: &Connection) -> bool {
 }
 
 fn assert_adopted(conn: &Connection) {
-    assert_eq!(
-        ledger_rows(conn),
-        [(
-            "migration.v0001".to_string(),
-            "registry_baseline".to_string()
-        )]
-    );
+    let shipped: Vec<_> = SHIPPED
+        .iter()
+        .map(|(version, name)| (format!("migration.v{version:04}"), (*name).to_string()))
+        .collect();
+    assert_eq!(ledger_rows(conn), shipped);
     let record = compat_record(conn);
-    assert_eq!(record.version, 1);
+    assert_eq!(record.version, SHIPPED.len() as u32);
     assert!(record.breaking.is_empty(), "{record:?}");
     assert_eq!(user_version(conn), 5, "adoption keeps the pre-ledger fence");
     assert!(
         has_table(conn, "task_envelope_stamps"),
         "the registry baseline creates envelope stamps"
+    );
+    assert!(
+        has_column(conn, "task_bundle_index", "task_type"),
+        "index_task_type adds the defect filter column"
     );
     assert!(passes_pre_ledger_acceptance(conn));
     assert!(
@@ -414,21 +424,24 @@ fn a_pre_ledger_registry_with_action_keys_stays_readable_read_only() {
     );
 }
 
-/// Leave the record a newer binary would: ledger v2 of the given class,
-/// with the `user_version` fence it keeps for pre-ledger binaries.
+/// The ledger version a newer binary would add after [`SHIPPED`].
+const NEWER: u32 = SHIPPED.len() as u32 + 1;
+
+/// Leave the record a newer binary would: ledger entry [`NEWER`] of the given
+/// class, with the `user_version` fence it keeps for pre-ledger binaries.
 fn advance_as_newer_binary(path: &Path, compat: MigrationCompatibility) {
     let record = CompatibilityRecord::for_registry(
-        2,
-        [
-            (1, "registry_baseline", MigrationCompatibility::Additive),
-            (2, "newer_registry_change", compat),
-        ],
+        NEWER,
+        SHIPPED
+            .iter()
+            .map(|(version, name)| (*version, *name, MigrationCompatibility::Additive))
+            .chain([(NEWER, "newer_registry_change", compat)]),
     );
     let conn = Connection::open(path).unwrap();
     conn.execute(
         "INSERT INTO schema_meta(key, value, updated_at)
-         VALUES ('migration.v0002', 'newer_registry_change', '2026-10-12T00:00:00Z')",
-        [],
+         VALUES (?1, 'newer_registry_change', '2026-10-12T00:00:00Z')",
+        [format!("migration.v{NEWER:04}")],
     )
     .unwrap();
     conn.execute(
@@ -460,7 +473,7 @@ fn a_newer_registry_is_decided_from_its_compatibility_record() {
     drop(registry);
     assert_eq!(
         ledger_rows(&Connection::open(&path).unwrap()).len(),
-        2,
+        NEWER as usize,
         "an older binary applies no migration to a newer registry"
     );
 
@@ -488,7 +501,7 @@ fn a_newer_registry_is_decided_from_its_compatibility_record() {
             .to_string(),
     ] {
         assert!(
-            error.contains("task registry schema version 2 is newer"),
+            error.contains(&format!("task registry schema version {NEWER} is newer")),
             "{error}"
         );
         assert!(error.contains("newer_registry_change"), "{error}");
