@@ -185,6 +185,9 @@ try {
     assert.equal(overflow, false, `selectors wrap at ${width}`);
   }
   await page.locator('#detail-CTX-1 .field-block').filter({ has: page.locator('.file-list') }).screenshot({ path: path.join(evidence, 'narrow.png'), animations: 'disabled' });
+  // At phone width the detail is a modal sheet over the topbar; the refreshes
+  // below need the desktop layout back.
+  await page.setViewportSize({ width: 1440, height: 1100 });
   for (const [name, entry, text, links] of [
     ['absent-holder', { reason: 'context_lock_conflict', conflicts: [{ requested_file: 'file:CTX-999.rs' }] }, 'Lock holder unavailable', []],
     ['reserved-surface', { reason: 'surface_reserved', blocking_task_ids: ['CTX-3', 'CTX-2', 'CTX-3'], conflicts: [{ reserved_by_task_id: 'CTX-2', requested_file: 'file:src/shared.rs' }], detail: 'Reserved for CTX-2, CTX-3, ranked ahead of this task and waiting only on context locks.' }, 'Waits on', ['CTX-2', 'CTX-3']],

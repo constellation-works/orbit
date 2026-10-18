@@ -59,7 +59,7 @@ export async function assertRunTaskLabels(page, evidence) {
     // The default filter hides done tasks, so this link has to reach a task its
     // list does not hold, without widening the filter to do it.
     await link.click();
-    const pinned = page.locator('#tasks-body .row.pinned-external');
+    const pinned = page.locator('#task-detail-body:has(.pinned-external)');
     await pinned.waitFor({ state: 'visible' });
     if (!(await pinned.textContent()).includes('RUN-TASK-1')) throw new Error('A task link must open that task expanded');
     if (JSON.stringify(await taskFilter()) !== JSON.stringify(filterBefore)) throw new Error('Following a task link must not change the Tasks filter');
@@ -84,8 +84,8 @@ export async function assertRunTaskLabels(page, evidence) {
       });
       // The fixture server leaves app.js out of the page; load it like a visit.
       await fresh.addScriptTag({ type: 'module', url: '/app.js' });
-      await fresh.locator('#tasks-body .row.pinned-external').waitFor({ state: 'visible' });
-      if (!(await fresh.locator('#tasks-body .row.pinned-external').textContent()).includes('RUN-TASK-1')) throw new Error('A copied task URL must open the same task in a new tab');
+      await fresh.locator('#task-detail-body:has(.pinned-external)').waitFor({ state: 'visible' });
+      if (!(await fresh.locator('#task-detail-body:has(.pinned-external)').textContent()).includes('RUN-TASK-1')) throw new Error('A copied task URL must open the same task in a new tab');
     } finally {
       await fresh.close();
     }
@@ -103,8 +103,9 @@ export async function assertRunTaskLabels(page, evidence) {
     await link.click();
     await page.locator('#tasks-body .row[data-key="task-RUN-TASK-1"].expanded').waitFor({ state: 'visible' });
     if (JSON.stringify(await taskFilter()) !== JSON.stringify(listFilter)) throw new Error('A task link must leave the operator\'s status filter as it was');
-    // Collapsing the row removes it from the URL, so a copy no longer names it.
-    await page.locator('#tasks-body .row[data-key="task-RUN-TASK-1"] .title').click();
+    // Closing the task removes it from the URL, so a copy no longer names it.
+    // At this phone width the task is a full-screen sheet; Back closes it.
+    await page.locator('#task-detail-pane[role="dialog"] .task-pane-back').click();
     await page.waitForFunction(() => !window.location.hash.includes('open='));
     await page.evaluate(async () => (await import('/js/runs.js')).setRunFilter('failed'));
     const historyFilters = new URL(page.url()).search;
@@ -185,7 +186,7 @@ export async function assertTaskLinkScopeHistory(browser, origin, evidence) {
       }
     };
     const openTask = async taskId => {
-      const pinned = page.locator('#tasks-body .row.pinned-external');
+      const pinned = page.locator('#task-detail-body:has(.pinned-external)');
       await pinned.waitFor({ state: 'visible' });
       if (!(await pinned.textContent()).includes(taskId)) throw new Error(`The link must open ${taskId} expanded`);
     };
@@ -271,7 +272,7 @@ export async function assertTaskLookupClear(browser, origin, evidence) {
   let holdList = false;
   const check = (condition, message) => { if (!condition) throw new Error(message); };
   const list = page.locator('#tasks-body .row[data-key="task-ORB-16022"]');
-  const pinned = page.locator('#tasks-body [data-key="pinned-ORB-16021"]');
+  const pinned = page.locator('#task-detail-body [data-key="pinned-ORB-16021"]');
   const search = page.locator('#task-search');
   const clear = page.getByRole('button', { name: 'Clear task search and open result', exact: true });
   const boot = async url => {
@@ -283,13 +284,22 @@ export async function assertTaskLookupClear(browser, origin, evidence) {
     });
   };
   const lookup = async id => { await search.fill(id); await search.press('Enter'); };
+  // At phone width the open task is a full-screen sheet over the list and its
+  // search; the sheet's Back returns to them.
+  const backToList = async width => {
+    if (width !== 375) return;
+    const sheet = page.locator('#task-detail-pane[role="dialog"][aria-modal="true"]');
+    await sheet.waitFor({ state: 'visible' });
+    await sheet.locator('.task-pane-back').click();
+    await sheet.waitFor({ state: 'hidden' });
+  };
   const routeState = () => page.evaluate(() => {
     const url = new URL(location.href);
     return { scope: url.search, params: Object.fromEntries(new URLSearchParams(url.hash.split('?')[1])), query: document.getElementById('task-search').value };
   });
   const restored = async () => {
     await list.waitFor({ state: 'visible' });
-    await page.waitForFunction(() => !document.querySelector('#tasks-body .pinned-task-wrap, #tasks-body .row.expanded'));
+    await page.waitForFunction(() => !document.querySelector('#task-detail-body .pinned-task-wrap, #tasks-body .row.expanded'));
     const state = await routeState();
     check(!state.params.open && !state.params.q && state.query === '', `Clear must retire open and query: ${JSON.stringify(state)}`);
     check(state.scope === '?workspace=ws_orbit&window=24h' && state.params.status === filters, `Clear must retain scope and status: ${JSON.stringify(state)}`);
@@ -350,6 +360,7 @@ export async function assertTaskLookupClear(browser, origin, evidence) {
       await pinned.waitFor({ state: 'visible' });
       check(await search.inputValue() === '', 'A successful lookup empties search');
       await page.screenshot({ path: path.join(evidence, `task-lookup-open-${width}.png`) });
+      await backToList(width);
       check(await clear.isVisible(), 'An empty search with a lookup result must expose Clear beside search');
       const layout = await clear.evaluate(node => {
         const rect = node.getBoundingClientRect();
@@ -366,10 +377,12 @@ export async function assertTaskLookupClear(browser, origin, evidence) {
       await lookup('ORB-16022');
       await list.and(page.locator('.expanded')).waitFor({ state: 'visible' });
       check(!(await routeState()).params.q, 'Successful listed lookup must remove stale q from route');
+      await backToList(width);
       await clear.click(); await restored();
       await boot(`${base}&open=ORB-16021`);
       await pinned.waitFor({ state: 'visible' });
       await page.screenshot({ path: path.join(evidence, `task-deep-link-${width}.png`) });
+      await backToList(width);
       await clear.click(); await restored();
     }
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -378,9 +391,9 @@ export async function assertTaskLookupClear(browser, origin, evidence) {
     await pinned.waitFor({ state: 'visible' });
     await clear.click(); await restored();
     await boot(page.url()); await restored();
-    // Existing detail Close and row collapse still remove open=.
+    // The pane's Close and row collapse still remove open=.
     await lookup('ORB-16021'); await pinned.waitFor({ state: 'visible' });
-    await pinned.getByRole('button', { name: 'Close', exact: true }).click(); await restored();
+    await page.locator('#task-detail-pane').getByRole('button', { name: 'Close task detail', exact: true }).click(); await restored();
     await lookup('ORB-16022'); await list.and(page.locator('.expanded')).waitFor({ state: 'visible' });
     await list.locator('.title').click(); await restored();
     for (const id of ['ORB-16023', 'ORB-16024']) {
@@ -452,7 +465,7 @@ export async function assertTaskLookupClear(browser, origin, evidence) {
     await boot(base);
     await list.waitFor({ state: 'visible' });
     await lookup('ORB-16025');
-    await page.locator('#tasks-body [data-key="pinned-ORB-16025"]').waitFor({ state: 'visible' });
+    await page.locator('#task-detail-body [data-key="pinned-ORB-16025"]').waitFor({ state: 'visible' });
     check((await routeState()).scope === '?workspace=ws_other&window=24h', 'Lookup must still adopt its owning workspace');
     await clear.click();
     await page.waitForFunction(() => !document.querySelector('.pinned-task-wrap'));

@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, teardownNode, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref, bindTaskLink, submissionNoticeLines } from './common.js';
+import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, teardownNode, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref, bindTaskLink, submissionNoticeLines, stateCell, fmtDuration, elapsedDurationInfo } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { DRAIN_POOLS, backlogReadiness, drainReadinessEntry, drainReadinessFor, drainReadinessView, drainWaitSignature } from './drain-waits.js';
@@ -11,16 +11,41 @@ import { buildDistributedBlock, buildExecutionProvenance, claimedReviewApproval,
 const $ = (id) => document.getElementById(id);
 
 let lastCrewPayload = { default_crew: null, crews: [] };
-let expandedTaskIds = new Set();
+// The list row whose detail the side pane shows. One task at a time: the pane
+// beside the list replaces the inline accordion, so selecting another row
+// moves the pane to it and the list itself never reflows around a detail.
+let selectedTaskId = null;
 let taskActionNotice = null;
 let pinnedExternalTask = null;
-// The task the Tasks hash names with `open=`: the one opened last and still
-// open, so a copied URL reopens it. `pendingOpenTaskId` is a hash-named task
-// that has not been shown yet; the next render expands it from the list or
+// The task the Tasks hash names with `open=`: the one selected and still
+// shown, so a copied URL reopens it. `pendingOpenTaskId` is a hash-named task
+// that has not been shown yet; the next render selects it from the list or
 // pins it when the operator's filter hides it.
 let openTaskId = null;
 let pendingOpenTaskId = null;
 let openTaskGeneration = 0;
+// `#tasks/<id>` shows the pane across the content width. `taskPageReturn`
+// remembers the list scroll when the page was entered from the list, so Back
+// lands on the same selection at the same place; `listRestore` applies that
+// on the next render. `taskPageError` is a page whose task could not be read.
+let taskPageId = null;
+let taskPageReturn = null;
+let taskPageError = null;
+let listRestore = null;
+let returningFromPage = false;
+let focusPaneTitle = false;
+// A status change folded the pane: focus goes back to the row it came from.
+let rowFocusAfterRender = null;
+// The pane's tab is a page-wide choice: moving the selection keeps it.
+let activeDetailTab = "overview";
+// The Runs tab's read per task (`GET /api/job-runs?task_id=`), kept so a
+// rebuilt detail repaints the last answer while a fresh read is in flight.
+let taskRunLoads = new Map();
+const TASK_RUNS_LIMIT = 20;
+const TASK_RUNS_FRESH_MS = 15000;
+// The last context a render ran with, for the keyboard and pane handlers that
+// are wired once.
+let paneContext = null;
 let searchDebounce = null;
 // ORB-10874: per-task inline-edit feedback for the status/crew selects. Each
 // entry is `{ kind: 'pending'|'success'|'error', text, undo }`, where `undo`
@@ -78,10 +103,15 @@ onWorkspaceChange(() => {
   pinnedExternalTask = null;
   taskActionNotice = null;
   quickActionState.clear();
-  expandedTaskIds.clear();
+  selectedTaskId = null;
+  taskRunLoads.clear();
   // The initial workspace selection also lands here; a task the URL named but
   // no render has shown yet must survive it.
-  if (!pendingOpenTaskId && openTaskId) setOpenTask(null);
+  if (!pendingOpenTaskId && openTaskId) {
+    taskPageId = null;
+    taskPageReturn = null;
+    setOpenTask(null);
+  }
   statusFeedback.clear();
   foldedStatusTasks.clear();
   crewFeedback.clear();
@@ -590,20 +620,116 @@ export function openVisibleTask(taskId, context) {
     copyTaskIdWithNotice(taskId, context);
     return;
   }
-  expandedTaskIds.add(taskId);
-  setOpenTask(taskId);
-  renderTasks(taskList(context), context);
+  selectTask(taskId, context);
   revealTaskRow(taskId);
 }
 
-function revealTaskRow(taskId) {
+// Bring a row into view without moving a list that already shows it: a
+// deep link centres its row, a selection only scrolls as far as it must.
+function revealTaskRow(taskId, block = "nearest") {
   requestAnimationFrame(() => {
     const row = findTaskRow(taskId);
     if (!row) return;
-    row.scrollIntoView({ behavior: "smooth", block: "center" });
+    row.scrollIntoView({ behavior: "smooth", block });
     row.classList.add("data-changed");
     setTimeout(() => row.classList.remove("data-changed"), 1200);
   });
+}
+
+// Select a list row: the pane moves to it. The clicked row stays where the
+// pointer left it, even when opening the pane narrows the list and its rows
+// rewrap, so selection never costs the operator their place.
+function selectTask(taskId, context, { anchor = null } = {}) {
+  const top = anchor && typeof anchor.getBoundingClientRect === "function" ? anchor.getBoundingClientRect().top : null;
+  if (pinnedExternalTask && pinnedExternalTask.id !== taskId) pinnedExternalTask = null;
+  selectedTaskId = taskId;
+  setOpenTask(taskId);
+  renderTasks(taskList(context), context);
+  keepRowInPlace(taskId, top);
+}
+
+function keepRowInPlace(taskId, top) {
+  const body = $("tasks-body");
+  const row = top == null ? null : findTaskRow(taskId);
+  if (!body || !row) return;
+  const delta = row.getBoundingClientRect().top - top;
+  if (Math.abs(delta) >= 1) body.scrollTop += delta;
+}
+
+// Close the pane. Focus returns to the row that opened it when it was in the
+// pane (or nowhere), so the keyboard resumes where the operator left the list.
+function closeTaskPane(context, { forget = false } = {}) {
+  if (taskPageId) {
+    leaveTaskPage(context);
+    return;
+  }
+  const taskId = shownTaskId();
+  if (!taskId) return;
+  const pane = $("task-detail-pane");
+  const active = document.activeElement;
+  const focusWasInPane = !active || active === document.body || Boolean(pane && pane.contains && pane.contains(active));
+  const row = findTaskRow(taskId);
+  const top = row && typeof row.getBoundingClientRect === "function" ? row.getBoundingClientRect().top : null;
+  if (pinnedExternalTask && pinnedExternalTask.id === taskId) pinnedExternalTask = null;
+  if (selectedTaskId === taskId) selectedTaskId = null;
+  if (openTaskId === taskId) setOpenTask(null);
+  // Reopening re-reads the detail, which is also the retry for a read that
+  // failed.
+  if (forget) forgetTaskDetailLoad(taskId);
+  renderTasks(taskList(context), context);
+  keepRowInPlace(taskId, top);
+  if (focusWasInPane) focusTaskRow(taskId);
+}
+
+function focusTaskRow(taskId) {
+  const button = findTaskRow(taskId)?.querySelector?.("[data-row-focus]");
+  if (button && typeof button.focus === "function") button.focus({ preventScroll: true });
+}
+
+// The task the pane holds right now: the pinned resolver result, else the
+// selected row.
+function shownTaskId() {
+  return (pinnedExternalTask && pinnedExternalTask.id) || selectedTaskId || null;
+}
+
+// Enter the full-page view of a task. The list behind it keeps its state; the
+// scroll is remembered because a hidden list loses it.
+function openTaskPage(taskId, context) {
+  const body = $("tasks-body");
+  taskPageReturn = { id: taskId, scrollTop: body ? body.scrollTop : 0 };
+  taskPageId = taskId;
+  taskPageError = null;
+  focusPaneTitle = true;
+  if (openTaskId !== taskId) setOpenTask(taskId);
+  renderTasks(taskList(context), context);
+  window.location.hash = `#tasks/${encodeURIComponent(taskId)}`;
+}
+
+// Leave the page state; the next render restores the list where it was.
+function exitTaskPageState() {
+  if (!taskPageId) return;
+  const back = taskPageReturn && taskPageReturn.id === taskPageId ? taskPageReturn : null;
+  listRestore = { id: taskPageId, scrollTop: back ? back.scrollTop : null };
+  taskPageId = null;
+  taskPageReturn = null;
+  taskPageError = null;
+}
+
+// Back to the list at the same selection. A page entered from the list goes
+// back through history, so the browser's own Back agrees with this control; a
+// page reached by a link has no list entry behind it and opens one.
+function leaveTaskPage(context) {
+  const taskId = taskPageId;
+  if (!taskId) return;
+  const fromList = Boolean(taskPageReturn && taskPageReturn.id === taskId);
+  exitTaskPageState();
+  if (!pinnedExternalTask && filterTasks(taskList(context), context).some((task) => task.id === taskId)) {
+    selectedTaskId = taskId;
+  }
+  returningFromPage = true;
+  renderTasks(taskList(context), context);
+  if (fromList && typeof window.history?.back === "function") window.history.back();
+  else window.location.hash = buildTasksHash(context);
 }
 
 // Task ids in a hash are untrusted input: keep only id-shaped values.
@@ -634,9 +760,11 @@ function setOpenTask(taskId) {
 }
 
 // Every path that closes a task detail goes through here so the URL stops
-// naming a task the page no longer shows.
+// naming a task the page no longer shows. A full-page task stays: the page is
+// that task, and its actions repaint it in place.
 function collapseTask(taskId) {
-  expandedTaskIds.delete(taskId);
+  if (taskPageId === taskId) return;
+  if (selectedTaskId === taskId) selectedTaskId = null;
   if (openTaskId === taskId) setOpenTask(null);
 }
 
@@ -648,8 +776,12 @@ function resolvePendingOpenTask(tasks, context) {
   if (!taskId) return;
   pendingOpenTaskId = null;
   if (filterTasks(tasks, context).some((task) => task.id === taskId)) {
-    expandedTaskIds.add(taskId);
-    revealTaskRow(taskId);
+    // A route replay for the row already selected leaves the list where it
+    // is, and coming back from the full page restores the list's own scroll.
+    const settled = selectedTaskId === taskId || (listRestore && listRestore.id === taskId);
+    selectedTaskId = taskId;
+    pinnedExternalTask = null;
+    if (!settled) revealTaskRow(taskId, "center");
   } else if (!(pinnedExternalTask && pinnedExternalTask.id === taskId)) {
     pinOpenTask(taskId, context);
   }
@@ -669,19 +801,21 @@ async function pinOpenTask(taskId, context) {
     taskActionNotice = error && error.status === 404
       ? `${taskId} not found`
       : `Could not open ${taskId}: ${(error && error.message) || error}`;
+    // A full page has no list on screen to carry the notice.
+    if (taskPageId === taskId) taskPageError = taskActionNotice;
   }
   renderTasks(taskList(context), context);
 }
 
 /* Global ID resolver support (ORB-00211): allow rendering detail for a task that
    is outside the filtered list (hidden status, search, or truncated fetch)
-   without mutating DASHBOARD_TASK_STATUSES. The pinned detail appears in a
-   highlighted block at top of #tasks-body; auto-clears once the filtered list
+   without mutating DASHBOARD_TASK_STATUSES. The pinned detail shows in the
+   side pane, marked as outside the list; auto-clears once the filtered list
    actually contains the task. */
 export function setPinnedExternalTask(task, context) {
   if (!task || !task.id) return;
   cancelTaskSearchDebounce();
-  if (openTaskId && openTaskId !== task.id) expandedTaskIds.delete(openTaskId);
+  if (selectedTaskId && selectedTaskId !== task.id) selectedTaskId = null;
   pinnedExternalTask = { task, id: task.id };
   pendingOpenTaskId = null;
   setOpenTask(task.id);
@@ -706,9 +840,9 @@ export function cancelTaskSearchDebounce() {
 export function clearTaskSearch(context) {
   cancelTaskSearchDebounce();
   if (context?.cancelTaskLookup) context.cancelTaskLookup();
-  for (const id of [openTaskId, pendingOpenTaskId, pinnedExternalTask?.id]) {
-    if (id) expandedTaskIds.delete(id);
-  }
+  selectedTaskId = null;
+  taskPageId = null;
+  taskPageReturn = null;
   pendingOpenTaskId = null;
   pinnedExternalTask = null;
   taskActionNotice = null;
@@ -759,6 +893,12 @@ function refreshChips(context) {
 // applyAuditHashQuery pair, so a reload or the browser's back/forward button
 // restores the same filtered view instead of resetting to the default.
 export function buildTasksHash(context) {
+  // The full-page view is its own route; the list filter waits behind it.
+  if (taskPageId) return `#tasks/${encodeURIComponent(taskPageId)}`;
+  return buildTasksListHash(context);
+}
+
+function buildTasksListHash(context) {
   const sp = new URLSearchParams();
   const order = statusOrder(context);
   const activeStatuses = activeStatusSet(context);
@@ -778,27 +918,46 @@ export function buildTasksHash(context) {
   return qs ? `#tasks?${qs}` : "#tasks";
 }
 
-export function applyTasksHashQuery(query, context) {
+// `page` is the `#tasks/<id>` route segment: that task's full-page view. It
+// names only the task, so the list filter behind it is left as it was.
+export function applyTasksHashQuery(query, context, page = null) {
   cancelTaskSearchDebounce();
+  const pageId = parseOpenTaskId(page);
   // A router replay of the route we just wrote is still the same lookup.
   // Retire it only when navigation actually changes the represented state.
-  if (query.toString() !== (buildTasksHash(context).split("?")[1] || "") && context?.cancelTaskLookup) {
-    context.cancelTaskLookup();
-  }
-  const open = parseOpenTaskId(query.get("open"));
+  const current = buildTasksHash(context);
+  const replay = pageId
+    ? current === `#tasks/${encodeURIComponent(pageId)}`
+    : query.toString() === (current.split("?")[1] || "");
+  if (!replay && context?.cancelTaskLookup) context.cancelTaskLookup();
+  const open = pageId || parseOpenTaskId(query.get("open"));
   if (openTaskId !== open) {
-    if (openTaskId) expandedTaskIds.delete(openTaskId);
+    if (selectedTaskId && selectedTaskId !== open) selectedTaskId = null;
     pinnedExternalTask = null;
     taskActionNotice = null;
   }
   openTaskGeneration += 1;
   openTaskId = open;
   pendingOpenTaskId = open;
+  if (pageId) {
+    if (taskPageId !== pageId) taskPageError = null;
+    taskPageId = pageId;
+    return;
+  }
+  // Back from the full page (this pane's control or the browser's) returns to
+  // the list as it was: the same filter, page and scroll.
+  const fromPage = Boolean(taskPageId) || returningFromPage;
+  returningFromPage = false;
+  exitTaskPageState();
+  if (fromPage && query.toString() === (buildTasksListHash(context).split("?")[1] || "")) return;
   // A link that only names a task (`#tasks?open=ID`) opens it under whatever
   // filter the operator already has; reading it as "no filter" would reset
   // the chips and search to their defaults.
   if (open && !["status", "q", "ready"].some((key) => query.has(key))) return;
-  if (context && typeof context.resetTaskPagination === "function") {
+  // A replay names the list already shown. Back fires popstate and then
+  // hashchange for the address the router just normalized; the second must
+  // not send the list to its first page and top.
+  if (!replay && context && typeof context.resetTaskPagination === "function") {
     context.resetTaskPagination();
   }
   const order = statusOrder(context);
@@ -2215,7 +2374,7 @@ function findCommentCard(id) {
     const node = document.getElementById(id);
     if (node && (node.id === id || String(node.className).includes("comment-card"))) return node;
   }
-  const root = (typeof document.getElementById === "function" ? document.getElementById("tasks-body") : null) || (typeof document !== "undefined" ? document.body : null);
+  const root = (typeof document.getElementById === "function" ? document.getElementById("task-detail-body") : null) || (typeof document !== "undefined" ? document.body : null);
   if (!root) return null;
   const queue = [root];
   while (queue.length > 0) {
@@ -2248,6 +2407,13 @@ export function scrollToComment(hash = getCommentHash()) {
   if (!rawId.startsWith("comment-")) return false;
   const target = findCommentCard(rawId);
   if (!target) return false;
+  // The thread lives on the detail's Comments tab.
+  for (let node = target.parentNode; node; node = node.parentNode) {
+    if (typeof node.activateTab === "function") {
+      node.activateTab("comments");
+      break;
+    }
+  }
   const panel = findCommentsPanel(target);
   if (panel) {
     const isCollapsed = panel.classList && typeof panel.classList.contains === "function"
@@ -2372,7 +2538,7 @@ function renderCommentsPanel(panel, task, context) {
 }
 
 function buildTaskDetail(task, context, drain = null) {
-  const detail = el("div", { class: "row-detail split-layout" });
+  const detail = el("div", { class: "row-detail task-detail" });
   detail.addEventListener("click", (e) => e.stopPropagation());
   detail.teardown = () => disconnectCommentCards(detail);
 
@@ -2419,7 +2585,7 @@ function buildTaskDetail(task, context, drain = null) {
   }
 
   if (showsEditor("acceptance_criteria")) {
-    addField(leftCol, "Acceptance criteria", editor("acceptance_criteria"), true, true);
+    addField(leftCol, "Acceptance criteria", editor("acceptance_criteria"), true, false);
   }
 
   // Criteria the delivery owes until the deployed build is measured; an
@@ -2438,10 +2604,6 @@ function buildTaskDetail(task, context, drain = null) {
     addField(leftCol, "Execution summary", markdownView(task.execution_summary), true, true);
   }
 
-  if (Array.isArray(task.artifacts) && task.artifacts.length > 0) {
-    addField(leftCol, "Artifacts", buildArtifacts(task), true, true);
-  }
-
   if (task.review && typeof task.review === "object") {
     addField(leftCol, "Review gate", buildReviewGate(task.review), true, true);
   }
@@ -2455,11 +2617,6 @@ function buildTaskDetail(task, context, drain = null) {
       formatTime: (value) => fmtAbsTimeValue(context, value),
     }),
   );
-
-  // ORB-12651: comments block appears in the left/main column after review gate
-  if (Array.isArray(task.comments) && task.comments.length > 0) {
-    leftCol.appendChild(buildCommentsPanel(task, context));
-  }
 
   // The side column leads with what identifies the task — who made it, which
   // run, when — then the levers an operator sets, then the graph around it.
@@ -2561,32 +2718,214 @@ function buildTaskDetail(task, context, drain = null) {
     addField(rightCol, "Context files", editor("context_files", actions), false, false, { actions, count });
   }
 
-  if (Array.isArray(task.history) && task.history.length > 0) {
-    // ORB-10311: drop legacy bare `commented` stubs *before* the recent-history
-    // limit so meaningful status/workflow events are not displaced by comment
-    // noise (comments render in their own panel below).
-    const meaningful = task.history.filter((h) => h && h.event !== "commented");
-    if (meaningful.length > 0) {
-      const wrap = el("div");
-      const recent = meaningful.slice(-5).reverse();
-      for (const h of recent) {
-        const note = h.note ? ` (${h.note})` : "";
-        const line = el("div", { class: "history-line" }, [
-          document.createTextNode(`[${fmtAbsTimeValue(context, h.at)}] `),
-          el("span", { class: "actor", text: h.by || "?" }),
-          document.createTextNode(`: ${taskHistoryEventLabel(h)}${note}`),
-        ]);
-        wrap.appendChild(line);
-      }
-      addField(rightCol, "Recent history", wrap);
-    }
-  }
-
-  detail.appendChild(leftCol);
-  detail.appendChild(rightCol);
+  // The overview leads; history, runs, artifacts and the thread each have a
+  // tab of their own, so the pane shows one subject at a time.
+  const history = buildTaskHistory(task, context);
+  const artifacts = Array.isArray(task.artifacts) ? task.artifacts.length : 0;
+  const comments = Array.isArray(task.comments) ? task.comments.length : 0;
+  const runs = el("div", { class: "task-runs", id: `detail-${task.id}-runs` });
+  const sections = buildDetailTabs(task, detail, [
+    { name: "overview", label: "Overview", content: el("div", { class: "split-layout detail-overview" }, [leftCol, rightCol]) },
+    { name: "history", label: "History", count: history.count, content: history.node },
+    { name: "runs", label: "Runs", count: taskRunCount(task), content: runs },
+    {
+      name: "artifacts",
+      label: "Artifacts",
+      count: artifacts,
+      content: artifacts > 0 ? buildArtifacts(task) : el("p", { class: "field-empty", text: "No artifacts attached." }),
+    },
+    {
+      name: "comments",
+      label: "Comments",
+      count: comments,
+      content: comments > 0 ? buildCommentsPanel(task, context) : el("p", { class: "field-empty", text: "No comments yet." }),
+    },
+  ], context);
+  for (const section of sections) detail.appendChild(section);
+  renderTaskRuns(runs, task, context);
   detail.appendChild(buildActionsRow(task, detail, context));
+  // Activated once the panels exist: the Runs tab reads its runs then.
+  detail.activateTab(activeDetailTab);
 
   return detail;
+}
+
+// Every meaningful history entry, newest first.
+function buildTaskHistory(task, context) {
+  // ORB-10311: legacy bare `commented` stubs are comment noise; the thread has
+  // its own tab.
+  const meaningful = Array.isArray(task.history) ? task.history.filter((h) => h && h.event !== "commented") : [];
+  if (meaningful.length === 0) {
+    return { count: 0, node: el("p", { class: "field-empty", text: "No history recorded." }) };
+  }
+  const wrap = el("div", { class: "history-list" });
+  for (const h of meaningful.slice().reverse()) {
+    const note = h.note ? ` (${h.note})` : "";
+    wrap.appendChild(el("div", { class: "history-line" }, [
+      document.createTextNode(`[${fmtAbsTimeValue(context, h.at)}] `),
+      el("span", { class: "actor", text: h.by || "?" }),
+      document.createTextNode(`: ${taskHistoryEventLabel(h)}${note}`),
+    ]));
+  }
+  return { count: meaningful.length, node: wrap };
+}
+
+const DETAIL_TAB_NAMES = ["overview", "history", "runs", "artifacts", "comments"];
+
+// The detail's tab strip and its panels. Every panel is built with the detail
+// and switching only toggles which one shows, so a draft in one tab survives
+// a visit to another. Arrow keys move between tabs (automatic activation).
+function buildDetailTabs(task, detail, tabs, context) {
+  const base = `detail-${task.id}`;
+  const list = el("div", { class: "detail-tabs", role: "tablist", "aria-label": "Task detail sections" });
+  const buttons = new Map();
+  const panels = new Map();
+  const runsNode = tabs.find((tab) => tab.name === "runs")?.content || null;
+  let current = null;
+  const activate = (name, { focus = false } = {}) => {
+    const next = panels.has(name) ? name : "overview";
+    current = next;
+    activeDetailTab = next;
+    for (const [key, button] of buttons) {
+      const on = key === next;
+      button.setAttribute("aria-selected", String(on));
+      button.tabIndex = on ? 0 : -1;
+      button.classList.toggle("active", on);
+      panels.get(key).hidden = !on;
+    }
+    if (focus) buttons.get(next).focus();
+    if (next === "runs") loadTaskRuns(task, context, runsNode);
+  };
+  for (const tab of tabs) {
+    const button = el("button", {
+      class: "detail-tab",
+      type: "button",
+      role: "tab",
+      id: `${base}-tab-${tab.name}`,
+      "aria-controls": `${base}-panel-${tab.name}`,
+    }, [
+      el("span", { class: "detail-tab-label", text: tab.label }),
+      el("span", { class: "detail-tab-count", text: tab.count ? String(tab.count) : "" }),
+    ]);
+    button.dataset.tab = tab.name;
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      activate(tab.name);
+    });
+    buttons.set(tab.name, button);
+    list.appendChild(button);
+    const panel = el("div", {
+      class: "detail-tabpanel",
+      role: "tabpanel",
+      id: `${base}-panel-${tab.name}`,
+      "aria-labelledby": button.id,
+    }, [tab.content]);
+    panel.dataset.tabPanel = tab.name;
+    panels.set(tab.name, panel);
+  }
+  list.addEventListener("keydown", (event) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const names = tabs.map((tab) => tab.name);
+    const at = Math.max(0, names.indexOf(current));
+    let next = null;
+    if (event.key === "ArrowRight") next = names[(at + 1) % names.length];
+    else if (event.key === "ArrowLeft") next = names[(at - 1 + names.length) % names.length];
+    else if (event.key === "Home") next = names[0];
+    else if (event.key === "End") next = names[names.length - 1];
+    if (!next) return;
+    event.preventDefault();
+    activate(next, { focus: true });
+  });
+  detail.activateTab = (name, opts) => activate(DETAIL_TAB_NAMES.includes(name) ? name : "overview", opts);
+  return [list, ...panels.values()];
+}
+
+// The Runs tab: the runs that carried this task, newest first, from the job
+// store's task filter. Read when the tab shows, at most once per freshness
+// window, and painted in place so a read never rebuilds the detail.
+function taskRunCount(task) {
+  const load = taskRunLoads.get(task.id);
+  return load && load.items ? load.total : null;
+}
+
+function loadTaskRuns(task, context, fallback = null) {
+  const previous = taskRunLoads.get(task.id);
+  const target = () => document.getElementById(`detail-${task.id}-runs`) || fallback;
+  if (previous && (previous.pending || Date.now() - previous.at < TASK_RUNS_FRESH_MS)) return;
+  if (isAggregateView() && !task.workspace_id) {
+    taskRunLoads.set(task.id, { pending: false, error: "Task workspace is unknown", items: null, total: null, at: Date.now() });
+    renderTaskRuns(target(), task, context);
+    return;
+  }
+  const visit = captureWorkspaceVisit();
+  const load = { pending: true, error: null, items: previous ? previous.items : null, total: previous ? previous.total : null, at: Date.now() };
+  taskRunLoads.set(task.id, load);
+  renderTaskRuns(target(), task, context);
+  fetchJson(taskWorkspacePath(task, `/api/job-runs?task_id=${encodeURIComponent(task.id)}&limit=${TASK_RUNS_LIMIT}`)).then(
+    (payload) => {
+      load.items = Array.isArray(payload && payload.items) ? payload.items : [];
+      load.total = Number.isFinite(payload && payload.total) ? payload.total : load.items.length;
+      load.error = null;
+    },
+    (error) => {
+      load.error = (error && error.message) || String(error);
+    },
+  ).finally(() => {
+    load.pending = false;
+    load.at = Date.now();
+    if (!visit.isCurrent() || taskRunLoads.get(task.id) !== load) return;
+    renderTaskRuns(target(), task, context);
+  });
+}
+
+function renderTaskRuns(node, task, context) {
+  if (!node) return;
+  const load = taskRunLoads.get(task.id);
+  const children = [];
+  if (!load || (load.pending && !load.items && !load.error)) {
+    const note = el("p", { class: "panel-placeholder", text: "Loading runs…", role: "status", "aria-live": "polite" });
+    children.push(note);
+  } else {
+    if (load.error) {
+      const retry = el("button", { class: "action", type: "button", text: "Retry" });
+      retry.addEventListener("click", (event) => {
+        event.stopPropagation();
+        taskRunLoads.delete(task.id);
+        loadTaskRuns(task, context, node);
+      });
+      children.push(el("div", { class: "action-error", text: `Could not load runs: ${load.error}`, role: "alert" }), retry);
+    }
+    if (load.items && load.items.length === 0) {
+      children.push(el("p", { class: "field-empty", text: "No runs recorded for this task." }));
+    } else if (load.items) {
+      const list = el("ul", { class: "task-run-list" });
+      for (const run of load.items) list.appendChild(buildTaskRun(run, task, context));
+      children.push(list);
+      if (load.total > load.items.length) {
+        children.push(el("p", { class: "task-runs-more", text: `Latest ${load.items.length} of ${load.total} runs.` }));
+      }
+    }
+  }
+  node.replaceChildren(...children);
+  const count = document.getElementById(`detail-${task.id}-tab-runs`)?.querySelector?.(".detail-tab-count");
+  if (count) count.textContent = load && load.items ? String(load.total) : "";
+}
+
+function buildTaskRun(run, task, context) {
+  const runId = String(run.run_id || "");
+  const link = el("a", { class: "mono task-run-id", text: runId });
+  link.href = runHref(runId, task.workspace_id ? { workspace: task.workspace_id } : {});
+  const when = run.started_at || run.scheduled_at || run.finished_at;
+  const { durationMs } = elapsedDurationInfo(run);
+  return el("li", { class: "task-run" }, [
+    el("div", { class: "task-run-head" }, [link, stateCell(run.state || "unknown")]),
+    el("div", { class: "task-run-meta" }, [
+      run.job_id ? el("span", { class: "task-run-job", text: run.job_id }) : null,
+      when ? el("span", { text: fmtAbsTimeValue(context, when) }) : null,
+      durationMs != null ? el("span", { text: fmtDuration(durationMs) }) : null,
+    ]),
+    run.error_message ? el("div", { class: "task-run-error", text: run.error_message }) : null,
+  ]);
 }
 
 // The expanded row while its first detail read is pending or has failed. A
@@ -2866,7 +3205,7 @@ async function applyTaskStatusChange(task, nextStatus, context) {
   const refuse = (text) => {
     statusFeedback.set(task.id, { kind: "error", text });
     renderTasks(taskList(context), context);
-    if (foldedStatusTasks.has(task.id) && !expandedTaskIds.has(task.id)) {
+    if (foldedStatusTasks.has(task.id) && selectedTaskId !== task.id) {
       scheduleFeedbackExpiry(statusFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
     }
   };
@@ -2931,8 +3270,10 @@ async function applyTaskStatusChange(task, nextStatus, context) {
     statusFeedback.set(task.id, feedback);
     // Fold the open detail in; an undo from a folded row keeps it folded. A
     // pinned detail is the only view of a filtered-out task, so it stays open.
+    // A full page is that task's own view, so it stays too.
     const pinned = pinnedExternalTask && pinnedExternalTask.id === task.id;
-    if (!pinned && (expandedTaskIds.has(task.id) || foldedStatusTasks.has(task.id))) {
+    if (!pinned && taskPageId !== task.id && (selectedTaskId === task.id || foldedStatusTasks.has(task.id))) {
+      if (selectedTaskId === task.id) rowFocusAfterRender = task.id;
       collapseTask(task.id);
       foldedStatusTasks.set(task.id, merged);
     }
@@ -3280,7 +3621,7 @@ async function approveReviewTask(task, detail, btnNode, context) {
 // while the detail is open again (it shows the feedback itself) or once the
 // feedback has expired.
 function buildFoldedStatusFeedback(taskId, context) {
-  if (!foldedStatusTasks.has(taskId) || expandedTaskIds.has(taskId)) return null;
+  if (!foldedStatusTasks.has(taskId) || selectedTaskId === taskId) return null;
   const entry = statusFeedback.get(taskId);
   return buildMutationFeedback(entry, () => {
     if (!entry || !entry.undo) return;
@@ -3290,7 +3631,7 @@ function buildFoldedStatusFeedback(taskId, context) {
 }
 
 function foldedStatusSignature(taskId) {
-  return foldedStatusTasks.has(taskId) && !expandedTaskIds.has(taskId) ? feedbackSignature(statusFeedback, taskId) : "";
+  return foldedStatusTasks.has(taskId) && selectedTaskId !== taskId ? feedbackSignature(statusFeedback, taskId) : "";
 }
 
 // Folded status feedback for a task with no row on screen, usually because its
@@ -3352,39 +3693,20 @@ function refreshDraftDetails(wrap, task, context, readinessTask = task) {
 }
 
 // The pinned global-resolver result: a task outside the active filter, shown
-// above the list with its own dismiss control.
+// in the pane with a note saying so. The list has no row for it, so its crew
+// control sits beside that note; the pane head closes it like any other.
 function buildPinnedTask(ptask, context) {
-  // The pinned row's detail is always open, so the row discloses nothing: its
-  // ID is the same copy button every task row has, and the row holds no other
-  // action of its own.
-  const row = el("div", {
-    class: "row pinned-external",
-    title: `${ptask.title} (global resolver; status ${ptask.status})`
-  }, [
-    makeCopyButton(ptask.id, { class: "id mono", title: "Copy task ID" }),
-    el("span", { class: "title", text: ptask.title }),
+  const row = el("div", { class: "pinned-external" }, [
+    el("span", { class: "pinned-note", text: `Not in the current list · ${ptask.status}` }),
     buildCrewUpdateControl(ptask, context),
   ]);
+  stopRowInteraction(row);
   row.dataset.hash = `${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, ptask.id)}`;
 
   const drain = taskDrainState(ptask, context);
   const detail = buildTaskDetail(ptask, context, drain);
   const readiness = detail.querySelector(".readiness-list");
   if (readiness) readiness.dataset.drainSignature = taskDrainSignature(drain);
-  const dismiss = el("button", { class: "action", text: "Close" });
-  dismiss.title = "Dismiss global task detail";
-  dismiss.addEventListener("click", (ev) => {
-    ev.stopPropagation();
-    pinnedExternalTask = null;
-    if (openTaskId === ptask.id) setOpenTask(null);
-    renderTasks(taskList(context), context);
-  });
-  let actions = detail.querySelector(".actions");
-  if (!actions) {
-    actions = el("div", { class: "actions" });
-    detail.appendChild(actions);
-  }
-  actions.appendChild(dismiss);
 
   const wrap = el("div", { class: "pinned-task-wrap" }, [row, detail]);
   wrap.teardown = () => disconnectCommentCards(wrap);
@@ -3757,7 +4079,10 @@ export function renderTasks(tasks, context) {
   if (!panelCanRender("tasks-body")) return;
   const body = $("tasks-body");
   if (!body) return;
-  enableRovingRows(body);
+  paneContext = context;
+  // j/k move like Down/Up, and while the pane is open it follows the row the
+  // keyboard lands on.
+  enableRovingRows(body, { letterKeys: true, onMove: followRovingSelection });
 
   // ORB-00030: in the aggregate ("All workspaces") view each task carries its
   // owning workspace; show it as a badge in the Title cell. Detected from the
@@ -3771,7 +4096,7 @@ export function renderTasks(tasks, context) {
     const p = pinnedExternalTask.task;
     if (filterTasks(tasks, context).some((task) => task.id === p.id)) {
       pinnedExternalTask = null;
-      if (openTaskId === p.id) expandedTaskIds.add(p.id);
+      if (openTaskId === p.id) selectedTaskId = p.id;
     }
   }
   resolvePendingOpenTask(tasks, context);
@@ -3780,11 +4105,10 @@ export function renderTasks(tasks, context) {
   }
 
   // Collected as a plain array rather than a document fragment: a fragment
-  // would detach every reused node from the panel, and moving a node is what
-  // costs an open draft its caret. syncNodes leaves a node it already holds in
-  // place.
+  // would detach every reused node from the panel. syncNodes leaves a node it
+  // already holds in place, which is also what keeps the list still: the
+  // detail lives in the pane, so a selection rebuilds nothing here.
   const nodes = [];
-  const drafts = openDraftNodes(body);
   // DANI-10396: the row hash is cheap to compute from task fields alone, so it
   // is checked against the previous render's node *before* building
   // buildStatusUpdateControl/buildCrewUpdateControl — syncNodes would discard
@@ -3794,19 +4118,6 @@ export function renderTasks(tasks, context) {
     if (node.dataset.key) existingRowNodes.set(node.dataset.key, node);
   }
   const notice = takeTaskActionNotice();
-
-  // Render pinned external task detail (for statuses outside active filter) at top.
-  if (pinnedExternalTask && pinnedExternalTask.task) {
-    const ptask = pinnedExternalTask.task;
-    const pinnedKey = `pinned-${ptask.id}`;
-    const draft = drafts.get(pinnedKey);
-    if (draft) {
-      refreshDraftDetails(draft, ptask, context);
-      nodes.push(draft);
-    } else {
-      nodes.push(buildPinnedTask(ptask, context));
-    }
-  }
 
   const filtered = filterTasks(tasks, context);
   // Rows keep a fixed-width action column so actions line up between groups;
@@ -3828,7 +4139,7 @@ export function renderTasks(tasks, context) {
   }
   renderFilterSummary(context);
   refreshChips(context);
-  if (filtered.length === 0 && nodes.length === 0) {
+  if (filtered.length === 0) {
     const replica = tasks.length === 0 ? replicaOwner() : null;
     const defaultText = tasks.length === 0 ? "No tasks available." : "No tasks match filter.";
     const emptyState = el("div", { class: "empty-state" }, [
@@ -3837,6 +4148,8 @@ export function renderTasks(tasks, context) {
       replica?.switchable ? showOnOwnerButton(replica.name) : null,
     ]);
     syncNodes(body, [notice, ...buildFoldedStatusNotices(new Set(), context), emptyState].filter(Boolean));
+    renderTaskPane(filtered, context);
+    finishTaskRender(body);
     return;
   }
   const groups = new Map();
@@ -3858,7 +4171,7 @@ export function renderTasks(tasks, context) {
     const group = groups.get(status);
     // Each status is one card: its head, the backlog's readiness strip, the
     // column labels, then the rows. The nodes stay siblings in the list so
-    // drafts, row reuse and keyboard roving work across groups; CSS draws the
+    // row reuse and keyboard roving work across groups; CSS draws the
     // card from the first node of each run to the one marked `group-end`.
     const groupNodes = [buildGroupHeader(status, group)];
     let rows = group;
@@ -3871,8 +4184,9 @@ export function renderTasks(tasks, context) {
     for (const t of rows) {
       const rowKey = `task-${t.id}`;
       const run = RUN_GROUPS.has(t.status);
-      // Basic hash based on row presentation parameters + expanded state
-      const rowHash = `${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${expandedTaskIds.has(t.id)}-${foldedStatusSignature(t.id)}`;
+      // Basic hash based on row presentation parameters (selection is painted
+      // apart, by syncRowSelection)
+      const rowHash = `${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${foldedStatusSignature(t.id)}`;
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {
@@ -3907,71 +4221,19 @@ export function renderTasks(tasks, context) {
         ]);
         row.dataset.key = rowKey;
         row.dataset.hash = rowHash;
+        // Selection is painted after the sync (syncRowSelection), so moving it
+        // rebuilds no row and the focused one keeps its node.
         makeRowDisclosure(row, titleCell, {
-          expanded: expandedTaskIds.has(t.id),
-          // The detail node only exists while the row is open, so the IDREF is
-          // only published while it actually resolves.
-          controls: expandedTaskIds.has(t.id) ? `detail-${t.id}` : null,
+          expanded: false,
+          controls: "task-detail-pane",
           onToggle: () => {
-            const toggle = () => {
-              if (expandedTaskIds.has(t.id)) {
-                collapseTask(t.id);
-                // Reopening re-reads the detail, which is also the retry for a
-                // read that failed.
-                forgetTaskDetailLoad(t.id);
-              } else {
-                expandedTaskIds.add(t.id);
-                setOpenTask(t.id);
-              }
-              renderTasks(taskList(context), context);
-            };
-            if (document.startViewTransition) {
-              row.style.viewTransitionName = `task-row-${t.id}`;
-              document.startViewTransition(toggle).finished.then(() => {
-                row.style.viewTransitionName = "";
-              });
-            } else {
-              toggle();
-            }
+            if (selectedTaskId === t.id && !pinnedExternalTask) closeTaskPane(context, { forget: true });
+            else selectTask(t.id, context, { anchor: row });
           },
         });
-        if (expandedTaskIds.has(t.id)) row.classList.add("expanded");
       }
       groupNodes.push(row);
       rowIds.add(t.id);
-      if (expandedTaskIds.has(t.id)) {
-        const key = `detail-${t.id}`;
-        const draft = drafts.get(key);
-        if (draft) {
-          const state = taskDetailState(t, context);
-          refreshDraftDetails(draft, t, context, state.task || t);
-          groupNodes.push(draft);
-        } else {
-          const state = taskDetailState(t, context);
-          const drain = taskDrainState(t, context);
-          // Diff by full task object stringified, plus the feedback the detail's
-          // own controls render (the row hash only covers the crew). A
-          // placeholder diffs on its read state instead; a detail rendered from
-          // the cached projection must not be rebuilt just because a refresh
-          // has a read in flight.
-          const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
-          const detailHash = `${JSON.stringify(state.task || t)}-${readState}-${taskDrainSignature(drain)}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}`;
-          const existingDetail = existingRowNodes.get(key);
-          let detail = existingDetail && existingDetail.dataset.hash === detailHash ? existingDetail : null;
-          if (!detail) {
-            detail = state.task
-              ? buildTaskDetail(state.task, context, drain)
-              : buildTaskDetailPlaceholder(t, state, context);
-            const readiness = detail.querySelector(".readiness-list");
-            if (readiness) readiness.dataset.drainSignature = taskDrainSignature(drain);
-            detail.dataset.key = key;
-            // The row's `aria-controls` points here, so the detail needs a real id.
-            detail.id = key;
-            detail.dataset.hash = detailHash;
-          }
-          groupNodes.push(detail);
-        }
-      }
     }
     if (rows.length === 0) groupNodes.push(buildFilteredEmpty(status));
     // A card whose rows carry no action (Blocked) gives the action column
@@ -3986,6 +4248,9 @@ export function renderTasks(tasks, context) {
   }
   nodes.splice(noticeIndex, 0, ...buildFoldedStatusNotices(rowIds, context));
   syncNodes(body, nodes);
+  syncRowSelection(body);
+  renderTaskPane(filtered, context);
+  finishTaskRender(body);
   const commentHash = getCommentHash();
   if (commentHash.startsWith("#comment-")) {
     if (restoredCommentHash !== commentHash) {
@@ -3996,4 +4261,394 @@ export function renderTasks(tasks, context) {
   } else {
     restoredCommentHash = null;
   }
+}
+
+// The selected row reads as selected without being rebuilt: its class and
+// its disclosure state are set on the node the list already holds.
+function syncRowSelection(body) {
+  const selected = !pinnedExternalTask && selectedTaskId ? `task-${selectedTaskId}` : null;
+  for (const row of body.querySelectorAll(".row")) {
+    if (!row.dataset.key || !row.dataset.key.startsWith("task-")) continue;
+    const on = row.dataset.key === selected;
+    row.classList.toggle("expanded", on);
+    const button = row.querySelector("[data-row-focus]");
+    if (button) button.setAttribute("aria-expanded", String(on));
+  }
+}
+
+// Work a render leaves for after both the list and the pane are in place:
+// the list scroll a full page saved, and focus a closed pane hands back.
+function finishTaskRender(body) {
+  const active = document.activeElement;
+  const pane = $("task-detail-pane");
+  const focusLost = !active || active === document.body;
+  if (listRestore && !taskPageId) {
+    const restore = listRestore;
+    listRestore = null;
+    if (restore.scrollTop != null) body.scrollTop = restore.scrollTop;
+    else revealTaskRow(restore.id, "center");
+    if (focusLost || (pane && pane.contains && pane.contains(active))) focusTaskRow(restore.id);
+  }
+  if (rowFocusAfterRender) {
+    const taskId = rowFocusAfterRender;
+    rowFocusAfterRender = null;
+    if (focusLost) focusTaskRow(taskId);
+  }
+}
+
+// The pane beside the list: a head naming the task with its close, back and
+// full-page controls, then the task's detail. A pinned resolver result shows
+// here too, marked as outside the list.
+function renderTaskPane(filtered, context) {
+  const pane = $("task-detail-pane");
+  const paneBody = $("task-detail-body");
+  if (!pane || !paneBody) return;
+  const ptask = pinnedExternalTask && pinnedExternalTask.task ? pinnedExternalTask.task : null;
+  const listTask = !ptask && selectedTaskId ? filtered.find((task) => task.id === selectedTaskId) || null : null;
+  const shown = ptask || listTask;
+  const existing = new Map();
+  for (const node of paneBody.children) {
+    if (node.dataset.key) existing.set(node.dataset.key, node);
+  }
+  const drafts = openDraftNodes(paneBody);
+  const nodes = [];
+  if (shown) {
+    nodes.push(buildPaneHead(shown, Boolean(ptask), context));
+    if (ptask) {
+      const draft = drafts.get(`pinned-${ptask.id}`);
+      if (draft) refreshDraftDetails(draft, ptask, context);
+      nodes.push(draft || buildPinnedTask(ptask, context));
+    } else {
+      nodes.push(buildListTaskDetail(listTask, drafts, existing, context));
+    }
+  } else if (taskPageId) {
+    nodes.push(buildTaskPagePlaceholder(context));
+  }
+  syncNodes(paneBody, nodes);
+  const open = nodes.length > 0;
+  pane.hidden = !open;
+  const main = $("tasks-main");
+  if (main) {
+    main.classList.toggle("task-pane-open", open);
+    main.classList.toggle("task-page-mode", open && Boolean(taskPageId));
+  }
+  syncPaneChrome(open);
+  if (focusPaneTitle && open) {
+    focusPaneTitle = false;
+    focusPaneHeading();
+  }
+}
+
+function focusPaneHeading() {
+  const title = $("task-detail-body")?.querySelector?.(".task-pane-title");
+  if (title && typeof title.focus === "function") title.focus({ preventScroll: true });
+}
+
+// A list task's detail node, kept across renders while its payload and
+// feedback are unchanged and kept verbatim while it holds a draft.
+function buildListTaskDetail(t, drafts, existing, context) {
+  const key = `detail-${t.id}`;
+  const state = taskDetailState(t, context);
+  const draft = drafts.get(key);
+  if (draft) {
+    refreshDraftDetails(draft, t, context, state.task || t);
+    return draft;
+  }
+  const drain = taskDrainState(t, context);
+  // Diff by full task object stringified, plus the feedback the detail's own
+  // controls render (the row hash only covers the crew). A placeholder diffs on
+  // its read state instead; a detail rendered from the cached projection must
+  // not be rebuilt just because a refresh has a read in flight.
+  const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
+  const detailHash = `${JSON.stringify(state.task || t)}-${readState}-${taskDrainSignature(drain)}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}`;
+  const existingDetail = existing.get(key);
+  if (existingDetail && existingDetail.dataset.hash === detailHash) return existingDetail;
+  const detail = state.task
+    ? buildTaskDetail(state.task, context, drain)
+    : buildTaskDetailPlaceholder(t, state, context);
+  const readiness = detail.querySelector(".readiness-list");
+  if (readiness) readiness.dataset.drainSignature = taskDrainSignature(drain);
+  detail.dataset.key = key;
+  // The row's disclosure and the tabs point here, so the detail needs a real id.
+  detail.id = key;
+  detail.dataset.hash = detailHash;
+  return detail;
+}
+
+function buildPaneHead(task, pinned, context) {
+  const page = taskPageId === task.id;
+  const back = el("button", {
+    class: "action task-pane-back",
+    type: "button",
+    text: page ? "Back to list" : "Back",
+    title: page ? "Back to the task list at this task (Esc)" : "Back to the task list (Esc)",
+  });
+  back.addEventListener("click", () => closeTaskPane(context, { forget: true }));
+  const full = page ? null : el("button", {
+    class: "action task-pane-full",
+    type: "button",
+    text: "Open full page",
+    title: "Show this task across the full width (Enter on its row)",
+  });
+  if (full) full.addEventListener("click", () => openTaskPage(task.id, context));
+  const close = page ? null : el("button", {
+    class: "task-pane-close",
+    type: "button",
+    text: "×",
+    title: "Close (Esc)",
+    "aria-label": "Close task detail",
+  });
+  if (close) close.addEventListener("click", () => closeTaskPane(context, { forget: true }));
+  const title = el("h2", { class: "task-pane-title", id: "task-pane-title", text: task.title || task.id });
+  title.tabIndex = -1;
+  const head = el("div", { class: "task-pane-head" }, [
+    el("div", { class: "task-pane-bar" }, [
+      back,
+      makeCopyButton(task.id, { class: "id mono", title: "Copy task ID" }),
+      statusPill(task.status),
+      el("span", { class: "task-pane-spacer" }),
+      full,
+      close,
+    ]),
+    title,
+  ]);
+  head.dataset.key = `pane-head-${task.id}`;
+  head.dataset.hash = `${task.id}-${task.title}-${task.status}-${pinned}-${page}`;
+  return head;
+}
+
+// A full page whose task is still being read, or could not be.
+function buildTaskPagePlaceholder(context) {
+  const back = el("button", { class: "action task-pane-back", type: "button", text: "Back to list" });
+  back.addEventListener("click", () => closeTaskPane(context));
+  const note = el("p", {
+    class: taskPageError ? "panel-placeholder action-error" : "panel-placeholder",
+    text: taskPageError || `Loading ${taskPageId}…`,
+    role: "status",
+    "aria-live": "polite",
+  });
+  const title = el("h2", { class: "task-pane-title", id: "task-pane-title", text: taskPageId });
+  title.tabIndex = -1;
+  const node = el("div", { class: "task-pane-head" }, [el("div", { class: "task-pane-bar" }, [back]), title, note]);
+  node.dataset.key = `pane-page-${taskPageId}`;
+  node.dataset.hash = taskPageError || "loading";
+  return node;
+}
+
+// ---------------------------------------------------------------------------
+// The pane's chrome: keyboard, the phone sheet, and the resizable width.
+
+const PANE_WIDTH_KEY = "orbit.dashboard.taskPaneWidth";
+const PANE_WIDTH_DEFAULT = 42;
+const PANE_WIDTH_MIN = 25;
+const PANE_WIDTH_MAX = 70;
+const PHONE_SHEET_QUERY = "(max-width: 760px)";
+let paneWidth = PANE_WIDTH_DEFAULT;
+let sheetOpen = false;
+let sheetInert = [];
+
+function isEditableTarget(target) {
+  return Boolean(target && (target.isContentEditable || (target.closest && target.closest("input, textarea, select"))));
+}
+
+function taskIdOfRow(row) {
+  const key = row && row.dataset ? row.dataset.key || "" : "";
+  return key.startsWith("task-") ? key.slice(5) : null;
+}
+
+// Roving focus moved to another row: while the pane shows a list task, it
+// follows. A pinned result or a full page is not a list selection.
+function followRovingSelection(button) {
+  if (!selectedTaskId || pinnedExternalTask || taskPageId || !paneContext) return;
+  const taskId = taskIdOfRow(button.closest ? button.closest(".row") : null);
+  if (taskId && taskId !== selectedTaskId) selectTask(taskId, paneContext);
+}
+
+// j/k from inside the pane: select the next or previous row and keep the
+// keyboard in the pane, on the new task's heading.
+function moveTaskSelection(step) {
+  const body = $("tasks-body");
+  if (!body || !paneContext) return false;
+  const buttons = Array.from(body.querySelectorAll("[data-row-focus]"))
+    .filter((button) => typeof button.getClientRects !== "function" || button.getClientRects().length > 0);
+  const at = buttons.findIndex((button) => taskIdOfRow(button.closest(".row")) === selectedTaskId);
+  const next = at < 0 ? buttons[0] : buttons[at + step];
+  const taskId = next ? taskIdOfRow(next.closest(".row")) : null;
+  if (!taskId) return false;
+  selectTask(taskId, paneContext);
+  revealTaskRow(taskId);
+  focusPaneHeading();
+  return true;
+}
+
+function phoneSheet() {
+  try {
+    return typeof window.matchMedia === "function" && window.matchMedia(PHONE_SHEET_QUERY).matches;
+  } catch (_) {
+    return false;
+  }
+}
+
+// At phone width the open pane is a full-screen sheet: a modal dialog whose
+// background is inert until Back closes it.
+function syncPaneChrome(open) {
+  const pane = $("task-detail-pane");
+  if (!pane) return;
+  const sheet = open && phoneSheet() && !pane.closest?.(".tab-pane:not(.active)");
+  if (sheet === sheetOpen) return;
+  sheetOpen = sheet;
+  if (sheet) {
+    pane.setAttribute("role", "dialog");
+    pane.setAttribute("aria-modal", "true");
+    pane.setAttribute("aria-labelledby", "task-pane-title");
+  } else if (typeof pane.removeAttribute === "function") {
+    pane.removeAttribute("role");
+    pane.removeAttribute("aria-modal");
+    pane.removeAttribute("aria-labelledby");
+  }
+  setSheetInert(sheet ? pane : null);
+  if (sheet) focusPaneHeading();
+}
+
+function setSheetInert(pane) {
+  for (const node of sheetInert) node.inert = false;
+  sheetInert = [];
+  for (let node = pane; node && node.parentElement && node !== document.body; node = node.parentElement) {
+    for (const sibling of node.parentElement.children) {
+      if (sibling === node || sibling.inert || sibling.tagName === "SCRIPT") continue;
+      sibling.inert = true;
+      sheetInert.push(sibling);
+    }
+  }
+}
+
+function clampPaneWidth(value) {
+  return Math.min(PANE_WIDTH_MAX, Math.max(PANE_WIDTH_MIN, value));
+}
+
+// The width is a per-viewer presentation preference: storage that is missing
+// or refuses (private mode, quota) costs only the remembered width.
+function loadPaneWidth() {
+  try {
+    const raw = window.localStorage.getItem(PANE_WIDTH_KEY);
+    const value = raw == null ? NaN : Number(raw);
+    return Number.isFinite(value) ? clampPaneWidth(value) : PANE_WIDTH_DEFAULT;
+  } catch (_) {
+    return PANE_WIDTH_DEFAULT;
+  }
+}
+
+function savePaneWidth() {
+  try {
+    window.localStorage.setItem(PANE_WIDTH_KEY, String(paneWidth));
+  } catch (_) {
+    /* the width still applies for this page */
+  }
+}
+
+function applyPaneWidth(value) {
+  paneWidth = Math.round(clampPaneWidth(value) * 10) / 10;
+  const main = $("tasks-main");
+  if (main) main.style.setProperty("--task-pane-width", `${paneWidth}%`);
+  const resizer = $("task-pane-resizer");
+  if (resizer) {
+    resizer.setAttribute("aria-valuenow", String(Math.round(paneWidth)));
+    resizer.setAttribute("aria-valuetext", `Detail pane ${Math.round(paneWidth)}% of the width`);
+  }
+}
+
+// The separator between the list and the pane: drag it, or focus it and use
+// the arrow keys (Shift for larger steps), Home and End. A double click
+// restores the default width.
+function wirePaneResizer() {
+  const resizer = $("task-pane-resizer");
+  const main = $("tasks-main");
+  if (!resizer || !main || resizer.dataset.wired === "true") return;
+  resizer.dataset.wired = "true";
+  let dragging = null;
+  const widthAt = (clientX) => {
+    const rect = main.getBoundingClientRect();
+    const style = window.getComputedStyle(main);
+    const left = rect.left + (parseFloat(style.paddingLeft) || 0);
+    const right = rect.right - (parseFloat(style.paddingRight) || 0);
+    return right > left ? ((right - clientX) / (right - left)) * 100 : paneWidth;
+  };
+  resizer.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    dragging = event.pointerId;
+    if (typeof resizer.setPointerCapture === "function") resizer.setPointerCapture(event.pointerId);
+    main.classList.add("task-pane-resizing");
+  });
+  resizer.addEventListener("pointermove", (event) => {
+    if (dragging === event.pointerId) applyPaneWidth(widthAt(event.clientX));
+  });
+  const finish = (event) => {
+    if (dragging !== event.pointerId) return;
+    dragging = null;
+    main.classList.remove("task-pane-resizing");
+    savePaneWidth();
+  };
+  resizer.addEventListener("pointerup", finish);
+  resizer.addEventListener("pointercancel", finish);
+  resizer.addEventListener("dblclick", () => {
+    applyPaneWidth(PANE_WIDTH_DEFAULT);
+    savePaneWidth();
+  });
+  resizer.addEventListener("keydown", (event) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const step = event.shiftKey ? 10 : 2;
+    let next = null;
+    if (event.key === "ArrowLeft") next = paneWidth + step;
+    else if (event.key === "ArrowRight") next = paneWidth - step;
+    else if (event.key === "Home") next = PANE_WIDTH_MIN;
+    else if (event.key === "End") next = PANE_WIDTH_MAX;
+    if (next == null) return;
+    event.preventDefault();
+    applyPaneWidth(next);
+    savePaneWidth();
+  });
+}
+
+// Wired once at startup. Enter on the selected row opens its full page, Esc
+// closes the pane (or leaves the full page), and j/k inside the pane move the
+// selection. Keys typed into a field stay with the field.
+export function wireTaskPane(context) {
+  paneContext = paneContext || context;
+  applyPaneWidth(loadPaneWidth());
+  wirePaneResizer();
+  const body = $("tasks-body");
+  const pane = $("task-detail-pane");
+  if (!body || !pane) return;
+  body.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const target = event.target;
+    if (!target || !target.matches || !target.matches("[data-row-focus]")) return;
+    const taskId = taskIdOfRow(target.closest(".row"));
+    if (!taskId || taskId !== selectedTaskId || pinnedExternalTask) return;
+    event.preventDefault();
+    openTaskPage(taskId, paneContext || context);
+  });
+  pane.addEventListener("keydown", (event) => {
+    if ((event.key !== "j" && event.key !== "k") || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (taskPageId || pinnedExternalTask || isEditableTarget(event.target)) return;
+    if (moveTaskSelection(event.key === "j" ? 1 : -1)) event.preventDefault();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (pane.hidden || pane.getClientRects().length === 0 || isEditableTarget(event.target)) return;
+    // The composer and other dialogs of the page keep their own Esc.
+    if (event.target && event.target.closest && event.target.closest("[role=dialog]:not(#task-detail-pane), #task-create-panel")) return;
+    event.preventDefault();
+    closeTaskPane(paneContext || context, { forget: true });
+  });
+  // The sheet follows the viewport and is released whenever Tasks is not the
+  // destination on screen.
+  try {
+    window.matchMedia(PHONE_SHEET_QUERY).addEventListener("change", () => syncPaneChrome(!pane.hidden));
+  } catch (_) {
+    /* no media queries: the pane stays a side pane */
+  }
+  // After the router has switched destinations for the same hashchange.
+  window.addEventListener("hashchange", () => setTimeout(() => syncPaneChrome(!pane.hidden), 0));
 }

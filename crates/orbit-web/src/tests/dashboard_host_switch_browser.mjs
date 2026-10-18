@@ -282,7 +282,7 @@ try {
   await until('the log stream on hostb', () => logged(/^GET \/api\/on\/hostb\/log\/stream\?/));
   await until('host resources on hostb', () => logged(/^GET \/api\/on\/hostb\/host\/resources$/));
   await page.locator('#tasks-body [data-key="task-hostb-ART"] > .title').click();
-  await page.locator('.field-block.collapsible h4', { hasText: 'artifacts' }).click();
+  await page.locator('#task-detail-body').getByRole('tab', { name: /^Artifacts/ }).click();
   await page.locator('.artifact-row').first().click();
   await page.locator('.artifact-preview', { hasText: 'hello from hostb' }).waitFor({ state: 'visible' });
   await page.locator('.task-quick.approve').first().click();
@@ -453,7 +453,7 @@ try {
   assert((await quick.getAttribute('title')).includes(READ_ONLY_REASON), 'the disabled quick action says why');
   await page.locator('#tasks-body [data-key="task-hostb-ART"] > .title').click();
   await page.locator('.host-read-only-note').waitFor({ state: 'visible' });
-  assert(await page.locator('#tasks-body .actions > .action.approve').first().isDisabled(), 'detail actions are disabled');
+  assert(await page.locator('#task-detail-body .actions > .action.approve').first().isDisabled(), 'detail actions are disabled');
   await page.locator('.claim-action-denied', { hasText: 'Read-only on hostb' }).first().waitFor({ state: 'visible' });
   assert(!routeLog.some((entry) => entry.method !== 'GET' && entry.path.startsWith('/api/on/')), 'no write is sent to a read-only host');
   await capture('host-read-only-1440');

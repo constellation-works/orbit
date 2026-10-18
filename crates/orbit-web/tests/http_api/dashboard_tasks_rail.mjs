@@ -78,6 +78,7 @@ class Node {
     for (const node of nodes) parent.insertBefore(node, before);
   }
   setAttribute(name, value) { this.attrs[name] = String(value); }
+  removeAttribute(name) { delete this.attrs[name]; }
   getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null; }
   addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
   contains(node) { for (let current = node; current; current = current.parentNode) if (current === this) return true; return false; }
@@ -104,7 +105,7 @@ function matches(node, simple) {
   // `[data-draft]`-style presence tests, so an open detail is not mistaken for a draft.
   for (const [, name] of simple.matchAll(/\[([\w-]+)\]/g)) {
     const key = name.startsWith('data-') ? name.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase()) : null;
-    if (!(key ? node.dataset[key] : node.getAttribute(name) != null)) return false;
+    if (!(key ? node.dataset[key] !== undefined : node.getAttribute(name) != null)) return false;
   }
   const id = simple.match(/#([\w-]+)/)?.[1];
   return !id || node.id === id;
@@ -120,8 +121,10 @@ function matchesChain(path, chain) {
   return true;
 }
 
-const ids = ['tasks-body', 'tasks-count', 'rail-count-tasks', 'tasks-previous', 'tasks-next', 'tasks-page-status', 'host-select'];
+const ids = ['tasks-main', 'tasks-body', 'task-detail-pane', 'task-detail-body', 'task-pane-resizer', 'tasks-count', 'rail-count-tasks', 'tasks-previous', 'tasks-next', 'tasks-page-status', 'host-select'];
 const byId = Object.fromEntries(ids.map(id => [id, Object.assign(new Node('div'), { id })]));
+// The selected task's detail renders in the pane beside the list.
+const paneBody = byId['task-detail-body'];
 const document = {
   activeElement: null,
   body: new Node('body'),
@@ -228,12 +231,12 @@ let osRow = byId['tasks-body'].querySelectorAll('.row').find(row => row.dataset.
 assert.equal(osRow.querySelector('.os-badge').title, `Runs on ${constrained.os_requirement.describe}`);
 const osTitle = osRow.querySelector('button.title');
 osTitle.parentNode.dispatch('click', { target: osTitle });
-assert.equal(byId['tasks-body'].querySelector('.task-os-readout').textContent, constrained.os_requirement.describe);
+assert.equal(paneBody.querySelector('.task-os-readout').textContent, constrained.os_requirement.describe);
 constrained.os_requirement = { any_of: [], state: 'unresolved', describe: 'unresolved (crew fixture-crew)' };
 paint({ total: 1, limit: 50, offset: 0, next_cursor: null }, [constrained]);
 osRow = byId['tasks-body'].querySelectorAll('.row').find(row => row.dataset.key === 'task-ORB-67');
 assert.equal(osRow.querySelector('.os-badge').textContent, 'unresolved');
-assert.equal(byId['tasks-body'].querySelector('.task-os-readout').textContent, constrained.os_requirement.describe);
+assert.equal(paneBody.querySelector('.task-os-readout').textContent, constrained.os_requirement.describe);
 
 // The expanded task detail paints transitions from the same history projection
 // the CLI reads, while older entries without statuses retain their event label.
@@ -249,7 +252,7 @@ paint({ total: 1, limit: 50, offset: 0, next_cursor: null }, [historyTask]);
 const historyTitle = byId['tasks-body'].querySelector('.row button.title');
 assert.ok(historyTitle, 'task title disclosure exists');
 historyTitle.parentNode.dispatch('click', { target: historyTitle });
-const historyLines = byId['tasks-body'].querySelectorAll('.history-line').map(line => line.textContent);
+const historyLines = paneBody.querySelectorAll('.history-line').map(line => line.textContent);
 assert.ok(historyLines.some(line => line.includes(': status proposed → backlog')), historyLines.join('\n'));
 assert.ok(historyLines.some(line => line.includes(': started backlog → in-progress')), historyLines.join('\n'));
 assert.ok(historyLines.some(line => line.includes(': status_changed')), historyLines.join('\n'));
@@ -259,7 +262,7 @@ const openTask = fixture => {
   paint({ total: 1, limit: 50, offset: 0, next_cursor: null }, [fixture]);
   const title = byId['tasks-body'].querySelector('.row button.title');
   title.parentNode.dispatch('click', { target: title });
-  return byId['tasks-body'].querySelector('.comment-card');
+  return paneBody.querySelector('.comment-card');
 };
 const card = openTask(pilotTask);
 const body = card.querySelector('.comment-body');
@@ -403,7 +406,7 @@ served = contextDraftPage;
 renderTasks(currentTasks, contextDraftContext);
 const contextDraftTitle = rowFor('ORB-37').querySelector('button.title');
 contextDraftTitle.parentNode.dispatch('click', { target: contextDraftTitle });
-let contextDraftDetail = byId['tasks-body'].querySelector('#detail-ORB-37');
+let contextDraftDetail = paneBody.querySelector('#detail-ORB-37');
 assert.ok(
   contextDraftDetail.querySelector('.file-list .field-empty').textContent.includes('no context files'),
   'the empty context state is visible before refresh',
@@ -427,7 +430,7 @@ taskRuntime.setTaskLocks({
   },
 });
 renderTasks(currentTasks, contextDraftContext);
-contextDraftDetail = byId['tasks-body'].querySelector('#detail-ORB-37');
+contextDraftDetail = paneBody.querySelector('#detail-ORB-37');
 const refreshedSelector = contextDraftDetail.querySelector('.context-selector');
 assert.ok(
   refreshedSelector && refreshedSelector.textContent.includes('file:src/') && refreshedSelector.textContent.includes('shared.rs'),
@@ -450,7 +453,7 @@ selectorDraft.value = 'file:unsaved.rs';
 selectorDraft.focus();
 contextDraftTask.context_files = ['file:server.rs'];
 renderTasks(currentTasks, contextDraftContext);
-contextDraftDetail = byId['tasks-body'].querySelector('#detail-ORB-37');
+contextDraftDetail = paneBody.querySelector('#detail-ORB-37');
 assert.equal(
   contextDraftDetail.querySelector('.field-editor-input'),
   selectorDraft,
@@ -567,7 +570,16 @@ const paintCards = () => {
   currentTasks = cardTasks;
   renderTasks(cardTasks, cardContext);
 };
-const readinessCard = id => byId['tasks-body'].querySelector(`#detail-${id} .readiness-list`);
+// One task's detail at a time: reading a card selects its row first.
+const showCard = id => {
+  if (paneBody.querySelector(`#detail-${id}`)) return;
+  const title = rowFor(id).querySelector('button.title');
+  title.parentNode.dispatch('click', { target: title });
+};
+const readinessCard = id => {
+  showCard(id);
+  return paneBody.querySelector(`#detail-${id} .readiness-list`);
+};
 const cardHead = id => readinessCard(id).querySelector('.readiness-drain-head').children.map(node => node.textContent);
 heldReads.set('ORB-41', holdRead());
 paintCards();
@@ -664,10 +676,11 @@ assert.ok(crewNote.textContent.includes('Allowed crews: sol.'), crewNote.textCon
 assert.ok(crewNote.textContent.includes('1 backlog task runs as another crew and waits: ORB-60 (opus).'), crewNote.textContent);
 assert.ok(!crewNote.textContent.includes('ORB-44'), 'an eligible task is not listed as excluded');
 assert.equal(drainWaits.drainCrewNote({ capacity: { allowed_crews: null }, tasks: Object.values(readinessEntries) }), null, 'no restriction, no note');
-for (const item of cardTasks) {
-  const title = rowFor(item.id).querySelector('button.title');
-  title.parentNode.dispatch('click', { target: title });
-}
+// Clicking the selected row again closes the pane.
+const selectedTitle = backlogBody.querySelector('.row.expanded button.title');
+selectedTitle.parentNode.dispatch('click', { target: selectedTitle });
+assert.equal(byId['task-detail-pane'].hidden, true, 'the selected row toggles the pane closed');
+assert.equal(backlogBody.querySelector('.row.expanded'), null, 'no row reads as selected once the pane closes');
 
 // A live child run belongs to the task's workspace, even when the page is in
 // the aggregate view or the task is pinned from another workspace. Its link
@@ -728,7 +741,7 @@ const paintPinned = () => {
   currentTasks = [pinnedVisibleTask];
   renderTasks(currentTasks, pinnedContext);
 };
-const pinnedWrap = () => byId['tasks-body'].querySelector('.pinned-task-wrap');
+const pinnedWrap = () => paneBody.querySelector('.pinned-task-wrap');
 const pinnedReadiness = () => pinnedWrap().querySelector('.readiness-list');
 const pinnedCardHead = () => pinnedReadiness().querySelector('.readiness-drain-head').children.map(node => node.textContent);
 const pinnedReads = [];
@@ -809,7 +822,7 @@ const openOrdinaryDraft = ordinaryTask => {
   paintOrdinary(ordinaryTask);
   const title = rowFor(ordinaryTask.id).querySelector('button.title');
   title.parentNode.dispatch('click', { target: title });
-  const detail = byId['tasks-body'].querySelector(`#detail-${ordinaryTask.id}`);
+  const detail = paneBody.querySelector(`#detail-${ordinaryTask.id}`);
   const readiness = readinessCard(ordinaryTask.id);
   assert.ok(readiness.textContent.includes('Checking whether the drain can take this task'), 'an ordinary detail shows its held readiness read');
   detail.querySelector('.action.comment').dispatch('click');
@@ -829,7 +842,7 @@ heldReads.delete('ORB-154');
 await settleReads();
 assert.notEqual(readinessCard('ORB-154'), ordinarySuccessDraft.readiness, 'a settled ordinary answer replaces its readiness list');
 assert.equal(readinessCard('ORB-154').textContent.includes('Ready: nothing is missing.'), true, 'an ordinary draft shows the successful answer');
-assert.equal(byId['tasks-body'].querySelector('#detail-ORB-154'), ordinarySuccessDraft.detail, 'success repaint preserves the ordinary detail node');
+assert.equal(paneBody.querySelector('#detail-ORB-154'), ordinarySuccessDraft.detail, 'success repaint preserves the ordinary detail node');
 assert.equal(ordinarySuccessDraft.detail.querySelector('.comment-form textarea'), ordinarySuccessDraft.textarea, 'success repaint preserves the draft textarea');
 assert.equal(ordinarySuccessDraft.textarea.value, 'keep this ordinary draft', 'success repaint preserves unsent text');
 assert.equal(document.activeElement, ordinarySuccessDraft.textarea, 'success repaint preserves textarea focus');
@@ -843,7 +856,7 @@ heldReads.delete('ORB-155');
 await settleReads();
 assert.notEqual(readinessCard('ORB-155'), ordinaryFailureDraft.readiness, 'a failed ordinary answer replaces its readiness list');
 assert.ok(readinessCard('ORB-155').textContent.includes('Drain readiness unknown: readiness offline.'));
-assert.equal(byId['tasks-body'].querySelector('#detail-ORB-155'), ordinaryFailureDraft.detail, 'error repaint preserves the ordinary detail node');
+assert.equal(paneBody.querySelector('#detail-ORB-155'), ordinaryFailureDraft.detail, 'error repaint preserves the ordinary detail node');
 assert.equal(ordinaryFailureDraft.detail.querySelector('.comment-form textarea'), ordinaryFailureDraft.textarea, 'error repaint preserves the draft textarea');
 assert.equal(ordinaryFailureDraft.textarea.value, 'keep this ordinary draft', 'error repaint preserves unsent text');
 assert.equal(document.activeElement, ordinaryFailureDraft.textarea, 'error repaint preserves textarea focus');
@@ -856,7 +869,7 @@ const stopOrdinaryReadiness = drainWaits.onDrainReadinessChange(() => {
 const ordinaryLock = { task_id: 'ORB-155', status: 'backlog', eligible: false, reason: 'context_lock_conflict', conflicts: [{ requested_file: 'file:src/locked.rs', locking_task_id: 'ORB-88' }] };
 drainWaits.setDrainReadiness({ tasks: [ordinaryLock] });
 assert.equal(ordinaryReadinessRepaints, 1, 'a fallback snapshot repaints an ordinary draft');
-assert.equal(byId['tasks-body'].querySelector('#detail-ORB-155'), ordinaryFailureDraft.detail, 'fallback repaint preserves the ordinary detail node');
+assert.equal(paneBody.querySelector('#detail-ORB-155'), ordinaryFailureDraft.detail, 'fallback repaint preserves the ordinary detail node');
 assert.equal(ordinaryFailureDraft.detail.querySelector('.comment-form textarea'), ordinaryFailureDraft.textarea, 'fallback repaint preserves the draft textarea');
 assert.equal(ordinaryFailureDraft.textarea.value, 'keep this ordinary draft', 'fallback repaint preserves unsent text');
 assert.equal(document.activeElement, ordinaryFailureDraft.textarea, 'fallback repaint preserves textarea focus');
@@ -1071,12 +1084,94 @@ applyTasksHashQuery(new URLSearchParams('status=done&open=%3Cscript%3E'), hashCo
 assert.equal(buildTasksHash(hashContext), '#tasks?status=done', 'a malformed task id is ignored');
 applyTasksHashQuery(new URLSearchParams('status=done'), hashContext);
 assert.equal(buildTasksHash(hashContext), '#tasks?status=done', 'a hash without open names no task');
+// `#tasks/<id>` is that task's full page; it names only the task, so the
+// filter behind it is kept for the way back.
+applyTasksHashQuery(new URLSearchParams(), hashContext, 'ORB-9');
+assert.equal(buildTasksHash(hashContext), '#tasks/ORB-9', 'a task page route is its own hash');
+assert.deepEqual([...statuses], ['done'], 'a task page keeps the operator\'s status chips');
+applyTasksHashQuery(new URLSearchParams('status=done&open=ORB-9'), hashContext);
+assert.equal(buildTasksHash(hashContext), '#tasks?status=done&open=ORB-9', 'leaving the page returns to the list at the same task');
+applyTasksHashQuery(new URLSearchParams('status=done'), hashContext, '<script>');
+assert.equal(buildTasksHash(hashContext), '#tasks?status=done', 'a malformed page id falls back to the list');
 
-// The next render expands a named task the list holds.
+// The next render selects a named task the list holds, and the pane shows it.
+const paneHost = byId['task-detail-pane'];
 applyTasksHashQuery(new URLSearchParams('open=ORB-7'), taskContext);
-paint({ total: 2, limit: 50, offset: 0, next_cursor: null }, [task(6), task(7)]);
-assert.deepEqual(
-  byId['tasks-body'].querySelectorAll('.row.expanded').map(row => row.dataset.key),
-  ['task-ORB-7'],
-  'only the task the link names is expanded',
-);
+paint({ total: 3, limit: 50, offset: 0, next_cursor: null }, [task(6), task(7), task(8, { history: [{ event: 'updated', by: 'operator', at: '2026-10-18T10:00:00Z' }] })]);
+const selectedRows = () => byId['tasks-body'].querySelectorAll('.row.expanded').map(row => row.dataset.key);
+assert.deepEqual(selectedRows(), ['task-ORB-7'], 'only the task the link names is selected');
+assert.equal(paneHost.hidden, false, 'a selection opens the pane');
+assert.deepEqual(paneBody.children.map(node => node.dataset.key), ['pane-head-ORB-7', 'detail-ORB-7'], 'the pane holds the selected task alone');
+
+// Moving the selection rebuilds no list row: the list keeps its nodes, so it
+// neither reflows nor loses its scroll, and only the pane changes.
+const listNodes = () => byId['tasks-body'].children.slice();
+const before = listNodes();
+window.location.hash = '#tasks?status=in-progress&open=ORB-7';
+window.history = { replaceState: (_state, _title, url) => { window.location.hash = url; } };
+const titleOf = id => rowFor(id).querySelector('button.title');
+titleOf('ORB-8').parentNode.dispatch('click', { target: titleOf('ORB-8') });
+assert.deepEqual(selectedRows(), ['task-ORB-8'], 'clicking another row moves the selection');
+assert.ok(listNodes().every((node, index) => node === before[index]) && listNodes().length === before.length, 'selection keeps every list node in place');
+assert.deepEqual(paneBody.children.map(node => node.dataset.key), ['pane-head-ORB-8', 'detail-ORB-8']);
+assert.equal(titleOf('ORB-8').getAttribute('aria-expanded'), 'true');
+assert.equal(titleOf('ORB-7').getAttribute('aria-expanded'), 'false', 'the previous row reads as unselected');
+assert.equal(window.location.hash, '#tasks?status=in-progress&open=ORB-8', 'the URL names the selected task, so a copied link reopens it');
+paint({ total: 3, limit: 50, offset: 0, next_cursor: null }, currentTasks.map(item => ({ ...item })));
+assert.ok(listNodes().every((node, index) => node === before[index]), 'a refresh with unchanged rows keeps the list nodes too');
+assert.deepEqual(selectedRows(), ['task-ORB-8'], 'a refresh keeps the selection');
+
+// Tabs: Overview first; the chosen tab carries over to the next selection.
+const tab = name => paneBody.querySelector(`.detail-tabs`).children.find(button => button.dataset.tab === name);
+const shownPanel = () => paneBody.querySelectorAll('.detail-tabpanel').filter(panel => !panel.hidden).map(panel => panel.dataset.tabPanel);
+assert.deepEqual(paneBody.querySelector('.detail-tabs').children.map(button => button.dataset.tab), ['overview', 'history', 'runs', 'artifacts', 'comments']);
+assert.deepEqual(shownPanel(), ['overview']);
+tab('history').dispatch('click');
+assert.deepEqual(shownPanel(), ['history'], 'a tab shows its own panel only');
+assert.equal(tab('history').getAttribute('aria-selected'), 'true');
+assert.ok(paneBody.querySelector('.history-line').textContent.includes('operator: updated'), 'History lists the task history');
+const runReads = [];
+context.fetch = path => {
+  const url = new URL(path, 'http://dashboard.test');
+  runReads.push(url);
+  return Promise.resolve(readinessResponse({ items: [{ run_id: 'jrun-tab-1', job_id: 'ship', state: 'failed', started_at: '2026-10-18T09:00:00Z', duration_ms: 1200, error_message: 'gate failed' }], total: 3 }));
+};
+tab('runs').dispatch('click');
+await settleReads();
+assert.equal(runReads.length, 1, 'the Runs tab reads the runs once');
+assert.equal(runReads[0].pathname, '/api/job-runs');
+assert.equal(runReads[0].searchParams.get('task_id'), 'ORB-8', 'the read is filtered to the selected task');
+const runLink = paneBody.querySelector('.task-run a.task-run-id');
+assert.equal(runLink.textContent, 'jrun-tab-1');
+assert.ok(runLink.href.includes('#runs?run_id=jrun-tab-1'), 'each run links to its run detail');
+assert.ok(paneBody.querySelector('.task-run-error').textContent.includes('gate failed'));
+assert.ok(paneBody.querySelector('.task-runs-more').textContent.includes('1 of 3'), 'a partial list says so');
+titleOf('ORB-6').parentNode.dispatch('click', { target: titleOf('ORB-6') });
+assert.deepEqual(shownPanel(), ['runs'], 'the chosen tab stays chosen for the next task');
+await settleReads();
+assert.equal(runReads.at(-1).searchParams.get('task_id'), 'ORB-6', 'and reads that task\'s runs');
+tab('overview').dispatch('click');
+context.fetch = () => new Promise(() => {});
+
+// The full page: `#tasks/<id>` shows the pane across the width, with Back in
+// place of the close and full-page controls; Back returns to the list with
+// the same task selected.
+applyTasksHashQuery(new URLSearchParams(), taskContext, 'ORB-7');
+paint({ total: 3, limit: 50, offset: 0, next_cursor: null }, currentTasks);
+assert.ok(byId['tasks-main'].classList.contains('task-page-mode'), 'the page route switches the layout to the full page');
+assert.deepEqual(paneBody.children.map(node => node.dataset.key), ['pane-head-ORB-7', 'detail-ORB-7']);
+const pageHead = paneBody.querySelector('.task-pane-head');
+assert.equal(pageHead.querySelector('.task-pane-full'), null, 'a full page offers no full-page control');
+const backToList = pageHead.querySelector('.task-pane-back');
+assert.equal(backToList.textContent, 'Back to list');
+backToList.dispatch('click');
+assert.ok(!byId['tasks-main'].classList.contains('task-page-mode'), 'Back leaves the full page');
+assert.deepEqual(selectedRows(), ['task-ORB-7'], 'the list comes back with the same task selected');
+assert.ok(window.location.hash.startsWith('#tasks?') && window.location.hash.endsWith('open=ORB-7'), `a page reached by link goes back to the list naming the task: ${window.location.hash}`);
+
+// Closing the pane from its own control clears the selection and the URL.
+paneBody.querySelector('.task-pane-close').dispatch('click');
+assert.equal(paneHost.hidden, true);
+assert.deepEqual(selectedRows(), []);
+assert.ok(!window.location.hash.includes('open='), 'a closed pane names no task');
+delete window.history;

@@ -517,6 +517,8 @@ for (const origin of ['detail', 'row']) {
       }
     }
   };
+  // The open detail sits in the side pane beside the list.
+  const taskText = () => text('tasks-body') + text('task-detail-body');
   const bothEnabled = () => rowShip() && detailShip() && !rowShip().disabled && !detailShip().disabled;
   refresh(); await settle();
   await openDetail();
@@ -534,7 +536,7 @@ for (const origin of ['detail', 'row']) {
   pendingShips.shift()(response({ error: 'Dispatch fixture failed' }, 503));
   await settle();
   check(bothEnabled(), `${origin}: dispatch failure after refresh enables retry in both controls`);
-  check(text('tasks-body').includes('Dispatch fixture failed'), `${origin}: dispatch failure appears in the current detail or row`);
+  check(taskText().includes('Dispatch fixture failed'), `${origin}: dispatch failure appears in the current detail or row`);
   click(origin === 'detail' ? detailShip() : rowShip()); await settle();
   check(shipRequests === requestsBefore + 2 && pendingShips.length === 1, `${origin}: failed dispatch can be retried`);
   refresh(); await settle();
@@ -547,7 +549,7 @@ for (const origin of ['detail', 'row']) {
   await openDetail();
   click(origin === 'detail' ? rowShip() : detailShip()); await settle();
   check(shipRequests === requestsBefore + 3 && pendingShips.length === 0, `${origin}: live duplicate is refused by the server`);
-  check(text('tasks-body').includes('Ship run is already in flight'), `${origin}: live duplicate error is visible`);
+  check(taskText().includes('Ship run is already in flight'), `${origin}: live duplicate error is visible`);
 
   shipFixture.status = 'in-progress';
   shipFixture.job_run_id = `jrun-${origin}-live`;

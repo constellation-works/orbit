@@ -42,7 +42,8 @@ Agent runs produce more state changes, logs, and diagnostics than a human can re
 
 WORK › Drain (`#drain`) shows the auto-drain state, forecast, window controls,
 admission passes and waits, fleet drains and locked files. Its Log view is
-`#drain/log`; Tasks keeps the full width for tasks and inline approval.
+`#drain/log`; Tasks keeps its width for the task list, its detail pane and
+inline approval.
 The Drain page shows a fleet table, including in **All workspaces** mode:
 host, workspace, drain phase, used/ceiling leaf slots, eligible tasks, most common
 wait reason, and admission/provider holds. Selecting a row switches host and

@@ -79,9 +79,22 @@
 .task-search-wrap.error .task-lookup-status { display: block; }
 .task-search-wrap.pending .task-lookup-status { display: block; color: var(--fg-dim); }
 
-/* A task opened by ID that the current filter or page would hide. */
-.pinned-task-wrap { margin-bottom: 14px; border: 1px solid var(--accent); border-radius: var(--radius-panel); background: var(--bg-elev); overflow: hidden; }
-.pinned-task-wrap .row.pinned-external { background: var(--bg-elev); cursor: default; }
+/* A task opened by ID that the current filter or page would hide: it shows
+   in the pane under a note saying it is outside the list. */
+.pinned-external {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin: 12px 16px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent-wash);
+  font-size: 12.5px;
+  color: var(--fg-mute);
+}
 #tasks-panel > .controls { border-bottom: 0; padding: 0 0 14px; }
 
 #tasks-panel > .body {
@@ -137,7 +150,6 @@
 #tasks-body > .group-readiness,
 #tasks-body > .col-head,
 #tasks-body > .row,
-#tasks-body > .row-detail,
 #tasks-body > .group-empty {
   background: var(--bg-elev);
   border-left: 1px solid var(--border);
@@ -689,6 +701,120 @@
 }
 
 main.tasks-layout { grid-template-columns: minmax(0, 1fr); }
+
+/* The task pane: the list, a resizer, then the selected task's detail at the
+   operator's remembered share of the width (`--task-pane-width`, set from
+   tasks.js), kept wide enough to read and narrow enough to leave a list.
+   Important because shell.css stacks every `main` grid below 1000px. */
+main.tasks-layout.task-pane-open {
+  grid-template-columns:
+    minmax(0, 1fr) 12px
+    clamp(320px, var(--task-pane-width, 42%), max(320px, calc(100% - 380px))) !important;
+  column-gap: 0;
+}
+.task-pane-resizer { display: none; }
+main.tasks-layout.task-pane-open > .task-pane-resizer {
+  display: block;
+  position: relative;
+  min-height: 0;
+  cursor: col-resize;
+  touch-action: none;
+}
+.task-pane-resizer::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: transparent;
+  transition: background 0.15s ease, width 0.15s ease;
+}
+.task-pane-resizer:hover::before,
+.task-pane-resizer:focus-visible::before,
+main.task-pane-resizing .task-pane-resizer::before { width: 3px; background: var(--accent); }
+.task-pane-resizer:focus-visible { outline: none; }
+main.task-pane-resizing { cursor: col-resize; user-select: none; }
+
+.task-detail-pane {
+  container: task-pane / inline-size;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--bg-elev);
+  overflow: hidden;
+}
+.task-detail-pane[hidden] { display: none; }
+.task-detail-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.task-pane-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  padding: 10px 16px 12px;
+  border-bottom: 1px solid var(--hair);
+  background: var(--bg-elev);
+}
+.task-pane-bar { display: flex; align-items: center; gap: 8px; min-height: 32px; }
+.task-pane-spacer { flex: 1 1 auto; }
+.task-pane-title {
+  margin: 6px 0 0;
+  font-size: 17px;
+  line-height: 1.35;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+.task-pane-title:focus { outline: none; }
+.task-pane-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.task-pane-head .panel-placeholder { margin: 10px 0 0; }
+.task-pane-back { display: none; align-items: center; }
+.task-pane-close {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-mute);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.task-pane-close:hover { color: var(--fg); background: var(--bg-well); }
+.task-pane-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* `#tasks/<id>`: the pane takes the content width and the list waits hidden
+   behind it (the column's inline display needs the override). */
+main.tasks-layout.task-page-mode { grid-template-columns: minmax(0, 1fr) !important; }
+main.tasks-layout.task-page-mode > .col-tasks,
+main.tasks-layout.task-page-mode > .task-pane-resizer { display: none !important; }
+main.tasks-layout.task-page-mode > .task-detail-pane { justify-self: center; width: 100%; max-width: 1280px; }
+main.tasks-layout.task-page-mode .task-pane-back { display: inline-flex; }
+
+/* A phone has no room beside the list: the pane is a full-screen sheet with
+   Back in place of the close and full-page controls. */
+@media (max-width: 760px) {
+  main.tasks-layout.task-pane-open { grid-template-columns: minmax(0, 1fr) !important; }
+  main.tasks-layout.task-pane-open > .task-pane-resizer { display: none; }
+  .task-detail-pane {
+    position: fixed;
+    inset: 0;
+    z-index: 400;
+    border: 0;
+    border-radius: 0;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  main.tasks-layout.task-page-mode > .task-detail-pane { max-width: none; }
+  /* The active view is a stacking context of its own; lift it so the sheet
+     also covers what paints after it, such as the status bar's live dot. */
+  .tab-pane.active:has(> main.tasks-layout.task-pane-open) { z-index: 400; }
+  .task-pane-back { display: inline-flex; }
+  .task-pane-close,
+  .task-pane-full { display: none; }
+}
 
 /* The composer stays outside list repainting so errors never discard a draft. */
 .task-create { padding: 16px; margin-bottom: 16px; border: 1px solid var(--border); border-radius: var(--radius); overflow: auto; flex: 0 1 auto; }

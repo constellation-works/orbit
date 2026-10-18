@@ -528,7 +528,7 @@ export function runHref(runId, { host = selectedRunHost(), workspace = currentWo
   return scopedHref(`#runs?run_id=${encodeURIComponent(runId)}`, { host, workspace });
 }
 
-/// The dashboard address that opens task `taskId` expanded on the Tasks tab,
+/// The dashboard address that selects task `taskId` on the Tasks tab,
 /// scoped like `runHref`. The hash carries only `open`, so following it leaves
 /// the operator's status and search filter as it was. Every task link is built
 /// here.
@@ -722,7 +722,10 @@ function syncRovingRows(container) {
   }
 }
 
-export function enableRovingRows(container) {
+//
+// `letterKeys` adds j/k as Down/Up; `onMove(button)` runs after a key moved
+// focus to another row's button. Options apply from the first registration.
+export function enableRovingRows(container, { letterKeys = false, onMove = null } = {}) {
   if (!container || rovingLists.has(container)) return;
   rovingLists.set(container, { key: null });
   container.addEventListener("focusin", (event) => {
@@ -741,14 +744,17 @@ export function enableRovingRows(container) {
     const buttons = Array.from(container.querySelectorAll("[data-row-focus]"))
       .filter((button) => button.getClientRects().length > 0);
     const at = buttons.indexOf(from);
+    const key = letterKeys && event.key === "j" ? "ArrowDown" : letterKeys && event.key === "k" ? "ArrowUp" : event.key;
     let next;
-    if (event.key === "ArrowDown") next = buttons[at + 1];
-    else if (event.key === "ArrowUp") next = buttons[at - 1];
-    else if (event.key === "Home") next = buttons[0];
-    else if (event.key === "End") next = buttons[buttons.length - 1];
+    if (key === "ArrowDown") next = buttons[at + 1];
+    else if (key === "ArrowUp") next = buttons[at - 1];
+    else if (key === "Home") next = buttons[0];
+    else if (key === "End") next = buttons[buttons.length - 1];
     else return;
     event.preventDefault();
-    if (next) next.focus();
+    if (!next) return;
+    next.focus();
+    if (onMove) onMove(next);
   });
 }
 
