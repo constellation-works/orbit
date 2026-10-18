@@ -614,6 +614,22 @@ Identify the failed step from `orbit run show`, then act:
   with a recorded decision:
   `orbit task review-reset <task-id> --lineage '<exact-lineage-key>' --reason '<decision>'`.
 
+  A **claimed** leaf keeps that ledger on the executing host until settlement
+  copies it to the owner. When final recovery escalates a `review_budget_exhausted`
+  lineage, the task comment's `human_action` names the owner host and the exact
+  `ORBIT_OPERATOR=1 orbit --root <owner-global> --workspace <owner-workspace> task review-reset ...`
+  command, then the follower host and the exact
+  `orbit --root <follower-global> --workspace <follower-workspace> job resume <run-id>`
+  command. Run each command as written, from any working directory. `--root` is
+  that host's Orbit data directory and `--workspace` is the registered workspace
+  id; `--root` alone does not select a checkout. Run the reset on the owner, not
+  on a replica: a replica does not hold the task, and it refuses control-plane
+  writes. Run the resume on the follower named in the action. Resume adopts the
+  owner's reset and continues from `validate` only when the checkpoint had
+  already reached that step and the pull is terminal. A leaf that failed before
+  `validate` resumes at its failed step, which the reset lets the review gate
+  admit again. A claim that is still live stays refused.
+
 - **A claimed reviewer reported `incomplete` because its manifest or report
   call was refused** (distributed drain follower): the reviewer's
   `orbit.task.artifact.get`/`put` reaches the owner only through the run's

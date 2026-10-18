@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use orbit_types::workflow::ReviewLedger;
+
 use super::{
     AdmissionRunContext, ClaimFinalRecovery, ExecutionLocation, HandoffObservation,
     ProviderUnavailable,
@@ -193,6 +195,34 @@ pub struct ClaimEvidence {
     /// predates the field keeps the task from that drain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forge_hold: Option<orbit_types::workflow::ForgeUnavailableHold>,
+    /// [ORB-16699] Review ledgers the executing host held for this claim.
+    /// Settlement copies them onto the owner so `review-reset` can reach the
+    /// lineage a claimed leaf exhausted. An owner that predates the field
+    /// ignores it. Absent when the leaf held no ledger for the claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_review: Option<ClaimedReviewCarry>,
+}
+
+/// Review ledgers a claimed leaf carried home [ORB-16699].
+///
+/// The lineage key stays the string the follower wrote. The owner stores
+/// that same key in its own workspace partition, which is what
+/// `review-reset` looks up. `executor_data_root` is that host's Orbit global
+/// directory and `executor_workspace_id` is the workspace `--workspace`
+/// selects there, so the resume command can name both from any directory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ClaimedReviewCarry {
+    /// Machine that executed the leaf and holds the follower ledger partition.
+    pub executor_machine_id: String,
+    /// That machine's Orbit global data directory.
+    pub executor_data_root: String,
+    /// Logical workspace id `--workspace` resolves on that machine. Empty on
+    /// a carry written before the field existed; the lineage-key prefix is
+    /// the fallback, and it matches this id for a workspace `workspace init`
+    /// bound.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub executor_workspace_id: String,
+    pub ledgers: Vec<ReviewLedger>,
 }
 
 /// [ORB-15570] A pull request a claimed leaf opened, by number and head

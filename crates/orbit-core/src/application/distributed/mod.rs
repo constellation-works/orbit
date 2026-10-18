@@ -41,6 +41,7 @@
 
 mod auth_failures;
 mod auth_recovery;
+mod claimed_review;
 mod contract;
 mod entry;
 mod final_recovery;

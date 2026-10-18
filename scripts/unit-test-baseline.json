@@ -224,6 +224,8 @@
         "application/pull_drain/drain/tests/breaker.rs::an_open_breaker_half_opens_after_its_cooldown_and_a_failed_probe_doubles_it",
         "application/pull_drain/tests/drain.rs::a_launch_failure_adopts_a_concurrent_settlement_and_retries_queued_cancellation",
         "application/pull_drain/tests/drain.rs::a_post_spawn_error_keeps_launch_intent_and_never_releases_pending_work",
+        "application/pull_drain/tests/drain.rs::claimed_leaf_settlement_carries_its_review_ledger",
+        "application/pull_drain/tests/drain.rs::claimed_review_import_keeps_an_operator_decision",
         "application/pull_drain/tests/drain.rs::pull_admission_stop_mid_pass_ends_it_before_the_next_request",
         "application/pull_drain/tests/drain.rs::pull_claimed_local_leaf_resumes_and_keeps_its_committed_candidate",
         "application/pull_drain/tests/drain.rs::pull_lost_request_and_binding_responses_recover_the_same_leaf",
