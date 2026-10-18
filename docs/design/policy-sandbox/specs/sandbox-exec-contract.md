@@ -56,12 +56,12 @@ A strategy that confines the process overrides `Sandbox::spawn`; returning `Ok` 
 
 - `success` reflects the child's exit status (clean exit with zero status). Timeouts and parent-signal exits report `success = false`.
 - `stdout` and `stderr` are `String::from_utf8_lossy` conversions of the captured bytes. Non-UTF-8 output is preserved as replacement characters.
-- `duration_ms` is wall-clock time from `Instant::now()` at spawn entry to spawn return.
+- `duration_ms` is wall-clock time from `Instant::now()` before the guarded spawn through supervision and cleanup, including the pipe-worker drain.
 - `output` is reserved for callers that want to attach a parsed-output payload after the fact; `run_process` itself does not populate it.
 
 ## Failure Modes
 
-- **Spawn failure.** `OrbitError::Execution("failed to spawn …")` — caller cannot retry without changing the request.
+- **Spawn failure.** `OrbitError::Execution("failed to spawn …")` — the runner returns the error without retrying; retry policy belongs to the caller.
 - **Stdin write failure.** Writer-thread error → child terminated → `OrbitError::Execution(<error>)` returned. Captured stdout/stderr up to that point are discarded.
 - **Stdin writer panic.** Writer-thread panic → `OrbitError::Execution("stdin writer thread panicked")` returned.
 - **Signal handler install failure.** If `sigaction` fails for SIGINT or SIGTERM, the guard rolls back any partial install and `run_process` returns `OrbitError::Execution(<error>)` before entering the wait loop.
@@ -79,7 +79,7 @@ A strategy that confines the process overrides `Sandbox::spawn`; returning `Ok` 
 ## Migration Rules
 
 - New `ExecRequest` fields must default to a backwards-compatible behavior; `EnvironmentMode::default()` and `StdinMode::default()` exist precisely so callers can adopt new fields incrementally.
-- The current `Sandbox` trait only exposes request validation. Adding live confinement requires an explicit confined-spawn seam or platform wrapper before untrusted code runs; returning successfully from `validate` alone cannot establish that boundary.
+- The current `Sandbox` trait exposes request validation and a `spawn` seam whose default creates an unconfined child. A strategy that adds live confinement must override `spawn` or use a platform wrapper before untrusted code runs; returning successfully from `validate` alone cannot establish that boundary.
 - Changes to `TERMINATION_GRACE_PERIOD`, `WAIT_POLL_INTERVAL`, or `DRAIN_BUDGET` require updated current documentation and behavior tests because these constants are observable in timeout/cancel behavior.
 
 ## Agent Signature

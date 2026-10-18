@@ -18,9 +18,10 @@ related_artifacts: [ORB-15722]
 
 > **Status: Migration landed.** Steps 1–7 of the migration in
 > [2_design.md](./2_design.md#5-migration-order) are merged (ORB-15826 through
-> ORB-15832). Every caller listed in the inventory now runs through the single
-> supervisor in `orbit-common`. The steps are kept as the record of how the
-> supervisors converged.
+> ORB-15832). The run-to-completion callers listed in the inventory now run
+> through the single supervisor in `orbit-common`. Long-lived plugin MCP
+> sessions share its `OwnedChild` ownership handle but keep their request loop.
+> The steps are kept as the record of how the supervisors converged.
 
 Orbit runs child processes that must not outlive their deadline, block on a
 full pipe, or leave descendants behind: Git, `gh`, `ps`, plugin backends,
@@ -33,7 +34,8 @@ that converged the rest onto it.
 
 ## 1. Motivation
 
-These were the problems the migration fixed.
+These problems motivated the migration. Caller-specific termination grace,
+capture policies and signal interception remain distinct on the shared supervisor.
 
 - **Leaks on failure paths.** Only `orbit-exec`'s `SupervisedChild` killed
   and reaped on `Drop`. The bounded runner in `orbit-common` returned early
