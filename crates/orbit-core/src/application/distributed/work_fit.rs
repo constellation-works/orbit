@@ -95,7 +95,7 @@ impl PullWorkFit {
         if let Some(receipt) = receipt
             && let Some(request) = runtime.pulled_claim_reservation(receipt)?
         {
-            self.accuracy.admit(&request.lookup);
+            self.accuracy.admit(&request.task_id, &request.lookup);
             admitted.push(request.task_id);
         }
         runtime.record_admission_forecast(&AdmissionForecastRecord {
@@ -105,6 +105,9 @@ impl PullWorkFit {
             mode: self.record.mode,
             cpu_count: self.accuracy.cpu_count,
             memory_total_bytes: self.accuracy.memory_total_bytes,
+            baseline_cpu_cores: Some(self.accuracy.baseline_cpu_cores),
+            baseline_memory_bytes: Some(self.accuracy.baseline_memory_bytes),
+            covered_deliveries: Some(self.accuracy.covered_deliveries.clone()),
             points: self.accuracy.into_points(),
             admitted,
             fit_admitted: Vec::new(),

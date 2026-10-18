@@ -1,6 +1,6 @@
 ---
 type: runbook
-summary: Select an admission forecast cohort and separate idle unsampled minutes, unrecordable partial minutes, and sampling gaps without changing host policy.
+summary: Select a forecast cohort, compare raw and attributed errors, and distinguish idle, partial and missing measurements without changing host policy.
 ---
 
 # Evaluate a forecast cohort
@@ -78,12 +78,44 @@ budgets, thresholds, profiles or persistent settings.
    `MISSING`. JSON adds `unsampled`, `partial` and `gap` beside `missing`. Not every forecast
    necessarily records every offset (the configured horizon can cap it).
    An empty cohort has zero counts, empty pairs/drains and null errors.
-5. Retain the raw pairs and the separate configuration evidence for live
-   post-deploy evaluation. Error stays forecast minus measured: negative
-   means under-forecast. Compare like cohorts and wait for target minutes
-   to mature before judging them. Resource profiles from `orbit run profiles`
-   describe a separate per-delivery population; sparse deliveries and wide
-   spread remain limits on confidence, regardless of host-forecast pair count.
+5. Compare raw and attributed errors at each mature offset. Error stays
+   forecast minus comparator: negative means under-forecast. Raw `cpu` and
+   `memory` summaries compare against the measured whole host, including
+   deliveries admitted after `forecast_at`. Attributed summaries compare
+   against the baseline saved by the forecast plus only the measured load
+   of deliveries it covered: running deliveries, outstanding reservations,
+   and admissions from that pass (including returned pull claims). For
+   example, a 5-core forecast with a 1-core baseline and 3 cores of covered
+   load has attributed error +1; if later deliveries add 5 cores, the raw
+   host error is -4. The latter alone cannot diagnose the forecast model.
+
+   JSON `attributed_cpu` and `attributed_memory` each expose `mean_error`,
+   `mean_absolute_error`, `under_rate` and `worst_miss`, beside the existing
+   raw summaries. Text shows `ATTR_CPU_MEAN_ERR`, `ATTR_CPU_MAE`,
+   `ATTR_CPU_UNDER`, `ATTR_CPU_WORST` and corresponding `ATTR_MEM_*`
+   columns; raw MAE is `CPU_MAE` / `MEM_MAE`. `ATTR_PAIRS` (JSON
+   `attributed_paired`) is the attributed denominator. Historical forecasts
+   without the nullable baseline/cohort metadata still form raw pairs,
+   but never contribute to attributed summaries; those summaries are null
+   (text `-`) when no attributed pairs exist. Pair-level JSON adds nullable
+   `attributed_cpu_cores` and `attributed_memory_bytes`, the comparator values.
+
+   Run minutes are weighted by their sampled overlap with the UTC host
+   minute and clipped at the next run minute and recorded run finish.
+   Memory is an overlap-weighted sum of worker peaks, not a synchronized
+   host peak. Known runs and continuations of their admission are covered;
+   reservations resolve to their first measured admission, excluding later
+   re-admissions of the same workspace/task. A covered delivery with no
+   measurement adds no observed load. `ATTR_PAIRS` confirms recorded
+   attribution metadata, not complete worker sampling. Inspect gaps or
+   sparse worker measurements before tuning. The fixed baseline excludes
+   later non-delivery host changes as well as later admissions.
+
+   Retain raw pairs and separate configuration evidence for live post-deploy
+   evaluation. Compare like cohorts and wait for target minutes to mature.
+   Resource profiles from `orbit run profiles` describe a separate per-delivery
+   population; sparse deliveries and wide spread remain limits on confidence,
+   regardless of host-forecast pair count.
 6. Read the per-drain decision columns on that same selection. Shadow
    columns count shadow passes only: `ADMITTED`, `WOULD_HOLD`, `WOULD_ADD`
    and `PULL_WOULD_HOLD`. Enforce columns count enforce passes only.

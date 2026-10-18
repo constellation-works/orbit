@@ -196,3 +196,45 @@ fn actor_backfills_stamp_the_map_and_preserve_roles_and_current_rows() {
 
 #[path = "migration_freeze/ledger.rs"]
 mod ledger;
+
+#[test]
+fn forecast_attribution_migrates_legacy_rows_and_reopens_idempotently() {
+    if !migration_freeze_isolated(
+        "forecast_attribution_migrates_legacy_rows_and_reopens_idempotently",
+    ) {
+        return;
+    }
+    use orbit_store::contracts::ResourceUsageStoreBackend;
+    let path = std::env::current_dir().unwrap().join("attribution.sqlite");
+    drop(Store::open(&path).unwrap());
+    let conn = Connection::open(&path).unwrap();
+    rewind(&conn, 53);
+    conn.execute_batch(
+        "ALTER TABLE admission_forecasts DROP COLUMN baseline_cpu_cores;
+         ALTER TABLE admission_forecasts DROP COLUMN baseline_memory_bytes;
+         ALTER TABLE admission_forecasts DROP COLUMN covered_deliveries_json;
+         INSERT INTO admission_forecasts (
+             workspace_id, run_id, forecast_at, mode, points_json,
+             admitted_json, fit_admitted_json, fit_skipped_json
+         ) VALUES ('ws_old', 'drain-old', '2026-10-17T00:00:00.000000Z', 'shadow',
+                   '[{\"offset_minutes\":5,\"cpu_cores\":2.0,\"memory_bytes\":4096}]',
+                   '[]', '[]', '[]');",
+    ).unwrap();
+    drop(conn);
+    let since = "2026-10-16T00:00:00Z".parse().unwrap();
+    for _ in 0..2 {
+        let store = Store::open(&path).unwrap();
+        let records = store.admission_forecasts(since).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].points[0].cpu_cores, 2.0);
+        assert_eq!(records[0].baseline_cpu_cores, None);
+        assert_eq!(records[0].baseline_memory_bytes, None);
+        assert_eq!(records[0].covered_deliveries, None);
+        drop(store);
+        // Replaying the additive migration with its columns already present
+        // must preserve legacy evidence too.
+        let conn = Connection::open(&path).unwrap();
+        rewind(&conn, 53);
+    }
+    drop(Store::open(&path).unwrap());
+}

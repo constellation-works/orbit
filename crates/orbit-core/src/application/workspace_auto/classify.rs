@@ -799,7 +799,7 @@ fn record_admission_forecast(
     };
     let result = runtime.workspace_id().and_then(|workspace_id| {
         for task in admitted.iter().filter_map(|task_id| tasks.get(task_id)) {
-            forecast.admit(&task_lookup(&workspace_id, task));
+            forecast.admit(&task.id, &task_lookup(&workspace_id, task));
         }
         runtime.record_admission_forecast(&AdmissionForecastRecord {
             workspace_id,
@@ -808,6 +808,9 @@ fn record_admission_forecast(
             mode: record.mode.clone(),
             cpu_count: forecast.cpu_count,
             memory_total_bytes: forecast.memory_total_bytes,
+            baseline_cpu_cores: Some(forecast.baseline_cpu_cores),
+            baseline_memory_bytes: Some(forecast.baseline_memory_bytes),
+            covered_deliveries: Some(forecast.covered_deliveries.clone()),
             points: forecast.into_points(),
             admitted: admitted.to_vec(),
             pull: None,

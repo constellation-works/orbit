@@ -233,11 +233,22 @@ fn accuracy(
         Column::new("PARTIAL").fixed(),
         Column::new("GAP").fixed(),
         Column::new("CPU_MEAN_ERR").fixed(),
+        Column::new("CPU_MAE").fixed(),
         Column::new("CPU_UNDER").fixed(),
         Column::new("CPU_WORST").fixed(),
         Column::new("MEM_MEAN_ERR").fixed(),
+        Column::new("MEM_MAE").fixed(),
         Column::new("MEM_UNDER").fixed(),
-        Column::new("MEM_WORST"),
+        Column::new("MEM_WORST").fixed(),
+        Column::new("ATTR_PAIRS").fixed(),
+        Column::new("ATTR_CPU_MEAN_ERR").fixed(),
+        Column::new("ATTR_CPU_MAE").fixed(),
+        Column::new("ATTR_CPU_UNDER").fixed(),
+        Column::new("ATTR_CPU_WORST").fixed(),
+        Column::new("ATTR_MEM_MEAN_ERR").fixed(),
+        Column::new("ATTR_MEM_MAE").fixed(),
+        Column::new("ATTR_MEM_UNDER").fixed(),
+        Column::new("ATTR_MEM_WORST"),
     ]);
     for offset in &report.offsets {
         let mut row = vec![
@@ -257,6 +268,13 @@ fn accuracy(
             format!("{cores:+.1} cores")
         }));
         row.extend(error_cells(&offset.memory, |bytes| {
+            format!("{:+.1} GiB", bytes / GIB)
+        }));
+        row.push(Cell::new(offset.attributed_paired));
+        row.extend(error_cells(&offset.attributed_cpu, |cores| {
+            format!("{cores:+.1} cores")
+        }));
+        row.extend(error_cells(&offset.attributed_memory, |bytes| {
             format!("{:+.1} GiB", bytes / GIB)
         }));
         offsets.add_row(row);
@@ -316,18 +334,20 @@ fn summary(report: &ForecastAccuracy) -> String {
     )
 }
 
-/// Mean error, under-forecast rate and worst miss, or `-` without pairs.
+/// Mean error, MAE, under-forecast rate and worst miss, or `-` without pairs.
 fn error_cells(summary: &ErrorSummary, value: impl Fn(f64) -> String) -> Vec<comfy_table::Cell> {
     use comfy_table::Cell;
-    let (Some(mean), Some(under), Some(worst)) = (
+    let (Some(mean), Some(mae), Some(under), Some(worst)) = (
         summary.mean_error,
+        summary.mean_absolute_error,
         summary.under_rate,
         summary.worst_miss.as_ref(),
     ) else {
-        return vec![Cell::new("-"), Cell::new("-"), Cell::new("-")];
+        return vec![Cell::new("-"); 4];
     };
     vec![
         Cell::new(value(mean)),
+        Cell::new(value(mae)),
         Cell::new(format!("{:.0}%", under * 100.0)),
         Cell::new(format!(
             "{} at {}",

@@ -28,11 +28,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Duration, DurationRound, Utc};
-use orbit_store::contracts::{AdmissionForecastRecord, DeliveryRunInterval, HostResourceMinute};
+use orbit_store::contracts::{
+    AdmissionForecastRecord, DeliveryRunInterval, DeliveryRunResources, HostResourceMinute,
+};
 use serde::Serialize;
 
 use super::forecast::ACCURACY_OFFSETS;
 use super::profile::PROFILE_HISTORY_DAYS;
+
+mod attribution;
 
 const SHADOW: &str = "shadow";
 
@@ -101,6 +105,11 @@ pub struct OffsetAccuracy {
     pub cpu: ErrorSummary,
     /// In bytes.
     pub memory: ErrorSummary,
+    /// Raw pairs with recorded attribution metadata (legacy rows excluded).
+    pub attributed_paired: u64,
+    /// Forecast minus (baseline-at-forecast plus covered deliveries' measured load).
+    pub attributed_cpu: ErrorSummary,
+    pub attributed_memory: ErrorSummary,
 }
 
 /// Forecast errors over one offset's pairs; every field is `None` without
@@ -142,6 +151,10 @@ pub struct ForecastPair {
     pub measured_cpu_cores: f64,
     pub forecast_memory_bytes: u64,
     pub measured_memory_bytes: u64,
+    /// Baseline-at-forecast plus only the covered deliveries' measured load.
+    /// Absent when the forecast predates attribution recording.
+    pub attributed_cpu_cores: Option<f64>,
+    pub attributed_memory_bytes: Option<f64>,
 }
 
 /// One drain's shadow and enforce decisions against what it admitted.
@@ -182,9 +195,11 @@ pub(crate) fn forecast_accuracy(
     records: &[AdmissionForecastRecord],
     minutes: &[HostResourceMinute],
     deliveries: &[DeliveryRunInterval],
+    resources: &[DeliveryRunResources],
     selection: AccuracySelection,
     report_at: DateTime<Utc>,
 ) -> ForecastAccuracy {
+    let attribution = attribution::Attribution::new(resources);
     let measured: BTreeMap<DateTime<Utc>, &HostResourceMinute> = minutes
         .iter()
         .map(|minute| (minute.minute_at, minute))
@@ -214,6 +229,7 @@ pub(crate) fn forecast_accuracy(
                 *bucket.entry(point.offset_minutes).or_default() += 1;
                 continue;
             };
+            let attributed = attribution.measured(record, minute_at);
             pairs.push(ForecastPair {
                 workspace_id: record.workspace_id.clone(),
                 run_id: record.run_id.clone(),
@@ -225,6 +241,8 @@ pub(crate) fn forecast_accuracy(
                 measured_cpu_cores: host.cpu_cores,
                 forecast_memory_bytes: point.memory_bytes,
                 measured_memory_bytes: host.memory_bytes,
+                attributed_cpu_cores: attributed.map(|load| load.0),
+                attributed_memory_bytes: attributed.map(|load| load.1),
             });
         }
     }
@@ -247,6 +265,13 @@ pub(crate) fn forecast_accuracy(
             let partial = partial.get(&offset).copied().unwrap_or(0);
             let gap = gap.get(&offset).copied().unwrap_or(0);
             let missing = unsampled + partial + gap;
+            let attributed: Vec<&ForecastPair> = at_offset
+                .iter()
+                .copied()
+                .filter(|pair| {
+                    pair.attributed_cpu_cores.is_some() && pair.attributed_memory_bytes.is_some()
+                })
+                .collect();
             OffsetAccuracy {
                 offset_minutes: offset,
                 paired: at_offset.len() as u64,
@@ -256,6 +281,19 @@ pub(crate) fn forecast_accuracy(
                 unsampled,
                 partial,
                 gap,
+                attributed_paired: attributed.len() as u64,
+                attributed_cpu: summarize(&attributed, |pair| {
+                    (
+                        pair.forecast_cpu_cores,
+                        pair.attributed_cpu_cores.unwrap_or_default(),
+                    )
+                }),
+                attributed_memory: summarize(&attributed, |pair| {
+                    (
+                        pair.forecast_memory_bytes as f64,
+                        pair.attributed_memory_bytes.unwrap_or_default(),
+                    )
+                }),
                 cpu: summarize(&at_offset, |pair| {
                     (pair.forecast_cpu_cores, pair.measured_cpu_cores)
                 }),

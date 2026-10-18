@@ -41,6 +41,9 @@ fn unfinished_minutes_stay_pending_and_only_mature_measurements_form_pairs() {
                     mode: "shadow".into(),
                     cpu_count: Some(16),
                     memory_total_bytes: Some(32_000),
+                    baseline_cpu_cores: None,
+                    baseline_memory_bytes: None,
+                    covered_deliveries: None,
                     points: vec![AdmissionForecastPoint {
                         offset_minutes: offset,
                         cpu_cores: 4.0,
