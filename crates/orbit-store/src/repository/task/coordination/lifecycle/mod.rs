@@ -12,6 +12,7 @@ mod inspect;
 mod mutate;
 mod releases;
 mod retention;
+mod steering;
 
 #[cfg(test)]
 pub(super) use codec::STATE_DECODES;

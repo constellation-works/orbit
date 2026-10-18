@@ -35,6 +35,6 @@ pub use recovery::{
     FinalRecoveryKey, FinalRecoveryObservedTask, FinalRecoveryRepairCommit, FinalRecoveryResume,
 };
 pub use steering::{
-    CommentLogMark, STEERING_UNCONSUMED_EVENT, STEERING_UNCONSUMED_MARKER, SteeringRound,
-    SteeringWatermark, StepSteeringSnapshot,
+    CommentLogMark, STEERING_DELIVERED_EVENT, STEERING_UNCONSUMED_EVENT,
+    STEERING_UNCONSUMED_MARKER, SteeringRound, SteeringWatermark, StepSteeringSnapshot,
 };

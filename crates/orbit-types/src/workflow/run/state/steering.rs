@@ -6,6 +6,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// Task history event recording that a prompt carried a steering block. Its
+/// note names the run, the step, the comments it carried in full
+/// (`delivered`) and those it could only cut down (`truncated`); a claimed
+/// leaf's, which its owner records, also names the claim and the machine
+/// that ran it.
+pub const STEERING_DELIVERED_EVENT: &str = "steering_delivered";
+
 /// Task history event, and the bracketed marker of its run's failure, for a
 /// task the promotion gate blocked because operator steering stayed
 /// undelivered after the run's steering rounds.

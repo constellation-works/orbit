@@ -205,7 +205,7 @@ impl TaskCommitBoundary {
     /// run, with the task in the status the claim's phase implies. Every claim
     /// mutation and every worker read fence stands on exactly these checks.
     /// `recovering` admits a failed claim for an operator's recovery.
-    fn claim_authority(
+    pub(super) fn claim_authority(
         &self,
         auth: &ClaimInvocation,
         recovering: bool,
@@ -344,9 +344,55 @@ impl TaskCommitBoundary {
         let mut evidence = ClaimEvidence::default();
         let mut binding = None;
         let mut release = false;
+        // A steering snapshot changes only the claim's own record, so it
+        // writes no task history event.
+        let mut history_event = true;
         let mut handoff_effects = ClaimCommitEffects::default();
         hold_step(DECISION_STEP, || -> Result<(), OrbitError> {
             match mutation {
+                ClaimMutation::Steering(record) => {
+                    if auth.operator || claim.phase != ExecutionClaimPhase::Running {
+                        return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
+                    }
+                    let run_id = state
+                        .bound_run
+                        .as_ref()
+                        .map(|run| run.run_id.clone())
+                        .ok_or_else(|| invalid("claim binding is inconsistent with phase"))?;
+                    let watermark = state.steering.get_or_insert_with(Default::default);
+                    match record {
+                        ClaimSteeringRecord::Snapshot {
+                            step_id,
+                            newest,
+                            built_at,
+                        } => {
+                            watermark.record(step_id, *newest, *built_at);
+                            history_event = false;
+                        }
+                        ClaimSteeringRecord::Delivery {
+                            step_id,
+                            through,
+                            delivered,
+                            truncated,
+                            built_at,
+                        } => {
+                            watermark.record_delivery(step_id, *through, delivered, *built_at);
+                            params.status_note = Some(
+                                serde_json::json!({
+                                    "run_id": run_id,
+                                    "step_id": step_id,
+                                    "delivered": delivered,
+                                    "truncated": truncated,
+                                    "claim_id": claim.claim_id,
+                                    "machine_id": auth.machine_id,
+                                })
+                                .to_string(),
+                            );
+                            state.last_event =
+                                orbit_types::workflow::STEERING_DELIVERED_EVENT.into();
+                        }
+                    }
+                }
                 ClaimMutation::Update(value) => {
                     if auth.operator
                         || !matches!(
@@ -830,7 +876,7 @@ impl TaskCommitBoundary {
         })?;
         state.updated_at = Utc::now().to_rfc3339();
         state.age_seconds = None;
-        params.status_event = Some(state.last_event.clone());
+        params.status_event = history_event.then(|| state.last_event.clone());
         let result = ClaimMutationResult {
             claim_id: claim.claim_id.clone(),
             phase: state.claim.phase,

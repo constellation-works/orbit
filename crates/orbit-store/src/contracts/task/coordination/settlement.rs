@@ -233,6 +233,12 @@ pub enum ClaimMutation {
         reason: String,
     },
     Fail(ClaimEvidence),
+    /// Mid-run steering's watermark for the claim's bound leaf run
+    /// (`docs/design/mid-run-steering/2_design.md` §3): the leaf records on
+    /// the owner what each task-context prompt it built carried, so the
+    /// owner's record, never the leaf's replica, is what its promotion gate
+    /// reads. Only the bound leaf may send it, while its claim runs.
+    Steering(ClaimSteeringRecord),
     /// The executor gives an unfinished claim back: the task returns to the
     /// backlog and the claim is revoked. The summary is the reason and is
     /// required; the comment, when present, is posted on the task.
@@ -307,6 +313,51 @@ pub struct ClaimInspection {
     /// [ORB-14439] The failure or release settlement the claim's leaf sent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settlement: Option<ClaimSettlementRecord>,
+    /// Mid-run steering's watermark for the claim's bound leaf run, recorded
+    /// through [`ClaimMutation::Steering`]. It belongs to that run, and every
+    /// settlement keeps it, so a later run continuing the claim's candidate
+    /// starts from it rather than delivering the same comments again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steering: Option<orbit_types::workflow::SteeringWatermark>,
+}
+
+/// What a claimed leaf's task-context prompt carried, as the leaf records it
+/// on its owner through [`ClaimMutation::Steering`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ClaimSteeringRecord {
+    /// The prompt carried no steering block; `newest` is the newest comment
+    /// it included.
+    Snapshot {
+        step_id: String,
+        newest: Option<orbit_types::workflow::CommentLogMark>,
+        built_at: chrono::DateTime<chrono::Utc>,
+    },
+    /// The prompt led with a steering block carrying `delivered` in full and
+    /// cutting `truncated` down. Every operator comment up to `through` has
+    /// now reached one of the run's prompts in full. The owner records a
+    /// `steering_delivered` task history event in the same commit.
+    Delivery {
+        step_id: String,
+        through: Option<orbit_types::workflow::CommentLogMark>,
+        delivered: Vec<orbit_types::workflow::CommentLogMark>,
+        truncated: Vec<orbit_types::workflow::CommentLogMark>,
+        built_at: chrono::DateTime<chrono::Utc>,
+    },
+}
+
+/// A claimed leaf's steering records, read from its owner.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimSteeringReading {
+    /// The watermark the leaf's own claim recorded; absent until its run
+    /// built a task-context prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim: Option<orbit_types::workflow::SteeringWatermark>,
+    /// The watermark of the task's most recent other claim that recorded
+    /// one: the baseline for a leaf that carries that claim's candidate and
+    /// built no prompt of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inherited: Option<orbit_types::workflow::SteeringWatermark>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

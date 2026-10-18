@@ -300,7 +300,7 @@ impl OrbitRuntime {
 
 pub(crate) fn check_worker_host_input(input: &Value, host_call: bool) -> Result<(), OrbitError> {
     if !host_call
-        && ["_worker_read", "_worker_update"]
+        && ["_worker_read", "_worker_update", "_worker_steering"]
             .iter()
             .any(|key| input.get(key).is_some())
     {

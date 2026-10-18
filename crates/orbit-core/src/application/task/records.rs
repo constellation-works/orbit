@@ -221,6 +221,15 @@ impl crate::OrbitRuntime {
         self.stores().tasks().verify_worker_claim(context)
     }
 
+    /// A claimed worker's mid-run steering records, behind the same fence
+    /// as [`Self::verify_worker_claim`].
+    pub(crate) fn worker_claim_steering(
+        &self,
+        context: &orbit_store::contracts::ClaimInvocation,
+    ) -> Result<orbit_store::contracts::ClaimSteeringReading, OrbitError> {
+        self.stores().tasks().worker_claim_steering(context)
+    }
+
     pub fn inspect_execution_claims(
         &self,
     ) -> Result<Vec<orbit_store::contracts::ClaimInspection>, OrbitError> {

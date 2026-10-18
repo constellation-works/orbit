@@ -92,6 +92,21 @@ impl TaskStoreBackend for TaskV2Store {
     ) -> Result<(), OrbitError> {
         self.claim_boundary()?.verify_worker_claim(context)
     }
+    fn worker_claim_steering(
+        &self,
+        context: &crate::contracts::ClaimInvocation,
+    ) -> Result<crate::contracts::ClaimSteeringReading, OrbitError> {
+        self.claim_boundary()?.worker_claim_steering(context)
+    }
+    fn task_claim_steering(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<orbit_types::workflow::SteeringWatermark>, OrbitError> {
+        match self.coordination_boundary() {
+            Some(boundary) => boundary.task_claim_steering(task_id),
+            None => Ok(None),
+        }
+    }
     fn inspect_execution_claims(
         &self,
     ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {

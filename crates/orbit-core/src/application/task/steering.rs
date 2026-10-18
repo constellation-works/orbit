@@ -16,6 +16,15 @@
 //! operator comment past the run's watermark that no block carried in full
 //! is outstanding. Each refusal spends one steering round, recorded on the
 //! run before its agent step is dispatched again.
+//!
+//! A claimed leaf's task record is its owner's, so its watermark is too: the
+//! leaf reads the comment log, its claim's watermark and the baseline its
+//! predecessor claim left from the owner, and records each snapshot and
+//! delivery there through its claim, where settlement keeps them. A comment
+//! only the follower's replica holds is never read, and an owner the leaf
+//! cannot read fails the prompt or the gate rather than certifying a stale
+//! log. Only its steering rounds, the run's own budget, stay in the leaf's
+//! run state.
 
 use std::collections::BTreeSet;
 
@@ -23,18 +32,18 @@ use chrono::SecondsFormat;
 use orbit_common::OrbitError;
 use orbit_common::text::{ceil_char_boundary, floor_char_boundary};
 use orbit_engine::{SteeringGateReading, SteeringRoundAdmission};
-use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, refuses_implementer_writes};
-use orbit_types::workflow::{CommentLogMark, PipelineState, SteeringRound, SteeringWatermark};
+use orbit_store::contracts::{ClaimSteeringReading, ClaimSteeringRecord};
+use orbit_types::task::{
+    Task, TaskComment, TaskHistoryEntry, TaskStatus, refuses_implementer_writes,
+};
+use orbit_types::workflow::{
+    CommentLogMark, PipelineState, STEERING_DELIVERED_EVENT, SteeringRound, SteeringWatermark,
+};
 use serde_json::{Value, json};
 
 use super::SYSTEM_ACTOR_LABEL;
 use super::helpers::is_automation_actor;
 use crate::OrbitRuntime;
-
-/// Task history event recording that a prompt carried a steering block. Its
-/// note names the run, the step, the comments it carried in full
-/// (`delivered`) and those it could only cut down (`truncated`).
-pub(crate) const STEERING_DELIVERED_EVENT: &str = "steering_delivered";
 
 /// Largest steering block text, in bytes. A long comment thread must not
 /// evict the task itself from the prompt; past this the block keeps its head
@@ -67,8 +76,9 @@ impl OrbitRuntime {
     /// context may omit. With a watermark, operator comments past it
     /// that no earlier block carried in full are delivered. A safe point with
     /// none builds the prompt as the snapshot does. A task that refuses
-    /// implementer writes is not steered, since its step is stopping, and
-    /// neither is a claimed leaf; their comments stay undelivered.
+    /// implementer writes is not steered, since its step is stopping; its
+    /// comments stay undelivered. A claimed leaf reads and records through
+    /// its owner, so an owner it cannot reach fails the prompt.
     pub(crate) fn steer_task_prompt(
         &self,
         run_id: &str,
@@ -77,10 +87,7 @@ impl OrbitRuntime {
         comments: &[TaskComment],
     ) -> Result<Option<Value>, OrbitError> {
         let state = self.stores().jobs().read_run_state(run_id)?;
-        let mut watermark = state
-            .as_ref()
-            .and_then(|state| state.steering_watermarks.get(&task.id))
-            .cloned();
+        let mut watermark = self.steering_watermark(&task.id, state.as_ref())?;
         let pending = if let Some(watermark) = &watermark {
             pending_operator_comments(watermark, comments)
         } else if state.as_ref().is_some_and(|state| {
@@ -109,16 +116,12 @@ impl OrbitRuntime {
             Vec::new()
         };
         let Some(watermark) = watermark.filter(|_| !pending.is_empty()) else {
-            let newest = newest_mark(comments);
-            self.update_steering_watermark(run_id, |state| {
-                state.record_steering_snapshot(&task.id, step_id, newest);
-            })?;
+            self.record_steering_snapshot(run_id, &task.id, step_id, newest_mark(comments))?;
             return Ok(None);
         };
-        // A stopping step gets no steering, and a claimed leaf's task record
-        // is the owner's, so delivery there waits for owner-routed steering.
-        // Either way the comments stay undelivered.
-        if refuses_implementer_writes(task.status) || self.worker_invocation().is_some() {
+        // A stopping step gets no steering, and its comments stay
+        // undelivered.
+        if refuses_implementer_writes(task.status) {
             return Ok(None);
         }
 
@@ -138,32 +141,7 @@ impl OrbitRuntime {
                 .and_then(|position| comment_mark(comments, usize::try_from(position).ok()?)),
             None => newest_mark(comments),
         };
-
-        // The event goes first: if the watermark write then fails, the prompt
-        // is never sent and the next safe point delivers again, rather than a
-        // recorded watermark hiding a comment no prompt carried.
-        let note = json!({
-            "run_id": run_id,
-            "step_id": step_id,
-            "delivered": delivered,
-            "truncated": truncated,
-        });
-        self.append_system_history(
-            &task.id,
-            vec![TaskHistoryEntry {
-                at: chrono::Utc::now(),
-                by: SYSTEM_ACTOR_LABEL.to_string(),
-                event: STEERING_DELIVERED_EVENT.to_string(),
-                note: Some(note.to_string()),
-                from_status: None,
-                to_status: None,
-                operation_id: None,
-                decision: None,
-            }],
-        )?;
-        self.update_steering_watermark(run_id, |state| {
-            state.record_steering_delivery(&task.id, step_id, through, &delivered);
-        })?;
+        self.record_steering_delivery(run_id, &task.id, step_id, through, &delivered, &truncated)?;
 
         Ok(Some(json!({
             "label": STEERING_LABEL,
@@ -176,8 +154,8 @@ impl OrbitRuntime {
     /// The promotion gate's reading of `task_id` for `run_id`, from the task,
     /// its comment log and the run's state as they are now.
     ///
-    /// Off, nothing is read. A claimed leaf refuses: its comment log is a
-    /// replica of the owner's, which this gate never certifies. Any record it
+    /// Off, nothing is read. A claimed leaf reads the task, its comment log
+    /// and its watermark from the owner, never its replica. Any record it
     /// cannot read is an error, so the gate fails closed. A comment written
     /// after this read is the next gate's or run's steering.
     pub(crate) fn steering_gate_reading(
@@ -188,13 +166,23 @@ impl OrbitRuntime {
         if !self.mid_run_steering().enabled {
             return Ok(SteeringGateReading::Disabled);
         }
-        if self.worker_invocation().is_some() {
-            return Err(OrbitError::Execution(format!(
-                "the promotion gate reads task {task_id}'s comment log from its owner, and a \
-                 claimed leaf cannot reach the owner's record here; its replica is never \
-                 certified"
-            )));
+        let reading = self.read_steering_gate(run_id, task_id);
+        if self.worker_invocation().is_none() {
+            return reading;
         }
+        reading.map_err(|error| {
+            OrbitError::Execution(format!(
+                "a claimed leaf reads task {task_id}'s comment log and steering watermark from \
+                 its owner, which could not answer ({error}); its replica is never certified"
+            ))
+        })
+    }
+
+    fn read_steering_gate(
+        &self,
+        run_id: &str,
+        task_id: &str,
+    ) -> Result<SteeringGateReading, OrbitError> {
         let task = self.get_task(task_id)?;
         let comments = self.get_task_comments(task_id)?;
         let state = self
@@ -204,29 +192,22 @@ impl OrbitRuntime {
             .ok_or_else(|| {
                 OrbitError::Execution(format!("run {run_id} has no pipeline state to gate"))
             })?;
-        let outstanding = match state.steering_watermarks.get(task_id) {
-            Some(watermark) => pending_operator_comments(watermark, &comments)
+        let outstanding = match self.steering_watermark(task_id, Some(&state))? {
+            Some(watermark) => pending_operator_comments(&watermark, &comments)
                 .into_iter()
                 .map(|comment| comment.mark)
                 .collect(),
             None => self.inherited_outstanding(run_id, task_id, &comments)?,
         };
-        Ok(if refuses_implementer_writes(task.status) {
-            SteeringGateReading::Terminal {
-                status: task.status,
-                outstanding,
-            }
-        } else if outstanding.is_empty() {
-            SteeringGateReading::Clear
-        } else {
-            SteeringGateReading::Outstanding(outstanding)
-        })
+        Ok(gate_verdict(task.status, outstanding))
     }
 
     /// Outstanding steering for a run that built no prompt for the task, such
     /// as a resume whose implement step was already checkpointed. Its
     /// candidate came from the nearest run of its resume lineage that did, so
-    /// that run's watermark is the baseline. Without one, every operator
+    /// that run's watermark is the baseline. Past the lineage, the watermark
+    /// the task's most recent claim kept through its settlement is, since the
+    /// run carries that claim's candidate. Without either, every operator
     /// comment written after the lineage started is outstanding.
     fn inherited_outstanding(
         &self,
@@ -240,19 +221,26 @@ impl OrbitRuntime {
                 OrbitError::Execution(format!("run {run_id} has no run record to gate"))
             })
         };
+        let pending = |watermark: &SteeringWatermark| {
+            pending_operator_comments(watermark, comments)
+                .into_iter()
+                .map(|comment| comment.mark)
+                .collect()
+        };
+        // A claimed leaf's prompts record on its owner, never in this
+        // machine's run state.
+        let claimed = self.worker_invocation().is_some();
         let mut run = record(run_id)?;
         for _ in 0..MAX_LINEAGE_HOPS {
             let Some(source) = run.retry_source_run_id.clone() else {
                 break;
             };
-            if let Some(watermark) = jobs
-                .read_run_state(&source)?
-                .and_then(|mut state| state.steering_watermarks.remove(task_id))
+            if !claimed
+                && let Some(watermark) = jobs
+                    .read_run_state(&source)?
+                    .and_then(|mut state| state.steering_watermarks.remove(task_id))
             {
-                return Ok(pending_operator_comments(&watermark, comments)
-                    .into_iter()
-                    .map(|comment| comment.mark)
-                    .collect());
+                return Ok(pending(&watermark));
             }
             run = record(&source)?;
         }
@@ -263,6 +251,14 @@ impl OrbitRuntime {
                  dispatch timestamp that could omit undelivered comments"
             )));
         }
+        let claim_baseline = if claimed {
+            self.owner_claim_steering(task_id)?.inherited
+        } else {
+            self.stores().tasks().task_claim_steering(task_id)?
+        };
+        if let Some(watermark) = claim_baseline {
+            return Ok(pending(&watermark));
+        }
         let started = run.started_at.unwrap_or(run.created_at);
         Ok(comments
             .iter()
@@ -270,6 +266,115 @@ impl OrbitRuntime {
             .filter(|(_, comment)| comment.at > started && !is_automation_actor(&comment.by))
             .filter_map(|(position, _)| comment_mark(comments, position))
             .collect())
+    }
+
+    /// `task_id`'s steering watermark for the run whose state is `state`: the
+    /// run's own, or for a claimed leaf the one its owner holds for its
+    /// claim.
+    fn steering_watermark(
+        &self,
+        task_id: &str,
+        state: Option<&PipelineState>,
+    ) -> Result<Option<SteeringWatermark>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return Ok(self.owner_claim_steering(task_id)?.claim);
+        }
+        Ok(state.and_then(|state| state.steering_watermarks.get(task_id).cloned()))
+    }
+
+    /// A claimed leaf's steering records, read from its owner.
+    fn owner_claim_steering(&self, task_id: &str) -> Result<ClaimSteeringReading, OrbitError> {
+        self.read_owner_request(json!({"id": task_id, "_worker_read": "steering"}))
+    }
+
+    /// Record that `step_id` built a prompt for `task_id` with no steering
+    /// block, whose newest comment is `newest`.
+    fn record_steering_snapshot(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        step_id: &str,
+        newest: Option<CommentLogMark>,
+    ) -> Result<(), OrbitError> {
+        if self.worker_invocation().is_some() {
+            return self.record_claim_steering(
+                task_id,
+                ClaimSteeringRecord::Snapshot {
+                    step_id: step_id.to_string(),
+                    newest,
+                    built_at: chrono::Utc::now(),
+                },
+            );
+        }
+        self.update_steering_watermark(run_id, |state| {
+            state.record_steering_snapshot(task_id, step_id, newest);
+        })
+    }
+
+    /// Record that `step_id` built a prompt for `task_id` whose steering
+    /// block carried `delivered` in full and cut `truncated` down, and after
+    /// which every operator comment up to `through` reached a prompt in full.
+    fn record_steering_delivery(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        step_id: &str,
+        through: Option<CommentLogMark>,
+        delivered: &[CommentLogMark],
+        truncated: &[CommentLogMark],
+    ) -> Result<(), OrbitError> {
+        // The owner records a claimed leaf's event and watermark in one
+        // commit.
+        if self.worker_invocation().is_some() {
+            return self.record_claim_steering(
+                task_id,
+                ClaimSteeringRecord::Delivery {
+                    step_id: step_id.to_string(),
+                    through,
+                    delivered: delivered.to_vec(),
+                    truncated: truncated.to_vec(),
+                    built_at: chrono::Utc::now(),
+                },
+            );
+        }
+        // The event goes first: if the watermark write then fails, the prompt
+        // is never sent and the next safe point delivers again, rather than a
+        // recorded watermark hiding a comment no prompt carried.
+        let note = json!({
+            "run_id": run_id,
+            "step_id": step_id,
+            "delivered": delivered,
+            "truncated": truncated,
+        });
+        self.append_system_history(
+            task_id,
+            vec![TaskHistoryEntry {
+                at: chrono::Utc::now(),
+                by: SYSTEM_ACTOR_LABEL.to_string(),
+                event: STEERING_DELIVERED_EVENT.to_string(),
+                note: Some(note.to_string()),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            }],
+        )?;
+        self.update_steering_watermark(run_id, |state| {
+            state.record_steering_delivery(task_id, step_id, through, delivered);
+        })
+    }
+
+    /// Record a claimed leaf's steering on its owner, through its claim.
+    fn record_claim_steering(
+        &self,
+        task_id: &str,
+        record: ClaimSteeringRecord,
+    ) -> Result<(), OrbitError> {
+        self.route_worker_host_tool(
+            "orbit.task.update",
+            json!({"id": task_id, "_worker_steering": record}),
+        )
+        .map(|_| ())
     }
 
     /// Admit one more steering round of `run_id` for `task_id`, recording it
@@ -336,6 +441,21 @@ impl OrbitRuntime {
                 Ok(())
             })
             .map(|_| ())
+    }
+}
+
+/// The gate's verdict on `outstanding` for a task in `status`: terminal
+/// handling wins over steering.
+fn gate_verdict(status: TaskStatus, outstanding: Vec<CommentLogMark>) -> SteeringGateReading {
+    if refuses_implementer_writes(status) {
+        SteeringGateReading::Terminal {
+            status,
+            outstanding,
+        }
+    } else if outstanding.is_empty() {
+        SteeringGateReading::Clear
+    } else {
+        SteeringGateReading::Outstanding(outstanding)
     }
 }
 
