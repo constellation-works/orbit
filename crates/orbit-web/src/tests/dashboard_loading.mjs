@@ -19,7 +19,7 @@ let shipLive = false;
 let shipRequests = 0;
 const pendingShips = [];
 let terminalRunFixture = false;
-let liveDrain = false;
+const fleetRequests = [];
 let readinessReads = 0;
 let crewReads = 0;
 let summaryReads = 0;
@@ -77,14 +77,21 @@ function fixture(url) {
       crew: 'opus', resolved_crew: 'opus', workspace_id: 'one', workspace_name: 'one',
     }]);
     case '/api/crews': return { default_crew: 'opus', crews: [{ name: 'opus' }] };
+    // The fleet stays visible even when the selected workspace is idle.
+    // Return both rows regardless of the request's selected workspace.
+    case '/api/fleet/drains': {
+      fleetRequests.push(url.pathname + url.search);
+      return { items: ['one', 'two'].map(id => ({
+        workspace_id: id, workspace_name: id, phase: id === 'two' ? 'draining' : 'idle',
+        slots_used: id === 'two' ? 1 : 0, slots_ceiling: 4,
+        eligible_count: id === 'one' ? 2 : 0, holds: [],
+      })) };
+    }
     case '/api/workflows/auto/readiness': return {
       capacity: {
-        active_leaf_runs: liveDrain ? 1 : 0, max_active_leaf_runs: 4, free_slots: liveDrain ? 3 : 4,
-        drain_run_id: liveDrain ? 'jrun-live-fixture' : null,
-        drain_phase: liveDrain ? 'draining' : 'idle',
-        drain_status_run_id: liveDrain ? 'jrun-live-fixture' : null,
-        ends_at: liveDrain ? new Date(Date.now() + 60 * 60 * 1000).toISOString() : null,
-        running_admitted_workers: liveDrain ? 1 : 0, admitted_workers: liveDrain ? 1 : 0,
+        active_leaf_runs: 0, max_active_leaf_runs: 4, free_slots: 4,
+        drain_run_id: null, drain_phase: 'idle', drain_status_run_id: null,
+        ends_at: null, running_admitted_workers: 0, admitted_workers: 0,
       },
       tasks: [],
     };
@@ -311,14 +318,20 @@ await settle();
 // The aggregate list carries each task's crew, but there is no single
 // workspace crew registry to validate it against or edit through.
 heldPath = null;
-liveDrain = true;
 refresh();
 await settle();
-check(node('global-drain-state').textContent.includes('Draining'), 'a live workspace drain appears before switching to aggregate view');
+const fleetIndicator = node('global-drain-state');
+const fleetLabel = () => fleetIndicator.querySelector('.global-drain-label').textContent;
+check(fleetRequests.length > 0, 'the header reads the fleet API');
+check(getWorkspace() === 'one' && node('auto-drain-panel').dataset.drainState === 'idle', 'the selected workspace drain card stays idle');
+check(!fleetIndicator.hidden && fleetIndicator.dataset.drainState === 'draining'
+  && fleetLabel() === 'Draining · 1 of 2', 'the selected workspace header includes the other workspace drain');
+const selectedFleetLabel = fleetLabel();
 const selectedWorkspaceReadinessReads = readinessReads;
 const selectedWorkspaceCrewReads = crewReads;
-setWorkspace(null);
-persistScopeToUrl();
+click(fleetIndicator);
+await settle();
+check(getWorkspace() === null && node('auto-drain-panel').dataset.drainState === 'fleet', 'the header opens the aggregate fleet card');
 check(new URL(window.location.href).searchParams.get('workspace') === 'all', 'aggregate scenario is represented by workspace=all');
 setActiveTab('tasks');
 await settle();
@@ -329,12 +342,23 @@ const aggregateCrewCell = aggregateCrewRow?.querySelector('.crew-cell');
 check(aggregateCrewCell?.textContent === 'opus', `aggregate crew remains visible without a missing label: ${aggregateCrewCell?.textContent}`);
 check(!aggregateCrewCell.querySelector('.task-crew-select'), 'aggregate crew cell does not offer a workspace-scoped edit');
 const aggregateDrainIndicator = node('global-drain-state');
-check(!aggregateDrainIndicator.hidden && aggregateDrainIndicator.textContent.includes('Per-workspace drain status'), 'aggregate header explains that drain status is workspace-scoped');
-check(aggregateDrainIndicator.getAttribute('aria-label').includes('Select a workspace'), 'aggregate drain indicator explains how to inspect live status');
+check(!aggregateDrainIndicator.hidden && fleetLabel() === selectedFleetLabel
+  && aggregateDrainIndicator.dataset.drainState === 'draining', 'aggregate header retains the fleet drain count');
+check(aggregateDrainIndicator.getAttribute('aria-label').includes('Open fleet drains'), 'fleet indicator names its navigation action');
+const fleetRows = [...node('auto-drain-body').querySelectorAll('.fleet-drains tbody tr')]
+  .map(row => [...row.querySelectorAll('td')].map(cell => cell.textContent));
+check(fleetRows.length === 2 && fleetRows[0][1] === 'one' && fleetRows[0][2] === 'idle'
+  && fleetRows[0][4] === '2' && fleetRows[1][1] === 'two' && fleetRows[1][2] === 'draining'
+  && fleetRows[1][3] === '1 / 4', 'aggregate fleet card shows idle eligible work beside the live drain');
 check(readinessReads === selectedWorkspaceReadinessReads, 'aggregate view does not fetch one workspace drain status as if it were global');
 check(crewReads === selectedWorkspaceCrewReads, 'aggregate view does not request a workspace crew registry');
 check(text('rail-count-jobs') === '22', `aggregate Jobs rail shows the fleet total, not the one-item page: ${text('rail-count-jobs')}`);
-liveDrain = false;
+globalThis.fleetScopeEvidence = {
+  source: 'controlled API responses; shipped dashboard assets; no production drain exercised',
+  selected: { workspace: 'one', drainPhase: 'idle', fleetLabel: selectedFleetLabel },
+  aggregate: { workspace: getWorkspace(), fleetLabel: fleetLabel(), rows: fleetRows },
+  requests: [...fleetRequests],
+};
 // The run exists in workspace two. Switching to All workspaces on its detail
 // page must replace the content with a scope prompt and issue no unscoped reads.
 navigateToRun('cross-workspace-run', 'two');
