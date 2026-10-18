@@ -83,9 +83,10 @@ refuses their canonical and advertised spellings before admission or mutation.
 They have no public compatibility aliases.
 
 `internal_drain::public_drain_calls_and_spoofed_initialize_are_refused_and_audited`
-uses production stdio and checks the 30-tool count, both retired spellings,
-operator and managed-agent discovery, spoofed client/initialize claims, denied
-custom RPC and durable refusal audit rows without changing task state.
+uses production stdio and checks that the internal drain tools are absent from
+discovery and refused on public calls, both retired spellings, operator and
+managed-agent discovery, spoofed client/initialize claims, denied custom RPC and
+durable refusal audit rows without changing task state.
 
 `internal_drain::follower_internal_transport_reconciles_lost_admission_and_fences_claims`
 exercises the production `SshDestinationProbe` and server through a disposable
