@@ -65,7 +65,19 @@ impl<'a> Attribution<'a> {
             record.baseline_memory_bytes? as f64,
         );
         let mut counted = BTreeSet::new();
-        for delivery in record.covered_deliveries.as_ref()? {
+        let deliveries = record.covered_deliveries.as_ref()?;
+        // Pull reservations are recorded before the owner returns a task ID.
+        // The forecast row keeps that request identity, while worker samples
+        // use the claimed task ID. Until the report can resolve that mapping,
+        // omit the whole attributed comparison instead of presenting only
+        // the baseline as though it covered the forecast's cohort.
+        if deliveries
+            .iter()
+            .any(|delivery| delivery.task_id.starts_with("pending:"))
+        {
+            return None;
+        }
+        for delivery in deliveries {
             let Some(runs) = self
                 .tasks
                 .get(&(delivery.workspace_id.as_str(), delivery.task_id.as_str()))
