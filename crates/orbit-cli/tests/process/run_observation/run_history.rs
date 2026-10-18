@@ -214,3 +214,114 @@ fn history_filters_before_limit_and_shows_tasks_and_duration() {
         json!([task_id])
     );
 }
+
+#[test]
+fn history_error_column_names_failed_runs_at_the_end_capped() {
+    if !isolated_run_observation(
+        "run_observation::run_history::history_error_column_names_failed_runs_at_the_end_capped",
+    ) {
+        return;
+    }
+    use orbit_types::workflow::{PipelineState, RunRootCause};
+
+    let fixture = Fixture::init();
+    let workspace_id = fixture.workspace_id();
+    let db = fixture.db();
+    let at = (Utc::now() - Duration::hours(1)).to_rfc3339();
+    // A child run that failed on its own, a parent that echoes it, and a held
+    // run with nothing recorded, next to a success.
+    for (id, state) in [
+        ("jrun-error-leaf", "failed"),
+        ("jrun-error-echo", "failed"),
+        ("jrun-error-held", "held"),
+        ("jrun-error-success", "success"),
+    ] {
+        db.execute(
+            "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state,
+                scheduled_at, started_at, finished_at, duration_ms, created_at)
+             VALUES (?1, ?2, 'task_pr_pipeline', 1, ?3, ?4, ?4, ?4, 1200, ?4)",
+            params![id, workspace_id, state, at],
+        )
+        .unwrap();
+    }
+    db.execute(
+        "INSERT INTO job_run_steps (workspace_id, run_id, step_index, target_type, target_id,
+            state, started_at, finished_at, duration_ms, exit_code, error_code, error_message)
+         VALUES (?1, 'jrun-error-leaf', 0, 'activity', 'implement', 'failed', ?2, ?2, 1200, 1,
+            'provider_limit',
+            'provider quota exhausted\nthe claimed leaf stopped before delivery and returns to its owner')",
+        params![workspace_id, at],
+    )
+    .unwrap();
+    let echo = PipelineState {
+        root_cause: Some(RunRootCause {
+            leaf_run_id: "jrun-error-leaf".into(),
+            task_id: None,
+            step: Some("implement".into()),
+            code: Some("provider_limit".into()),
+        }),
+        ..PipelineState::new(
+            "jrun-error-echo".into(),
+            "task_pr_pipeline".into(),
+            json!({}),
+        )
+    };
+    db.execute(
+        "INSERT INTO job_run_states (workspace_id, run_id, pipeline_state_json)
+         VALUES (?1, 'jrun-error-echo', ?2)",
+        params![workspace_id, serde_json::to_string(&echo).unwrap()],
+    )
+    .unwrap();
+
+    let output = fixture
+        .orbit()
+        .args(["run", "history", "--no-reconcile", "--format", "table"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8(output.stdout).unwrap();
+    let header = text.lines().next().unwrap();
+    assert!(header.trim_end().ends_with("DURATION  ERROR"), "{text}");
+    let error_start = header.find("ERROR").unwrap();
+    let row = |id: &str| {
+        text.lines()
+            .find(|line| line.starts_with(id))
+            .unwrap_or_else(|| panic!("no row for {id} in {text}"))
+    };
+    assert_eq!(
+        row("jrun-error-leaf").get(error_start..).unwrap().trim(),
+        "provider_limit: provider quota exhausted the claimed leaf..."
+    );
+    assert_eq!(
+        row("jrun-error-echo").get(error_start..).unwrap().trim(),
+        "root cause jrun-error-leaf at implement (provider_limit)"
+    );
+    for id in ["jrun-error-held", "jrun-error-success"] {
+        assert!(
+            row(id)
+                .get(error_start..)
+                .unwrap_or_default()
+                .trim()
+                .is_empty(),
+            "{id} has no recorded error: {text}"
+        );
+    }
+
+    // Success-only listings keep the original columns.
+    let successes = fixture
+        .orbit()
+        .args([
+            "run",
+            "history",
+            "--no-reconcile",
+            "--format",
+            "table",
+            "--state",
+            "success",
+        ])
+        .output()
+        .unwrap();
+    assert!(successes.status.success(), "{successes:?}");
+    let text = String::from_utf8(successes.stdout).unwrap();
+    assert!(!text.lines().next().unwrap().contains("ERROR"), "{text}");
+}

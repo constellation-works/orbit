@@ -169,12 +169,14 @@ Example after a worker was SIGKILLed mid-step:
 
 ```text
 $ orbit run history --limit 1
-│ RUN_ID                  ROLE        JOB_ID            ATTEMPT   STATE         ERROR_MESSAGE                  │
-│ jrun-20260704-0927-t2   top-level   demo_sleep_long   1         interrupted   job run marked interrupted     │
-│                                                                               because recorded worker        │
-│                                                                               process is no longer alive     │
-│                                                                               (reason=process_not_found, …)  │
+RUN_ID                 ROLE       JOB_ID           ATTEMPT  STATE        ERROR
+jrun-20260704-0927-t2  top-level  demo_sleep_long  1        interrupted  job run marked interrupted because recorded worker proces...
 ```
+
+`ERROR` is the last column. It is present only when a listed run failed, was held, was interrupted,
+or timed out with a recorded root cause or error, and each such row shows that text on one line,
+capped at 60 characters. A run that echoes a root cause shows `root cause <leaf run>` instead of its own
+error; `--json` carries the full records.
 
 `ROLE` reads the run id itself. A directly submitted run and another run's child land in the
 same minute stem, so the marked sequence — `-t2` for the second top-level submission of that
