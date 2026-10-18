@@ -127,7 +127,7 @@ fn darwin_start_and_parent(pid: u32) -> Option<(u64, u32)> {
 pub struct ProcessTreeProcess {
     pub key: ProcessStartKey,
     /// The tree member that listed this process as its child; `None` for the
-    /// root.
+    /// root and for an orphan `SessionTree` adopted from launchd.
     pub parent: Option<ProcessStartKey>,
     /// Own user plus system CPU time, in nanoseconds.
     pub cpu_time_ns: u64,
@@ -166,9 +166,11 @@ pub struct ProcessTreeProcess {
 ///   a later snapshot.
 /// - Alive under the same parent: the walk missed it. It stays tracked, so
 ///   it is neither charged again nor written off.
-/// - Alive under another parent: it was reparented away. What it ran here
-///   stays charged, and nothing in the tree will reap it, so it creates no
-///   debt. Debt it was owed is dropped with it.
+/// - Alive under another parent: it was reparented away. Its last CPU total
+///   stays tracked without a parent or debt, so its exit creates no debt.
+///   If a later snapshot adopts it again (`SessionTree`), only growth since
+///   that last total is charged, not its already charged lifetime. No usage
+///   is charged while it is absent from the snapshots.
 ///
 /// An exited process that has not been waited for stays listed and readable
 /// as a zombie, so one that left the walk had already been reaped before
@@ -249,9 +251,23 @@ impl TreeCpuAccount {
             };
             match locate(key.pid) {
                 Some((now, ppid)) if now == key => {
-                    if tracked.parent.is_some_and(|parent| parent.pid == ppid) {
-                        next.insert(key, tracked);
-                    }
+                    let still_under_parent =
+                        tracked.parent.is_some_and(|parent| parent.pid == ppid);
+                    next.insert(
+                        key,
+                        if still_under_parent {
+                            tracked
+                        } else {
+                            // A reparented child can miss the snapshot's orphan
+                            // scan and reappear later. Preserve its charged CPU
+                            // baseline, but no tree member can reap it anymore.
+                            Tracked {
+                                parent: None,
+                                owed_ns: 0,
+                                ..tracked
+                            }
+                        },
+                    );
                 }
                 _ => {
                     exited.insert(key, tracked);
@@ -332,6 +348,53 @@ pub fn process_tree(root: u32) -> Option<Vec<ProcessTreeProcess>> {
     darwin_tree::snapshot(root)
 }
 
+/// A process tree plus the orphans it left behind, across snapshots.
+///
+/// [`process_tree`] follows parent links, so a descendant leaves it when its
+/// parent exits without waiting for it and launchd adopts it: a build that
+/// outlives the tool shell that started it, or a server that a short-lived
+/// client started. Such an orphan keeps its session, because `setsid` is the
+/// only way out of one and no process can join one, so every member of a
+/// session descends from its leader. Each snapshot therefore also walks the
+/// children of launchd that are in a session the tree leads: the root's own
+/// session when the root is its leader (a pipeline worker calls `setsid`),
+/// and each session a member started (an agent's tool shell). An adopted
+/// orphan has no parent in the snapshot, and its descendants are walked as
+/// usual.
+///
+/// A session stays owned while a snapshot finds one of its members, so an
+/// orphan whose leader has exited is still adopted. macOS allocates pids in
+/// order and never reuses one that names a live session, so a dropped id
+/// cannot come back as another session before the pid space wraps.
+///
+/// Not found: a process that starts its own session after it leaves the tree
+/// (a daemon that forks and calls `setsid`) and everything it starts, a
+/// session whose leader exited between two snapshots without one of them
+/// seeing it or a member, and a member whose parent left its session.
+#[cfg(target_os = "macos")]
+#[derive(Debug)]
+pub struct SessionTree {
+    root: u32,
+    sessions: std::collections::HashSet<u32>,
+}
+
+#[cfg(target_os = "macos")]
+impl SessionTree {
+    pub fn new(root: u32) -> Self {
+        Self {
+            root,
+            sessions: std::collections::HashSet::new(),
+        }
+    }
+
+    /// The tree and its adopted orphans, or `None` under the same rules as
+    /// [`process_tree`], or when launchd's children cannot be listed. A miss
+    /// leaves the owned sessions as they were.
+    pub fn snapshot(&mut self) -> Option<Vec<ProcessTreeProcess>> {
+        darwin_tree::session_snapshot(self.root, &mut self.sessions)
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub(super) mod darwin_tree {
     use std::collections::{HashSet, VecDeque};
@@ -352,6 +415,36 @@ pub(super) mod darwin_tree {
         snapshot_with(root, read_process, child_pids, read_start)
     }
 
+    pub(super) fn session_snapshot(
+        root: u32,
+        sessions: &mut HashSet<u32>,
+    ) -> Option<Vec<ProcessTreeProcess>> {
+        session_snapshot_with(
+            root,
+            sessions,
+            read_process,
+            child_pids,
+            read_start,
+            session_of,
+        )
+    }
+
+    /// launchd, which adopts a process whose parent exits.
+    const LAUNCHD_PID: u32 = 1;
+
+    /// How a queued pid came to be walked, which decides how its read
+    /// failures and its parent are checked.
+    #[derive(Clone, Copy)]
+    enum Listed {
+        /// The walk's root, which must be readable.
+        Root,
+        /// An orphan in an owned session, which must still be launchd's.
+        Orphan,
+        /// A member's child, with the start identity and observed parent
+        /// PID of that member, so reparenting invalidates ownership.
+        By(ProcessStartKey, u32),
+    }
+
     // Kernel reads are injected so exit and reuse between them can be tested
     // without exhausting PIDs or generating host load.
     pub(in crate::process) fn snapshot_with(
@@ -362,30 +455,129 @@ pub(super) mod darwin_tree {
     ) -> Option<Vec<ProcessTreeProcess>> {
         let mut found = Vec::new();
         let mut seen = HashSet::from([root]);
-        // Each queued child carries the start identity and observed parent PID
-        // of the process that listed it, so reparenting invalidates ownership.
-        let mut queue = VecDeque::from([(root, None::<(ProcessStartKey, u32)>)]);
-        while let Some((pid, owner)) = queue.pop_front() {
-            let is_root = owner.is_none();
+        walk(
+            VecDeque::from([(root, Listed::Root)]),
+            &mut found,
+            &mut seen,
+            &mut read_process,
+            &mut child_pids,
+            &mut read_start,
+        )?;
+        Some(found)
+    }
+
+    /// [`snapshot_with`], then the children of launchd in `sessions` or in a
+    /// session a member leads, and their descendants. `sessions` becomes the
+    /// owned sessions this snapshot found a member of.
+    fn session_snapshot_with(
+        root: u32,
+        sessions: &mut HashSet<u32>,
+        mut read_process: impl FnMut(u32) -> Result<(ProcessTreeProcess, u32), ReadError>,
+        mut child_pids: impl FnMut(u32) -> Result<Vec<u32>, ReadError>,
+        mut read_start: impl FnMut(u32) -> Result<(u64, u32), ReadError>,
+        mut session_of: impl FnMut(u32) -> Result<u32, ReadError>,
+    ) -> Option<Vec<ProcessTreeProcess>> {
+        let mut found = Vec::new();
+        let mut seen = HashSet::from([root]);
+        walk(
+            VecDeque::from([(root, Listed::Root)]),
+            &mut found,
+            &mut seen,
+            &mut read_process,
+            &mut child_pids,
+            &mut read_start,
+        )?;
+        let mut owned = sessions.clone();
+        let mut visible = HashSet::new();
+        note_sessions(&found, &mut session_of, &mut owned, &mut visible);
+        let mut orphans = VecDeque::new();
+        for pid in child_pids(LAUNCHD_PID).ok()? {
+            if seen.contains(&pid) {
+                continue;
+            }
+            if let Ok(session) = session_of(pid)
+                && owned.contains(&session)
+            {
+                seen.insert(pid);
+                orphans.push_back((pid, Listed::Orphan));
+            }
+        }
+        let adopted = found.len();
+        walk(
+            orphans,
+            &mut found,
+            &mut seen,
+            &mut read_process,
+            &mut child_pids,
+            &mut read_start,
+        )?;
+        note_sessions(&found[adopted..], &mut session_of, &mut owned, &mut visible);
+        owned.retain(|session| visible.contains(session));
+        *sessions = owned;
+        Some(found)
+    }
+
+    /// Record the session of each member in `visible`, and own each one a
+    /// member leads. A member that exits before its session is read simply
+    /// leads nothing.
+    fn note_sessions(
+        members: &[ProcessTreeProcess],
+        session_of: &mut impl FnMut(u32) -> Result<u32, ReadError>,
+        owned: &mut HashSet<u32>,
+        visible: &mut HashSet<u32>,
+    ) {
+        for member in members {
+            if let Ok(session) = session_of(member.key.pid) {
+                if session == member.key.pid {
+                    owned.insert(session);
+                }
+                visible.insert(session);
+            }
+        }
+    }
+
+    /// Walk `queue` breadth first, appending each member to `found`. `None`
+    /// when the root or a still-listed member cannot be read.
+    fn walk(
+        mut queue: VecDeque<(u32, Listed)>,
+        found: &mut Vec<ProcessTreeProcess>,
+        seen: &mut HashSet<u32>,
+        read_process: &mut impl FnMut(u32) -> Result<(ProcessTreeProcess, u32), ReadError>,
+        child_pids: &mut impl FnMut(u32) -> Result<Vec<u32>, ReadError>,
+        read_start: &mut impl FnMut(u32) -> Result<(u64, u32), ReadError>,
+    ) -> Option<()> {
+        while let Some((pid, listed)) = queue.pop_front() {
+            let is_root = matches!(listed, Listed::Root);
             let (mut process, parent) = match read_process(pid) {
                 Ok(read) => read,
                 Err(ReadError::Gone) if !is_root => continue,
                 Err(ReadError::Gone | ReadError::Unreadable) => return None,
             };
-            if let Some((owner, owner_parent)) = owner {
-                // A listed PID may now name an unrelated process, and a parent
-                // PID alone also matches a replacement of that parent. The
-                // listing parent may also have left the tree since queueing.
-                if parent != owner.pid {
-                    continue;
-                }
-                match read_start(owner.pid) {
-                    Ok(current) if current == (owner.starttime, owner_parent) => {}
-                    Ok(_) | Err(ReadError::Gone) => continue,
-                    Err(ReadError::Unreadable) => return None,
+            match listed {
+                Listed::Root => {}
+                // Its session was read before this, so a pid that launchd no
+                // longer holds may name another process.
+                Listed::Orphan if parent != LAUNCHD_PID => continue,
+                Listed::Orphan => {}
+                Listed::By(owner, owner_parent) => {
+                    // A listed PID may now name an unrelated process, and a
+                    // parent PID alone also matches a replacement of that
+                    // parent. The listing parent may also have left the tree
+                    // since queueing.
+                    if parent != owner.pid {
+                        continue;
+                    }
+                    match read_start(owner.pid) {
+                        Ok(current) if current == (owner.starttime, owner_parent) => {}
+                        Ok(_) | Err(ReadError::Gone) => continue,
+                        Err(ReadError::Unreadable) => return None,
+                    }
                 }
             }
-            process.parent = owner.map(|(owner, _)| owner);
+            process.parent = match listed {
+                Listed::By(owner, _) => Some(owner),
+                Listed::Root | Listed::Orphan => None,
+            };
             found.push(process);
             let children = match child_pids(pid) {
                 Ok(children) => children,
@@ -402,11 +594,11 @@ pub(super) mod darwin_tree {
             }
             for child in children {
                 if seen.insert(child) {
-                    queue.push_back((child, Some((process.key, parent))));
+                    queue.push_back((child, Listed::By(process.key, parent)));
                 }
             }
         }
-        Some(found)
+        Some(())
     }
 
     fn read_process(pid: u32) -> Result<(ProcessTreeProcess, u32), ReadError> {
@@ -530,12 +722,13 @@ pub(super) mod darwin_tree {
     }
 
     /// Direct children of `ppid`. A full buffer is treated as truncated and
-    /// retried. `proc_listchildpids` reports a failure as a zero count and
-    /// leaves `errno` set, the same shape as a process with no children, so
-    /// `errno` is cleared before the call.
+    /// retried, up to room for every pid: launchd alone has hundreds.
+    /// `proc_listchildpids` reports a failure as a zero count and leaves
+    /// `errno` set, the same shape as a process with no children, so `errno`
+    /// is cleared before the call.
     fn child_pids(ppid: u32) -> Result<Vec<u32>, ReadError> {
         let mut slots = 32usize;
-        for _ in 0..6 {
+        for _ in 0..13 {
             let mut pids = vec![libc::pid_t::from(0); slots];
             let bytes = i32::try_from(pids.len().saturating_mul(size_of::<libc::pid_t>()))
                 .map_err(|_| ReadError::Unreadable)?;
@@ -565,6 +758,15 @@ pub(super) mod darwin_tree {
             slots = slots.saturating_mul(2);
         }
         Err(ReadError::Unreadable)
+    }
+
+    /// The session `pid` belongs to (`getsid`), which the kernel answers for
+    /// any process.
+    fn session_of(pid: u32) -> Result<u32, ReadError> {
+        clear_errno();
+        // Safety: `getsid` is a pure query of the named process.
+        let session = unsafe { libc::getsid(pid as libc::pid_t) };
+        u32::try_from(session).map_err(|_| classify_errno())
     }
 
     fn clear_errno() {

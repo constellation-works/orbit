@@ -15,10 +15,11 @@
 //!   linker peak is what triggers the OOM killer.
 //!
 //! macOS has no worker scope. The same thread sums the worker's process tree
-//! instead ([`super::usage_tree`]): CPU deltas of processes seen in both
-//! samples, plus the full CPU time of processes that appeared, and the sum of
-//! each process's `ri_phys_footprint`. The first read is a baseline. An
-//! unreadable tree skips that sample and leaves the baseline in place.
+//! instead ([`super::usage_tree`]), with the orphans still in a session the
+//! worker leads: CPU deltas of processes seen in both samples, plus the full
+//! CPU time of processes that appeared, and the sum of each process's
+//! `ri_phys_footprint`. The first read is a baseline. An unreadable tree
+//! skips that sample and leaves the baseline in place.
 //!
 //! Each minute since the worker started becomes one `run_resource_minutes`
 //! row, written as soon as the minute ends; the last, partial minute is
@@ -514,7 +515,7 @@ impl OrbitRuntime {
         let workspace_id = self.workspace_id().ok()?;
         ResourceSamplerThread::spawn(RunResourceSampler::from_process_tree(
             store,
-            || orbit_common::process::ancestry::process_tree(std::process::id()),
+            super::usage_tree::session_tree_reader(std::process::id()),
             orbit_common::process::ancestry::process_start_and_parent,
             PathBuf::from("/proc"),
             workspace_id,

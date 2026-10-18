@@ -1,7 +1,8 @@
 //! Process-tree sampling: interval CPU stays non-negative when a child
 //! leaves, a reaped descendant is charged once, a descendant reaped outside
-//! the tree does not hide later work, an unreadable tree writes nothing, and
-//! a real macOS tree is what the minute row records.
+//! the tree does not hide later work, an unreadable tree writes nothing, a
+//! real macOS tree is what the minute row records, and, run explicitly, how
+//! much of a build-like workload's CPU the worker's tree captures.
 
 use std::collections::VecDeque;
 #[cfg(target_os = "macos")]
@@ -624,5 +625,339 @@ fn hold_leaf(bytes: usize) {
     loop {
         std::thread::sleep(std::time::Duration::from_secs(60));
         std::hint::black_box(pages.len());
+    }
+}
+
+/// Native attribution, run explicitly on a Mac:
+/// `scripts/build-budget.py -- cargo test -p orbit-core --lib
+/// application::job::pipeline::worker::tests::usage_tree::native_tree_attributes_a_build_like_workload
+/// -- --ignored --exact --nocapture`.
+///
+/// A re-executed worker leads its own session, as a pipeline worker does, and
+/// samples itself every [`RESOURCE_SAMPLE_INTERVAL`] while a build-like
+/// workload runs under it: a driver keeps three wrapper-plus-compiler jobs
+/// busy, a short-lived client starts a compile server that outlives it, and a
+/// shell exits under a build it never waited for. Every workload process
+/// reports its own `getrusage` CPU when it exits, which is the reference. The
+/// JSON line compares it with the session tree the worker records, with the
+/// parent-link walk alone, and with host-wide non-idle CPU over the same
+/// window, which on a shared host includes other work.
+///
+/// [`RESOURCE_SAMPLE_INTERVAL`]: crate::runtime::host_resource::RESOURCE_SAMPLE_INTERVAL
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "native macOS attribution measurement; run explicitly in isolation"]
+fn native_tree_attributes_a_build_like_workload() {
+    use attribution::*;
+
+    if let Ok(role) = std::env::var(ROLE) {
+        run_role(&role);
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut worker = role_command("worker", dir.path());
+    // Safety: `setsid` is async-signal-safe and touches only the child.
+    unsafe {
+        worker.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    worker
+        .arg("--nocapture")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let output = worker.output().expect("run the attribution worker");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "attribution worker {}:\n{stdout}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = stdout
+        .lines()
+        .find_map(|line| serde_json::from_str(line).ok())
+        .unwrap_or_else(|| panic!("no attribution JSON in worker output:\n{stdout}"));
+    std::io::Write::write_all(&mut std::io::stdout(), format!("{report}\n").as_bytes()).unwrap();
+    let workload = report["workload_cpu_s"]["total"].as_f64().unwrap();
+    let recorded = report["tree_cpu_s"]["session_tree"].as_f64().unwrap();
+    assert!(
+        workload >= 10.0,
+        "the workload must do enough CPU work to measure: {report:#}"
+    );
+    assert!(
+        recorded >= 0.85 * workload,
+        "the worker's tree must capture at least 85% of its workload's CPU: {report:#}"
+    );
+    assert!(
+        recorded <= 1.1 * workload,
+        "the worker's tree must not adopt CPU that is not its workload's: {report:#}"
+    );
+}
+
+#[cfg(target_os = "macos")]
+mod attribution {
+    use std::path::{Path, PathBuf};
+    use std::process::{Child, Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    use orbit_common::process::ancestry::{process_start_and_parent, process_tree};
+
+    use crate::application::job::pipeline::worker::usage_tree::{TreeSampler, session_tree_reader};
+    use crate::runtime::host_resource::{RESOURCE_SAMPLE_INTERVAL, read_host_usage};
+
+    pub(super) const ROLE: &str = "ORBIT_TREE_ATTRIBUTION_ROLE";
+    const DIR: &str = "ORBIT_TREE_ATTRIBUTION_DIR";
+    const TEST: &str = "application::job::pipeline::worker::tests::usage_tree::native_tree_attributes_a_build_like_workload";
+    const JOBS: usize = 3;
+    const COMPILES: usize = 16;
+    const COMPILE_CPU: Duration = Duration::from_millis(750);
+    const CLIENT_CPU: Duration = Duration::from_millis(200);
+    const SERVER_REQUESTS: u32 = 12;
+    const SERVER_REQUEST_CPU: Duration = Duration::from_millis(400);
+    const ORPHAN_CPU: Duration = Duration::from_secs(2);
+    /// Driver, each wrapper and compiler, client and shell.
+    const BUILD_PROCESSES: usize = 3 + 2 * COMPILES;
+    const DEADLINE: Duration = Duration::from_secs(120);
+
+    pub(super) fn role_command(role: &str, dir: &Path) -> Command {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", TEST, "--ignored", "--quiet"])
+            .env(ROLE, role)
+            .env(DIR, dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        command
+    }
+
+    fn spawn(role: &str) -> Child {
+        role_command(role, &dir())
+            .spawn()
+            .unwrap_or_else(|error| panic!("spawn {role}: {error}"))
+    }
+
+    fn dir() -> PathBuf {
+        PathBuf::from(std::env::var(DIR).unwrap())
+    }
+
+    fn own_cpu_ns() -> u64 {
+        let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+        // Safety: the pointer names a writable rusage structure.
+        assert_eq!(
+            unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) },
+            0
+        );
+        // Safety: the successful call initialized the structure.
+        let usage = unsafe { usage.assume_init() };
+        let usec = (usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) as u64 * 1_000_000
+            + (usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) as u64;
+        usec * 1_000
+    }
+
+    /// Spend `cpu` of this process's own CPU time, however loaded the host.
+    fn burn(cpu: Duration) {
+        let target = own_cpu_ns() + cpu.as_nanos() as u64;
+        let mut value = 1_u64;
+        while own_cpu_ns() < target {
+            for _ in 0..10_000 {
+                value =
+                    std::hint::black_box(value.wrapping_mul(6364136223846793005).wrapping_add(1));
+            }
+        }
+    }
+
+    /// Record this process's lifetime CPU under `component`, atomically, as
+    /// the last thing it does.
+    fn report(component: &str) {
+        let dir = dir();
+        let pid = std::process::id();
+        let pending = dir.join(format!(".{component}.{pid}"));
+        std::fs::write(&pending, own_cpu_ns().to_string()).unwrap();
+        std::fs::rename(&pending, dir.join(format!("{component}.{pid}"))).unwrap();
+    }
+
+    fn reports() -> Vec<(String, u64)> {
+        std::fs::read_dir(dir())
+            .unwrap()
+            .filter_map(|entry| {
+                let name = entry.ok()?.file_name().into_string().ok()?;
+                let (component, _pid) = name.split_once('.').filter(|_| !name.starts_with('.'))?;
+                let ns = std::fs::read_to_string(dir().join(&name))
+                    .ok()?
+                    .parse()
+                    .ok()?;
+                Some((component.to_string(), ns))
+            })
+            .collect()
+    }
+
+    fn samples_taken() -> u64 {
+        std::fs::read_to_string(dir().join("samples"))
+            .ok()
+            .and_then(|count| count.parse().ok())
+            .unwrap_or(0)
+    }
+
+    // The client and the shell exit without waiting for a child on purpose:
+    // launchd adopts and reaps it, which is what is being measured.
+    #[allow(clippy::zombie_processes)]
+    pub(super) fn run_role(role: &str) {
+        match role {
+            "worker" => worker(),
+            "driver" => {
+                let mut others = vec![spawn("client"), spawn("shell")];
+                let mut running: Vec<Child> = Vec::new();
+                for _ in 0..COMPILES {
+                    while running.len() >= JOBS {
+                        let before = running.len();
+                        running.retain_mut(|job| job.try_wait().unwrap().is_none());
+                        if running.len() == before {
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                    }
+                    running.push(spawn("wrapper"));
+                }
+                for mut child in running.into_iter().chain(others.drain(..)) {
+                    assert!(child.wait().unwrap().success());
+                }
+                report("build");
+            }
+            "wrapper" => {
+                assert!(spawn("compiler").wait().unwrap().success());
+                report("build");
+            }
+            "compiler" => {
+                burn(COMPILE_CPU);
+                report("build");
+            }
+            "client" => {
+                // Starts the server and exits without waiting for it, so
+                // launchd adopts the server.
+                let _server = spawn("server");
+                burn(CLIENT_CPU);
+                report("build");
+            }
+            "server" => {
+                for _ in 0..SERVER_REQUESTS {
+                    burn(SERVER_REQUEST_CPU);
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                // A compile server idles until its timeout before exiting.
+                // Waiting out one more sample stands in for that idle tail.
+                let served = samples_taken();
+                let idle_until = Instant::now() + Duration::from_secs(30);
+                while samples_taken() <= served && Instant::now() < idle_until {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                report("server");
+            }
+            "shell" => {
+                // A shell that dies under a build it started: the build keeps
+                // running, adopted by launchd.
+                let _build = spawn("orphan");
+                report("build");
+            }
+            "orphan" => {
+                burn(ORPHAN_CPU);
+                report("orphan");
+            }
+            other => panic!("unknown attribution role {other}"),
+        }
+    }
+
+    fn worker() {
+        let root = std::process::id();
+        let mut session = TreeSampler::new(session_tree_reader(root), process_start_and_parent);
+        let mut parent_links =
+            TreeSampler::new(move || process_tree(root), process_start_and_parent);
+        let sample = |session: &mut TreeSampler, parent_links: &mut TreeSampler| {
+            let recorded = session.usage().expect("the session tree is readable");
+            let walked = parent_links.usage().expect("the process tree is readable");
+            (recorded.cpu_usage_usec, walked.cpu_usage_usec)
+        };
+        let proc_root = PathBuf::from("/proc");
+        let host_before = read_host_usage(&proc_root).expect("host CPU is readable");
+        let own_before = own_cpu_ns();
+        let started = Instant::now();
+        sample(&mut session, &mut parent_links);
+        std::fs::write(dir().join("samples"), "0").unwrap();
+
+        let expected = BUILD_PROCESSES + 2;
+        let mut driver = spawn("driver");
+        let mut driver_done = false;
+        let mut samples = 0_u64;
+        let mut next_sample = started + RESOURCE_SAMPLE_INTERVAL;
+        let (session_usec, walked_usec) = loop {
+            std::thread::sleep(Duration::from_millis(50));
+            if !driver_done && let Some(status) = driver.try_wait().unwrap() {
+                assert!(status.success(), "driver {status}");
+                driver_done = true;
+            }
+            let finished = driver_done && reports().len() >= expected;
+            if finished || Instant::now() >= next_sample {
+                let taken = sample(&mut session, &mut parent_links);
+                samples += 1;
+                std::fs::write(dir().join("samples"), samples.to_string()).unwrap();
+                next_sample += RESOURCE_SAMPLE_INTERVAL;
+                if finished {
+                    break taken;
+                }
+            }
+            assert!(
+                started.elapsed() < DEADLINE,
+                "workload did not finish: {:?}",
+                reports()
+            );
+        };
+        let wall = started.elapsed().as_secs_f64();
+        let own = own_cpu_ns() - own_before;
+        let host_after = read_host_usage(&proc_root).expect("host CPU is readable");
+        let (busy, total) = host_after
+            .cpu_delta(host_before)
+            .expect("host ticks advanced");
+        let system = busy as f64 / total as f64 * f64::from(host_after.cpu_count) * wall;
+
+        let reports = reports();
+        let component = |name: &str| {
+            reports
+                .iter()
+                .filter(|(component, _)| component == name)
+                .map(|(_, ns)| *ns as f64 / 1e9)
+                .sum::<f64>()
+        };
+        let workload = component("build") + component("server") + component("orphan");
+        // The worker's own sampling is in the tree but not in the workload.
+        let own_s = own as f64 / 1e9;
+        let session_s = session_usec as f64 / 1e6 - own_s;
+        let walked_s = walked_usec as f64 / 1e6 - own_s;
+        let report = serde_json::json!({
+            "schema_version": 1,
+            "sample_interval_s": RESOURCE_SAMPLE_INTERVAL.as_secs_f64(),
+            "samples": samples,
+            "wall_s": wall,
+            "workload_processes": reports.len(),
+            "workload_cpu_s": {
+                "total": workload,
+                "build": component("build"),
+                "server": component("server"),
+                "orphan": component("orphan"),
+            },
+            "worker_own_cpu_s": own_s,
+            "tree_cpu_s": { "session_tree": session_s, "parent_links": walked_s },
+            "attribution": {
+                "session_tree": session_s / workload,
+                "parent_links": walked_s / workload,
+            },
+            "system_nonidle_cpu_s": system,
+            "system_cpu_count": host_after.cpu_count,
+            "system_nonidle_outside_session_tree_s": system - session_s - own_s,
+        });
+        std::io::Write::write_all(&mut std::io::stdout(), format!("{report}\n").as_bytes())
+            .unwrap();
     }
 }
