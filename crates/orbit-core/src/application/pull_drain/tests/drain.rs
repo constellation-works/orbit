@@ -4,9 +4,11 @@ use std::collections::BTreeMap;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_store::contracts::*;
-use orbit_types::workflow::PipelineState;
+use orbit_types::workflow::{
+    PipelineState, ReviewBudget, ReviewConsumption, ReviewLedger, ReviewResetDecision,
+};
 
-use super::super::drain::{PullDrain, PullLauncher, PullPeer, RefusedDelivery};
+use super::super::drain::{PullDrain, PullLauncher, PullPeer, RefusedDelivery, no_claimed_review};
 use crate::application::job::pipeline::WorkerLaunchError;
 use crate::application::test_support::runtime_with_workspace_layout;
 
@@ -244,6 +246,7 @@ fn a_post_spawn_error_keeps_launch_intent_and_never_releases_pending_work() {
         peer: &peer,
         launcher: &UncertainLauncher,
         refused_delivery: RefusedDelivery::WhenDue,
+        claimed_review: &no_claimed_review,
     };
     assert!(drain.refill(&destination, &template, 1).is_err());
     let [record] = jobs.local_pull_admissions().unwrap().try_into().unwrap();
@@ -315,6 +318,7 @@ fn a_launch_failure_adopts_a_concurrent_settlement_and_retries_queued_cancellati
         peer: &peer,
         launcher: &launcher,
         refused_delivery: RefusedDelivery::WhenDue,
+        claimed_review: &no_claimed_review,
     };
     let error = drain.refill(&destination, &template, 1).unwrap_err();
     assert!(
@@ -406,6 +410,7 @@ fn pull_lost_request_and_binding_responses_recover_the_same_leaf() {
         peer: &peer,
         launcher: &launcher,
         refused_delivery: RefusedDelivery::WhenDue,
+        claimed_review: &no_claimed_review,
     };
     peer.lose_request.set(true);
     assert!(drain.refill(&destination, &template, 1).is_err());
@@ -445,6 +450,7 @@ fn pull_admission_stop_mid_pass_ends_it_before_the_next_request() {
         peer: &peer,
         launcher: &launcher,
         refused_delivery: RefusedDelivery::WhenDue,
+        claimed_review: &no_claimed_review,
     };
     let asked = Cell::new(0);
     // Open for the first request; the stop lands while it is answered.
@@ -506,6 +512,7 @@ fn pull_claimed_local_leaf_resumes_and_keeps_its_committed_candidate() {
         peer: &peer,
         launcher: &launcher,
         refused_delivery: RefusedDelivery::WhenDue,
+        claimed_review: &no_claimed_review,
     };
     drain.refill(&destination, &template, 1).expect("admit");
     let [leaf] = jobs
@@ -579,6 +586,151 @@ fn pull_claimed_local_leaf_resumes_and_keeps_its_committed_candidate() {
         candidate.source_run_id.as_deref(),
         Some(leaf.run_id.as_str())
     );
+}
+
+/// [ORB-16699] The first settlement a claimed leaf records carries the
+/// exhausted review ledger the follower holds, so the owner can import it.
+#[test]
+fn claimed_leaf_settlement_carries_its_review_ledger() {
+    if isolated_pull_test(
+        "application::pull_drain::tests::drain::claimed_leaf_settlement_carries_its_review_ledger",
+    ) {
+        return;
+    }
+    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
+    let (claim_id, run_id) = {
+        let jobs = runtime.stores().jobs();
+        let (destination, template) = request(jobs);
+        let peer = Peer::default();
+        let launcher = Launcher::default();
+        let drain = PullDrain {
+            jobs,
+            peer: &peer,
+            launcher: &launcher,
+            refused_delivery: RefusedDelivery::WhenDue,
+            claimed_review: &no_claimed_review,
+        };
+        drain.refill(&destination, &template, 1).expect("admit");
+        let records = jobs.local_pull_admissions().expect("pulls");
+        let record = records.first().expect("one pull");
+        let claim_id = record
+            .receipt
+            .as_ref()
+            .and_then(|receipt| receipt.claim.as_ref())
+            .expect("the pull claimed a task")
+            .claim_id
+            .clone();
+        let run_id = record.leaf_run_id.clone().expect("launched leaf");
+        (claim_id, run_id)
+    };
+    let workspace = runtime.workspace_id().expect("workspace");
+    let mut ledger = ReviewLedger::new(
+        &format!("{workspace}/task/main/{claim_id}"),
+        vec!["task".into()],
+        ReviewBudget { minutes: 30 },
+        Utc::now(),
+    );
+    ledger.consumed_seconds = 1_800;
+    runtime
+        .review_store()
+        .expect("review store")
+        .review_import_claimed_ledger(&workspace, &ledger)
+        .expect("seed ledger");
+    let now = Utc::now();
+    {
+        let jobs = runtime.stores().jobs();
+        jobs.mark_job_run_running(&run_id, now, std::process::id())
+            .expect("leaf running");
+        jobs.complete_job_run_step(
+            &run_id,
+            &JobRunStepParams {
+                lock_wait_ms: None,
+                step_index: 1,
+                target_type: orbit_types::workflow::JobTargetType::Activity,
+                target_id: "implement".into(),
+                started_at: now,
+                finished_at: now,
+                duration_ms: None,
+                exit_code: Some(1),
+                agent_response_json: None,
+                state: orbit_types::workflow::JobRunState::Failed,
+                error_code: None,
+                error_message: Some("implementation failed".into()),
+            },
+        )
+        .expect("failed step");
+        jobs.finalize_job_run(
+            &run_id,
+            orbit_types::workflow::JobRunState::Failed,
+            now,
+            None,
+        )
+        .expect("leaf failed");
+    }
+    let settled = runtime
+        .record_claimed_leaf_settlement(&run_id, None)
+        .expect("record")
+        .expect("the leaf had a pull");
+    let ClaimMutation::Fail(evidence) = settled.settlement.as_ref().expect("a failure settlement")
+    else {
+        panic!("an untyped candidate failure fails the claim: {settled:?}");
+    };
+    let carry = evidence
+        .claimed_review
+        .as_ref()
+        .expect("the settlement carries the follower ledger");
+    assert_eq!(carry.ledgers.len(), 1, "{carry:?}");
+    assert!(
+        carry.ledgers[0]
+            .lineage_key
+            .ends_with(&format!("/{claim_id}")),
+        "{}",
+        carry.ledgers[0].lineage_key
+    );
+    assert_eq!(carry.ledgers[0].consumed_seconds, 1_800);
+    assert!(carry.ledgers[0].decisions.is_empty());
+}
+
+/// [ORB-16699] Re-importing the exhausted ledger must not wipe an operator
+/// reset that already recorded a decision.
+#[test]
+fn claimed_review_import_keeps_an_operator_decision() {
+    if isolated_pull_test(
+        "application::pull_drain::tests::drain::claimed_review_import_keeps_an_operator_decision",
+    ) {
+        return;
+    }
+    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
+    let workspace = runtime.workspace_id().expect("workspace");
+    let now = Utc::now();
+    let mut decided = ReviewLedger::new(
+        &format!("{workspace}/task/main/claim-kept"),
+        vec!["task".into()],
+        ReviewBudget { minutes: 30 },
+        now,
+    );
+    decided.decisions.push(ReviewResetDecision {
+        after_attempt_index: 0,
+        reason: "operator reset".into(),
+        actor: "operator".into(),
+        recorded_at: now,
+        previous_budget: ReviewBudget { minutes: 30 },
+        previous_consumption: ReviewConsumption { seconds: 1_800 },
+        budget: ReviewBudget { minutes: 30 },
+    });
+    let store = runtime.review_store().expect("review store");
+    store
+        .review_import_claimed_ledger(&workspace, &decided)
+        .expect("seed decision");
+    let mut exhausted = decided.clone();
+    exhausted.decisions.clear();
+    exhausted.consumed_seconds = 1_800;
+    let kept = store
+        .review_import_claimed_ledger(&workspace, &exhausted)
+        .expect("replay");
+    assert_eq!(kept.decisions.len(), 1);
+    assert_eq!(kept.consumed_seconds, 0);
+    assert_eq!(kept.decisions[0].reason, "operator reset");
 }
 
 pub(super) fn isolated_pull_test(name: &str) -> bool {

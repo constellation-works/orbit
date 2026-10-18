@@ -197,11 +197,13 @@ pub(crate) fn pull_refill(
     })?;
     let peer = runtime.routed_pull_peer(transport.clone());
     let launcher = runtime.leaf_pull_launcher();
+    let claimed_review = |run_id: &str| runtime.claimed_review_carry(run_id);
     let drain = PullDrain {
         jobs: runtime.stores().jobs(),
         peer: peer.as_ref(),
         launcher: launcher.as_ref(),
         refused_delivery: RefusedDelivery::WhenDue,
+        claimed_review: &claimed_review,
     };
     let read_pass_state = || {
         runtime.read_run_state(&run_id).map_err(|error| {

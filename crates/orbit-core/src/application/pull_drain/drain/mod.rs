@@ -8,8 +8,8 @@ mod settlement;
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
-    AdmissionLookup, AdmissionReceipt, AdmissionRequest, JobRunStoreBackend, LocalPullAdmission,
-    PullDestination,
+    AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimedReviewCarry, JobRunStoreBackend,
+    LocalPullAdmission, PullDestination,
 };
 use orbit_types::workflow::BaselineRedHold;
 
@@ -24,8 +24,15 @@ pub(crate) use breaker::{
 #[cfg(test)]
 pub(crate) use failure::release_settlement;
 pub(crate) use failure::{
-    leaf_failure_settlement, operator_cancel_release, recorded_base_no_longer_red,
+    attach_claimed_review, leaf_failure_settlement, operator_cancel_release,
+    recorded_base_no_longer_red,
 };
+
+/// Settlement callback that carries no review ledger. Tests pass this.
+#[cfg(test)]
+pub(crate) fn no_claimed_review(_: &str) -> Option<ClaimedReviewCarry> {
+    None
+}
 
 /// Trusted owner transport, supplied by runtime composition. Implementations
 /// must check current claim/run/phase on bind and settlement; replaying a receipt
@@ -166,4 +173,8 @@ pub(crate) struct PullDrain<'a> {
     pub(crate) peer: &'a dyn PullPeer,
     pub(crate) launcher: &'a dyn PullLauncher,
     pub(crate) refused_delivery: RefusedDelivery,
+    /// Review ledgers the named leaf run held, copied onto a failure or
+    /// release settlement before it is recorded. The first recorded
+    /// settlement is immutable, so this has to run at the write.
+    pub(crate) claimed_review: &'a dyn Fn(&str) -> Option<ClaimedReviewCarry>,
 }

@@ -7,6 +7,7 @@ use orbit_store::contracts::{
     DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
 };
 use orbit_types::tool::{McpCapability, ToolSessionContext};
+use orbit_types::workflow::ReviewLedger;
 use serde::Serialize;
 
 use super::contract::{
@@ -125,6 +126,12 @@ pub struct AdmissionReceiptLookup {
     /// under a new ID.
     pub permits_replacement_request: bool,
     pub guidance: String,
+    /// Review ledgers the owner holds for the current claim, when the lookup
+    /// found one [ORB-16699]. Empty, and omitted, when there is no claim or
+    /// no ledger. A follower resume reads an operator reset from here. An
+    /// older follower ignores the field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub review_ledgers: Vec<ReviewLedger>,
 }
 
 impl crate::OrbitRuntime {
@@ -235,20 +242,39 @@ impl crate::OrbitRuntime {
             .stores()
             .tasks()
             .lookup_admission(&identity, request_id)?;
-        let (outcome, receipt, current_claim) = match lookup {
+        let (outcome, receipt, current_claim, review_ledgers) = match lookup {
             AdmissionLookup::Found {
                 receipt,
                 current_claim,
-            } => (
-                AdmissionReceiptLookupOutcome::Found,
-                Some(serde_json::to_value(&*receipt).map_err(json_error)?),
-                current_claim
-                    .map(|claim| serde_json::to_value(&*claim))
-                    .transpose()
-                    .map_err(json_error)?,
+            } => {
+                let review_ledgers = current_claim
+                    .as_ref()
+                    .map(|claim| {
+                        self.owner_review_ledgers_for_claim(&claim.claim_id, &claim.task_id)
+                    })
+                    .unwrap_or_default();
+                (
+                    AdmissionReceiptLookupOutcome::Found,
+                    Some(serde_json::to_value(&*receipt).map_err(json_error)?),
+                    current_claim
+                        .map(|claim| serde_json::to_value(&*claim))
+                        .transpose()
+                        .map_err(json_error)?,
+                    review_ledgers,
+                )
+            }
+            AdmissionLookup::Expired => (
+                AdmissionReceiptLookupOutcome::Expired,
+                None,
+                None,
+                Vec::new(),
             ),
-            AdmissionLookup::Expired => (AdmissionReceiptLookupOutcome::Expired, None, None),
-            AdmissionLookup::NotFound => (AdmissionReceiptLookupOutcome::NotFound, None, None),
+            AdmissionLookup::NotFound => (
+                AdmissionReceiptLookupOutcome::NotFound,
+                None,
+                None,
+                Vec::new(),
+            ),
         };
         Ok(AdmissionReceiptLookup {
             lookup_schema: ADMISSION_RECEIPT_LOOKUP_SCHEMA,
@@ -260,6 +286,7 @@ impl crate::OrbitRuntime {
             grants_execution_authority: false,
             permits_replacement_request: false,
             guidance: lookup_guidance(outcome).to_string(),
+            review_ledgers,
         })
     }
 

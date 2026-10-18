@@ -1,7 +1,7 @@
 ---
 title: Terminal Interface — Design
 owner: claude
-last_updated: 2026-10-12
+last_updated: 2026-10-18
 last_validated: 2026-10-18
 status: Accepted
 feature: terminal-interface
@@ -46,7 +46,7 @@ The audit view still demonstrates the difference between the two renderings. [OR
 
 The eight per-domain wrappers this replaced (`status_color`/`_cell`, `priority_color`/`_cell`, `job_state_color`/`_cell`, `doctor_status_color_cell`, `task_type_color_cell`) are gone, and with them the two-edit cost visible in the history — [T20260427-43] added a `friction` arm to two functions, [ORB-10202] removed it from two — and the `backlog` drift between the pair. Adding a status is now one line in one table. Satisfies [./specs/color-and-styling.md](./specs/color-and-styling.md) §1 [One Semantic Color Vocabulary, Gated at the Sink](./4_decisions.md#one-semantic-color-vocabulary-gated-at-the-sink).
 
-**Still diverges on §3's palette depth.** `comfy_table` renders `Color::Green` through `crossterm` as `\e[38;5;10m`, a 256-color code, while `colored` renders the same role as `\e[32m`. The spec asks for 16-color ANSI only; the two backends therefore still disagree about the *shade*, though no longer about *whether* to emit. **Still diverges on §3's uniform-filter rule**: a column the caller filtered on stays on screen but is still painted, in every list command.
+**Still diverges on §3's palette depth.** `comfy_table` renders `Color::Green` through `crossterm` as `\e[38;5;10m`, a 256-color code. `Table::render_at` rewrites that form for the four role colors to the 16-color bright code `\e[92m`, while `colored` renders the same role as `\e[32m`. The spec asks for 16-color ANSI, which both backends now emit, so they still disagree about the *shade* (bright against normal), though no longer about *whether* to emit. **Still diverges on §3's uniform-filter rule**: a column the caller filtered on stays on screen but is still painted, in every list command.
 
 ## 5. Sink Resolution
 

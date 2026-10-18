@@ -245,6 +245,7 @@ impl crate::OrbitRuntime {
         );
         match settlement {
             ClaimMutation::Fail(evidence) => {
+                let evidence = self.prepare_claimed_review_settlement(&claim, evidence);
                 let final_recovery = evidence.final_recovery.clone();
                 let result = self.mutate_execution_claim(
                     Some(&context),
@@ -257,6 +258,7 @@ impl crate::OrbitRuntime {
                 Ok(result)
             }
             ClaimMutation::Release(evidence) => {
+                self.import_claimed_review_ledgers(evidence.claimed_review.as_ref());
                 let context = match self.refused_release_hold(&claim, run_id, &evidence) {
                     Some(hold) => context.with_provider_hold(hold),
                     None => context,
