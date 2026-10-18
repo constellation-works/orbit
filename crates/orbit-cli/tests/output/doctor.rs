@@ -1081,6 +1081,7 @@ enabled = false
 /// The repair preserves translated review values in their original layer,
 /// including explicit modern overrides, and keeps the first backup on retry.
 #[test]
+#[allow(clippy::print_stderr)] // Name each scenario and its elapsed time in isolated child failure output.
 fn doctor_retired_review_repair_preserves_effective_policy() {
     if crate::isolated_test::run_in_child(
         "doctor::doctor_retired_review_repair_preserves_effective_policy",
@@ -1201,6 +1202,7 @@ fn doctor_retired_review_repair_preserves_effective_policy() {
 /// An after-landing policy, even when masked by another layer, requires an
 /// operator migration. Refusal must precede every config write and backup.
 #[test]
+#[allow(clippy::print_stderr)] // Name each scenario and its elapsed time in isolated child failure output.
 fn doctor_retired_review_repair_refuses_after_landing_before_any_write() {
     if crate::isolated_test::run_in_child(
         "doctor::doctor_retired_review_repair_refuses_after_landing_before_any_write",
