@@ -151,6 +151,14 @@ pub(super) fn migrated_default_executor_for_platform(
         changed = true;
     }
 
+    // `host_os` is new. Copy the shipped declaration onto an installed default
+    // that still omits it, and leave an operator-set value in place. An
+    // executor that omits the field stays unrestricted.
+    if existing.host_os.is_none() && seeded.host_os.is_some() {
+        migrated.host_os.clone_from(&seeded.host_os);
+        changed = true;
+    }
+
     if changed { Some(migrated) } else { None }
 }
 

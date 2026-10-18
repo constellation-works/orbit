@@ -73,20 +73,29 @@ pub(super) fn canonical_footprint(
         .collect::<Result<BTreeSet<_>, _>>()
         .map(|files| files.into_iter().collect())
 }
-/// Why `task`'s `os:` tags exclude the requesting executor, or `None` when
-/// they admit it.
+/// Why `task`'s effective OS requirement excludes the requesting executor, or
+/// `None` when it admits it.
+///
+/// The requirement is the task's `os:` tags intersected with its assigned
+/// crew's executor `host_os` (`limits`). An empty `limits` map is the tag
+/// requirement alone.
 pub(super) fn os_unavailable(
     task: &orbit_types::task::Task,
     request: &AdmissionRequest,
+    limits: &std::collections::BTreeMap<String, orbit_types::task::ExecutorOsLimit>,
 ) -> Option<String> {
-    let wait = orbit_types::task::TaskOsRequirement::from_tags(&task.tags)
-        .unsatisfied_reason(request.os)?;
-    Some(format!(
-        "{wait}; the executor runs {}",
-        request
-            .os
-            .map_or("an undeclared OS", orbit_types::task::HostOs::as_str)
-    ))
+    let runs = request
+        .os
+        .map_or("an undeclared OS", orbit_types::task::HostOs::as_str);
+    let wait = match orbit_types::task::TaskOsRequirement::for_crew(
+        &task.tags,
+        task.crew.as_deref(),
+        limits,
+    ) {
+        Ok(requirement) => requirement.unsatisfied_reason(request.os)?,
+        Err(reason) => reason,
+    };
+    Some(format!("{wait}; the executor runs {runs}"))
 }
 pub(super) fn overlaps(left: &[String], right: &[String]) -> bool {
     left.iter()
@@ -301,6 +310,7 @@ impl TaskCommitBoundary {
                 held,
                 validation_hold,
                 ordering.gates.as_ref(),
+                &ordering.executor_host_os,
                 reach,
             )
         };
@@ -323,6 +333,7 @@ impl TaskCommitBoundary {
         held: &BTreeMap<String, String>,
         validation_hold: &ValidationHold<'_>,
         gates: Option<&orbit_types::workflow::ValidationGates>,
+        executor_host_os: &std::collections::BTreeMap<String, orbit_types::task::ExecutorOsLimit>,
         reach: DependencyReach,
     ) -> Result<Option<AdmissionLookup>, OrbitError> {
         if let Some(row) = self.receipt_row(&identity.location().machine_id, &request.request_id)? {
@@ -358,6 +369,7 @@ impl TaskCommitBoundary {
             in_flight: &in_flight.footprints,
             reservations: &reservations,
             owner_wave: &owner_wave,
+            executor_host_os,
         };
         let mut receipt = AdmissionReceipt {
             schema_version: 1,
@@ -380,14 +392,7 @@ impl TaskCommitBoundary {
         let key = receipt_key(&receipt.machine_id, &request.request_id)?;
         // A stopped landing's repair is nearly finished work for its task, so
         // it is offered before any backlog candidate [ORB-14261].
-        if self.admit_repair_locked(
-            identity,
-            request,
-            &key,
-            orbit_dir,
-            &in_flight.tasks,
-            &mut receipt,
-        )? {
+        if self.admit_repair_locked(&screen, &key, orbit_dir, &in_flight.tasks, &mut receipt)? {
             return self
                 .lookup_admission(identity, &request.request_id)
                 .map(Some);

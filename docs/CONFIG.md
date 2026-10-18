@@ -851,6 +851,7 @@ Orbit does not write OpenCode's `opencode.json` MCP config and `orbit mcp init` 
 | | |
 |---|---|
 | Install | `~/.local/bin/muse`, a launcher that execs `~/.local/bin/muse-bin-<version>`; check with `muse --version`. Init detects `muse` on `PATH` and enables the `muse` crew. Orbit sets `MUSE_NO_AUTO_UPDATE=1` and `MUSE_LOGIN=0` for every run (an outer value cannot override them), so a run never swaps the binary under running work or starts a device login; upgrade with the launcher yourself. |
+| Routing | The shipped asset sets `host_os: [macos]`. A task assigned a muse crew waits for a macOS host and keeps that crew; a Linux drain does not redraw it onto another crew. Muse Code also ships a Windows build, but native Windows is not an Orbit runtime (ORB-13857) and spawning that binary from Orbit-in-WSL2 is unverified, so Windows stays off the list until that launch is verified. A Mac pull drain that claims these tasks must run the owner's exact Orbit build: `orbit host list` shows the owner reachable with the same `binary_version` and `protocol_fingerprint`. |
 | Auth | `muse login` (Meta account, browser device code) once, outside Orbit. The login is the file `auth.json` under the config root (`$XDG_CONFIG_HOME/muse`, else `~/.config/muse`), not a macOS keychain item, so Muse gets no keychain carve-out. Or `pass = ["META_API_KEY"]`, which Muse prefers; `muse auth set --api-key-stdin` also works. Orbit never logs in or forwards `META_API_KEY` unless `pass` names it. |
 | Model | A catalog id (`muse-spark-1.3`); `muse model-profile show <model> [--effort <tier>]` resolves one. `effort` renders as `--reasoning-effort`; Muse accepts `none` … `ultra`, which covers every Orbit effort, and any other value is refused at config load. |
 | Prompt | `muse exec` does not read stdin (piped stdin alone exits 2, `missing prompt`) and refuses `--prompt-file /dev/stdin` (`not a regular file`). Orbit writes the prompt to a mode-0600 file with an unpredictable name in the run's scratch directory (`<worktree>/.orbit/tmp/`), passes `--prompt-file <path>`, and deletes the file when the invocation ends, whatever its outcome. The envelope never reaches argv; the audit keeps the prompt in the invocation's stdin blob. An activity profile that cannot read the worktree cannot read the file either, and the run fails. |
@@ -1238,6 +1239,23 @@ Both OS sandboxes (macOS `sandbox-exec`, Linux Bubblewrap) let workers share one
 The macOS profile allows `pseudo-tty`, `/dev/ptmx` (read, write, ioctl), and read, write and ioctl on `/dev/ttys[0-9]+`, so `openpty`/`posix_openpt` work inside a worker (a test driving a CLI through a real terminal, say). Other PTYs remain subject to normal OS checks. Linux needs no equivalent rule.
 
 ---
+
+## Executor `host_os`
+
+An executor asset may declare the host operating systems it can run on, beside `sandbox` and `model_flag`:
+
+```yaml
+spec:
+  host_os:
+    - macos
+```
+
+- The value is a non-empty subset of `linux`, `macos` and `windows`. An empty list or any other name is refused when the asset loads, and the error names that asset. Omit `host_os`, or set it null, and the executor runs on every host. Assets that omit it load as they did before the field existed.
+- A task's effective OS requirement is its `os:` tags intersected with its assigned crew's executor `host_os`. Local admission, `orbit run ship` discovery, the drain-start warning and owner pull admission all read that one intersection, so they cannot disagree. An empty intersection (an `os:linux` task assigned a muse crew, for example) is refused when the task is created or updated. The reason names the crew, the executor constraint and the task's tags, and nothing is written: the task never becomes one that no host can run.
+- An explicit crew this host cannot run stays assigned and waits, for example `waits for a macos host (crew muse-wonder)`. It is not redrawn onto another crew. A pool draw and `workflow.default_crew` skip a crew whose executor excludes this host; the other members keep their weights, and an excluded default is left unset rather than pinned. Provider preflight stays a backstop for a missing binary or a failed login on a host the executor does allow.
+- Seeding copies a shipped `host_os` onto an installed default only when that install still omits the field. A value an operator set is kept. Clearing the field restores the shipped declaration on the next seed. Custom executors outside the shipped set are not rewritten.
+- `orbit doctor providers` reports `unsupported on this OS` when `host_os` excludes this host, including when the binary is absent, so an operator is not told to install it here. `not installed` is only for an executor this host may run whose command is missing.
+- Muse is the shipped case: `macos` only, as [Muse Code](#muse-code-cli) records. A Mac that pulls those tasks from the owner must run the owner's exact Orbit build. `orbit host list` shows the owner reachable with the same `binary_version` and `protocol_fingerprint` ([distributed drain](runbooks/distributed-drain.md)).
 
 ## Executor authentication recovery probes
 

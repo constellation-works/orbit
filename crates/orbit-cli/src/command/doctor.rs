@@ -374,6 +374,29 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
         // An executor without a `command` (e.g. `local-shell`) launches no
         // provider CLI, so availability does not apply rather than failing.
         let cli_available = def.command.as_ref().map(|_| launcher.is_some());
+        // A declared `host_os` that excludes this host is not a missing
+        // binary. An omitted declaration keeps the path probe.
+        let unsupported_on_this_os = def.host_os.as_ref().is_some_and(|hosts| {
+            !orbit_types::task::HostOs::current().is_some_and(|host| hosts.contains(&host))
+        });
+        let availability = if unsupported_on_this_os {
+            Some("unsupported on this OS")
+        } else {
+            match cli_available {
+                Some(true) => Some("installed"),
+                Some(false) => Some("not installed"),
+                None => None,
+            }
+        };
+        let found = if unsupported_on_this_os {
+            "unsupported"
+        } else {
+            match cli_available {
+                Some(true) => "yes",
+                Some(false) => "no",
+                None => "-",
+            }
+        };
         let sandbox = def.sandbox.map_or("unspecified", |kind| kind.as_str());
         let readiness = (sandbox == "linux-bwrap")
             .then_some(linux_probe.as_ref())
@@ -402,6 +425,7 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
             "command": def.command,
             "args": def.args,
             "cli_available": cli_available,
+            "availability": availability,
             "launcher": launcher.as_ref().map(|path| path.display().to_string()),
             "sandbox": def.sandbox,
             "sandbox_ready": readiness.map(|probe| probe.available),
@@ -419,12 +443,7 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
             def.name.clone(),
             def.executor_type.to_string(),
             def.command.clone().unwrap_or_else(|| "-".to_string()),
-            match cli_available {
-                Some(true) => "yes",
-                Some(false) => "no",
-                None => "-",
-            }
-            .to_string(),
+            found.to_string(),
             sandbox.to_string(),
             readiness.map_or_else(
                 || "-".to_string(),

@@ -2288,6 +2288,7 @@ fn a_pull_drain_on_a_host_that_fails_the_git_scan_claims_nothing() {
             env: Default::default(),
             sandbox: Some(sandbox),
             allow_fallback: false,
+            host_os: None,
             created_at: None,
             updated_at: None,
         })

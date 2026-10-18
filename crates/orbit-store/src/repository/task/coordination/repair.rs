@@ -25,6 +25,7 @@ use super::admission::{
     ADMISSION_RESERVATION_TTL_SECONDS, RECEIPT_KIND, StoredReceipt, digest, os_unavailable,
 };
 use super::lifecycle::{CLAIM, STATE, decode_state, encode, row};
+use super::selection::Screen;
 use crate::contracts::*;
 
 /// How long a pending repair waits for its original executor before the
@@ -46,19 +47,24 @@ impl TaskCommitBoundary {
     /// left for one that can. Caller holds the admission boundary.
     pub(super) fn admit_repair_locked(
         &self,
-        identity: &AdmissionIdentity,
-        request: &AdmissionRequest,
+        screen: &Screen<'_>,
         receipt_key: &str,
         orbit_dir: &Path,
         tasks: &[Task],
         receipt: &mut AdmissionReceipt,
     ) -> Result<bool, OrbitError> {
-        let candidates = self.repair_candidates(identity, request, tasks, receipt)?;
+        let candidates = self.repair_candidates(
+            screen.identity,
+            screen.request,
+            tasks,
+            receipt,
+            screen.executor_host_os,
+        )?;
         receipt.queue_depth += candidates.len();
         for candidate in candidates {
             if self.commit_repair_claim(
-                identity,
-                request,
+                screen.identity,
+                screen.request,
                 receipt_key,
                 orbit_dir,
                 receipt,
@@ -76,6 +82,7 @@ impl TaskCommitBoundary {
         request: &AdmissionRequest,
         tasks: &'a [Task],
         receipt: &mut AdmissionReceipt,
+        executor_host_os: &std::collections::BTreeMap<String, orbit_types::task::ExecutorOsLimit>,
     ) -> Result<Vec<RepairCandidate<'a>>, OrbitError> {
         let mut candidates = Vec::new();
         for state in self.claim_states_locked()? {
@@ -113,7 +120,7 @@ impl TaskCommitBoundary {
                 receipt.invalid_candidates.push(diagnose(reason));
                 continue;
             }
-            if let Some(reason) = os_unavailable(task, request) {
+            if let Some(reason) = os_unavailable(task, request, executor_host_os) {
                 receipt.os_unavailable.push(diagnose(reason));
                 continue;
             }

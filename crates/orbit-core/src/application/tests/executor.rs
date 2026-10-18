@@ -27,6 +27,7 @@ fn base_def(name: &str, executor_type: ExecutorType) -> ExecutorDef {
         env: Default::default(),
         sandbox: None,
         allow_fallback: false,
+        host_os: None,
         created_at: Some(now),
         updated_at: Some(now),
     }

@@ -113,6 +113,9 @@ pub(super) fn backlog_snapshot_in_mode(
     let expiring_batches = expiring_backlog_batches(runtime, &backlog);
     sort_tasks_for_automatic_dispatch(&mut backlog, &expiring_batches);
     let mut excluded = Vec::new();
+    let executor_host_os = runtime
+        .executor_host_os_limits()
+        .map_err(|error| PassError::store(action, "read executor host operating systems", error))?;
     let pilot_preparations = active_pilot_preparations(runtime, action)?;
     backlog.retain(|task| {
         if !pilot_preparations.contains_key(&task.id) {
@@ -196,7 +199,7 @@ pub(super) fn backlog_snapshot_in_mode(
     // A task this host's OS cannot run is left for a host that can. Read every
     // pass, so a retagged backlog task is honoured at its next admission.
     backlog.retain(|task| {
-        let Some(exclusion) = host_os_exclusion(runtime, task) else {
+        let Some(exclusion) = host_os_exclusion(runtime, task, &executor_host_os) else {
             return true;
         };
         excluded.push(exclusion);

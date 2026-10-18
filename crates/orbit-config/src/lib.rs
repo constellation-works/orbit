@@ -119,7 +119,8 @@ pub use registry::{
 };
 pub use resolved::{
     CodexExecutionPolicy, ExecutionEnvPolicy, PrSettings, RETIRED_SYSTEM_CREW,
-    RETIRED_SYSTEM_CREW_WARNING, ResolvedConfig, disabled_crew_message, names_retired_system_crew,
+    RETIRED_SYSTEM_CREW_WARNING, ResolvedConfig, disabled_crew_message, executor_host_os,
+    names_retired_system_crew,
 };
 pub use roots::ConfigRoots;
 pub use seed::{ConfigSeed, seed_default_config};

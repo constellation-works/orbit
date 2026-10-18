@@ -20,7 +20,7 @@ mod execution_env;
 
 pub use config::{PrSettings, ResolvedConfig};
 pub use crew::{
-    RETIRED_SYSTEM_CREW, RETIRED_SYSTEM_CREW_WARNING, disabled_crew_message,
+    RETIRED_SYSTEM_CREW, RETIRED_SYSTEM_CREW_WARNING, disabled_crew_message, executor_host_os,
     names_retired_system_crew,
 };
 pub use execution_env::{CodexExecutionPolicy, ExecutionEnvPolicy};

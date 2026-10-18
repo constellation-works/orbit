@@ -193,23 +193,33 @@ impl OrbitRuntime {
             .collect())
     }
 
-    /// Each backlog task whose `os:` tags this host's OS does not satisfy,
-    /// with the wait: `ORB-12 waits for a macos host (os:macos)`.
+    /// Each backlog task whose effective OS requirement this host does not
+    /// satisfy, with the wait: `ORB-12 waits for a macos host (os:macos)`.
     ///
-    /// A drain start reports these, so a drain that starts nothing on this
-    /// host does not read as an empty backlog.
+    /// The requirement is the task's `os:` tags intersected with its assigned
+    /// crew's executor `host_os`. A drain start reports these, so a drain that
+    /// starts nothing on this host does not read as an empty backlog.
     pub fn host_os_backlog_waits(&self) -> Result<Vec<String>, OrbitError> {
         let host = self.host_os();
-        Ok(self
-            .list_task_metadata()?
-            .into_iter()
-            .filter(|task| task.status == orbit_types::task::TaskStatus::Backlog)
-            .filter_map(|task| {
-                orbit_types::task::TaskOsRequirement::from_tags(&task.tags)
-                    .unsatisfied_reason(host)
-                    .map(|wait| format!("{} {wait}", task.id))
-            })
-            .collect())
+        let limits = self.executor_host_os_limits()?;
+        let mut waits = Vec::new();
+        for task in self.list_task_metadata()? {
+            if task.status != orbit_types::task::TaskStatus::Backlog {
+                continue;
+            }
+            let wait = match orbit_types::task::TaskOsRequirement::for_crew(
+                &task.tags,
+                task.crew.as_deref(),
+                &limits,
+            ) {
+                Ok(requirement) => requirement.unsatisfied_reason(host),
+                Err(reason) => Some(reason),
+            };
+            if let Some(wait) = wait {
+                waits.push(format!("{} {wait}", task.id));
+            }
+        }
+        Ok(waits)
     }
 
     /// [`Self::host_os_backlog_waits`] as one drain-start warning, or `None`

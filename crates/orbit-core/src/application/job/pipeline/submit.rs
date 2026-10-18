@@ -260,11 +260,20 @@ impl OrbitRuntime {
                 task_id,
                 crate::application::workflow::SHIP_WORKFLOW_ALIAS,
             )?;
-            // A task whose `os:` tags this host cannot satisfy is never started
-            // here; it would only fail on a platform it cannot run on.
-            if let Some(wait) = orbit_types::task::TaskOsRequirement::from_tags(&task.tags)
-                .unsatisfied_reason(self.host_os())
-            {
+            // A task whose effective OS requirement this host cannot satisfy is
+            // never started here; it would only fail on a platform it cannot
+            // run on. The requirement is the task's `os:` tags intersected
+            // with its assigned crew's executor `host_os`.
+            let limits = self.executor_host_os_limits()?;
+            let wait = match orbit_types::task::TaskOsRequirement::for_crew(
+                &task.tags,
+                task.crew.as_deref(),
+                &limits,
+            ) {
+                Ok(requirement) => requirement.unsatisfied_reason(self.host_os()),
+                Err(reason) => Some(reason),
+            };
+            if let Some(wait) = wait {
                 return Err(OrbitError::PolicyDenied(format!(
                     "explicit ship task '{task_id}' {wait}, and this host runs {}; ship it on \
                      a host of that OS (a pull-drain follower on one claims it from the \

@@ -1,4 +1,8 @@
-use orbit_types::task::{ReadinessGap, ReadinessStage, Task, TaskOsRequirement, readiness_gaps};
+use std::collections::BTreeMap;
+
+use orbit_types::task::{
+    ExecutorOsLimit, ReadinessGap, ReadinessStage, Task, TaskOsRequirement, readiness_gaps,
+};
 
 use super::super::auto_admission::{DeferralReason, DeferredAdmission};
 use super::super::pass_error::PassError;
@@ -30,16 +34,23 @@ pub(super) fn footprint_exclusion(deferred: DeferredAdmission) -> BacklogTaskExc
     }
 }
 
-/// The exclusion for a task whose `os:` tags this host does not satisfy.
+/// The exclusion for a task whose effective OS requirement this host does not
+/// satisfy: its `os:` tags intersected with its assigned crew's executor
+/// `host_os`.
 ///
 /// Shared by automatic selection and the explicit ship override, so a drain,
 /// ship discovery and a gate carrying a named task withhold the same tasks and
-/// name the same wait.
+/// name the same wait. `limits` is empty when no executor declares `host_os`,
+/// which leaves the tag requirement unchanged.
 pub(super) fn host_os_exclusion(
     runtime: &OrbitRuntime,
     task: &Task,
+    limits: &BTreeMap<String, ExecutorOsLimit>,
 ) -> Option<BacklogTaskExclusion> {
-    let reason = TaskOsRequirement::from_tags(&task.tags).unsatisfied_reason(runtime.host_os())?;
+    let reason = match TaskOsRequirement::for_crew(&task.tags, task.crew.as_deref(), limits) {
+        Ok(requirement) => requirement.unsatisfied_reason(runtime.host_os())?,
+        Err(reason) => reason,
+    };
     Some(BacklogTaskExclusion {
         id: task.id.clone(),
         reason: BacklogTaskExclusionReason::HostOsMismatch,

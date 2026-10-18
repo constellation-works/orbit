@@ -10,7 +10,7 @@
 //! discovery, `orbit run ship` and the owner handing out claims cannot
 //! disagree about which host a task waits for.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -94,6 +94,23 @@ pub struct TaskOsRequirement {
     /// satisfies it until it is retagged.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub invalid: Vec<String>,
+    /// Crew whose executor `host_os` narrowed `any_of`. Absent when the
+    /// requirement is the task's tags alone, so that description stays
+    /// `a macos host (os:macos)`.
+    #[serde(skip)]
+    pub crew: Option<String>,
+}
+
+/// A crew's executor `host_os`, carried into admission beside the task's tags.
+///
+/// Only crews whose executor declares `host_os` appear. Omission is
+/// unrestricted and has no entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutorOsLimit {
+    /// Executor definition that declared the set.
+    pub executor: String,
+    /// Non-empty set from that definition.
+    pub hosts: BTreeSet<HostOs>,
 }
 
 impl TaskOsRequirement {
@@ -113,6 +130,78 @@ impl TaskOsRequirement {
             }
         }
         requirement
+    }
+
+    /// Intersect these tags with an executor's declared `host_os`.
+    ///
+    /// `None` means the executor omits `host_os`: the requirement is returned
+    /// unchanged, description included. A declared set keeps only the hosts
+    /// in both and names `crew` in the wait. An empty intersection is an
+    /// error naming the crew, the executor constraint and the task's tags,
+    /// because the task would otherwise be stored where no host can run it.
+    ///
+    /// Stored tags outside the namespace keep their existing refusal and are
+    /// not combined with the executor constraint.
+    pub fn intersect_executor(
+        &self,
+        crew: &str,
+        executor: &str,
+        host_os: Option<&BTreeSet<HostOs>>,
+    ) -> Result<Self, String> {
+        let Some(limit) = host_os else {
+            return Ok(self.clone());
+        };
+        if !self.invalid.is_empty() {
+            return Ok(self.clone());
+        }
+        if self.any_of.is_empty() {
+            let mut narrowed = self.clone();
+            narrowed.any_of.clone_from(limit);
+            narrowed.crew = Some(crew.to_string());
+            return Ok(narrowed);
+        }
+        let intersection = self
+            .any_of
+            .intersection(limit)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        if intersection.is_empty() {
+            let constraint = limit
+                .iter()
+                .map(|os| os.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let tag_list = self.any_of.iter().map(|os| os.tag()).collect::<Vec<_>>();
+            return Err(format!(
+                "crew `{crew}` (executor `{executor}`, host_os: {constraint}) does not intersect \
+                 the task's tags {}; no host can run it",
+                quoted(tag_list.iter().map(String::as_str))
+            ));
+        }
+        let mut narrowed = self.clone();
+        narrowed.any_of = intersection;
+        narrowed.crew = Some(crew.to_string());
+        Ok(narrowed)
+    }
+
+    /// Tags intersected with the assigned crew's executor limit.
+    ///
+    /// `limits` is keyed by crew name and holds only crews whose executor
+    /// declares `host_os`. No crew, or a crew with no entry, is the tag
+    /// requirement alone.
+    pub fn for_crew(
+        tags: &[String],
+        crew: Option<&str>,
+        limits: &BTreeMap<String, ExecutorOsLimit>,
+    ) -> Result<Self, String> {
+        let requirement = Self::from_tags(tags);
+        let Some(name) = crew.map(str::trim).filter(|name| !name.is_empty()) else {
+            return Ok(requirement);
+        };
+        let Some(limit) = limit_for_crew(name, limits) else {
+            return Ok(requirement);
+        };
+        requirement.intersect_executor(name, &limit.executor, Some(&limit.hosts))
     }
 
     /// Whether the task carries no `os:` tag at all.
@@ -161,6 +250,9 @@ impl TaskOsRequirement {
             .map(|os| os.as_str())
             .collect::<Vec<_>>()
             .join(" or ");
+        if let Some(crew) = &self.crew {
+            return format!("a {names} host (crew {crew})");
+        }
         let tags = self
             .any_of
             .iter()
@@ -169,6 +261,19 @@ impl TaskOsRequirement {
             .join(", ");
         format!("a {names} host ({tags})")
     }
+}
+
+fn limit_for_crew<'a>(
+    crew: &str,
+    limits: &'a BTreeMap<String, ExecutorOsLimit>,
+) -> Option<&'a ExecutorOsLimit> {
+    if let Some(limit) = limits.get(crew) {
+        return Some(limit);
+    }
+    limits
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(crew))
+        .map(|(_, limit)| limit)
 }
 
 /// Reject any `os:*` tag outside the reserved namespace.

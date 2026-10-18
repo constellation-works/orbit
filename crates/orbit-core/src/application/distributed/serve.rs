@@ -767,6 +767,7 @@ impl crate::OrbitRuntime {
                 owner_os: self.host_os(),
                 expiring_tasks,
                 gates: Some(self.owner_validation_gates()),
+                executor_host_os: self.executor_host_os_limits()?,
             },
             owner_binary_version(),
             &self.paths().repo_root,

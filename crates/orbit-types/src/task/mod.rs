@@ -62,7 +62,9 @@ pub use model::{
     unmet_task_dependencies_with_index, unsatisfiable_task_dependencies,
     unsatisfiable_task_dependencies_with_index, validate_task_dependencies_with,
 };
-pub use os_requirement::{HostOs, OS_TAG_PREFIX, TaskOsRequirement, validate_os_tags};
+pub use os_requirement::{
+    ExecutorOsLimit, HostOs, OS_TAG_PREFIX, TaskOsRequirement, validate_os_tags,
+};
 pub use plan::{TaskPlan, TaskPlanCheckpoint, TaskPlanSuccessCriterion};
 pub use readiness::{
     ReadinessGap, ReadinessGapCode, ReadinessSeverity, ReadinessStage, TaskReadiness,

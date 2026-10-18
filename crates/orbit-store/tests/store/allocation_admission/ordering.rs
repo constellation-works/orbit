@@ -113,6 +113,7 @@ fn affinity_respects_priority_expiry_and_os_eligibility() {
                 .map(|(task, _)| task.id.clone())
                 .collect(),
             gates: None,
+            executor_host_os: Default::default(),
         };
         let mut request = owner_request("order");
         request.os = case.requester;
