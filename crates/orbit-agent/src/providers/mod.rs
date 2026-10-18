@@ -22,6 +22,7 @@ pub use antigravity::{
     antigravity_background_task_diagnostic, antigravity_print_timeout_diagnostic,
     antigravity_terminal_error_diagnostic, apply_antigravity_print_timeout,
 };
+pub use muse::muse_terminal_failure_diagnostic;
 pub use usage_window::provider_usage_windows;
 
 use std::borrow::Cow;
@@ -98,6 +99,10 @@ pub fn project_cli_response<'a>(provider: &str, stdout: &'a [u8]) -> Cow<'a, [u8
         "grok" => {
             grok::project_grok_response(stdout).map_or_else(|| Cow::Borrowed(stdout), Cow::Owned)
         }
+        // [ORB-16597] Only a completed terminal's text is Muse's answer; a
+        // failed terminal's text is failure prose for diagnostics, never an
+        // envelope.
+        "muse" => Cow::Owned(muse::project_muse_response(stdout)),
         _ => normalize_cli_stdout(provider, stdout),
     }
 }

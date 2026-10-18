@@ -6,9 +6,9 @@ use std::time::Duration;
 
 use orbit_agent::{
     ParsedStdout, antigravity_background_task_diagnostic, antigravity_print_timeout_diagnostic,
-    antigravity_terminal_error_diagnostic, normalize_cli_stdout, project_cli_response,
-    provider_authentication_failure, provider_capacity_exhausted, provider_content_refusal,
-    provider_invocation_diagnostic, provider_usage_limit,
+    antigravity_terminal_error_diagnostic, muse_terminal_failure_diagnostic, normalize_cli_stdout,
+    project_cli_response, provider_authentication_failure, provider_capacity_exhausted,
+    provider_content_refusal, provider_invocation_diagnostic, provider_usage_limit,
 };
 use orbit_common::process::build_budget::BuildBudgetWaits;
 use orbit_common::security::redaction::{PatternRedactor, redact_all_json};
@@ -218,6 +218,11 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
     let provider_refusal = structured_provider_refusal(&provider, stdout.protocol_bytes());
     // [ORB-14695] So does Claude's terminal error result for a usage limit.
     let provider_limit = structured_provider_limit(&provider, stdout.protocol_bytes());
+    // [ORB-16597] A non-completed Muse terminal's own failure reason, for
+    // the operator diagnostic on either exit path. Classification of that
+    // reason stays with the shared readers above and below.
+    let muse_terminal_failure =
+        muse_terminal_failure_diagnostic(&provider, stdout.protocol_bytes());
     // Two orthogonal contracts. `require_completion_envelope` gates step
     // completion and its status outcome (above); `require_response_envelope` additionally gates the
     // envelope's *content* for activities whose downstream templates consume it
@@ -226,6 +231,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         && provider_auth_error.is_none()
         && provider_refusal.is_none()
         && provider_limit.is_none()
+        && muse_terminal_failure.is_none()
         && !completion_protocol_violation
         && !print_timeout_reached
         && !completion_status_failure
@@ -394,6 +400,17 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
                     },
                 )
             })
+            // [ORB-16597] Muse likewise writes its failure reason only in
+            // its terminal frame and often leaves stderr empty.
+            .or_else(|| {
+                muse_terminal_failure.as_ref().map(|diagnostic| {
+                    format!(
+                        "{} {}",
+                        exit_message(),
+                        bounded_diagnostic(diagnostic, redaction)
+                    )
+                })
+            })
             .unwrap_or_else(exit_message);
         // [ORB-13941] A provider that could not authenticate is unusable on
         // this host, not a failed attempt at the work. Only text the provider
@@ -403,6 +420,9 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
             antigravity_terminal_error_diagnostic(&provider, stdout.protocol_bytes());
         if provider_authentication_failure(&stderr_text)
             || terminal_error
+                .as_deref()
+                .is_some_and(provider_authentication_failure)
+            || muse_terminal_failure
                 .as_deref()
                 .is_some_and(provider_authentication_failure)
         {
@@ -472,6 +492,13 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
     } else if let Some(diagnostic) = background_task_diagnostic {
         Some(with_sandbox_write_attribution(
             diagnostic,
+            sandbox_write_diagnostic.as_deref(),
+        ))
+    } else if let Some(diagnostic) = muse_terminal_failure {
+        // [ORB-16597] Exit 0 with a non-completed terminal: the provider's
+        // own reason, not the generic missing-envelope diagnostic.
+        Some(with_sandbox_write_attribution(
+            bounded_diagnostic(&diagnostic, redaction),
             sandbox_write_diagnostic.as_deref(),
         ))
     } else if (spec.require_completion_envelope || spec.require_response_envelope)
@@ -724,6 +751,26 @@ pub(super) fn provider_failure<'a>(provider: &str, frame: &'a Value) -> Option<&
         {
             frame.get("error")
         }
+        // [ORB-16597] Muse frames key on `payload_type`, not `type`: the
+        // terminal record is `run.terminal.completed` whatever its outcome,
+        // and `payload.terminal` carries the wire-open outcome. Only a
+        // non-completed terminal is a provider failure frame; its payload
+        // (`terminal`, `text`, and any status fields it carries) is the
+        // provider-owned failure. Prompt echoes, deltas and child-task
+        // records carry other `payload_type`s and never match.
+        "muse"
+            if frame
+                .get("payload_type")
+                .and_then(Value::as_str)
+                .is_some_and(|payload_type| payload_type.starts_with("run.terminal."))
+                && frame
+                    .get("payload")
+                    .and_then(|payload| payload.get("terminal"))
+                    .and_then(Value::as_str)
+                    != Some("completed") =>
+        {
+            Some(frame.get("payload").unwrap_or(frame))
+        }
         _ => None,
     }
 }
@@ -734,12 +781,21 @@ pub(super) fn provider_failure<'a>(provider: &str, frame: &'a Value) -> Option<&
 fn structured_provider_auth_error(provider: &str, stdout: &[u8]) -> Option<String> {
     stdout_frames(stdout).find_map(|frame| {
         let failure = provider_failure(provider, &frame)?;
-        let status = [failure, &frame].into_iter().find_map(|fields| {
+        // Provider-owned field sets that may carry the status or the prose:
+        // the failure itself, its frame, and a nested `error` object. For
+        // Muse the failure is the terminal `payload`, so its `text` and any
+        // status fields it carries are read here. [ORB-16597]
+        let mut sources: Vec<&Value> = vec![failure, &frame];
+        if let Some(error) = failure.get("error").filter(|error| error.is_object()) {
+            sources.push(error);
+        }
+        let status = sources.iter().find_map(|fields| {
             [
                 "api_error_status",
                 "status",
                 "status_code",
                 "http_status",
+                "httpStatus",
                 "code",
             ]
             .iter()
@@ -749,13 +805,31 @@ fn structured_provider_auth_error(provider: &str, stdout: &[u8]) -> Option<Strin
                 matches!(status, 401 | 403).then_some(status)
             })
         });
-        let message = failure.as_str().or_else(|| {
-            ["message", "result", "type", "status", "code"]
-                .iter()
-                .filter_map(|key| failure.get(*key).and_then(Value::as_str))
-                .find(|text| provider_authentication_failure(text))
-        });
-        if status.is_none() && !message.is_some_and(provider_authentication_failure) {
+        let prose: Vec<&str> = failure
+            .as_str()
+            .into_iter()
+            .chain(sources.iter().flat_map(|fields| {
+                ["message", "text", "result", "error"]
+                    .iter()
+                    .filter_map(|key| fields.get(*key).and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+            }))
+            .chain(
+                ["message", "result", "type", "status", "code"]
+                    .iter()
+                    .filter_map(|key| failure.get(*key).and_then(Value::as_str)),
+            )
+            .filter(|text| !text.trim().is_empty())
+            .collect();
+        let auth_message = prose
+            .iter()
+            .copied()
+            .find(|text| provider_authentication_failure(text));
+        // With an HTTP 401/403 the status itself is the evidence, so the
+        // provider's own prose is carried even when it names no known
+        // authentication phrase.
+        let message = auth_message.or_else(|| status.and_then(|_| prose.first().copied()));
+        if status.is_none() && auth_message.is_none() {
             return None;
         }
         let status = status
@@ -813,10 +887,16 @@ fn provider_reported(
                 .as_str()
                 .into_iter()
                 .chain(
-                    ["message", "result"]
+                    ["message", "result", "text", "error"]
                         .iter()
                         .filter_map(|key| failure.get(*key).and_then(Value::as_str)),
                 )
+                .chain(failure.get("error").into_iter().flat_map(|error| {
+                    ["message", "text"]
+                        .iter()
+                        .filter_map(|key| error.get(*key).and_then(Value::as_str))
+                        .collect::<Vec<_>>()
+                }))
                 .find(|text| matches(text))
                 .map(str::to_string)
         })
