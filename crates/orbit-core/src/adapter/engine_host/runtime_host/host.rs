@@ -25,11 +25,13 @@ use orbit_types::task::{
 use orbit_types::telemetry::{InvocationTrace, ProviderLimitObservation};
 use orbit_types::workflow::{
     CommentLogMark, DeferralProbe, JobRun, JobRunStartOutcome, JobRunState, NamespaceProbe,
+    TagInstruction,
 };
 use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::actions::{cli_executor, dispatch, sandbox, task_context};
+use crate::application::tag_instructions::TagInstructionFailure;
 use crate::runtime::engine::paths::{codex_workspace_write_writable_dirs, current_repo_root};
 #[cfg(target_os = "linux")]
 use crate::runtime::recovery_authority::RecoveryAuthority;
@@ -845,6 +847,26 @@ impl RuntimeHost for OrbitRuntime {
         input: &Value,
     ) -> Result<Option<Value>, DispatchError> {
         task_context::task_context_for_agent_input(self, run_id, step_id, input)
+    }
+
+    fn tag_instructions_for_activity(
+        &self,
+        run_id: &str,
+        activity_name: &str,
+        input: &Value,
+    ) -> Result<Vec<TagInstruction>, DispatchError> {
+        OrbitRuntime::tag_instructions_for_activity(self, run_id, activity_name, input).map_err(
+            |failure| match failure {
+                TagInstructionFailure::Store(error) => DispatchError::CliInvocationFailed(format!(
+                    "load tag instructions for `{activity_name}` (run {run_id}): {error}"
+                )),
+                // The same mapping and files refuse identically on every
+                // attempt, so a refusal is not retried.
+                TagInstructionFailure::Refused(error) => {
+                    DispatchError::CliInvocationPermanent(error.to_string())
+                }
+            },
+        )
     }
 
     fn mid_run_steering_enabled(&self) -> bool {

@@ -163,6 +163,7 @@ impl Leaf {
         let receipt = AdmissionReceipt {
             schema_version: 1,
             gates: None,
+            tag_instructions: None,
             request: record.request.clone(),
             machine_id: FOLLOWER.into(),
             claim: Some(ExecutionClaim {

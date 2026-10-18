@@ -111,6 +111,13 @@ pub(crate) fn run_show_payload(
             orbit_core::runtime::audit::run::RunRecoveryAttempts::unavailable()
         });
 
+    let tag_instructions = runtime
+        .collect_run_tag_instructions(&run.run_id)
+        .unwrap_or_else(|error| {
+            tracing::warn!(target: "orbit.cli.run", run_id = %run.run_id, %error, "tag instructions unreadable");
+            orbit_core::runtime::audit::tag_instructions::RunTagInstructions::unavailable()
+        });
+
     let RunDisplaySteps {
         records: steps,
         source: steps_source,
@@ -176,6 +183,7 @@ pub(crate) fn run_show_payload(
     let mut doc = json!({
         "run": run_projection,
         "recovery_attempts": recovery.to_json(),
+        "tag_instructions": tag_instructions.to_json(),
         "pull_claim": pull_claim,
         "claimed_leaves": claimed_leaves,
         "refused_settlements": refused_settlements,
@@ -250,6 +258,10 @@ pub(crate) fn run_show_payload(
                 .map(|detail| format!("; {detail}"))
                 .unwrap_or_default(),
         ));
+    }
+    for line in tag_instructions.header_lines() {
+        header.push('\n');
+        header.push_str(&line);
     }
     let mut displayed_build_budget_waits = HashSet::new();
     for process in &provider_processes {

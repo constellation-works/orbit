@@ -164,6 +164,11 @@ impl OrbitRuntime {
         self.current_mid_run_steering()
     }
 
+    /// `[workflow.tag_instructions]` as admitted.
+    pub(crate) fn tag_instruction_settings(&self) -> &orbit_config::TagInstructionSettings {
+        self.context.settings().tag_instructions()
+    }
+
     /// The resolved `[operation]` review preferences (layered over the
     /// built-in no-review defaults) with per-field provenance [ORB-11333].
     pub fn operation_policy(&self) -> &orbit_config::OperationPolicy {

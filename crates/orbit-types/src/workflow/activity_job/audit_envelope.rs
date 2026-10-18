@@ -241,6 +241,16 @@ pub enum V2AuditEventKind {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         omitted_requirement_notes: Vec<String>,
     },
+    /// The tag instructions a CLI backend invocation's prompt carried, emitted
+    /// once per invocation before the subprocess starts, and only when there
+    /// were some. Text is not recorded: the hash and source identify it.
+    TagInstructionsApplied {
+        /// The pipeline step that dispatched the activity.
+        step_id: String,
+        activity_name: String,
+        task_id: String,
+        instructions: Vec<crate::workflow::TagInstructionRecord>,
+    },
     /// [ORB-11354] An operator-admitted provider subprocess is about to run
     /// **outside** the executor's filesystem sandbox.
     ///
@@ -420,6 +430,7 @@ impl V2AuditEventKind {
             V2AuditEventKind::TrustedHostExecutionAdmitted { .. } => {
                 "trusted_host.execution_admitted"
             }
+            V2AuditEventKind::TagInstructionsApplied { .. } => "activity.tag_instructions_applied",
             V2AuditEventKind::CliInvocationStarted { .. } => "cli.invocation.started",
             V2AuditEventKind::CliInvocationProcess { .. } => "cli.invocation.process",
             V2AuditEventKind::CliInvocationActivity { .. } => "cli.invocation.activity",

@@ -13,7 +13,7 @@ use orbit_common::security::child_env::{MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAG
 use orbit_common::security::redaction::argv_redactor;
 use orbit_tools::plugin::BrokeredCaller;
 use orbit_types::workflow::activity_job::{AgentLoopSpec, V2AuditEventKind};
-use orbit_types::workflow::{ActivityToolDenyPolicy, ExecutorSandboxKind};
+use orbit_types::workflow::{ActivityToolDenyPolicy, ExecutorSandboxKind, render_tag_instructions};
 use serde_json::Value;
 
 use crate::context::{PluginBrokerRun, ProvenanceEnv, provenance_env};
@@ -156,6 +156,24 @@ pub(crate) fn run_cli_backend_for_step(
     if let Some(tools) = &inspection_tools {
         envelope_spec.instruction.push_str("\n\n");
         envelope_spec.instruction.push_str(tools.instruction);
+    }
+    // Trusted per-tag guidance goes last, after every built-in rule it may
+    // not override. The audit row names what the prompt carried.
+    let tag_instructions = host.tag_instructions_for_activity(run_id, activity_name, input)?;
+    if !tag_instructions.is_empty() {
+        envelope_spec.instruction.push_str("\n\n");
+        envelope_spec
+            .instruction
+            .push_str(&render_tag_instructions(&tag_instructions));
+        audit.emit_lossy(V2AuditEventKind::TagInstructionsApplied {
+            step_id: step_id.to_string(),
+            activity_name: activity_name.to_string(),
+            task_id: task_id.unwrap_or_default().to_string(),
+            instructions: tag_instructions
+                .iter()
+                .map(|instruction| instruction.record())
+                .collect(),
+        });
     }
     let envelope_json = cli_agent_envelope_json(
         &envelope_spec,

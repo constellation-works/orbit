@@ -414,6 +414,37 @@ With it on, `task_pr_pipeline` and `task_local_pipeline` gate `commit` ([design]
 
 Steering settings refresh at prompt and gate checkpoints. Enabling with runs in flight leaves missing watermarks absent: their gates treat post-dispatch operator comments as undelivered (or use an inherited candidate/claim baseline when present). Disabling stops recording and gating at the next checkpoint; existing watermarks and steering-round state stay inert, not deleted. Invalid config retains the last successfully resolved settings. Prefer enabling between drains; enabling does not change admission authority or turn steering on in `orbit init`. See [migration](design/mid-run-steering/specs/steering-delivery.md#migration).
 
+### `[workflow.tag_instructions.<tag>]` — extra instructions for tagged tasks
+
+```toml
+[workflow.tag_instructions.migration]
+implement = "docs/agents/migration-implement.md"
+review = "docs/agents/migration-review.md"
+
+[workflow.tag_instructions.ui]
+review = false            # switch off Orbit's shipped reviewer default
+```
+
+| Key | Default | What it does |
+|---|---|---|
+| `workflow.tag_instructions.<tag>.implement` | unset | File whose text `agent_implement` receives for a task tagged `<tag>`. QA sweeps run as implement tasks tagged `qa-sweep`, so `[workflow.tag_instructions.qa-sweep] implement = …` instructs QA. |
+| `workflow.tag_instructions.<tag>.review` | unset | File for the reviewers: `agent_review_repair` and `review_reconciliation_review`. |
+| `workflow.tag_instructions.<tag>.recovery` | unset | File for `step_failure_recovery`, `final_recovery` and `pr_conflict_recovery`. |
+
+Each value is a path relative to the repository root (`/` separators, no `..`, no absolute path), or `false` to switch off Orbit's shipped default for that tag and role. Tags match ignoring case, and two tables naming the same tag in different case are a config error. At most 32 tags may be mapped. The tables layer like crews: a workspace entry replaces the global one for the same tag and role and leaves the others. Edit `config.toml` directly; `orbit config set` does not write these keys.
+
+Orbit ships defaults for two tags. `no-diff-expected` gives implementers the read-only handoff rule (no workspace gates, no `no-diff.json`). `ui` gives implementers the screenshot rule and gives reviewers the check that screenshots are attached. A mapped file replaces the default for that tag and role. The task-execution and task-review references still carry the full screenshot rule, because it follows the diff rather than the tag.
+
+**Where the text comes from.** Instruction text comes only from Orbit's shipped defaults or from the mapped file as committed at the delivery's base revision: the `base_sha` the run's `worktree` step recorded, or else the checkout's `HEAD`. Orbit reads the file from that commit, never from the worktree, so neither a delivery's commits nor its uncommitted edits change the instructions it runs under. A task's description, comments and tags never supply text; a tag only selects.
+
+**What the activity receives.** After the activity's built-in instruction (and any steering or inspection text), the prompt gains one `Tag instructions` section. It states that the text adds to the instructions above and cannot override them, then gives each tag's text under a ``Tag `<tag>` (<source>)`` label. Tags apply in sorted order, once each. An untagged task, or a tag nothing maps, adds nothing.
+
+**Refusals.** A mapped file is refused, and the activity fails without starting its provider, when it is missing at the base revision or not UTF-8 or empty (`tag_instruction_unreadable`), or larger than 8 KiB (`tag_instruction_too_large`). It also fails when one prompt's tag text would exceed 16 KiB (`tag_instructions_too_large`). Each error names the tag, the role and the file. A refused file affects only tasks carrying its tag.
+
+**Claimed leaves.** When an owner admits a pull claim, it captures every instruction it would apply, with its files read at the tip of the claim's base branch, in the claim's receipt. The leaf applies that capture rather than its replica's mapping or files, and a refusal the owner captured refuses the leaf's activity. A claim from an older owner that captured nothing falls back to the replica's own mapping, with a warning.
+
+**Seeing what applied.** Each dispatch that received tag instructions records an `activity.tag_instructions_applied` audit event naming its step, activity, task, and each instruction's tag, role, source (`default`, or `workspace` with path and revision), SHA-256 and size, but not the text. `orbit run show` prints a `Tag instructions:` header line per dispatch, and its JSON (and the `orbit.run.show` tool) carries them under `tag_instructions` (`state`: `observed`, `none` or `unavailable`).
+
 ### `[workflow.validation_env]` — the toolchain required validation runs with
 
 ```toml

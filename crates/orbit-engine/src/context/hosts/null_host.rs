@@ -16,6 +16,7 @@ use orbit_types::task::{
 use orbit_types::telemetry::{InvocationTrace, ProviderLimitObservation};
 use orbit_types::workflow::{
     DeferralProbe, JobRun, JobRunStartOutcome, JobRunState, NamespaceProbe, PipelineState,
+    TagInstruction,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -637,6 +638,15 @@ pub trait NullRuntimeHost: Send + Sync {
         _input: &Value,
     ) -> Result<Option<Value>, DispatchError> {
         Ok(None)
+    }
+
+    fn tag_instructions_for_activity(
+        &self,
+        _run_id: &str,
+        _activity_name: &str,
+        _input: &Value,
+    ) -> Result<Vec<TagInstruction>, DispatchError> {
+        Ok(Vec::new())
     }
 
     fn resolve_activity_tool_denials(
@@ -1308,6 +1318,14 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
         input: &Value,
     ) -> Result<Option<Value>, DispatchError> {
         NullRuntimeHost::task_context_for_agent_input(self, run_id, step_id, input)
+    }
+    fn tag_instructions_for_activity(
+        &self,
+        run_id: &str,
+        activity_name: &str,
+        input: &Value,
+    ) -> Result<Vec<TagInstruction>, DispatchError> {
+        NullRuntimeHost::tag_instructions_for_activity(self, run_id, activity_name, input)
     }
     fn resolve_activity_tool_denials(
         &self,

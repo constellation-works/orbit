@@ -476,6 +476,7 @@ fn admission(
     let receipt = AdmissionReceipt {
         schema_version: 1,
         gates: None,
+        tag_instructions: None,
         request: record.request.clone(),
         machine_id: destination.execution_machine_id.clone(),
         claim: Some(ExecutionClaim {

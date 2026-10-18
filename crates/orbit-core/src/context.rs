@@ -444,6 +444,9 @@ pub(crate) struct OrbitRuntimeSettings {
     /// `[workflow.mid_run_steering]`: whether task-context prompts record
     /// the run's steering watermark (default off).
     mid_run_steering: orbit_config::MidRunSteeringSettings,
+    /// `[workflow.tag_instructions]`: the files that replace or disable
+    /// Orbit's shipped per-tag instructions.
+    tag_instructions: orbit_config::TagInstructionSettings,
 }
 
 impl OrbitRuntimeSettings {
@@ -477,6 +480,7 @@ impl OrbitRuntimeSettings {
         worktree_reclaim_below_free_mib: Option<u64>,
         worktree_parked_reclaim_after_hours: u64,
         mid_run_steering: orbit_config::MidRunSteeringSettings,
+        tag_instructions: orbit_config::TagInstructionSettings,
     ) -> Self {
         Self {
             persistence,
@@ -507,11 +511,16 @@ impl OrbitRuntimeSettings {
             worktree_reclaim_below_free_mib,
             worktree_parked_reclaim_after_hours,
             mid_run_steering,
+            tag_instructions,
         }
     }
 
     pub(crate) fn mid_run_steering(&self) -> orbit_config::MidRunSteeringSettings {
         self.mid_run_steering
+    }
+
+    pub(crate) fn tag_instructions(&self) -> &orbit_config::TagInstructionSettings {
+        &self.tag_instructions
     }
 
     pub(crate) fn set_host_shutdown_hold_minutes(&mut self, minutes: u32) {

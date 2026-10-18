@@ -19,6 +19,9 @@ pub struct AdmissionOrdering {
     /// The owner's validation gates, captured in the receipt
     /// ([`AdmissionReceipt::gates`]) [ORB-15622].
     pub gates: Option<orbit_types::workflow::ValidationGates>,
+    /// The owner's tag instructions, captured in the receipt
+    /// ([`AdmissionReceipt::tag_instructions`]).
+    pub tag_instructions: Option<orbit_types::workflow::CapturedTagInstructions>,
     /// Crew name to the executor `host_os` that constrains tasks assigned to
     /// it. Empty leaves admission on the task's `os:` tags alone. Not part of
     /// the follower's request, so it does not change the request fingerprint.
@@ -541,6 +544,14 @@ pub struct AdmissionReceipt {
     /// leaf falls back to the replica's configuration with a warning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gates: Option<orbit_types::workflow::ValidationGates>,
+    /// Every tag instruction the owner applies, resolved when it admitted
+    /// this request. The claimed leaf's activities receive these, never its
+    /// replica's configuration or files, so one task gets the same guidance
+    /// on every host. Like `gates`, a response field outside the request's
+    /// fingerprint: a receipt from an older owner carries none, and its leaf
+    /// falls back to resolving on the replica with a warning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag_instructions: Option<orbit_types::workflow::CapturedTagInstructions>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -61,6 +61,7 @@
 //!   projection in sibling named modules.
 //! - `persistence` — artifact path resolution from the two roots.
 //! - `plugin_enablement` — the workspace `[plugin_enablement]` toggles.
+//! - `tag_instructions` — the `[workflow.tag_instructions.<tag>]` file mapping.
 //! - `store` — comment-preserving [`ConfigStore`] edits and an atomic save that
 //!   refuses to replace a file changed since the store read it.
 //! - `seed` — rendering and writing a fresh default `config.toml`.
@@ -80,6 +81,7 @@ mod resolved;
 mod roots;
 mod seed;
 mod store;
+mod tag_instructions;
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -127,6 +129,7 @@ pub use resolved::{
 pub use roots::ConfigRoots;
 pub use seed::{ConfigSeed, seed_default_config};
 pub use store::{ConfigScope, ConfigStore, WorkspaceInitMode};
+pub use tag_instructions::{TAG_INSTRUCTIONS_KEY, TagInstructionSetting, TagInstructionSettings};
 
 const MACHINE_SETTINGS_FILE: &str = "config.toml";
 
