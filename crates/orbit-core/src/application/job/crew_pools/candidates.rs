@@ -1,8 +1,7 @@
 use orbit_common::OrbitError;
-use orbit_config::{canonical_crew_pool, canonical_crew_pool_entries};
+use orbit_config::{canonical_crew_pool, canonical_crew_pool_entries, executor_host_os};
 use orbit_types::identity::Crew;
-use orbit_types::task::{Task, TaskComplexity, TaskHistoryEntry};
-use orbit_types::workflow::CrewPurpose;
+use orbit_types::task::{Task, TaskComplexity, TaskHistoryEntry, TaskOsRequirement};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -74,12 +73,8 @@ impl OrbitRuntime {
             return Ok(None);
         }
         let before = task.crew.clone();
-        let assignment = self.creation_crew_assignment(
-            complexity,
-            None,
-            task_crew_purpose(&task.tags),
-            &mut random_crew_ticket,
-        )?;
+        let assignment =
+            self.creation_crew_assignment(complexity, None, &task.tags, &mut random_crew_ticket)?;
         task.crew = assignment
             .as_ref()
             .map(|assignment| assignment.crew.clone());
@@ -296,12 +291,13 @@ impl OrbitRuntime {
         complexity: Option<TaskComplexity>,
         pools: &CapturedCrewPools,
     ) -> Result<Option<(Vec<CrewCandidate>, String)>, OrbitError> {
-        self.complexity_pool_candidates_on(complexity, pools, false)
+        self.complexity_pool_candidates_on(complexity, pools, None)
     }
 
     /// The creation-time counterpart of [`Self::complexity_pool_candidates`]:
     /// a crew counts when any host serving with this one can run its
-    /// executor, so an owner whose pool holds a follower-only crew can draw
+    /// executor and its OS limit intersects the task's tags, so an owner
+    /// whose pool holds a follower-only crew can draw
     /// it and let the task wait for that follower. Only creation and
     /// complexity re-rates draw this way; admission, provider holds and
     /// activity fallbacks keep the executing-host filter above.
@@ -309,15 +305,16 @@ impl OrbitRuntime {
         &self,
         complexity: Option<TaskComplexity>,
         pools: &CapturedCrewPools,
+        task_os: &TaskOsRequirement,
     ) -> Result<Option<(Vec<CrewCandidate>, String)>, OrbitError> {
-        self.complexity_pool_candidates_on(complexity, pools, true)
+        self.complexity_pool_candidates_on(complexity, pools, Some(task_os))
     }
 
     fn complexity_pool_candidates_on(
         &self,
         complexity: Option<TaskComplexity>,
         pools: &CapturedCrewPools,
-        serving_hosts: bool,
+        task_os: Option<&TaskOsRequirement>,
     ) -> Result<Option<(Vec<CrewCandidate>, String)>, OrbitError> {
         let Some(pool) = complexity
             .and_then(|complexity| pools.get(complexity.as_str()))
@@ -346,7 +343,7 @@ impl OrbitRuntime {
         }
         // A crew whose executor `host_os` excludes this host is not drawn, so
         // admission does not select it and then withhold it. The creation
-        // draw (`serving_hosts`) instead keeps a crew any serving host can
+        // draw (`task_os`) instead keeps a crew any serving host can
         // run: the assigned task waits for that host rather than being
         // redrawn here. Crews with no declaration stay, with their weights,
         // so an unconstrained pool draws as before. An explicit crew never
@@ -354,9 +351,20 @@ impl OrbitRuntime {
         let declared = self.declared_executor_host_os()?;
         // Resolve the serving set once: it reads this workspace's claim
         // records, which no candidate's answer can change.
-        let serving = serving_hosts.then(|| self.serving_host_oses());
+        let serving = task_os.map(|_| self.serving_host_oses());
         let crews = enabled
             .into_iter()
+            .filter(|candidate| {
+                task_os.is_none_or(|requirement| {
+                    requirement
+                        .intersect_executor(
+                            &candidate.crew.name,
+                            &candidate.crew.assignment.provider,
+                            executor_host_os(&candidate.crew.assignment.provider, &declared),
+                        )
+                        .is_ok()
+                })
+            })
             .filter(|candidate| match &serving {
                 Some(oses) => self.crew_runs_on_hosts(&candidate.crew, &declared, oses),
                 None => self.crew_runs_on_host(&candidate.crew, &declared),
@@ -365,7 +373,7 @@ impl OrbitRuntime {
         if crews.is_empty() {
             tracing::info!(
                 source = %pool.source,
-                "every crew in the pool is excluded by its executor host_os; routing to workflow.default_crew",
+                "every crew in the pool is excluded by its executor host_os or task OS tags; routing to workflow.default_crew",
             );
             return Ok(None);
         }
@@ -444,14 +452,16 @@ impl OrbitRuntime {
     /// Creation and complexity re-rates draw from the complexity pools;
     /// a status transition alone never revisits the choice, and
     /// `task update --crew ""` re-enters here for the task's current
-    /// complexity. An explicit crew is kept exactly as the caller wrote it.
+    /// complexity. Complexity pools exclude crews incompatible with the tags
+    /// this write leaves the task with, before drawing. An explicit crew is
+    /// kept exactly as the caller wrote it.
     /// `None` means this workspace can name no crew at all, so the field stays
     /// unset and dispatch resolves one from configuration as it always has.
     pub(crate) fn creation_crew_assignment(
         &self,
         complexity: Option<TaskComplexity>,
         explicit: Option<&str>,
-        purpose: Option<CrewPurpose>,
+        tags: &[String],
         random: &mut impl FnMut() -> Result<u64, OrbitError>,
     ) -> Result<Option<CreationCrewAssignment>, OrbitError> {
         if let Some(explicit) = explicit.and_then(non_empty) {
@@ -460,7 +470,7 @@ impl OrbitRuntime {
                 source: "explicit".to_string(),
             }));
         }
-        if let Some(purpose) = purpose
+        if let Some(purpose) = task_crew_purpose(tags)
             && let Some((candidates, _)) = self.purpose_pool_candidates(purpose, false)?
         {
             let source = format!("{PURPOSE_SOURCE_PREFIX}{purpose}");
@@ -473,8 +483,11 @@ impl OrbitRuntime {
         }
         let pools = self.capture_auto_crew_pools(&Value::Null)?;
         if let Some(complexity) = complexity
-            && let Some((candidates, _)) =
-                self.creation_complexity_pool_candidates(Some(complexity), &pools)?
+            && let Some((candidates, _)) = self.creation_complexity_pool_candidates(
+                Some(complexity),
+                &pools,
+                &TaskOsRequirement::from_tags(tags),
+            )?
         {
             let source = format!("pool:{complexity}");
             let candidates = permitted_candidates(candidates, &source, None)?;

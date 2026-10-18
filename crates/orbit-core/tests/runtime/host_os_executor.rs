@@ -979,10 +979,81 @@ fn a_linux_owner_with_a_macos_follower_draws_the_macos_only_crew() {
     );
 }
 
+/// Automatic assignment filters by the effective tags before drawing, so a
+/// serving follower cannot make a satisfiable Linux task or edit fail.
+fn serving_host_draws_respect_effective_task_os_tags() {
+    const MAC: &str = "hm_fixture_mac";
+    let (_root, linux) = runtime_on(HostOs::Linux, MUSE_ONLY_POOL);
+    seed_claim_evidence(&linux, MAC, 0);
+    let owner = linux
+        .clone()
+        .with_registered_host_oses([(MAC.to_string(), HostOs::Macos)]);
+    let fallback = add(&owner, "linux-fallback", None, &[" OS:LiNuX "])
+        .expect("a macOS-only pool must fall back for a Linux-only task");
+    assert_eq!(fallback.crew.as_deref(), Some("sol"));
+    assert_eq!(fallback.crew_source.as_deref(), Some("default"));
+
+    let untagged = add(&owner, "unrestricted-draw", None, &[]).unwrap();
+    assert_eq!(untagged.crew.as_deref(), Some("muse-wonder"));
+    assert_eq!(untagged.crew_source.as_deref(), Some("pool:medium"));
+    let either = add(&owner, "either-os", None, &["os:linux", "os:macos"]).unwrap();
+    assert_eq!(either.crew.as_deref(), Some("muse-wonder"));
+
+    let count = owner.list_tasks().unwrap().len();
+    let refused = add(&owner, "impossible-pin", Some("muse-wonder"), &["os:linux"])
+        .expect_err("an explicit impossible crew remains refused");
+    assert!(matches!(refused, OrbitError::InvalidInput(_)), "{refused}");
+    assert_eq!(owner.list_tasks().unwrap().len(), count);
+
+    let pinned = add(&owner, "cleared-linux", Some("sol"), &["os:linux"]).unwrap();
+    for (task, tags) in [(&pinned, None), (&untagged, Some(json!(["os:linux"])))] {
+        let mut update = json!({"id": task.id, "crew": "", "model": "codex"});
+        if let Some(tags) = tags {
+            update["tags"] = tags;
+        }
+        owner
+            .run_tool("orbit.task.update", update)
+            .expect("clearing uses the effective tags and compatible fallback");
+        let cleared = owner.get_task(&task.id).unwrap();
+        assert_eq!(cleared.crew.as_deref(), Some("sol"));
+        assert_eq!(cleared.crew_source.as_deref(), Some("default"));
+        assert_eq!(cleared.tags, vec!["os:linux"]);
+    }
+
+    let (_rerate_root, linux) = runtime_on(HostOs::Linux, RERATE_POOL);
+    seed_claim_evidence(&linux, MAC, 0);
+    let owner = linux.with_registered_host_oses([(MAC.to_string(), HostOs::Macos)]);
+    for (title, tags, edited_tags) in [
+        ("kept-linux", vec!["os:linux"], None),
+        ("added-linux", vec![], Some(json!(["os:linux"]))),
+        ("removed-linux", vec!["os:linux"], Some(json!([]))),
+    ] {
+        let task = add(&owner, title, None, &tags).unwrap();
+        let mut update = json!({"id": task.id, "complexity": "hard", "model": "codex"});
+        if let Some(tags) = edited_tags {
+            update["tags"] = tags;
+        }
+        owner
+            .run_tool("orbit.task.update", update)
+            .expect("valid re-rate");
+        let rerated = owner.get_task(&task.id).unwrap();
+        let (crew, source) = if title == "removed-linux" {
+            ("muse-wonder", "pool:hard")
+        } else {
+            ("sol", "default")
+        };
+        assert_eq!(rerated.complexity, Some(TaskComplexity::Hard));
+        assert_eq!(rerated.crew.as_deref(), Some(crew), "{title}");
+        assert_eq!(rerated.crew_source.as_deref(), Some(source), "{title}");
+        assert_eq!(rerated.tags.is_empty(), title == "removed-linux", "{title}");
+    }
+}
+
 crate::scenario_table!(
     a_linux_host_waits_on_a_muse_crew_and_a_macos_host_admits_it_scenarios,
     a_linux_host_waits_on_a_muse_crew_and_a_macos_host_admits_it,
     a_linux_owner_with_a_macos_follower_draws_the_macos_only_crew,
+    serving_host_draws_respect_effective_task_os_tags,
     an_empty_os_intersection_is_refused_on_add_and_update,
     an_excluded_default_crew_is_not_pinned,
     a_supported_explicit_run_crew_survives_discovery_and_replay,

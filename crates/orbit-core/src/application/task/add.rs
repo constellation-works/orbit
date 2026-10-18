@@ -9,7 +9,7 @@ use orbit_types::task::{
 
 use crate::OrbitRuntime;
 use crate::application::job::crew_pools::{
-    CreationCrewAssignment, random_crew_ticket, seeded_crew_ticket, task_crew_purpose,
+    CreationCrewAssignment, random_crew_ticket, seeded_crew_ticket,
 };
 
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
@@ -179,7 +179,7 @@ impl OrbitRuntime {
         let mut crew_assignment = self.creation_crew_assignment(
             Some(params.complexity),
             params.crew.as_deref(),
-            task_crew_purpose(&params.tags),
+            &normalized_tags,
             &mut creation_crew_ticket(action_key),
         )?;
         // A crew the system chose from a setting records that setting rather
