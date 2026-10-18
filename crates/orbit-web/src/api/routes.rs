@@ -158,6 +158,12 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
             "/metrics/invocations",
             get(metrics::invocation_metrics).post(metrics::ingest_invocation),
         )
+        // Analytics › Resources: this host's delivery resource profiles for
+        // the selected workspace, as admission prices candidates with them.
+        .route(
+            "/resource-profiles",
+            get(resource_profiles::resource_profiles),
+        )
         .route(
             "/diagnostics/metrics",
             get(diagnostics::list_diagnostics_metrics),

@@ -90,6 +90,13 @@ pub struct HostLoad {
     pub memory_total_bytes: u64,
 }
 
+/// The host's size: what admission's thresholds are percentages of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct HostCapacity {
+    pub cpu_count: u32,
+    pub memory_total_bytes: u64,
+}
+
 /// Busy cores over a window of one to two minutes ending now.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct SustainedCpu {

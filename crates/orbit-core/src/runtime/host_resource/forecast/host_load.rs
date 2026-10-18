@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, TimeDelta, Utc};
 
-use super::{HostLoad, SustainedCpu};
+use super::{HostCapacity, HostLoad, SustainedCpu};
 use crate::runtime::host_resource::{HostUsageReading, read_host_usage};
 
 /// Shortest interval CPU utilization is measured over.
@@ -98,6 +98,15 @@ impl HostLoadProbe {
             }
             std::thread::sleep(wait);
         }
+    }
+
+    /// The host's core count and memory, read now without a CPU window.
+    /// `None` when the host cannot be read.
+    pub(crate) fn capacity(&self) -> Option<HostCapacity> {
+        read_host_usage(&self.proc_root).map(|reading| HostCapacity {
+            cpu_count: reading.cpu_count,
+            memory_total_bytes: reading.memory_total_bytes,
+        })
     }
 
     /// The host's load as of `now`: CPU over the interval since the previous

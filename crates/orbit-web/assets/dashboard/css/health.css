@@ -470,14 +470,15 @@ td .rel-rate { font-size: 12px; }
 /* ORB-15746 — Analytics › Metrics: implement_one duration and task completion
    trends. One colour per complexity series, shared by lines, dots, stacked
    bars, swatches and tooltips; `other` (xhard + unset) only ever stacks. */
-.metrics-body {
+.metrics-body, .resources-body {
   --mx-all: var(--fg);
   --mx-low: #5cc8f0;
   --mx-medium: #f2b24c;
   --mx-hard: #ff7a6b;
   --mx-other: #3a414b;
 }
-.panel > .body.metrics-body {
+.panel > .body.metrics-body,
+.panel > .body.resources-body {
   display: flex; flex-direction: column; gap: 16px;
   padding: 16px; background: var(--bg);
 }
@@ -716,4 +717,75 @@ td .rel-rate { font-size: 12px; }
   .mx-y-wrap { flex-basis: 32px; }
   .mx-notes { padding-left: 0; }
   .mx-tip { width: 200px; }
+}
+
+/* Analytics › Resources: this host's delivery resource profiles. CPU, memory
+   and the still-running strip stack on one x-axis (minutes since admission)
+   with one cursor and tooltip. Complexity series keep the Metrics colours;
+   the rarer ones and a template's single series add their own. */
+.resources-body {
+  --mx-xhard: #9085e9;
+  --mx-unassessed: #63d297;
+  --mx-unset: #e7eaee;
+  --mx-template: var(--accent);
+  --rp-gutter: 52px;
+}
+.rp-s-low { --mx-c: var(--mx-low); }
+.rp-s-medium { --mx-c: var(--mx-medium); }
+.rp-s-hard { --mx-c: var(--mx-hard); }
+.rp-s-xhard { --mx-c: var(--mx-xhard); }
+.rp-s-unassessed { --mx-c: var(--mx-unassessed); }
+.rp-s-unset { --mx-c: var(--mx-unset); }
+.rp-s-template { --mx-c: var(--mx-template); }
+.rp-card { gap: 16px; }
+.rp-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 12px; }
+.rp-classes { flex-wrap: wrap; max-width: 100%; }
+.mx-seg-btn:disabled { color: var(--fg-disabled); cursor: default; }
+.mx-seg-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rp-n.low { color: #f2c46d; }
+.rp-sparse-tag {
+  margin-left: 6px; padding: 0 5px; border: 1px dashed #f2c46d; border-radius: 4px;
+  color: #f2c46d; font: 11px var(--font-sans);
+}
+.mx-sc.rp-sparse .mx-swatch { opacity: 0.55; }
+.rp-charts { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.rp-frame { position: relative; min-width: 0; border-radius: 4px; }
+.rp-frame:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rp-stack { position: relative; display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.rp-plot { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.rp-plot-title { padding-left: var(--rp-gutter); color: var(--fg-dim); font: 12px var(--font-sans); }
+.rp-plot-body { display: grid; grid-template-columns: var(--rp-gutter) minmax(0, 1fr); min-width: 0; }
+.rp-y-axis { position: relative; margin-right: 8px; }
+.rp-area { position: relative; height: 180px; border-bottom: 1px solid var(--border); }
+.rp-area-alive { height: 56px; }
+.rp-plot-alive .rp-plot-title { font-size: 11px; }
+.rp-lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; z-index: 1; }
+.rp-line { fill: none; stroke: var(--mx-c); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.rp-line.rp-mean { stroke-width: 1.5; stroke-dasharray: 5 4; stroke-linecap: butt; }
+.rp-band { fill: var(--mx-c); fill-opacity: 0.14; stroke: none; }
+.rp-lines .rp-sparse { opacity: 0.5; }
+.rp-end { width: 9px; height: 9px; }
+.rp-end.rp-sparse { opacity: 0.8; }
+.rp-threshold { position: absolute; left: 0; right: 0; border-top: 1px dashed #f2c46d; z-index: 2; }
+.rp-threshold-label {
+  position: absolute; right: 4px; transform: translateY(-120%); z-index: 2;
+  padding: 0 4px; background: var(--bg-elev); color: #f2c46d; font: 11px var(--font-mono);
+}
+.rp-x-row { display: grid; grid-template-columns: var(--rp-gutter) minmax(0, 1fr); margin-top: -8px; }
+.rp-x-axis { position: relative; height: 18px; }
+.rp-tip { top: 26px; width: 272px; transform: translateX(14px); }
+.rp-tip.left { transform: translateX(calc(-100% - 14px)); }
+.rp-tip[hidden] { display: none; }
+.rp-tip-series { display: flex; flex-direction: column; gap: 2px; padding-top: 4px; }
+.rp-tip-values { display: flex; flex-direction: column; padding-left: 18px; color: var(--fg-dim); font: 12px var(--font-mono); font-variant-numeric: tabular-nums; }
+.rp-notes { padding-left: var(--rp-gutter); }
+.rp-row-name { display: inline-flex; align-items: center; gap: 8px; }
+.rp-meta { margin: 0; color: var(--fg-mute); font: 12px var(--font-sans); }
+
+@media (max-width: 600px) {
+  .resources-body { --rp-gutter: 38px; }
+  .rp-area { height: 150px; }
+  .rp-area-alive { height: 48px; }
+  .rp-tip { width: 220px; }
+  .rp-notes { padding-left: 0; }
 }
