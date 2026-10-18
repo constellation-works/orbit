@@ -93,6 +93,51 @@ fn run_explicit_zero_duration_drain(pair: &Pair, slots: u32) -> String {
     run_single_pass_drain(pair, slots, &[], Some(0))
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn a_credentialless_pull_drain_excludes_claude_provider_aliases_before_claiming() {
+    if !isolated(
+        module_path!(),
+        "a_credentialless_pull_drain_excludes_claude_provider_aliases_before_claiming",
+    ) {
+        return;
+    }
+    let _env = orbit_common::test_env::unset(["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]);
+    let config = "[crews.writer]\nprovider = \"anthropic\"\nmodel = \"claude-sonnet\"\n\n\
+                  [crews.reviewers]\nprovider = \"codex\"\nmodel = \"gpt-sol\"\n\n\
+                  [workflow]\ndefault_crew = \"reviewers\"\n";
+    let pair = Pair::with_configs(config, config, &[Some("writer"), Some("reviewers")]);
+
+    let drain = run_windowless_drain(&pair, 1, &[]);
+    let input = pair
+        .follower_jobs
+        .get_job_run(&drain)
+        .unwrap()
+        .unwrap()
+        .input
+        .unwrap();
+    assert_eq!(input["allowed_crews"], json!(["reviewers"]));
+    assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+    let claimed = pair
+        .owner_claims()
+        .into_iter()
+        .map(|claim| claim["claim"]["task_id"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(claimed, vec![pair.tasks[1].clone()]);
+    assert_eq!(pair.run_state(&drain), JobRunState::Success);
+    let (follower, _) = bound_follower(&pair);
+    let warnings = follower
+        .submission_notices(orbit_core::application::job::SubmissionKind::PullDrain)
+        .warnings();
+    assert_eq!(
+        warnings
+            .iter()
+            .filter(|warning| warning.contains("setup-token"))
+            .count(),
+        1
+    );
+}
+
 fn run_single_pass_drain(
     pair: &Pair,
     slots: u32,
@@ -235,7 +280,9 @@ fn a_windowless_pull_drain_over_an_empty_backlog_asks_once_and_ends() {
 /// Explicit zero is the same bounded single-pass contract as an omitted
 /// duration: it admits once, fills only the requested slot, then settles.
 fn an_explicit_zero_duration_pull_drain_admits_one_bounded_pass() {
-    let pair = Pair::new(2);
+    // Non-Claude crews: a macOS host without a worker credential narrows its
+    // drains away from Claude crews [ORB-16663], which this test is not about.
+    let pair = Pair::with_crews(&[Some("sol"), Some("sol")]);
 
     let drain = run_explicit_zero_duration_drain(&pair, 1);
 

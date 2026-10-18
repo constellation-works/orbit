@@ -369,6 +369,8 @@ impl OrbitRuntime {
         )?
         .into_result()?;
         self.preflight_git_protection()?;
+        let crews = self
+            .drain_crews_without_worker_credential(self.canonical_allowed_crews(allowed_crews)?)?;
         let workflow = crate::application::workflow::find_workflow(
             crate::application::workflow::AUTO_WORKFLOW_ALIAS,
         )
@@ -377,7 +379,7 @@ impl OrbitRuntime {
             for_seconds,
             max_active_leaf_runs,
             completion,
-            &self.canonical_allowed_crews(allowed_crews)?,
+            &crews,
             approve_proposed,
             auto_fix,
         )?;

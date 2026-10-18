@@ -54,6 +54,7 @@ use std::os::unix::process::ExitStatusExt;
 use super::run::CANCELLATION_WORKER_EXIT_AUDIT;
 
 mod admission;
+mod claude_credential;
 mod notices;
 mod submit;
 mod wait;

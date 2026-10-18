@@ -41,7 +41,11 @@ fn git(cwd: &Path, args: &[&str]) {
 /// `shipped_jobs` deploys the catalog and a worker that cannot start, so an
 /// admitted submission persists its run and then fails at startup without
 /// launching anything.
-fn open(ship_mode: ShipMode, config: &str, shipped_jobs: bool) -> (TempDir, OrbitRuntime) {
+pub(super) fn open(
+    ship_mode: ShipMode,
+    config: &str,
+    shipped_jobs: bool,
+) -> (TempDir, OrbitRuntime) {
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let repo = root.path().join("repo");

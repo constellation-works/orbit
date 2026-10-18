@@ -26,7 +26,9 @@ fn throttled_runtime(root: &Path, extra: &str) -> OrbitRuntime {
     std::fs::create_dir_all(&workspace).unwrap();
     std::fs::write(
         global.join("config.toml"),
-        format!("[execution.env]\npass = [\"HOME\", \"PATH\", \"{UNSET_PASS}\"]\n\n{extra}"),
+        format!(
+            "[execution.env]\npass = [\"HOME\", \"PATH\", \"CLAUDE_CODE_OAUTH_TOKEN\", \"{UNSET_PASS}\"]\n\n{extra}"
+        ),
     )
     .unwrap();
     let probe = PressureProbe::calm();
@@ -45,6 +47,10 @@ fn receipt(notices: &SubmissionNotices) -> Value {
 }
 
 fn each_submission_kind_carries_its_notices() {
+    // This fixture's host holds its worker credential, so the Claude credential
+    // warning [ORB-16663] on macOS stays out of the notices it asserts.
+    let _credential =
+        orbit_common::test_env::scoped([("CLAUDE_CODE_OAUTH_TOKEN", Some("fixture-worker-token"))]);
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let runtime = throttled_runtime(root.path(), "");
     let mac = seed(
@@ -116,6 +122,8 @@ fn each_submission_kind_carries_its_notices() {
 }
 
 fn a_validation_environment_warning_reaches_every_kind() {
+    let _credential =
+        orbit_common::test_env::scoped([("CLAUDE_CODE_OAUTH_TOKEN", Some("fixture-worker-token"))]);
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let runtime = throttled_runtime(
         root.path(),

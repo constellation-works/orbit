@@ -44,6 +44,9 @@ pub struct SubmissionNotices {
     pub host_os_backlog_warning: Option<String>,
     /// The `execution.env.pass` names this environment does not hold.
     pub unset_env_pass_warning: Option<String>,
+    /// Claude crews a drain here excludes for want of a worker credential
+    /// [ORB-16663]. Drains only.
+    pub claude_worker_credential_warning: Option<String>,
     /// That this host declares no required validation commands. Drains only.
     pub required_validation_note: Option<String>,
 }
@@ -59,6 +62,7 @@ impl SubmissionNotices {
             .chain(self.validation_env_warning.clone())
             .chain(self.host_os_backlog_warning.clone())
             .chain(self.unset_env_pass_warning.clone())
+            .chain(self.claude_worker_credential_warning.clone())
             .collect()
     }
 
@@ -108,6 +112,10 @@ impl OrbitRuntime {
                 .then(|| self.host_os_backlog_warning())
                 .flatten(),
             unset_env_pass_warning: self.unset_env_pass_warning(),
+            claude_worker_credential_warning: kind
+                .is_drain()
+                .then(|| self.claude_worker_credential_warning())
+                .flatten(),
             required_validation_note: kind
                 .is_drain()
                 .then(|| self.required_validation_note())
