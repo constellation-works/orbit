@@ -22,6 +22,8 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         // Observation of Orbit's own state.
         "orbit.auto_task.list"
         | "orbit.auto_task.show"
+        | "orbit.codebase.analytics"
+        | "orbit.codebase.show"
         | "orbit.drain.claims"
         | "orbit.friction.show"
         | "orbit.friction.stats"

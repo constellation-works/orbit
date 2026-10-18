@@ -18,6 +18,7 @@ pub const SYSTEM_AUDIT_IDENTITY: &str = "system";
 pub(crate) mod admission;
 pub mod audit_event;
 pub mod auto_tasks;
+pub mod codebase;
 pub mod config;
 pub mod distributed;
 pub mod epic_retirement;

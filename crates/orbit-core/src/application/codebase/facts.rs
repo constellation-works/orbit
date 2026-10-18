@@ -2,23 +2,26 @@
 //! (envelope plus history), the reservation history and the lock-conflict
 //! denials, reduced to the per-task facts the rankings slice by window.
 //!
-//! The scan reads every task bundle's history, so it runs once per cache
-//! period ([`crate::runtime_memo::CODEBASE_ANALYTICS_TTL`]) and every window,
-//! threshold and rollup is computed from the cached facts.
+//! The scan reads every task bundle's history. A caller that serves repeated
+//! requests (the dashboard) caches the facts and slices every window,
+//! threshold and rollup from them; the CLI and the tool scan once per call.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
+use orbit_common::OrbitError;
 use orbit_common::fs::selector::Selector;
-use orbit_core::{
-    AuditEvent, AuditEventFilter, AuditEventStatus, OrbitError, OrbitRuntime, TaskStatus,
-};
+use orbit_store::contracts::AuditEventFilter;
 use orbit_types::task::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, TaskHistoryEntry, TaskRelationType,
+    TaskStatus,
 };
+use orbit_types::telemetry::{AuditEvent, AuditEventStatus};
 use orbit_types::workflow::{BUBBLEWRAP_NAMESPACE_REFUSALS, ProviderFailureClass};
 use serde_json::Value;
+
+use crate::OrbitRuntime;
 
 /// Lock-conflict denials read per scan. Audit rows are pruned by retention,
 /// so this bounds a pathological retry storm rather than normal history.
@@ -139,8 +142,10 @@ pub(super) struct LockDenial {
     pub(super) files: Vec<Anchor>,
 }
 
+/// One workspace scan: the per-task facts every ranking slices by window,
+/// minimum support and rollup.
 #[derive(Debug)]
-pub(crate) struct CodebaseFacts {
+pub struct CodebaseFacts {
     pub(super) computed_at: DateTime<Utc>,
     pub(super) tasks: Vec<TaskFacts>,
     pub(super) reservations: Vec<ReservationFacts>,

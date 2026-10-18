@@ -2,6 +2,7 @@ pub mod audit;
 pub mod auto_task;
 pub mod browser_kit;
 pub mod clock;
+pub mod codebase;
 pub mod config;
 pub mod doctor;
 pub mod friction;
@@ -98,6 +99,7 @@ Operate:
 
 Observe:
   audit       Query the audit event log
+  codebase    Rank the repository paths that are risky for agents to change
   log         Tail the unified Orbit log feed
   doctor      Diagnose workspace health, provider CLIs, and filesystem access
 
@@ -163,6 +165,7 @@ pub enum Commands {
 
     // ── Observe ──
     Audit(audit::AuditCommand),
+    Codebase(codebase::CodebaseCommand),
     Log(log::LogCommand),
     Doctor(doctor::DoctorCommand),
 

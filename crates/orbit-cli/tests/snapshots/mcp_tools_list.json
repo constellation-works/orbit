@@ -282,6 +282,93 @@
     }
   },
   {
+    "name": "orbit_codebase_analytics",
+    "description": "Rank the workspace's repository paths by how often tasks that declared them regressed, widened their footprint onto them, were blocked by a run failure or were rejected after a run, plus lock contention and paths reserved together. Every ranking is a rate over distinct tasks with its numerator and denominator; `overlap` lists the paths found in several rankings. The same payload the dashboard's Codebase view reads.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "window": {
+          "type": "string",
+          "description": "Counted period ending now: 7d, 30d, 90d or all. Default: 90d."
+        },
+        "min_support": {
+          "type": "integer",
+          "description": "Smallest denominator a ranked row needs, at least 1. Default: 15."
+        },
+        "rollup": {
+          "type": "string",
+          "description": "How paths are grouped: file, dir (parent directory) or crate. Default: file."
+        },
+        "model": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok"
+          ],
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized."
+        },
+        "workspace": {
+          "type": "string",
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+        }
+      },
+      "additionalProperties": true
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "orbit_codebase_show",
+    "description": "One repository path's standing in every codebase ranking: rate, numerator, denominator, place in the ranking, and the task IDs behind each numerator (refused requesters for lock contention, reserving requesters for each coupled pair). Use it to follow a rate from `orbit_codebase_analytics` to its tasks.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "A ranked key at the chosen rollup: a file path, a directory, or a crate such as crates/orbit-core/. A trailing slash is optional."
+        },
+        "window": {
+          "type": "string",
+          "description": "Counted period ending now: 7d, 30d, 90d or all. Default: 90d."
+        },
+        "min_support": {
+          "type": "integer",
+          "description": "Smallest denominator a ranked row needs, at least 1. Default: 15."
+        },
+        "rollup": {
+          "type": "string",
+          "description": "How paths are grouped: file, dir (parent directory) or crate. Default: file."
+        },
+        "model": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok"
+          ],
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized."
+        },
+        "workspace": {
+          "type": "string",
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": true
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
     "name": "orbit_command_exec",
     "description": "Execute a command as an explicit argv array in an explicit working directory and return its stdout, stderr, and exit status, within a deadline. Requires operator capability and the workspace claim; withheld from managed runs.",
     "inputSchema": {

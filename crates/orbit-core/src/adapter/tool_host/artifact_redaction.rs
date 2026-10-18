@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
 use orbit_common::governance::auto_task::AutoTaskVerb;
+use orbit_common::governance::codebase::CodebaseVerb;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::{OperationVerb, ParamSpec, ParamType, Redaction};
@@ -339,6 +340,12 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         OrbitBuiltinAction::Search(verb) => match verb {
             SearchVerb::Query => ActionPolicy { declared: verb.spec().params, ..NO_REDACTION },
         },
+        OrbitBuiltinAction::Codebase(verb) => match verb {
+            CodebaseVerb::Analytics | CodebaseVerb::Show => ActionPolicy {
+                declared: verb.spec().params,
+                ..NO_REDACTION
+            },
+        },
         OrbitBuiltinAction::Workflow(verb) => match verb {
             WorkflowVerb::Auto
             | WorkflowVerb::RunList
@@ -395,6 +402,9 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
         },
         OrbitBuiltinAction::Search(verb) => match verb {
             SearchVerb::Query => false,
+        },
+        OrbitBuiltinAction::Codebase(verb) => match verb {
+            CodebaseVerb::Analytics | CodebaseVerb::Show => false,
         },
         OrbitBuiltinAction::Workflow(verb) => match verb {
             WorkflowVerb::Auto

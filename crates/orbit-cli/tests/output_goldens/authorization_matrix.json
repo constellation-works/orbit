@@ -563,6 +563,28 @@
   },
   {
     "surface": "tool",
+    "operation": "orbit.codebase.analytics",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.codebase.show",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
     "operation": "orbit.command.exec",
     "required_any": [
       "operator"

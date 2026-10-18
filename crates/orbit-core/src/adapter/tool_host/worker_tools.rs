@@ -1,5 +1,6 @@
 //! Generic coordination writes translated into owner claim transactions.
 use orbit_common::governance::auto_task::AutoTaskVerb;
+use orbit_common::governance::codebase::CodebaseVerb;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::OperationVerb;
@@ -40,6 +41,9 @@ pub(crate) fn execute(
         },
         OrbitBuiltinAction::Search(verb) => match verb {
             SearchVerb::Query => false,
+        },
+        OrbitBuiltinAction::Codebase(verb) => match verb {
+            CodebaseVerb::Analytics | CodebaseVerb::Show => false,
         },
         OrbitBuiltinAction::Workflow(verb) => match verb {
             WorkflowVerb::Auto
@@ -327,6 +331,9 @@ pub(crate) fn execute(
         },
         OrbitBuiltinAction::Search(verb) => match verb {
             SearchVerb::Query => return Ok(None),
+        },
+        OrbitBuiltinAction::Codebase(verb) => match verb {
+            CodebaseVerb::Analytics | CodebaseVerb::Show => return Ok(None),
         },
         OrbitBuiltinAction::Workflow(verb) => match verb {
             WorkflowVerb::Auto

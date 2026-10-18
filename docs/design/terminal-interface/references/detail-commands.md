@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Reference: Detail Commands Behind Truncatable List Columns"
-last_updated: 2026-10-08
+last_updated: 2026-10-18
 last_validated: 2026-10-13
 ---
 
@@ -29,6 +29,7 @@ Only *flexible* columns are ever truncated — fixed columns render whole or are
 | `orbit skill list` | `SUMMARY` | `orbit skill show <id>` |
 | `orbit friction list` | `TAGS`, `TITLE` | `orbit friction show <id>` |
 | `orbit search` | `ID`, `TITLE/SUMMARY` | per hit kind: `orbit task show`, `orbit friction show` |
+| `orbit codebase analytics` | `PATH`, `PATHS`, `RANKINGS` | `orbit codebase show <path>` (rankings, counts and the tasks behind each); `--json` for coupled pairs |
 
 ## Gaps
 

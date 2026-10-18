@@ -1,5 +1,6 @@
 pub mod authorization;
 pub mod auto_task;
+pub mod codebase;
 pub mod drain;
 pub mod friction;
 pub mod operation;

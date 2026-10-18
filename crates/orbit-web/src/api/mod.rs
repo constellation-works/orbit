@@ -38,7 +38,6 @@ mod task_create;
 mod tasks;
 mod workspaces;
 
-pub(crate) use codebase::CodebaseFacts;
 use helpers::*;
 pub(crate) use host::host_error_code;
 pub(crate) use origin::{nosniff_json_responses, require_localhost_origin};

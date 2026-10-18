@@ -25,6 +25,7 @@ Operate:
 
 Observe:
   audit       Query the audit event log
+  codebase    Rank the repository paths that are risky for agents to change
   log         Tail the unified Orbit log feed
   doctor      Diagnose workspace health, provider CLIs, and filesystem access
 
