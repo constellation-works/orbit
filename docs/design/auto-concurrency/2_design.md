@@ -498,6 +498,16 @@ the first key that has enough. Each lookup reports which step answered:
 The chain never crosses from `no-diff` to `change` until step 4. A new review
 task borrows another review profile before it is assumed to build.
 
+**Evaluation of finer keys and phases (2026-10-18).** Crew and cost-heavy
+tags remain candidates for child keys, with fixed `n/(n+10)` shrinkage to
+the existing parent; QA templates already have their own work class.
+Phase alignment would additionally need a measured cold/warm setup label,
+an agent-phase curve and duration distribution with the same backoff, and
+validation keyed by the required command set and diff-derived affected
+crates. The host-local replay below found insufficient preserved forecast
+inputs to compare these options; it does not justify changing these profiles
+([§4.2](#42-crew-bias-and-phase-replay)).
+
 ## 4. The load forecast
 
 The forecast covers minutes `t = 0 … H` from now, for CPU and memory
@@ -643,6 +653,108 @@ under-forecast minutes stayed at 8.3%. `z = 1.282`, the sum's 90th
 percentile, under-forecast 8.7% at +5m but 14.7% at +10m against 10.0%.
 The earlier shadow cohort rarely had two profiled deliveries at once and
 barely moves: +1.01 GiB and 25.0% under at +5m, before and after.
+
+### 4.2 Crew, bias and phase replay
+
+**Evaluation (2026-10-18): insufficient data; reject adoption pending a
+qualifying replay.** A read-only transaction on the executing host
+**dk-server-2**, `~/.orbit/orbit.db`, selected the preceding 30 days at
+`2026-10-18T19:08:03Z`. It contained 378 forecast rows, from October 13–18,
+on a 32-core host. Only 23 preserved both their baseline and covered
+deliveries; 355 legacy rows have neither. Current host readings,
+reservations and task tags cannot recover those historical inputs. Inferring
+a baseline by subtracting a fitted delivery term from the recorded forecast
+would not independently check reconstruction, so those rows were excluded
+from comparative replay.
+
+For the 23 preserved rows, the scratch replay rebuilt profiles using only
+deliveries finished **before** each forecast, with the existing 30-day,
+last-50 window, 10-delivery fallback threshold, minute aggregation,
+conditional survival and §4.1 memory quantile. It retained the saved
+baseline and flat terms. Median signed and absolute reconstruction
+residuals were **0 cores and 0 GiB at every offset** (maximum absolute
+CPU residual below `2e-15` cores; memory exactly equal). Reserved-task
+class labels came from their subsequently persisted admission records;
+resource observations from unfinished/future deliveries never trained a
+profile. Template base classes used the current task index, which is not a
+historical tag snapshot; exact agreement on this small subset does not
+certify reconstruction of legacy rows.
+
+Pairing uses the host minute at `floor(forecast_at) + offset` only after
+that minute ended. Errors below are forecast minus measured; each metric
+cell is **mean error / MAE / under-forecast percentage**, in cores for CPU
+and GiB for memory. Raw recorded pairs are descriptive context, not a
+replayed baseline for variant scoring.
+
+| Recorded context | Pairs | CPU | Memory |
+|---|---:|---:|---:|
+| +5m | 372 | +0.21 / 3.76 / 47.04% | +4.19 / 4.49 / 12.90% |
+| +10m | 368 | -0.26 / 4.13 / 49.46% | +3.88 / 4.31 / 12.77% |
+| +20m | 365 | -1.74 / 4.40 / 59.73% | +2.34 / 3.30 / 26.58% |
+| +30m | 358 | -2.76 / 5.00 / 65.64% | +0.59 / 2.96 / 44.97% |
+
+| Replayed diagnostic subset | Pairs | CPU | Memory |
+|---|---:|---:|---:|
+| +5m | 19 | +1.29 / 2.14 / 36.84% | +1.77 / 2.34 / 21.05% |
+| +10m | 19 | +1.00 / 2.91 / 31.58% | +1.63 / 1.97 / 15.79% |
+| +20m | 19 | -0.81 / 2.47 / 63.16% | +1.15 / 2.83 / 42.11% |
+| +30m | 16 | -1.45 / 2.50 / 68.75% | +0.36 / 2.36 / 37.50% |
+
+Thus the eligible paired counts are **19 / 19 / 19 / 16**, below the
+required **150** at every offset. No variant was fitted, scored or ranked:
+
+| Option | CPU and memory mean error / MAE / under-rate at +5/+10/+20/+30m | Child keys using parent |
+|---|---|---|
+| (a) Resolved execution crew plus cost-heavy tags, with backoff | Not estimable on a qualifying replay cohort | Not evaluated |
+| (b) Causal per-horizon CPU correction; memory unchanged | Not estimable on a qualifying replay cohort | Not applicable |
+| (c) Phase-aligned setup / agent / validate | Not estimable on a qualifying replay cohort | Not evaluated |
+| Best combination | Not selected; no qualifying comparison | Not evaluated |
+
+The unchanged diagnostic baseline made 57 delivery lookups: 46 exact and
+11 falling back to the same-workspace parent, across 3 distinct child keys.
+These are baseline lookup counts, not results for the proposed child keys.
+Joining sampled runs by `(workspace, run_id)` to `job_runs.resolved_crew`
+found one distinct resolved crew in 584 of 592 completed, non-resumed,
+CPU-eligible deliveries and no resolved crew in 8; parent/wrapper rows with
+null crew were not mistaken for a different execution crew. A future
+crew/tag replay must also preserve admission-time cost-heavy tags rather
+than assuming today's tags applied historically.
+
+For the phase audit, a worker-minute row was attributed only when its
+entire sampled interval lay inside a named step of that delivery's sibling
+runs: `worktree`, `implement_one` or `validate`. Mixed and unmatched
+intervals were excluded, not assigned from their CPU shape. Of 51,467
+minute rows, 19,398 lay within the agent step and 14,840 within validate;
+**17,229 (33.48%) could not be attributed** by this conservative rule.
+No whole sampled interval lay inside worktree creation. This is an audit
+of recorded step intervals, not a completed three-phase model: the first
+build and cold/warm target state are not separately established, and no
+command-set / diff-derived affected-crate join or agent duration model was
+fitted. Parent-run waiting and boundary intervals remain among the exclusions.
+Reviewer `review.baseline_commands` were not counted as per-delivery
+validation commands.
+
+The fixed candidate protocol for a later qualifying replay is a
+`(workspace, class, complexity, resolved crew, sorted security/ui tags)`
+child key (QA templates stay in class), shrunk by `n/(n+10)` to its current
+parent; no free regression over sparse cells. A CPU-only correction could
+use one EWMA per offset (`alpha=0.1`, initialized at zero), subtracting the
+estimated signed error and flooring CPU at zero. An error becomes eligible
+only after its target minute has ended **before** the next forecast; memory
+receives no bias correction. Phase replay would project remaining validate
+load for a live validate step, or remaining agent load followed by validate
+for a live agent step, with setup separated by measured cache state. These
+are unscored protocols, not implementation recommendations.
+
+Adoption requires at least 10% lower CPU MAE at **both +10m and +20m**,
+no more than **+2 percentage points** CPU under-rate at **any** offset,
+and no increase in memory under-rate. None of these comparative conditions
+can be established here. Memory's deliberate conservatism remains intact;
+no admission, profile or forecast behavior changes. The replay script and
+its unrounded JSON output are task artifacts named
+`evaluation/forecast-replay.py` and `evaluation/forecast-replay-output.json`.
+Collect at least 150 paired forecasts with preserved replay inputs, and
+establish the missing phase/key labels, before reconsidering adoption.
 
 ## 5. Admission
 
