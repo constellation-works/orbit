@@ -111,6 +111,7 @@ def self_test():
     scratch = Path(__file__).resolve().parent.parent / ".orbit/tmp"
     scratch.mkdir(parents=True, exist_ok=True)
     native_recorder_prefix_self_test(harness, scratch)
+    retired_cases_orphan_proof_self_test(harness, scratch)
     with tempfile.TemporaryDirectory(prefix="qa-evidence-regression-", dir=scratch) as tmp:
         repo = Path(tmp)
         for directory in ["bin", "scripts", ".orbit/tmp", "browsers"]:
@@ -431,6 +432,107 @@ def self_test():
         assert all(row(report, name)["outcome"] == "NOT_RUN" for name in ["first", "second"]), report
         # Repeated invocations also retain earlier report bytes.
         assert all(Path(directory).is_dir() for directory in directories), directories
+
+
+def retired_cases_orphan_proof_self_test(harness, scratch):
+    """Reject retired-case command_tests/command_rows without an executable command through the public sweep entrypoint."""
+    with tempfile.TemporaryDirectory(prefix="qa-retired-cases-", dir=scratch) as tmp:
+        repo = Path(tmp)
+        for directory in ["bin", "scripts", ".orbit/tmp"]:
+            (repo / directory).mkdir(parents=True, exist_ok=True)
+        driver = repo / "driver.py"
+        driver.write_text(DRIVER.replace(
+            'qa.validate_inventory = lambda *_: ([], {"cli": []})',
+            'qa.source_contracts = lambda *_: {kind: set() for kind in ["cli", "job", "activity", "mcp", "api", "dashboard"]}'
+        ))
+        (repo / "mode.json").write_text(json.dumps("complete"))
+        cargo = repo / "bin/cargo"
+        cargo.write_text(f"#!{sys.executable}\n" + CARGO)
+        cargo.chmod(0o755)
+        orbit = repo / "bin/orbit"
+        orbit.write_text(f"#!{sys.executable}\nprint('fixture orbit')\n")
+        orbit.chmod(0o755)
+        command = ["cargo", "test", "-p", "fixture", "--test", "boundary", "boundary::", "--", "--show-output"]
+
+        def run_sweep(case, mode="complete"):
+            (repo / "mode.json").write_text(json.dumps(mode))
+            scenario = {
+                "id": "rust", "required": True, "capability": "local", "kind": "cargo-test",
+                "command": command, "assertions": ["original-boundary"],
+                "required_tests": ["boundary::contracts"], "required_rows": ["original_boundary"],
+                "behavior": ["normal", "failure"], "retired_cases": [case],
+            }
+            inventory = {
+                "surface_contracts": {"cli_top_level": [], "job_assets": [], "sha256": {}},
+                "feature_families": [],
+                "scenarios": [scenario],
+                "required_capability_gaps": {},
+            }
+            (repo / "scripts/qa-full-sweep-inventory.json").write_text(json.dumps(inventory))
+            child = subprocess.run(
+                [sys.executable, str(driver), str(harness), str(repo), "--run-commands"],
+                cwd=repo,
+                env={**os.environ, "PATH": f"{cargo.parent}:{os.environ['PATH']}"},
+                capture_output=True, text=True, timeout=60,
+            )
+            report = json.loads((repo / ".orbit/tmp/report.json").read_text())
+            guard = next(r for r in report["results"] if r["scenario"] == "inventory-guard")
+            return child, report, guard
+
+        orphan_case = {
+            "retired": "old::admission",
+            "guarantee": "Generation admission still refuses incompatible participants",
+            "disposition": "verified-equivalent",
+            "reason": "The separately named command checks generation admission",
+            "command_tests": ["admission::never_executed"],
+        }
+        child, report, guard = run_sweep(orphan_case)
+        assert child.returncode == 1, (child.returncode, child.stderr)
+        assert report["decision"] == "INCOMPLETE", report
+        assert guard["outcome"] == "FAIL", guard
+        assert "command_tests or command_rows require an executable command" in guard["stderr"], guard
+
+        null_command_case = {
+            "retired": "old::admission",
+            "guarantee": "Generation admission still refuses incompatible participants",
+            "disposition": "verified-equivalent",
+            "reason": "The separately named command checks generation admission",
+            "command": None,
+            "command_tests": ["admission::never_executed"],
+        }
+        child, report, guard = run_sweep(null_command_case)
+        assert child.returncode == 1, (child.returncode, child.stderr)
+        assert report["decision"] == "INCOMPLETE", report
+        assert guard["outcome"] == "FAIL", guard
+        assert "command_tests or command_rows require an executable command" in guard["stderr"], guard
+
+        commandless_case = {
+            "retired": "old::admission",
+            "guarantee": "Generation admission still refuses incompatible participants",
+            "disposition": "verified-equivalent",
+            "reason": "The same behavioral row runs inside the primary scenario",
+            "required_rows": ["original_boundary"],
+        }
+        child, report, guard = run_sweep(commandless_case)
+        assert child.returncode == 0, (child.returncode, child.stderr)
+        assert report["decision"] == "PASS", report
+        assert guard["outcome"] == "PASS", guard
+
+        valid_command_case = {
+            "retired": "old::admission",
+            "guarantee": "Generation admission still refuses incompatible participants",
+            "disposition": "verified-equivalent",
+            "reason": "The separately named command checks generation admission",
+            "command": command,
+            "command_tests": ["boundary::contracts"],
+        }
+        child, report, guard = run_sweep(valid_command_case)
+        assert child.returncode == 0, (child.returncode, child.stderr)
+        assert report["decision"] == "PASS", report
+        assert guard["outcome"] == "PASS", guard
+
+        child, report, guard = run_sweep(valid_command_case, mode="seatbelt")
+        assert report["decision"] == "INCOMPLETE", report
 
 
 def native_recorder_prefix_self_test(harness, scratch):
