@@ -830,7 +830,7 @@ fn a_pilot_os_tag_conflicting_with_the_explicit_crew_is_refused_unapplied() {
     );
 }
 
-fn a_pilot_complexity_redraw_into_a_conflicting_crew_is_refused_unapplied() {
+fn a_pilot_complexity_rerate_falls_back_from_an_incompatible_crew() {
     let mut workspace = macos_only_workspace();
     on(&mut workspace, HostOs::Macos);
     let task = workspace
@@ -855,17 +855,26 @@ fn a_pilot_complexity_redraw_into_a_conflicting_crew_is_refused_unapplied() {
     let before = workspace.runtime.get_task(&task.id).unwrap();
 
     // A medium assessment redraws from the medium pool, whose only member
-    // is the macOS-only crew, against the task's existing `os:linux` tag.
+    // is the macOS-only crew. The existing `os:linux` tag filters it before
+    // the draw, so the compatible default remains usable.
     let applied = apply_findings(
         &workspace,
         &task,
         Some(json!({"recommended_complexity": "medium"})),
     );
 
-    assert_unapplied_conflict(&workspace, &task, &before, &applied);
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    assert_eq!(applied["applied_count"], 1, "{applied}");
+    assert_eq!(
+        applied["task_outcomes"][0]["outcome"], "applied",
+        "{applied}"
+    );
     let kept = workspace.runtime.get_task(&task.id).unwrap();
     assert_eq!(kept.crew.as_deref(), Some("fixture"));
-    assert_eq!(kept.complexity, Some(TaskComplexity::Low));
+    assert_eq!(kept.crew_source.as_deref(), Some("default"));
+    assert_eq!(kept.complexity, Some(TaskComplexity::Medium));
+    assert_eq!(kept.tags, ["os:linux"]);
+    assert_ne!(kept, before);
 }
 
 fn compatible_and_unrestricted_pilot_assignments_still_apply() {
@@ -910,6 +919,6 @@ crate::scenario_table!(
 crate::scenario_table!(
     pilot_os_crew_intersection_scenarios,
     a_pilot_os_tag_conflicting_with_the_explicit_crew_is_refused_unapplied,
-    a_pilot_complexity_redraw_into_a_conflicting_crew_is_refused_unapplied,
+    a_pilot_complexity_rerate_falls_back_from_an_incompatible_crew,
     compatible_and_unrestricted_pilot_assignments_still_apply
 );

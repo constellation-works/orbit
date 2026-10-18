@@ -18,5 +18,5 @@ pub(crate) use draw::{
     complexity_crews_key, complexity_of_crews_key, random_crew_ticket, seeded_crew_ticket,
     weighted_draw,
 };
-pub(crate) use purpose::{PURPOSE_SOURCE_PREFIX, automatic_crew_source, task_crew_purpose};
+pub(crate) use purpose::{PURPOSE_SOURCE_PREFIX, automatic_crew_source};
 pub(crate) use types::{CapturedCrewPools, CreationCrewAssignment, CrewCandidate, InspectionPool};
