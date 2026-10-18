@@ -392,15 +392,7 @@ impl TaskCommitBoundary {
         let key = receipt_key(&receipt.machine_id, &request.request_id)?;
         // A stopped landing's repair is nearly finished work for its task, so
         // it is offered before any backlog candidate [ORB-14261].
-        if self.admit_repair_locked(
-            identity,
-            request,
-            &key,
-            orbit_dir,
-            &in_flight.tasks,
-            &mut receipt,
-            executor_host_os,
-        )? {
+        if self.admit_repair_locked(&screen, &key, orbit_dir, &in_flight.tasks, &mut receipt)? {
             return self
                 .lookup_admission(identity, &request.request_id)
                 .map(Some);
