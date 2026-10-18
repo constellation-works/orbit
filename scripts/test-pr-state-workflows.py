@@ -8,8 +8,10 @@ from pathlib import Path
 import re
 import self_test_hang
 import shutil
+import signal
 import sys
 import tempfile
+import textwrap
 import threading
 import time
 import unittest
@@ -402,6 +404,94 @@ case "$1" in --show-stats|--zero-stats) exit "${FIXTURE_STATS_EXIT:-0}";; *) exi
             "hung step: hung-compiler-step "
             f"(command bash exceeded {self_test_hang.HANG_PROBE_SECONDS:g}s)",
             str(caught.exception))
+
+    def test_timeout_reaps_live_leader_and_exited_leader_descendant(self):
+        # Public run() boundary used by the workflow fixtures. The leader must
+        # not outlive the hang error, and neither may a child that inherited
+        # the output pipes and stayed in the leader's process group.
+        if not Path("/proc/self/stat").exists():
+            self.skipTest("process liveness is observed through /proc")
+        limit = self_test_hang.HANG_PROBE_SECONDS
+        exited = textwrap.dedent("""\
+            import os, sys, time
+            record = sys.argv[1]
+            read_fd, write_fd = os.pipe()
+            child = os.fork()
+            if child == 0:
+                os.close(read_fd)
+                os.write(write_fd, b"ready")
+                os.close(write_fd)
+                time.sleep(30)
+                os._exit(0)
+            os.close(write_fd)
+            if os.read(read_fd, 5) != b"ready":
+                os._exit(2)
+            os.close(read_fd)
+            with open(record, "w", encoding="utf-8") as handle:
+                handle.write(f"{os.getpid()}\\n{child}\\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os._exit(0)
+            """)
+        live = textwrap.dedent("""\
+            import os, sys, time
+            with open(sys.argv[1], "w", encoding="utf-8") as handle:
+                handle.write(f"{os.getpid()}\\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            time.sleep(30)
+            """)
+        for step, script, count in (
+                ("live-leader", live, 1),
+                ("exited-leader-with-descendant", exited, 2)):
+            with self.subTest(step=step):
+                record = self.root / f"{step}.pids"
+                marker = str(record)
+                self.addCleanup(_stop_owned_processes, record, marker)
+                try:
+                    with self.assertRaises(AssertionError) as caught:
+                        self_test_hang.run(
+                            [sys.executable, "-c", script, marker],
+                            step=step, cwd=self.root, capture_output=True, text=True,
+                            timeout=limit)
+                    self.assertIn(
+                        f"hung step: {step} (command {sys.executable} exceeded {limit:g}s)",
+                        str(caught.exception))
+                    pids = _recorded_pids(record)
+                    self.assertEqual(len(pids), count, "the fixture must record every process")
+                    running = [f"{pid}:{_owned_state(pid, marker)}" for pid in pids
+                               if _owned_state(pid, marker) in {"R", "S", "D", "T"}]
+                    self.assertEqual(running, [], "run() must terminate fixture processes before returning")
+                finally:
+                    _stop_owned_processes(record, marker)
+
+
+def _recorded_pids(path):
+    if not path.exists():
+        return []
+    return [int(line) for line in path.read_text().split() if line.strip()]
+
+
+def _owned_state(pid, marker):
+    """Return the /proc state when pid is still this fixture, else None."""
+    try:
+        command = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\x00", b" ")
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except FileNotFoundError:
+        return None
+    if marker.encode() not in command:
+        return None
+    return stat.rsplit(")", 1)[1].split(None, 1)[0]
+
+
+def _stop_owned_processes(path, marker):
+    for pid in _recorded_pids(path):
+        if _owned_state(pid, marker) is None:
+            continue
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 @unittest.skipIf(yaml is None, "PyYAML not installed; the workflow guard skips locally without it")
