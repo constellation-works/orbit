@@ -54,6 +54,7 @@ pub(crate) fn classify_failure(
     status: AuditEventStatus,
     error_message: Option<&str>,
 ) -> FailureClass {
+    let error_message = error_message.map(orbit_types::workflow::failure_classification_text);
     if is_deferral(surface, error_message) {
         return FailureClass::Deferred;
     }

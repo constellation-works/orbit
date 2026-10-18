@@ -19,6 +19,7 @@
 //! the candidate and returns the task to the backlog, like a run interrupted
 //! at a step boundary by the same upgrade.
 
+use super::failure_classification_text;
 use serde_json::Value;
 
 /// Error code of an implementer-declared blocker.
@@ -123,7 +124,9 @@ impl AgentBlocker {
 #[must_use]
 pub fn is_upgrade_pending(error_code: Option<&str>, message: Option<&str>) -> bool {
     error_code == Some(UPGRADE_PENDING_ERROR_CODE)
-        || message.is_some_and(|message| message.contains(UPGRADE_PENDING_MARKER))
+        || message.is_some_and(|message| {
+            failure_classification_text(message).contains(UPGRADE_PENDING_MARKER)
+        })
 }
 
 /// Whether a step failure says an agent (the implementer or step recovery)
@@ -131,7 +134,9 @@ pub fn is_upgrade_pending(error_code: Option<&str>, message: Option<&str>) -> bo
 #[must_use]
 pub fn is_task_blocked_by_agent(error_code: Option<&str>, message: Option<&str>) -> bool {
     error_code == Some(TASK_BLOCKED_BY_AGENT_ERROR_CODE)
-        || message.is_some_and(|message| message.contains(TASK_BLOCKED_BY_AGENT_MARKER))
+        || message.is_some_and(|message| {
+            failure_classification_text(message).contains(TASK_BLOCKED_BY_AGENT_MARKER)
+        })
 }
 
 /// The blocker an activity output declares, when `{kind, evidence}` is well formed.
@@ -179,6 +184,7 @@ pub fn upgrade_pending_kind(message: &str) -> Option<&str> {
 }
 
 fn kind_after<'a>(message: &'a str, marker: &str) -> Option<&'a str> {
+    let message = failure_classification_text(message);
     let (_, rest) = message.split_once(marker)?;
     let rest = rest.trim_start().strip_prefix("kind=")?;
     let kind = rest.split_whitespace().next()?;
