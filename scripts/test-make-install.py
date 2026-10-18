@@ -11,7 +11,7 @@ a stray file, or a missing executable.
 
 import os
 from pathlib import Path
-import subprocess
+import self_test_hang
 import tempfile
 import unittest
 
@@ -79,17 +79,17 @@ class MakeInstallRecipeTests(unittest.TestCase):
             "ORBIT_BUILD_BUDGET_DIR": str(self.locks),
             "ORBIT_BUILD_SLOTS": "1",
         }
-        result = subprocess.run(
+        result = self_test_hang.run(
             [
                 "make", "-f", str(MAKEFILE), "-C", str(self.work), goal,
                 f"INSTALL_BIN_DIR={destination}",
                 f"BUILD_BUDGET={BUILD_BUDGET}",
                 f"CARGO={self.stub}",
             ],
+            step=f"make {goal}",
             env=env,
             capture_output=True,
             text=True,
-            timeout=120,
             check=False,
         )
         self.assertEqual(result.returncode, 0, f"make {goal} failed:\n{result.stdout}{result.stderr}")
@@ -101,7 +101,9 @@ class MakeInstallRecipeTests(unittest.TestCase):
     def assert_installed_artifact(self, executable, profile):
         self.assertTrue(executable.is_file(), f"{executable} was not installed")
         self.assertTrue(os.access(executable, os.X_OK), f"{executable} is not executable")
-        run = subprocess.run([str(executable)], capture_output=True, text=True, timeout=30, check=False)
+        run = self_test_hang.run(
+            [str(executable)], step="installed orbit",
+            capture_output=True, text=True, check=False)
         self.assertEqual(run.stdout, f"{profile}-artifact\n", "installed file is not the reported release artifact")
 
     def test_install_into_spaced_destination_creates_only_the_intended_tree(self):

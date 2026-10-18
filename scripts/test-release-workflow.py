@@ -7,11 +7,13 @@ import json
 import os
 from pathlib import Path
 import re
+import self_test_hang
 import socket
 import subprocess
 import tempfile
 import textwrap
 import threading
+import time
 import unittest
 
 try:
@@ -77,7 +79,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             f"{'b' * 64}  {self.outputs['darwin_intel_asset']}\n")
         self.output = self.root / "output"
 
-    def run_script(self, step, cwd=None, timeout=10, **values):
+    def run_script(self, step, cwd=None, timeout=None, **values):
         # Resolve the actual step env bindings, as Actions does, without ever
         # substituting expressions into Bash source.
         env = dict(self.env)
@@ -96,13 +98,16 @@ class ReleaseWorkflowTests(unittest.TestCase):
             else:
                 self.fail(f"unsupported workflow env binding: {key}")
         env.update(values)
-        return subprocess.run(["bash", "-e", "-o", "pipefail", "-c", step["run"]],
-                              cwd=cwd or self.root, env=env, text=True, capture_output=True,
-                              timeout=timeout)
+        return self_test_hang.run(
+            ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+            step=str(step.get("id") or step.get("name") or "workflow step"),
+            cwd=cwd or self.root, env=env, text=True, capture_output=True,
+            timeout=timeout)
 
     def git(self, *arguments):
-        result = subprocess.run(["git", *arguments], cwd=self.root, env=self.env,
-                                text=True, capture_output=True, timeout=10)
+        result = self_test_hang.run(
+            ["git", *arguments], step="git", cwd=self.root, env=self.env,
+            text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout.strip()
 
@@ -118,7 +123,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         for args in (("genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256",
                       "-out", str(self.signing_key)),
                      ("pkey", "-in", str(self.signing_key), "-pubout", "-out", str(public_key))):
-            result = subprocess.run(["openssl", *args], capture_output=True, text=True, timeout=10)
+            result = self_test_hang.run(
+                ["openssl", *args], step="openssl", capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
         for name in DESKTOP_BUNDLES:
             (self.root / "dist" / name).write_bytes(f"rebuilt {name}".encode())
@@ -212,7 +218,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             return None
         return dict(line.split("=", 1) for line in self.output.read_text().splitlines())
 
-    def publish_desktop(self, cwd=None, timeout=10, **values):
+    def publish_desktop(self, cwd=None, timeout=None, **values):
         for step in self.jobs["publish-desktop"]["steps"]:
             if "run" in step:
                 result = self.run_script(step, cwd=cwd, timeout=timeout, **values)
@@ -274,10 +280,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
                                      version="1.2.3"):
         root = self.root if root is None else root
         remote = self.remote if remote is None else remote
-        result = subprocess.run(
+        result = self_test_hang.run(
             ["openssl", "dgst", "-sha256", "-verify", str(root / "npm/release-signing.pub"),
              "-signature", str(remote / DESKTOP_SIGNATURE), str(remote / DESKTOP_MANIFEST)],
-            text=True, capture_output=True, timeout=10)
+            step="openssl dgst", text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         digests = {name: digest for digest, name in
                    (line.split("  ") for line in
@@ -484,7 +490,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 lock.acquire()
                 owns = True
                 holding.set()
-                if not proceed.wait(15):
+                if not proceed.wait(self_test_hang.HANG_CEILING_SECONDS):
                     raise TimeoutError("linux publisher was not released to upload")
                 results["linux"] = self.publish_desktop()
             except Exception as exc:
@@ -497,7 +503,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         def run_full():
             owns = False
             try:
-                if not holding.wait(15):
+                if not holding.wait(self_test_hang.HANG_CEILING_SECONDS):
                     raise TimeoutError("linux publisher never held the tag group")
                 acquired = lock.acquire(blocking=False)
                 results["entered_during_linux"] = acquired
@@ -522,13 +528,13 @@ class ReleaseWorkflowTests(unittest.TestCase):
         linux.start()
         full.start()
         try:
-            self.assertTrue(excluded.wait(15), results)
+            self.assertTrue(excluded.wait(self_test_hang.HANG_CEILING_SECONDS), results)
             self.assertFalse(results.get("entered_during_linux"),
                              "full publisher entered while linux held the tag group")
         finally:
             proceed.set()
-            linux.join(20)
-            full.join(20)
+            linux.join(self_test_hang.SUBPROCESS_JOIN_SECONDS)
+            full.join(self_test_hang.SUBPROCESS_JOIN_SECONDS)
         self.assertFalse(linux.is_alive() or full.is_alive(), "publisher thread did not finish")
         self.assertNotIn("linux_error", results, results.get("linux_error"))
         self.assertNotIn("full_error", results, results.get("full_error"))
@@ -557,7 +563,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.bind(("127.0.0.1", 0))
         listener.listen(2)
-        listener.settimeout(15)
+        # Accept is a wall-clock wait for publishers that run at idle priority.
+        # The connect timeout inside gh starts only after that child is running.
+        listener.settimeout(self_test_hang.HANG_CEILING_SECONDS)
         barrier_host, barrier_port = listener.getsockname()
         barrier_address = f"{barrier_host}:{barrier_port}"
         labels = []
@@ -588,7 +596,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         def publish(tag, cwd, remote, accept):
             try:
                 errors[tag] = self.publish_desktop(
-                    cwd=cwd, timeout=20,
+                    cwd=cwd,
                     FAKE_GH_BARRIER=barrier_address,
                     FAKE_GH_BARRIER_LABEL=tag,
                     FAKE_ACCEPT_TAGS=accept,
@@ -605,9 +613,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
         second = threading.Thread(target=publish, args=("v9.9.9", other, other_remote, "v9.9.9"))
         first.start()
         second.start()
-        first.join(25)
-        second.join(25)
-        server.join(5)
+        first.join(self_test_hang.SUBPROCESS_JOIN_SECONDS)
+        second.join(self_test_hang.SUBPROCESS_JOIN_SECONDS)
+        server.join(self_test_hang.SUBPROCESS_JOIN_SECONDS)
         self.assertFalse(first.is_alive() or second.is_alive() or server.is_alive())
         self.assertNotIn("barrier", errors, errors.get("barrier"))
         self.assertEqual(set(labels), {"v1.2.3", "v9.9.9"},
@@ -730,6 +738,24 @@ class ReleaseWorkflowTests(unittest.TestCase):
         result = self.run_script(self.tap_runs[1])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.git("-C", "tap", "rev-parse", "HEAD"), before)
+
+    def test_slow_step_past_the_removed_cap_completes(self):
+        # Sleep stands in for a correct step that loses the CPU under idle
+        # scheduling. 25s is past the removed 10s and 20s caps.
+        step = {"id": "slow-release-step", "run": f"sleep {self_test_hang.SLOW_FIXTURE_SECONDS}"}
+        started = time.monotonic()
+        result = self.run_script(step)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertGreater(time.monotonic() - started, 20)
+
+    def test_hung_step_fails_and_names_the_step(self):
+        step = {"id": "hung-release-step", "run": "sleep 30"}
+        with self.assertRaises(AssertionError) as caught:
+            self.run_script(step, timeout=self_test_hang.HANG_PROBE_SECONDS)
+        self.assertIn(
+            "hung step: hung-release-step "
+            f"(command bash exceeded {self_test_hang.HANG_PROBE_SECONDS:g}s)",
+            str(caught.exception))
 
 
 if __name__ == "__main__":

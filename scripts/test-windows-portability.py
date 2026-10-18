@@ -2,7 +2,7 @@
 """Run the portability guard against small Rust module trees."""
 
 from pathlib import Path
-import subprocess
+import self_test_hang
 import sys
 import tempfile
 import unittest
@@ -32,9 +32,10 @@ class PortabilityTests(unittest.TestCase):
                 path = root / "crates/example" / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(source)
-            result = subprocess.run(
+            result = self_test_hang.run(
                 [sys.executable, str(SCRIPTS / "check-windows-portability.py"), "--root", str(root)],
-                capture_output=True, text=True, timeout=30,
+                step="windows portability",
+                capture_output=True, text=True,
             )
             self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
             if expected:
