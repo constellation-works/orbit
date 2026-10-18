@@ -43,6 +43,9 @@ Options:
       --fix-automation-pins
           Delete this Orbit root and workspace's own state-routine attempt pins that no consumer or live run still names. Legacy shared pins, other roots' and workspaces' pins, in-use pins and unrecognized refs are kept and reported. Refuses while a routine sweep runs
 
+      --fix-retired-config-keys
+          Back up each config.toml that still sets a retired or deprecated key, then remove only those keys
+
       --confirm
           Confirm a destructive repair. Required by --fix-orphan-task-stores, which deletes partition directories and their task bundles
 

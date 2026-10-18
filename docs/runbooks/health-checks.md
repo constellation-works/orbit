@@ -27,6 +27,7 @@ SQLite `PRAGMA quick_check`; it reads the entire store and can take much longer 
 | Check | What it reports | Status and next step |
 |---|---|---|
 | `config` | Effective global + workspace configuration | `ok` when valid; `warning` for ignored crew properties or lanes pointing at disabled crews (possibly several rows); `error` for selection/parse failures. Correct the named config field. |
+| `retired-config-keys` | Retired or deprecated registry keys still set in the global or workspace `config.toml` | `ok` when none are set; one `warning` per key, naming the key and the file that sets it. `orbit doctor --fix-retired-config-keys` backs up that file and removes only those keys. A file that cannot be read is a `warning` and names the path. |
 | `database` | Store DB readability and schema-ledger version versus this binary; `--deep` adds `PRAGMA quick_check` | `ok` when readability and version match (and integrity passes with `--deep`); `warning` for an older schema or unreadable ledger; `error` for open/integrity failure or a newer schema. Follow the diagnostic; newer schemas need a newer binary. |
 | `disk-space` | Free space on the volume holding the local `.orbit` | `warning` below 1 GiB or 5%, or when the probe fails; `error` below 256 MiB or 1%. Free space on that volume. |
 | `search-index` | Lexical index chunk count and indexed-task count versus stored-task count | `ok` when task counts agree, including an empty workspace; `warning` on a count mismatch or read failure. A mismatch names `orbit search reindex`; this check does not inspect embeddings or prove freshness when counts agree. |
@@ -121,6 +122,7 @@ Do not run a repair merely to collect health evidence.
 | `fix-retired-activity-backends` | `ok`, number of activity files repaired; skipped files are reported on stderr |
 | `fix-orphan-task-stores` | `ok`, empty/populated partition and deleted bundle counts; requires `--confirm` |
 | `fix-automation-pins` | `ok`, reclaimed owned attempt pins and the in-flight, live-run, assessed, legacy and foreign-owner pins retained; `warning` when ownership was refused while owned pins exist or a pin could not be deleted (see [below](#release-leaked-automation-attempt-pins)) |
+| `fix-retired-config-keys` | `ok`, the retired and deprecated keys removed and the backup written beside each edited `config.toml`. A run that finds none removes nothing and writes no backup |
 
 Example excerpt (other checks omitted; counts vary by workspace):
 
@@ -143,6 +145,26 @@ Lock files flagged by `stale-locks`
 include holder diagnostics. Run `orbit doctor --fix-stale-locks` to clear a dead holder's
 record after acquiring the advisory lock and rechecking the holder. The repair preserves
 the lock file so queued openers and new openers share the same inode; do not delete it.
+
+### Remove retired config keys
+
+`retired-config-keys` warns while the global or workspace `config.toml` still
+sets a registry key that load accepts only so an older file keeps working.
+Each warning names the key and the file. Examples are `workflow.system_crew`
+(deprecated, ignored) and `scoring.enabled` (removed, ignored). Diagnosis does
+not write either file. Retired sections that are not registry keys, such as
+`[duel]`, `[routines]` and `[docs]`, are not part of this check.
+
+```sh
+orbit doctor --fix-retired-config-keys
+```
+
+For each file that still sets such a key, the repair copies the current bytes
+to `config.toml.bak` beside that file, or to `config.toml.bak.N` when the
+name is already taken, then removes only those keys. Comments, neighboring
+keys and a file that has none of them stay as they are. Emptied parent tables
+are left in place. A later run finds nothing to remove and does not write
+again. `orbit config get` and `orbit config set` still refuse the keys.
 
 ### Repair stale task reservations
 
@@ -170,9 +192,9 @@ This is distinct from `--fix-stale-locks`, which handles dead-holder filesystem 
 
 There is deliberately no blanket `--fix` or resolve-all option. Configuration repair, database
 recovery, job cancellation, graph cleanup, id-allocation retirement, filesystem holder-record cleanup,
-task-reservation release, retired activity-backend cleanup, orphan task-store deletion, and
-automation attempt-pin release have different evidence and safety gates, so each repair remains
-explicit and safety-scoped.
+task-reservation release, retired activity-backend cleanup, orphan task-store deletion,
+retired config-key removal, and automation attempt-pin release have different evidence and
+safety gates, so each repair remains explicit and safety-scoped.
 
 For definition convergence after installing a new Orbit binary, or to restore a shipped
 default that was deleted by hand, use `orbit workspace sync` rather than a doctor repair.

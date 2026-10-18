@@ -18,6 +18,10 @@ mod config;
 mod crew;
 mod execution_env;
 
+pub use compatibility::{
+    CompatibilityConfigKey, CompatibilityConfigKeyDisposition, compatibility_config_keys_at,
+    compatibility_config_keys_present,
+};
 pub use config::{PrSettings, ResolvedConfig};
 pub use crew::{
     RETIRED_SYSTEM_CREW, RETIRED_SYSTEM_CREW_WARNING, disabled_crew_message, executor_host_os,

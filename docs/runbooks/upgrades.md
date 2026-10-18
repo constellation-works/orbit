@@ -1027,7 +1027,9 @@ task records or the lexical index. No automatic deletion of that global
 directory is performed.
 
 Legacy `[semantic]` configuration and `search.model` are ignored with a warning
-for the removal release; delete them from config.toml. Config get/set reject
+for the removal release; delete them from config.toml. `orbit doctor` names
+the file, and `orbit doctor --fix-retired-config-keys` backs it up and removes
+the key. Config get/set reject
 these retired keys with migration guidance. The runtime no longer honors
 `ORBIT_SEARCH_COMPANION*` environment overrides.
 

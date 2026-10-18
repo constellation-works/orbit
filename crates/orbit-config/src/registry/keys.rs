@@ -139,6 +139,19 @@ pub(crate) fn removed_key_note(key: &str) -> Option<&'static str> {
         .map(|(_, note)| *note)
 }
 
+/// Whether `key` is a removed or deprecated registry key that load still accepts.
+///
+/// `orbit config get` and `set` refuse it. `ConfigStore::unset_value` still
+/// removes it, so a doctor repair can delete the key without accepting a new value.
+pub(crate) fn is_compatibility_config_key(key: &str) -> bool {
+    DEPRECATED_CONFIG_KEYS
+        .iter()
+        .any(|(candidate, _)| *candidate == key)
+        || REMOVED_CONFIG_KEYS
+            .iter()
+            .any(|(candidate, _)| *candidate == key)
+}
+
 /// Registry keys `orbit config set` refuses to write, with the reason an
 /// operator needs. Unlike [`REMOVED_CONFIG_KEYS`] these are live settings —
 /// readable by `orbit config get`/`show` and admitted at load — they are

@@ -1501,7 +1501,7 @@ Config is parsed at startup, and invalid entries fail loud. Common errors:
 | `[operation] has unknown key '<x>'`, `[review] has unknown key '<x>'`, `operation.review_policy has invalid value '<x>'` | The review keys are a closed set. |
 | `[task] artifact_store is no longer supported` | Remove the key. |
 
-**Retired keys warn and are ignored.** Delete them; `orbit config get`/`set` reject them with migration notes.
+**Retired keys warn and are ignored.** Delete them; `orbit config get`/`set` reject them with migration notes. `orbit doctor` lists each one with the file that still sets it, and `orbit doctor --fix-retired-config-keys` backs up that file and removes only those keys.
 
 | Retired | Note |
 |---|---|
@@ -1515,7 +1515,7 @@ Config is parsed at startup, and invalid entries fail loud. Common errors:
 | `knowledge.task_id_pattern` | Deprecated. |
 | `execution.env.inherit` | Inheritance is fixed off. |
 
-**Deprecated keys warn and are translated or ignored.** Still loaded, warned on every load, and refused by `orbit config get`/`set`; a later release makes them errors.
+**Deprecated keys warn and are translated or ignored.** Still loaded, warned on every load, and refused by `orbit config get`/`set`; a later release makes them errors. `orbit doctor --fix-retired-config-keys` removes them the same way it removes retired keys.
 
 | Deprecated | Translation |
 |---|---|

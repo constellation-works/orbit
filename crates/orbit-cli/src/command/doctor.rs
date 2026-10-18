@@ -1,6 +1,7 @@
 use clap::{Args, Subcommand};
 use orbit_cmd::{
-    DoctorCommands, OrphanTaskStoreRemoval, WorkspaceDoctorResult, WorkspaceDoctorStatus,
+    DoctorCommands, OrphanTaskStoreRemoval, RetiredConfigKeyRepair, WorkspaceDoctorResult,
+    WorkspaceDoctorStatus,
 };
 use orbit_core::{DOCTOR_FINDINGS_MESSAGE_PREFIX, OrbitError, OrbitRuntime};
 use orbit_types::policy::{DEFAULT_POLICY_NAME, FsOperation};
@@ -59,6 +60,10 @@ pub struct DoctorCommand {
     /// Delete this Orbit root and workspace's own state-routine attempt pins that no consumer or live run still names. Legacy shared pins, other roots' and workspaces' pins, in-use pins and unrecognized refs are kept and reported. Refuses while a routine sweep runs.
     #[arg(long)]
     pub fix_automation_pins: bool,
+
+    /// Back up each config.toml that still sets a retired or deprecated key, then remove only those keys.
+    #[arg(long)]
+    pub fix_retired_config_keys: bool,
 
     /// Confirm a destructive repair. Required by --fix-orphan-task-stores, which deletes partition directories and their task bundles.
     #[arg(long)]
@@ -227,6 +232,19 @@ impl Execute for DoctorCommand {
                 } else {
                     WorkspaceDoctorStatus::Warning
                 },
+                message,
+                remediation: None,
+            });
+        }
+        if self.fix_retired_config_keys {
+            let started = std::time::Instant::now();
+            let repair = runtime.remove_retired_config_keys()?;
+            let message = retired_config_key_repair_message(&repair);
+            eprintln!("{message}");
+            results.push(WorkspaceDoctorResult {
+                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                check_name: "fix-retired-config-keys".to_string(),
+                status: WorkspaceDoctorStatus::Ok,
                 message,
                 remediation: None,
             });
@@ -493,6 +511,36 @@ fn orphan_task_store_removal_message(removed: &OrphanTaskStoreRemoval) -> String
         "Removed {} empty orphaned task-store partition(s) and {} populated partition(s) \
          ({} task bundle(s)).",
         removed.empty_partitions, removed.populated_partitions, removed.task_bundles
+    )
+}
+
+/// Render `--fix-retired-config-keys`: which keys were removed, and the backup
+/// written beside each edited file. An empty repair changed nothing.
+fn retired_config_key_repair_message(repair: &RetiredConfigKeyRepair) -> String {
+    if repair.removed.is_empty() {
+        return "No retired or deprecated config keys were present.".to_string();
+    }
+    let mut groups: Vec<(String, String, Vec<&str>)> = Vec::new();
+    for entry in &repair.removed {
+        let config = entry.config_path.display().to_string();
+        let backup = entry.backup_path.display().to_string();
+        if let Some(group) = groups.iter_mut().find(|group| group.0 == config) {
+            group.2.push(entry.key.as_str());
+        } else {
+            groups.push((config, backup, vec![entry.key.as_str()]));
+        }
+    }
+    let detail = groups
+        .iter()
+        .map(|(config, backup, keys)| {
+            format!("{} from {config} (backup {backup})", keys.join(", "))
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let count = repair.removed.len();
+    format!(
+        "Removed {count} retired or deprecated config key{}: {detail}.",
+        if count == 1 { "" } else { "s" }
     )
 }
 
