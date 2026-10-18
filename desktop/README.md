@@ -29,23 +29,30 @@ dashboard's own host switcher.
   server if the app crashes. On macOS, a crash that skips Rust's panic hook (a SIGKILL, for example)
   can leave the server running until you stop it yourself.
 - **Menu bar and tray.** The icon's menu shows how many drains are running and how many runs
-  failed in the last 24 hours, with **Open Orbit**, **Restart Dashboard Server**, **Check for
+  failed in the last 24 hours, summed across this host and every registered remote host, with
+  **Open Orbit**, **Restart Dashboard Server**, **Check for
   Updates…** (see [Auto-update](#auto-update)), **Launch at Login** and **Quit Orbit**. On macOS the counts also appear beside the icon (`▶` drains, `✕` failed runs),
   and closing the window keeps the app in the menu bar; **Quit Orbit** or ⌘Q ends it. On Linux,
   closing the window quits, because a desktop without an AppIndicator host has no tray to return
   from. Restarting the server reloads the window once the new server is ready.
-- **Notifications.** Every 20 seconds the app reads its own server's `/api/fleet/drains`,
-  `/api/job-runs/all?state=failed&since=24h` and `/api/tasks/all?status=review`, which cover every
-  workspace on this host. A run that newly appears as failed, or a task that newly appears in review,
-  raises a native notification naming the task title (or the job) and its workspace. More than three
-  at once arrive as one summary. Review reads follow every cursor page before comparing tasks,
-  so older tasks entering review are covered even with a large backlog. A failed page leaves the
-  previous complete review baseline intact until a successful read. The first read after launch
-  only records what is already there. A workspace that comes back after being unavailable does not
-  re-announce its old failures, and a task that stayed in review is not announced again either. A
-  task that enters review there after recovery still is. A review response that drops a task
-  without naming its workspace unavailable is treated as the task leaving review, so its return is
-  announced. Other hosts' runs aren't watched; switch to them in the dashboard. A development build (`cargo
+- **Notifications.** Every 20 seconds the app reads its own server's `api/hosts` without opening a
+  probe session, then `/api/fleet/drains`, `/api/job-runs/all?state=failed&since=24h` and
+  `/api/tasks/all?status=review` for this host and for each registered remote that the list does not
+  already mark unreachable. Remote routes go through `/api/on/<host>/…` and cover every workspace on
+  that host. The menu's drain and failure counts are the sums of the hosts that answered. A host
+  that does not answer is unavailable, not zero: the tray does not keep a number that dropped that
+  host, and the host's previous runs and review tasks stay remembered, so they are not announced
+  again when the host returns. A run that newly appears as failed, or a task that newly appears in
+  review, raises a native notification naming the task title (or the job) and its workspace. When
+  more than one host is registered, the notification names the host too; with only this host, the
+  text stays the title and the workspace. More than three at once arrive as one summary. Review
+  reads follow every cursor page before comparing tasks, so older tasks entering review are covered
+  even with a large backlog. A failed page leaves the previous complete review baseline intact until
+  a successful read. The first read after launch only records what is already there. A workspace
+  that comes back after being unavailable does not re-announce its old failures, and a task that
+  stayed in review is not announced again either. A task that enters review there after recovery
+  still is. A review response that drops a task without naming its workspace unavailable is treated
+  as the task leaving review, so its return is announced. A development build (`cargo
   run`) posts notifications as Terminal on macOS, because it has no app bundle of its own.
 - **Launch at login.** The menu's checkbox adds or removes a login item: a LaunchAgent on macOS and
   an autostart `.desktop` entry on Linux. It opens the app normally, window included.
