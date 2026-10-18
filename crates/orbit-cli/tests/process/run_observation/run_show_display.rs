@@ -327,6 +327,130 @@ fn run_show_keeps_worker_identity_and_degrades_on_an_unreadable_checkpoint() {
     assert_eq!(degraded["run"]["run_id"], INTERRUPTED, "{degraded}");
 }
 
+/// A skipped step's condition is not the failure a cascaded parent reports.
+fn run_show_reports_the_failed_step_before_a_later_skip() {
+    const CHILD: &str = "jrun-20261018-skipped-root-cause-child";
+    const PARENT: &str = "jrun-20261018-skipped-root-cause-parent";
+    let fixture = Fixture::terminal();
+    let workspace_id = fixture.workspace_id();
+    let db = fixture.db();
+    for (run_id, state) in [(CHILD, "failed"), (PARENT, "failed")] {
+        db.execute(
+            "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state,
+                 input_json, scheduled_at, started_at, finished_at, created_at)
+             VALUES (?1, ?2, 'fixture_job', 1, ?3, '{}',
+                 '2026-10-18T00:00:00+00:00', '2026-10-18T00:00:01+00:00',
+                 '2026-10-18T00:00:02+00:00', '2026-10-18T00:00:00+00:00')",
+            params![run_id, workspace_id, state],
+        )
+        .expect("seed cascade runs");
+    }
+    for (event_id, step_id, body_kind, details, ts) in [
+        (
+            "commit-started",
+            "commit_task",
+            "step_started",
+            serde_json::json!({ "step_id": "commit_task" }),
+            "2026-10-18T00:00:01+00:00",
+        ),
+        (
+            "commit-finished",
+            "commit_task",
+            "step_finished",
+            serde_json::json!({
+                "step_id": "commit_task",
+                "outcome": "failed",
+                "error_message": "task-commit lock timeout",
+            }),
+            "2026-10-18T00:00:02+00:00",
+        ),
+        (
+            "ship-started",
+            "ship_leaves",
+            "step_started",
+            serde_json::json!({ "step_id": "ship_leaves" }),
+            "2026-10-18T00:00:03+00:00",
+        ),
+        (
+            "ship-skipped",
+            "ship_leaves",
+            "step_skipped",
+            serde_json::json!({
+                "step_id": "ship_leaves",
+                "reason": "ship_leaves => false",
+            }),
+            "2026-10-18T00:00:04+00:00",
+        ),
+    ] {
+        let mut payload = serde_json::json!({
+            "event_id": format!("{CHILD}-{event_id}"),
+            "body_kind": body_kind,
+            "ts": ts,
+            "step_id": step_id,
+        });
+        if let Some(details) = details.as_object() {
+            payload
+                .as_object_mut()
+                .expect("audit payload object")
+                .extend(details.clone());
+        }
+        db.execute(
+            "INSERT INTO v2_audit_events (workspace_id, event_id, source, schema_version,
+                 event_type, ts, run_id, agent_identity, payload_json)
+             VALUES (?1, ?2, 'v2_envelope', 1, 'activity.progress', ?3, ?4, 'test', ?5)",
+            params![
+                workspace_id,
+                format!("{CHILD}-{event_id}"),
+                ts,
+                CHILD,
+                payload.to_string()
+            ],
+        )
+        .expect("seed cascade audit event");
+    }
+
+    let runtime = orbit_core::OrbitRuntime::from_roots(
+        &fixture.home.join(".orbit"),
+        &fixture.work.join(".orbit"),
+    )
+    .expect("open runtime");
+    runtime
+        .write_run_state(
+            PARENT,
+            &orbit_types::workflow::PipelineState::new(
+                PARENT.to_string(),
+                "fixture_job".to_string(),
+                serde_json::json!({}),
+            ),
+        )
+        .expect("seed parent state");
+    let failure = orbit_engine::RuntimeHost::run_deterministic(
+        &runtime,
+        "pipeline_success_guard",
+        &serde_json::json!({}),
+        &serde_json::json!({
+            "run_id": PARENT,
+            "context": "fixture child run",
+            "results": [{
+                "status": "failed",
+                "run_id": CHILD,
+                "error": "fixture child failed",
+            }],
+        }),
+        orbit_tools::ToolContext::default(),
+    )
+    .expect_err("the failed child makes its parent fail");
+    assert!(
+        failure
+            .to_string()
+            .contains("fixture child run did not succeed")
+    );
+
+    let json = fixture.json(&["run", "show", PARENT, "--no-reconcile", "--json"]);
+    assert_eq!(json["run"]["root_cause"]["leaf_run_id"], CHILD, "{json}");
+    assert_eq!(json["run"]["root_cause"]["step"], "commit_task", "{json}");
+}
+
 #[test]
 fn run_show_contracts() {
     if !isolated_run_observation("run_observation::run_show_display::run_show_contracts") {
@@ -348,6 +472,10 @@ fn run_show_contracts() {
         (
             "run_show_keeps_worker_identity_and_degrades_on_an_unreadable_checkpoint",
             run_show_keeps_worker_identity_and_degrades_on_an_unreadable_checkpoint as fn(),
+        ),
+        (
+            "run_show_reports_the_failed_step_before_a_later_skip",
+            run_show_reports_the_failed_step_before_a_later_skip as fn(),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");
