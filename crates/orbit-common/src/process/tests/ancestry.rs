@@ -1,5 +1,6 @@
 //! The macOS process tree names the calling process and a live child, and
-//! drops the child once it has been reaped.
+//! drops the child once it has been reaped. The session tree keeps a child
+//! that launchd adopted.
 
 use std::io::Write;
 use std::os::unix::process::CommandExt;
@@ -133,6 +134,106 @@ fn a_child_is_in_the_process_tree_until_it_exits() {
     assert!(
         !contains_pid(&after, child_pid),
         "a reaped child is not still in the tree"
+    );
+}
+
+/// A background job whose shell exits is adopted by launchd and leaves the
+/// parent-link walk, but it is still in the session the shell led, so the
+/// session tree keeps it, with no parent.
+#[test]
+fn an_orphan_stays_in_the_session_tree_its_shell_led() {
+    use std::io::{BufRead, BufReader};
+
+    const TEST: &str =
+        "process::tests::ancestry::an_orphan_stays_in_the_session_tree_its_shell_led";
+    let self_pid = std::process::id();
+    let mut tree = ancestry::SessionTree::new(self_pid);
+    if tree.snapshot().is_none() {
+        match crate::test_env::ps_stat(self_pid) {
+            crate::test_env::PsRun::Denied(reason) => {
+                crate::test_env::report_ps_denied(TEST, &reason);
+                return;
+            }
+            crate::test_env::PsRun::Ran(output) => panic!(
+                "session tree is unreadable but ps ran (status {}): {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        }
+    }
+
+    let mut shell = Command::new("/bin/sh");
+    shell
+        .args([
+            "-c",
+            "/bin/sleep 30 </dev/null >/dev/null 2>&1 & echo $!; read _ || :",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    // Safety: `setsid` is async-signal-safe and touches only the child.
+    unsafe {
+        shell.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut shell = shell.spawn().expect("spawn the session's shell");
+    // The shell leads its session and its job's process group, so killing
+    // the group on the way out also stops the orphaned job.
+    struct KillGroup(libc::pid_t);
+    impl Drop for KillGroup {
+        fn drop(&mut self) {
+            // Safety: signals only the group this test created.
+            unsafe { libc::killpg(self.0, libc::SIGKILL) };
+        }
+    }
+    let shell_pid = shell.id();
+    let _group = KillGroup(shell_pid as libc::pid_t);
+    let mut line = String::new();
+    BufReader::new(shell.stdout.take().expect("shell stdout"))
+        .read_line(&mut line)
+        .expect("read the job's pid");
+    let job: u32 = line.trim().parse().expect("the job's pid");
+
+    let before = tree.snapshot().expect("session tree readable");
+    let listed_job = before
+        .iter()
+        .find(|process| process.key.pid == job)
+        .unwrap_or_else(|| panic!("the job is under its shell: {before:?}"));
+    assert_eq!(
+        listed_job.parent.map(|parent| parent.pid),
+        Some(shell_pid),
+        "the job is walked through its shell while the shell lives"
+    );
+
+    drop(shell.stdin.take());
+    assert!(shell.wait().expect("reap the shell").success());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while ancestry::process_start_and_parent(job).map(|(_, parent)| parent) != Some(1) {
+        assert!(Instant::now() < deadline, "launchd never adopted the job");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        !contains_pid(
+            &ancestry::process_tree(self_pid).expect("tree readable"),
+            job
+        ),
+        "the parent-link walk loses the orphan"
+    );
+    let after = tree.snapshot().expect("session tree readable");
+    let adopted = after
+        .iter()
+        .find(|process| process.key == listed_job.key)
+        .unwrap_or_else(|| panic!("the session tree keeps the orphaned job: {after:?}"));
+    assert_eq!(adopted.parent, None, "an adopted orphan has no parent");
+    // Other tests' children may share this tree, but launchd's own children
+    // are in sessions nothing here leads.
+    assert!(
+        after.len() < before.len() + 16,
+        "the session tree adopts orphans, not launchd's children: {after:?}"
     );
 }
 
