@@ -23,7 +23,7 @@ use orbit_engine::{
 use orbit_types::identity::ReasoningEffort;
 use orbit_types::resource::{EXECUTOR_RESOURCE_SCHEMA_VERSION, ExecutorResource};
 use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, OnDenial, Provider};
-use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind};
+use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind, is_provider_unavailable};
 
 const PROMPT_SECRET: &str = "muse-tenant-42-authorization-bearer-zzz";
 /// The Orbit envelope as it appears inside a JSON string value.
@@ -251,6 +251,46 @@ fn run_body(terminal: &str, exit_code: i32) -> String {
 
 fn success_body() -> String {
     run_body("completed", 0)
+}
+
+/// A run ending in `terminal` whose `payload.text` is `text`, after the same
+/// prompt echoes and delta `run_body` emits.
+fn run_body_with_text(terminal: &str, text: &str, exit_code: i32) -> String {
+    [
+        record(
+            "run.lifecycle.started",
+            &format!(r#"{{"prompt":"Required response schema: {SUCCESS_ENVELOPE}"}}"#),
+        ),
+        record(
+            "turn.input.user",
+            &format!(r#"{{"text":"Required response schema: {SUCCESS_ENVELOPE}"}}"#),
+        ),
+        record("run.output.delta", r#"{"text":"{\"schemaVersion\":1,"}"#),
+        record(
+            "run.terminal.completed",
+            &format!(r#"{{"terminal":"{terminal}","text":"{text}"}}"#),
+        ),
+        format!("exit {exit_code}"),
+    ]
+    .join("\n")
+}
+
+/// A run ending with an arbitrary terminal `payload`, after the prompt echoes.
+fn run_body_with_payload(payload: &str, exit_code: i32) -> String {
+    [
+        record(
+            "run.lifecycle.started",
+            &format!(r#"{{"prompt":"Required response schema: {SUCCESS_ENVELOPE}"}}"#),
+        ),
+        record(
+            "turn.input.user",
+            &format!(r#"{{"text":"Required response schema: {SUCCESS_ENVELOPE}"}}"#),
+        ),
+        record("run.output.delta", r#"{"text":"{\"schemaVersion\":1,"}"#),
+        record("run.terminal.completed", payload),
+        format!("exit {exit_code}"),
+    ]
+    .join("\n")
 }
 
 #[test]
@@ -639,9 +679,126 @@ fn a_terminal_other_than_completed_cannot_report_success() {
     // `TurnTerminal` is wire-open: anything but `completed` is a failure, even
     // when the record carries a success envelope and the CLI exits 0.
     for terminal in ["failed", "cancelled", "interrupted"] {
-        let outcome = dispatch(&Harness::new(&run_body(terminal, 0)), spec(60));
+        let reason = format!("provider stopped with terminal {terminal}");
+        let outcome = dispatch(
+            &Harness::new(&run_body_with_text(terminal, &reason, 0)),
+            spec(60),
+        );
         assert!(!outcome.success, "terminal {terminal} must fail");
+        let message = outcome.message.unwrap_or_default();
+        assert!(
+            message.contains(&reason),
+            "terminal {terminal} reason must reach the operator message: {message}",
+        );
+        assert!(
+            !is_provider_unavailable(None, Some(&message)),
+            "terminal {terminal} without auth evidence must stay unclassified: {message}",
+        );
     }
+}
+
+#[test]
+fn failed_terminal_reason_reaches_the_message_without_provider_classification() {
+    // The inaccessible-model failure Daniel observed: an ordinary run
+    // failure carrying its reason, never a provider-unavailable outage.
+    let reason = "model muse-wonder-full-1.0 does not exist or you lack access";
+    let outcome = dispatch(
+        &Harness::new(&run_body_with_text("failed", reason, 1)),
+        spec(60),
+    );
+    assert!(!outcome.success);
+    let message = outcome.message.unwrap_or_default();
+    assert!(
+        message.contains(reason),
+        "the failed terminal's reason must reach the operator: {message}",
+    );
+    assert!(
+        !is_provider_unavailable(None, Some(&message)),
+        "an inaccessible model must not be stamped provider-unavailable: {message}",
+    );
+    assert!(
+        !message.contains("muse login"),
+        "an inaccessible model must not produce a relogin hint: {message}",
+    );
+}
+
+#[test]
+fn terminal_authentication_failure_is_typed_provider_unavailable() {
+    // Auth evidence in the provider-owned terminal payload only:
+    // `payload.text` carrying an authentication phrase, and HTTP status
+    // fields on the payload, on either exit path.
+    for (payload, exit_code) in [
+        (
+            r#"{"terminal":"failed","text":"authentication failed: login expired"}"#,
+            1,
+        ),
+        (
+            r#"{"terminal":"failed","text":"credentials rejected by upstream","status":401}"#,
+            1,
+        ),
+        (
+            r#"{"terminal":"failed","text":"credentials rejected by upstream","status_code":403}"#,
+            0,
+        ),
+    ] {
+        let outcome = dispatch(
+            &Harness::new(&run_body_with_payload(payload, exit_code)),
+            spec(60),
+        );
+        assert!(!outcome.success, "payload {payload} must fail");
+        let message = outcome.message.unwrap_or_default();
+        assert!(
+            is_provider_unavailable(None, Some(&message)),
+            "terminal auth failure must be typed provider-unavailable: {message}",
+        );
+        assert!(
+            message.contains("provider=muse"),
+            "the typed failure must name the muse provider: {message}",
+        );
+    }
+}
+
+#[test]
+fn completed_answer_mentioning_authentication_still_succeeds_unclassified() {
+    // The completed answer text is the agent's transcript, not the
+    // provider writing about itself: phrases in it classify nothing.
+    let body = run_body_with_payload(
+        r#"{"terminal":"completed","text":"{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"edited\":true,\"note\":\"authentication failed for a tool; model muse-wonder-full-1.0 does not exist or you lack access\"},\"error\":null}"}"#,
+        0,
+    );
+    let outcome = dispatch(&Harness::new(&body), spec(60));
+    assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
+    let message = outcome.message.unwrap_or_default();
+    assert!(
+        !is_provider_unavailable(None, Some(&message)),
+        "a completed answer must stay unclassified: {message}",
+    );
+}
+
+#[test]
+fn non_terminal_auth_phrases_never_classify_or_complete() {
+    // Prompt echoes and deltas quoting authentication prose are not the
+    // provider's terminal frame.
+    let body = [
+        record(
+            "run.lifecycle.started",
+            r#"{"prompt":"authentication failed"}"#,
+        ),
+        record("run.output.delta", r#"{"text":"authentication failed"}"#),
+        record(
+            "run.terminal.completed",
+            &format!(r#"{{"terminal":"completed","text":"{SUCCESS_ENVELOPE}"}}"#),
+        ),
+        "exit 0".to_string(),
+    ]
+    .join("\n");
+    let outcome = dispatch(&Harness::new(&body), spec(60));
+    assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
+    let message = outcome.message.unwrap_or_default();
+    assert!(
+        !is_provider_unavailable(None, Some(&message)),
+        "non-terminal records must not classify: {message}",
+    );
 }
 
 #[test]
@@ -656,6 +813,11 @@ fn a_later_failed_terminal_record_overrides_an_earlier_completed_one() {
     );
     let outcome = dispatch(&Harness::new(&body), spec(60));
     assert!(!outcome.success);
+    let message = outcome.message.unwrap_or_default();
+    assert!(
+        message.contains("model error"),
+        "the later failed terminal's reason must win: {message}",
+    );
 }
 
 #[test]

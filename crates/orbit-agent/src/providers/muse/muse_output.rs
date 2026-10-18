@@ -18,24 +18,60 @@
 //! (reminder agents) report their own outcomes. None of them is the run's
 //! answer.
 //!
-//! So this module keeps only `payload.text` of the last
-//! `run.terminal.completed` record, and only when its `payload.terminal` is
-//! `completed`. The exported schema marks `TurnTerminal` wire-open, so
-//! `failed`, `cancelled`, and any value Orbit does not know are all failures.
+//! So the answer projection ([`project_muse_response`]) keeps only
+//! `payload.text` of the last `run.terminal.completed` record, and only when
+//! its `payload.terminal` is `completed`. The exported schema marks
+//! `TurnTerminal` wire-open, so `failed`, `cancelled`, and any value Orbit
+//! does not know are all failures.
+//!
+//! A non-completed terminal's `payload.text` is provider-owned failure
+//! prose, not an answer: normalization retains it for invocation traces and
+//! operator diagnostics (see [`muse_terminal_failure_diagnostic`]), while
+//! the answer projection above still reduces it to empty, so it can never
+//! satisfy the completion envelope. Classification of that prose (say, as
+//! an authentication failure) stays with the engine's shared
+//! provider-failure machinery, never with this reducer.
 //! Every stdout line must be a record: a line that is not a JSON object with
 //! a string `payload_type` means the stream cannot be trusted, and the whole
 //! output reduces to empty, which carries no envelope and so fails closed.
 
 use serde_json::Value;
 
-/// The one record type whose payload is the run's final answer.
+/// The one record type whose payload carries the run's terminal outcome.
 const TERMINAL_RECORD: &str = "run.terminal.completed";
 
 /// The only `TurnTerminal` value that means the run produced its answer.
 const COMPLETED: &str = "completed";
 
-/// Return the final answer text of a completed Muse run, or empty bytes.
-pub(crate) fn normalize_muse_stdout(stdout: &[u8]) -> Vec<u8> {
+/// Upper bound on provider failure prose copied into a diagnostic. The CLI
+/// runner bounds and redacts again at its own boundary.
+const TERMINAL_ERROR_LIMIT_CHARS: usize = 400;
+
+/// The last terminal record's provider-owned fields Orbit reads:
+/// `payload.terminal` (the outcome) and `payload.text` (the final answer
+/// when completed, the provider's failure reason when not).
+struct TerminalInfo {
+    terminal: Option<String>,
+    text: Option<String>,
+}
+
+impl TerminalInfo {
+    fn is_completed(&self) -> bool {
+        self.terminal.as_deref() == Some(COMPLETED)
+    }
+
+    fn text(&self) -> Option<&str> {
+        self.text
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+    }
+}
+
+/// The last terminal record in the stream, or `None` when there is none or
+/// the stream is malformed (a line that is not a JSON object with a string
+/// `payload_type` poisons the whole stream).
+fn last_terminal(stdout: &[u8]) -> Option<TerminalInfo> {
     let text = String::from_utf8_lossy(stdout);
     let mut terminal = None;
     for line in text.lines() {
@@ -44,30 +80,112 @@ pub(crate) fn normalize_muse_stdout(stdout: &[u8]) -> Vec<u8> {
             continue;
         }
         let Ok(record) = serde_json::from_str::<Value>(trimmed) else {
-            return Vec::new();
+            return None;
         };
-        let Some(payload_type) = record.get("payload_type").and_then(Value::as_str) else {
-            return Vec::new();
-        };
-        if payload_type == TERMINAL_RECORD {
+        let payload_type = record.get("payload_type").and_then(Value::as_str)?;
+        if payload_type == TERMINAL_RECORD || payload_type.starts_with("run.terminal.") {
             // A later terminal record replaces an earlier one, so a failed
             // final record cannot be outvoted by a completed earlier one.
-            terminal = Some(completed_answer(record.get("payload")));
+            terminal = Some(terminal_info(record.get("payload")));
         }
     }
-    terminal.flatten().map_or_else(Vec::new, String::into_bytes)
+    terminal
 }
 
-/// The answer of one terminal record, or `None` when it is not completed or
-/// carries no text.
-fn completed_answer(payload: Option<&Value>) -> Option<String> {
-    let payload = payload?.as_object()?;
-    if payload.get("terminal").and_then(Value::as_str) != Some(COMPLETED) {
+fn terminal_info(payload: Option<&Value>) -> TerminalInfo {
+    let Some(payload) = payload.and_then(Value::as_object) else {
+        return TerminalInfo {
+            terminal: None,
+            text: None,
+        };
+    };
+    TerminalInfo {
+        terminal: payload
+            .get("terminal")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        // `text` is the field Muse Code 1.4.10 was observed to carry; the
+        // `message`/`error` fallbacks read the same provider-owned payload
+        // only when `text` is absent.
+        text: payload
+            .get("text")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                payload
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .or_else(|| match payload.get("error") {
+                Some(Value::String(text)) => Some(text.clone()),
+                Some(error) => error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                None => None,
+            }),
+    }
+}
+
+/// Return the terminal record's `payload.text` for tracing and diagnostics,
+/// or empty bytes when the stream is malformed or carries no terminal text.
+///
+/// For a completed run this is the final answer. For a failed, cancelled or
+/// unknown terminal it is the provider's own failure reason, retained only
+/// so the operator diagnostic can carry it; the answer projection is
+/// [`project_muse_response`], which never exposes it as an answer.
+pub(crate) fn normalize_muse_stdout(stdout: &[u8]) -> Vec<u8> {
+    let Some(info) = last_terminal(stdout) else {
+        return Vec::new();
+    };
+    info.text()
+        .map_or_else(Vec::new, |text| text.as_bytes().to_vec())
+}
+
+/// Return the final answer text of a completed Muse run, or empty bytes.
+///
+/// Only a `payload.terminal` of `completed` yields its `payload.text`; every
+/// other terminal, a missing terminal record, and a malformed stream reduce
+/// to empty, which carries no envelope and so fails closed.
+pub(crate) fn project_muse_response(stdout: &[u8]) -> Vec<u8> {
+    let Some(info) = last_terminal(stdout) else {
+        return Vec::new();
+    };
+    if !info.is_completed() {
+        return Vec::new();
+    }
+    info.text()
+        .map_or_else(Vec::new, |text| text.as_bytes().to_vec())
+}
+
+/// Provider-gated diagnostic for a Muse run whose terminal is not
+/// `completed`: the provider's own failure reason from the terminal frame's
+/// `payload.text`, read from no other record, so prompt echoes, deltas and
+/// child-task records never count as failure evidence. Completed terminals
+/// and malformed streams yield `None`. Unbounded in the prose it selects;
+/// the caller bounds and redacts it, and this helper bounds it again.
+pub fn muse_terminal_failure_diagnostic(provider: &str, stdout: &[u8]) -> Option<String> {
+    if provider != "muse" {
         return None;
     }
-    payload
-        .get("text")
-        .and_then(Value::as_str)
-        .filter(|text| !text.is_empty())
-        .map(str::to_string)
+    let info = last_terminal(stdout)?;
+    if info.is_completed() {
+        return None;
+    }
+    let terminal = info.terminal.as_deref().unwrap_or("unknown");
+    let text = match info.text() {
+        Some(text) => format!("Muse terminal {terminal}: {text}"),
+        None => format!("Muse run ended with terminal {terminal} and no failure text"),
+    };
+    Some(bound_terminal_error(&text))
+}
+
+fn bound_terminal_error(text: &str) -> String {
+    let bounded: String = text.chars().take(TERMINAL_ERROR_LIMIT_CHARS).collect();
+    if bounded.chars().count() < text.chars().count() {
+        format!("{bounded}…")
+    } else {
+        bounded
+    }
 }
