@@ -273,6 +273,7 @@ fn in_progress_task(runtime: &OrbitRuntime, run: &JobRun) -> String {
             crew: None,
             crew_source: None,
             orchestrator: None,
+            origin: None,
             comments: Vec::new(),
             context_creation: Vec::new(),
         })

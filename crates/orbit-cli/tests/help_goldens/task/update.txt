@@ -86,6 +86,14 @@ Options:
       --orchestrator <ORCHESTRATOR>
           Named crew responsible for orchestration attribution (empty string clears)
 
+      --origin <ORIGIN>
+          Replacement task origin (operator_request, orchestrator_initiative, automation)
+
+          Possible values:
+          - operator_request:        A human operator asked for the work
+          - orchestrator_initiative: An orchestrator decided the work was needed on its own
+          - automation:              Filed by automation: an auto-task, routine, sweep or other system filer
+
       --context <CONTEXT_FILES>
           Replace the whole task context list. Omit to preserve it; an empty string clears it. To extend scope, include all existing selectors plus the new ones. Repeat or comma-separate for multiple selectors. Prefer `file:`, `dir:`, or `symbol:` forms; legacy raw paths are accepted and upgraded. Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up
 

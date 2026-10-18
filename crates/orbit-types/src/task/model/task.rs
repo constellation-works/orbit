@@ -62,6 +62,10 @@ pub struct Task {
     /// attribution metadata only; execution resolution continues to use `crew`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orchestrator: Option<String>,
+    /// Why the task was filed. Absent on tasks filed before origins were
+    /// recorded and on interactive filings that did not state one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<TaskOrigin>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -150,6 +154,7 @@ impl Task {
             crew: envelope.crew,
             crew_source: envelope.crew_source,
             orchestrator: envelope.orchestrator,
+            origin: envelope.origin,
             created_at: envelope.created_at,
             updated_at: envelope.updated_at,
         }

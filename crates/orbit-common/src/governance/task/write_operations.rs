@@ -20,8 +20,8 @@ use orbit_types::task::TASK_SHOW_PROJECTION_FIELDS_CSV;
 use orbit_types::tool::McpToolScope;
 
 use super::operations::{
-    TASK_COMPLEXITY_VALUES, TASK_HOST_HELP, TASK_PRIORITY_VALUES, TASK_TYPE_VALUES, TaskOperation,
-    TaskVerb,
+    TASK_COMPLEXITY_VALUES, TASK_HOST_HELP, TASK_ORIGIN_VALUES, TASK_PRIORITY_VALUES,
+    TASK_TYPE_VALUES, TaskOperation, TaskVerb,
 };
 use crate::governance::operation::{
     CliArgKind, CliHelp, Description, Effect, EnumValue, ParamSpec, ParamType, RETIRED_AGENT_FIELD,
@@ -170,6 +170,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             "source_task",
             "crew",
             "orchestrator",
+            "origin",
             "model",
         ],
     },
@@ -278,6 +279,13 @@ pub(super) const ADD: TaskOperation = TaskOperation {
                 CliArgKind::flag("orchestrator"),
                 "Named crew responsible for orchestration attribution",
             ),
+            both(
+                "origin",
+                ParamType::Enum(TASK_ORIGIN_VALUES),
+                "Optional reason the task was filed: `operator_request` when a human asked for the work, `orchestrator_initiative` when the orchestrator decided on its own, `automation` for a system filer. Omitted, it stays unset, except that system filers and sweep findings record `automation`.",
+                CliArgKind::flag("origin"),
+                "Why the task was filed: operator_request (a human asked), orchestrator_initiative (the orchestrator decided) or automation. Omitted, it stays unset",
+            ),
         ],
         WRITE_PROJECTION_PARAMS,
         &[
@@ -383,6 +391,7 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             "job_run_id",
             "crew",
             "orchestrator",
+            "origin",
             "context_files",
             "allow_missing_context",
             "artifacts",
@@ -568,6 +577,13 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
                 CliArgKind::flag("orchestrator"),
                 "Named crew responsible for orchestration attribution (empty string clears)",
             )),
+            both(
+                "origin",
+                ParamType::Enum(TASK_ORIGIN_VALUES),
+                "Replacement reason the task was filed: operator_request, orchestrator_initiative or automation. Corrects a recorded origin; it cannot be cleared.",
+                CliArgKind::flag("origin"),
+                "Replacement task origin (operator_request, orchestrator_initiative, automation)",
+            ),
             path(preserve_empty(both(
                 "context_files",
                 ParamType::StringList,

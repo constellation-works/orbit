@@ -143,6 +143,7 @@ fn envelope(
         crew: None,
         crew_source: None,
         orchestrator: None,
+        origin: None,
         relations,
         tags,
         required_tools: Vec::new(),

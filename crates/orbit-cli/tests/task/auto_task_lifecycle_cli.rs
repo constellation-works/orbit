@@ -147,6 +147,10 @@ fn auto_task_cli_delete_opt_out_restore_and_open_task_refusals_persist() {
     let minted = fixture.json(&["auto-task", "mint", "fixture-open-task", "--json"]);
     let id = minted["id"].as_str().unwrap();
     let task_before = fixture.json(&["task", "show", id, "--json"]);
+    assert_eq!(
+        task_before["origin"], "automation",
+        "a task an auto-task definition mints records automation as its origin"
+    );
     let definition_before = fixture.json(&["auto-task", "show", "fixture-open-task", "--json"]);
     operator(
         &fixture,

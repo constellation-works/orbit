@@ -63,6 +63,18 @@ The connected tool schema is authoritative for supported fields.
   `github.auth.status` can still yield a structured `available: false` or
   `authenticated: false` capability-unavailable result when the lane has no
   GitHub client or credentials; that is not a clean CI pass.
+- `origin` records why the task was filed, from a closed set:
+  `operator_request` (a human operator asked for the work),
+  `orchestrator_initiative` (the orchestrator judged it necessary on its own)
+  or `automation` (a system filer). Orchestrators set it on every filing; the
+  operator's request usually reaches you in chat, so Orbit cannot infer it.
+  Tasks minted by auto-task definitions, routines and other system filers, and
+  sweep findings tagged `auto-task:*`, `qa-sweep`, `code-review`,
+  `security-review` or `friction-curation`, record `automation` when no origin
+  is given. Any other filing without one stays unset, which never reads as a
+  value. `orbit.task.update` can correct an origin but not clear it, an unknown
+  value is refused with the allowed list, and `orbit task list --origin`
+  (`origin` on `orbit.task.list`) filters by it.
 - `covered_by` names a task or GitHub PR covering an archived/rejected CI
   sweep finding. Its target is a task ID or an external key such as
   `github-pr:NUMBER` (this checkout's repository) or

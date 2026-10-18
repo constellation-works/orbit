@@ -131,6 +131,19 @@ pub const TASK_TYPE_VALUES: &[EnumValue] = &[
     EnumValue::plain("chore"),
 ];
 
+/// `TaskOrigin` as the CLI offers it.
+pub const TASK_ORIGIN_VALUES: &[EnumValue] = &[
+    EnumValue::helped("operator_request", "A human operator asked for the work"),
+    EnumValue::helped(
+        "orchestrator_initiative",
+        "An orchestrator decided the work was needed on its own",
+    ),
+    EnumValue::helped(
+        "automation",
+        "Filed by automation: an auto-task, routine, sweep or other system filer",
+    ),
+];
+
 /// `TaskPriority` as the CLI offers it.
 pub const TASK_PRIORITY_VALUES: &[EnumValue] = &[
     EnumValue::plain("low"),
@@ -217,13 +230,13 @@ const LIST: TaskOperation = TaskOperation {
     verb: TaskVerb::List,
     cli_path: &["list"],
     tool_name: "orbit.task.list",
-    tool_description: "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Optional filters: status, parent, type, tag, dependency readiness, path, runs_on. os_requirement is derived from OS tags intersected with the stored crew executor host_os, with source and unresolved/conflict states.",
+    tool_description: "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Optional filters: status, parent, type, origin, tag, dependency readiness, path, runs_on. os_requirement is derived from OS tags intersected with the stored crew executor host_os, with source and unresolved/conflict states.",
     cli_about: "List tasks with optional filters",
     cli_help: CliHelp {
         constraints: &[],
         long_about: None,
         after_help: Some(
-            "Examples:\n  orbit task list\n  orbit task list --limit 100\n  orbit task list --status backlog\n  orbit task list --status in-progress,review\n  orbit task list --type feature\n  orbit task list --priority high\n  orbit task list --parent T12345678-123456\n  orbit task list --ref jira:ENG-1234\n  orbit task list --has-ref jira\n  orbit task list --tag perf --tag bench\n  orbit task list --path src/auth/login.rs\n  orbit task list --json",
+            "Examples:\n  orbit task list\n  orbit task list --limit 100\n  orbit task list --status backlog\n  orbit task list --status in-progress,review\n  orbit task list --type feature\n  orbit task list --origin operator_request\n  orbit task list --priority high\n  orbit task list --parent T12345678-123456\n  orbit task list --ref jira:ENG-1234\n  orbit task list --has-ref jira\n  orbit task list --tag perf --tag bench\n  orbit task list --path src/auth/login.rs\n  orbit task list --json",
         ),
         flag_order: &[
             "status",
@@ -231,6 +244,7 @@ const LIST: TaskOperation = TaskOperation {
             "limit",
             "priority",
             "type",
+            "origin",
             "parent_id",
             "job_run_id",
             "tag",
@@ -286,6 +300,13 @@ const LIST: TaskOperation = TaskOperation {
                     "Filter by task type (feature, bug, refactor, chore)",
                 ),
                 &["task_type", "taskType"],
+            ),
+            both(
+                "origin",
+                ParamType::Enum(TASK_ORIGIN_VALUES),
+                "Optional task origin filter: operator_request, orchestrator_initiative or automation. Tasks without a recorded origin never match.",
+                CliArgKind::flag("origin"),
+                "Filter by task origin (operator_request, orchestrator_initiative, automation); tasks without a recorded origin never match",
             ),
             both(
                 "job_run_id",

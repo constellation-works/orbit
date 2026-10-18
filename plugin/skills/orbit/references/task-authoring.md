@@ -69,7 +69,9 @@ instead. See [friction](friction.md) for workspace ownership and retry rules.
    necessary. See [task fields](task-fields.md) for `required_tools` and capabilities.
 4. Create through `orbit.task.add` with `model` attribution. Required inputs are
    title, description, workspace and assessed complexity (`low`, `medium`, `hard`,
-   `xhard`).
+   `xhard`). An orchestrator also sets `origin`: `operator_request` when a human
+   asked for the work (in chat or elsewhere outside Orbit), or
+   `orchestrator_initiative` when you decided on your own that it is needed.
    Use the advertised schema; detailed `plan` belongs to pickup, not task creation.
    Creation does not approve promotion, dispatch or completion.
 5. Read the returned ID using `fields: ["id"]` or a JSON parser. Never truncate a
@@ -86,6 +88,7 @@ orbit tool run orbit.task.add --input '{
   "context_files": ["file:<verified-modification-target>"],
   "workspace": "<discovered-selector>",
   "complexity": "medium", "type": "feature", "model": "<agent-family>",
+  "origin": "operator_request",
   "fields": ["id"]
 }'
 ```

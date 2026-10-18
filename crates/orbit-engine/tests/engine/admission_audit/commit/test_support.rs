@@ -308,6 +308,7 @@ pub fn task_with_file(id: &str, title: &str, path: &str, implemented_by: &str) -
         crew: None,
         crew_source: None,
         orchestrator: None,
+        origin: None,
         created_at: now,
         updated_at: now,
     }

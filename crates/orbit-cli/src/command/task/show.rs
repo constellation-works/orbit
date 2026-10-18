@@ -234,6 +234,7 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
         ("Implemented By:", "implemented_by"),
         ("Execution Crew:", "crew"),
         ("Orchestrator:", "orchestrator"),
+        ("Origin:", "origin"),
     ] {
         if let Some(value) = field(key) {
             let _ = writeln!(out, "{} {}", bold(label), value);

@@ -751,6 +751,7 @@ impl orbit_engine::test_support::NullRuntimeHost for Host {
             crew: None,
             crew_source: None,
             orchestrator: None,
+            origin: None,
             created_at: now,
             updated_at: now,
         })

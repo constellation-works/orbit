@@ -31,6 +31,7 @@ fn task(id: &str, title: &str) -> Task {
         crew: None,
         crew_source: None,
         orchestrator: None,
+        origin: None,
         created_at: at,
         updated_at: at,
     }

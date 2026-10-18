@@ -414,3 +414,60 @@ impl TaskType {
         &["feature", "bug", "refactor", "chore"]
     }
 }
+
+/// Why a task was filed: a human operator asked for it, an orchestrator
+/// decided on its own, or automation minted it.
+///
+/// Persisted `Task.origin` stays `Option`: a task filed before origins were
+/// recorded, or by an interactive caller that did not say, has none, and
+/// that absence is never read as any of these values.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+#[serde(rename_all = "snake_case")]
+pub enum TaskOrigin {
+    /// A human operator asked for the work.
+    #[cfg_attr(feature = "clap", value(name = "operator_request"))]
+    OperatorRequest,
+    /// An orchestrator judged the work necessary on its own initiative.
+    #[cfg_attr(feature = "clap", value(name = "orchestrator_initiative"))]
+    OrchestratorInitiative,
+    /// A system filer minted it: an auto-task definition, routine, sweep or
+    /// other automated creation path.
+    Automation,
+}
+
+impl TaskOrigin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TaskOrigin::OperatorRequest => "operator_request",
+            TaskOrigin::OrchestratorInitiative => "orchestrator_initiative",
+            TaskOrigin::Automation => "automation",
+        }
+    }
+
+    pub fn valid_names() -> &'static [&'static str] {
+        &["operator_request", "orchestrator_initiative", "automation"]
+    }
+}
+
+impl Display for TaskOrigin {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl FromStr for TaskOrigin {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "operator_request" => Ok(TaskOrigin::OperatorRequest),
+            "orchestrator_initiative" => Ok(TaskOrigin::OrchestratorInitiative),
+            "automation" => Ok(TaskOrigin::Automation),
+            other => Err(format!(
+                "unknown task origin: {other} (valid origins: {})",
+                TaskOrigin::valid_names().join(", ")
+            )),
+        }
+    }
+}
