@@ -2,7 +2,7 @@
 title: Federated MCP — Vision
 owner: grok
 last_updated: 2026-10-13
-last_validated: 2026-10-13
+last_validated: 2026-10-18
 status: Draft
 feature: federated-mcp
 doc_role: vision
