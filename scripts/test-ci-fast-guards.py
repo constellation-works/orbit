@@ -359,11 +359,14 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
     log.write(json.dumps(["guard-end", "test-cpu-utilisation.py"]) + "\\n")
 open(os.path.join(os.environ["GUARD_TEST_CALLS"], "test-cpu-utilisation.py"), "w").close()
 ''')
-        self.write_executable(self.scripts / "test-build-budget.sh", '''#!/usr/bin/env python3
-import json, os
+        # The exclusive lane's last suite holds too, so a lane that outlived
+        # the builds would still be running when nextest starts.
+        self.write_executable(self.scripts / "test-compiler-cache-namespaces.sh", '''#!/usr/bin/env python3
+import json, os, time
+time.sleep(0.5)
 with open(os.environ["GUARD_TEST_LOG"], "a") as log:
-    log.write(json.dumps(["guard-start", "test-build-budget.sh"]) + "\\n")
-open(os.path.join(os.environ["GUARD_TEST_CALLS"], "test-build-budget.sh"), "w").close()
+    log.write(json.dumps(["guard-end", "test-compiler-cache-namespaces.sh"]) + "\\n")
+open(os.path.join(os.environ["GUARD_TEST_CALLS"], "test-compiler-cache-namespaces.sh"), "w").close()
 ''')
         self.init_ci_git()
         result = self.run_guard("ci-guardrails.sh")
@@ -380,11 +383,8 @@ open(os.path.join(os.environ["GUARD_TEST_CALLS"], "test-build-budget.sh"), "w").
             r"iowait_pct=\d+\.\d+|unavailable=(unchanged|decreased|proc_stat))",
         )
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        self.assertIn(
-            ["clippy", "--workspace", "--lib", "--bins", "--", "-D", "warnings",
-             "-D", "clippy::disallowed_methods"],
-            calls,
-        )
+        production_clippy = ["check", "--workspace", "--lib", "--bins"]
+        self.assertIn(production_clippy, calls)
         self.assertFalse(any("--all-targets" in call for call in calls))
         listing = ["nextest", "list", "--list-type", "binaries-only", "--message-format", "json",
                    "--workspace", "--lib", "--bins", "--tests"]
@@ -398,17 +398,17 @@ open(os.path.join(os.environ["GUARD_TEST_CALLS"], "test-build-budget.sh"), "w").
         self.assertIn("--binaries-metadata", run)
         self.assertIn("--cargo-metadata", run)
         # Repository guards never share the host with the workspace suites:
-        # the last pool member ends before nextest starts. The production
-        # clippy, doctest and documentation chain starts after the listing and
-        # joins before the exclusive self-tests.
+        # the last pool member and the last exclusive suite end before nextest
+        # starts. The production clippy, doctest and documentation chain starts
+        # after the listing.
         self.assertLess(calls.index(["guard-end", "test-cpu-utilisation.py"]), calls.index(run), calls)
-        clippy = calls.index(["clippy", "--workspace", "--lib", "--bins", "--", "-D", "warnings",
-                              "-D", "clippy::disallowed_methods"])
+        self.assertLess(calls.index(["guard-end", "test-compiler-cache-namespaces.sh"]),
+                        calls.index(run), calls)
+        clippy = calls.index(production_clippy)
         doctests = calls.index(["test", "--no-fail-fast", "--workspace", "--doc"])
         self.assertLess(calls.index(listing), clippy, calls)
         self.assertLess(clippy, doctests, calls)
-        self.assertLess(calls.index(["doc", "--no-deps", "--workspace"]),
-                        calls.index(["guard-start", "test-build-budget.sh"]), calls)
+        self.assertLess(doctests, calls.index(["doc", "--no-deps", "--workspace"]), calls)
         for phase in ("doctests", "documentation"):
             self.assertIn((phase, "0"), phases)
         # A background check failure must keep its status and timing in the
@@ -416,7 +416,7 @@ open(os.path.join(os.environ["GUARD_TEST_CALLS"], "test-build-budget.sh"), "w").
         original = (self.bin / "cargo").read_text()
         (self.bin / "cargo").write_text(original.replace(
             'if sys.argv[1] == "metadata":',
-            'if sys.argv[1] == "clippy":\n    raise SystemExit(23)\n'
+            'if sys.argv[1] == "check":\n    raise SystemExit(23)\n'
             'if sys.argv[1] == "metadata":'))
         self.log.write_text("")
         result = self.run_guard("ci-guardrails.sh")
@@ -488,6 +488,25 @@ log("end {name}")
                               f'sleep {hold}\n'
                               f'printf "end {name}\\n" >> "{events}"\n')
 
+    def write_priority_stub(self, name, priorities, events=None, hold=0):
+        # Records whether the guard runs lowered: in Linux's idle class, or else
+        # at a higher nice value than this test process.
+        self.write_executable(self.scripts / name, f'''#!/usr/bin/env python3
+import json, os, time
+def log(event):
+    if {str(events) if events else ""!r}:
+        with open({str(events)!r}, "a") as stream:
+            stream.write(event + "\\n")
+log("start {name}")
+idle = getattr(os, "SCHED_IDLE", None)
+lowered = ((idle is not None and os.sched_getscheduler(0) == idle)
+           or os.getpriority(os.PRIO_PROCESS, 0) > {os.getpriority(os.PRIO_PROCESS, 0)})
+with open({str(priorities)!r}, "a") as stream:
+    stream.write(json.dumps([{name!r}, lowered]) + "\\n")
+time.sleep({hold})
+log("end {name}")
+''')
+
     def test_pool_and_exclusive_self_test_failures_are_named_and_fail_the_job(self):
         self.prepare_ci()
         self.write_executable(self.scripts / "test-release-workflow.py", "#!/bin/sh\nexit 19\n")
@@ -500,34 +519,31 @@ log("end {name}")
         self.assertIn("ci-guardrails: FAILED test-build-budget.sh (exit 21)", result.stderr)
         self.assertRegex(result.stderr, r"ci-guardrails: test-build-budget\.sh [0-9.]+ s")
 
-    def test_exclusive_self_tests_run_alone_after_the_pool_joins(self):
+    def test_exclusive_self_tests_run_one_at_a_time_beside_a_lowered_pool(self):
         self.prepare_ci()
         events = self.root / "events"
-        left, right = self.root / "left.fifo", self.root / "right.fifo"
-        os.mkfifo(left)
-        os.mkfifo(right)
-        installer, mcp = "test-installer-security.sh", "test-mcp-registry-publish-workflow.sh"
-        # Members hold briefly after rendezvous, so a suite launched beside them would show
-        # its start before their end; the correct order never does.
-        self.write_overlapping_member(installer, events, outgoing=left, incoming=right, hold=0.5)
-        self.write_overlapping_member(mcp, events, outgoing=right, incoming=left, hold=0.5)
-        # The last pool member holds, so a suite started beside the pool shows its start
-        # before this member's end; the correct order never does.
-        cross = "test-cross-revision-check.sh"
-        self.write_event_stub(cross, events, hold=0.5)
-        for name in ("test-build-budget.sh", "test-compiler-cache.sh"):
-            self.write_event_stub(name, events)
+        priorities = self.root / "priorities"
+        # Pool members hold, so the exclusive lane overlaps them. Each records its
+        # own priority, so a pool member at normal priority beside the lane shows.
+        pool = ("test-installer-security.sh", "check-orphan-modules.sh", "test-cross-revision-check.sh")
+        for name in pool:
+            self.write_priority_stub(name, priorities, hold=0.5)
+        # The first exclusive suite holds, so a second one started beside it
+        # would show its start before the first one's end; the correct order never does.
+        exclusive = ("test-build-budget.sh", "test-compiler-cache.sh")
+        self.write_priority_stub(exclusive[0], priorities, events, hold=0.5)
+        self.write_priority_stub(exclusive[1], priorities, events)
         result = self.run_guard("ci-guardrails.sh", "--fast",
                                 env_overrides={"CI_TEST_BASE": "missing-delivery-base"})
         self.assertEqual(result.returncode, 0, result.stderr)
-        log = events.read_text().splitlines()
-        # Both pool members start before either ends, and every exclusive suite runs
-        # after the whole pool has finished, one at a time.
-        self.assertLess(max(log.index(f"start {installer}"), log.index(f"start {mcp}")),
-                        min(log.index(f"end {installer}"), log.index(f"end {mcp}")), log)
-        self.assertLess(log.index(f"end {cross}"), log.index("start test-build-budget.sh"), log)
-        self.assertEqual(log[-4:], ["start test-build-budget.sh", "end test-build-budget.sh",
-                                    "start test-compiler-cache.sh", "end test-compiler-cache.sh"], log)
+        self.assertEqual(events.read_text().splitlines(),
+                         [f"{edge} {name}" for name in exclusive for edge in ("start", "end")])
+        observed = dict(json.loads(line) for line in priorities.read_text().splitlines())
+        # Exclusive suites keep the caller's priority; everything in the pool,
+        # which shares the host with them, runs lowered.
+        self.assertEqual(observed, {**{name: True for name in pool},
+                                    **{name: False for name in exclusive}})
+        self.assertRegex(result.stderr, r"ci-guardrails-phase: exclusive-self-tests wall_seconds=\d+ exit=0")
 
     def test_pool_width_is_the_build_budget_cargo_jobs(self):
         self.prepare_ci()
@@ -751,7 +767,9 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         builds = [row for row in observed if row["argv"] == folded]
         self.assertEqual([{key: row[key] for key in ("argv", *lint)} for row in builds],
                          [dict(argv=folded, **lint)])
-        foreground = {key: builds[0][key] for key in ("idle", "nice")}
+        # The workspace test listing runs in the main shell; nextest keeps its priority.
+        listed = [row for row in observed if row["argv"][:2] == ["nextest", "list"]]
+        foreground = {key: listed[0][key] for key in ("idle", "nice")}
         # Cargo fingerprints this environment. The nextest listing and the
         # doctest build must see exactly the folded build's values, or each
         # recompiles every workspace member before it can run.
@@ -761,12 +779,25 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(len(doctests), 1, observed)
         for row in (*listing, *doctests):
             self.assertEqual({key: row[key] for key in lint}, lint, row)
+        # Documentation runs under production Clippy's lint environment, so it
+        # reuses that pass's check of the workspace instead of repeating it.
+        production_lint = {
+            "RUSTC_WORKSPACE_WRAPPER": "clippy-driver",
+            "CLIPPY_ARGS": (
+                "-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__"
+                "-D__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__"
+            ),
+        }
+        production = [row for row in observed if row["argv"][:1] in (["check"], ["doc"])]
+        self.assertEqual([row["argv"][0] for row in production], ["check", "doc"], observed)
+        for row in production:
+            self.assertEqual({key: row[key] for key in production_lint}, production_lint, row)
         # The production clippy, doctest and documentation chain overlaps the
         # tests only at lowered priority, so it cannot take CPU time from their
-        # deadline assertions; the tests themselves keep normal priority.
-        background = [row for row in observed if row["argv"][:1] in (["clippy"], ["doc"]) or
-                      (row["argv"][:1] == ["test"] and "--doc" in row["argv"])]
-        self.assertEqual(len(background), 3, observed)
+        # deadline assertions; the tests themselves keep normal priority. The
+        # workflow test build is lowered too: it overlaps the exclusive suites.
+        background = [*production, *doctests, *builds]
+        self.assertEqual(len(background), 4, observed)
         for row in background:
             self.assertTrue((row["idle"] and not foreground["idle"]) or
                             row["nice"] > foreground["nice"], (row, foreground))
