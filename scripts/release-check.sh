@@ -11,6 +11,7 @@ cd "$repo_root"
 
 NPM_PKG="@orbit-tools/cli"
 CARGO_TOML="Cargo.toml"
+DESKTOP_CARGO_TOML="desktop/Cargo.toml"
 NPM_PACKAGE_JSON="npm/package.json"
 MCP_SERVER_JSON="server.json"
 CLAUDE_PLUGIN_MANIFEST="plugin/.claude-plugin/plugin.json"
@@ -32,7 +33,7 @@ require_bin() {
 
 require_bin jq
 
-for file in "$CARGO_TOML" "$NPM_PACKAGE_JSON" "$MCP_SERVER_JSON" \
+for file in "$CARGO_TOML" "$DESKTOP_CARGO_TOML" "$NPM_PACKAGE_JSON" "$MCP_SERVER_JSON" \
   "$CLAUDE_PLUGIN_MANIFEST" "$CODEX_PLUGIN_MANIFEST" "$AGENT_PLUGIN_MANIFEST" \
   "$AGENT_PLUGIN_MCP" "$CLAUDE_PLUGIN_MCP" "$CLAUDE_MARKETPLACE"; do
   if [[ ! -f "$file" ]]; then
@@ -57,6 +58,20 @@ cargo_package_version="$(
       exit
     }
   ' "$CARGO_TOML"
+)"
+# The desktop shell is its own Cargo workspace with its own [package] version.
+desktop_package_version="$(
+  awk '
+    /^\[package\]$/ { in_package = 1; next }
+    /^\[/ { in_package = 0 }
+    in_package && /^version[[:space:]]*=/ {
+      value = $0
+      sub(/^[^=]*=[[:space:]]*/, "", value)
+      gsub(/"/, "", value)
+      print value
+      exit
+    }
+  ' "$DESKTOP_CARGO_TOML"
 )"
 npm_package_version="$(jq -r .version "$NPM_PACKAGE_JSON")"
 mcp_name="$(jq -r .mcpName "$NPM_PACKAGE_JSON")"
@@ -162,6 +177,7 @@ else
 fi
 
 printf '%-32s %s\n' "$CARGO_TOML [workspace.package]" "$cargo_package_version"
+printf '%-32s %s\n' "$DESKTOP_CARGO_TOML [package]" "$desktop_package_version"
 printf '%-32s %s\n' "$NPM_PACKAGE_JSON" "$npm_package_version"
 printf '%-32s %s\n' "$MCP_SERVER_JSON" "$server_version"
 printf '%-32s %s\n' "$CLAUDE_PLUGIN_MANIFEST" "$claude_plugin_version"
@@ -180,6 +196,11 @@ compare_version() {
   fi
 }
 
+if [[ -z "$desktop_package_version" ]]; then
+  echo "DRIFT: $DESKTOP_CARGO_TOML has no [package] version" >&2
+  drift=1
+fi
+compare_version "$DESKTOP_CARGO_TOML" "$desktop_package_version"
 compare_version "$NPM_PACKAGE_JSON" "$npm_package_version"
 compare_version "$CLAUDE_PLUGIN_MANIFEST" "$claude_plugin_version"
 compare_version "$CODEX_PLUGIN_MANIFEST" "$codex_plugin_version"

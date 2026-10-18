@@ -12,7 +12,8 @@ How to cut an Orbit release. Follow the checklist top to bottom. Plugin, npm, si
 
 You need:
 
-- Actions secrets `ORBIT_RELEASE_SIGNING_KEY_PEM` (signs the checksum manifest) and `TAP_GITHUB_TOKEN` (pushes to `constellation-works/homebrew-tap`).
+- Actions secrets `ORBIT_RELEASE_SIGNING_KEY_PEM` (signs the checksum manifests) and `TAP_GITHUB_TOKEN` (pushes to `constellation-works/homebrew-tap`).
+- For the desktop app, when the repository variable `ORBIT_DESKTOP_RELEASE` is `true`: the six Apple signing and notarization secrets listed in [desktop/README.md](desktop/README.md#one-time-setup).
 - npm publish rights on `@orbit-tools` with your OTP. The npm package is published by hand.
 - Permission to create GitHub Releases and admin-merge on `constellation-works/orbit`.
 
@@ -122,6 +123,8 @@ Show each candidate with its task ID, title, and why it was flagged. The human a
 |---|---|
 | `Cargo.toml` | `[workspace.package].version` |
 | `Cargo.lock` | `cargo update --workspace` (no third-party drift) |
+| `desktop/Cargo.toml` | `[package].version` |
+| `desktop/Cargo.lock` | `cargo update --workspace --manifest-path desktop/Cargo.toml` (no third-party drift) |
 | `npm/package.json` | `version` |
 | `server.json` | `version` and `packages[0].version` |
 | `plugin/.claude-plugin/plugin.json` | `version` |
@@ -158,6 +161,8 @@ context_files:
   - file:CHANGELOG.md
   - file:Cargo.toml
   - file:Cargo.lock
+  - file:desktop/Cargo.toml
+  - file:desktop/Cargo.lock
   - file:npm/package.json
   - file:server.json
   - file:plugin/.claude-plugin/plugin.json
@@ -169,7 +174,7 @@ context_files:
   - file:scripts/smoke-plugin-install.sh
 ```
 
-Acceptance criteria: Cargo, npm, `server.json`, and all three plugin manifests report the new version. `Cargo.lock` is refreshed without third-party drift. The CHANGELOG section is in place. The npm and plugin install smokes pass.
+Acceptance criteria: Cargo (including `desktop/Cargo.toml`), npm, `server.json`, and all three plugin manifests report the new version. `Cargo.lock` and `desktop/Cargo.lock` are refreshed without third-party drift. The CHANGELOG section is in place. The npm and plugin install smokes pass.
 
 ### 7. Get human approval
 
@@ -271,6 +276,8 @@ Pushing a `v*` tag runs `.github/workflows/release.yml`:
 |---|---|
 | `build-release` | `cargo build -p orbit-cli --release --locked` for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, and `aarch64-unknown-linux-gnu` |
 | `publish-release` | Writes `orbit-checksums.txt`, signs it as `orbit-checksums.txt.sig`, and creates the GitHub Release with auto-generated notes |
+| `build-desktop` | Only when `ORBIT_DESKTOP_RELEASE` is `true`. Runs `cargo tauri build` in `desktop/` to make a signed, notarized universal macOS `.dmg` and the `.deb` and `.AppImage` for Linux x86_64 and arm64 |
+| `publish-desktop` | Signs `orbit-desktop-checksums.txt` and attaches it and the desktop bundles to the release once `publish-release` has created it |
 | `bump-homebrew-tap` | Updates `Formula/orbit.rb` in `constellation-works/homebrew-tap` (macOS only; Linux uses `install.sh`) |
 | `smoke-install-macos` / `smoke-install-ubuntu` | Installs from the tag's `install.sh` and runs `orbit --version` |
 
@@ -280,6 +287,7 @@ Common failures:
 
 - **`--locked` build fails:** `Cargo.lock` wasn't refreshed. Fix it in the next patch.
 - **Homebrew step fails:** `TAP_GITHUB_TOKEN` expired, or tap branch protection rejected the push.
+- **Desktop job fails:** the CLI release has already published, so nothing is blocked. A missing Apple secret is named in the log, and an expired certificate or a revoked app-specific password shows up as a signing or notarization error. Fix the secret and re-run the failed jobs: `publish-desktop` adds the missing assets. A version mismatch means `desktop/Cargo.toml` wasn't bumped, so fix it in the next patch.
 - **Installer smoke fails:** there's a regression in the tagged `install.sh`.
 - **npm smoke red after publish:** either the tagged script speaks an old CLI contract, or the published artifact is bad. Triage with the [runbook](docs/runbooks/release.md#npm-install-smoke-two-artifacts). Fix a script-only problem on `agent-main` without a patch release, and don't re-dispatch the old tag after the script has moved on.
 

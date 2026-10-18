@@ -29,7 +29,16 @@ key whose public half matches
 [`npm/release-signing.pub`](../../npm/release-signing.pub). The release
 workflow signs `orbit-checksums.txt` as `orbit-checksums.txt.sig`;
 `install.sh`, the npm postinstall, and `orbit update` authenticate
-that signature before trusting release-hosted SHA-256 values.
+that signature before trusting release-hosted SHA-256 values. The same key
+signs `orbit-desktop-checksums.txt` for the desktop app. No shipped code
+verifies that manifest; users check it by hand as
+[desktop/README.md](../../desktop/README.md#releases) describes, so it adds no
+trust set to the rotation below.
+
+The desktop release jobs run only when the repository variable
+`ORBIT_DESKTOP_RELEASE` is `true`, and the macOS bundle needs six Apple
+signing and notarization secrets. The account steps and the secret list are in
+[desktop/README.md](../../desktop/README.md#one-time-setup).
 
 All three shipped release-signing trust sets contain only `orbit-release-key-3`,
 valid through `2029-12-31` and not revoked: [`install.sh`](../../install.sh),
@@ -71,6 +80,10 @@ an empty date remains optional.
      `npx -y @orbit-tools/cli@<version> mcp serve`. Do not use `@latest`.
    - Run `cargo update --workspace` to refresh `Cargo.lock` without
      third-party dependency drift.
+   - Update `[package].version` in
+     [`desktop/Cargo.toml`](../../desktop/Cargo.toml) and run
+     `cargo update --workspace --manifest-path desktop/Cargo.toml`. The
+     desktop build fails when this version doesn't match the tag.
 
    For a major version bump, first follow
    [RELEASING.md's CHANGELOG archiving policy](../../RELEASING.md#changelog-archiving).
@@ -129,7 +142,12 @@ an empty date remains optional.
      [linux-sandbox.md](linux-sandbox.md));
    - update the Homebrew tap;
    - smoke the tagged shell installer and search help on macOS and Ubuntu;
-   - smoke the bundled-Bubblewrap fallback on Ubuntu 22.04.
+   - smoke the bundled-Bubblewrap fallback on Ubuntu 22.04;
+   - when `ORBIT_DESKTOP_RELEASE` is `true`, build the signed and notarized
+     universal macOS `.dmg` and the Linux `.deb` and `.AppImage` for x86_64
+     and arm64, then attach them with their signed
+     `orbit-desktop-checksums.txt`. These jobs run beside the CLI release
+     and never block it.
 
    Review the result of every job, but treat CI as informational on
    `agent-main`: no job is a merge gate. Failures are queued for asynchronous
@@ -328,6 +346,7 @@ same acknowledgement and record format, and does not honor
 [`scripts/release-check.sh`](../../scripts/release-check.sh) compares:
 
 - `[workspace.package].version` in `Cargo.toml`;
+- `[package].version` in `desktop/Cargo.toml`;
 - `.version` in `npm/package.json`;
 - `.version` in the Claude, Codex, and Agent Plugins 1.0 manifests;
 - the server name, package identity, launch arguments, and both version fields
