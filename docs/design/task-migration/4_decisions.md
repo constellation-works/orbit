@@ -1,8 +1,8 @@
 ---
 title: Task Migration — Decisions
 owner: claude
-last_updated: 2026-10-04
-last_validated: 2026-10-10
+last_updated: 2026-10-18
+last_validated: 2026-10-18
 status: Draft
 feature: task-migration
 doc_role: decisions
@@ -86,7 +86,7 @@ unreachable; it never falls back to the local prefix.
 ## Disjoint id ranges (superseded by prefixes)
 
 **Recorded:** 2026-07 · [ORB-00034] · superseded 2026-08 by [ORB-10721]
-**Code anchors:** `crates/orbit-config/src/raw.rs` (`[tasks] id_start`), `crates/orbit-store/src/driver/sqlite/task_registry/allocator.rs`
+**Code anchors:** `crates/orbit-config/src/registry/settings/table.rs` (`tasks.id_start`), `crates/orbit-store/src/driver/sqlite/task_registry/allocator.rs`
 
 ### Context
 

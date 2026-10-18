@@ -1,8 +1,8 @@
 ---
 title: Terminal Interface — Decisions
 owner: claude
-last_updated: 2026-09-26
-last_validated: 2026-10-10
+last_updated: 2026-10-18
+last_validated: 2026-10-18
 status: Accepted
 feature: terminal-interface
 doc_role: decisions
@@ -57,7 +57,7 @@ Rejected alternative: make `--format json` the default and have humans opt into 
 - The JSON and human views cannot disagree about a field's value, because one is derived from the other.
 - Cost: every command that prints must be refactored to return a payload instead of writing to stdout, and `Execute::execute` returning `Result<(), OrbitError>` no longer expresses that — the trait signature changes, touching all 154 `impl Execute` blocks.
 - Cost: output becomes environment-dependent. A command run in CI (no TTY) prints differently than the same command run in a terminal, so any test or runbook that asserts on stdout must pin `--format` explicitly or it will pass locally and fail in CI.
-- Cost: moving the JSON error payload from stdout to stderr is a breaking change for any existing script that parses errors off stdout, and there is no output snapshot suite that would catch the regression — `crates/orbit-cli/src/snapshots/` holds one file, covering audit event JSON shape only.
+- Cost: moving the JSON error payload from stdout to stderr is a breaking change for any existing script that parses errors off stdout, and there is no output snapshot suite that would catch the regression — `crates/orbit-cli/tests/snapshots/` holds one file, covering the MCP tools list only.
 
 ## Borderless Tables With Truncate-to-Width Rows
 
@@ -77,7 +77,7 @@ The preset draws box rules around and between the header and body. Those glyphs 
 Tables are borderless, and a row is exactly one line.
 
 - Drop the box preset. A list is a dim uppercase header row, two-space gutters, and left-aligned columns. Numeric and duration columns are right-aligned so magnitudes compare vertically.
-- Every row is capped to one line. Content that does not fit its column is truncated with `…`, never wrapped. `add_single_line_row` becomes the only way to add a row; the unbounded `add_row` path is not exposed.
+- Every row is capped to one line. Content that does not fit its column is truncated with `…`, never wrapped. `Table::add_row` is the only way to add a row, and every row renders as one line; no unbounded row path is exposed.
 - Truncation is a promise of a fuller view. A list command that truncates a column must have a corresponding detail command that prints the untruncated value (`orbit tool show <name>` for `orbit tool list`), and `--format json` always carries the full value regardless of terminal width.
 - Columns whose value is identical in every row of a given result set are not rendered in `auto` mode.
 

@@ -3,8 +3,8 @@ summary: "User Interface — Decisions"
 type: design
 title: "User Interface — Decisions"
 owner: gemini
-last_updated: 2026-10-10
-last_validated: 2026-10-10
+last_updated: 2026-10-18
+last_validated: 2026-10-18
 status: Draft
 feature: user-interface
 doc_role: decisions
@@ -54,6 +54,8 @@ Aggregate v2 denial envelopes and SQLite `status = denied` audit events in the p
 
 **Recorded:** 2026-05-11 02:06:39.447535Z · [T20260428-15]
 
+The Scoreboard view these columns belonged to was retired by [ORB-15922].
+
 ### Context
 The scoreboard had separate columns for output tokens, tool calls, duel wins/losses, and friction triage. After failed tool calls became first-class, the split counters made reliability harder to scan.
 
@@ -84,6 +86,8 @@ Keep the Tasks view in a two-column layout and size `#log-panel` to the availabl
 ## Grouped Scoreboard Sections
 
 **Recorded:** 2026-05-18 02:58:43.428001Z · [ORB-00144]
+
+The Scoreboard view these sections belonged to was retired by [ORB-15922].
 
 ### Context
 The scoreboard started as one compact per-agent table. Adding knowledge-artifact counters and planning-duel matrix data made the flat table mix delivery attribution, review work, operations, knowledge stewardship, and duel outcomes in one scan path. Alternatives were to keep widening the table, add column groups inside the same table, or split the view into focused sections.
@@ -119,6 +123,8 @@ Extract the dashboard assets, ServeArgs, JSON API handlers, router construction,
 ## Unified Leaderboard Matrix Scoreboard
 
 **Recorded:** 2026-05-18 06:56:13.678774Z · [ORB-00154]
+
+The Scoreboard view this matrix replaced was retired by [ORB-15922].
 
 ### Context
 [ORB-00154] found that the dashboard Scoreboard fragmented the four canonical agents across six stacked tables, repeated headers, sparse zero glyphs, and bare integers. Real alternatives included keeping grouped tables, switching to an agent-major wide table, using per-agent cards, or reducing the view to a pure heatmap.
@@ -166,7 +172,7 @@ Rejected alternative: workspace-prefixed route paths (`/api/:workspace/tasks`). 
 
 **Recorded:** 2026-07-26 19:14:18.916582Z · [ORB-10444]
 
-This five-tab grouping is historical. The 2026-09-24 dashboard chrome update renamed and regrouped the rail while keeping the route hashes.
+This five-tab grouping is historical. The 2026-09-24 dashboard chrome update renamed and regrouped the rail while keeping the route hashes. The Scoreboard subtab this decision introduced was later retired by [ORB-15922]; `/api/scoreboard` now serves only the cost subset until its sunset date.
 
 ### Context
 Top-level nav is the dashboard's scarcest surface, and two of its six entries were not earning a slot: a deprecated review-threads tab with no backing view, and Scoreboard, a diagnostics-shaped read-only telemetry view sitting beside the operator workflow tabs.
@@ -269,5 +275,6 @@ Keep every route, endpoint and control, and change the presentation around them:
 - [ORB-10588] — added the Reliability subtab: job-run failure rate and recovery invocation rate from durable run state.
 - [ORB-16400] — pipeline reliability counts each failed delivery once and rolls wrapper echoes into the leaf.
 - [ORB-10648] — made the task create/update bodies reject unsupported fields instead of discarding them silently.
+- [ORB-15922] — retired the Scoreboard view; `/api/scoreboard` serves only the cost subset until its sunset date.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
