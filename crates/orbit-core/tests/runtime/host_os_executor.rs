@@ -6,6 +6,7 @@
 use std::collections::BTreeSet;
 
 use orbit_core::application::task::TaskAddParams;
+use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
 use orbit_core::{
     CompletionPolicy, OrbitError, OrbitRuntime, ShipMode, Task, TaskComplexity, TaskStatus,
 };
@@ -337,9 +338,87 @@ fn an_excluded_default_crew_is_not_pinned() {
     assert!(admitted(&backlog(&mac)).contains(&pinned.id));
 }
 
+/// Public init loads the shipped declarations and upgrades an installed default
+/// only when its host constraint is absent. Operator choices survive refresh.
+fn init_seeds_host_os_and_preserves_operator_constraints() {
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let seed = || {
+        init_workspace_at_root(
+            &global,
+            InitOptions {
+                global_only: true,
+                refresh_defaults: true,
+                ..Default::default()
+            },
+        )
+        .expect("seed defaults through public init");
+    };
+    seed();
+    let store = orbit_store::compose::global_executor_def_store(global.join("resources/executors"));
+    let defs = store.list_executor_defs().expect("load seeded catalog");
+    assert!(defs.len() > 1, "the shipped catalog is more than muse");
+    let mut muse = store
+        .get_executor_def("muse")
+        .unwrap()
+        .expect("muse seeded");
+    assert_eq!(muse.host_os, Some(BTreeSet::from([HostOs::Macos])));
+    for def in defs.into_iter().filter(|def| def.name != "muse") {
+        assert!(
+            def.host_os.is_none(),
+            "{} declared host_os {:?}",
+            def.name,
+            def.host_os
+        );
+    }
+
+    muse.host_os = None;
+    store
+        .upsert_executor_def(&muse)
+        .expect("installed default without host_os");
+    seed();
+    let copied = store
+        .get_executor_def("muse")
+        .unwrap()
+        .expect("muse present");
+    assert_eq!(copied.host_os, Some(BTreeSet::from([HostOs::Macos])));
+
+    let mut customized = copied;
+    customized.host_os = Some(BTreeSet::from([HostOs::Linux, HostOs::Macos]));
+    store
+        .upsert_executor_def(&customized)
+        .expect("operator host_os");
+    seed();
+    assert_eq!(
+        store
+            .get_executor_def("muse")
+            .unwrap()
+            .expect("muse present")
+            .host_os,
+        customized.host_os,
+        "an operator-set host_os is not overwritten"
+    );
+
+    customized.host_os = None;
+    store
+        .upsert_executor_def(&customized)
+        .expect("clear host_os");
+    seed();
+    assert_eq!(
+        store
+            .get_executor_def("muse")
+            .unwrap()
+            .expect("muse present")
+            .host_os,
+        Some(BTreeSet::from([HostOs::Macos])),
+        "clearing host_os restores the shipped declaration"
+    );
+}
+
 crate::scenario_table!(
     a_linux_host_waits_on_a_muse_crew_and_a_macos_host_admits_it_scenarios,
     a_linux_host_waits_on_a_muse_crew_and_a_macos_host_admits_it,
     an_empty_os_intersection_is_refused_on_add_and_update,
-    an_excluded_default_crew_is_not_pinned
+    an_excluded_default_crew_is_not_pinned,
+    init_seeds_host_os_and_preserves_operator_constraints
 );

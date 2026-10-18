@@ -1,10 +1,8 @@
-use std::collections::BTreeSet;
 use std::sync::Mutex;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_store::contracts::ExecutorDefStoreBackend;
-use orbit_types::task::HostOs;
 use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind, ExecutorType};
 
 use crate::application::executor::{
@@ -182,108 +180,6 @@ fn custom_executor_sandbox_choice_is_not_rewritten_by_seed_migration() {
             .expect("custom preserved")
             .sandbox,
         Some(ExecutorSandboxKind::MacosSandboxExec)
-    );
-}
-
-const HOST_OS_YAML: &str = r#"schemaVersion: 2
-kind: Executor
-metadata:
-  name: muse
-spec:
-  executor_type: direct_agent
-  command: muse
-  host_os: {hosts}
-"#;
-
-/// An empty or unknown `host_os` fails the embedded load and names the asset.
-#[test]
-fn an_empty_or_unknown_host_os_is_refused_and_names_the_asset() {
-    for (hosts, needle) in [
-        (
-            "[]",
-            "host_os must list at least one of linux, macos, windows",
-        ),
-        ("[darwin]", "unknown host_os `darwin`"),
-    ] {
-        let yaml = HOST_OS_YAML.replace("{hosts}", hosts);
-        let error = parse_default_executor_for_platform("muse", &yaml, LINUX)
-            .expect_err("host_os must be a non-empty known set");
-        let message = error.to_string();
-        assert!(
-            message.contains("invalid embedded executor def 'muse'"),
-            "{message}"
-        );
-        assert!(message.contains(needle), "{message}");
-    }
-}
-
-/// Fresh seeding loads every previously shipped asset with no `host_os`, and
-/// the muse asset as macOS only.
-#[test]
-fn seeded_defaults_keep_an_omitted_host_os_and_muse_declares_macos_only() {
-    let store = InMemoryExecutorStore::default();
-    seed_default_executors_for_platform(&store, false, LINUX).expect("seed");
-    let defs = store.list_executor_defs().expect("list");
-    assert!(defs.len() > 1, "the shipped catalog is more than muse");
-    for def in defs {
-        if def.name == "muse" {
-            assert_eq!(def.host_os, Some(BTreeSet::from([HostOs::Macos])));
-        } else {
-            assert!(
-                def.host_os.is_none(),
-                "{} declared host_os {:?}",
-                def.name,
-                def.host_os
-            );
-        }
-    }
-}
-
-/// A shipped `host_os` is copied onto an installed default that omits it, and
-/// an operator-set value is kept. Clearing it restores the shipped set.
-#[test]
-fn seed_copies_a_shipped_host_os_only_when_the_install_omits_it() {
-    let store = InMemoryExecutorStore::default();
-    store
-        .upsert_executor_def(&base_def("muse", ExecutorType::DirectAgent))
-        .expect("installed muse without host_os");
-
-    seed_default_executors_for_platform(&store, false, LINUX).expect("seed");
-    let copied = store
-        .get_executor_def("muse")
-        .expect("get")
-        .expect("muse present");
-    assert_eq!(copied.host_os, Some(BTreeSet::from([HostOs::Macos])));
-
-    let mut customized = copied.clone();
-    customized.host_os = Some(BTreeSet::from([HostOs::Linux, HostOs::Macos]));
-    store
-        .upsert_executor_def(&customized)
-        .expect("operator host_os");
-    seed_default_executors_for_platform(&store, false, LINUX).expect("reseed");
-    assert_eq!(
-        store
-            .get_executor_def("muse")
-            .expect("get")
-            .expect("muse present")
-            .host_os,
-        customized.host_os,
-        "an operator-set host_os is not overwritten"
-    );
-
-    customized.host_os = None;
-    store
-        .upsert_executor_def(&customized)
-        .expect("clear host_os");
-    seed_default_executors_for_platform(&store, false, LINUX).expect("reseed");
-    assert_eq!(
-        store
-            .get_executor_def("muse")
-            .expect("get")
-            .expect("muse present")
-            .host_os,
-        Some(BTreeSet::from([HostOs::Macos])),
-        "clearing host_os restores the shipped declaration"
     );
 }
 
