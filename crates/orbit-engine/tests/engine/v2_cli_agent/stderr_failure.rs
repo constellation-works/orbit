@@ -109,6 +109,11 @@ fn generic_stderr_cannot_reclassify_the_failure() {
         // Exercise wrapped error messages, as job/run and audit consumers do.
         let message = format!("step implement_one: {message}");
         assert_eq!(
+            DispatchError::JobExecution(message.clone()).failure_code(),
+            "pipeline_step_failed",
+            "stderr cannot change the terminal failure handoff code: {message}"
+        );
+        assert_eq!(
             incident_class(&message),
             orbit_store::FailureClass::Unexpected,
             "{message}"
@@ -124,4 +129,17 @@ fn generic_stderr_cannot_reclassify_the_failure() {
         assert!(!is_task_blocked_by_agent(None, Some(&message)), "{message}");
         assert!(!is_upgrade_pending(None, Some(&message)), "{message}");
     }
+}
+
+#[test]
+fn genuine_stall_keeps_its_terminal_failure_code() {
+    let message = format!(
+        "{} {} provider process produced no output and used no CPU for 30s",
+        orbit_types::workflow::TRANSIENT_FAILURE_MARKER,
+        orbit_types::workflow::STALLED_MARKER,
+    );
+    assert_eq!(
+        DispatchError::JobExecution(message).failure_code(),
+        orbit_types::workflow::STALLED_ERROR_CODE,
+    );
 }
