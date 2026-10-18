@@ -188,8 +188,8 @@ uncached.
 
 `.cargo/config.toml` sets `build.rustc-wrapper` to `scripts/rustc-compiler-cache.sh`,
 a bash script that cargo cannot execute on `x86_64-pc-windows-msvc`. Cargo
-config has no per-OS wrapper setting, so native Windows builds, including the
-compile-only Windows CI job, disable the wrapper with an empty override:
+config has no per-OS wrapper setting, so a native Windows build (not supported
+or checked in CI) disables the wrapper with an empty override:
 
 ```powershell
 $env:CARGO_BUILD_RUSTC_WRAPPER = ""

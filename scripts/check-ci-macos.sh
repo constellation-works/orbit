@@ -78,13 +78,14 @@ def indentation(line: str) -> int:
     return len(line) - len(line.lstrip(" "))
 
 
-def has_unfiltered_pull_request() -> bool:
-    # Inspect the workflow's block-form event mapping without an optional YAML
-    # dependency on native runners. Any event options could withhold a required
-    # check, so only an empty pull_request event provides complete coverage.
+def runs_on_agent_main_pushes() -> bool:
+    # The macOS workflow runs on agent-main pushes, not pull requests: its
+    # checks are not required, and its failures are repaired after merge.
+    # Read the block-form `on:` mapping without an optional YAML dependency.
     in_events = False
-    event_indent = None
-    for index, line in enumerate(lines):
+    in_push = False
+    push_indent = None
+    for line in lines:
         stripped = re.sub(r"\s+#.*$", "", line).strip()
         if not stripped or stripped.startswith("#"):
             continue
@@ -94,15 +95,13 @@ def has_unfiltered_pull_request() -> bool:
             continue
         if indent == 0:
             break
-        if event_indent is None:
-            event_indent = indent
-        if indent != event_indent or not re.fullmatch(r"pull_request:\s*(?:\{\s*\}|null|~)?", stripped):
+        if in_push and indent <= push_indent:
+            in_push = False
+        if stripped == "push:":
+            in_push, push_indent = True, indent
             continue
-        for child in lines[index + 1:]:
-            if not child.strip() or child.lstrip().startswith("#"):
-                continue
-            return indentation(child) <= event_indent
-        return True
+        if in_push and re.fullmatch(r"branches:\s*\[[^\]]*\bagent-main\b[^\]]*\]", stripped):
+            return True
     return False
 
 
@@ -232,8 +231,8 @@ def filtered_cargo_tests() -> list[FilteredTest]:
 
 errors: list[str] = []
 
-if not has_unfiltered_pull_request():
-    errors.append("workflow must define an unfiltered pull_request event so required checks report on every PR")
+if not runs_on_agent_main_pushes():
+    errors.append("workflow must run on agent-main pushes (push: branches: [..., agent-main])")
 
 filtered_tests = filtered_cargo_tests()
 if not filtered_tests:

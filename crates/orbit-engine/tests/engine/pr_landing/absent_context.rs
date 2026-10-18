@@ -3,6 +3,8 @@ use super::*;
 
 const NEW: &str = "name: CI\non:\n  pull_request:\n    branches: [agent-main]\npermissions: {}\njobs:\n  check:\n    name: Protected (${{ matrix.language }})\n    strategy:\n      matrix:\n        language: [rust]\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo check\n";
 
+const LIVE_PR_GATE: &str = "tests/engine/pr_landing/infrastructure/fixtures/live-pr-gate.yml";
+const LIVE_PR_GATE_CONTEXT: &str = "Windows cargo check (x86_64-pc-windows-msvc)";
 fn setup(sandbox: &Path, source: &str) -> (Fixture, DeliveryHost) {
     setup_with_context(sandbox, source, "Protected (rust)")
 }
@@ -672,43 +674,48 @@ fn reserved_refresh_observes_lost_unapplied_and_pending_outcomes_without_another
 }
 
 #[test]
-fn current_platform_workflows_use_only_the_bounded_live_pr_emission_contract() {
+fn live_pr_gate_emission_contract_and_push_only_platform_workflows() {
     isolated(
-        "absent_context::current_platform_workflows_use_only_the_bounded_live_pr_emission_contract",
+        "absent_context::live_pr_gate_emission_contract_and_push_only_platform_workflows",
         |sandbox| {
-            for (file, context) in [
-                (
-                    "ci-windows.yml",
-                    "Windows cargo check (x86_64-pc-windows-msvc)",
-                ),
-                ("ci-macos.yml", "macOS Sandbox"),
-                ("website-check.yml", "Check and build"),
-            ] {
-                in_fresh_row(sandbox, |row| {
-                    let source = fs::read_to_string(
-                        Path::new(env!("CARGO_MANIFEST_DIR"))
-                            .join("../../.github/workflows")
-                            .join(file),
-                    )
-                    .unwrap();
-                    let (fx, host) = setup_with_context(row, &source, context);
-                    let mut input = fx.complete_input();
-                    input["auto_fix"] = json!(true);
-                    action(&host, "pr_complete", &input)
-                        .unwrap_or_else(|error| panic!("{file}: {error}"));
-                    assert_eq!(
-                        fs::read_to_string(fx.forge.join("mutations")).unwrap(),
-                        "update\nmerge\n",
-                        "{file}"
-                    );
-                });
-            }
+            // The live-PR gate shape, frozen from the retired Windows workflow:
+            // a missing check it emits is proven and repaired by one update.
+            in_fresh_row(sandbox, |row| {
+                let source =
+                    fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(LIVE_PR_GATE))
+                        .unwrap();
+                let (fx, host) = setup_with_context(row, &source, LIVE_PR_GATE_CONTEXT);
+                let mut input = fx.complete_input();
+                input["auto_fix"] = json!(true);
+                action(&host, "pr_complete", &input)
+                    .unwrap_or_else(|error| panic!("{LIVE_PR_GATE}: {error}"));
+                assert_eq!(
+                    fs::read_to_string(fx.forge.join("mutations")).unwrap(),
+                    "update\nmerge\n"
+                );
+            });
+            // macOS runs only on agent-main pushes, so a pull request can never
+            // emit its checks: a missing one must not prompt a branch update.
+            in_fresh_row(sandbox, |row| {
+                let source = fs::read_to_string(
+                    Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("../../.github/workflows/ci-macos.yml"),
+                )
+                .unwrap();
+                let (fx, host) = setup_with_context(row, &source, "macOS Sandbox");
+                let mut input = fx.complete_input();
+                input["auto_fix"] = json!(true);
+                assert!(action(&host, "pr_complete", &input).is_err());
+                assert!(
+                    !fx.forge.join("mutations").exists(),
+                    "a push-only workflow cannot update the branch"
+                );
+            });
             for case in ["endpoint", "output", "condition", "conditional_step"] {
                 in_fresh_row(sandbox, |row| {
                     let mut source: Value = serde_yaml::from_str(
                         &fs::read_to_string(
-                            Path::new(env!("CARGO_MANIFEST_DIR"))
-                                .join("../../.github/workflows/ci-windows.yml"),
+                            Path::new(env!("CARGO_MANIFEST_DIR")).join(LIVE_PR_GATE),
                         )
                         .unwrap(),
                     )
@@ -734,7 +741,7 @@ fn current_platform_workflows_use_only_the_bounded_live_pr_emission_contract() {
                     let (fx, host) = setup_with_context(
                         row,
                         &serde_yaml::to_string(&source).unwrap(),
-                        "Windows cargo check (x86_64-pc-windows-msvc)",
+                        LIVE_PR_GATE_CONTEXT,
                     );
                     let mut input = fx.complete_input();
                     input["auto_fix"] = json!(true);

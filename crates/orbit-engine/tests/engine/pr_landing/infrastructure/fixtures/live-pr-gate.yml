@@ -1,3 +1,5 @@
+# Frozen copy of the retired ci-windows.yml (removed 2026-10-18). The absent-context
+# emission tests prove against its live-PR gate shape; it is not a workflow.
 name: Windows Compile Check
 
 # Windows is supported through WSL2, where the Linux workflow applies. Native

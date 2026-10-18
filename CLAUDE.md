@@ -50,7 +50,7 @@ Run Cargo-based gates (`ci-fast`, `ci-test-affected`, `goldens`, `ci-lint`, and 
 
 ## Local Rust CodeQL checks
 
-Hosted CodeQL (`.github/workflows/codeql.yml`) analyses every pull request and every `agent-main` push. A delivery therefore does not run CodeQL locally, and doesn't record it as owed, unless one of these applies:
+Hosted CodeQL (`.github/workflows/codeql.yml`) analyses every `agent-main` push (coalesced) and runs weekly; it does not run on pull requests, and its alerts become repair tasks. A delivery therefore does not run CodeQL locally, and doesn't record it as owed, unless one of these applies:
 
 - the task repairs a code-scanning alert or another CodeQL finding;
 - the task is tagged `security` or `security-review`;
