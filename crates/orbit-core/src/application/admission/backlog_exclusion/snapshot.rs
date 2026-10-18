@@ -13,8 +13,8 @@ use super::super::surface_reservation::{
 };
 use super::super::unknown_footprint::footprint_waits;
 use super::exclusions::{
-    clears_complexity_gate, host_os_exclusion, inherited_only_epic_root_exclusion,
-    pilot_finding_exclusion, pilot_preparation_exclusion,
+    browser_kit_exclusion, clears_complexity_gate, host_os_exclusion,
+    inherited_only_epic_root_exclusion, pilot_finding_exclusion, pilot_preparation_exclusion,
 };
 use super::listing::active_pilot_preparations;
 use super::ordering::task_root_id;
@@ -201,6 +201,16 @@ pub(super) fn backlog_snapshot_in_mode(
     backlog.retain(|task| {
         let Some(exclusion) = host_os_exclusion(runtime, task, &executor_host_os, pools, None)
         else {
+            return true;
+        };
+        excluded.push(exclusion);
+        false
+    });
+    // A `ui` task is left for a host with a verified browser kit. The kit is
+    // read once per pass, so one installed mid-window counts at the next.
+    let kit_verified = runtime.browser_kit_verified();
+    backlog.retain(|task| {
+        let Some(exclusion) = browser_kit_exclusion(task, kit_verified) else {
             return true;
         };
         excluded.push(exclusion);

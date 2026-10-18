@@ -421,6 +421,15 @@ pub fn explain_workspace_auto_readiness(
                         object.insert("detail".to_string(), json!(excluded.detail));
                         object.insert("host_os".to_string(), json!(runtime.host_os()));
                     }
+                    BacklogTaskExclusionReason::BrowserKitMissing => {
+                        // A verified kit on this host, or a host that has
+                        // one, clears it; the detail names the install.
+                        object.insert(
+                            "reason".to_string(),
+                            Value::String("browser_kit_missing".to_string()),
+                        );
+                        object.insert("detail".to_string(), json!(excluded.detail));
+                    }
                     BacklogTaskExclusionReason::LocalRouteBeforePr => {
                         // [ORB-14168] The drain records the same snake_case
                         // reason. The detail names the deciding layer and the

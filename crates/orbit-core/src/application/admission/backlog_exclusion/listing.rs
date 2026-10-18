@@ -8,7 +8,7 @@ use serde_json::Value;
 use super::super::pass_error::PassError;
 use super::super::unknown_footprint::{FootprintGuard, FootprintWave, whole_tree_holder};
 use super::exclusions::{
-    clears_complexity_gate, footprint_exclusion, host_os_exclusion,
+    browser_kit_exclusion, clears_complexity_gate, footprint_exclusion, host_os_exclusion,
     inherited_only_epic_root_exclusion, pilot_finding_exclusion, pilot_preparation_exclusion,
 };
 use super::snapshot::backlog_snapshot_in_mode;
@@ -177,6 +177,7 @@ pub(crate) fn list_backlog_tasks(
                 message: error.to_string(),
             }
         })?;
+        let kit_verified = runtime.browser_kit_verified();
         for task_id in &explicit_task_ids {
             let task = runtime.get_task(task_id).map_err(|err| {
                 DispatchError::DeterministicActionFailed {
@@ -201,6 +202,10 @@ pub(crate) fn list_backlog_tasks(
                 &pools,
                 admitted_crew.as_deref(),
             ) {
+                excluded.push(exclusion);
+                continue;
+            }
+            if let Some(exclusion) = browser_kit_exclusion(&task, kit_verified) {
                 excluded.push(exclusion);
                 continue;
             }

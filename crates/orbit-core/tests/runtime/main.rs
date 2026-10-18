@@ -1,5 +1,5 @@
 //! The composed runtime through its public surface: dispatch admission, the
-//! distributed drain, `os:` tag routing, retired deterministic stubs, final
+//! distributed drain, `os:` and `ui` tag routing, retired deterministic stubs, final
 //! recovery, repeated rebase recovery, relation auto-close, PR closure on
 //! terminal decisions and requeues, settlement from a delivery PR merged
 //! outside Orbit, orphaned delivery adoption, plugin inspection, the sandbox
@@ -90,6 +90,7 @@ mod workspace_seed;
 mod host_os_executor;
 mod host_os_routing;
 mod host_resources;
+mod host_ui_routing;
 mod implement_blocker;
 mod invocation_metrics;
 mod job_finalization;

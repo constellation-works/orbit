@@ -1276,6 +1276,12 @@
         "description": "The executor's host OS: `linux`, `macos` or `windows`. A task tagged `os:<name>` is admitted only to an executor whose OS it names, and is otherwise skipped and stays in the backlog. Omitted: only tasks without an `os:` tag are admissible.",
         "param_type": "string",
         "required": false
+      },
+      {
+        "name": "browser_kit",
+        "description": "Whether the executor's host has a verified headless browser kit. A task tagged `ui` is admitted only to an executor that declares one, and is otherwise skipped and stays in the backlog. Omitted: `false`.",
+        "param_type": "boolean",
+        "required": false
       }
     ]
   },
