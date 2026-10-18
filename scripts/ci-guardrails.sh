@@ -35,6 +35,9 @@ failed=0
 guard_pool_pid=""
 guard_phase_started=0
 guard_pool_seconds=0
+exclusive_lane_pid=""
+exclusive_started=0
+guards_joined=0
 check_chain_pid=""
 # Keep all runtime output within the checkout, including on macOS.
 mkdir -p "$repo_root/.orbit/tmp"
@@ -52,6 +55,20 @@ join_guard_pool() {
   cat "$guard_logs/pool.err" >&2
   guard_pool_seconds=$((SECONDS - guard_phase_started))
   phase_records+=("guard-pool wall_seconds=$guard_pool_seconds exit=$status")
+  if [[ "$failed" -eq 0 ]]; then failed="$status"; fi
+}
+
+# Joins the exclusive self-test lane: prints its output and folds its status
+# into the first failure. It joins after the pool, so a pool failure stays the
+# job's exit status.
+join_exclusive_lane() {
+  local status=0
+  if [[ -z "$exclusive_lane_pid" ]]; then return 0; fi
+  wait "$exclusive_lane_pid" || status=$?
+  exclusive_lane_pid=""
+  cat "$guard_logs/exclusive.out"
+  cat "$guard_logs/exclusive.err" >&2
+  phase_records+=("exclusive-self-tests wall_seconds=$((SECONDS - exclusive_started)) exit=$status")
   if [[ "$failed" -eq 0 ]]; then failed="$status"; fi
 }
 
@@ -76,6 +93,7 @@ join_check_chain() {
 report_phases() {
   local status=$? record
   join_guard_pool
+  join_exclusive_lane
   join_check_chain
   if ((${#phase_records[@]})); then
     for record in "${phase_records[@]}"; do
@@ -152,6 +170,9 @@ pool_width="$("$repo_root/scripts/build-budget.py" --cargo-jobs)"
 pids=()
 names=()
 slots=()
+# The exclusive lane is a second subshell with copies of these counters, so it
+# names its output slots apart from the pool's.
+slot_prefix=""
 launched=0
 reaped=0
 next_slot=0
@@ -202,7 +223,7 @@ start_guard() {
 
 # Starts one pool member in the next output slot.
 launch_guard() {
-  local slot="$next_slot"
+  local slot="$slot_prefix$next_slot"
   next_slot=$((next_slot + 1))
   start_guard "$slot" "$@"
   pids+=("$started_pid")
@@ -251,13 +272,25 @@ run_guard() {
   launch_guard "$@"
 }
 
-# Exclusive self-test: runs alone after the pool has joined, and is drained
-# before the next starts. Use it for suites that assert elapsed time or timeouts,
-# measure build-budget admission, or drive a real Cargo target.
+# Exclusive self-test: runs in the exclusive lane at normal priority, and is
+# drained before the next starts. Use it for suites that assert elapsed time or
+# timeouts, measure build-budget admission, or drive a real Cargo target.
 run_exclusive_guard() {
   if skipped "$1"; then return 0; fi
   launch_guard "$@"
   drain_pool
+}
+
+# Production Clippy's lint environment: what `cargo clippy --workspace --lib
+# --bins -- -D warnings -D clippy::disallowed_methods` sets for its `cargo
+# check`, spelled out the way with-test-build-lint.sh spells out the folded
+# build's. Documentation runs under it too. Cargo fingerprints it, so
+# documentation reuses Clippy's check of every workspace library instead of
+# checking the workspace again with plain rustc before rustdoc can start.
+with_production_lint() {
+  RUSTC_WORKSPACE_WRAPPER=clippy-driver \
+    CLIPPY_ARGS='-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__-D__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__' \
+    "$@"
 }
 
 # Production clippy, doctests, then documentation. Each takes the Cargo build
@@ -269,11 +302,11 @@ run_exclusive_guard() {
 # artifacts.
 run_check_chain() {
   local status=0 next=0
-  run_phase clippy-production cargo clippy --workspace --lib --bins -- -D warnings -D clippy::disallowed_methods || status=$?
+  run_phase clippy-production with_production_lint cargo check --workspace --lib --bins || status=$?
   run_phase doctests "$lint" cargo test --no-fail-fast --workspace --doc || next=$?
   if [[ "$status" -eq 0 ]]; then status="$next"; fi
   next=0
-  RUSTDOCFLAGS="-D warnings" run_phase documentation cargo doc --no-deps --workspace || next=$?
+  RUSTDOCFLAGS="-D warnings" run_phase documentation with_production_lint cargo doc --no-deps --workspace || next=$?
   if [[ "$status" -eq 0 ]]; then status="$next"; fi
   return "$status"
 }
@@ -286,6 +319,14 @@ lower_priority() {
   sh -c 'chrt --idle -p 0 "$PPID"' >/dev/null 2>&1 ||
     sh -c 'renice -n 19 -p "$PPID"' >/dev/null 2>&1 ||
     echo "ci-guardrails: cannot lower background priority; continuing at normal priority" >&2
+}
+
+# Runs one command at lowered priority (see lower_priority).
+run_lowered() {
+  (
+    lower_priority
+    exec "$@"
+  )
 }
 
 # Runs the clippy/doctest/documentation chain in the background while nextest
@@ -306,10 +347,36 @@ start_check_chain() {
   check_chain_pid=$!
 }
 
+# Exclusive self-tests run one at a time, at normal priority, in a lane that
+# starts after formatting. Each one asserts elapsed time or timeouts, measures
+# build-budget admission, or drives a real Cargo target; the rendezvous and
+# deadline checks in ci-fast-guards count too. Everything beside them, the guard
+# pool and in full mode the workflow test build, runs at lowered priority, so it
+# takes only CPU time the suites leave idle. The lane joins after the pool and
+# before the workspace tests start. Each suite is mostly one process, so the
+# lane leaves most of the host to that lowered work.
 guard_phase_started=$SECONDS
+exclusive_started=$SECONDS
+(
+  # The report trap belongs to the parent shell, not to the lane.
+  trap - EXIT
+  slot_prefix=exclusive-
+  run_exclusive_guard "$repo_root/scripts/test-build-budget.sh"
+  run_exclusive_guard "$repo_root/scripts/test-ci-fast-guards.py"
+  run_exclusive_guard "$repo_root/scripts/test-ci-test-affected.py"
+  run_exclusive_guard "$repo_root/scripts/test-codeql-rust-local.py"
+  run_exclusive_guard "$repo_root/scripts/test-compiler-cache.sh"
+  run_exclusive_guard "$repo_root/scripts/test-compiler-cache-namespaces.sh"
+  exit "$failed"
+) >"$guard_logs/exclusive.out" 2>"$guard_logs/exclusive.err" &
+exclusive_lane_pid=$!
+
 (
   # The report trap belongs to the parent shell, not to the pool.
   trap - EXIT
+  # Beside the exclusive lane, the pool and every guard it starts run at
+  # lowered priority.
+  lower_priority
   # About 6 s of CPU time across about 63 s of wall time, nearly all of it
   # fixed slow-child and hang delays. The helper's deadlines run on an
   # injected clock, and a fixture step fails only after 120 s without output,
@@ -351,7 +418,7 @@ guard_phase_started=$SECONDS
 
   # Fixture self-tests that assert no elapsed time or timeout and touch no real
   # Cargo target. Full CI always runs these; fast mode selects them by inputs.
-  # The exclusive suites are listed after the pool joins.
+  # The exclusive suites run in their own lane, above.
   run_guard "$repo_root/scripts/test-installer-security.sh"
   run_guard "$repo_root/scripts/test-mcp-registry-publish-workflow.sh"
   run_guard "$repo_root/scripts/test-check-unused-dependencies.py"
@@ -388,11 +455,14 @@ if [[ "$fast" == false ]]; then
   # compile. Production clippy stays its own pass, in the background check
   # chain (run_check_chain). make ci-lint still runs a separate all-targets
   # clippy because that gate does not build test binaries.
-  run_phase workflow-test-list-build "$repo_root/scripts/check-ci-macos.sh" --workspace-build
-  # The pool has overlapped the build. Join it before any test runs: the
-  # workspace suites assert elapsed time and timeouts, so nothing else at
-  # normal priority shares the host with them.
+  # It runs at lowered priority beside the exclusive lane.
+  run_phase workflow-test-list-build run_lowered "$repo_root/scripts/check-ci-macos.sh" --workspace-build
+  # The pool and the exclusive lane have overlapped the build. Join both
+  # before any test runs: the workspace suites assert elapsed time and
+  # timeouts, so nothing else at normal priority shares the host with them.
   join_guard_pool
+  join_exclusive_lane
+  guards_joined=$SECONDS
   # Every later Cargo command that compiles workspace members runs under the
   # folded build's lint environment. Cargo fingerprints it, so without it the
   # nextest pass and doctests would recompile the whole workspace.
@@ -432,20 +502,13 @@ if [[ "$fast" == false ]]; then
 fi
 
 # Fast mode joins here; full mode already joined before its tests.
-join_guard_pool
+if [[ "$fast" == true ]]; then
+  join_guard_pool
+  join_exclusive_lane
+  guards_joined=$SECONDS
+fi
 
-# Exclusive self-tests run one at a time with nothing else on the host. Each one
-# asserts elapsed time or timeouts, measures build-budget admission, or drives a
-# real Cargo target; the rendezvous and deadline checks in ci-fast-guards count too.
-exclusive_started=$SECONDS
-run_exclusive_guard "$repo_root/scripts/test-build-budget.sh"
-run_exclusive_guard "$repo_root/scripts/test-ci-fast-guards.py"
-run_exclusive_guard "$repo_root/scripts/test-ci-test-affected.py"
-run_exclusive_guard "$repo_root/scripts/test-codeql-rust-local.py"
-run_exclusive_guard "$repo_root/scripts/test-compiler-cache.sh"
-run_exclusive_guard "$repo_root/scripts/test-compiler-cache-namespaces.sh"
-
-# The pool's wall time plus the exclusive suites'. In full mode the Cargo
-# phases between them are not counted.
-phase_records+=("repository-guards wall_seconds=$((guard_pool_seconds + SECONDS - exclusive_started)) exit=$failed")
+# From the start of the pool and the exclusive lane to the later of their
+# joins. In full mode that includes the workflow test build they overlap.
+phase_records+=("repository-guards wall_seconds=$((guards_joined - guard_phase_started)) exit=$failed")
 exit "$failed"
