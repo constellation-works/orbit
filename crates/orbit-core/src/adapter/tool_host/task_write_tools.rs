@@ -26,7 +26,8 @@ use crate::application::task::{
 use super::dispatch::ToolCaller;
 use super::input::{
     empty_string_to_none, optional_bool_alias, parse_artifacts, parse_assessed_task_complexity,
-    parse_relations, parse_task_priority, parse_task_status, parse_task_type,
+    parse_optional_task_origin, parse_relations, parse_task_priority, parse_task_status,
+    parse_task_type,
 };
 use super::json::serialize_task_write_response;
 use super::task_tools::{TaskWriteOutput, write_response_fields};
@@ -169,6 +170,7 @@ pub(super) fn add(
             source_task_id: optional_string(options, "source_task_id")?,
             crew: optional_string(input, "crew")?,
             orchestrator: optional_string(input, "orchestrator")?,
+            origin: parse_optional_task_origin(input, "origin")?,
             context_creation: ContextCreationAuthorization::default(),
         },
         &screen,
@@ -543,6 +545,7 @@ fn task_update_params_from_input(
         job_run_id: optional_raw_string(input, "job_run_id")?.map(empty_string_to_none),
         crew: optional_raw_string(input, "crew")?.map(empty_string_to_none),
         orchestrator: optional_raw_string(input, "orchestrator")?.map(empty_string_to_none),
+        origin: parse_optional_task_origin(input, "origin")?,
         context_files: optional_csv_or_string_list_alias(input, &["context_files", "context"])?,
         // Derived from the core's selector screening, never from tool input.
         context_creation: ContextCreationAuthorization::default(),

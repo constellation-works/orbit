@@ -17,7 +17,7 @@ use orbit_core::{
 use orbit_types::identity::{
     agent_family_from_cli, all_agent_families, infer_agent_family_from_model,
 };
-use orbit_types::task::TaskRelation;
+use orbit_types::task::{TaskOrigin, TaskRelation};
 use orbit_types::task::{inline_safe_artifact_media_type, validate_relative_artifact_path};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
@@ -176,6 +176,9 @@ pub(super) struct CreateTaskBody {
     crew: Option<String>,
     #[serde(default)]
     orchestrator: Option<String>,
+    /// Why the task was filed; omitted, it stays unset.
+    #[serde(default)]
+    origin: Option<TaskOrigin>,
     /// Caller-supplied provenance, forwarded as the write's model identity the
     /// same way `POST /api/frictions` takes it. Before
     /// ORB-10648 this key was undeclared, so serde dropped it and the task was
@@ -311,6 +314,9 @@ pub(super) struct UpdateTaskBody {
     crew: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_nullable_string_patch_field")]
     orchestrator: Option<Option<String>>,
+    /// Replacement origin; an origin can be corrected but not cleared.
+    #[serde(default)]
+    origin: Option<TaskOrigin>,
     /// Caller-supplied provenance, forwarded as the write's model identity.
     /// See [`CreateTaskBody::model`].
     #[serde(default)]
@@ -625,6 +631,7 @@ pub(super) async fn create_task_action(
         crew: body.crew,
         crew_source: None,
         orchestrator: body.orchestrator,
+        origin: body.origin,
         context_creation: Default::default(),
     };
     task_mutation_response(runtime, "task creation", move |runtime| {
@@ -709,6 +716,7 @@ pub(super) async fn update_task_action(
         job_run_id: None,
         crew: body.crew,
         orchestrator: body.orchestrator,
+        origin: body.origin,
         context_files: body.context_files,
         context_creation: Default::default(),
         upsert_artifacts: Vec::new(),

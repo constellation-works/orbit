@@ -1080,6 +1080,7 @@ fn reserved_key_publishes_a_new_bundle_before_replaying() {
             crew: None,
             crew_source: None,
             orchestrator: None,
+            origin: None,
             comments: Vec::new(),
             context_creation: Vec::new(),
         };
@@ -1202,6 +1203,7 @@ impl Coordinated {
                 crew: None,
                 crew_source: None,
                 orchestrator: None,
+                origin: None,
                 comments: Vec::new(),
                 context_creation: Vec::new(),
             })

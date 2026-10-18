@@ -117,6 +117,7 @@ fn create_task_with_crew(
             crew: crew.map(ToString::to_string),
             crew_source: None,
             orchestrator: None,
+            origin: None,
             comments: Vec::new(),
             context_creation: Vec::new(),
         })

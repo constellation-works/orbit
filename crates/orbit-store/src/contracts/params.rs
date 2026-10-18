@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use orbit_types::identity::OrbitId;
 use orbit_types::task::{
     ExternalRef, TaskArtifact, TaskComment, TaskComplexity, TaskDecision, TaskHistoryEntry,
-    TaskPriority, TaskRelation, TaskStatus, TaskType,
+    TaskOrigin, TaskPriority, TaskRelation, TaskStatus, TaskType,
 };
 use orbit_types::workflow::JobRunState;
 use serde::{Deserialize, Serialize};
@@ -43,6 +43,9 @@ pub struct TaskCreateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew_source: Option<String>,
     pub orchestrator: Option<String>,
+    /// Why the task was filed; absent on legacy creation contracts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<TaskOrigin>,
     pub comments: Vec<TaskComment>,
     /// Exact canonical `context_files` selectors an operator surface accepted
     /// for creation under `allow_missing_context`. Recorded as the task's
@@ -86,6 +89,8 @@ pub struct TaskDocumentUpdateParams {
     /// Assignment provenance updated with the selected crew.
     pub crew_source: Option<Option<String>>,
     pub orchestrator: Option<Option<String>>,
+    /// Replacement origin. An origin is set, never cleared.
+    pub origin: Option<TaskOrigin>,
     /// Exact canonical selectors of the replacement `context_files` an
     /// operator surface newly authorized for creation. The task's creation
     /// grant is recomputed and recorded in the same bundle commit whenever

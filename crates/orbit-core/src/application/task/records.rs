@@ -135,6 +135,7 @@ impl TaskRecordService<'_> {
                     crew: params.crew.clone(),
                     crew_source: params.crew_source.clone(),
                     orchestrator: params.orchestrator.clone(),
+                    origin: params.origin,
                     context_creation: params.context_creation.clone(),
                 },
             )?;

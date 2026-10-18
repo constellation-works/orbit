@@ -4223,6 +4223,7 @@ fn task(id: &str, status: TaskStatus) -> Task {
         crew: None,
         crew_source: None,
         orchestrator: None,
+        origin: None,
         created_at: now,
         updated_at: now,
     }

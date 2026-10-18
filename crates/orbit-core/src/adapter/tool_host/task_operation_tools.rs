@@ -19,7 +19,9 @@ use crate::application::task::{
 };
 
 use super::dispatch::ToolCaller;
-use super::input::{parse_task_priority, parse_task_status, parse_task_type};
+use super::input::{
+    parse_optional_task_origin, parse_task_priority, parse_task_status, parse_task_type,
+};
 use super::json::{
     serialize_error, serialize_task_lint_report, serialize_task_show,
     serialize_task_write_response, task_fields_to_json,
@@ -217,6 +219,7 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
         .optional_string("type")?
         .map(|value| parse_task_type("type", &value))
         .transpose()?;
+    let origin = parse_optional_task_origin(input.as_value(), "origin")?;
     let external_ref = input
         .optional_string("external_ref")?
         .map(|value| ExternalRef::parse_key(&value))
@@ -233,6 +236,7 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
             statuses,
             priority,
             task_type,
+            origin,
             parent_id: input.optional_string("parent_id")?,
             job_run_id: input.optional_string("job_run_id")?,
             tags: input.optional_string_list("tag")?.unwrap_or_default(),

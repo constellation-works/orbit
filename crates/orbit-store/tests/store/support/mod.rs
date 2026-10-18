@@ -64,6 +64,7 @@ pub fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams {
         crew: None,
         crew_source: None,
         orchestrator: None,
+        origin: None,
         comments: vec![TaskComment {
             at: now,
             by: "daniel".to_string(),

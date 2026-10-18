@@ -87,6 +87,14 @@ Options:
       --orchestrator <ORCHESTRATOR>
           Named crew responsible for orchestration attribution
 
+      --origin <ORIGIN>
+          Why the task was filed: operator_request (a human asked), orchestrator_initiative (the orchestrator decided) or automation. Omitted, it stays unset
+
+          Possible values:
+          - operator_request:        A human operator asked for the work
+          - orchestrator_initiative: An orchestrator decided the work was needed on its own
+          - automation:              Filed by automation: an auto-task, routine, sweep or other system filer
+
       --model <MODEL>
           Explicit agent model to persist on the task artifact
 

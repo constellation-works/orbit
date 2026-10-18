@@ -3,7 +3,7 @@ use orbit_common::security::redaction::redact_all;
 use orbit_store::contracts::TaskCreateParams as StoreTaskCreateParams;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    Task, TaskStatus, TaskType, normalize_required_tools, normalize_task_dependencies,
+    Task, TaskOrigin, TaskStatus, TaskType, normalize_required_tools, normalize_task_dependencies,
     normalize_task_tags, validate_os_tags,
 };
 
@@ -147,7 +147,14 @@ impl OrbitRuntime {
 
         let normalized_tags = normalize_task_tags(params.tags.clone());
         validate_os_tags(&normalized_tags)?;
-        params.title = title_with_provenance_prefix(&params.title, &normalized_tags);
+        let provenance_prefix = provenance_title_prefix(&normalized_tags);
+        // A system filer, or a sweep finding its provenance tag marks, is
+        // automation unless the caller stated an origin. Any other filing
+        // without one stays unset.
+        let origin = params.origin.or_else(|| {
+            (params.system_created || provenance_prefix.is_some()).then_some(TaskOrigin::Automation)
+        });
+        params.title = title_with_provenance_prefix(&params.title, provenance_prefix);
 
         let (canonical_agent, canonical_model) =
             self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
@@ -256,6 +263,7 @@ impl OrbitRuntime {
                         .as_ref()
                         .map(|assignment| assignment.source.clone()),
                     orchestrator: params.orchestrator.clone(),
+                    origin,
                     comments: comments.clone(),
                     context_creation: params.context_creation.authorize.clone(),
                 },
@@ -333,12 +341,13 @@ fn creation_crew_ticket(
     }
 }
 
-/// Apply visible provenance at the shared task-creation boundary used by CLI,
-/// MCP, dashboard, scheduler, and internal callers. Auto-task provenance wins
-/// so scheduler-minted parent tasks keep their established title convention;
-/// finding provenance otherwise follows the fixed table above.
-fn title_with_provenance_prefix(title: &str, tags: &[String]) -> String {
-    let prefix = if tags.iter().any(|tag| tag.starts_with("auto-task:")) {
+/// The visible provenance a task's tags name, applied at the shared
+/// task-creation boundary used by CLI, MCP, dashboard, scheduler, and internal
+/// callers. Auto-task provenance wins so scheduler-minted parent tasks keep
+/// their established title convention; finding provenance otherwise follows
+/// the fixed table above.
+fn provenance_title_prefix(tags: &[String]) -> Option<&'static str> {
+    if tags.iter().any(|tag| tag.starts_with("auto-task:")) {
         Some(AUTO_TASK_TITLE_PREFIX)
     } else {
         TASK_PROVENANCE_TITLE_PREFIXES
@@ -348,8 +357,10 @@ fn title_with_provenance_prefix(title: &str, tags: &[String]) -> String {
                     .any(|candidate| candidate == tag)
                     .then_some(*prefix)
             })
-    };
+    }
+}
 
+fn title_with_provenance_prefix(title: &str, prefix: Option<&str>) -> String {
     match prefix {
         Some(prefix) if !title.starts_with(prefix) => format!("{prefix}{title}"),
         _ => title.to_string(),

@@ -180,6 +180,7 @@ impl TaskV2Store {
                 crew: params.crew,
                 crew_source: params.crew_source,
                 orchestrator: params.orchestrator,
+                origin: params.origin,
                 relations,
                 tags: normalize_task_tags(params.tags),
                 required_tools: orbit_types::task::normalize_required_tools(params.required_tools),

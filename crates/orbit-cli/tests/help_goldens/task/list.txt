@@ -45,6 +45,14 @@ Options:
           - refactor
           - chore
 
+      --origin <ORIGIN>
+          Filter by task origin (operator_request, orchestrator_initiative, automation); tasks without a recorded origin never match
+
+          Possible values:
+          - operator_request:        A human operator asked for the work
+          - orchestrator_initiative: An orchestrator decided the work was needed on its own
+          - automation:              Filed by automation: an auto-task, routine, sweep or other system filer
+
       --parent <PARENT_ID>
           Filter to subtasks belonging to a parent task
 
@@ -102,6 +110,7 @@ Examples:
   orbit task list --status backlog
   orbit task list --status in-progress,review
   orbit task list --type feature
+  orbit task list --origin operator_request
   orbit task list --priority high
   orbit task list --parent T12345678-123456
   orbit task list --ref jira:ENG-1234

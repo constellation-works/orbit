@@ -867,3 +867,56 @@ fn patch_task(server: &Server, task_id: &str, body: Value) -> Response {
         body,
     )
 }
+
+/// The REST task surface records, corrects and filters the typed origin, and
+/// refuses a value outside the closed set.
+#[test]
+fn task_origin_round_trips_and_filters_over_http() {
+    isolated(
+        "task_contracts::task_origin_round_trips_and_filters_over_http",
+        || {
+            let fixture = Fixture::new();
+            let server = fixture.server(true);
+            let create = |title: &str, origin: Option<&str>| {
+                let mut body =
+                    json!({"title": title, "description": "Origin fixture", "complexity": "low"});
+                if let Some(origin) = origin {
+                    body["origin"] = json!(origin);
+                }
+                server.send("POST", "/api/tasks?workspace=ws_http_fixture", body)
+            };
+            let asked = super::support::json_ok(create("Operator asked", Some("operator_request")));
+            let unstated = super::support::json_ok(create("Origin unstated", None));
+            assert_eq!(asked["origin"], "operator_request");
+            assert_eq!(unstated["origin"], Value::Null);
+
+            let refused = create("Bad origin", Some("human"));
+            assert!(
+                refused.status().is_client_error(),
+                "unknown origin must be refused, got {}",
+                refused.status()
+            );
+            assert!(
+                refused.text().unwrap().contains("orchestrator_initiative"),
+                "refusal must name the allowed origins"
+            );
+
+            let id = unstated["id"].as_str().unwrap();
+            let updated = super::support::json_ok(server.send(
+                "PATCH",
+                &format!("/api/tasks/{id}?workspace=ws_http_fixture"),
+                json!({"origin": "orchestrator_initiative"}),
+            ));
+            assert_eq!(updated["origin"], "orchestrator_initiative");
+
+            let page = super::support::json_ok(
+                server.get("/api/tasks?workspace=ws_http_fixture&origin=operator_request"),
+            );
+            assert_eq!(page["total"], 1);
+            assert_eq!(page["items"][0]["id"], asked["id"]);
+            assert_eq!(page["items"][0]["origin"], "operator_request");
+            let invalid = server.get("/api/tasks?workspace=ws_http_fixture&origin=human");
+            assert!(invalid.status().is_client_error());
+        },
+    );
+}

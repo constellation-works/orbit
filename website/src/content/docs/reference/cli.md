@@ -66,9 +66,9 @@ mirror, pass `--workspace` explicitly. `--host <host>` names the host for
 
 | Command | Purpose |
 |---|---|
-| `orbit task add` | Create a task. `--title` and `--complexity` are required. |
+| `orbit task add` | Create a task. `--title` and `--complexity` are required. `--origin` records why it was filed: `operator_request`, `orchestrator_initiative` or `automation`. |
 | `orbit task update <id>` | Update fields. `--approve` takes the next approval step (`proposed → backlog`, `review → done`) and is refused while a non-terminal local run lists the task. `--status` follows the [lifecycle table](../../concepts/tasks/#transition-rules); `--force` overrides it. |
-| `orbit task list` | List tasks of every status by default. Filter with `--status`, `--tag`, `--path`, `--ready`, `--ref`. |
+| `orbit task list` | List tasks of every status by default. Filter with `--status`, `--tag`, `--origin`, `--path`, `--ready`, `--ref`. |
 | `orbit task eligible` | List `backlog` and `proposed` tasks whose context-file lock surface overlaps no `in-progress` or `review` task, by the same lock test automatic dispatch uses. Nothing else is checked: not dependencies, complexity, groups, crew, or overlap between candidates. `--status backlog\|proposed`, `--path`, `--limit`; `--explain` also lists held-back candidates with the overlapping file and the task holding it. Read-only. JSON shape: [Response shapes](../../how-to/mcp-integration/#response-shapes). |
 | `orbit task show <id>` | Show one task: on this machine, found by ID across registered workspaces, or on the host its prefix names. A proposed or backlog task gets a `Readiness:` line naming what blocks drain approval or admission, with a fix for each gap. A task a failed run left blocked prints a `Next:` line, and a recorded final-recovery decision prints `Final Recovery:`; a routed show uses the same words. `--json` carries `next_step` and `final_recovery`. `--fields` selects specific fields. |
 | `orbit task archive <id>` | Archive a task from any status. Archived is terminal; restore with `task update <id> --status <status> --force`. |

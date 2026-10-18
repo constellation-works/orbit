@@ -2,8 +2,8 @@ use orbit_types::identity::OrbitId;
 
 use super::paths::ContextCreationAuthorization;
 use orbit_types::task::{
-    ExternalRef, TaskArtifact, TaskComment, TaskComplexity, TaskHistoryEntry, TaskPriority,
-    TaskRelation, TaskStatus, TaskType,
+    ExternalRef, TaskArtifact, TaskComment, TaskComplexity, TaskHistoryEntry, TaskOrigin,
+    TaskPriority, TaskRelation, TaskStatus, TaskType,
 };
 
 #[derive(Default, Clone)]
@@ -37,6 +37,7 @@ pub(crate) struct TaskRecordUpdateParams {
     pub(crate) crew: Option<Option<String>>,
     pub(crate) crew_source: Option<Option<String>>,
     pub(crate) orchestrator: Option<Option<String>>,
+    pub(crate) origin: Option<TaskOrigin>,
     pub(crate) status_event: Option<String>,
     pub(crate) status_note: Option<String>,
     pub(crate) append_history: Vec<TaskHistoryEntry>,
@@ -78,6 +79,7 @@ impl TaskRecordUpdateParams {
             || self.crew.is_some()
             || self.crew_source.is_some()
             || self.orchestrator.is_some()
+            || self.origin.is_some()
     }
 
     pub(super) fn has_history_changes(&self) -> bool {
@@ -124,6 +126,10 @@ pub struct TaskAddParams {
     pub crew_source: Option<String>,
     /// Named crew responsible for orchestration attribution, not execution.
     pub orchestrator: Option<String>,
+    /// Why the task was filed, as the caller stated it. `None` stays unset
+    /// for an interactive filing; a `system_created` filing or a sweep finding
+    /// its provenance tag marks records [`TaskOrigin::Automation`] instead.
+    pub origin: Option<TaskOrigin>,
     /// Creation intent an operator surface's selector screening established
     /// for `context_files` ([`OrbitRuntime::add_task_screened`]).
     ///
@@ -155,6 +161,7 @@ impl Default for TaskAddParams {
             crew: None,
             crew_source: None,
             orchestrator: None,
+            origin: None,
             context_creation: ContextCreationAuthorization::default(),
         }
     }
@@ -188,6 +195,8 @@ pub struct TaskUpdateParams {
     pub job_run_id: Option<Option<String>>,
     pub crew: Option<Option<String>>,
     pub orchestrator: Option<Option<String>>,
+    /// Replacement origin. An origin can be corrected but not cleared.
+    pub origin: Option<TaskOrigin>,
     pub context_files: Option<Vec<String>>,
     /// Creation intent an operator surface's selector screening established
     /// for the replacement `context_files`. Ignored without `context_files`.
@@ -230,6 +239,7 @@ impl TaskUpdateParams {
             job_run_id,
             crew,
             orchestrator,
+            origin,
             context_files,
             upsert_artifacts,
             discard_candidate,
@@ -254,6 +264,7 @@ impl TaskUpdateParams {
             && job_run_id.is_none()
             && crew.is_none()
             && orchestrator.is_none()
+            && origin.is_none()
             && context_files.is_none()
             && upsert_artifacts.is_empty()
             && !discard_candidate
@@ -283,6 +294,7 @@ impl From<TaskUpdateParams> for TaskRecordUpdateParams {
             job_run_id: p.job_run_id,
             crew: p.crew,
             orchestrator: p.orchestrator,
+            origin: p.origin,
             context_files: p.context_files,
             context_creation: p.context_creation.authorize,
             upsert_artifacts: p.upsert_artifacts,

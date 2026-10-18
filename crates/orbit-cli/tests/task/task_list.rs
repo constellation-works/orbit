@@ -337,6 +337,119 @@ fn task_list_truncation_notice_emitted_after_table_body_in_human_modes() {
     );
 }
 
+/// Origin is a closed, optional enum: add and update accept each value and
+/// refuse anything else with the allowed list, an interactive filing without
+/// one stays unset (as every task filed before origins existed reads back),
+/// a sweep finding records automation, and `--origin` filters on it.
+#[test]
+fn task_origin_is_recorded_validated_and_filtered() {
+    let workspace = workspace();
+    let add = |title: &str, extra: &[&str]| -> Value {
+        let mut args = vec![
+            "task",
+            "add",
+            "--title",
+            title,
+            "--complexity",
+            "low",
+            "--json",
+        ];
+        args.extend_from_slice(extra);
+        serde_json::from_slice(&workspace.run(&args, title).stdout).unwrap()
+    };
+    let asked = add("Operator asked", &["--origin", "operator_request"]);
+    let decided = add(
+        "Orchestrator decided",
+        &["--origin", "orchestrator_initiative"],
+    );
+    let unstated = add("Origin unstated", &[]);
+    let finding = add("Sweep finding", &["--tag", "qa-sweep"]);
+    assert_eq!(asked["origin"], "operator_request");
+    assert_eq!(decided["origin"], "orchestrator_initiative");
+    assert_eq!(
+        unstated["origin"],
+        Value::Null,
+        "an interactive filing without an origin must stay unset"
+    );
+    assert_eq!(
+        finding["origin"], "automation",
+        "a sweep finding is filed by automation"
+    );
+
+    // The tool surface refuses an unknown value and names the allowed set.
+    let refused = workspace.run_raw(&[
+        "tool",
+        "run",
+        "orbit.task.add",
+        "--input",
+        r#"{"title":"Bad origin","description":"d","complexity":"low","origin":"human","workspace":"task-list-test"}"#,
+    ]);
+    let refusal = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused.stdout),
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(
+        !refused.status.success(),
+        "unknown origin accepted: {refusal}"
+    );
+    for allowed in ["operator_request", "orchestrator_initiative", "automation"] {
+        assert!(
+            refusal.contains(allowed),
+            "refusal must list `{allowed}`: {refusal}"
+        );
+    }
+    let unstated_id = unstated["id"].as_str().unwrap();
+    let rejected_update = workspace.run_raw(&["task", "update", unstated_id, "--origin", "human"]);
+    assert!(!rejected_update.status.success());
+    let shown = workspace.run(
+        &["task", "show", unstated_id, "--fields", "origin", "--json"],
+        "show unset origin",
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&shown.stdout).unwrap(),
+        Value::Null,
+        "a refused origin must leave the task unset"
+    );
+
+    workspace.run(
+        &[
+            "task",
+            "update",
+            unstated_id,
+            "--origin",
+            "operator_request",
+            "--json",
+        ],
+        "set origin on update",
+    );
+    let listed = workspace.run(
+        &["task", "list", "--origin", "operator_request", "--json"],
+        "filter by origin",
+    );
+    let mut ids = serde_json::from_slice::<Value>(&listed.stdout)
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|task| task["id"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    ids.sort();
+    let mut expected = vec![
+        asked["id"].as_str().unwrap().to_string(),
+        unstated_id.to_string(),
+    ];
+    expected.sort();
+    assert_eq!(ids, expected);
+    let automated = workspace.run(
+        &["task", "list", "--origin", "automation", "--json"],
+        "filter automation",
+    );
+    let automated: Value = serde_json::from_slice(&automated.stdout).unwrap();
+    assert_eq!(automated.as_array().unwrap().len(), 1);
+    assert_eq!(automated[0]["id"], finding["id"]);
+}
+
 #[test]
 fn task_index_and_bounded_listing() {
     for (name, check) in [
