@@ -20,7 +20,6 @@ pub use audit::{
 };
 #[cfg(unix)]
 pub(crate) use brokered::RunDispatch;
-pub(crate) use callback::legacy_callback_identity_enabled;
 pub use callback::refuse_plugin_child_cli_command;
 #[cfg(unix)]
 pub use claimed_owner::{ClaimedOwnerRoute, bridge_claimed_owner_call, owner_route_unavailable};

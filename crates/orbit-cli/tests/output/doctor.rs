@@ -952,6 +952,9 @@ fn doctor_lists_a_retired_config_key_and_the_fix_removes_only_that_key() {
 base_branch = \"agent-main\"
 system_crew = \"sol\"
 
+[plugin]
+legacy_callback_identity = true
+
 [scoring]
 enabled = false
 
@@ -1003,6 +1006,16 @@ arbitrary = { nested = true }
         "doctor names the removed key and its file: {reported_rows:?}"
     );
     assert!(
+        retired.iter().any(|row| mentions_key_and_file(
+            row,
+            "plugin.legacy_callback_identity",
+            &workspace_config
+        ) && row["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("removed"))),
+        "doctor reports the retired callback setting as removed: {reported_rows:?}"
+    );
+    assert!(
         ["task.approval", "workflow.future", "future"]
             .iter()
             .all(|key| retired.iter().any(|row| mentions_key_and_file(
@@ -1039,6 +1052,7 @@ arbitrary = { nested = true }
     assert!(
         repair_message.contains("workflow.system_crew")
             && repair_message.contains("scoring.enabled")
+            && repair_message.contains("plugin.legacy_callback_identity")
             && repair_message.contains(&workspace_config.display().to_string()),
         "{repair}"
     );
@@ -1052,7 +1066,8 @@ arbitrary = { nested = true }
         "the repair keeps the neighboring key: {updated}"
     );
     assert!(
-        !updated.contains("system_crew")
+        !updated.contains("legacy_callback_identity")
+            && !updated.contains("system_crew")
             && !updated.contains("enabled")
             && !updated.contains("[future]")
             && !updated.contains("delegate_approval"),

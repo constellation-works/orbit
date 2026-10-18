@@ -1,7 +1,7 @@
 #[cfg(unix)]
 use super::super::super::callback::resolve_plugin_callback;
 #[cfg(unix)]
-use super::{legacy_off, mint, present_descriptor};
+use super::{mint, present_descriptor};
 
 /// A backend can put any file it likes on the number, so the record has to
 /// prove the host wrote it: its own token must name the very inode the caller
@@ -18,7 +18,7 @@ fn a_forged_record_on_the_callback_descriptor_is_not_a_credential() {
     let (_credential, _env) = present_descriptor(&forged);
 
     assert_eq!(
-        resolve_plugin_callback(root.path(), legacy_off).expect("resolve"),
+        resolve_plugin_callback(root.path()).expect("resolve"),
         None,
         "a record the host did not write must not identify anyone"
     );

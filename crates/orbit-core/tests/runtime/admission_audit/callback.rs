@@ -135,15 +135,6 @@ fn present_callback_descriptor(session: &PluginCallbackSession) -> std::fs::File
     file
 }
 
-/// Turn the deprecation on for this host, so the retired environment token and
-/// process ancestry identify a callback for one more release [ORB-12841].
-fn enable_legacy_callback_identity(runtime: &OrbitRuntime) {
-    let path = runtime.global_root().join("config.toml");
-    let mut document = std::fs::read_to_string(&path).unwrap_or_default();
-    document.push_str("\n[plugin]\nlegacy_callback_identity = true\n");
-    std::fs::write(&path, document).expect("write the host config");
-}
-
 /// What the recorded manifest asks for under `permissions.orbit_tools`.
 fn recorded_orbit_tools_request(runtime: &OrbitRuntime) -> Vec<String> {
     let installed = crate::admission_audit::store_support::plugins(runtime)
@@ -221,55 +212,67 @@ fn plugin_callback_allowlist_ignores_forged_or_unset_env() {
     );
 }
 
-/// A live token identifies the process the host bound it to. Presenting one
-/// that belongs to another process — read out of the session directory, or
-/// kept across a `setsid` — is a mismatch, never that plugin's allowlist.
-fn plugin_callback_refuses_a_token_bound_to_another_process() {
+/// Without the descriptor, neither a token nor live ancestry may authorize
+/// dispatch. This covers the default refusal even with a readable session
+/// directory, where the sandbox probe cannot identify the caller.
+fn plugin_callback_refuses_retired_credentials() {
     let _g = env_guard();
     let runtime = fresh_runtime();
     record_callback_plugin(&runtime, &["orbit.task.list"]);
-    enable_legacy_callback_identity(&runtime);
-    let installed = crate::admission_audit::store_support::plugins(&runtime)
-        .get_plugin("callback")
-        .expect("read plugin")
-        .expect("callback plugin is recorded");
-    let mut session = PluginCallbackSession::mint(
+    // Force an absent descriptor independently of the test runner's fd 3.
+    // SAFETY: this isolated fixture holds `env_guard()` for all env changes.
+    unsafe {
+        std::env::set_var(
+            orbit_tools::plugin::ORBIT_PLUGIN_CALLBACK_FD_ENV,
+            "2147483647",
+        );
+        std::env::set_var("ORBIT_PLUGIN_CALLBACK", "retired-token");
+    }
+    for entry in [ToolEntryPoint::Cli, ToolEntryPoint::Mcp] {
+        let error = dispatch_entry(&runtime, "orbit.task.list", entry)
+            .expect_err("an environment token alone must not authorize dispatch");
+        assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
+    }
+    // The environment the host actually issues must also refuse a detached
+    // caller. An unbound session has no ancestry match, just as a descendant
+    // that has left its original process tree has none.
+    let marker_session = PluginCallbackSession::mint(
         &runtime.global_root(),
         &PluginProvenance {
-            name: installed.name,
-            version: installed.version,
-            manifest_digest: installed.manifest_digest,
-            grants: installed.grants,
+            name: "callback".to_string(),
+            version: "1.0.0".to_string(),
+            manifest_digest: "0".repeat(64),
+            grants: Vec::new(),
         },
         &["orbit.task.list".to_string()],
     )
-    .expect("mint callback session");
-    // A live process this one is no part of: never this process, its parent,
-    // or its group.
-    let other = orbit_common::test_env::spawn_unrelated_process();
-    session.bind_pid(other.pid()).expect("bind another process");
-    // SAFETY: callers hold `env_guard()` while changing process environment.
+    .expect("mint marker session");
+    let mut issued_env = Vec::new();
+    marker_session.stamp_env(&mut issued_env);
+    let marker = issued_env
+        .iter()
+        .find(|(name, _)| name == "ORBIT_PLUGIN_CALLBACK")
+        .expect("host must mark a backend for refusal without its descriptor");
+    // SAFETY: the fixture still holds `env_guard()`.
     unsafe {
-        std::env::set_var(
-            orbit_tools::plugin::ORBIT_PLUGIN_CALLBACK_ENV,
-            session.token(),
-        );
+        std::env::set_var(&marker.0, &marker.1);
     }
-
-    let error = dispatch_cli(&runtime, "orbit.task.list")
-        .expect_err("a token bound to another process is not this caller's credential");
-    // SAFETY: callers hold `env_guard()` while changing process environment.
+    for entry in [ToolEntryPoint::Cli, ToolEntryPoint::Mcp] {
+        let error = dispatch_entry(&runtime, "orbit.task.list", entry)
+            .expect_err("the host's marker must refuse callbacks without a descriptor or ancestry");
+        assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
+    }
+    // SAFETY: the fixture still holds `env_guard()`.
     unsafe {
-        std::env::remove_var(orbit_tools::plugin::ORBIT_PLUGIN_CALLBACK_ENV);
+        std::env::remove_var("ORBIT_PLUGIN_CALLBACK");
     }
-    drop(other);
-    assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
-    assert!(
-        error
-            .to_string()
-            .contains("not held by the calling process"),
-        "{error}"
-    );
+    let _session = bind_live_callback_session(&runtime);
+    for entry in [ToolEntryPoint::Cli, ToolEntryPoint::Mcp] {
+        let error = dispatch_entry(&runtime, "orbit.task.list", entry)
+            .expect_err("a backend that shed its descriptor must not become an ordinary caller");
+        assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
+        assert!(error.to_string().contains("callback"), "{error}");
+    }
 }
 
 /// Clear every restriction the child controls: the namespace, the
@@ -280,7 +283,7 @@ fn shed_child_restrictions() {
     // SAFETY: callers hold `env_guard()` while changing process environment.
     unsafe {
         std::env::remove_var(ORBIT_PLUGIN_ENV);
-        std::env::remove_var(orbit_tools::plugin::ORBIT_PLUGIN_CALLBACK_ENV);
+        std::env::remove_var("ORBIT_PLUGIN_CALLBACK");
         std::env::remove_var("ORBIT_ALLOWED_TOOLS");
         std::env::remove_var("ORBIT_ACTIVITY_TOOLS");
         std::env::remove_var("ORBIT_TASK_ACTOR_KIND");
@@ -330,7 +333,7 @@ fn env_guard() -> orbit_common::test_env::ScopedEnv {
         "ORBIT_ACTIVITY_ID",
         "ORBIT_STEP_INDEX",
         ORBIT_PLUGIN_ENV,
-        orbit_tools::plugin::ORBIT_PLUGIN_CALLBACK_ENV,
+        "ORBIT_PLUGIN_CALLBACK",
         orbit_tools::plugin::ORBIT_PLUGIN_CALLBACK_FD_ENV,
         "ORBIT_ALLOWED_TOOLS",
     ])
@@ -344,6 +347,6 @@ fn fresh_runtime() -> OrbitRuntime {
 crate::scenario_table!(
     plugin_callback_allowlist_ignores_forged_or_unset_env_scenarios,
     plugin_callback_allowlist_ignores_forged_or_unset_env,
-    plugin_callback_refuses_a_token_bound_to_another_process,
+    plugin_callback_refuses_retired_credentials,
     plugin_callback_cannot_exceed_the_spawning_callers_ceiling
 );
