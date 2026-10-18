@@ -14,7 +14,8 @@ use orbit_common::process::build_budget::BuildBudgetWaits;
 use orbit_common::security::redaction::{PatternRedactor, redact_all_json};
 use orbit_types::workflow::activity_job::AgentLoopSpec;
 use orbit_types::workflow::{
-    ProviderFailureClass, ProviderLimitFailure, TRANSIENT_FAILURE_MARKER, provider_failure_text,
+    ProviderFailureClass, ProviderLimitFailure, STALLED_MARKER, TRANSIENT_FAILURE_MARKER,
+    provider_failure_text,
 };
 use serde_json::Value;
 
@@ -64,6 +65,10 @@ pub(super) struct ProviderExit<'a> {
     pub(super) exit_code: Option<i32>,
     pub(super) duration: Duration,
     pub(super) timed_out: bool,
+    /// The stall watch ended the process. Distinct from [`Self::timed_out`].
+    pub(super) stalled: bool,
+    /// The window the stall watch used. Zero when the watch was disabled.
+    pub(super) stall_window: Duration,
     /// The provider-side time budget Orbit injected into argv, if the
     /// provider has one. [ORB-14683]
     pub(super) print_timeout: Option<Duration>,
@@ -108,6 +113,8 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         exit_code,
         duration,
         timed_out,
+        stalled,
+        stall_window,
         print_timeout,
         codex_home,
         build_budget_waits,
@@ -118,7 +125,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
     // downstream gates are. Parse response envelopes to project useful fields
     // and diagnostics, but only make them authoritative when the activity
     // explicitly declares that downstream templates require them.
-    let exit_success = !timed_out && matches!(exit_code, Some(0));
+    let exit_success = !timed_out && !stalled && matches!(exit_code, Some(0));
     // Attribution is deliberately not gated on the exit code. An agent that
     // hits a policy-denied write mid-turn can still exit 0 — it narrates the
     // denial and stops without emitting a terminating envelope — and that
@@ -300,7 +307,12 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
             )
         })
         .flatten();
-    let message = if timed_out {
+    let message = if stalled {
+        Some(format!(
+            "{TRANSIENT_FAILURE_MARKER} {STALLED_MARKER} provider process produced no output and used no CPU for {}s",
+            stall_window.as_secs()
+        ))
+    } else if timed_out {
         Some(format!(
             "cli subprocess exceeded {}s wall-clock timeout",
             timeout_seconds
@@ -578,6 +590,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         "timed_out".into(),
         Value::Bool(timed_out || print_timeout_reached),
     );
+    output.insert("stalled".into(), Value::Bool(stalled));
     output.insert(
         "print_timeout_ms".into(),
         print_timeout.map_or(Value::Null, |budget| {

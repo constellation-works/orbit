@@ -165,6 +165,14 @@ pub const TRANSIENT_FAILURE_ERROR_CODE: &str = "transient_failure";
 /// The bracketed marker form of [`TRANSIENT_FAILURE_ERROR_CODE`].
 pub const TRANSIENT_FAILURE_MARKER: &str = "[transient_failure]";
 
+/// Token a step failure carries when the provider process produced no output
+/// and used no CPU for its configured stall window. The outcome is transient:
+/// the usual retry and recovery path still runs.
+pub const STALLED_ERROR_CODE: &str = "stalled";
+
+/// The bracketed marker form of [`STALLED_ERROR_CODE`].
+pub const STALLED_MARKER: &str = "[stalled]";
+
 /// Marker an owner call carries when the owner was reached but could not
 /// serve it only because its own task store or database stayed locked past
 /// its deadline (`lock_busy`), including an owner whose `orbit` exited at
@@ -306,7 +314,8 @@ impl ClaimFailureClass {
                 .is_some()
         {
             Some(Self::BaselineRed)
-        } else if typed(TRANSIENT_FAILURE_ERROR_CODE, TRANSIENT_FAILURE_MARKER)
+        } else if typed(STALLED_ERROR_CODE, STALLED_MARKER)
+            || typed(TRANSIENT_FAILURE_ERROR_CODE, TRANSIENT_FAILURE_MARKER)
             || super::super::is_forge_unavailable(error_code, message)
             || super::super::is_upgrade_pending(error_code, message)
         {

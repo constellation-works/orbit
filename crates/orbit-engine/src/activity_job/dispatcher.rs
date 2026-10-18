@@ -363,6 +363,7 @@ impl DispatchError {
                 wf::TASK_BLOCKED_BY_AGENT_ERROR_CODE
             }
             _ if wf::is_upgrade_pending(None, Some(&text())) => wf::UPGRADE_PENDING_ERROR_CODE,
+            _ if text().contains(wf::STALLED_MARKER) => wf::STALLED_ERROR_CODE,
             // [ORB-14266] The handoff preserves the candidate for the next run.
             _ => wf::ProviderFailureClass::of(None, Some(&text()))
                 .map_or("pipeline_step_failed", wf::ProviderFailureClass::as_str),

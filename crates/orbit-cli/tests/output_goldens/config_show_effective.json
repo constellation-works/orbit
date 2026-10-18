@@ -57,6 +57,12 @@
       "path": null,
       "shadowed_by": []
     },
+    "execution.agent_stall_minutes": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "execution.codex.approval_policy": {
       "scope": "built-in",
       "state": "unset",

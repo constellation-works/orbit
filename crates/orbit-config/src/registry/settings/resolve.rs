@@ -87,6 +87,11 @@ pub(super) fn normalize_logins(raw: Vec<String>) -> Vec<String> {
 /// cold workspace build and test gate, still bounded below a typical activity.
 pub(super) const DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES: u32 = 45;
 
+/// Default `execution.agent_stall_minutes`: long enough that a provider
+/// thinking quietly is not cut off, short enough that a wedged one does not
+/// hold a deploy for hours. Zero disables the check.
+pub(super) const DEFAULT_AGENT_STALL_MINUTES: u32 = 30;
+
 /// Default `retention.audit_days` and `retention.runs_days`.
 pub(super) const DEFAULT_RETENTION_DAYS: u32 = 60;
 
@@ -113,6 +118,19 @@ pub(super) fn resolve_retention_days(
         ))),
         Some(value) => Ok(value),
         None => Ok(default),
+    }
+}
+
+/// Admit `execution.agent_stall_minutes`. Zero disables the stall check and
+/// leaves only the wall-clock deadline. A day is the ceiling.
+pub(super) fn resolve_agent_stall_minutes(raw: Option<u32>) -> Result<u32, OrbitError> {
+    const MAX_MINUTES: u32 = 1440;
+    match raw {
+        Some(value) if value > MAX_MINUTES => Err(OrbitError::InvalidInput(format!(
+            "execution.agent_stall_minutes has invalid value {value}; expected 0..={MAX_MINUTES}"
+        ))),
+        Some(value) => Ok(value),
+        None => Ok(DEFAULT_AGENT_STALL_MINUTES),
     }
 }
 

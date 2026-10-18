@@ -32,7 +32,7 @@ fn output_capture_redacts_boundary_tokens_before_blob_storage() {
         raw.resize(LIMIT + 8192, b'.');
         raw.push(b'\n');
         raw.extend_from_slice(protocol);
-        let (stdout, stderr, code, _, timed_out) = spawn_with_timeout(SpawnWithTimeoutRequest {
+        let (stdout, stderr, code, _, timed_out, _) = spawn_with_timeout(SpawnWithTimeoutRequest {
             stdin_bytes: &raw,
             output_capture_limit: Some(LIMIT),
             ..spawn_test_request(
@@ -102,7 +102,7 @@ fn output_capture_redacts_boundary_tokens_before_blob_storage() {
             raw[..SECRET.len()].copy_from_slice(SECRET.as_bytes());
             raw[SECRET.len()] = 0xff;
         }
-        let (stdout, _, code, _, timed_out) = spawn_with_timeout(SpawnWithTimeoutRequest {
+        let (stdout, _, code, _, timed_out, _) = spawn_with_timeout(SpawnWithTimeoutRequest {
             stdin_bytes: &raw,
             output_capture_limit: Some(LIMIT),
             ..spawn_test_request(

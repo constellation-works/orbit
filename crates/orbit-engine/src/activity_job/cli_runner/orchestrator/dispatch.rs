@@ -88,6 +88,7 @@ pub(crate) fn run_cli_backend_for_step(
         prepare_inspection_tools(&provider, input, fs_profile, &cli_executor.args)?;
     let timeout_seconds = invocation_timeout_seconds(spec, trusted_host.as_ref(), input);
     let wall_clock_timeout = Duration::from_secs(timeout_seconds);
+    let stall_window = host.agent_stall_window();
 
     let task_ids = task_ids_from_input(input);
     let task_id = task_id_from_input(input);
@@ -681,13 +682,14 @@ pub(crate) fn run_cli_backend_for_step(
                 report: &report_stopped,
             }),
             spawned_child: Some(spawned),
+            stall_window,
         })
     });
     // The provider has exited, timed out, or failed to start: nothing in its
     // sandbox may reach the broker any longer.
     drop(plugin_broker);
 
-    let (stdout, stderr, exit_code, duration, timed_out) = match spawn_result {
+    let (stdout, stderr, exit_code, duration, timed_out, stalled) = match spawn_result {
         Ok(result) => result,
         Err(err) => {
             if let Some(boundary) = worktree_boundary.take() {
@@ -781,6 +783,8 @@ pub(crate) fn run_cli_backend_for_step(
         exit_code,
         duration,
         timed_out,
+        stalled,
+        stall_window: stall_window.unwrap_or_default(),
         print_timeout,
         codex_home,
         build_budget_waits,

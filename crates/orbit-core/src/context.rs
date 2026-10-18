@@ -361,6 +361,8 @@ pub(crate) struct OrbitPolicyContext {
     execution_env_policy: ExecutionEnvPolicy,
     codex_execution_policy: CodexExecutionPolicy,
     proc_spawn_max_timeout_ms: u64,
+    /// `execution.agent_stall_minutes`. Zero disables the provider stall watch.
+    agent_stall_minutes: u32,
 }
 
 impl OrbitPolicyContext {
@@ -369,12 +371,14 @@ impl OrbitPolicyContext {
         execution_env_policy: ExecutionEnvPolicy,
         codex_execution_policy: CodexExecutionPolicy,
         proc_spawn_max_timeout_ms: u64,
+        agent_stall_minutes: u32,
     ) -> Self {
         Self {
             policy,
             execution_env_policy,
             codex_execution_policy,
             proc_spawn_max_timeout_ms,
+            agent_stall_minutes,
         }
     }
 }
@@ -702,6 +706,10 @@ impl OrbitContext {
 
     pub(crate) fn proc_spawn_max_timeout_ms(&self) -> u64 {
         self.policy.proc_spawn_max_timeout_ms
+    }
+
+    pub(crate) fn agent_stall_minutes(&self) -> u32 {
+        self.policy.agent_stall_minutes
     }
 
     pub(crate) fn persistence(&self) -> &PersistenceConfig {

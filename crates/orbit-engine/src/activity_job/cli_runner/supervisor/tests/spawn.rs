@@ -81,7 +81,7 @@ fn stdin_lifecycle_child() {
             // payload; cat cannot exit successfully until it receives all bytes.
             for payload in [Vec::new(), (0..4 * 1024 * 1024).map(|n| n as u8).collect()] {
                 let args = Vec::new();
-                let (stdout, stderr, exit_code, _, timed_out) =
+                let (stdout, stderr, exit_code, _, timed_out, _) =
                     with_supervisor_seam(seam(), || {
                         spawn_with_timeout(SpawnWithTimeoutRequest {
                             stdin_bytes: &payload,
@@ -108,7 +108,7 @@ fn stdin_lifecycle_child() {
             // An early stdin close still reports the provider's status/stderr.
             let args = sh_args("printf 'early exit\\n' >&2; exit 7");
             let payload = vec![b'x'; 4 * 1024 * 1024];
-            let (_, stderr, code, _, timed_out) = with_supervisor_seam(seam(), || {
+            let (_, stderr, code, _, timed_out, _) = with_supervisor_seam(seam(), || {
                 spawn_with_timeout(SpawnWithTimeoutRequest {
                     stdin_bytes: &payload,
                     ..spawn_test_request(
@@ -233,11 +233,11 @@ fn exercise_escaped_stdin(root: &Path, without_wakeup: bool) {
                 assert!(!error.permanent);
                 assert!(error.message.contains("injected wait failure"));
             }
-            ("exit", Ok((_, _, code, _, timed_out))) => {
+            ("exit", Ok((_, _, code, _, timed_out, _))) => {
                 assert_eq!(code, Some(0));
                 assert!(!timed_out);
             }
-            ("timeout", Ok((_, _, code, _, timed_out))) => {
+            ("timeout", Ok((_, _, code, _, timed_out, _))) => {
                 assert_eq!(code, None);
                 assert!(timed_out);
             }
@@ -472,7 +472,7 @@ fn a_provider_blocked_on_a_stopped_descendant_finishes_once_the_supervisor_ends_
         (outcome, reports.into_inner())
     };
 
-    let ((stdout, _, exit_code, duration, timed_out), reports) =
+    let ((stdout, _, exit_code, duration, timed_out, _), reports) =
         run(Duration::from_secs(1), Duration::from_secs(60));
     let stdout = String::from_utf8_lossy(stdout.bytes()).into_owned();
     let child_pid: u32 = stdout
@@ -493,7 +493,7 @@ fn a_provider_blocked_on_a_stopped_descendant_finishes_once_the_supervisor_ends_
     assert!(stopped.pid_start_time.is_some());
 
     // A deadline that lands first is a timeout, exactly as without the watch.
-    let ((_, _, exit_code, _, timed_out), reports) =
+    let ((_, _, exit_code, _, timed_out, _), reports) =
         run(Duration::from_secs(30), Duration::from_millis(500));
     assert!(timed_out && exit_code.is_none());
     assert!(reports.is_empty(), "{reports:?}");

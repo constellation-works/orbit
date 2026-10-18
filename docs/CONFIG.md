@@ -1356,6 +1356,7 @@ The remaining keys, grouped as `orbit config show` groups them.
 | `execution.codex.approval_policy` | unset | `untrusted`, `on-request` or `never`. Security key. |
 | `execution.env.pass` | `HOME`, `PATH`, `CODEX_HOME`, `TMPDIR`, `USER` (+ `__CF_USER_TEXT_ENCODING` on macOS) | Environment names passed into agent subprocesses. Security key. See [`[execution.env]`](#executionenv--the-agent-subprocess-environment). |
 | `execution.proc_spawn_max_timeout_minutes` | `45` | Longest timeout one `proc.spawn` call may use inside a managed activity (1–1440), also capped at the activity's remaining wall-clock budget (passed to the agent as `ORBIT_ACTIVITY_DEADLINE_UNIX_MS`). Outside an activity the ceiling is 60 seconds. The result reports `timeout_ceiling_ms` and its source. |
+| `execution.agent_stall_minutes` | `30` | Minutes a provider process may produce no stdout or stderr and use no CPU before Orbit ends it and fails the step as stalled, so the usual retry and recovery path runs. `0` disables the check and leaves only the wall-clock timeout. At most 1440. |
 
 ### `[review]` and `[operation]` — automatic review
 

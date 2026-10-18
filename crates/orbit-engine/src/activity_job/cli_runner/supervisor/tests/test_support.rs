@@ -33,6 +33,7 @@ pub(super) fn spawn_test_request<'a>(
         on_progress: None,
         stopped_descendants: None,
         spawned_child: None,
+        stall_window: None,
     }
 }
 
