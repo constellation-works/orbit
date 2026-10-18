@@ -363,23 +363,20 @@ the failed leaf whenever one can be resumed (`orbit job resume <leaf>`); the lea
 the worktree and checkpoints, and on success it hands the task to `review` like the
 original run would have.
 
-A **claimed** leaf whose pull is still live cannot use this path. Resume would
-mint a different run and cannot inherit that binding; the command refuses and
-names deliberate recovery. Inspect the claim on the owner with
+A **claimed** leaf cannot use this path, whether its claim is still live or
+has settled. Resume would mint a different run that cannot inherit the
+claim/run binding, so the command refuses and names deliberate recovery.
+Inspect the claim on the owner with
 `ORBIT_OPERATOR=1 orbit tool run orbit.drain.claims`, reconcile any uncertain
 merge, and do not ship the same task again. See
 [distributed-drain setup](./distributed-drain.md).
 
-A claimed leaf that already settled, and whose review budget final recovery
-escalated, is the exception. The task comment names the owner host and the
-exact `orbit task review-reset` command, then the follower host and the exact
-`orbit job resume` command. Each command includes `--root` (that host's Orbit
-data directory) and `--workspace` (the registered workspace), so it selects
-the checkout from any working directory. Run the reset on the owner, then the
-resume on the follower. The follower adopts the reset. When the checkpoint had
-already reached `validate`, the resumed run continues from that step. A leaf
-that failed before `validate` resumes at its failed step. A still-live claim
-stays refused.
+When final recovery of a claimed leaf escalated an exhausted review budget,
+the task comment names the owner host and the exact `orbit task requeue`
+command, with `--root` (the owner's Orbit data directory) and `--workspace`
+(the registered workspace), so it selects the checkout from any working
+directory. Run it on the owner. The task's next claim continues the candidate
+the failed claim kept, under a new admission with its own review budget.
 
 Resume starts a new linked run with `attempt + 1` and `retry_source_run_id` set.
 Checkpointed steps are skipped and their outputs are replayed into the pipeline.
