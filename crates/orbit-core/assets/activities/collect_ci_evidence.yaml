@@ -38,7 +38,13 @@ spec:
     at 16 KiB. No additional query or retry is used for command selection.
     Workflow runs are listed repository-wide in one query. `latest_runs`
     records the newest run of each workflow for audit, ordered by creation
-    time then run ID. Current failures are selected by relevant identity
+    time then run ID. GitHub-managed `Dependabot Updates` runs with event
+    `dynamic` are recorded in `skipped_runs` with reason
+    `github_managed_dependabot_update`, before branch probes or investigation.
+    They cannot become current, mixed-state or deferred failures: dependency
+    security findings belong to the Dependabot alert sweep. Repository CI
+    triggered by pull requests on `dependabot/*` branches remains in scope.
+    Current failures are selected by relevant identity
     (workflow, ref, and observed failed jobs): a queued or in-progress
     successor is not evidence that an observed failure is resolved, an
     unrelated pull-request run cannot erase a landing-branch failure, and a
@@ -220,6 +226,11 @@ spec:
             type: array
           latest_runs:
             type: array
+          skipped_runs:
+            type: array
+            description: >
+              GitHub-managed dynamic Dependabot updates excluded from CI
+              investigation, retaining run identity, reason and evidence.
           current_failures:
             type: array
           branch_failures:
