@@ -40,11 +40,14 @@ Agent runs produce more state changes, logs, and diagnostics than a human can re
   aggregate views without a selected workspace) is shown as unknown. Lock refreshes
   update open details without discarding unsaved editors.
 
-The Tasks dock's Drain view shows a fleet table in **All workspaces** mode:
+WORK › Drain (`#drain`) shows the auto-drain state, forecast, window controls,
+admission passes and waits, fleet drains and locked files. Its Log view is
+`#drain/log`; Tasks keeps the full width for tasks and inline approval.
+The Drain page shows a fleet table, including in **All workspaces** mode:
 host, workspace, drain phase, used/ceiling leaf slots, eligible tasks, most common
 wait reason, and admission/provider holds. Selecting a row switches host and
 workspace using the dashboard scope controls. The table stacks into labelled rows
-inside a narrow dock. The top-bar fleet indicator remains visible when an idle
+on narrow screens. The top-bar fleet indicator remains visible when an idle
 workspace is selected; opening it selects the fleet overview.
 
 `GET /api/fleet/drains` returns `{ items: [...] }` with one row per registered

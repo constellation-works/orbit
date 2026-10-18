@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, fmtDuration } from './js/common.js';
+import { bindTaskLink, captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, fmtDuration } from './js/common.js';
 import { cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './js/tasks.js';
 import { initTaskCreate } from './js/task-create.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, renderAuditSummary, renderDenialCount, syncAuditControls, wireAuditSearch, } from './js/audit.js';
@@ -263,7 +263,7 @@ function routerContext() {
     // ORB-14830: Doctor reads its report when the view opens, never per tick.
     openDoctor: () => openDoctor().catch((e) => console.error("Failed to run doctor", e)),
     fitLogPanelToViewport,
-    showDrainDock: () => setDockMode("drain"),
+    setDrainView: (mode) => setDockMode(mode),
 
     // Events and Codebase pass-throughs (re-exported here for router;
     // imported at top of this file)
@@ -411,17 +411,13 @@ function renderLocksPanel(payload) {
     group.dataset.hash = JSON.stringify(task);
     const details = detailsPanel(`lock-task-${taskId}`, { class: "lock-task-details" });
 
-    const idButton = el("button", {
+    const idButton = el("a", {
       class: "lock-task-id mono",
       text: taskId,
       title: `Open ${taskId} in the task list`,
     });
-    idButton.type = "button";
-    idButton.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      openVisibleTask(taskId, taskContext());
-    });
+    // Locks live on Drain, so opening a task must navigate to Tasks too.
+    bindTaskLink(idButton, taskId);
 
     const header = el("summary", { class: "lock-task-header" }, [
       statusPill(task.status || "unknown"),
@@ -1388,19 +1384,21 @@ function activeRefreshJobs() {
     add("Health summary", fetchAndRenderSummary());
   }
   add("Jobs in flight", fetchJobsInFlight());
-  // Keep the chrome indicator current even when Tasks and its dock are hidden.
+  // Keep the chrome indicator current on every page.
   add("Drain", fetchAndRenderAutoDrainPane());
 
   if (activeTab === "tasks") {
     add("Tasks", fetchAndRenderTasks());
-    // /api/tasks/locks is per-workspace; skip it in aggregate mode (the locks
-    // panel shows the placeholder rendered above).
+    // Task rows still show their locked-file counts; the panel lives on Drain.
     if (!aggregate && !document.hidden) add("Locked files", fetchAndRenderTaskLocks());
     // When each running task's run started, for the In progress rows' elapsed
     // time. Only while that group can show.
     if (!aggregate && activeStatuses.has("in-progress")) add("Running runs", fetchRunningRuns());
-    // The dock's Drain card; without a concrete workspace it renders its own
-    // read-only note instead of fetching.
+    return jobs;
+  }
+
+  if (activeTab === "drain") {
+    if (!aggregate && !document.hidden) add("Locked files", fetchAndRenderTaskLocks());
     return jobs;
   }
 
@@ -1910,11 +1908,11 @@ function selectFleetScope(host, workspace) {
   setWorkspace(workspace);
   persistScopeToUrl();
   if (!changed) buildWorkspaceSelector();
-  sAT("auto-drain", { refresh: false });
+  sAT("drain", { refresh: false });
   refreshDashboard();
 }
 
-initOperations({ selectFleetScope, getJobsSubtab: () => activeJobsSubtab, getWorkspaces: () => dashboardWorkspaces, getOperationsSubtab: () => activeOperationsSubtab });
+initOperations({ getTab: () => activeTab, selectFleetScope, getJobsSubtab: () => activeJobsSubtab, getWorkspaces: () => dashboardWorkspaces, getOperationsSubtab: () => activeOperationsSubtab });
 initConfig();
 
 initRuns(runsContext());
@@ -1937,8 +1935,7 @@ void startFleetIndicatorRefresh().catch(error => console.error(error));
 iT();
 
 initLogTail();
-// The status bar's Open log shows the full tail: Tasks, with the dock on Log.
+// The status bar opens the full tail on Drain.
 document.getElementById("log-statusbar-open")?.addEventListener("click", () => {
-  setDockMode("log");
-  sAT("tasks");
+  sAT("drain/log");
 });

@@ -688,59 +688,7 @@
   /* text-align + grid-area (in narrow) inherited from .row.* + @media rules so columns align with data rows */
 }
 
-main.tasks-layout {
-  align-items: stretch;
-  grid-template-columns: minmax(0, 1fr) var(--dock-w, clamp(336px, 32%, 720px));
-}
-@media (max-width: 1250px) {
-  .main-col > .tab-pane[data-tab="tasks"] > main.tasks-layout {
-    grid-template-columns: minmax(0, 2fr) var(--dock-w, minmax(280px, 1.15fr)) !important;
-  }
-}
-
-/* ORB-10874: below ~900px the two-column task/log layout has no room
-   left for either column, so stack them — the task list keeps its own
-   independently-scrolling, min-height-guaranteed body (below) and the
-   log panel follows underneath rather than both being squeezed into
-   slivers side by side. */
-@media (max-width: 900px) {
-  .main-col > .tab-pane[data-tab="tasks"] > main.tasks-layout {
-    grid-template-columns: 1fr !important;
-  }
-
-  /* The stacked dock makes the task layout taller than the remaining
-     shell. Let the pane scroll instead of constraining its first grid
-     row to zero height, which leaves the task-body clipped below its
-     column header. */
-  .main-col > .tab-pane[data-tab="tasks"] { overflow-y: auto; }
-  .main-col > .tab-pane[data-tab="tasks"] > main.tasks-layout {
-    height: auto;
-    min-height: 100%;
-  }
-}
-
-/* Overlay the splitter on the dock's left edge. Every grid item needs
-   an explicit row: CSS Grid places definite row+column items first, so
-   a splitter-only grid-row occupies the dock's cell and auto-places
-   #side-dock onto row 2. */
-@media (min-width: 901px) {
-  main.tasks-layout > .col-tasks {
-    grid-column: 1;
-    grid-row: 1;
-  }
-  main.tasks-layout > #side-dock {
-    grid-column: 2;
-    grid-row: 1;
-  }
-  main.tasks-layout > .dock-splitter {
-    grid-column: 2;
-    grid-row: 1;
-    justify-self: start;
-    margin-left: -13px;
-    height: 100%;
-    z-index: 5;
-  }
-}
+main.tasks-layout { grid-template-columns: minmax(0, 1fr); }
 
 /* The composer stays outside list repainting so errors never discard a draft. */
 .task-create { padding: 16px; margin-bottom: 16px; border: 1px solid var(--border); border-radius: var(--radius); overflow: auto; flex: 0 1 auto; }

@@ -2,10 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 // A long title, one that fits, and one with no break opportunity at all.
-const longTitle = 'Dashboard task titles should show enough information to recognise the work before opening the full detail panel';
+const longTitle = 'Dashboard task titles should show enough information to recognise the work before opening the full detail panel. '.repeat(2).trim();
 const titleTexts = [longTitle, longTitle, 'Short title', 'LongUnbrokenTitle'.repeat(8)];
 
-// Runs inside the full dashboard browser harness, with its default dock.
+// Runs inside the full dashboard browser harness, with its full-width Tasks page.
 export async function assertTaskTitleLayout(page, evidence) {
   await page.evaluate(async titleTexts => {
     const { setWorkspace } = await import('/js/common.js');
@@ -55,7 +55,6 @@ export async function assertTaskTitleLayout(page, evidence) {
       return globalThis.taskTitleFixture.priorFetch(url, options);
     };
     cacheCrewPayload(crews);
-    document.querySelector('main.tasks-layout').style.removeProperty('--dock-w');
     globalThis.taskTitleFixture.render();
   }, titleTexts);
   try {
@@ -135,7 +134,7 @@ export async function assertTaskTitleLayout(page, evidence) {
         const named = await page.locator(`#tasks-body [data-key="task-${taskId}"]`).getByRole('button', { name: titleTexts[index] }).count();
         if (named !== 1) fail(`The ${taskId} title button must be named with its full title`);
       }
-      // Beside the default dock the single line must still be wide enough to
+      // The full-width single line must still be wide enough to
       // recognise the work: the title column gained its width in ORB-15231.
       if (viewport.width >= 1280 && (plain.width < 260 || plain.visibleCharacters < 30 || badged.visibleCharacters < 20)) {
         fail('Plain and badged titles must show enough of their text on one line');

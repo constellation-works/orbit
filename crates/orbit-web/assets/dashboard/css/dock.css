@@ -1,10 +1,6 @@
-/* The Tasks dock: its pane switcher, the splitter, and the Locked files panel. */
+/* Drain and Log view switcher and the Locked files panel. */
 
-/* ORB-10972: the dock. Two panes, one column width. `data-mode` on the
-   host swaps which pane is displayed; nothing about the column's own box
-   changes, so the task table beside it never reflows on a mode switch. */
-/* The dock is a column of cards under a pill tab bar; it has no frame of
-   its own. */
+/* The shared view host is a column of cards under its tab bar. */
 #side-dock {
   display: flex;
   flex-direction: column;
@@ -66,30 +62,6 @@
   scrollbar-color: var(--border) transparent;
 }
 
-@media (max-width: 900px) {
-  .col-log { min-height: 320px; }
-}
-.dock-splitter {
-  width: 6px;
-  cursor: col-resize;
-  user-select: none;
-  touch-action: none;
-  background: transparent;
-  transition: background 0.15s ease;
-}
-.dock-splitter:hover,
-.dock-splitter.dragging {
-  background: var(--border-hover, var(--border));
-}
-.dock-splitter:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-@media (max-width: 900px) {
-  .dock-splitter {
-    display: none !important;
-  }
-}
 .col-log {
   display: flex;
   flex-direction: column;

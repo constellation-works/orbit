@@ -84,7 +84,7 @@ opening an archive last written before the window. When retention has already pr
 the start of the window, its header shows "covers since" with the oldest
 retained instant.
 
-The Tasks dock's Log mode and the bottom status bar put the message before
+WORK > Drain's Log view (`#drain/log`) and the bottom status bar put the message before
 structured context. Agent relays show the provider event kind (or the stream
 name for plain output), its item kind when it has one, and a compact run
 identifier first; the raw provider line is omitted when the kind is known.

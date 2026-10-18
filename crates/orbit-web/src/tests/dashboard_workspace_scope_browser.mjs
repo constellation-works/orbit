@@ -58,7 +58,8 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
               'reliability-meta', 'reliability-count'].map(id => [id, text(id)])),
           };
         };
-        window.confirm = () => true;
+        globalThis.scopeConfirmations = [];
+        window.confirm = message => { globalThis.scopeConfirmations.push(message); return true; };
         globalThis.EventSource = class { close() {} };
         globalThis.fetch = async (url, options = {}) => {
           const parsed = new URL(url, window.location.href);
@@ -88,7 +89,7 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
           }
           if (pathname === '/api/workspaces') return respond(['one', 'two'].slice(0, workspaceCount)
             .map(id => ({ id, name: id, status: 'active', is_default: id === 'one' })));
-          if (pathname === '/api/tasks' || pathname === '/api/tasks/all') return respond({ items: [task], total: 1 });
+          if (pathname === '/api/tasks' || pathname === '/api/tasks/all') return respond({ items: [task, { id: 'PROPOSAL-1', title: 'Approve the proposed dashboard task', status: 'proposed', priority: 'medium' }], total: 2 });
           if (pathname === `/api/tasks/${task.id}`) return respond(task);
           if (pathname === '/api/audit') return respond([]);
           if (pathname === '/api/crews') return respond({ crews: [] });
@@ -96,10 +97,33 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
             machine_name: 'fixture', capabilities: { routine_toggle: allowed }, clock: {},
             routines: [{ name: 'scope-routine', source: 'one', target: 'job:fixture', enabled: routineEnabled }],
           });
+          if (pathname === '/api/fleet/drains') return respond({ items: [{
+            workspace_id: 'one', workspace_name: 'Fixture workspace', phase: drainRunId ? 'draining' : 'idle',
+            slots_used: drainRunId ? 1 : 0, slots_ceiling: 4, eligible_count: 1, holds: [],
+          }] });
+          if (pathname === '/api/runs/scope-drain') return respond({ run: {
+            run_id: 'scope-drain', state: 'running', job_id: 'workspace_auto_pipeline',
+            drain_last_pass: { queued: 3, deferred_total: 1, excluded_total: 2, recorded_at: '2026-10-18T20:00:00Z' },
+          }, steps: [] });
           if (pathname === '/api/workflows/auto/readiness') return respond({
-            controls_authorized: true, tasks: [],
+            controls_authorized: true, total: 2, tasks: [
+              { task_id: 'READY-1', eligible: true },
+              { task_id: 'WAIT-1', eligible: false, reason: 'unmet_dependency' },
+            ],
             capacity: { active_leaf_runs: 0, max_active_leaf_runs: 4, free_slots: 4,
-              drain_run_id: drainRunId, drain_phase: drainRunId ? 'draining' : 'idle' },
+              drain_run_id: drainRunId, drain_phase: drainRunId ? 'draining' : 'idle',
+              ends_at: drainRunId ? new Date(Date.now() + 3600000).toISOString() : null,
+              admitted_workers: 3, running_admitted_workers: 1,
+              last_admission_forecast: {
+                mode: 'enforce', forecast_at: '2026-10-18T20:00:00Z',
+                cpu_peak: { minute: 10, value: 3, percent: 60 },
+                memory_peak: { minute: 5, value: 1000, percent: 40 },
+                headroom: { admit_cpu_percent: 89, admit_memory_percent: 74 },
+                series: { bucket_minutes: 5,
+                  cpu_percent: [20, 40, 60, 50, 40, 30, 20, 20, 20, 20, 20, 20, 20],
+                  memory_percent: [30, 40, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35] },
+                admitted: [], skipped: [],
+              } },
           });
           if (pathname === '/api/distributed/claims') return respond({
             owner_workspace: true, claims: [claim],
@@ -143,7 +167,38 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
       await page.locator('#routine-operation-feedback.success').waitFor({ state: 'visible' });
       if (await page.locator('#routines-body .operations-readonly-note').count()) throw new Error('Single-workspace actions must not show an aggregate read-only note');
 
-      await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('tasks'));
+      // Routes are exercised through the shipped router, including in-place
+      // legacy normalization. Every page retains a real link to Drain.
+      for (const [legacy, expected] of [
+        ['auto-drain', '#drain'], ['operations/auto-drain', '#drain'],
+        ['tasks/drain', '#drain'], ['tasks/log', '#drain/log'],
+        ['tasks?dock=drain', '#drain'], ['tasks?dock=log', '#drain/log'],
+      ]) {
+        await page.evaluate(async route => (await import('/js/router.js')).setActiveTab(route), legacy);
+        if (new URL(page.url()).hash !== expected || !await page.locator('.tab-pane[data-tab="drain"]').isVisible()) {
+          throw new Error(`Legacy drain route ${legacy} did not reach ${expected}: ${page.url()}`);
+        }
+        const mode = await page.locator('#side-dock').getAttribute('data-mode');
+        if (mode !== (expected.endsWith('/log') ? 'log' : 'drain')) throw new Error(`Wrong Drain view for ${legacy}: ${mode}`);
+      }
+      for (const route of ['tasks', 'jobs/live', 'drain', 'diagnostics/incidents', 'analytics/metrics',
+        'operations/routines', 'knowledge/frictions', 'plugins', 'config/effective']) {
+        await page.evaluate(async route => (await import('/js/router.js')).setActiveTab(route), route);
+        const indicator = page.locator('#global-drain-state');
+        if (!await indicator.isVisible() || await indicator.getAttribute('href') !== '#drain') {
+          throw new Error(`Drain chip must link to #drain on ${route}`);
+        }
+      }
+      await page.evaluate(() => { location.hash = '#tasks?dock=log'; });
+      await page.waitForFunction(() => location.hash === '#drain/log');
+      await page.locator('#dock-tab-drain').click();
+      await page.waitForFunction(() => location.hash === '#drain');
+      await page.locator('#log-statusbar-open').click();
+      await page.waitForFunction(() => location.hash === '#drain/log');
+      await page.locator('.tab[data-tab="drain"]').click();
+      await page.locator('#drain-waits-body').filter({ hasText: 'waits on deps' }).waitFor();
+      await page.locator('#drain-fleet-body .fleet-drains').waitFor();
+      await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('drain'));
       await page.locator('#dock-mode-toggle [data-mode="drain"]').click();
       const start = page.locator('#auto-drain-start-body .drain-start');
       const stop = page.locator('#auto-drain-body .drain-stop');
@@ -151,9 +206,39 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
       if (!(await start.isEnabled()) || !(await stop.isEnabled())) throw new Error('Drain controls must remain enabled after chip interaction');
       await start.click();
       await page.locator('#auto-drain-operation-feedback.success').waitFor({ state: 'visible' });
+      await page.locator('#drain-pass-body').filter({ hasText: '3 queued · 1 deferred · 2 excluded' }).waitFor();
+      if (await page.locator('#auto-drain-panel .drain-forecast-spark').count() !== 2) throw new Error('Drain must show both forecast sparklines');
+      const passLink = new URL(await page.locator('#drain-pass-body a').getAttribute('href'), page.url());
+      if (passLink.hash !== '#runs?run_id=scope-drain' || passLink.searchParams.get('workspace') !== 'one') {
+        throw new Error(`Admission run link lost its scope: ${passLink}`);
+      }
+      for (const width of [1440, 375]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await page.locator('#dock-pane-drain').evaluate(node => { node.scrollTop = 0; });
+        await page.screenshot({ path: path.join(evidence, `drain-window-dark-${width}.png`), animations: 'disabled' });
+        if (width === 375) {
+          await page.locator('#auto-drain-start').scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(evidence, 'drain-controls-dark-375.png'), animations: 'disabled' });
+        }
+      }
+      const confirmations = await page.evaluate(() => globalThis.scopeConfirmations);
+      if (!confirmations.some(message => message.includes('Start'))) throw new Error('Starting a window must confirm');
       await stop.click();
       await page.locator('#auto-drain-operation-feedback.success').waitFor({ state: 'visible' });
+      await page.locator('#drain-pass-body').filter({ hasText: 'No active admission window.' }).waitFor();
+      if (!(await page.evaluate(() => globalThis.scopeConfirmations)).some(message => /Stop/.test(message))) {
+        throw new Error('Stopping admissions must confirm');
+      }
 
+      await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('tasks'));
+      if (await page.locator('#tasks-main #auto-drain-panel').count()) throw new Error('Tasks must not contain Drain');
+      await page.locator('#tasks-body [data-key="task-PROPOSAL-1"] .task-quick.approve').waitFor();
+      await page.getByText('Awaiting approval', { exact: true }).waitFor();
+      for (const width of [1440, 375]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await page.screenshot({ path: path.join(evidence, `tasks-approval-dark-${width}.png`), animations: 'disabled' });
+      }
+      await page.setViewportSize({ width: 1280, height: 900 });
       await page.locator('#tasks-body [data-key="task-SCOPE-1"] > .title').click();
       await page.locator('button.claim-action.approve').click();
       await page.locator('button.claim-action.revoke').waitFor({ state: 'visible' });

@@ -41,13 +41,9 @@ function markWorkspaceSelectorScope(fleetWide) {
   }
 }
 
-// ORB-10444: the top-level nav is exactly these tabs plus the hash-only
-// `run-detail` route. Observe splits by the question a page answers: Health
-// (`#diagnostics/…`) is what is broken now, Analytics (`#analytics/…`) is how
-// delivery is trending. Auto-drain is not a destination: its window card is
-// the Tasks dock's Drain mode (ORB-12898). The retired `#auto-drain` and older
-// `#operations/auto-drain` hashes still resolve, to Tasks with Drain selected.
-const TABS = ["tasks", "jobs", "diagnostics", "analytics", "operations", "knowledge", "plugins", "config", "run-detail"];
+// Drain is a Work destination. Retired auto-drain and Tasks dock links are
+// normalized in place so Back never gets trapped on a redirect.
+const TABS = ["tasks", "jobs", "drain", "diagnostics", "analytics", "operations", "knowledge", "plugins", "config", "run-detail"];
 const DIAG_SUBTABS = ["incidents", "doctor"];
 // Health › Incidents views: `#diagnostics/incidents[/events|/errors]`.
 const INCIDENTS_VIEWS = ["incidents", "events", "errors"];
@@ -76,6 +72,7 @@ const RUN_DETAIL_SUBTABS = ["steps", "events"];
 const RAIL_LABELS = {
   tasks: "Tasks",
   jobs: "Jobs",
+  drain: "Drain",
   diagnostics: "Health",
   analytics: "Analytics",
   operations: "Automation",
@@ -329,14 +326,13 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   const previousSubtab = document.querySelector(".rail-subtabs:not(.dimmed) .subtab.active");
   const { segments, query } = parseHashRoute(raw);
   let head = segments[0] || "tasks";
-  // Legacy routes: auto-drain was a destination, and before that an
-  // Operations subtab. Both open Tasks with the dock in Drain mode.
   let legacyRoute = false;
-  if (head === "auto-drain" || (head === "operations" && segments[1] === "auto-drain")) {
-    head = "tasks";
-    segments.splice(1);
+  const dockView = segments[1] || query.get("dock") || query.get("dockMode") || query.get("panel");
+  if (head === "auto-drain" || (head === "operations" && segments[1] === "auto-drain") ||
+      (head === "tasks" && ["drain", "auto-drain", "log"].includes(dockView))) {
+    head = "drain";
+    segments.splice(1, segments.length, dockView === "log" || segments[2] === "log" ? "log" : "drain");
     legacyRoute = true;
-    if (ctx.showDrainDock) ctx.showDrainDock();
   }
   if (head === "runs" && !segments[1] && query.get("run_id")) {
     segments[1] = encodeURIComponent(query.get("run_id"));
@@ -412,7 +408,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   for (const pane of document.querySelectorAll(".tab-pane")) {
     pane.classList.toggle("active", pane.dataset.tab === top);
   }
-  if (top === "tasks") requestAnimationFrame(ctx.fitLogPanelToViewport || (() => {}));
+  if (top === "drain") requestAnimationFrame(ctx.fitLogPanelToViewport || (() => {}));
 
   const indicator = $("tab-indicator") || el("div", {id: "tab-indicator", class: "tab-indicator"});
   if (!indicator.parentNode) document.querySelector(".tabs").appendChild(indicator);
@@ -438,7 +434,11 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     }
   };
   let hash;
-  if (top === "jobs") {
+  if (top === "drain") {
+    const mode = segments[1] === "log" ? "log" : "drain";
+    if (ctx.setDrainView) ctx.setDrainView(mode);
+    hash = mode === "log" ? "#drain/log" : "#drain";
+  } else if (top === "jobs") {
     const sub = JOBS_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getJobsSubtab();
     adoptHashedWindow();
     setJobsSubtabImpl(ctx, sub);
