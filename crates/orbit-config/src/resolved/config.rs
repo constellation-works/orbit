@@ -104,6 +104,9 @@ pub struct ResolvedConfig {
     /// inherits the host state. Always empty for the global layer, which
     /// refuses the table.
     pub plugin_enablement: BTreeMap<String, bool>,
+    /// `[workflow.tag_instructions.<tag>]`: which file, if any, replaces
+    /// Orbit's shipped default instruction for a tag and role.
+    pub tag_instructions: crate::TagInstructionSettings,
 }
 
 impl ResolvedConfig {
@@ -139,6 +142,7 @@ impl ResolvedConfig {
             ignored_crew_properties: Vec::new(),
             plugins: BTreeMap::new(),
             plugin_enablement: BTreeMap::new(),
+            tag_instructions: crate::TagInstructionSettings::default(),
             snapshot,
         }
     }
@@ -332,6 +336,8 @@ impl ResolvedConfig {
         let plugins = plugin_sections_from_raw(parsed.plugins.as_ref(), config_path)?;
         let plugin_enablement =
             crate::plugin_enablement::plugin_enablement_from_document(&document, config_path)?;
+        let tag_instructions =
+            crate::tag_instructions::tag_instructions_from_document(&document, config_path)?;
 
         Ok(Self {
             execution_env: ExecutionEnvPolicy::from_snapshot(&snapshot),
@@ -360,6 +366,7 @@ impl ResolvedConfig {
             ignored_crew_properties,
             plugins,
             plugin_enablement,
+            tag_instructions,
             snapshot,
         })
     }

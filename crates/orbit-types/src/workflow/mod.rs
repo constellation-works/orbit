@@ -21,9 +21,11 @@ mod routine;
 mod run;
 mod ship;
 mod skill;
+mod tag_instructions;
 pub use error::{
     FinalRecoveryError, JobRunStateError, ProviderSandboxError, RetiredBackendError,
-    ReviewAdmissionError, ReviewHistoryError, ReviewReportError, WorkflowError,
+    ReviewAdmissionError, ReviewHistoryError, ReviewReportError, TagInstructionError,
+    WorkflowError,
 };
 
 pub use activity_job::{
@@ -174,6 +176,13 @@ pub use run::{
 };
 pub use ship::{CompletionPolicy, ShipMode, resolved_ship_mode};
 pub use skill::Skill;
+pub use tag_instructions::{
+    CapturedTagInstructions, MAX_TAG_INSTRUCTION_FILE_BYTES, MAX_TAG_INSTRUCTION_PROMPT_BYTES,
+    MAX_TAG_INSTRUCTION_TAGS, TAG_INSTRUCTIONS_HEADING, TAG_INSTRUCTIONS_SCHEMA_VERSION,
+    TagInstruction, TagInstructionRecord, TagInstructionRefusal, TagInstructionRole,
+    TagInstructionSource, instruction_tags, normalize_instruction_tag, render_tag_instructions,
+    select_tag_instructions,
+};
 
 pub mod automation;
 

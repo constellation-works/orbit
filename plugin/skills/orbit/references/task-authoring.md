@@ -153,7 +153,8 @@ site, a desktop app UI) `ui`. Topical tags such as `dashboard` or `website`
 may stay alongside it, but `ui` is the one tooling reads; don't invent
 variants (`web-ui`, `frontend`). Its delivery owes screenshots of each changed
 view as task artifacts ([task-execution.md](task-execution.md#screenshots-of-a-ui-change)),
-and its reviewer checks them.
+and its reviewer checks them. The tag carries those two rules into the
+implementer's and reviewer's prompts as tag instructions (below).
 
 The tag also routes the task to a host with a verified headless browser kit
 (the orbit-setup browser-checks reference). Admission reads the kit every
@@ -173,6 +174,25 @@ and the task has no `ui` tag, it adds one; QA sweeps add it to the UI
 findings they file. Neither ever removes a `ui` tag someone set. The
 screenshot rule follows the diff, not the tag: an untagged UI change still
 owes screenshots.
+
+## Tags that carry instructions
+
+Some tags add trusted instructions to the prompts of the activities that work
+on the task. Orbit ships them for `no-diff-expected` (the read-only handoff
+rule, for implementers) and `ui` (the screenshot rule, for implementers and
+reviewers). A workspace can map any tag to a repository file per role
+(implement, review, recovery) under `[workflow.tag_instructions.<tag>]`,
+replace a shipped default, or switch one off (docs/CONFIG.md). QA sweeps are
+implement tasks tagged `qa-sweep`, so that tag's implement file instructs QA.
+
+The text comes only from those defaults and from the mapped file as committed
+at the delivery's base revision. Nothing you write on the task supplies it:
+put task-specific guidance in the description and criteria, not in a tag, and
+don't invent a tag to smuggle instructions in. Tags match ignoring case. The
+instructions add to an activity's built-in rules and never override them. An
+oversized or missing mapped file fails the activity by name rather than
+running without it. `orbit run show` lists the tag instructions each dispatch
+received.
 
 ## Modification footprint
 

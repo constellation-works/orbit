@@ -14,6 +14,7 @@ use orbit_types::task::{
 use orbit_types::telemetry::{InvocationTrace, ProviderLimitObservation};
 use orbit_types::workflow::{
     DeferralProbe, JobRun, JobRunStartOutcome, JobRunState, NamespaceProbe, PipelineState,
+    TagInstruction,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -668,6 +669,23 @@ pub trait RuntimeHost: Send + Sync {
         step_id: &str,
         input: &Value,
     ) -> Result<Option<Value>, DispatchError>;
+
+    /// The tag instructions `activity_name` of `run_id` receives for the task
+    /// its `input` names, in application order.
+    ///
+    /// The text comes only from trusted sources: Orbit's shipped defaults and
+    /// repository files read at the delivery's base revision, as the host's
+    /// configuration maps the task's tags to them. A claimed leaf's host
+    /// answers from what the owner captured at admission. An activity no tag
+    /// addresses, or input naming no single task, receives none. A mapped
+    /// file that is missing, unreadable or over its size cap refuses the
+    /// dispatch with a named error rather than running without it.
+    fn tag_instructions_for_activity(
+        &self,
+        run_id: &str,
+        activity_name: &str,
+        input: &Value,
+    ) -> Result<Vec<TagInstruction>, DispatchError>;
 
     /// Whether `workflow.mid_run_steering.enabled` is on for this dispatch.
     /// When false (the default), an activity's `steering_instruction` is

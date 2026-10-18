@@ -775,6 +775,7 @@ impl crate::OrbitRuntime {
                 owner_os: self.host_os(),
                 expiring_tasks,
                 gates: Some(self.owner_validation_gates()),
+                tag_instructions: Some(self.captured_tag_instructions(&request.ship.base_branch)),
                 executor_host_os: self.executor_host_os_limits()?,
             },
             owner_binary_version(),

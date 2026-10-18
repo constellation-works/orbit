@@ -112,6 +112,7 @@ mod resource_profiles;
 mod run_cli_invocations;
 mod run_history;
 mod run_outcome_contract;
+mod tag_instructions;
 mod task_delivery;
 mod task_external_merge;
 mod task_lint_paths;

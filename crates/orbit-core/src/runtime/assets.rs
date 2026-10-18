@@ -1,5 +1,29 @@
 //! Embedded activity definitions available to the runtime and bootstrap layers.
 
+use orbit_types::workflow::TagInstructionRole;
+
+/// Orbit's shipped tag instructions: the tag (normalized), the role it
+/// addresses and its text. A `[workflow.tag_instructions]` file for the same
+/// tag and role replaces one, and `false` there disables it. Embedded, not
+/// seeded, so every host of one Orbit version ships the same text.
+pub(crate) const DEFAULT_TAG_INSTRUCTIONS: &[(&str, TagInstructionRole, &str)] = &[
+    (
+        "no-diff-expected",
+        TagInstructionRole::Implement,
+        include_str!("../../assets/tag_instructions/no-diff-expected/implement.md"),
+    ),
+    (
+        "ui",
+        TagInstructionRole::Implement,
+        include_str!("../../assets/tag_instructions/ui/implement.md"),
+    ),
+    (
+        "ui",
+        TagInstructionRole::Review,
+        include_str!("../../assets/tag_instructions/ui/review.md"),
+    ),
+];
+
 /// Shippable default activity assets, seeded under
 /// `<orbit_root>/resources/activities/<name>.yaml` on `orbit init`. Keep this
 /// list in sync with the workflow YAMLs under `crates/orbit-core/assets/jobs/`:

@@ -323,6 +323,7 @@ impl TaskCommitBoundary {
                 held,
                 validation_hold,
                 ordering.gates.as_ref(),
+                ordering.tag_instructions.as_ref(),
                 &ordering.executor_host_os,
                 reach,
             )
@@ -346,6 +347,7 @@ impl TaskCommitBoundary {
         held: &BTreeMap<String, String>,
         validation_hold: &ValidationHold<'_>,
         gates: Option<&orbit_types::workflow::ValidationGates>,
+        tag_instructions: Option<&orbit_types::workflow::CapturedTagInstructions>,
         executor_host_os: &std::collections::BTreeMap<String, orbit_types::task::ExecutorOsLimit>,
         reach: DependencyReach,
     ) -> Result<Option<AdmissionLookup>, OrbitError> {
@@ -402,6 +404,7 @@ impl TaskCommitBoundary {
                 .filter(|task| screen.queued(task, &snapshot.statuses))
                 .count(),
             gates: gates.cloned(),
+            tag_instructions: tag_instructions.cloned(),
         };
         let key = receipt_key(&receipt.machine_id, &request.request_id)?;
         // A stopped landing's repair is nearly finished work for its task, so

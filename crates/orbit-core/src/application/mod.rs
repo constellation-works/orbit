@@ -35,6 +35,7 @@ pub mod routines;
 pub(crate) mod search;
 pub mod skill;
 pub(crate) mod sweep_filing;
+pub(crate) mod tag_instructions;
 pub mod task;
 #[cfg(test)]
 pub(crate) mod test_support;

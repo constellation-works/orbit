@@ -55,6 +55,8 @@ mod build_budget;
 mod no_diff;
 #[cfg(unix)]
 mod stderr_failure;
+#[cfg(unix)]
+mod tag_instructions;
 
 /// Provider failures are control-plane evidence; transcripts and Orbit work
 /// failures must never exclude a crew. Recorded Claude payload: ORB-13965.

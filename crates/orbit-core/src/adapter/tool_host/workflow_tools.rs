@@ -17,6 +17,7 @@ use crate::runtime::audit::run::{
     MAX_RECOVERY_ATTEMPTS, RECOVERY_FETCH_PER_RUN, RunExecutionProgress, RunProviderProcess,
     RunRecoveryAttempts,
 };
+use crate::runtime::audit::tag_instructions::RunTagInstructions;
 use crate::{OrbitRuntime, ShipMode};
 
 use super::input::{parse_optional_string_array_field, parse_string_array_field};
@@ -176,6 +177,13 @@ fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
         }
     }
     value["execution_progress"] = execution_progress_json(&progress);
+    // Which trusted tag instructions each activity's prompt carried, so a
+    // reader can tell why an agent followed them; `unavailable` when the
+    // audit trail cannot be read.
+    value["tag_instructions"] = runtime
+        .collect_run_tag_instructions(&run.run_id)
+        .unwrap_or_else(|_| RunTagInstructions::unavailable())
+        .to_json();
     Ok(value)
 }
 
