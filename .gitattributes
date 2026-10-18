@@ -3,8 +3,10 @@
 # Windows, and shell scripts and hooks cannot run with CRLF line endings.
 * text=auto eol=lf
 
-# Tracked binary assets: never normalised or diffed as text.
+# Tracked binary assets and raw detached signatures: never normalised or
+# diffed as text.
 *.gif binary
 *.png binary
+*.sig binary
 *.woff2 binary
 *.whl binary
