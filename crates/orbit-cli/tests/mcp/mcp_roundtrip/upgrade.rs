@@ -858,5 +858,6 @@ fn upgrade_admission_and_session_handover() {
         let started = Instant::now();
         check();
         tracing::info!(case = name, elapsed = ?started.elapsed(), "MCP contract row completed");
+        orbit_common::test_env::record_scenario_pass(name);
     }
 }

@@ -5,7 +5,7 @@ tags: [operations, qa, release, automation]
 paths: [".orbit/auto_tasks/qa-full-sweep.yaml", "scripts/qa-full-sweep*", "crates/orbit-core/assets/auto_tasks/qa-full-sweep.yaml"]
 related_features: [auto-tasks, activity-job, dashboard, task-publication]
 related_artifacts: [ORB-12010, ORB-15327]
-last_validated: 2026-10-14
+last_validated: 2026-10-17
 ---
 
 # Full pre-release QA sweep
@@ -216,7 +216,9 @@ guard before sign-off. Listing does not earn the scenario's assertions.
 `qa-scenario-pass: <row>` only after that row's assertions return, and isolated
 child fixtures forward those records to the public command output. The sweep
 requires both the wrapper's passing test and every required row completion;
-an unrelated aggregate pass cannot substitute for them. Commands retain
+an unrelated aggregate pass cannot substitute for them. A `retired_cases`
+command is listed and executed the same way, as a second row of that scenario
+with no assertions of its own. Commands retain
 successful output with `--show-output`. Any `SKIP:`, `DEFERRED:` or `skipping`
 notice across built-in, command, Cargo, browser, website or imported execution
 makes its coverage `NOT_RUN`, keeps the raw output, and records the missing
@@ -264,12 +266,44 @@ then excludes only that simulated notice from child-output forwarding. Real
 child skips and deferrals still reach the command output and invalidate coverage;
 the sweep classifier has no exception for test names or injected refusal text.
 
-Retired cases without a verified equivalent stay in `coverage_gaps`; their
-scenario remains `BLOCKED` with all original assertions intact. The current
-inventory explicitly preserves gaps for the task-eligibility stdio contract,
-the pending breaking-switch safe-point contract, and the shipped typed
-final-recovery decision contract. Restoring or verifying equivalent coverage
-is required before these scenarios can earn sign-off.
+Unresolved `coverage_gaps` still block their scenario. A passing suite cannot
+earn sign-off while a retired identity has no verified equivalent, and the
+scenario's original assertions stay intact. A scenario may instead record
+`retired_cases`. Each entry names the retired identity, the observable
+guarantee, and a disposition of `verified-equivalent` or `standards-excluded`.
+The harness accepts it only when every named test or row is one the sweep
+actually runs. The same identity cannot be both a gap and a disposition.
+`standards-excluded` is only for a contract AGENTS.md forbids pinning, such as
+prose or a policy asset, and the reason must cite AGENTS.md. It still names
+the surviving behavioral selections. A disposition command is a separate
+`cargo test` with `--test` or `--lib`, and it must not filter on the retired
+identity. Its result is another row of the same scenario. A failure, a missing
+name, or a `SKIP:`, `DEFERRED:`, or `skipping` notice fails that scenario.
+Bubblewrap and other sandbox deferrals stay `NOT_RUN`. A macOS-only capability
+stays `NOT_RUN` in this harness, and Linux evidence never verifies macOS.
+
+`mcp_task_eligible_is_advertised_read_only_and_answers_over_stdio` is a row of
+`mcp_roundtrip::task_projection_search_and_audit`. Over stdio, tools/list
+advertises `orbit_task_eligible` as read-only with status, path, limit, and
+explain; a proposed task with no context is returned under `explain`; and
+`status: review` or an unknown filter is `invalid_input`. Lock overlap stays
+on the CLI eligibility test and is not this row.
+
+The pending breaking-switch contract is split across two current boundaries.
+`a_breaking_upgrade_refuses_ordinary_joins_until_live_participants_yield` in
+`orbit-common` refuses an old-generation join until the live participant drops
+its guard. `a_replaced_mcp_server_defers_handover_until_a_large_partial_request_completes`
+waits for an in-flight MCP request before binary handover. Together they are
+the verified equivalent. They do not re-prove a live drain worker recording
+`upgrade_quiesce`, an idle dashboard exit, or `mcp serve` exiting for a
+generation switch. Clock resume of an already recorded interruption is
+`upgrade_resume` and is not selected by this scenario.
+
+The shipped final-recovery activity document pin stays retired. AGENTS.md
+forbids prose-matching and policy-asset tests, which is why ORB-15844 removed
+the schema and instruction assertions. Authority remains on the runtime rows
+that enforce the shipped disallow list, and crew routing remains on the
+workflow resume input `crew_config_key` of `workflow.final_recovery_crews`.
 
 Browser producers receive a unique run directory and a separate directory per
 scenario. Each row retains its candidate-bound `harness-result.json`, screenshots,
@@ -349,6 +383,10 @@ selected names without claiming execution, run:
 python3 scripts/test-qa-full-sweep.py --check --check-cargo-selections
 ```
 
+That listing includes each `retired_cases` command. A zero selection or a
+missing `command_tests` name fails the guard the same way a scenario selection
+does. Listing still does not earn the scenario's assertions.
+
 The consolidated CLI targets are `mcp`, `output`, `process`, `task`, `tool`,
 and `workspace`; core runtime and fake-provider cases use `runtime` and
 `provider`. MCP case names start with `mcp_roundtrip::`, including nested
@@ -359,9 +397,12 @@ module-qualified, especially when using `--exact`.
 
 A retired case without equivalent admitted boundary coverage stays in the
 inventory as `kind: coverage-gap` with a concrete `coverage_gap` explanation
-and its original assertions. It has no executable command or passing cases:
-the harness emits `BLOCKED`, and even unrelated PASS evidence cannot make it
-earn release sign-off. Browser page navigation does not replace HTTP contracts.
+and its original assertions. That scenario has no executable command or passing
+cases. A non-empty `coverage_gaps` map on a scenario that still has a command
+is the same sign-off failure: the harness emits `BLOCKED` and clears the
+scenario's assertions. Unrelated PASS evidence cannot earn release sign-off.
+A `retired_cases` disposition does not weaken that rule. Browser page
+navigation does not replace HTTP contracts.
 
 `task-list-pagination` runs `cargo test -p orbit-web --test http_api pagination::
 -- --nocapture`. Its two required cases exercise both `/api/tasks` and
