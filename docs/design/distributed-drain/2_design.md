@@ -772,8 +772,10 @@ owns delivery:
   run writes a `candidate_resume` event naming the claim, the machine that committed the
   candidate and its source run, and the step output carries `source_machine_id`. With no kept
   candidate the fresh reason names the foreign run's machine; a local run that happens to share
-  the leaf's id is never read. A prior run on the owner that left no failure handoff — a claim's
-  leaf the owner executed itself — falls back to the candidate kept from that leaf's claim.
+  the leaf's id is never read. A prior run on the owner that left no preserving failure handoff
+  or evidence hold falls back to that same latest kept claim candidate. This includes a local
+  attempt that stamped its binding during setup and stopped before candidate resume; it does
+  not replace the earlier claim's candidate or its machine-qualified provenance.
   A `Release` for a leaf that is still running (not `pending`, not terminal) is *held*: no pass
   delivers it until the leaf is seen to stop. The task is never back in the backlog while its
   first executor may still be working.

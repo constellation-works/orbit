@@ -244,8 +244,8 @@ fn claim_candidate(preserved: &Value, claim: Option<ClaimSource>) -> Option<Cand
 }
 
 /// The candidate recorded by the failure handoff of the run the task was last
-/// linked to, or else the one its evidence hold kept, or why there is none to
-/// resume.
+/// linked to, or else its evidence hold or the latest kept claim candidate,
+/// or why there is none to resume.
 fn preserved_candidate<H: RuntimeHost + ?Sized>(
     host: &H,
     task: &Task,
@@ -270,8 +270,14 @@ fn preserved_candidate<H: RuntimeHost + ?Sized>(
             && checkpoint.output.get("task_id").and_then(Value::as_str) == Some(task.id.as_str())
     }) else {
         return match held_candidate(host, task, &prior_run_id)? {
-            Preserved::None(reason) => Ok(local_claim_candidate(host, task, &prior_run_id)?
-                .unwrap_or(Preserved::None(reason))),
+            // A candidate-less local attempt may have replaced the task's
+            // binding after a claim kept its candidate. Use the same
+            // machine-aware offer as admission, retaining the claim's source
+            // identity and its spec, discard and durability checks.
+            Preserved::None(reason) => match host.kept_claim_candidate(&task.id)? {
+                Some(kept) => kept_candidate(kept),
+                None => Ok(Preserved::None(reason)),
+            },
             preserved => Ok(preserved),
         };
     };
@@ -389,23 +395,6 @@ fn foreign_candidate<H: RuntimeHost + ?Sized>(
             ),
         )),
     })
-}
-
-/// [ORB-14603] The candidate the owner kept from the claim whose leaf was
-/// this machine's run `prior_run_id`, when that leaf left no failure handoff.
-fn local_claim_candidate<H: RuntimeHost + ?Sized>(
-    host: &H,
-    task: &Task,
-    prior_run_id: &str,
-) -> Result<Option<Preserved>, OrbitError> {
-    let local = host.local_machine_id();
-    host.kept_claim_candidate(&task.id)?
-        .filter(|kept| {
-            local.as_deref() == Some(kept.machine_id.as_str())
-                && kept.candidate.source_run_id.as_deref() == Some(prior_run_id)
-        })
-        .map(kept_candidate)
-        .transpose()
 }
 
 /// A candidate the owner kept from a claim, or why it refused it.

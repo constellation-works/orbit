@@ -1244,7 +1244,9 @@ it committed keeps nothing and records no event. Without
 `Resumes ... at <head>.` in text, or `resumes` with `source: claim` in JSON.
 The task's next run then continues that candidate, whether it is a claim or
 an owner-local run, and its `resume_candidate` output names it as
-`source_sha`. When the kept candidate was never pushed (`host_local: true`),
+`source_sha`. A later claim or owner-local attempt that stops without keeping
+a candidate leaves that earlier claim candidate available to either route.
+When the kept candidate was never pushed (`host_local: true`),
 only a run on the machine that made it continues the candidate; a run on
 another host implements fresh. If the task's description or acceptance
 criteria changed since the candidate was kept, the requeue is refused and

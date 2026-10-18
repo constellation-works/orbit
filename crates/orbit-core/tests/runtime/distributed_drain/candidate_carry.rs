@@ -408,15 +408,14 @@ fn owner_run_named(pair: &Pair, run_id: &str, task: &str) {
     owner.write_run_state(run_id, &state).unwrap();
 }
 
-/// The owner's own `task_pr_pipeline` run of `task`: its checkout, then its
-/// `resume_candidate` step, with the inputs the pipeline passes them.
-fn owner_local_run(pair: &Pair, task: &str) -> (Value, Value) {
+/// Start the owner's own run through setup, before candidate resume.
+fn owner_local_setup(pair: &Pair, task: &str) -> Value {
     let owner = &pair.wire.owner;
     let run = owner_jobs(pair)
         .insert_job_run("task_pr_pipeline", 1, Utc::now(), None, None)
         .unwrap()
         .run_id;
-    let setup = engine_action(
+    engine_action(
         owner,
         "worktree_setup",
         &json!({
@@ -427,12 +426,18 @@ fn owner_local_run(pair: &Pair, task: &str) -> (Value, Value) {
             "base_sync": "local",
             "dependency_delivery": "ignore",
         }),
-    );
+    )
+}
+
+/// The owner's own `task_pr_pipeline` run of `task`: its checkout, then its
+/// `resume_candidate` step, with the inputs the pipeline passes them.
+fn owner_local_run(pair: &Pair, task: &str) -> (Value, Value) {
+    let setup = owner_local_setup(pair, task);
     let resumed = engine_action(
-        owner,
+        &pair.wire.owner,
         "candidate_resume",
         &json!({
-            "job_run_id": run,
+            "job_run_id": setup["job_run_id"],
             "task_ids": [task],
             "workspace_path": setup["workspace_path"],
             "base_sha": setup["base_sha"],
@@ -441,6 +446,81 @@ fn owner_local_run(pair: &Pair, task: &str) -> (Value, Value) {
         }),
     );
     (setup, resumed)
+}
+
+/// A stopped local attempt that reached setup but kept no candidate must not
+/// hide the earlier claim candidate that requeue promises to the next run.
+#[test]
+fn a_candidateless_owner_local_attempt_resumes_the_candidate_requeue_advertises() {
+    if !isolated(
+        module_path!(),
+        "a_candidateless_owner_local_attempt_resumes_the_candidate_requeue_advertises",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let task = pair.tasks[0].clone();
+    let base = owner_published(&pair);
+    let follower = host_checkout(&pair, &pair);
+    let (_, leaf, head, carry) = committed_then_stopped(&pair, &follower, &base, true);
+    assert_eq!(carry["carry"], "durable", "{carry}");
+    let owner = &pair.wire.owner;
+    owner
+        .requeue_blocked_task(&task, "keep the claim candidate", false)
+        .unwrap();
+
+    // Attempt B stamps a local binding, then stops before candidate_resume.
+    // No worker is launched: arrange the conclusive stop in the fixture store.
+    let stopped_setup = owner_local_setup(&pair, &task);
+    let stopped = stopped_setup["job_run_id"].as_str().unwrap();
+    assert_eq!(stopped_setup["prior_foreign_run"]["run_id"], leaf);
+    assert_eq!(pair.owner_task(&task)["job_run_id"], stopped);
+    let mut state = PipelineState::new(stopped.into(), "task_pr_pipeline".into(), json!({}));
+    state.pipeline["worktree"] = stopped_setup.clone();
+    owner.write_run_state(stopped, &state).unwrap();
+    owner_jobs(&pair)
+        .finalize_job_run(stopped, JobRunState::Cancelled, Utc::now(), None)
+        .unwrap();
+    owner
+        .update_task_as_human(
+            &task,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Blocked),
+                ..Default::default()
+            },
+            "human:on-call".into(),
+        )
+        .unwrap();
+
+    let advertised = owner
+        .requeue_blocked_task(&task, "continue after the local stop", false)
+        .expect("the earlier durable claim candidate survives the local stop");
+    assert_eq!(advertised["resumes"]["source"], "claim", "{advertised}");
+    assert_eq!(advertised["resumes"]["head_sha"], head, "{advertised}");
+    assert_eq!(advertised["resumes"]["branch"], BRANCH, "{advertised}");
+    assert!(
+        advertised["next_step"]
+            .as_str()
+            .unwrap()
+            .contains("claimed or local"),
+        "{advertised}"
+    );
+
+    // Attempt C sees B as local, but resumes A with A's machine provenance.
+    let (setup, resumed) = owner_local_run(&pair, &task);
+    assert_eq!(setup["prior_job_run_id"], stopped, "{setup}");
+    assert!(setup["prior_foreign_run"].is_null(), "{setup}");
+    assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+    assert_eq!(resumed["source_sha"], advertised["resumes"]["head_sha"]);
+    assert_eq!(resumed["source_branch"], advertised["resumes"]["branch"]);
+    assert_eq!(resumed["source_run_id"], leaf, "{resumed}");
+    assert_eq!(resumed["source_machine_id"], FOLLOWER, "{resumed}");
+    let checkout = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    assert_eq!(
+        std::fs::read_to_string(checkout.join("src/f0.rs")).unwrap(),
+        CARRIED,
+        "the next local implementer receives the advertised candidate's change"
+    );
 }
 
 /// The note of the owner's latest `candidate_resume` event for `task`.
