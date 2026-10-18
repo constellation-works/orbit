@@ -71,7 +71,7 @@ pub(super) struct StateInner {
     diagnostics_friction: RuntimeMemo<(String, usize)>,
     /// Per-server cache of the codebase analytics scan, one per workspace
     /// runtime. Holds typed facts; every window and rollup slices them.
-    codebase: RuntimeMemo<(), crate::api::CodebaseFacts>,
+    codebase: RuntimeMemo<(), orbit_core::application::codebase::CodebaseFacts>,
     /// Per-server cache of the last `orbit doctor` report for each workspace
     /// runtime, behind `/api/doctor`.
     doctor_reports: DoctorReports,
@@ -523,7 +523,9 @@ impl DashboardState {
     }
 
     /// Process-local codebase analytics scan cache for this server instance.
-    pub(crate) fn codebase_memo(&self) -> &RuntimeMemo<(), crate::api::CodebaseFacts> {
+    pub(crate) fn codebase_memo(
+        &self,
+    ) -> &RuntimeMemo<(), orbit_core::application::codebase::CodebaseFacts> {
         &self.inner.codebase
     }
 

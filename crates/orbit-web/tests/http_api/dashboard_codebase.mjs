@@ -188,11 +188,12 @@ codebase.applyCodebaseHashQuery(new URLSearchParams('window=30d&min_support=5&ro
 assert.equal(codebase.buildCodebaseHash(), '#analytics/codebase?window=30d&min_support=5&rollup=dir');
 assert.deepEqual([pressed('codebase-window'), pressed('codebase-rollup'), byId['codebase-min-support'].value], [['30d'], ['dir'], '5']);
 
-// The fixture's four path rankings share five paths in two or more of them:
-// src/a/ in all four; src/c/ (footprint 80%), src/b/ (regressions 50%),
-// src/y/ (blocked 20%) and src/z/ (footprint 10%) in two. src/z/ is also
-// rejected at 95%, which must not lift it: Rejected does not order the list.
-// Task ORB-9 regressed all five ranked regression paths.
+// The fixture's four path rankings share five paths in two or more of them,
+// which the server lists in `overlap`: src/a/ in all four; src/c/ (footprint
+// 80%), src/b/ (regressions 50%), src/y/ (blocked 20%) and src/z/ (footprint
+// 10%) in two. src/z/ is also rejected at 95%, which does not lift it:
+// Rejected does not order the list. Task ORB-9 regressed all five ranked
+// regression paths.
 const rate = (numerator, denominator) => ({ rate: numerator / denominator, numerator, denominator });
 const regressed = (id, crew, by) => ({ task_id: id, title: `Task ${id}`, crew, regression_tasks: by });
 const wide = regressed('ORB-9', 'opus', ['ORB-90']);
@@ -232,6 +233,13 @@ const full = {
     { paths: ['src/a/', 'src/b/'], ...rate(16, 40), reservations: [30, 26] },
   ] },
   lock_contention: { below_support: 0, reservations: 2557, denials: 0, wait_time_recorded: false, rows: [] },
+  overlap: { ranked_paths: 8, rows: [
+    { path: 'src/a/', rankings: ['regressions', 'footprint_misses', 'blocked', 'rejected'], top_rate: 0.65 },
+    { path: 'src/c/', rankings: ['regressions', 'footprint_misses'], top_rate: 0.8 },
+    { path: 'src/b/', rankings: ['regressions', 'rejected'], top_rate: 0.5 },
+    { path: 'src/y/', rankings: ['blocked', 'rejected'], top_rate: 0.2 },
+    { path: 'src/z/', rankings: ['footprint_misses', 'rejected'], top_rate: 0.1 },
+  ] },
 };
 const sent = await serve(full);
 assert.equal(sent.pathname, '/api/codebase/analytics');
@@ -314,6 +322,7 @@ assert.equal(button(part('list'), 'Show paths with 5+ tasks'), undefined, 'alrea
 const changedRankings = JSON.parse(JSON.stringify(full));
 changedRankings.footprint_misses.rows = changedRankings.footprint_misses.rows.filter(row => row.path !== 'src/a/');
 changedRankings.blocked.rows[0] = { ...changedRankings.blocked.rows[0], ...rate(10, 20) };
+changedRankings.overlap.rows[0] = { path: 'src/a/', rankings: ['regressions', 'blocked', 'rejected'], top_rate: 0.65 };
 await serve(changedRankings);
 assert.deepEqual(rows()[0].querySelectorAll('span.codebase-chip').map(node => [node.dataset.ranking, node.querySelector('span.codebase-chip-rate').textContent]),
   [['blocked', '50%'], ['rejected', '5.0%']], 'a poll removes absent rankings and updates rates in the open list’s chips');
@@ -392,6 +401,7 @@ const empty = {
   change_coupling: { rows: [], below_support: 13051, reservations: 0, excluded_large: 250, large_footprint_cap: 12 },
   blocked: { rows: [], below_support: 0, causes: [{ cause: 'unclassified', kind: 'unclassified', tasks: 0 }, { cause: 'run_failure', kind: 'attributed', tasks: 0 }] },
   rejected: { rows: [], below_support: 0, rejected_with_run: 0, excluded_without_run: 0 },
+  overlap: { rows: [], ranked_paths: 0 },
 };
 await serve(empty);
 assert.equal(part('list').dataset.ranking, 'lock_contention', 'the open tile survives a new payload');

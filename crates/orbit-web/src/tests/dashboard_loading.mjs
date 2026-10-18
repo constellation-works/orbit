@@ -205,7 +205,7 @@ function fixture(url) {
         touched: 'declared_footprint', tasks_scanned: 0, computed_at: new Date().toISOString(), cache_ttl_seconds: 300,
         regressions: empty, lock_contention: { ...empty, wait_time_recorded: false }, footprint_misses: empty,
         change_coupling: { ...empty, excluded_large: 0, large_footprint_cap: 12 }, blocked: { ...empty, causes: [] },
-        rejected: { ...empty, excluded_without_run: 0 } };
+        rejected: { ...empty, excluded_without_run: 0 }, overlap: { rows: [], ranked_paths: 0 } };
     }
     case '/api/frictions': {
       const status = url.searchParams.get('status');

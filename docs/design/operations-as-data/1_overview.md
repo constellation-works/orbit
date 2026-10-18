@@ -1,7 +1,7 @@
 ---
 title: Operations as Data — Overview
 owner: claude
-last_updated: 2026-10-13
+last_updated: 2026-10-18
 last_validated: 2026-10-18
 status: Accepted
 feature: operations-as-data
@@ -113,6 +113,7 @@ and again in the tool handler.
 | Task review and lifecycle operations (`reconcile_review` and its CLI actions, `review_reset`, inactive `reject` and `delete`) | [crates/orbit-common/src/governance/task/lifecycle_operations.rs](../../../crates/orbit-common/src/governance/task/lifecycle_operations.rs) | [ORB-15940] |
 | The workflow-run registry (five MCP-advertised tool-only verbs, including the multiplexed `orbit.workflow.auto`) | [crates/orbit-common/src/governance/workflow.rs](../../../crates/orbit-common/src/governance/workflow.rs) | [ORB-15941] |
 | The search registry (root CLI query and tool-only friction listing) | [crates/orbit-common/src/governance/search.rs](../../../crates/orbit-common/src/governance/search.rs) | [ORB-15942] |
+| The codebase registry (read-only `analytics` and `show`, on the CLI and MCP) | [crates/orbit-common/src/governance/codebase.rs](../../../crates/orbit-common/src/governance/codebase.rs) | [ORB-16787] |
 | MCP adapter: generic `OperationTool<V>`, schema, scope and execution kind | [crates/orbit-tools/src/builtin/orbit/operation.rs](../../../crates/orbit-tools/src/builtin/orbit/operation.rs) | [ORB-10358], [ORB-15932] |
 | Auto-task guarded modes (bounded list, acknowledged mint, checked toggle), keyed on `AutoTaskVerb` | [crates/orbit-tools/src/builtin/orbit/auto_task.rs](../../../crates/orbit-tools/src/builtin/orbit/auto_task.rs) | [ORB-15935] |
 | Task guarded modes (bounded `show`/`list`, versioned `show` snapshot), keyed on `TaskVerb` | [crates/orbit-tools/src/builtin/orbit/task/operation.rs](../../../crates/orbit-tools/src/builtin/orbit/task/operation.rs) | [ORB-15937] |
@@ -154,5 +155,7 @@ and again in the tool handler.
   parameter kind, refuse-mode unknown fields and the schema extension table.
 - [ORB-15941] — phase 4: migrated the workflow-run tools as a tool-only noun
   and settled that a multiplexed tool's action is an enum parameter.
+- [ORB-16787] — declared the read-only codebase analytics noun in the
+  registry, with its CLI and MCP surfaces derived from it.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

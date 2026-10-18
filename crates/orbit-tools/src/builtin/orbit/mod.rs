@@ -1,5 +1,6 @@
 pub mod agent;
 mod auto_task;
+mod codebase;
 pub mod command;
 mod domain_control;
 pub mod drain;

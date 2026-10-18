@@ -1,18 +1,22 @@
-//! The six rankings of the codebase view, computed from cached scan facts for
-//! one window, minimum support and rollup.
+//! The six rankings of the codebase view, computed from scan facts for one
+//! window, minimum support and rollup, and the paths several of them share.
 //!
 //! Every ranking is a rate over distinct tasks (or requesting identities for
 //! contention, reservations for coupling) with its numerator and denominator,
 //! so a popular file does not lead merely because many tasks touch it. Rows whose denominator is below
 //! the minimum support are omitted and counted in `below_support`.
+//!
+//! Each ranking's rows come from one builder that also keeps what stands
+//! behind every numerator, so the per-path detail reads the counts the
+//! rankings rank.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
-use orbit_core::TaskStatus;
+use orbit_types::task::TaskStatus;
 use serde_json::{Value, json};
 
-use super::facts::{Anchor, BlockCause, CodebaseFacts, INFRA_CAUSES, TaskFacts};
+use super::facts::{Anchor, BlockCause, CodebaseFacts, INFRA_CAUSES, ReservationFacts, TaskFacts};
 
 /// Rows returned per ranking.
 pub(super) const ROW_LIMIT: usize = 25;
@@ -21,6 +25,9 @@ const DRILLDOWN_LIMIT: usize = 20;
 /// Reservations naming more files than this are left out of change coupling,
 /// so a sweeping reservation does not pair everything with everything.
 pub(super) const LARGE_FOOTPRINT_CAP: usize = 12;
+/// The four rankings keyed by one path, in the order the overlap lists them.
+pub(super) const PATH_RANKINGS: [&str; 4] =
+    ["regressions", "footprint_misses", "blocked", "rejected"];
 
 /// How footprint paths are grouped before counting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,9 +100,9 @@ impl Params {
 
 /// A rate row before rendering: `numerator` of `denominator` distinct items.
 #[derive(Default)]
-struct Tally {
-    numerator: usize,
-    denominator: usize,
+pub(super) struct Tally {
+    pub(super) numerator: usize,
+    pub(super) denominator: usize,
 }
 
 fn rate(numerator: usize, denominator: usize) -> f64 {
@@ -108,7 +115,9 @@ fn rate(numerator: usize, denominator: usize) -> f64 {
 
 /// Keep rows with a numerator and enough support, ranked by rate, then
 /// numerator, then path; report how many fell below the support threshold.
-fn rank<T>(
+/// Every kept row is returned: a section shows the first [`ROW_LIMIT`], and
+/// the per-path detail reports a path's place in the whole order.
+pub(super) fn rank<T>(
     rows: BTreeMap<String, T>,
     min_support: usize,
     tally: impl Fn(&T) -> (usize, usize),
@@ -146,11 +155,10 @@ fn rank_rows<T>(
             .then_with(|| right_num.cmp(&left_num))
             .then_with(|| left_path.cmp(right_path))
     });
-    kept.truncate(ROW_LIMIT);
     (kept, below_support)
 }
 
-fn rate_fields(numerator: usize, denominator: usize) -> Value {
+pub(super) fn rate_fields(numerator: usize, denominator: usize) -> Value {
     json!({
         "rate": rate(numerator, denominator),
         "numerator": numerator,
@@ -158,7 +166,7 @@ fn rate_fields(numerator: usize, denominator: usize) -> Value {
     })
 }
 
-fn merge(mut base: Value, extra: Value) -> Value {
+pub(super) fn merge(mut base: Value, extra: Value) -> Value {
     if let (Some(base), Value::Object(extra)) = (base.as_object_mut(), extra) {
         base.extend(extra);
     }
@@ -166,26 +174,77 @@ fn merge(mut base: Value, extra: Value) -> Value {
 }
 
 pub(super) fn all_sections(facts: &CodebaseFacts, params: &Params) -> Value {
-    json!({
+    let mut sections = json!({
         "regressions": regressions(facts, params),
         "lock_contention": lock_contention(facts, params),
         "footprint_misses": footprint_misses(facts, params),
         "change_coupling": change_coupling(facts, params),
         "blocked": blocked(facts, params),
         "rejected": rejected(facts, params),
-    })
+    });
+    sections["overlap"] = overlap(&sections);
+    sections
+}
+
+/// Paths in two or more of the [`PATH_RANKINGS`] as listed (each ranking's
+/// first [`ROW_LIMIT`] rows): by how many, then by the highest rate outside
+/// Rejected (whose one-off rejections would otherwise lead), then by path.
+/// `ranked_paths` counts the distinct paths across the four lists.
+fn overlap(sections: &Value) -> Value {
+    let mut index: BTreeMap<&str, Vec<(&str, f64)>> = BTreeMap::new();
+    for ranking in PATH_RANKINGS {
+        for row in sections[ranking]["rows"].as_array().into_iter().flatten() {
+            if let Some(path) = row["path"].as_str() {
+                let rate = row["rate"].as_f64().unwrap_or(0.0);
+                index.entry(path).or_default().push((ranking, rate));
+            }
+        }
+    }
+    let ranked_paths = index.len();
+    let mut rows: Vec<(&str, Vec<&str>, f64)> = index
+        .into_iter()
+        .filter(|(_, hits)| hits.len() >= 2)
+        .map(|(path, hits)| {
+            let top = hits
+                .iter()
+                .filter(|(ranking, _)| *ranking != "rejected")
+                .map(|(_, rate)| *rate)
+                .fold(0.0, f64::max);
+            let rankings = hits.into_iter().map(|(ranking, _)| ranking).collect();
+            (path, rankings, top)
+        })
+        .collect();
+    rows.sort_by(|left, right| {
+        right
+            .1
+            .len()
+            .cmp(&left.1.len())
+            .then_with(|| right.2.total_cmp(&left.2))
+            .then_with(|| left.0.cmp(right.0))
+    });
+    let rows: Vec<Value> = rows
+        .into_iter()
+        .map(|(path, rankings, top)| json!({ "path": path, "rankings": rankings, "top_rate": top }))
+        .collect();
+    json!({ "rows": rows, "ranked_paths": ranked_paths })
+}
+
+#[derive(Default)]
+pub(super) struct RegressionRow<'a> {
+    pub(super) tally: Tally,
+    /// The regressed tasks: the numerator.
+    pub(super) regressed: Vec<&'a TaskFacts>,
+    by_crew: BTreeMap<String, Tally>,
 }
 
 /// Distinct done tasks with an incoming `regression_from` ÷ done tasks whose
 /// footprint touched the path, for tasks that became done in the window.
-fn regressions(facts: &CodebaseFacts, params: &Params) -> Value {
-    #[derive(Default)]
-    struct Row<'a> {
-        tally: Tally,
-        regressed: Vec<&'a TaskFacts>,
-        by_crew: BTreeMap<String, Tally>,
-    }
-    let mut rows: BTreeMap<String, Row> = BTreeMap::new();
+/// Also returns the number of done tasks in the window.
+pub(super) fn regression_rows<'a>(
+    facts: &'a CodebaseFacts,
+    params: &Params,
+) -> (BTreeMap<String, RegressionRow<'a>>, usize) {
+    let mut rows: BTreeMap<String, RegressionRow> = BTreeMap::new();
     let mut population = 0;
     for task in &facts.tasks {
         let Some(done_at) = task.done_at else {
@@ -212,11 +271,17 @@ fn regressions(facts: &CodebaseFacts, params: &Params) -> Value {
             }
         }
     }
+    (rows, population)
+}
+
+fn regressions(facts: &CodebaseFacts, params: &Params) -> Value {
+    let (rows, population) = regression_rows(facts, params);
     let (ranked, below_support) = rank(rows, params.min_support, |row| {
         (row.tally.numerator, row.tally.denominator)
     });
     let rows: Vec<Value> = ranked
         .into_iter()
+        .take(ROW_LIMIT)
         .map(|(path, mut row)| {
             row.regressed
                 .sort_by_key(|regressed| std::cmp::Reverse(regressed.done_at));
@@ -260,20 +325,28 @@ fn regressions(facts: &CodebaseFacts, params: &Params) -> Value {
     json!({ "rows": rows, "below_support": below_support, "population": population })
 }
 
+#[derive(Default)]
+pub(super) struct LockRow {
+    /// The requesters refused a lock on the path: the numerator.
+    pub(super) contenders: BTreeSet<String>,
+    pub(super) requesters: BTreeSet<String>,
+    pub(super) reservations: usize,
+    pub(super) denials: usize,
+}
+
+pub(super) struct LockRows {
+    pub(super) rows: BTreeMap<String, LockRow>,
+    reservations: usize,
+    denials: usize,
+}
+
 /// Distinct requesters that waited on a path because of a lock conflict ÷
 /// distinct requesters that asked for it (reserved it or were refused it). A retry
 /// loop repeats the same contender and counts once. Reservation and denial
 /// counts are reported beside, not folded into, the contention figure, per
 /// path and as window totals.
-fn lock_contention(facts: &CodebaseFacts, params: &Params) -> Value {
-    #[derive(Default)]
-    struct Row {
-        contenders: BTreeSet<String>,
-        requesters: BTreeSet<String>,
-        reservations: usize,
-        denials: usize,
-    }
-    let mut rows: BTreeMap<String, Row> = BTreeMap::new();
+pub(super) fn lock_rows(facts: &CodebaseFacts, params: &Params) -> LockRows {
+    let mut rows: BTreeMap<String, LockRow> = BTreeMap::new();
     let mut reservations = 0;
     let mut denials = 0;
     for reservation in &facts.reservations {
@@ -300,11 +373,27 @@ fn lock_contention(facts: &CodebaseFacts, params: &Params) -> Value {
             row.requesters.extend(denial.contenders.iter().cloned());
         }
     }
-    let (ranked, below_support) = rank(rows, params.min_support, |row| {
-        (row.contenders.len(), row.requesters.len())
-    });
+    LockRows {
+        rows,
+        reservations,
+        denials,
+    }
+}
+
+pub(super) fn lock_tally(row: &LockRow) -> (usize, usize) {
+    (row.contenders.len(), row.requesters.len())
+}
+
+fn lock_contention(facts: &CodebaseFacts, params: &Params) -> Value {
+    let LockRows {
+        rows,
+        reservations,
+        denials,
+    } = lock_rows(facts, params);
+    let (ranked, below_support) = rank(rows, params.min_support, lock_tally);
     let rows: Vec<Value> = ranked
         .into_iter()
+        .take(ROW_LIMIT)
         .map(|(path, row)| {
             merge(
                 rate_fields(row.contenders.len(), row.requesters.len()),
@@ -328,15 +417,23 @@ fn lock_contention(facts: &CodebaseFacts, params: &Params) -> Value {
     })
 }
 
+#[derive(Default)]
+pub(super) struct FootprintRow<'a> {
+    pub(super) tally: Tally,
+    pub(super) widenings: usize,
+    /// Each task that widened onto the path, with its latest such widening
+    /// in the window: the numerator.
+    pub(super) missed: Vec<(&'a TaskFacts, DateTime<Utc>)>,
+}
+
 /// Distinct tasks that had the path added mid-run by `context_files_widened`
 /// ÷ tasks whose footprint touched it, for tasks active in the window.
-fn footprint_misses(facts: &CodebaseFacts, params: &Params) -> Value {
-    #[derive(Default)]
-    struct Row {
-        tally: Tally,
-        widenings: usize,
-    }
-    let mut rows: BTreeMap<String, Row> = BTreeMap::new();
+/// Also returns the number of tasks active in the window.
+pub(super) fn footprint_rows<'a>(
+    facts: &'a CodebaseFacts,
+    params: &Params,
+) -> (BTreeMap<String, FootprintRow<'a>>, usize) {
+    let mut rows: BTreeMap<String, FootprintRow> = BTreeMap::new();
     let mut population = 0;
     for task in &facts.tasks {
         let widened: Vec<_> = task
@@ -348,10 +445,12 @@ fn footprint_misses(facts: &CodebaseFacts, params: &Params) -> Value {
             continue;
         }
         population += 1;
-        let mut missed: BTreeMap<String, usize> = BTreeMap::new();
-        for (_, anchors) in &widened {
+        let mut missed: BTreeMap<String, (usize, DateTime<Utc>)> = BTreeMap::new();
+        for (at, anchors) in &widened {
             for key in params.rollup.keys(anchors.iter()) {
-                *missed.entry(key).or_default() += 1;
+                let entry = missed.entry(key).or_insert((0, *at));
+                entry.0 += 1;
+                entry.1 = entry.1.max(*at);
             }
         }
         let mut touched = params.rollup.keys(&task.footprint);
@@ -359,17 +458,24 @@ fn footprint_misses(facts: &CodebaseFacts, params: &Params) -> Value {
         for key in touched {
             let row = rows.entry(key.clone()).or_default();
             row.tally.denominator += 1;
-            if let Some(events) = missed.get(&key) {
+            if let Some((events, at)) = missed.get(&key) {
                 row.tally.numerator += 1;
                 row.widenings += events;
+                row.missed.push((task, *at));
             }
         }
     }
+    (rows, population)
+}
+
+fn footprint_misses(facts: &CodebaseFacts, params: &Params) -> Value {
+    let (rows, population) = footprint_rows(facts, params);
     let (ranked, below_support) = rank(rows, params.min_support, |row| {
         (row.tally.numerator, row.tally.denominator)
     });
     let rows: Vec<Value> = ranked
         .into_iter()
+        .take(ROW_LIMIT)
         .map(|(path, row)| {
             merge(
                 rate_fields(row.tally.numerator, row.tally.denominator),
@@ -380,13 +486,32 @@ fn footprint_misses(facts: &CodebaseFacts, params: &Params) -> Value {
     json!({ "rows": rows, "below_support": below_support, "population": population })
 }
 
+/// One ranked pair: its paths, the reservations holding both (the
+/// numerator), how many held either, and how many held each path.
+pub(super) struct CouplingPair<'a> {
+    pub(super) paths: (String, String),
+    pub(super) both: Vec<&'a ReservationFacts>,
+    pub(super) either: usize,
+    pub(super) counts: (usize, usize),
+}
+
+pub(super) struct CouplingPairs<'a> {
+    /// Pairs at or above the minimum support, in ranked order.
+    pub(super) ranked: Vec<CouplingPair<'a>>,
+    /// Reservations naming each path, over the counted reservations.
+    pub(super) singles: BTreeMap<String, usize>,
+    below_support: usize,
+    counted: usize,
+    excluded_large: usize,
+}
+
 /// Path pairs reserved together: Jaccard overlap of the reservations naming
 /// each, `both ÷ either`. Reservations above [`LARGE_FOOTPRINT_CAP`] files
 /// are excluded; pairs reserved together fewer than `min_support` times are
 /// omitted.
-fn change_coupling(facts: &CodebaseFacts, params: &Params) -> Value {
+pub(super) fn coupling_pairs<'a>(facts: &'a CodebaseFacts, params: &Params) -> CouplingPairs<'a> {
     let mut singles: BTreeMap<String, usize> = BTreeMap::new();
-    let mut pairs: BTreeMap<(String, String), usize> = BTreeMap::new();
+    let mut pairs: BTreeMap<(String, String), Vec<&ReservationFacts>> = BTreeMap::new();
     let mut counted = 0;
     let mut excluded_large = 0;
     for reservation in &facts.reservations {
@@ -402,39 +527,65 @@ fn change_coupling(facts: &CodebaseFacts, params: &Params) -> Value {
         for (index, left) in keys.iter().enumerate() {
             *singles.entry(left.clone()).or_default() += 1;
             for right in &keys[index + 1..] {
-                *pairs.entry((left.clone(), right.clone())).or_default() += 1;
+                pairs
+                    .entry((left.clone(), right.clone()))
+                    .or_default()
+                    .push(reservation);
             }
         }
     }
     let mut below_support = 0;
-    let mut rows: Vec<(String, String, usize, usize, usize, usize)> = pairs
+    let mut ranked: Vec<CouplingPair> = pairs
         .into_iter()
         .filter_map(|((left, right), both)| {
-            if both < params.min_support {
+            if both.len() < params.min_support {
                 below_support += 1;
                 return None;
             }
-            let left_count = singles.get(&left).copied().unwrap_or(both);
-            let right_count = singles.get(&right).copied().unwrap_or(both);
-            let either = left_count + right_count - both;
-            Some((left, right, both, either, left_count, right_count))
+            let left_count = singles.get(&left).copied().unwrap_or(both.len());
+            let right_count = singles.get(&right).copied().unwrap_or(both.len());
+            let either = left_count + right_count - both.len();
+            Some(CouplingPair {
+                paths: (left, right),
+                both,
+                either,
+                counts: (left_count, right_count),
+            })
         })
         .collect();
-    rows.sort_by(|left, right| {
-        rate(right.2, right.3)
-            .total_cmp(&rate(left.2, left.3))
-            .then_with(|| right.2.cmp(&left.2))
-            .then_with(|| (&left.0, &left.1).cmp(&(&right.0, &right.1)))
+    ranked.sort_by(|left, right| {
+        rate(right.both.len(), right.either)
+            .total_cmp(&rate(left.both.len(), left.either))
+            .then_with(|| right.both.len().cmp(&left.both.len()))
+            .then_with(|| left.paths.cmp(&right.paths))
     });
-    rows.truncate(ROW_LIMIT);
-    let rows: Vec<Value> = rows
+    CouplingPairs {
+        ranked,
+        singles,
+        below_support,
+        counted,
+        excluded_large,
+    }
+}
+
+fn change_coupling(facts: &CodebaseFacts, params: &Params) -> Value {
+    let CouplingPairs {
+        ranked,
+        below_support,
+        counted,
+        excluded_large,
+        ..
+    } = coupling_pairs(facts, params);
+    let rows: Vec<Value> = ranked
         .into_iter()
-        .map(|(left, right, both, either, left_count, right_count)| {
+        .take(ROW_LIMIT)
+        .map(|pair| {
+            let (left, right) = pair.paths;
             merge(
-                rate_fields(both, either),
+                rate_fields(pair.both.len(), pair.either),
                 json!({
                     "paths": [left, right],
-                    "reservations": [left_count, right_count],
+                    "reservations": [pair.counts.0, pair.counts.1],
                 }),
             )
         })
@@ -448,34 +599,47 @@ fn change_coupling(facts: &CodebaseFacts, params: &Params) -> Value {
     })
 }
 
+#[derive(Default)]
+pub(super) struct BlockedRow<'a> {
+    pub(super) tally: Tally,
+    /// Each task a run failure blocked, with its latest such block in the
+    /// window: the numerator.
+    pub(super) blocked: Vec<(&'a TaskFacts, DateTime<Utc>)>,
+    /// Each task blocked in the window with no cause found and no run
+    /// failure, with its latest such block.
+    pub(super) unclassified: Vec<(&'a TaskFacts, DateTime<Utc>)>,
+}
+
+pub(super) struct BlockedRows<'a> {
+    pub(super) rows: BTreeMap<String, BlockedRow<'a>>,
+    causes: BTreeMap<&'static str, usize>,
+    attributed: usize,
+    unclassified: usize,
+}
+
 /// Tasks that entered `blocked` in the window. A block the run failure
 /// classification attributes to infrastructure is reported under its cause,
 /// never against the task's files; a block nothing classifies is reported
 /// in the `unclassified` bucket and its own per-path column. Only run
 /// failures on the work count against the footprint: `blocked ÷ touched`.
-fn blocked(facts: &CodebaseFacts, params: &Params) -> Value {
-    #[derive(Default)]
-    struct Row {
-        tally: Tally,
-        unclassified: usize,
-    }
-    let mut rows: BTreeMap<String, Row> = BTreeMap::new();
+pub(super) fn blocked_rows<'a>(facts: &'a CodebaseFacts, params: &Params) -> BlockedRows<'a> {
+    let mut rows: BTreeMap<String, BlockedRow> = BTreeMap::new();
     let mut causes: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut attributed = 0;
     let mut unclassified = 0;
     for task in &facts.tasks {
-        let blocks: Vec<BlockCause> = task
+        let blocks: Vec<(DateTime<Utc>, BlockCause)> = task
             .blocks
             .iter()
             .filter(|(at, _)| params.within(*at))
-            .map(|(_, cause)| *cause)
+            .copied()
             .collect();
         if blocks.is_empty() && !params.within(task.updated_at) {
             continue;
         }
         let task_causes: BTreeSet<&'static str> = blocks
             .iter()
-            .filter_map(|cause| match cause {
+            .filter_map(|(_, cause)| match cause {
                 BlockCause::Infra(name) => Some(*name),
                 _ => None,
             })
@@ -483,31 +647,71 @@ fn blocked(facts: &CodebaseFacts, params: &Params) -> Value {
         for cause in task_causes {
             *causes.entry(cause).or_default() += 1;
         }
-        let run = blocks.contains(&BlockCause::Run);
-        let unknown = !run && blocks.contains(&BlockCause::Unclassified);
-        attributed += usize::from(run);
-        unclassified += usize::from(unknown);
+        let latest = |wanted: BlockCause| {
+            blocks
+                .iter()
+                .filter(|(_, cause)| *cause == wanted)
+                .map(|(at, _)| *at)
+                .max()
+        };
+        let run = latest(BlockCause::Run);
+        let unknown = if run.is_some() {
+            None
+        } else {
+            latest(BlockCause::Unclassified)
+        };
+        attributed += usize::from(run.is_some());
+        unclassified += usize::from(unknown.is_some());
         for key in params.rollup.keys(&task.footprint) {
             let row = rows.entry(key).or_default();
             row.tally.denominator += 1;
-            row.tally.numerator += usize::from(run);
-            row.unclassified += usize::from(unknown);
+            if let Some(at) = run {
+                row.tally.numerator += 1;
+                row.blocked.push((task, at));
+            }
+            if let Some(at) = unknown {
+                row.unclassified.push((task, at));
+            }
         }
     }
-    // A path with only unclassified blocks still earns a row, so that bucket
-    // stays visible per path; it ranks by its attributed rate of zero.
-    let (ranked, below_support) = rank_rows(
+    BlockedRows {
         rows,
-        params.min_support,
-        &|row: &Row| (row.tally.numerator, row.tally.denominator),
-        |row| row.tally.numerator > 0 || row.unclassified > 0,
-    );
+        causes,
+        attributed,
+        unclassified,
+    }
+}
+
+/// [`blocked_rows`] ranked. A path with only unclassified blocks still earns
+/// a row, so that bucket stays visible per path; it ranks by its attributed
+/// rate of zero.
+pub(super) fn rank_blocked(
+    rows: BTreeMap<String, BlockedRow<'_>>,
+    min_support: usize,
+) -> (Vec<(String, BlockedRow<'_>)>, usize) {
+    rank_rows(
+        rows,
+        min_support,
+        &|row: &BlockedRow| (row.tally.numerator, row.tally.denominator),
+        |row| row.tally.numerator > 0 || !row.unclassified.is_empty(),
+    )
+}
+
+fn blocked(facts: &CodebaseFacts, params: &Params) -> Value {
+    let BlockedRows {
+        rows,
+        causes,
+        attributed,
+        unclassified,
+    } = blocked_rows(facts, params);
+    let (ranked, below_support) = rank_blocked(rows, params.min_support);
     let rows: Vec<Value> = ranked
         .into_iter()
+        .take(ROW_LIMIT)
         .map(|(path, row)| {
             merge(
                 rate_fields(row.tally.numerator, row.tally.denominator),
-                json!({ "path": path, "unclassified": row.unclassified }),
+                json!({ "path": path, "unclassified": row.unclassified.len() }),
             )
         })
         .collect();
@@ -524,37 +728,69 @@ fn blocked(facts: &CodebaseFacts, params: &Params) -> Value {
     json!({ "rows": rows, "below_support": below_support, "causes": cause_rows })
 }
 
+#[derive(Default)]
+pub(super) struct RejectedRow<'a> {
+    pub(super) tally: Tally,
+    /// Each task rejected after a run in the window, with when: the
+    /// numerator.
+    pub(super) rejected: Vec<(&'a TaskFacts, DateTime<Utc>)>,
+}
+
+pub(super) struct RejectedRows<'a> {
+    pub(super) rows: BTreeMap<String, RejectedRow<'a>>,
+    counted: usize,
+    excluded_without_run: usize,
+}
+
 /// Rejected tasks that had a job run ÷ tasks with a run whose footprint
 /// touched the path. Proposal-stage rejections (no run) are excluded.
-fn rejected(facts: &CodebaseFacts, params: &Params) -> Value {
-    let mut rows: BTreeMap<String, Tally> = BTreeMap::new();
+pub(super) fn rejected_rows<'a>(facts: &'a CodebaseFacts, params: &Params) -> RejectedRows<'a> {
+    let mut rows: BTreeMap<String, RejectedRow> = BTreeMap::new();
     let mut excluded_without_run = 0;
     let mut counted = 0;
     for task in &facts.tasks {
-        let rejected_in_window = task.status == TaskStatus::Rejected
-            && task.rejected_at.is_some_and(|at| params.within(at));
+        let rejected_at = task
+            .rejected_at
+            .filter(|at| task.status == TaskStatus::Rejected && params.within(*at));
         if !task.had_run {
-            excluded_without_run += usize::from(rejected_in_window);
+            excluded_without_run += usize::from(rejected_at.is_some());
             continue;
         }
-        if !rejected_in_window && !params.within(task.updated_at) {
+        if rejected_at.is_none() && !params.within(task.updated_at) {
             continue;
         }
-        counted += usize::from(rejected_in_window);
+        counted += usize::from(rejected_at.is_some());
         for key in params.rollup.keys(&task.footprint) {
             let row = rows.entry(key).or_default();
-            row.denominator += 1;
-            row.numerator += usize::from(rejected_in_window);
+            row.tally.denominator += 1;
+            if let Some(at) = rejected_at {
+                row.tally.numerator += 1;
+                row.rejected.push((task, at));
+            }
         }
     }
+    RejectedRows {
+        rows,
+        counted,
+        excluded_without_run,
+    }
+}
+
+fn rejected(facts: &CodebaseFacts, params: &Params) -> Value {
+    let RejectedRows {
+        rows,
+        counted,
+        excluded_without_run,
+    } = rejected_rows(facts, params);
     let (ranked, below_support) = rank(rows, params.min_support, |row| {
-        (row.numerator, row.denominator)
+        (row.tally.numerator, row.tally.denominator)
     });
     let rows: Vec<Value> = ranked
         .into_iter()
-        .map(|(path, tally)| {
+        .take(ROW_LIMIT)
+        .map(|(path, row)| {
             merge(
-                rate_fields(tally.numerator, tally.denominator),
+                rate_fields(row.tally.numerator, row.tally.denominator),
                 json!({ "path": path }),
             )
         })

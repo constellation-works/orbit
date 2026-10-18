@@ -1,6 +1,7 @@
 mod agent_tools;
 mod artifact_redaction;
 mod auto_task_tools;
+mod codebase_tools;
 mod command_tools;
 mod desktop;
 mod dispatch;

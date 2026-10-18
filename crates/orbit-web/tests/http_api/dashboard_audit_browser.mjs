@@ -59,6 +59,11 @@ const analytics = {
     { path: 'docs/README.md', ...rate(1, 18) },
     { path: 'src/blocked.rs', ...rate(1, 16) },
   ] },
+  overlap: { ranked_paths: 28, rows: [
+    { path: 'crates/orbit-core/src/application/task/mod.rs', rankings: ['regressions', 'footprint_misses', 'blocked'], top_rate: 0.4 },
+    { path: 'docs/README.md', rankings: ['footprint_misses', 'rejected'], top_rate: 6 / 18 },
+    { path: 'src/blocked.rs', rankings: ['blocked', 'rejected'], top_rate: 5 / 16 },
+  ] },
 };
 const analyticsRequests = [];
 // When set, /api/audit pages through it like the real endpoint: newest first,

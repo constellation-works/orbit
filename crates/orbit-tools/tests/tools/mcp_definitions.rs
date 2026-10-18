@@ -62,6 +62,8 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.auto_task.list",
             "orbit.auto_task.mint",
             "orbit.auto_task.update",
+            "orbit.codebase.analytics",
+            "orbit.codebase.show",
             "orbit.command.exec",
             "orbit.friction.add",
             "orbit.friction.update",

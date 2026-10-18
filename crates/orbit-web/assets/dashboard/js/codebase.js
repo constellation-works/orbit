@@ -244,15 +244,10 @@ function buildModel(data) {
       index.get(row.path)[key] = { rank: at + 1, row };
     });
   }
-  // Paths in two or more rankings, by how many, then by the highest rate
+  // Paths in two or more rankings, ordered by the server (the same list
+  // `orbit codebase analytics` prints): by how many, then by the highest rate
   // outside Rejected (whose one-off rejections would otherwise lead).
-  const overlaps = [...index].map(([path, hits]) => {
-    const keys = PATH_RANKINGS.filter((key) => hits[key]);
-    const rates = keys.filter((key) => key !== "rejected").map((key) => Number(hits[key].row.rate) || 0);
-    return { path, keys, top: rates.length ? Math.max(...rates) : 0 };
-  })
-    .filter((entry) => entry.keys.length >= 2)
-    .sort((a, b) => b.keys.length - a.keys.length || b.top - a.top || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const overlaps = rowsOf(data, "overlap").map((row) => ({ path: row.path, keys: Array.isArray(row.rankings) ? row.rankings : [] }));
   // How many ranked regression paths each task regressed.
   const regressedPaths = new Map();
   for (const row of rowsOf(data, "regressions")) {

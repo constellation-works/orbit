@@ -1,4 +1,5 @@
 use orbit_common::governance::auto_task::AUTO_TASK;
+use orbit_common::governance::codebase::CODEBASE;
 use orbit_common::governance::drain::DRAIN;
 use orbit_common::governance::friction::FRICTION;
 use orbit_common::governance::task::TASK;
@@ -48,6 +49,8 @@ pub fn register(registry: &mut ToolRegistry) {
     );
     registry.register(pipeline::wait::OrbitPipelineWaitTool);
     operation::register_noun(registry, &SEARCH);
+    // Read-only codebase analytics, the dashboard Codebase view's rankings.
+    operation::register_noun(registry, &CODEBASE);
     // Workflow ship, run reads and resume, and the auto-drain control come
     // from the shared operation registry.
     operation::register_noun(registry, &WORKFLOW);

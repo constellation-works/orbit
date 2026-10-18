@@ -1012,6 +1012,129 @@ fn codebase_view_of_an_empty_workspace_is_empty_sections() {
     );
 }
 
+/// The dashboard route and the `orbit.codebase.*` tools read one core
+/// service: the tool answers the route's rankings and overlap for the same
+/// selection, and a path's detail names the tasks behind each numerator it
+/// reports.
+#[test]
+fn codebase_tools_serve_the_dashboard_payload_and_path_detail() {
+    isolated(
+        "codebase::codebase_tools_serve_the_dashboard_payload_and_path_detail",
+        || {
+            let fixture = Fixture::new();
+            let shared = "src/shared.rs";
+            let regressed =
+                add_with_status(&fixture, "regressed", &[shared], vec![], TaskStatus::Done);
+            add_with_status(&fixture, "clean", &[shared], vec![], TaskStatus::Done);
+            let regression = add(
+                &fixture,
+                "regression",
+                &["src/fix.rs"],
+                regression_from(&regressed),
+            );
+            widen(&fixture, &regression, shared, true);
+            let failed = add(&fixture, "run block", &[shared], vec![]);
+            transition_and_return(&fixture, &failed, "workflow_run_failed", Some("workflow run failed: job=task_pr_pipeline, run_id=jrun-fail, error_code=-, error=tests failed".into()), TaskStatus::Blocked);
+
+            let server = fixture.server(false);
+            let mut api = json_ok(server.get(&format!(
+                "/api/codebase/analytics?{WS}&window=30d&min_support=1"
+            )));
+            let mut tool = fixture
+                .runtime
+                .run_tool(
+                    "orbit.codebase.analytics",
+                    json!({ "window": "30d", "min_support": 1 }),
+                )
+                .unwrap();
+            assert_eq!(api["cache_ttl_seconds"], 300, "the route caches its scan");
+            assert_eq!(tool["cache_ttl_seconds"], 0, "the tool scans per call");
+            for payload in [&mut api, &mut tool] {
+                let object = payload.as_object_mut().unwrap();
+                for scan_time in ["computed_at", "since", "cache_ttl_seconds"] {
+                    object.remove(scan_time);
+                }
+            }
+            assert_eq!(api, tool, "one service serves the route and the tool");
+            assert_eq!(
+                api["overlap"]["rows"][0],
+                json!({
+                    "path": shared,
+                    "rankings": ["regressions", "footprint_misses", "blocked"],
+                    "top_rate": 0.5,
+                }),
+                "{api}"
+            );
+
+            let detail = fixture
+                .runtime
+                .run_tool(
+                    "orbit.codebase.show",
+                    json!({ "path": shared, "window": "30d", "min_support": 1 }),
+                )
+                .unwrap();
+            assert_eq!(detail["path"], shared);
+            let rankings = &detail["rankings"];
+            let ids = |ranking: &str| -> Vec<String> {
+                rankings[ranking]["tasks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|task| task["task_id"].as_str().unwrap().to_string())
+                    .collect()
+            };
+            assert_eq!(ids("regressions"), std::slice::from_ref(&regressed));
+            assert_eq!(
+                rankings["regressions"]["tasks"][0]["regression_tasks"],
+                json!([regression])
+            );
+            assert_eq!(ids("footprint_misses"), std::slice::from_ref(&regression));
+            assert_eq!(ids("blocked"), std::slice::from_ref(&failed));
+            for ranking in ["regressions", "footprint_misses", "blocked"] {
+                let standing = &rankings[ranking];
+                let listed = row(&api[ranking], shared).unwrap();
+                assert_eq!(
+                    (&standing["numerator"], &standing["denominator"]),
+                    (&listed["numerator"], &listed["denominator"]),
+                    "{ranking}: the detail reports the ranked counts"
+                );
+                assert_eq!(
+                    standing["numerator"].as_u64().unwrap() as usize,
+                    ids(ranking).len(),
+                    "{ranking}: one task per numerator count"
+                );
+                let place = api[ranking]["rows"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .position(|listed| listed["path"] == shared)
+                    .unwrap();
+                assert_eq!(standing["rank"], place + 1, "{ranking}: {detail}");
+            }
+            assert!(rankings["rejected"]["tasks"].as_array().unwrap().is_empty());
+            assert_eq!(rankings["lock_contention"], Value::Null);
+
+            // A directory key is accepted without its trailing slash.
+            let by_dir = fixture
+                .runtime
+                .run_tool(
+                    "orbit.codebase.show",
+                    json!({ "path": "src", "rollup": "dir", "min_support": 1 }),
+                )
+                .unwrap();
+            assert_eq!(by_dir["path"], "src/");
+            let unknown = fixture.runtime.run_tool(
+                "orbit.codebase.show",
+                json!({ "path": "src/absent.rs", "min_support": 1 }),
+            );
+            assert!(
+                matches!(unknown, Err(OrbitError::InvalidInput(_))),
+                "{unknown:?}"
+            );
+        },
+    );
+}
+
 /// Warm latency of the cached view, measured on a copy of a real store: one
 /// cold scan, then requests across every window, rollup and a lowered support
 /// inside the cache period. Never point it at a live store. The measurements

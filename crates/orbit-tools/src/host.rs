@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use orbit_common::OrbitError;
 use orbit_common::governance::auto_task::AutoTaskVerb;
+use orbit_common::governance::codebase::CodebaseVerb;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::search::SearchVerb;
@@ -99,6 +100,8 @@ pub enum OrbitBuiltinAction {
     /// Auto-task verbs are registry data, like friction's.
     AutoTask(AutoTaskVerb),
     AgentInvoke,
+    /// Read-only codebase analytics verbs.
+    Codebase(CodebaseVerb),
     CommandExec,
     DesktopRead,
     DesktopAutomation,
@@ -120,6 +123,12 @@ pub enum OrbitBuiltinAction {
     Workflow(WorkflowVerb),
     /// Workspace coordination-hold verbs.
     WorkspaceClaim(WorkspaceClaimVerb),
+}
+
+impl From<CodebaseVerb> for OrbitBuiltinAction {
+    fn from(verb: CodebaseVerb) -> Self {
+        Self::Codebase(verb)
+    }
 }
 
 impl From<DrainVerb> for OrbitBuiltinAction {

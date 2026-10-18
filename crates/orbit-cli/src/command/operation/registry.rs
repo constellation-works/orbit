@@ -436,6 +436,10 @@ impl Commands {
                 CommandOperation::new(RuntimeNeed::Required, None, None, runtime_dispatch!(Audit))
                     .governed_when(prunes, "audit", "prune")
             }
+            // Codebase analytics is registry-driven like friction.
+            Commands::Codebase(command) => {
+                registry_operation(&command.command, runtime_dispatch!(Codebase))
+            }
             Commands::Log(_) => CommandOperation::new(
                 RuntimeNeed::Required,
                 Some(admin_meta("log", Some("tail"), Some("log_feed"), None)),
