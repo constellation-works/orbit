@@ -105,6 +105,44 @@ fn a_drain_without_a_worker_credential_excludes_claude_crews_and_names_the_fix()
 }
 
 #[test]
+fn a_claude_provider_alias_is_excluded_and_refused_like_its_canonical_provider() {
+    if !super::dispatch_admission::isolated(
+        "claude_worker_credential::a_claude_provider_alias_is_excluded_and_refused_like_its_canonical_provider",
+    ) {
+        return;
+    }
+    let _env = orbit_common::test_env::unset(["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]);
+    let config = CONFIG.replace("provider = \"claude\"", "provider = \"anthropic\"");
+    let (_root, runtime) = open(ShipMode::Pr, &config, true);
+
+    admit(&runtime, &[]);
+    assert_eq!(drain_input(&runtime)["allowed_crews"], json!(["reviewers"]));
+    assert_eq!(remedy_warnings(&runtime), 1);
+
+    let refusal = match submit(&runtime, &["writer".to_string()]) {
+        Err(OrbitError::InvalidInput(message)) => message,
+        other => panic!("expected an invalid-input refusal for a Claude alias, got {other:?}"),
+    };
+    assert!(refusal.contains(REMEDY_MARK), "{refusal}");
+
+    let allowed = ["writer".to_string()];
+    let refusal = match runtime.submit_workspace_pull_run(
+        WorkspacePullRequest {
+            selector: "owner-machine/ws_claude_credential",
+            for_seconds: Some(60),
+            max_active_leaf_runs: None,
+            allowed_crews: &allowed,
+            actor: None,
+        },
+        JobRunTrigger::cli(),
+    ) {
+        Err(OrbitError::InvalidInput(message)) => message,
+        other => panic!("expected a pull refusal for a Claude alias before probing, got {other:?}"),
+    };
+    assert!(refusal.contains(REMEDY_MARK), "{refusal}");
+}
+
+#[test]
 fn an_allow_crew_naming_only_claude_crews_is_refused_with_the_remediation() {
     if !super::dispatch_admission::isolated(
         "claude_worker_credential::an_allow_crew_naming_only_claude_crews_is_refused_with_the_remediation",

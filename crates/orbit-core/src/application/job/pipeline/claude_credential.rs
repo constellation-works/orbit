@@ -14,14 +14,12 @@ use orbit_engine::activity_job::cli_runner::{
     CLAUDE_WORKER_CREDENTIAL_REMEDY, claude_worker_credential_held,
 };
 use orbit_types::identity::{Crew, resolve_crew};
+use orbit_types::workflow::activity_job::Provider;
 
 use crate::OrbitRuntime;
 
 fn is_claude(crew: &Crew) -> bool {
-    crew.assignment
-        .provider
-        .trim()
-        .eq_ignore_ascii_case("claude")
+    Provider::parse(&crew.assignment.provider).is_ok_and(|provider| provider == Provider::Claude)
 }
 
 impl OrbitRuntime {
