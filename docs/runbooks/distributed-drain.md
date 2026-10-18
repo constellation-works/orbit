@@ -1201,39 +1201,37 @@ not remote reachability. Inspect that run on the execution host.
 
 ### Interrupted claimed-run resume refusal
 
-A claimed leaf whose pull still holds capacity cannot use generic resume.
-`orbit job resume` creates a new run and cannot inherit a live claim/run
-binding:
+A claimed leaf cannot use generic resume, whether its claim is still live or
+has settled. `orbit job resume` creates a new run, which cannot inherit the
+claim/run binding, and a worker refuses a claimed leaf definition that no
+claim binds:
 
 ```bash
 orbit job resume <run-id>
 ```
 
-Expect a validation error naming deliberate recovery, not a new attempt, while
-the claim is still live. Resuming an older local run after another host has
-bound the task is the same refusal: the error names that host's run and
-machine, and it does not reuse the old checkpoints. Continue the binding on
-that machine, or admit a new attempt only after an authorized rebind.
+Expect a validation error naming deliberate recovery, not a new attempt.
+Resuming an older local run after another host has bound the task is the same
+refusal: the error names that host's run and machine, and it does not reuse
+the old checkpoints. Continue the binding on that machine, or admit a new
+attempt only after an authorized rebind.
 
-One exception: a **terminal** pull whose review budget was reset on the owner.
+A claim is one delivery attempt, and its review ledger is keyed by the claim.
 Claimed before-landing and before-PR review ledgers stay on the follower until
-settlement copies them to the owner. Final recovery for an exhausted lineage
-writes a `human_action` that names both commands and hosts. Run the reset on
-the owner (a replica refuses it). Then, on the follower:
+settlement copies them to the owner. When final recovery escalates an
+exhausted lineage, its `human_action` names one owner command:
 
 ```bash
-orbit --root <follower-global> --workspace <follower-workspace> job resume <run-id>
+ORBIT_OPERATOR=1 orbit --root <owner-global> --workspace <owner-workspace> task requeue <task-id> --reason '<decision>'
 ```
 
-`--root` is that host's Orbit data directory and `--workspace` is the
+`--root` is the owner's Orbit data directory and `--workspace` is the
 registered workspace. Both are required: `--root` alone does not select a
-checkout, so the command is written to work from any directory.
-
-Resume looks up the owner's ledger, adopts the operator decision into the
-follower's partition, and continues. When the checkpoint had already reached
-`validate`, the new run starts at that step and does not replay the escalation.
-A leaf that failed before `validate` resumes at its failed step. A live claim
-stays refused. See [the review gate](./review-gate.md).
+checkout, so the command is written to work from any directory. Run it on the
+owner; a replica refuses it. The requeue returns the task to the backlog. Its
+next claim is a new owner admission with its own leaf run, worker binding and
+review budget, and it continues the candidate the failed claim kept. See
+[the review gate](./review-gate.md).
 In-run step retries of the **same** bound run are different: they keep the
 claim. Crash recovery before launch may recover the same queued run; it must
 not restart a run whose execution became uncertain.

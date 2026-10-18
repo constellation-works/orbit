@@ -382,6 +382,12 @@ struct OwnerLocal {
 
 impl OwnerLocal {
     fn new() -> Self {
+        Self::requiring(CHECK, "")
+    }
+
+    /// [`Self::new`] with `check` as the owner's one required command and
+    /// `config` after its `[workflow]` table.
+    fn requiring(check: &str, config: &str) -> Self {
         let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let orbit = root.path().join(OWNER).join("repo/.orbit");
         std::fs::create_dir_all(&orbit).unwrap();
@@ -389,7 +395,7 @@ impl OwnerLocal {
             orbit.join("config.toml"),
             format!(
                 "[workflow]\ndistributed_completion = \"done\"\n\
-                 required_validation_commands = [\"{CHECK}\"]\n"
+                 required_validation_commands = [\"{check}\"]\n{config}"
             ),
         )
         .unwrap();
@@ -512,24 +518,7 @@ impl OwnerLocal {
         let run = pair.follower_jobs.get_job_run(leaf).unwrap().unwrap();
         assert_eq!(run.job_id, LOCAL_LEAF_JOB, "an owner-local claim");
         let input = run.input.expect("leaf input");
-        let record = pair.admission(leaf);
-        let claim = record.receipt.as_ref().unwrap().claim.clone().unwrap();
-        let owner = pair.wire.owner.clone();
-        let bound = owner
-            .clone()
-            .with_worker_invocation(
-                WorkerInvocation {
-                    owner_machine_id: OWNER.into(),
-                    owner_workspace_id: record.destination.owner_workspace_id.clone(),
-                    owner_destination: record.destination.selector.clone(),
-                    task_id: claim.task_id.clone(),
-                    claim_id: claim.claim_id.clone(),
-                    execution: claim.executed_on.clone(),
-                    bound_run_id: leaf.to_string(),
-                },
-                Arc::new(ToSelf(owner)),
-            )
-            .unwrap();
+        let bound = self.bound(leaf);
 
         // The steps before the implementer, as the pipeline passes them; the
         // engine injects `run_id` at dispatch.
@@ -605,6 +594,32 @@ impl OwnerLocal {
         let ClaimMutation::AcceptHandoff(_) = pair.admission(leaf).settlement.unwrap() else {
             panic!("the shipped leaf records a typed handoff")
         };
+    }
+
+    /// The owner bound as `leaf`'s worker, exactly as the drain's launcher
+    /// binds it: the claim, task, hosts and run its durable admission records.
+    fn bound(&self, leaf: &str) -> OrbitRuntime {
+        let record = self.pair.admission(leaf);
+        let claim = record.receipt.as_ref().unwrap().claim.clone().unwrap();
+        self.bound_as(WorkerInvocation {
+            owner_machine_id: OWNER.into(),
+            owner_workspace_id: record.destination.owner_workspace_id.clone(),
+            owner_destination: record.destination.selector.clone(),
+            task_id: claim.task_id.clone(),
+            claim_id: claim.claim_id.clone(),
+            execution: claim.executed_on.clone(),
+            bound_run_id: leaf.to_string(),
+        })
+    }
+
+    /// The drain's runtime bound to `invocation`, whatever claim it names,
+    /// coordinating with its own owner as the launcher's bound clone does.
+    fn bound_as(&self, invocation: WorkerInvocation) -> OrbitRuntime {
+        self.pair
+            .follower
+            .clone()
+            .with_worker_invocation(invocation, Arc::new(ToSelf(self.pair.wire.owner.clone())))
+            .unwrap()
     }
 
     /// The landing job the owner dispatched when it accepted `task`'s open
@@ -948,3 +963,6 @@ crate::scenario_table!(
 
 #[path = "landing_retry.rs"]
 mod retry;
+
+#[path = "requeued_claim.rs"]
+mod requeued;
