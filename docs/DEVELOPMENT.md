@@ -20,15 +20,17 @@ The detailed rules behind [CONTRIBUTING.md](../CONTRIBUTING.md). Read the sectio
 
 ## Validation and CI
 
-For tasks that deliver a diff, run these gates before implementation handoff or before-PR review:
+For tasks that deliver a diff, `make ci-fast` is the required local gate; in a managed delivery the pipeline's final validation runs it on the final candidate. The required PR checks (Check / Clippy / Test and Test shard 1/3, 2/3 and 3/3) gate lint, rustdoc, goldens and the whole test suite, so the other targets below are focused tools, not blanket pre-handoff gates. Run the ones the change needs:
 
 ```bash
 make ci-guards         # static repository guards; no build or network
-make ci-fast           # MSRV compile check, formatting, script guardrails; no Rust tests
+make ci-fast           # required: MSRV compile check, formatting, script guardrails; no Rust tests
 make ci-test-affected  # complete test targets of changed crates and their workspace dependents
 make ci-lint           # clippy for production and all targets, then rustdoc
 make goldens           # CLI/MCP, CI log, sandbox and SQLite ledger schema goldens; UPDATE=1 regenerates
 ```
+
+Run `make goldens` when the change touches a golden surface (CLI help, MCP text, sandbox profiles, ledger schemas), and the tests of the behavior you changed. A red required check on the PR is repaired through the PR (auto-fix or a follow-up commit). `workflow.required_validation_commands` in the workspace config sets what the pipeline runs.
 
 When an edit changes any generated row in `docs/INDEX.md` (for example, indexed Markdown frontmatter, its first heading, or summary), run `make docs-index`, review the generated index, and run `scripts/generate-doc-indexes.sh --check`. Include any resulting `docs/INDEX.md` change with the source edits, even when `make ci-fast` is pipeline-owned final validation.
 
