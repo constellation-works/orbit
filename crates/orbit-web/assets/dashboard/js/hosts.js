@@ -20,7 +20,7 @@
 // flight, and hand focus back to the button that opened them.
 
 import { captureFocus, el, fetchJson, getHost, requestHostSwitch, requestJson, requestPanel } from './common.js';
-import { describeResource, fetchHostResourcePayloadFor, hostVerdict } from './host-resources.js';
+import { describeResource, fetchHostResourcePayloadFor, hostResources, hostVerdict } from './host-resources.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -284,7 +284,7 @@ function healthCell(row) {
   }
   const verdict = reading.resources ? hostVerdict(reading.resources) : null;
   const chips = reading.resources
-    ? el("span", { class: "host-health-readings" }, ["cpu", "memory", "disk"].map((resource) => resourceChip(reading.resources, resource)))
+    ? el("span", { class: "host-health-readings" }, hostResources(reading.resources).map((resource) => resourceChip(reading.resources, resource)))
     : el("span", { class: "host-health-error", text: reading.resourcesError || "resources unavailable" });
   const drain = drainLine(reading, verdict);
   const node = el("span", { class: "host-health" }, [chips, drain]);

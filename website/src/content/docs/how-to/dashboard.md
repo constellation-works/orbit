@@ -156,8 +156,9 @@ prove that a particular task or run succeeded.
 | **Plugins** | Installed plugins and the panels they add. |
 | **Settings** | Effective, Workspace file, Global file, Crews, Keys, System, and Hosts. |
 
-The top bar shows live load, memory, and disk readings for the serving host,
-the drain state when a delivery window is active, and **Refresh**. Counts in
+The top bar shows live load, memory, and disk readings for the serving host
+(plus disk I/O stall on Linux hosts), its provider usage with each provider's
+windows together (`claude 15% 5h | 32% 7d`), the drain state when a delivery window is active, and **Refresh**. Counts in
 the selected window sit on the rail: failed, timed-out, and interrupted runs
 under **Runs**, and doctor warnings, policy denials, and failing routines under
 **Health**. Click a rail count to open the view behind it. The denial count
