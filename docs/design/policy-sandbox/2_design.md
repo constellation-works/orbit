@@ -105,9 +105,8 @@ On Linux, shipped agent executors declare `linux-bwrap`. The wrapper enforces wr
 
 The `fsProfile:` field on an activity flows through `crates/orbit-engine/src/activity_job/`:
 
-- `dispatcher.rs` carries `fs_profile: Option<&str>` on `DispatchInput` and threads it into `run_activity_job_dispatch`, `run_loop_step_dispatch`, and `run_agent_loop_via_driver`.
-- `job_executor.rs` reads `t.fs_profile.as_deref()` from the activity spec at the call site of every step type.
-- `agent_loop_driver.rs` invokes `host.tool_context_for_activity(fs_profile, audit_logger)` to construct the `ToolContext` the CLI path and remaining in-process tools read from.
+- `dispatcher.rs` carries `fs_profile: Option<&str>` on `V2DispatchInput` and threads it into `run_deterministic` and `run_agent_loop_activity`. The deterministic path calls `host.tool_context_for_activity(...)` directly. The agent-loop path hands the profile to the CLI runner (`run_cli_backend_for_step`), whose `cli_runner/orchestrator/prepare.rs` builds the tool context through `activity_tool_context`.
+- `job_executor/` reads each step's profile with `step_fs_profile(step)` (`job_executor/step.rs`) and passes it into `V2DispatchInput` at every dispatch site, for example `job_executor/recovery/invocation.rs`.
 
 `crates/orbit-core/src/adapter/engine_host/runtime_host/activity_tools.rs::tool_context_for_activity` is the single materialization point:
 
@@ -115,7 +114,7 @@ The `fsProfile:` field on an activity flows through `crates/orbit-engine/src/act
 fs_profile: Some(fs_profile.unwrap_or(UNRESTRICTED_FS_PROFILE).to_string())
 ```
 
-This is the implicit-`unrestricted` rule from §2.2 in code form. Every v2 dispatcher path that constructs a `ToolContext` reaches this line, so omitting `fsProfile:` means "unrestricted within policy," not "no policy."
+This is the implicit-`unrestricted` rule from §2 in code form. Every v2 dispatcher path that constructs a `ToolContext` reaches this line, so omitting `fsProfile:` means "unrestricted within policy," not "no policy."
 
 Legacy pipeline contexts are different. `crates/orbit-core/src/runtime/tool_exec.rs` fills a missing profile from `ORBIT_ACTIVITY_FS_PROFILE`; if the variable is unset, `ctx.fs_profile` stays `None`. That used to bypass the retired in-process helper; the live CLI sandbox still needs an explicit profile (see §9).
 

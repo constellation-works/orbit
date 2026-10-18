@@ -2,7 +2,7 @@
 title: Process Supervision — Design
 owner: claude
 last_updated: 2026-10-12
-last_validated: 2026-10-12
+last_validated: 2026-10-18
 status: Draft
 feature: process-supervision
 doc_role: design
@@ -19,7 +19,7 @@ related_artifacts: [ORB-15722]
 This doc covers every place Orbit waits on a child process it spawned:
 the bounded runner, the shared supervisor and its exec, engine, build and
 source adapters, plus long-lived MCP session ownership, verified
-at `99f2b2e55`, with the changes of steps 1–3 and 5–7 reflected below. §1–§3
+at `99f2b2e55`, with the changes of steps 1–7 reflected below. §1–§3
 describe the current code. §4 specifies the
 supervisor that survives, §5 orders the migration, and §6 lists what the
 design leaves open. Two things are out of scope. One is how a child is
@@ -35,24 +35,29 @@ Both stay as they are; the supervisor receives a spawned child or a
 
 [`process/bounded.rs`](../../../crates/orbit-common/src/process/bounded.rs)
 exposes `run_bounded`, `run_bounded_capped`, `run_bounded_capped_typed` and
-`run_bounded_capped_complete_typed`. It is synchronous and needs no
-threads on Unix. It spawns with `process_group(0)` and null stdin. One
-loop drains both pipes nonblocking, with each turn capped at 64 KiB or
-20 ms, and polls `try_wait` every 20 ms. At the deadline it sends SIGTERM
-to the group, waits 200 ms, then SIGKILL. When the leader exits it kills
-the group and drains for up to 500 ms more. Group signals go through
-`OwnedChild::signal_group`, which skips the caller's own group and a pid
-that no longer leads its group. Termination waits for both the direct child
-and its original group to exit. If the child joins another group while alive,
-it is killed directly and reaped after the grace period; its new group is
-never signalled. Capture keeps a prefix and keeps reading past the
-limit (`BoundedOutputCapture`, ending with `OUTPUT_TRUNCATED_MARKER`). The
-`complete` mode also needs both pipes at EOF before the deadline. The
-`_typed` variants return a spawn failure as its `io::Error`.
+`run_bounded_capped_complete_typed`. It is synchronous. It spawns with
+`process_group(0)` and null stdin, then adopts the child into the shared
+supervisor (§1.2) with `SupervisedChild::adopt(child).supervise(…)`. The
+supervisor drains both pipes on joined workers. Each stream feeds a
+prefix-keeping sink (`BoundedOutputCapture`, ending with
+`OUTPUT_TRUNCATED_MARKER`) that keeps reading past the limit. The deadline is
+the supervisor's fixed timeout, and the post-exit drain is capped at it. At
+the deadline it sends SIGTERM to the group, waits 200 ms, then SIGKILL. When
+the leader exits it kills the group and drains for up to 500 ms more. Group
+signals go through `OwnedChild::signal_group`, which skips the caller's own
+group and a pid that no longer leads its group. Termination waits for both
+the direct child and its original group to exit. If the child joins another
+group while alive, it is killed directly and reaped after the grace period;
+its new group is never signalled. The `complete` mode also needs both pipes
+at EOF before the deadline. The `_typed` variants return a spawn failure as
+its `io::Error`. The child is spawned before the supervisor's signal guard,
+so the OS error kind survives and the process-identity probe neither
+intercepts signals nor samples itself.
 
-The spawned child is held through `process::OwnedChild`. A pipe or wait
-error, including any `?` return from `supervise`, drops the handle, kills
-its group, reaps the leader and waits up to one second for group drain.
+The spawned child is held through `SupervisedChild`, which owns a
+`process::OwnedChild`. A pipe or wait error, including any `?` return from
+`supervise`, drops the handle, kills its group, reaps the leader and waits up
+to one second for group drain.
 Normal completion disarms the handle after descendant cleanup. It installs
 no signal handling: a SIGTERM to Orbit during a call leaves the child's
 group running.
@@ -276,7 +281,7 @@ Tests that call a supervisor directly are left out.
 | Extendable deadline | no | no | build-budget credits | no | no |
 | Typed stop cause / `timed_out` | `ProcessTimeout` error | yes | `timed_out` | `BuildPhaseEnd` | `Deferred` reason |
 | Typed spawn error kind | yes | no (`OrbitError`) | permanent vs transient | no | no |
-| Threads per run (Unix) | 0 | 2–3 | 2–3 | 2 | 0 |
+| Threads per run (Unix) | 2 | 2–3 | 2–3 | 2 | 0 |
 
 ## 4. The single supervisor
 
@@ -428,12 +433,12 @@ it moves the most callers with the least new API.
 
 ## 6. Concerns & Honest Limitations
 
-- **Bounded callers gain threads.** Today a bounded call on Unix needs no
-  threads. On the supervisor it has two pipe workers, joined before return,
-  so the "no capture worker survives the probe" guarantee in
-  [`DEVELOPMENT.md`](../../DEVELOPMENT.md#child-processes) still holds.
-  `identity`'s `ps` call runs on sampling paths, so step 4 should check
-  sampling overhead. If it regresses, the supervisor may keep a
+- **Bounded callers gain threads.** Step 4 has landed, so a bounded call on
+  Unix now has two pipe workers, joined before return. Whether the "no capture
+  worker survives the probe" guarantee in
+  [`DEVELOPMENT.md`](../../DEVELOPMENT.md#child-processes) holds on this path,
+  and the sampling overhead of `identity`'s `ps` call, have not been re-measured
+  since the change. If sampling regresses, the supervisor may keep a
   single-threaded nonblocking mode for `Null` stdin with capture-only sinks.
   That mode would be a second implementation of the loop, so add it only if
   measured.

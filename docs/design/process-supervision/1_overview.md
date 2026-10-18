@@ -2,12 +2,12 @@
 title: Process Supervision — Overview
 owner: claude
 last_updated: 2026-10-12
-last_validated: 2026-10-12
+last_validated: 2026-10-18
 status: Draft
 feature: process-supervision
 doc_role: overview
 type: design
-summary: Proposal to converge Orbit's child-process supervisors (orbit-common's bounded runner, orbit-exec's SupervisedChild, the engine CLI runner, and two ad-hoc loops) onto one kill-on-drop supervisor in orbit-common, with a caller inventory and a seven-step migration.
+summary: Record of converging Orbit's child-process supervisors (orbit-common's bounded runner, orbit-exec's SupervisedChild, the engine CLI runner, and two ad-hoc loops) onto one kill-on-drop supervisor in orbit-common, with the caller inventory and the seven-step migration, now landed.
 tags: [process-supervision, code-health, architecture]
 paths: ["crates/orbit-common/src/process/**", "crates/orbit-exec/src/supervision/**", "crates/orbit-engine/src/activity_job/cli_runner/supervisor/**", "crates/orbit-exec/src/build_sandbox/supervise.rs", "crates/orbit-core/src/application/automation/source/command.rs"]
 related_features: [process-supervision, policy-sandbox, executors]
@@ -16,36 +16,39 @@ related_artifacts: [ORB-15722]
 
 # Process Supervision — Overview
 
-> **Status: Draft proposal.** The supervisors described here exist today. The
-> single supervisor and its migration are not implemented; the steps are
-> filed as proposed tasks.
+> **Status: Migration landed.** Steps 1–7 of the migration in
+> [2_design.md](./2_design.md#5-migration-order) are merged (ORB-15826 through
+> ORB-15832). Every caller listed in the inventory now runs through the single
+> supervisor in `orbit-common`. The steps are kept as the record of how the
+> supervisors converged.
 
 Orbit runs child processes that must not outlive their deadline, block on a
 full pipe, or leave descendants behind: Git, `gh`, `ps`, plugin backends,
-validation shells, and provider CLIs. Three supervisors do this today, plus
-two smaller wait loops written in place. Each solves the same problem
-(spawn into a fresh process group, drain both pipes, enforce a deadline, kill
-the group, reap) with different guarantees. Only one of them kills the
-child's group when a failure path drops it. This folder lists every caller
-and what it needs, chooses the supervisor that survives, and orders the
-migration.
+validation shells, and provider CLIs. Before the migration, three supervisors
+did this and two smaller wait loops were written in place. Each solved the
+same problem (spawn into a fresh process group, drain both pipes, enforce a
+deadline, kill the group, reap) with different guarantees. This folder
+records the caller inventory, the supervisor that survived, and the order
+that converged the rest onto it.
 
 ## 1. Motivation
 
-- **Leaks on failure paths.** Only `orbit-exec`'s `SupervisedChild` kills
-  and reaps on `Drop`. The bounded runner in `orbit-common` returns early
-  through `?` without signalling the child. The engine CLI runner relies on
-  an explicit kill at each exit, so a new early return or a panic leaks the
-  provider's group. The plugin exec backend kills only the direct child when
-  callback binding fails.
-- **Different guarantees for the same job.** The termination grace is 200 ms
+These were the problems the migration fixed.
+
+- **Leaks on failure paths.** Only `orbit-exec`'s `SupervisedChild` killed
+  and reaped on `Drop`. The bounded runner in `orbit-common` returned early
+  through `?` without signalling the child. The engine CLI runner relied on
+  an explicit kill at each exit, so a new early return or a panic leaked the
+  provider's group. The plugin exec backend killed only the direct child when
+  callback binding failed.
+- **Different guarantees for the same job.** The termination grace was 200 ms
   in one supervisor, 5 s in another and none in the third. Output capture
-  either keeps a prefix, stops the child, or keeps a head and tail. Only
-  `orbit-exec` forwards SIGINT/SIGTERM to live child groups. Whether a fix
-  reaches a given child depends on which supervisor its caller happened to
+  either kept a prefix, stopped the child, or kept a head and tail. Only
+  `orbit-exec` forwarded SIGINT/SIGTERM to live child groups. Whether a fix
+  reached a given child depended on which supervisor its caller happened to
   use.
 - **Repeated repairs.** Escaped `setsid` writers, stopped descendants,
-  `EMFILE` on wakeup pairs and reused pids have been fixed separately in each
+  `EMFILE` on wakeup pairs and reused pids had been fixed separately in each
   supervisor.
 
 ## 2. Core Concepts
@@ -69,12 +72,12 @@ migration.
 
 | Concern | File | Task |
 |---------|------|------|
-| Bounded runner (deadline, prefix capture, no `Drop`) | [process/bounded.rs](../../../crates/orbit-common/src/process/bounded.rs) | [ORB-15829] |
+| Bounded runner (deadline, prefix capture), on the shared supervisor | [process/bounded.rs](../../../crates/orbit-common/src/process/bounded.rs) | [ORB-15829] |
 | Shared supervisor (`SupervisedChild`, kill-on-drop, signal fan-out), moved from exec — the survivor | [process/supervisor/wait.rs](../../../crates/orbit-common/src/process/supervisor/wait.rs) | [ORB-15828] |
 | Engine provider supervisor (rolling capture, progress, build-budget deadline) | [supervisor/spawn.rs](../../../crates/orbit-engine/src/activity_job/cli_runner/supervisor/spawn.rs) | [ORB-15830] |
-| Plugin build-phase loop | [build_sandbox/supervise.rs](../../../crates/orbit-exec/src/build_sandbox/supervise.rs) | [ORB-15831] |
-| Automation source command loop | [source/command.rs](../../../crates/orbit-core/src/application/automation/source/command.rs) | [ORB-15832] |
-| Owned process-group child handle | new, in `crates/orbit-common/src/process/` | [ORB-15826], [ORB-15827] |
+| Plugin build phases, on the shared supervisor | [build_sandbox/supervise.rs](../../../crates/orbit-exec/src/build_sandbox/supervise.rs) | [ORB-15831] |
+| Automation source commands, on the shared supervisor | [source/command.rs](../../../crates/orbit-core/src/application/automation/source/command.rs) | [ORB-15832] |
+| Owned process-group child handle | [process/owned_child.rs](../../../crates/orbit-common/src/process/owned_child.rs) | [ORB-15826], [ORB-15827] |
 | Caller inventory, capability matrix, target API, migration order | [2_design.md](./2_design.md) | [ORB-15722] |
 | Standing rules for supervision | [4_decisions.md](./4_decisions.md) | [ORB-15722] |
 

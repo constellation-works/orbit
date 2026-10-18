@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Sandboxed Exec Contract"
 tags: ["policy-sandbox"]
-last_validated: 2026-10-12
+last_validated: 2026-10-18
 ---
 
 # Spec: Sandboxed Exec Contract
