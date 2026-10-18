@@ -248,6 +248,153 @@ fn kit_changes_are_refused_inside_a_worker() {
     );
 }
 
+#[cfg(target_os = "linux")]
+mod verification_errors {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::process::CommandExt;
+    use std::process::Command;
+
+    /// Refuse process creation only in this CLI child. Threads remain available
+    /// for logging; clone3 falls back to clone so its flags can be inspected.
+    fn deny_probe_spawn(command: &mut Command) {
+        let instruction = |code, jt, jf, k| libc::sock_filter { code, jt, jf, k };
+        let deny = libc::SECCOMP_RET_ERRNO | libc::EACCES as u32;
+        let mut filter = vec![instruction(0x20, 0, 0, 0)]; // seccomp_data.nr
+        #[cfg(target_arch = "x86_64")]
+        for syscall in [libc::SYS_fork, libc::SYS_vfork] {
+            filter.push(instruction(0x15, 0, 1, syscall as u32));
+            filter.push(instruction(0x06, 0, 0, deny));
+        }
+        filter.extend([
+            instruction(0x15, 0, 1, libc::SYS_clone3 as u32),
+            instruction(0x06, 0, 0, libc::SECCOMP_RET_ERRNO | libc::ENOSYS as u32),
+            instruction(0x15, 1, 0, libc::SYS_clone as u32),
+            instruction(0x06, 0, 0, libc::SECCOMP_RET_ALLOW),
+            instruction(0x20, 0, 0, 16), // low word of clone's flags
+            instruction(0x45, 1, 0, libc::CLONE_THREAD as u32),
+            instruction(0x06, 0, 0, deny),
+            instruction(0x06, 0, 0, libc::SECCOMP_RET_ALLOW),
+        ]);
+        // SAFETY: only libc syscalls run after fork, and the kernel copies the
+        // owned filter synchronously. Restrictions affect only this child.
+        unsafe {
+            command.pre_exec(move || {
+                let program = libc::sock_fprog {
+                    len: filter.len() as u16,
+                    filter: filter.as_ptr().cast_mut(),
+                };
+                if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+                    || libc::prctl(libc::PR_SET_SECCOMP, libc::SECCOMP_MODE_FILTER, &program) != 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+
+    /// A failed spawn must revoke an earlier pass through the real CLI, and a
+    /// subsequent successful smoke probe must restore the worker handoff.
+    #[test]
+    fn probe_spawn_error_revokes_previous_pass_and_success_restores_it() {
+        if crate::isolated_test::run_in_child(
+            "browser_kit::verification_errors::probe_spawn_error_revokes_previous_pass_and_success_restores_it",
+        ) {
+            return;
+        }
+        let fixture = WorkCheckout::new();
+        fs::create_dir_all(&fixture.work).unwrap();
+        let root = write_kit(
+            &fixture.home,
+            &FixtureKit {
+                version: PLAYWRIGHT_VERSION,
+                browser_installed: true,
+                verified_version: Some(PLAYWRIGHT_VERSION),
+            },
+        );
+        let bin = fixture.work.join("bin");
+        fs::create_dir(&bin).unwrap();
+        let node = bin.join("node");
+        fs::write(
+            &node,
+            "#!/bin/sh\n: > \"$ORBIT_BROWSER_KIT_SCREENSHOT\"\nprintf '{\"text\":\"kit ok\",\"version\":\"fixture\"}\\n'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&node, fs::Permissions::from_mode(0o755)).unwrap();
+        let status = || {
+            let output = orbit(&fixture)
+                .args(["browser-kit", "status", "--json"])
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            json_stdout(&output)
+        };
+        assert_eq!(status()["verified"], true);
+        assert_eq!(
+            orbit_core::bootstrap::browser_kit::worker_env_for_home(&fixture.home).len(),
+            WORKER_ENV_NAMES.len()
+        );
+
+        let mut denied = Command::new(assert_cmd::cargo::cargo_bin!("orbit"));
+        test_env::clear_inherited_authority(|name| {
+            denied.env_remove(name);
+        });
+        denied
+            .current_dir(&fixture.work)
+            .env("HOME", &fixture.home)
+            .env("USERPROFILE", &fixture.home)
+            .env("PATH", &bin)
+            .env("RUST_LOG", "off")
+            .env_remove("ORBIT_FORMAT")
+            .args(["browser-kit", "verify", "--json"]);
+        deny_probe_spawn(&mut denied);
+        let output = assert_cmd::Command::from_std(denied)
+            .timeout(test_env::FIXTURE_STEP_DEADLINE)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains(&std::io::Error::from_raw_os_error(libc::EACCES).to_string()),
+            "the original spawn diagnostic must survive: {output:?}"
+        );
+        assert!(
+            root.join("verify").is_dir(),
+            "verification reached the probe"
+        );
+        assert!(
+            !root.join("orbit-kit.json").exists(),
+            "failed probe kept a pass"
+        );
+        let failed = status();
+        assert_eq!(failed["state"], "unverified", "{failed}");
+        assert_eq!(failed["verified"], false, "{failed}");
+        assert_eq!(failed["worker_env"], json!([]), "{failed}");
+        assert!(orbit_core::bootstrap::browser_kit::worker_env_for_home(&fixture.home).is_empty());
+
+        let output = orbit(&fixture)
+            .env("PATH", &bin)
+            .args(["browser-kit", "verify", "--json"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(json_stdout(&output)["passed"], true);
+        let record: Value =
+            serde_json::from_slice(&fs::read(root.join("orbit-kit.json")).unwrap()).unwrap();
+        assert_eq!(record["playwright_version"], PLAYWRIGHT_VERSION);
+        assert_eq!(record["chromium_revision"], REVISION);
+        assert_eq!(record["browser_version"], "fixture");
+        let passed = status();
+        assert_eq!(passed["state"], "verified", "{passed}");
+        assert_eq!(passed["worker_env"], json!(WORKER_ENV_NAMES), "{passed}");
+        assert_eq!(
+            orbit_core::bootstrap::browser_kit::worker_env_for_home(&fixture.home).len(),
+            WORKER_ENV_NAMES.len()
+        );
+    }
+}
+
 /// Onboarding a repository with a web UI offers the kit but, with no
 /// terminal and no `--install-browser-kit`, installs nothing; a verified kit
 /// is reported ready.

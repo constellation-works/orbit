@@ -102,7 +102,10 @@ headless shell with `ldd` and closes any gap one of three ways:
   interactive shell does not reach workers.
 
 `verify` serves a page on loopback, screenshots it into `verify/smoke.png`
-and records the pass in `orbit-kit.json`. A failure prints the likely cause:
+and records the pass in `orbit-kit.json`. Starting verification clears any
+earlier pass: a timeout, failed spawn or failed smoke test leaves workers
+without the kit until verification succeeds again. A failed smoke test
+prints the likely cause:
 a missing `lib*.so` or a Skia/FontConfig crash is a library or font gap, and
 `Executable doesn't exist` means the module and browser revision are out of
 step (`orbit browser-kit install` repairs both). When a worker's check fails
