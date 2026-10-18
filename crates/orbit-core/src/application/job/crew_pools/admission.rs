@@ -108,6 +108,32 @@ impl OrbitRuntime {
         }
     }
 
+    /// Discovery uses only a durable selection for this task, never a crew
+    /// belonging to a sibling or an unadmitted activity input override.
+    pub(crate) fn admitted_task_crew_for_input(
+        &self,
+        input: &Value,
+        task_id: &str,
+    ) -> Result<Option<String>, OrbitError> {
+        let Some(run_id) = input
+            .get("run_id")
+            .and_then(Value::as_str)
+            .and_then(non_empty)
+        else {
+            return Ok(None);
+        };
+        let Some(run_input) = self.get_job_run_backend(run_id)?.and_then(|run| run.input) else {
+            return Ok(None);
+        };
+        Ok(run_input
+            .get(SELECTION_KEY)
+            .filter(|selection| selection.get("task_id").and_then(Value::as_str) == Some(task_id))
+            .and_then(|selection| selection.get("crew"))
+            .and_then(Value::as_str)
+            .and_then(non_empty)
+            .map(ToOwned::to_owned))
+    }
+
     /// Report a submission-time crew exclusion against the crew that will
     /// actually run [ORB-12606]. A task routed by a pool is excluded only when
     /// the allowlist permits none of the pool's members, which is exactly what

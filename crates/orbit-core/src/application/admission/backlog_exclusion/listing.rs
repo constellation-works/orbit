@@ -188,7 +188,19 @@ pub(crate) fn list_backlog_tasks(
                 excluded.push(pilot_preparation_exclusion(&task.id));
                 continue;
             }
-            if let Some(exclusion) = host_os_exclusion(runtime, &task, &executor_host_os, &pools) {
+            let admitted_crew = runtime
+                .admitted_task_crew_for_input(input, &task.id)
+                .map_err(|error| DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message: format!("read admitted task crew: {error}"),
+                })?;
+            if let Some(exclusion) = host_os_exclusion(
+                runtime,
+                &task,
+                &executor_host_os,
+                &pools,
+                admitted_crew.as_deref(),
+            ) {
                 excluded.push(exclusion);
                 continue;
             }

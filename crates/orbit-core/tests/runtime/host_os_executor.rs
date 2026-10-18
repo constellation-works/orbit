@@ -371,6 +371,191 @@ fn select_task_crew(runtime: &OrbitRuntime, task: &str) -> Result<Value, OrbitEr
         .unwrap())
 }
 
+fn install_discovery_worker(runtime: &OrbitRuntime) {
+    let worker = "host_os_executor::discovery_gate_worker";
+    orbit_common::test_env::assert_child_test_exists(worker);
+    orbit_core::test_support::install_substitute_pipeline_worker([
+        "env".to_string(),
+        format!(
+            "ORBIT_TEST_OS_GLOBAL={}",
+            runtime.paths().global_dir.display()
+        ),
+        format!(
+            "ORBIT_TEST_OS_WORKSPACE={}",
+            runtime.paths().orbit_dir.display()
+        ),
+        "ORBIT_TEST_OS_RUN={run_id}".to_string(),
+        std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+        "--exact".into(),
+        worker.into(),
+        "--ignored".into(),
+        "--nocapture".into(),
+    ]);
+}
+
+/// A substitute gate worker executes only the deterministic fixture job. The
+/// real coordinator still performs admission, discovery and child dispatch.
+#[test]
+#[ignore = "entry point for the host OS pipeline fixture worker"]
+fn discovery_gate_worker() {
+    let global = std::env::var_os("ORBIT_TEST_OS_GLOBAL").unwrap();
+    let workspace = std::env::var_os("ORBIT_TEST_OS_WORKSPACE").unwrap();
+    let run = std::env::var("ORBIT_TEST_OS_RUN").unwrap();
+    let runtime = OrbitRuntime::from_roots(
+        std::path::Path::new(&global),
+        std::path::Path::new(&workspace),
+    )
+    .unwrap()
+    .with_host_resource_probe(super::dispatch_admission::PressureProbe::calm())
+    .with_host_os(Some(HostOs::Linux));
+    install_discovery_worker(&runtime);
+    runtime.execute_pipeline_run_worker(&run).unwrap();
+}
+
+/// Exercise the shipped list/validate/fan-out path, rather than an empty job
+/// that proves only initial admission. No provider or delivery is launched.
+fn a_supported_explicit_run_crew_survives_discovery_and_replay() {
+    let (_root, linux) = runtime_on(HostOs::Linux, DEFAULT_MUSE);
+    let task = add(&linux, "run-override", None, &[]).unwrap();
+    assert_eq!(task.crew, None);
+    let resources = linux.paths().global_dir.join("resources");
+    std::fs::create_dir_all(resources.join("jobs")).unwrap();
+    std::fs::create_dir_all(resources.join("activities")).unwrap();
+    for name in [
+        "list_backlog_tasks",
+        "validate_bundles",
+        "invoke_and_wait",
+        "pipeline_success_guard",
+    ] {
+        std::fs::copy(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("assets/activities/{name}.yaml")),
+            resources.join(format!("activities/{name}.yaml")),
+        )
+        .unwrap();
+    }
+    let job_path = resources.join("jobs/task_auto_pipeline.yaml");
+    let shipped = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/jobs/task_auto_pipeline.yaml"),
+    )
+    .unwrap();
+    let mut job: Value = serde_yaml::from_str(&shipped).unwrap();
+    // Bound a broken fixture worker without changing discovery or dispatch.
+    job["spec"]["steps"][2]["fan_out"]["worker"]["default_input"]["timeout_seconds"] = json!(30);
+    std::fs::write(&job_path, serde_yaml::to_string(&job).unwrap()).unwrap();
+    std::fs::write(resources.join("jobs/task_gate_pipeline.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: task_gate_pipeline\nspec:\n  state: enabled\n  steps: []\n",
+    ).unwrap();
+    install_discovery_worker(&linux);
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        linux.sqlite_store().unwrap(),
+        linux.workspace_id().unwrap(),
+    );
+    // Ordinary submission captures the explicit selection before discovery.
+    // Replay then keeps that choice and exercises the same shipped steps.
+    let submitted = linux
+        .submit_pipeline_run(
+            "task_auto_pipeline",
+            json!({"task_ids": [task.id], "crew": "sol", "mode": "local"}),
+            None,
+            Some("test"),
+        )
+        .unwrap();
+    let waited = linux
+        .run_tool(
+            "orbit.pipeline.wait",
+            json!({"run_ids": [submitted.run_id], "timeout_seconds": 60}),
+        )
+        .unwrap();
+    assert_eq!(
+        jobs.get_job_run(&submitted.run_id).unwrap().unwrap().state,
+        JobRunState::Success,
+        "{waited}"
+    );
+    let original_children = jobs.list_job_runs("task_gate_pipeline").unwrap();
+    assert_eq!(
+        original_children.len(),
+        1,
+        "the original explicit submission dispatches a gate"
+    );
+    assert_eq!(original_children[0].input.as_ref().unwrap()["crew"], "sol");
+    let replay = linux.replay_job_run(&submitted.run_id).unwrap();
+    assert!(replay.success, "{replay:?}");
+    assert_eq!(
+        admitted(&replay.pipeline["list_backlog"]),
+        vec![task.id.clone()],
+        "{replay:?}"
+    );
+    assert_eq!(replay.pipeline["validate_bundles"]["bundle_count"], 1);
+    let input = jobs
+        .get_job_run(&replay.run_id)
+        .unwrap()
+        .unwrap()
+        .input
+        .unwrap();
+    assert_eq!(input["crew_selection"]["source"], "explicit");
+    assert_eq!(input["crew_selection"]["crew"], "sol");
+    assert_eq!(jobs.list_job_runs("task_gate_pipeline").unwrap().len(), 2);
+    let child_id = replay.pipeline["gate_results"][0]["run_id"]
+        .as_str()
+        .unwrap();
+    let child = jobs.get_job_run(child_id).unwrap().unwrap();
+    assert_eq!(child.state, JobRunState::Success);
+    let child_input = child.input.as_ref().unwrap();
+    assert_eq!(child_input["crew"], "sol");
+    assert_eq!(child_input["crew_selection"], input["crew_selection"]);
+
+    // A frozen choice is scoped to its task and cannot erase task pins or
+    // OS tags, even when a caller names additional tasks at discovery.
+    let pinned = add(&linux, "pinned", Some("muse-wonder"), &[]).unwrap();
+    let tagged = add(&linux, "tagged", None, &["os:macos"]).unwrap();
+    let other = add(&linux, "other", None, &[]).unwrap();
+    let listed = linux.run_deterministic("list_backlog_tasks", &json!({}),
+        &json!({"run_id": replay.run_id, "task_ids": [task.id, pinned.id, tagged.id, other.id]}),
+        ToolContext::default()).unwrap();
+    assert_eq!(admitted(&listed), vec![task.id.clone()]);
+    for id in [&pinned.id, &tagged.id, &other.id] {
+        assert_eq!(
+            excluded(&listed, id).unwrap()["reason"],
+            "host_os_mismatch",
+            "{listed}"
+        );
+    }
+    assert_eq!(
+        linux.get_task(&task.id).unwrap().crew,
+        None,
+        "run override does not pin the task"
+    );
+    // Even a matching frozen selection does not release a task's stored pin
+    // or its tags if either changes after admission.
+    for update in [
+        json!({"crew": "muse-wonder"}),
+        json!({"crew": "sol", "tags": ["os:macos"]}),
+    ] {
+        let mut update = update;
+        update["id"] = json!(task.id);
+        update["model"] = json!("codex");
+        linux.run_tool("orbit.task.update", update).unwrap();
+        let listed = linux
+            .run_deterministic(
+                "list_backlog_tasks",
+                &json!({}),
+                &json!({"run_id": replay.run_id, "task_ids": [task.id]}),
+                ToolContext::default(),
+            )
+            .unwrap();
+        assert!(admitted(&listed).is_empty(), "{listed}");
+        assert_eq!(
+            excluded(&listed, &task.id).unwrap()["reason"],
+            "host_os_mismatch"
+        );
+    }
+}
+
 /// Unsupported defaults stay unpinned but cannot be recovered by a later
 /// automatic draw, including when host filtering empties a configured pool.
 fn an_excluded_default_crew_is_not_pinned() {
@@ -622,6 +807,7 @@ crate::scenario_table!(
     a_linux_host_waits_on_a_muse_crew_and_a_macos_host_admits_it,
     an_empty_os_intersection_is_refused_on_add_and_update,
     an_excluded_default_crew_is_not_pinned,
+    a_supported_explicit_run_crew_survives_discovery_and_replay,
     init_seeds_host_os_and_preserves_operator_constraints,
     activity_defaults_and_unrestricted_crews_remain_consistent
 );
