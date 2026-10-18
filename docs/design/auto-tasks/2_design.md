@@ -2,7 +2,7 @@
 title: Auto-tasks — Design
 owner: claude
 last_updated: 2026-10-12
-last_validated: 2026-10-13
+last_validated: 2026-10-18
 status: Accepted
 feature: auto-tasks
 doc_role: design
@@ -22,8 +22,11 @@ host clock and routine due-math it uses are documented under `docs/design/routin
 
 The [shared automation-trigger proposal](../automation-triggers/1_overview.md)
 from [ORB-11315] specifies delivery thresholds, preparation/failure eligibility,
-immutable batches and separate successful-coverage checkpoints. It is proposed
-and unimplemented; existing scheduling and action semantics remain current.
+immutable batches and separate successful-coverage checkpoints. Its delivery-trigger
+consumers and `preparation_eligible` state routines are implemented on the existing
+sweep clock with durable batches and checkpoints ([ORB-11330], [ORB-11331]); the
+broader batching and mode design remains proposed. Existing scheduling and action
+semantics remain current.
 
 ## 1. The definition record
 
