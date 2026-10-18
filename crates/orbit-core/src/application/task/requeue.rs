@@ -18,9 +18,10 @@
 //! A claimed leaf publishes nothing through a failure handoff: its claim's
 //! settlement keeps its committed candidate on the owner, which records it on
 //! the task and hands it to the task's next run, claimed or owner-local.
-//! A requeue of a task whose stopped run is that leaf reports that candidate
-//! as what the next run continues, read from the same record admission reads,
-//! and refuses it, as a published one, once the task's specification changed.
+//! A requeue reports the candidate the next admission offers — the latest
+//! settlement that preserved one, which a later claim that kept none does not
+//! replace — read from the same record admission reads, and refuses it, as a
+//! published one, once the task's specification changed.
 //!
 //! Two callers share [`OrbitRuntime::write_candidate_requeue`]: the operator
 //! command (`orbit task requeue`, `orbit.task.requeue`) and the cleared-infra
@@ -284,11 +285,11 @@ impl OrbitRuntime {
 
     /// Requeue blocked task `id` as an operator decision. Without `discard`,
     /// the next run resumes the candidate the task's stopped run published
-    /// through its failure handoff, or the one the owner kept from the claim
-    /// whose leaf that run was, or implements fresh when there is neither.
-    /// With `discard`, the published or kept candidate is discarded, the
-    /// task's undelivered Orbit pull requests are closed, and the next run
-    /// implements fresh.
+    /// through its failure handoff, or the latest candidate a claim of the
+    /// task kept — a later claim that ended without one does not replace it —
+    /// or implements fresh when there is neither. With `discard`, the
+    /// published or kept candidate is discarded, the task's undelivered Orbit
+    /// pull requests are closed, and the next run implements fresh.
     ///
     /// The publication is authenticated before the task write lock is taken,
     /// since that asks the forge and the remote; under the lock only cheap
@@ -373,14 +374,25 @@ impl OrbitRuntime {
                         resume.as_ref().and_then(|(entry, _)| entry.clone()),
                         Vec::new(),
                     ),
-                    (None, Some(kept)) => (
-                        format!(
-                            "requeued onto the candidate its claim kept (head {} on {}): {reason}",
-                            kept.candidate.head_sha, kept.candidate.branch
-                        ),
-                        None,
-                        Vec::new(),
-                    ),
+                    (None, Some(kept)) => {
+                        // Run ids are unique only per machine, so the note
+                        // names the stopped run as the keeper only when both
+                        // agree. A later candidate-less claim, or a colliding
+                        // id on another machine, is not that run.
+                        let whose = if Self::stopped_run_kept_this_candidate(&current, kept) {
+                            "its claim kept"
+                        } else {
+                            "an earlier claim kept"
+                        };
+                        (
+                            format!(
+                                "requeued onto the candidate {whose} (head {} on {}): {reason}",
+                                kept.candidate.head_sha, kept.candidate.branch
+                            ),
+                            None,
+                            Vec::new(),
+                        )
+                    }
                     (None, None) => (format!("requeued: {reason}"), None, Vec::new()),
                 }
             };
@@ -486,17 +498,20 @@ impl OrbitRuntime {
         Ok(())
     }
 
-    /// The candidate the owner kept from the claim whose leaf was `task`'s
-    /// stopped run, as the task's next run receives it: admission offers a
-    /// claim the task's latest kept candidate, and an owner-local run
-    /// continues the one its prior run's claim kept, so both agree when that
-    /// run is the leaf that kept it. A candidate the task's specification has
-    /// outgrown is refused, as a published one is; one an operator already
+    /// The candidate the next admission offers `task`: the latest claim
+    /// settlement that preserved one. A later claim that ended without a
+    /// candidate does not replace it, so this does not require the stopped
+    /// run to be the leaf that kept it. A candidate the task's specification
+    /// has outgrown is refused, as a published one is; one an operator already
     /// discarded resumes nothing.
+    ///
+    /// Run ids are unique only per machine. Whether the stopped run itself
+    /// kept the candidate is [`Self::stopped_run_kept_this_candidate`]; that
+    /// check never decides that no candidate exists, and a bare run id is
+    /// never enough to call the stopped run the keeper. A candidate the
+    /// stopped run held, identified the same way, is what admission offers
+    /// instead of an earlier claim settlement.
     fn kept_claim_requeue(&self, task: &Task) -> Result<Option<KeptClaimCandidate>, OrbitError> {
-        let Some(run_id) = task.job_run_id.as_deref() else {
-            return Ok(None);
-        };
         let Some(kept) = self.stores().tasks().kept_claim_candidate(
             &task.id,
             self.automation_machine_identity().unwrap_or_default(),
@@ -504,13 +519,7 @@ impl OrbitRuntime {
         else {
             return Ok(None);
         };
-        // Run ids are unique only per machine.
-        if kept.candidate.source_run_id.as_deref() != Some(run_id)
-            || task
-                .job_run_machine
-                .as_ref()
-                .is_some_and(|origin| origin.machine_id != kept.machine_id)
-        {
+        if self.stopped_run_holds_candidate(task)? {
             return Ok(None);
         }
         match kept.fresh.as_ref().map(|(reason, _)| *reason) {
@@ -524,6 +533,48 @@ impl OrbitRuntime {
                 kept.candidate.head_sha, kept.candidate.branch
             ))),
         }
+    }
+
+    /// Whether `task`'s stopped run is the run that kept `candidate`.
+    ///
+    /// Run ids are unique only per machine, so the id and the machine both
+    /// have to agree. A matching id on another machine is a different run.
+    /// The check never decides which candidate admission offers: a later claim
+    /// that kept nothing leaves the latest preserved candidate in force.
+    fn stopped_run_kept_this_candidate(task: &Task, kept: &KeptClaimCandidate) -> bool {
+        let Some(run_id) = task.job_run_id.as_deref() else {
+            return false;
+        };
+        kept.candidate.source_run_id.as_deref() == Some(run_id)
+            && task
+                .job_run_machine
+                .as_ref()
+                .is_none_or(|origin| origin.machine_id == kept.machine_id)
+    }
+
+    /// Whether admission offers a candidate `task`'s stopped run held, rather
+    /// than the latest claim settlement. The run id matches only together
+    /// with the machine, the same linkage admission uses.
+    fn stopped_run_holds_candidate(&self, task: &Task) -> Result<bool, OrbitError> {
+        use orbit_types::workflow::{CANDIDATE_HELD_EVENT, HeldCandidate};
+
+        let history = self.get_task_history(&task.id)?;
+        let Some(held) = history
+            .iter()
+            .rev()
+            .find(|entry| entry.event == CANDIDATE_HELD_EVENT)
+            .and_then(HeldCandidate::from_entry)
+        else {
+            return Ok(false);
+        };
+        if task.job_run_id.as_deref() != Some(held.run_id.as_str()) {
+            return Ok(false);
+        }
+        // Run ids are unique only per machine.
+        Ok(task
+            .job_run_machine
+            .as_ref()
+            .is_none_or(|origin| held.machine_id.as_deref() == Some(origin.machine_id.as_str())))
     }
 
     /// Authenticate what an operator requeue without a discard resumes: the

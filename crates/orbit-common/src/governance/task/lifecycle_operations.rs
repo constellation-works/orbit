@@ -243,12 +243,13 @@ pub(super) const REVIEW_RESET: TaskOperation = TaskOperation {
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
 };
 
-/// Requeue a blocked task onto the candidate its stopped run published.
+/// Requeue a blocked task onto the candidate its stopped run published, or
+/// the latest candidate a claim of the task kept.
 pub(super) const REQUEUE: TaskOperation = TaskOperation {
     verb: TaskVerb::Requeue,
     cli_path: &["requeue"],
     tool_name: "orbit.task.requeue",
-    tool_description: "Return a blocked task to the backlog so its next run resumes the candidate and pull request its stopped run published, re-authenticating that publication exactly as automatic adoption does, or the candidate the owner kept from the claim whose leaf was that run. Requires trusted operator authority; unavailable to managed runs. A task whose run has not stopped, or whose claim is unsettled, is refused. A changed task specification is refused with the option to set discard_candidate, which closes the task's undelivered Orbit pull requests and lets the next run implement fresh.",
+    tool_description: "Return a blocked task to the backlog so its next run resumes the candidate and pull request its stopped run published, re-authenticating that publication exactly as automatic adoption does, or the latest candidate a claim of the task kept. A later claim that ended without a candidate does not replace that one. Requires trusted operator authority; unavailable to managed runs. A task whose run has not stopped, or whose claim is unsettled, is refused. A changed task specification is refused with the option to set discard_candidate, which closes the task's undelivered Orbit pull requests and lets the next run implement fresh.",
     cli_about: "Requeue a blocked task onto its published candidate",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
