@@ -980,8 +980,11 @@ function buildOsBadges(task) {
   if (!requirement || typeof requirement !== "object") return [];
   const invalid = Array.isArray(requirement.invalid) ? requirement.invalid : [];
   const anyOf = Array.isArray(requirement.any_of) ? requirement.any_of : [];
+  if (["unresolved", "conflict"].includes(requirement.state)) {
+    return [el("span", { class: "os-badge os-badge-invalid", text: requirement.state, title: requirement.describe })];
+  }
   return [
-    ...anyOf.map((os) => el("span", { class: "os-badge mono", text: `os:${os}`, title: `Runs on ${requirement.describe || os}` })),
+    ...anyOf.map((os) => el("span", { class: "os-badge mono", text: os === "macos" ? "macOS" : os, title: `Runs on ${requirement.describe || os}` })),
     ...invalid.map((tag) => el("span", { class: "os-badge os-badge-invalid mono", text: tag, title: "Unsupported OS tag: no host runs this task until it is retagged" })),
   ];
 }
@@ -2535,6 +2538,7 @@ function buildTaskDetail(task, context, drain = null) {
       el("div", { class: "property-row" }, [el("span", { class: "label", text: label }), control]);
     properties.appendChild(property("status", buildStatusUpdateControl(task, context)));
     properties.appendChild(property("complexity", buildComplexityUpdateControl(task, context)));
+    properties.appendChild(property("runs on", el("span", { class: "task-os-readout", text: task.os_requirement?.describe || (task.crew ? "any host" : "any host from OS tags (crew unassigned)") })));
     const actions = actionSlot();
     if (showsEditor("tags")) {
       properties.appendChild(property("tags", editor("tags", actions)));
@@ -3323,6 +3327,9 @@ function takeTaskActionNotice() {
 // A detail kept for an open draft can refresh its read-only readiness and
 // selector displays without touching the editor holding that draft.
 function refreshDraftDetails(wrap, task, context, readinessTask = task) {
+  for (const readout of wrap.querySelectorAll(".task-os-readout")) {
+    readout.textContent = task.os_requirement?.describe || (task.crew ? "any host" : "any host from OS tags (crew unassigned)");
+  }
   if (Array.isArray(readinessTask.context_files)) {
     for (const ul of wrap.querySelectorAll(".file-list")) {
       if (!ul.contentionTask) continue;
@@ -3865,7 +3872,7 @@ export function renderTasks(tasks, context) {
       const rowKey = `task-${t.id}`;
       const run = RUN_GROUPS.has(t.status);
       // Basic hash based on row presentation parameters + expanded state
-      const rowHash = `${t.id}-${t.title}-${t.status}-${(t.tags || []).filter(isOsTag).join(",")}-${readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${expandedTaskIds.has(t.id)}-${foldedStatusSignature(t.id)}`;
+      const rowHash = `${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${expandedTaskIds.has(t.id)}-${foldedStatusSignature(t.id)}`;
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {

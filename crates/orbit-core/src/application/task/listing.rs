@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::TaskStoreBackend;
 use orbit_types::task::{
-    Task, TaskEnvelopeV2, TaskReferenceIndex, TaskStatus, automatic_dispatch_cmp,
+    HostOs, Task, TaskEnvelopeV2, TaskReferenceIndex, TaskStatus, automatic_dispatch_cmp,
     task_dependencies_ready_with_index,
 };
 
@@ -23,6 +23,7 @@ pub use orbit_store::contracts::{
 pub struct TaskListQuery {
     pub filter: TaskListFilter,
     pub ready: bool,
+    pub runs_on: Option<HostOs>,
     pub path: Option<String>,
     pub limit: usize,
 }
@@ -32,6 +33,7 @@ impl Default for TaskListQuery {
         Self {
             filter: TaskListFilter::default(),
             ready: false,
+            runs_on: None,
             path: None,
             limit: crate::DEFAULT_TASK_LIST_LIMIT,
         }
@@ -107,18 +109,22 @@ pub(crate) fn metadata_task(envelope: TaskEnvelopeV2) -> Task {
 fn query_task_store(
     store: &dyn TaskStoreBackend,
     query: &TaskListQuery,
+    os_readout: Option<&super::TaskOsReadout>,
 ) -> Result<TaskPage, OrbitError> {
     // The store hands every call of one query the same status projection, so
     // the prefix knowledge readiness needs is derived from it once rather than
     // by a scan of the whole projection for each candidate.
     let reference_index = OnceCell::new();
     let residual = |task: &Task, statuses: &BTreeMap<String, TaskStatus>| {
-        (!query.ready
-            || task_dependencies_ready_with_index(
-                task,
-                statuses,
-                reference_index.get_or_init(|| TaskReferenceIndex::from_status_index(statuses)),
-            ))
+        query
+            .runs_on
+            .is_none_or(|host| os_readout.is_some_and(|readout| readout.admits(task, host)))
+            && (!query.ready
+                || task_dependencies_ready_with_index(
+                    task,
+                    statuses,
+                    reference_index.get_or_init(|| TaskReferenceIndex::from_status_index(statuses)),
+                ))
             && query.path.as_deref().is_none_or(|path| {
                 crate::application::search::task_selectors_contain_path(&task.context_files, path)
             })
@@ -126,7 +132,7 @@ fn query_task_store(
     store.query_task_rows(
         &query.filter,
         query.limit,
-        (query.ready || query.path.is_some()).then_some(&residual),
+        (query.ready || query.path.is_some() || query.runs_on.is_some()).then_some(&residual),
     )
 }
 
@@ -135,7 +141,11 @@ impl OrbitRuntime {
         if !self.coordination_task_reads_visible() {
             return Ok(TaskPage::default());
         }
-        query_task_store(self.stores().tasks(), query)
+        let os_readout = query
+            .runs_on
+            .map(|_| super::TaskOsReadout::new(self))
+            .transpose()?;
+        query_task_store(self.stores().tasks(), query, os_readout.as_ref())
     }
 
     /// Query every lifecycle status with active work first, preserving newest
@@ -155,6 +165,7 @@ impl OrbitRuntime {
                 ..query.filter.clone()
             },
             ready: query.ready,
+            runs_on: query.runs_on,
             path: query.path.clone(),
             limit: query.limit,
         })

@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 
 use crate::OrbitRuntime;
 use crate::application::task::{
-    TaskLintReport, task_record_json, task_show_field_json, task_show_json,
+    TaskLintReport, TaskOsReadout, task_record_json, task_show_field_json, task_show_json,
 };
 
 pub(super) fn serialize_task(runtime: &OrbitRuntime, task: &Task) -> Result<Value, OrbitError> {
@@ -59,6 +59,7 @@ fn serialize_task_record(
         return task_record_json(runtime, &row, &status_by_id).map(Value::Object);
     }
     let mut object = task_base_json(task, &status_by_id);
+    TaskOsReadout::new(runtime)?.insert_into(task, &mut object);
     runtime.task_crew_read(task).insert_into(&mut object);
     Ok(Value::Object(object))
 }

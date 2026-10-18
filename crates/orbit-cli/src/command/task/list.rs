@@ -37,6 +37,7 @@ pub(super) fn render(input: &Map<String, Value>, value: Value, view: ListView) -
         status: status_filtered,
         priority: input.contains_key("priority"),
         task_type: input.contains_key("type"),
+        runs_on: input.contains_key("runs_on"),
     };
 
     let mut table = task_table(&tasks, view.full, filtered);

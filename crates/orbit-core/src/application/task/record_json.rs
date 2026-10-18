@@ -9,7 +9,7 @@ use orbit_types::task::{
 };
 use serde_json::{Map, Value};
 
-use super::TaskRow;
+use super::{TaskOsReadout, TaskRow};
 use crate::OrbitRuntime;
 
 impl OrbitRuntime {
@@ -42,6 +42,7 @@ pub fn task_record_json(
 ) -> Result<Map<String, Value>, OrbitError> {
     let task = &row.task;
     let mut object = task_base_json(task, status_by_id);
+    TaskOsReadout::new(runtime)?.insert_into(task, &mut object);
     object.insert(
         "comments".to_string(),
         serde_json::to_value(&row.comments).map_err(serialize_error("comments"))?,
@@ -115,6 +116,7 @@ pub fn task_show_field_json(
     status_by_id: Option<&BTreeMap<String, TaskStatus>>,
 ) -> Result<Value, OrbitError> {
     match field {
+        "os_requirement" => Ok(TaskOsReadout::new(runtime)?.requirement(task)),
         "comments" => serde_json::to_value(runtime.get_task_comments(&task.id)?)
             .map_err(serialize_error("comments")),
         "history" => serde_json::to_value(runtime.get_task_history(&task.id)?)

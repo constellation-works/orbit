@@ -1049,12 +1049,157 @@ fn serving_host_draws_respect_effective_task_os_tags() {
     }
 }
 
+/// Show/list expose admission's constraints without persisting derived data.
+fn effective_os_readouts_follow_configuration_and_filter_before_the_limit() {
+    let config = format!("{POOL}\n[crews.gone]\nmodel = \"gpt-6.1-sol\"\nprovider = \"codex\"\n");
+    let (_root, runtime) = runtime_on(HostOs::Linux, &config);
+    let mac = add(&runtime, "readout-mac", Some("muse-wonder"), &[]).unwrap();
+    let linux = add(&runtime, "readout-linux", Some("sol"), &["os:linux"]).unwrap();
+    let plain = add(&runtime, "readout-plain", Some("sol"), &[]).unwrap();
+    let gone = add(&runtime, "readout-gone", Some("gone"), &[]).unwrap();
+    let tagged_mac = add(
+        &runtime,
+        "readout-tagged-mac",
+        Some("muse-wonder"),
+        &["os:macos"],
+    )
+    .unwrap();
+    let before = runtime.list_tasks().unwrap();
+    let show = |runtime: &OrbitRuntime, task: &Task| {
+        runtime
+            .run_tool("orbit.task.show", json!({"id": task.id, "model": "codex"}))
+            .unwrap()
+    };
+    let shown = show(&runtime, &mac);
+    assert_eq!(shown["os_requirement"]["any_of"], json!(["macos"]));
+    assert_eq!(
+        shown["os_requirement"]["source"],
+        json!({"tags": [], "crew": "muse-wonder", "executor": "muse"})
+    );
+    assert_eq!(
+        shown["os_requirement"]["describe"],
+        "macOS hosts (crew muse-wonder)"
+    );
+    let projected = runtime
+        .run_tool(
+            "orbit.task.show",
+            json!({"id": mac.id,
+        "fields": ["os_requirement"], "model": "codex"}),
+        )
+        .unwrap();
+    assert_eq!(projected, shown["os_requirement"]);
+    let tagged = show(&runtime, &linux);
+    assert_eq!(tagged["os_requirement"]["any_of"], json!(["linux"]));
+    assert_eq!(
+        tagged["os_requirement"]["source"]["tags"],
+        json!(["os:linux"])
+    );
+    assert!(show(&runtime, &plain).get("os_requirement").is_none());
+
+    // Removing a configured crew makes its stored assignment unresolved.
+    std::fs::write(runtime.paths().orbit_dir.join("config.toml"), POOL).unwrap();
+    let runtime =
+        OrbitRuntime::from_roots(&runtime.paths().global_dir, &runtime.paths().orbit_dir).unwrap();
+    assert_eq!(
+        show(&runtime, &gone)["os_requirement"]["state"],
+        "unresolved"
+    );
+    for (os, expected) in [
+        ("macos", vec![&mac.id, &tagged_mac.id, &plain.id]),
+        ("linux", vec![&linux.id, &plain.id]),
+        ("windows", vec![&plain.id]),
+    ] {
+        for fields in [None, Some(json!(["id", "os_requirement"]))] {
+            let mut input = json!({"runs_on": os, "limit": 50, "model": "codex"});
+            if let Some(fields) = fields {
+                input["fields"] = fields;
+            }
+            let listed = runtime.run_tool("orbit.task.list", input).unwrap();
+            let ids = listed["tasks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|task| task["id"].as_str().unwrap())
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                ids,
+                expected.iter().map(|id| id.as_str()).collect(),
+                "{listed}"
+            );
+            assert_eq!(listed["total"], expected.len());
+            assert_eq!(listed["truncated"], false);
+            for task in listed["tasks"].as_array().unwrap() {
+                let id = task["id"].as_str().unwrap();
+                let stored = runtime.get_task(id).unwrap();
+                assert_eq!(
+                    task.get("os_requirement").unwrap_or(&Value::Null),
+                    show(&runtime, &stored)
+                        .get("os_requirement")
+                        .unwrap_or(&Value::Null)
+                );
+            }
+        }
+        let limited = runtime
+            .run_tool(
+                "orbit.task.list",
+                json!({"runs_on": os, "limit": 1, "model": "codex"}),
+            )
+            .unwrap();
+        assert_eq!(limited["tasks"].as_array().unwrap().len(), 1);
+        assert_eq!(limited["total"], expected.len());
+        assert_eq!(limited["truncated"], expected.len() > 1);
+    }
+    assert!(
+        runtime
+            .run_tool(
+                "orbit.task.list",
+                json!({"runs_on": "plan9", "model": "codex"})
+            )
+            .is_err()
+    );
+    // A later executor edit can invalidate an assignment accepted previously.
+    let mut executor = runtime
+        .list_executor_defs()
+        .unwrap()
+        .into_iter()
+        .find(|def| def.name == "muse")
+        .unwrap();
+    executor.host_os = Some(BTreeSet::from([HostOs::Linux]));
+    runtime.upsert_executor_def(&executor).unwrap();
+    let conflict = show(&runtime, &tagged_mac);
+    assert_eq!(conflict["os_requirement"]["state"], "conflict");
+    assert_eq!(conflict["os_requirement"]["any_of"], json!([]));
+    let listed = runtime
+        .run_tool(
+            "orbit.task.list",
+            json!({"runs_on": "macos", "model": "codex"}),
+        )
+        .unwrap();
+    assert_eq!(
+        listed["total"], 1,
+        "only the unconstrained crew admits macOS after the edit: {listed}"
+    );
+    assert_eq!(
+        runtime.list_tasks().unwrap(),
+        before,
+        "all task records remain unchanged by reads and config edits"
+    );
+    let (_root, unassigned) = runtime_on(HostOs::Linux, DEFAULT_MUSE);
+    let task = add(&unassigned, "readout-unassigned", None, &[]).unwrap();
+    assert_eq!(task.crew, None);
+    assert!(
+        show(&unassigned, &task).get("os_requirement").is_none(),
+        "without a stored crew or OS tags, automatic routing stays undecided"
+    );
+}
+
 crate::scenario_table!(
     a_linux_host_waits_on_a_muse_crew_and_a_macos_host_admits_it_scenarios,
     a_linux_host_waits_on_a_muse_crew_and_a_macos_host_admits_it,
     a_linux_owner_with_a_macos_follower_draws_the_macos_only_crew,
     serving_host_draws_respect_effective_task_os_tags,
     an_empty_os_intersection_is_refused_on_add_and_update,
+    effective_os_readouts_follow_configuration_and_filter_before_the_limit,
     an_excluded_default_crew_is_not_pinned,
     a_supported_explicit_run_crew_survives_discovery_and_replay,
     init_seeds_host_os_and_preserves_operator_constraints,

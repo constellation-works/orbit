@@ -6,8 +6,8 @@
 //! Sidecars (`comments`, `history`, `artifacts`), fields whose canonical form
 //! depends on other tasks (`resolved_dependencies`, `relations`), and the
 //! host-local crew enrichments (`resolved_crew`, `crew_model`,
-//! `crew_unresolved`) still need a runtime fetch; the remaining fields are
-//! projected from the record itself.
+//! `crew_unresolved`, `os_requirement`) still need a runtime fetch; the
+//! remaining fields are projected from the record itself.
 
 use std::collections::BTreeMap;
 
@@ -137,8 +137,10 @@ pub fn refuses_implementer_writes(status: TaskStatus) -> bool {
 }
 
 /// The `os_requirement` enrichment: the host operating systems the task's
-/// `os:` tags admit, parsed. `None` for a task without an `os:` tag, which
-/// any host runs; the unprojected readout then omits the key.
+/// `os:` tags admit, parsed. Host-backed read surfaces replace this with the
+/// effective intersection with the stored crew executor and its source.
+/// `None` for a task without an `os:` tag. A host omits the key only when
+/// neither tags nor the stored crew constrain its OS.
 pub fn task_os_requirement_json(task: &Task) -> Option<Value> {
     let requirement = TaskOsRequirement::from_tags(&task.tags);
     (!requirement.is_unrestricted()).then(|| {
@@ -146,13 +148,15 @@ pub fn task_os_requirement_json(task: &Task) -> Option<Value> {
             "any_of": requirement.any_of,
             "invalid": requirement.invalid,
             "describe": requirement.describe_hosts(),
+            "source": {"tags": requirement.any_of.iter().map(|os| os.tag()).collect::<Vec<_>>()},
         })
     })
 }
 
 /// JSON for a Task-local (non-sidecar) projection field.
 ///
-/// Returns `None` for sidecar names, cross-task fields
+/// `os_requirement` here is a tags-only fallback; hosts replace it with their
+/// crew-aware readout. Returns `None` for sidecar names, cross-task fields
 /// (`resolved_dependencies`, `relations`), the crew enrichments a host resolves
 /// (`resolved_crew`, `crew_model`, `crew_unresolved`), and unknown names, so
 /// callers can keep those on their existing fetch paths.
@@ -225,7 +229,8 @@ pub fn task_dependency_labels(
 /// It carries [`TASK_SHOW_PUBLIC_DTO_FIELDS`] in that order, each with the
 /// value its `--fields` projection answers, then `os_requirement` and
 /// `readiness` when the task has them. A surface adds its own sidecars and
-/// extras to the returned object and never re-lists a base key.
+/// extras to the returned object; a host specializes `os_requirement` with
+/// the stored crew executor constraint.
 pub fn task_base_json(
     task: &Task,
     status_by_id: &BTreeMap<String, TaskStatus>,

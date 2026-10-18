@@ -12,8 +12,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::fs::overlap_index::OverlapIndex;
 use orbit_core::application::task::{
-    PullRequestLinks, TaskRow, declared_context_files, task_record_json, task_show_json,
-    task_status_transition_allowed, task_status_transition_required_field,
+    PullRequestLinks, TaskOsReadout, TaskRow, declared_context_files, task_record_json,
+    task_show_json, task_status_transition_allowed, task_status_transition_required_field,
 };
 use orbit_core::runtime::engine::ConfiguredCrewRegistryProjection;
 use orbit_core::{AuditEvent, OrbitError, OrbitRuntime, ResolvedCrewProjection, Task, TaskStatus};
@@ -174,6 +174,7 @@ pub(crate) const TASK_SUMMARY_PROJECTION: &str = "summary";
 /// the registry and the row's own `job_run_id` / `job_run_machine`.
 pub(crate) struct TaskListProjection {
     registry: ConfiguredCrewRegistryProjection,
+    os_readout: Result<TaskOsReadout, String>,
     local_machine_id: Option<String>,
     /// Read once, on the page's first proposed or backlog row.
     preparing: OnceCell<BTreeSet<String>>,
@@ -185,6 +186,7 @@ impl TaskListProjection {
     pub(crate) fn new(runtime: &OrbitRuntime) -> Self {
         Self {
             registry: runtime.configured_crew_registry_projection(),
+            os_readout: TaskOsReadout::new(runtime).map_err(|error| error.to_string()),
             local_machine_id: runtime.automation_machine_identity().map(str::to_string),
             preparing: OnceCell::new(),
             pull_request_links: PullRequestLinks::new(runtime),
@@ -201,6 +203,10 @@ impl TaskListProjection {
     ) -> Result<Value, OrbitError> {
         let task = &row.task;
         let mut object = task_to_json(task, status_by_id, &self.pull_request_links);
+        self.os_readout
+            .as_ref()
+            .map_err(|error| OrbitError::Execution(error.clone()))?
+            .insert_into(task, &mut object);
         for body in TASK_SUMMARY_OMITTED_BODIES {
             object.remove(body);
         }

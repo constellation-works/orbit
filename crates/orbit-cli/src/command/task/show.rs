@@ -165,7 +165,11 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
     }
     if let Some(os) = task.get("os_requirement").filter(|value| value.is_object()) {
         let invalid = os.get("invalid").map(strings).unwrap_or_default();
-        let runs_on = if invalid.is_empty() {
+        let runs_on = if invalid.is_empty()
+            || matches!(
+                os.get("state").and_then(Value::as_str),
+                Some("unresolved" | "conflict")
+            ) {
             os.get("describe")
                 .and_then(Value::as_str)
                 .unwrap_or_default()

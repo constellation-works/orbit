@@ -25,6 +25,7 @@ pub(crate) mod legacy_decisions;
 mod lifecycle;
 mod lint;
 mod listing;
+mod os_readout;
 mod params;
 mod paths;
 pub(crate) mod pilot;
@@ -82,6 +83,7 @@ pub use listing::{
     TaskRow,
 };
 pub(crate) use listing::{TaskEligibilityQuery, metadata_task};
+pub use os_readout::TaskOsReadout;
 pub(crate) use params::TaskRecordUpdateParams;
 pub use params::{TaskAddParams, TaskUpdateParams};
 pub use paths::ContextCreationAuthorization;
