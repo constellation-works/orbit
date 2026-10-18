@@ -1203,3 +1203,125 @@ fn doctor_warns_when_routine_last_success_is_stale() {
         freshness(&fresh)
     );
 }
+
+/// A home whose global config routes the default lane to `crew`, on `provider`.
+fn routed_crew_fixture(crew: &str, provider: &str) -> WorkCheckout {
+    let fixture = WorkCheckout::new();
+    let init = command(&fixture)
+        .env("ORBIT_SKIP_HOST_PREREQUISITES", "1")
+        .args([
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "doctor-host-os",
+            "--task-prefix",
+            "DH",
+        ])
+        .output()
+        .expect("init");
+    assert!(init.status.success(), "{init:?}");
+    let global = fixture.home.join(".orbit");
+    fs::create_dir_all(&global).expect("global root");
+    fs::write(
+        global.join("config.toml"),
+        format!(
+            "[workflow]\ndefault_crew = \"{crew}\"\n\n\
+             [crews.{crew}]\nprovider = \"{provider}\"\nmodel = \"fixture\"\n"
+        ),
+    )
+    .expect("routed crew config");
+    fixture
+}
+
+/// A crew whose executor `host_os` excludes this host is unsupported here, not
+/// a missing install: its provider row is `skipped` with no install advice, as
+/// `orbit doctor providers` reports it. The shipped Muse executor is macOS-only,
+/// so every other host, Linux and Windows alike, takes this branch.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn doctor_skips_a_crew_whose_executor_host_os_excludes_this_host() {
+    if crate::isolated_test::run_in_child(
+        "doctor::doctor_skips_a_crew_whose_executor_host_os_excludes_this_host",
+    ) {
+        return;
+    }
+    let fixture = routed_crew_fixture("muse-wonder", "muse");
+    let parsed = rows(&doctor(&fixture, &[]));
+    let crew = row(&parsed, "provider:muse-wonder");
+    assert_eq!(crew["status"], "skipped", "{crew}");
+    assert!(
+        crew["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("unsupported on this OS")),
+        "{crew}"
+    );
+    assert!(
+        crew["remediation"].is_null(),
+        "an unsupported crew gets no install advice: {crew}"
+    );
+}
+
+/// The complement: on macOS, where Muse runs, a missing CLI is still an error
+/// with install advice. PATH omits the CLI so the check cannot find it.
+#[cfg(target_os = "macos")]
+#[test]
+fn doctor_keeps_a_missing_cli_an_error_on_a_host_the_executor_supports() {
+    if crate::isolated_test::run_in_child(
+        "doctor::doctor_keeps_a_missing_cli_an_error_on_a_host_the_executor_supports",
+    ) {
+        return;
+    }
+    let fixture = routed_crew_fixture("muse-wonder", "muse");
+    let output = command(&fixture)
+        .env("PATH", fixture.temp.path())
+        .args(["doctor", "--json"])
+        .output()
+        .expect("doctor report");
+    let parsed = rows(&output);
+    let crew = row(&parsed, "provider:muse-wonder");
+    assert_eq!(crew["status"], "error", "{crew}");
+    assert!(
+        crew["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("was not found")),
+        "{crew}"
+    );
+    assert!(
+        crew["remediation"]
+            .as_str()
+            .is_some_and(|remediation| remediation.contains("Install the 'muse' CLI")),
+        "{crew}"
+    );
+}
+
+/// An unrestricted executor (no `host_os`) keeps its missing-CLI error on every
+/// host. PATH omits the CLI so the check cannot find it.
+#[test]
+fn doctor_keeps_a_missing_cli_an_error_for_an_unrestricted_executor() {
+    if crate::isolated_test::run_in_child(
+        "doctor::doctor_keeps_a_missing_cli_an_error_for_an_unrestricted_executor",
+    ) {
+        return;
+    }
+    let fixture = routed_crew_fixture("codex-wonder", "codex");
+    let output = command(&fixture)
+        .env("PATH", fixture.temp.path())
+        .args(["doctor", "--json"])
+        .output()
+        .expect("doctor report");
+    let parsed = rows(&output);
+    let crew = row(&parsed, "provider:codex-wonder");
+    assert_eq!(crew["status"], "error", "{crew}");
+    assert!(
+        crew["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("was not found")),
+        "{crew}"
+    );
+    assert!(
+        crew["remediation"]
+            .as_str()
+            .is_some_and(|remediation| remediation.contains("Install the 'codex' CLI")),
+        "{crew}"
+    );
+}
