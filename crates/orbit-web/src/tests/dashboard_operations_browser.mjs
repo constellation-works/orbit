@@ -115,7 +115,7 @@ try {
       getRunDetail: () => null, setRunDetail: () => {}, getRunEvents: () => [], setRunEvents: () => {},
       getRunLogs: () => [], setRunLogs: () => {}, getExpandedSteps: () => new Set(), setExpandedSteps: () => {},
       getLastRuns: () => [], refreshDashboard: () => {}, renderDiagnostics: () => {},
-      fitLogPanelToViewport: () => {}, showDrainDock: () => setDockMode('drain'),
+      fitLogPanelToViewport: () => {}, setDrainView: (mode) => setDockMode(mode),
       getIncidentsView: () => incidentsView, setIncidentsView: (value) => { incidentsView = value; },
       getAnalyticsSubtab: () => analytics, setAnalyticsSubtab: (value) => { analytics = value; },
       getReliabilityView: () => reliabilityView, setReliabilityView: (value) => { reliabilityView = value; },
@@ -194,34 +194,16 @@ try {
     const tasks = await page.evaluate(() => {
       const main = document.querySelector('.tab-pane[data-tab="tasks"] > main.tasks-layout');
       const list = document.getElementById('tasks-panel').getBoundingClientRect();
-      const dock = document.getElementById('side-dock').getBoundingClientRect();
       const style = getComputedStyle(main);
-      const contentWidth = main.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
-      const available = contentWidth - parseFloat(style.columnGap || '0');
-      const expectedDock = window.innerWidth <= 900
-        ? contentWidth
-        : window.innerWidth > 1250
-          ? Math.min(720, Math.max(336, contentWidth * 0.32))
-          : Math.max(280, available * 1.15 / 3.15);
       return {
         tracks: style.gridTemplateColumns.trim().split(/\s+/).length,
         listWidth: list.width,
-        dockWidth: dock.width,
-        expectedDock,
-        mainWidth: contentWidth,
-        available,
+        mainWidth: main.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+        hasDrain: Boolean(main.querySelector('#auto-drain-panel')),
       };
     });
-    const expectedTracks = width > 900 ? 2 : 1;
-    if (tasks.tracks !== expectedTracks) throw new Error(`Tasks grid has ${tasks.tracks} tracks at ${width}px, expected ${expectedTracks}: ${JSON.stringify(tasks)}`);
-    if (Math.abs(tasks.dockWidth - tasks.expectedDock) > 2) {
-      throw new Error(`Tasks dock width changed at ${width}px: ${JSON.stringify(tasks)}`);
-    }
-    if (width === 900 && Math.abs(tasks.listWidth - tasks.mainWidth) > 1) {
-      throw new Error(`Tasks layout should stack at 900px: ${JSON.stringify(tasks)}`);
-    }
-    if (width > 900 && Math.abs(tasks.listWidth + tasks.dockWidth - tasks.available) > 2) {
-      throw new Error(`Tasks list and dock should fill both columns at ${width}px: ${JSON.stringify(tasks)}`);
+    if (tasks.tracks !== 1 || Math.abs(tasks.listWidth - tasks.mainWidth) > 1 || tasks.hasDrain) {
+      throw new Error(`Tasks should fill its page without Drain at ${width}px: ${JSON.stringify(tasks)}`);
     }
   }
   await page.click('.tab[data-tab="operations"]');
@@ -270,7 +252,7 @@ try {
     work: [...document.querySelector('.rail-group').querySelectorAll('.tab')].map(button => button.dataset.tab),
     automation: [...document.querySelectorAll('#operations-subtabs .subtab')].map(button => button.dataset.subtab),
   }));
-  if (menus.work.join() !== 'tasks,jobs' || menus.automation.join() !== 'routines,auto-tasks') throw new Error(`Navigation menus: ${JSON.stringify(menus)}`);
+  if (menus.work.join() !== 'tasks,jobs,drain' || menus.automation.join() !== 'routines,auto-tasks') throw new Error(`Navigation menus: ${JSON.stringify(menus)}`);
   const jobsNavigation = [];
   for (const subtab of ['live', 'history', 'catalogue']) {
     await page.click(`.tab[data-tab="jobs"]`);
@@ -402,20 +384,18 @@ try {
   await assertRunningTaskHeader('375px viewport', 1);
   await page.evaluate(() => { document.querySelector('#jobs-live-main .operation-running-grid').style.gridTemplateColumns = ''; });
 
-  // ORB-12898: the retired #auto-drain destination opens Tasks with the Drain
-  // dock, and the card fits the dock at its 336px minimum (and the narrower
-  // mid-width column) with no horizontal scroll.
+  // Retired drain routes reach the full-page Drain controls without overflow.
   await page.evaluate(async () => {
     const { setDockMode } = await import('/js/log-tail.js');
     const { setActiveTab } = await import('/js/router.js');
     setDockMode('log');
     setActiveTab('auto-drain');
   });
-  await page.waitForFunction(() => location.hash.startsWith('#tasks'));
+  await page.waitForFunction(() => location.hash.startsWith('#drain'));
   const drainCheck = async (label, dockWidth) => {
     const result = await page.evaluate((width) => {
-      const layout = document.querySelector('main.tasks-layout');
-      if (width) layout.style.setProperty('--dock-w', `${width}px`); else layout.style.removeProperty('--dock-w');
+      const layout = document.querySelector('main.drain-layout');
+      // The Drain page always fills the available width.
       const dock = document.getElementById('side-dock');
       const card = document.getElementById('auto-drain-panel');
       const start = document.getElementById('auto-drain-start');
@@ -433,21 +413,22 @@ try {
         startVisible: start.getBoundingClientRect().height > 0,
         panels: [...dock.querySelectorAll('.dock-pane[data-pane="drain"] > .panel')].map(panel => panel.id),
         scroll: [card, start].some(box => box.scrollWidth > box.clientWidth + 1),
+        clipped: [card, start].some(box => box.scrollHeight > box.clientHeight + 1),
         overflowing,
         durations: start.querySelectorAll('.drain-duration[aria-pressed]').length,
         bar: Boolean(card.querySelector('.drain-capacity-bar[aria-label]')),
       };
-    }, dockWidth);
+    });
     if (result.mode !== 'drain' || !result.cardVisible || !result.startVisible) throw new Error(`#auto-drain did not open the Drain dock at ${label}: ${JSON.stringify(result)}`);
-    if (result.panels.join(' ') !== 'auto-drain-panel auto-drain-start locks-panel') throw new Error(`Drain dock cards out of order at ${label}: ${result.panels}`);
-    if (result.scroll || result.overflowing.length) throw new Error(`Drain card overflows at ${label} (dock ${result.dockWidth}px): ${result.overflowing}`);
+    if (result.panels.join(' ') !== 'auto-drain-panel auto-drain-start drain-waits-panel drain-fleet-panel locks-panel') throw new Error(`Drain dock cards out of order at ${label}: ${result.panels}`);
+    if (result.scroll || result.clipped || result.overflowing.length) throw new Error(`Drain card overflows at ${label} (dock ${result.dockWidth}px): ${result.overflowing}`);
     if (result.durations !== 6 || !result.bar) throw new Error(`Drain card incomplete at ${label}: ${JSON.stringify(result)}`);
     await page.screenshot({ path: path.join(evidence, `drain-${label}.png`), fullPage: true });
     return result.dockWidth;
   };
   await page.setViewportSize({ width: 1440, height: 1000 });
-  const minimum = await drainCheck('1440-dock336', 336);
-  if (minimum !== 336) throw new Error(`dock did not sit at its 336px minimum: ${minimum}`);
+  const fullWidth = await drainCheck('1440', null);
+  if (fullWidth < 1000) throw new Error(`Drain does not use the full page: ${fullWidth}`);
   for (const [phase, label] of [['draining', 'Draining'], ['winding_down', 'Winding down'], ['idle', 'idle']]) {
     await page.evaluate(state => globalThis.setDrainFixturePhase(state), phase);
     const rendered = await page.evaluate(() => ({
@@ -608,7 +589,7 @@ try {
     (await import('/js/router.js')).setActiveTab('auto-drain');
     await globalThis.setDrainFixturePhase('draining');
   });
-  await page.waitForFunction(() => location.hash.startsWith('#tasks'));
+  await page.waitForFunction(() => location.hash.startsWith('#drain'));
 
   // ORB-14489: render the live throttle case with spare workspace capacity:
   // the summary blames the throttle, not running tasks.
@@ -662,7 +643,7 @@ try {
   if (!logDrainState.includes('Draining')) throw new Error(`Drain tab loses its accessible live state while Log is selected: ${logDrainState}`);
   await page.click('.tab[data-tab="jobs"]');
   await page.click('#global-drain-state');
-  if (!page.url().includes('#tasks') || await page.locator('#side-dock').getAttribute('data-mode') !== 'drain') throw new Error('Global Drain indicator did not open the card');
+  if (!page.url().includes('#drain') || await page.locator('#side-dock').getAttribute('data-mode') !== 'drain') throw new Error('Global Drain indicator did not open the card');
   await page.emulateMedia({ reducedMotion: 'reduce' });
   for (const selector of ['#auto-drain-dot', '#global-drain-state .drain-dot']) {
     const animation = await page.locator(selector).evaluate(node => getComputedStyle(node).animationName);
@@ -717,14 +698,11 @@ try {
   };
   await approveCard('375x812');
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.evaluate(() => document.querySelector('main.tasks-layout').style.setProperty('--dock-w', '336px'));
   await approveCard('1440-dock336');
-  await page.evaluate(() => document.querySelector('main.tasks-layout').style.removeProperty('--dock-w'));
   await page.setViewportSize({ width: 375, height: 812 });
-  await page.evaluate(() => document.querySelector('main.tasks-layout').style.removeProperty('--dock-w'));
 
-  // The Log dock toolbar keeps every control reachable at the 280px (<=1250px
-  // viewport) and 336px dock minimums, while following and while paused with
+  // The full-page Log toolbar keeps every control reachable on desktop and
+  // phone, while following and while paused with
   // the buffered action shown. Pausing and buffering go through the real
   // follow handler and SSE consumer, fed by a fixture stream.
   await page.evaluate(async () => {
@@ -843,13 +821,6 @@ try {
   }
   const logToolbarCheck = async (label, viewport, dockWidth, paused) => {
     await page.setViewportSize(viewport);
-    // The dashboard re-applies the saved dock width (or clears --dock-w when
-    // none is saved) from a window resize listener, and Chromium delivers that
-    // event on the next rendered frame. Let it fire before forcing this
-    // fixture's width, or it clears the width mid-measurement and the dock
-    // falls back to its 32% default (384px at 1440).
-    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-    await page.evaluate((width) => document.querySelector('main.tasks-layout').style.setProperty('--dock-w', `${width}px`), dockWidth);
     const ids = ['all', 'err', 'deny', 'warn'].map(filter => `.log-filters .filter-pill[data-filter="${filter}"]`)
       .concat(['#log-show-agent', '#log-follow-tail', '#log-wrap-lines'], paused ? ['#log-buffered-count'] : []);
     const layout = await page.evaluate((selectors) => {
@@ -862,7 +833,7 @@ try {
       });
       return { dockWidth: Math.round(document.getElementById('side-dock').getBoundingClientRect().width), clipped: bar.scrollWidth > bar.clientWidth + 1, unreachable };
     }, ids);
-    if (layout.dockWidth !== dockWidth) throw new Error(`Log dock is not ${dockWidth}px at ${label}: ${layout.dockWidth}`);
+    if (layout.dockWidth < viewport.width - 300) throw new Error(`Log does not fill the page at ${label}: ${layout.dockWidth}`);
     if (layout.clipped || layout.unreachable.length) throw new Error(`Log toolbar clips controls at ${label}: ${JSON.stringify(layout)}`);
     for (const selector of ids) {
       await page.focus(selector);
@@ -874,8 +845,9 @@ try {
     await page.screenshot({ path: path.join(evidence, `log-toolbar-${label}.png`), fullPage: true });
   };
   const logToolbarSizes = [
-    ['1024-dock280', { width: 1024, height: 900 }, 280],
-    ['1440-dock336', { width: 1440, height: 1000 }, 336],
+    ['1024', { width: 1024, height: 900 }, null],
+    ['1440', { width: 1440, height: 1000 }, null],
+    ['375', { width: 375, height: 812 }, null],
   ];
   for (const [label, viewport, width] of logToolbarSizes) await logToolbarCheck(`${label}-following`, viewport, width, false);
   await page.click('#log-follow-tail');
@@ -890,7 +862,6 @@ try {
   await page.click('#log-buffered-count');
   const resumed = await page.evaluate(() => getComputedStyle(document.getElementById('log-buffered-count')).display);
   if (resumed !== 'none') throw new Error('Clicking the buffered action did not flush the paused buffer');
-  await page.evaluate(() => document.querySelector('main.tasks-layout').style.removeProperty('--dock-w'));
 
   await page.setViewportSize({ width: 375, height: 812 });
   await page.click('.tab[data-tab="tasks"]');
@@ -1187,7 +1158,7 @@ try {
   await feedbackPage.close();
 
   if (pageErrors.length) throw new Error(`page errors during the scenario: ${pageErrors.join(' | ')}`);
-  console.log(`PASS: Chromium Operations fixture; 1440/672/390/375; phone shell, subtabs, Drain dock card at 336/900/375, Log toolbar at dock 280/336 following and paused, Running now task-grouped job id wrapping at 280px, reload, history, feedback timer expiry. Screenshots: ${evidence}`);
+  console.log(`PASS: Chromium Operations fixture; 1440/672/390/375; phone shell, subtabs, Drain page at 1440/900/375, full-page Log toolbar following and paused, Running now task-grouped job id wrapping at 280px, reload, history, feedback timer expiry. Screenshots: ${evidence}`);
 } finally {
   await browser?.close(); server.close();
 }

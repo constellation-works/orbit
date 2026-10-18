@@ -252,8 +252,8 @@ try {
     assert.ok(layout.pageWidth <= layout.viewport, JSON.stringify(layout));
     assert.ok(layout.tableWidth <= layout.bodyWidth, JSON.stringify(layout));
     assert.equal(await page.locator('.fleet-drains tbody td').first().evaluate(cell =>
-      getComputedStyle(cell, '::before').content === JSON.stringify(cell.dataset.label) && Boolean(cell.dataset.label)), true,
-      'stacked cells visibly label their fields');
+      getComputedStyle(cell, '::before').content === JSON.stringify(cell.dataset.label) && Boolean(cell.dataset.label)), width <= 650,
+      'only narrow fleet tables stack with visible field labels');
     measurements.push(layout);
     await page.locator('.fleet-drains tbody tr').first().scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(evidence, 'fleet-' + width + '.png'), fullPage: true });

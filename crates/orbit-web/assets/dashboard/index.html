@@ -44,7 +44,7 @@
             </div>
           </div>
           <span class="topbar-spacer"></span>
-          <button id="global-drain-state" class="global-drain-state" type="button" title="Open Drain card" hidden><span class="drain-dot" aria-hidden="true"></span><span class="global-drain-label">Draining</span><span class="global-drain-running" id="global-drain-running"></span></button>
+          <a id="global-drain-state" class="global-drain-state" href="#drain" title="Open Drain" hidden><span class="drain-dot" aria-hidden="true"></span><span class="global-drain-label">Draining</span><span class="global-drain-running" id="global-drain-running"></span></a>
           <div class="rail-conn topbar-conn">
             <span id="conn-status" class="status-dot orange"></span>
             <span class="conn-text"><span id="conn-host" class="conn-host"></span><span id="meta-text">connecting&hellip;</span></span>
@@ -69,6 +69,7 @@
             <div class="rail-group-label">Work</div>
           <button class="tab" data-tab="tasks" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h9"/></svg><span class="rail-label">Tasks</span><span class="rail-count" id="rail-count-tasks"></span></button>
           <button class="tab" data-tab="jobs" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4.5l9 5.5-9 5.5z"/></svg><span class="rail-label">Jobs</span><span class="rail-count" id="rail-count-jobs"></span></button>
+          <button class="tab" data-tab="drain" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h12l-4 6v5l-4 2v-7z"/></svg><span class="rail-label">Drain</span></button>
           </div>
 
           <div class="rail-group">
@@ -182,15 +183,13 @@
             </div>
           </section>
         </div>
-        <div class="dock-splitter" id="dock-splitter" role="separator" aria-orientation="vertical" tabindex="0" title="Resize dock" aria-label="Resize dock" aria-valuenow="336" aria-valuemin="336"></div>
-        <!-- ORB-10972: the right column is a two-mode dock. Drain carries the
-             auto-drain window card (ORB-12898) above the per-task file locks;
-             Log hosts the orbit.log tail at full dock height. The column width
-             is identical in both modes, so switching never reflows the task
-             table beside it. -->
+      </main>
+    </section>
+    <section class="tab-pane" data-tab="drain" tabindex="0" role="region" aria-labelledby="topbar-crumb">
+      <main class="drain-layout" id="drain-main">
         <div class="col-log" id="side-dock" data-mode="drain">
           <div class="dock-head">
-            <div class="dock-seg-group" id="dock-mode-toggle" role="tablist" aria-label="Right dock mode">
+            <div class="dock-seg-group" id="dock-mode-toggle" role="tablist" aria-label="Drain views">
               <button type="button" role="tab" class="dock-seg on" id="dock-tab-drain" data-mode="drain" aria-selected="true" aria-controls="dock-pane-drain" tabindex="0">Drain <span id="dock-drain-state" class="dock-drain-state"></span></button>
               <button type="button" role="tab" class="dock-seg" id="dock-tab-log" data-mode="log" aria-selected="false" aria-controls="dock-pane-log" tabindex="-1">Log <span id="dock-log-state" class="dock-log-state"></span></button>
             </div>
@@ -214,6 +213,15 @@
                 <span class="drain-start-sub" id="auto-drain-start-sub"></span>
               </header>
               <div class="body" id="auto-drain-start-body"></div>
+            </section>
+            <section class="panel drain-waits-card" id="drain-waits-panel" aria-labelledby="drain-waits-title">
+              <header><h2 class="drain-title" id="drain-waits-title">Admission passes and waits</h2></header>
+              <div class="body" id="drain-pass-body"></div>
+              <div class="body" id="drain-waits-body"></div>
+            </section>
+            <section class="panel drain-fleet-card" id="drain-fleet-panel" aria-labelledby="drain-fleet-title" hidden>
+              <header><h2 class="drain-title" id="drain-fleet-title">Fleet drains</h2></header>
+              <div class="body" id="drain-fleet-body"></div>
             </section>
             <section class="panel" id="locks-panel">
               <header><h2 class="drain-title">Locked files</h2><span class="count" id="locks-count">0 files / 0 tasks</span></header>

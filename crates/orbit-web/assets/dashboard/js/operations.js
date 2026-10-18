@@ -5,7 +5,7 @@ import { navigateToRun, setActiveTab } from './router.js';
 import { renderAutomation } from './automation.js';
 import { FLEET_CACHE_MS, fetchFleetDrains, fleetDrainLabel, peekFleetDrains, renderFleetDrains } from './fleet-drains.js';
 import { cpuLoadMultiple } from './host-resources.js';
-import { DRAIN_LOCK_REASONS, drainCrewNote, drainReason, setDrainReadiness } from './drain-waits.js';
+import { DRAIN_LOCK_REASONS, drainCrewNote, drainReason, drainReadinessView, setDrainReadiness } from './drain-waits.js';
 import { sparkline, svg } from './sparkline.js';
 
 const $ = (id) => document.getElementById(id);
@@ -97,6 +97,10 @@ export function initOperations(nextContext) {
     updateDrainIndicators("idle", "idle");
     const start = $("auto-drain-start");
     if (start) start.hidden = true;
+    for (const id of ["drain-pass-body", "drain-waits-body"]) {
+      const body = $(id);
+      if (body) body.textContent = "";
+    }
     for (const id of ["routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback", "job-operation-feedback"]) feedback(id, "", "");
   });
 }
@@ -1598,10 +1602,8 @@ function fetchAndRenderAutoTasks() {
 // fixed `pendingOperations` key, guard released in `finally`) rather than
 // tasks.js's per-task Ship guard.
 //
-// ORB-12898: the window is a compact card at the top of the Tasks dock's
-// Drain mode, above Locked files. It keeps only what an operator acts on:
-// the live window, the three settings, Start/Stop, the slot line, two counts,
-// and which tasks are waiting on a running one.
+// The Drain page keeps the live window and forecast above window controls,
+// admission passes, waits, fleet drains and locked files.
 
 // [ORB-12728] The live coordinator readiness reports, if any. The server
 // nests it under `capacity` (where the slot picture comes from); an older
@@ -2711,7 +2713,10 @@ function autoDrainForecast(payload) {
 // read-only view.
 function renderAutoDrain(payload) {
   lastAutoDrain = payload;
+  const waits = $("drain-waits-panel");
+  if (waits) waits.hidden = false;
   setDrainReadiness(payload);
+  renderDrainWaits(payload);
   const body = $("auto-drain-body");
   if (!body) return;
   // A poll or a control click rebuilds both cards; keep keyboard focus on the
@@ -2740,6 +2745,54 @@ function renderAutoDrain(payload) {
   ].filter(Boolean));
   renderAutoDrainStart(payload, reasons);
   if (focusKey) document.querySelector?.(`[data-drain-focus="${focusKey}"]`)?.focus();
+}
+
+// Reuse the task list's wait descriptions so both views name the same cause.
+function renderDrainWaits(payload) {
+  const body = $("drain-waits-body");
+  if (!body) return;
+  body.textContent = "";
+  const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+  const groups = new Map();
+  for (const entry of tasks.filter(entry => !entry.eligible)) {
+    const view = drainReadinessView(entry);
+    const label = view.badge?.text || view.label;
+    groups.set(label, (groups.get(label) || 0) + 1);
+  }
+  const counts = autoDrainCounts(payload);
+  body.append(el("p", { class: "drain-section-label", text: `${counts.eligible} eligible now · ${counts.waiting} waiting` }));
+  if (groups.size) body.append(el("ul", { class: "drain-waits-list" }, [...groups].map(([reason, count]) =>
+    el("li", { text: `${count} · ${reason}` }))));
+  body.append(el("p", { class: "drain-waits-note", text: "Current readiness snapshot; eligibility can change before admission. Open Tasks for individual blockers." }));
+  if (payload.capacity?.candidate_pool_truncated) body.append(el("p", {
+    class: "drain-waits-note", text: "The candidate pool is truncated; these waits cover only the returned tasks.",
+  }));
+}
+
+// Run detail already exposes the last durable admission pass. Read it only
+// while Drain is open; the readiness and fleet polling cadence stays intact.
+function fetchDrainPass(payload) {
+  const body = $("drain-pass-body");
+  if (!body || context?.getTab?.() !== "drain") return Promise.resolve();
+  const capacity = payload.capacity || {};
+  const runId = capacity.drain_status_run_id || capacity.drain_run_id || capacity.pull_drain_run_id;
+  if (!runId) {
+    return requestPanel("drain-pass-body", "idle", () => Promise.resolve(null), () => {
+      body.textContent = "No active admission window.";
+    });
+  }
+  const path = `/api/runs/${encodeURIComponent(runId)}`;
+  return requestPanel("drain-pass-body", path, () => fetchJson(path), detail => {
+    body.textContent = "";
+    const link = runLink(runId, getWorkspace(), "Open admission run");
+    const pass = detail.run?.drain_last_pass;
+    if (pass) {
+      body.append(el("p", { text: `Last pass: ${pass.queued || 0} queued · ${Math.max(pass.deferred_total || 0, pass.deferred?.length || 0)} deferred · ${Math.max(pass.excluded_total || 0, pass.excluded?.length || 0)} excluded` }));
+      if (pass.recorded_at) body.append(el("p", { class: "drain-waits-note", text: `Recorded ${formatDateTime(pass.recorded_at)}` }));
+      if (pass.last_pass_error) body.append(el("p", { class: "drain-throttle-note", text: pass.last_pass_error }));
+    } else body.append(el("p", { class: "drain-waits-note", text: "No admission pass recorded yet." }));
+    body.append(link);
+  });
 }
 
 // The Start card: window length, parallel tasks, what happens when a task
@@ -2783,8 +2836,22 @@ function loadFleetSnapshot({ refreshWhenStale }) {
   return fetchFleetDrains();
 }
 
+function renderDrainFleet(payload) {
+  const panel = $("drain-fleet-panel");
+  const body = $("drain-fleet-body");
+  if (!panel || !body) return;
+  // Aggregate mode already shows this table in the status card.
+  panel.hidden = !selectedWorkspace();
+  if (panel.hidden) {
+    body.textContent = "";
+    return;
+  }
+  body.replaceChildren(renderFleetDrains(payload, context.selectFleetScope));
+}
+
 function paintFleetSurfaces(payload) {
   renderFleetIndicator(payload);
+  renderDrainFleet(payload);
   const card = $("auto-drain-panel");
   if (card?.dataset.drainState !== "fleet") return;
   const body = $("auto-drain-body");
@@ -2836,6 +2903,12 @@ function fetchAndRenderAutoDrain() {
   if (!workspace) {
     return requestPanel("auto-drain-body", "fleet", () => loadFleetSnapshot({ refreshWhenStale: true }), payload => {
       setDrainReadiness({});
+      for (const id of ["drain-waits-panel", "drain-fleet-panel"]) {
+        const panel = $(id);
+        if (panel) panel.hidden = true;
+      }
+      const pass = $("drain-pass-body");
+      if (pass) pass.textContent = "";
       updateDrainIndicators('fleet', 'Fleet drains');
       const card = $("auto-drain-panel");
       if (card) {
@@ -2856,22 +2929,30 @@ function fetchAndRenderAutoDrain() {
       const when = $("auto-drain-when");
       if (when) when.textContent = "";
       renderFleetIndicator(payload);
+      renderDrainFleet(payload);
     }, "auto-drain-phase-label");
   }
   const query = autoDrainConcurrency && autoDrainConcurrencyValid() ? `?concurrency=${encodeURIComponent(autoDrainConcurrency)}` : "";
   const scope = "/api/workflows/auto/readiness";
   const path = `${scope}${query}`;
   const visit = captureWorkspaceVisit();
-  const readiness = requestPanel("auto-drain-body", scope, () => fetchJson(path), renderAutoDrain, "auto-drain-phase-label");
+  let rendered = null;
+  const readiness = requestPanel("auto-drain-body", scope, () => fetchJson(path), payload => {
+    rendered = payload;
+    renderAutoDrain(payload);
+  }, "auto-drain-phase-label");
   const fleet = loadFleetSnapshot({ refreshWhenStale: false }).then(payload => {
-    if (visit.isCurrent()) renderFleetIndicator(payload);
+    if (visit.isCurrent()) {
+      renderFleetIndicator(payload);
+      renderDrainFleet(payload);
+    }
     return payload;
   });
-  return Promise.all([readiness, fleet]).then(() => {});
+  return Promise.all([readiness.then(() => visit.isCurrent() && rendered ? fetchDrainPass(rendered) : undefined), fleet]).then(() => {});
 }
 
 // The chrome always names the fleet, including when an idle default workspace
-// is selected. The dock's phase continues to describe the selected workspace.
+// is selected. The status card describes the selected workspace.
 function renderFleetIndicator(payload) {
   const global = $("global-drain-state");
   if (!global) return;
@@ -2907,7 +2988,7 @@ export async function fetchAndRenderOperations(subtab = context.getOperationsSub
   ]));
 }
 
-// The Tasks dock's Drain card refreshes with the Tasks tab.
+// Readiness refreshes on every page to feed the chip and task readiness.
 export async function fetchAndRenderAutoDrainPane() {
   await fetchAndRenderAutoDrain();
 }
