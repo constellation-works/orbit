@@ -11,7 +11,7 @@ tags: [orbit-core, orbit-cmd, architecture, north-star]
 paths: ["crates/orbit-core/**", "crates/orbit-cmd/**"]
 related_features: [orbit-core]
 related_artifacts: [ORB-10026, ORB-10545, ORB-12772]
-last_validated: 2026-10-10
+last_validated: 2026-10-17
 ---
 
 # Orbit Core — Decisions
