@@ -159,6 +159,17 @@ function fixture(url) {
       };
     }
     case '/api/tasks/completion-by-complexity': return { by_complexity: [] };
+    case '/api/diagnostics/defects': {
+      const counts = (total) => ({ total, lineage: { fix_for_fix: 0, regression: 0, unattributed: total }, origin: { other: total } });
+      return {
+        window: metricsWindow(url),
+        lineages: ['fix_for_fix', 'regression', 'unattributed'],
+        origins: ['other'],
+        buckets: [0, 1, 2].map(i => ({ start: new Date(Date.UTC(2026, 9, 11, 10 + i)).toISOString(), ...counts(healthFixture ? i : 0) })),
+        current: counts(healthFixture ? 3 : 0),
+        previous: counts(healthFixture ? 2 : 0),
+      };
+    }
     case '/api/audit/incidents': {
       const selectedClass = url.searchParams.get('class');
       const limit = Number(url.searchParams.get('limit'));

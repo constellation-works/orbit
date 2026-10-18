@@ -114,8 +114,9 @@ impl<'tx> TaskIndexWriter<'tx> {
         let index = tx
             .prepare(
                 "INSERT INTO task_bundle_index (
-            task_id, workspace_id, status, priority, job_run_id, created_at, updated_at, terminal_month, complexity
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            task_id, workspace_id, status, priority, job_run_id, created_at, updated_at, terminal_month, complexity,
+            task_type
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
         ON CONFLICT(task_id) DO UPDATE SET
             workspace_id = excluded.workspace_id,
             status = excluded.status,
@@ -124,7 +125,8 @@ impl<'tx> TaskIndexWriter<'tx> {
             created_at = excluded.created_at,
             updated_at = excluded.updated_at,
             terminal_month = excluded.terminal_month,
-            complexity = excluded.complexity",
+            complexity = excluded.complexity,
+            task_type = excluded.task_type",
             )
             .map_err(sqlite_store_error)?;
         let tag = tx
@@ -163,6 +165,7 @@ impl<'tx> TaskIndexWriter<'tx> {
                 envelope.updated_at.to_rfc3339(),
                 terminal_month(envelope.status, envelope.updated_at),
                 indexed_complexity(envelope.complexity),
+                envelope.task_type.to_string(),
             ])
             .map_err(sqlite_store_error)?;
 

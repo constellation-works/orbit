@@ -29,6 +29,7 @@ use orbit_common::{StorageLayer, fs::generation::LedgerCompatibility};
 use rusqlite::Connection;
 
 use super::baseline::apply_registry_baseline;
+use super::index_task_type::apply_index_task_type;
 use crate::contracts::{MigrationCompatibility, StateComponent};
 use crate::driver::sqlite::migration::{LedgeredDatabase, Migration};
 
@@ -51,6 +52,14 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         name: "registry_baseline",
         compat: MigrationCompatibility::Additive,
         apply: apply_registry_baseline,
+    },
+    // Each task's `type`, for the defect projection. Existing rows stay `NULL`
+    // until that projection rebuilds them from bundles.
+    Migration {
+        version: 2,
+        name: "index_task_type",
+        compat: MigrationCompatibility::Additive,
+        apply: apply_index_task_type,
     },
 ];
 

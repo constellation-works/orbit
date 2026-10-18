@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use orbit_types::task::{
-    TaskEnvelopeV2, TaskPriority, TaskRelationType, TaskStatus, normalize_task_tags,
+    TaskEnvelopeV2, TaskPriority, TaskRelationType, TaskStatus, TaskType, normalize_task_tags,
 };
 use serde::{Deserialize, Serialize};
 
@@ -225,4 +225,20 @@ pub struct TaskTerminalTransition {
     /// Complexity bucket, as in [`TaskCompletionByComplexity::complexity`].
     pub complexity: String,
     pub at: DateTime<Utc>,
+}
+
+/// One `bug` task as the generated index holds it: a defect, dated when it
+/// was filed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskDefectFiling {
+    pub task_id: String,
+    /// The task's `created_at`.
+    pub filed_at: DateTime<Utc>,
+    /// Indexed tags, which carry the finding's provenance (`qa-sweep`,
+    /// `code-review`, …).
+    pub tags: Vec<String>,
+    /// The indexed `type` of each `regression_from` target, `None` when the
+    /// target is outside this workspace's index or not indexed yet. Empty when
+    /// the defect names no cause.
+    pub regression_from_types: Vec<Option<TaskType>>,
 }

@@ -1,11 +1,12 @@
-//! Analytics › Metrics trends [ORB-15746]: implement_one durations and terminal
-//! task transitions, bucketed on the clock and scoped to the workspace.
+//! Analytics › Metrics trends [ORB-15746]: implement_one durations, terminal
+//! task transitions and filed defects, bucketed on the clock and scoped to the
+//! workspace.
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{JobRunState, JobRunStep, JobTargetType};
 use orbit_store::contracts::InvocationInsertParams;
-use orbit_types::task::{TaskComplexity, TaskStatus};
+use orbit_types::task::{TaskComplexity, TaskRelation, TaskRelationType, TaskStatus, TaskType};
 use orbit_types::telemetry::InvocationTrace;
 use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
@@ -477,6 +478,89 @@ fn completion_trend_counts_terminal_tasks_where_they_closed() {
 
             let response = server.get(&format!("/api/diagnostics/completions?since=bogus&{WS}"));
             assert_eq!(response.status().as_u16(), 400);
+        },
+    );
+}
+
+fn add_typed(
+    fixture: &Fixture,
+    task_type: TaskType,
+    tags: &[&str],
+    regression_from: Option<&str>,
+) -> String {
+    fixture
+        .runtime
+        .add_task(TaskAddParams {
+            title: format!("{task_type:?} defect fixture"),
+            description: "defect trend fixture".into(),
+            task_type: Some(task_type),
+            tags: tags.iter().map(|tag| tag.to_string()).collect(),
+            relations: regression_from
+                .map(|target| TaskRelation {
+                    relation_type: TaskRelationType::RegressionFrom,
+                    target: target.into(),
+                })
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        })
+        .unwrap()
+        .id
+        .to_string()
+}
+
+#[test]
+fn defect_trend_classifies_bugs_by_lineage_and_origin_after_backfill() {
+    isolated(
+        "metrics_trends::defect_trend_classifies_bugs_by_lineage_and_origin_after_backfill",
+        || {
+            let fixture = Fixture::new();
+            let feature = add_typed(&fixture, TaskType::Feature, &[], None);
+            // A full code review's findings also carry `code-review`.
+            let regression = add_typed(
+                &fixture,
+                TaskType::Bug,
+                &["code-review", "full-code-review"],
+                Some(&feature),
+            );
+            add_typed(
+                &fixture,
+                TaskType::Bug,
+                &["qa-sweep-2026-09-15"],
+                Some(&regression),
+            );
+            add_typed(&fixture, TaskType::Bug, &[], None);
+            add_typed(&fixture, TaskType::Chore, &["code-review"], None);
+
+            // Rows indexed before registry v2 have no type yet; the first read
+            // must rebuild them rather than report no defects.
+            let index =
+                rusqlite::Connection::open(fixture.global.join("tasks").join("index.sqlite"))
+                    .unwrap();
+            index
+                .execute("UPDATE task_bundle_index SET task_type = NULL", [])
+                .unwrap();
+            drop(index);
+
+            let server = fixture.server(false);
+            let day = json_ok(server.get(&format!("/api/diagnostics/defects?since=24h&{WS}")));
+            let current = &day["current"];
+            assert_eq!(current["total"], 3, "only bug tasks count: {day}");
+            assert_eq!(
+                current["lineage"],
+                json!({ "fix_for_fix": 1, "regression": 1, "unattributed": 1 })
+            );
+            assert_eq!(current["origin"]["full-code-review"], 1);
+            assert_eq!(current["origin"]["code-review"], 0);
+            assert_eq!(current["origin"]["qa-sweep"], 1);
+            assert_eq!(current["origin"]["other"], 1);
+            let summed: u64 = day["buckets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|bucket| bucket["total"].as_u64().unwrap())
+                .sum();
+            assert_eq!(summed, 3, "buckets add up to the window total");
         },
     );
 }

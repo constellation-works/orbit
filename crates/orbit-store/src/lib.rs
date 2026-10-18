@@ -95,7 +95,7 @@ pub use contracts::{
     InvocationRunCoverage, JobRunOutcomeFact, JobRunStepParams, RegisteredTaskResolution,
     RoutineFireIntentParams, RoutineFireRecord, RoutineFireState, SessionLogAppendParams,
     SessionLogEntry, SessionLogKind, TaskArtifactUpdateParams, TaskCompletionByComplexity,
-    TaskCreateParams, TaskInvocationMetrics, TaskLockConflict, TaskLockHolder,
+    TaskCreateParams, TaskDefectFiling, TaskInvocationMetrics, TaskLockConflict, TaskLockHolder,
     TaskReservationReleaseReason, TaskReservationReserveParams, TaskStoreBackend,
     TaskTerminalTransition, ToolInvocationMetrics, V2AuditEventFilter, V2AuditEventInsertParams,
     V2AuditEventRow,
