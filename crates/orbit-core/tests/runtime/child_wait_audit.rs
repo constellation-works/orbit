@@ -43,7 +43,6 @@ const PARENT: &str = "child_wait_parent";
 const CHILD: &str = "child_wait_child";
 
 struct Fixture {
-    root: TempDir,
     global: PathBuf,
     repo: PathBuf,
     runtime: OrbitRuntime,
@@ -57,6 +56,12 @@ struct Fixture {
     cleaned: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(unix)]
     acquisition_events: Option<std::sync::mpsc::SyncSender<&'static str>>,
+    // Fields drop in declaration order after `Drop::drop`. `root` must be
+    // last: the runtime, job store, listener and workers close first, so
+    // nothing they own (a store flush, the runtime's shared-history
+    // sampler writing under `global`) can recreate a path inside the tree
+    // while `TempDir` is removing it, leaving the root behind.
+    root: TempDir,
 }
 
 #[cfg(unix)]
