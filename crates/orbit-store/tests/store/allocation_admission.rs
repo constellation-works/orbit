@@ -675,6 +675,7 @@ fn pull_request(run_id: &str, request_id: &str) -> AdmissionRequest {
         },
         crews: None,
         os: None,
+        browser_kit: false,
         admissible: None,
     }
 }
@@ -1239,6 +1240,7 @@ fn owner_request(id: &str) -> AdmissionRequest {
         },
         crews: None,
         os: None,
+        browser_kit: false,
         admissible: None,
     }
 }

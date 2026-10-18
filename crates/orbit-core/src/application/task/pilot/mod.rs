@@ -86,7 +86,7 @@ use serde_json::{Value, json};
 /// Actor that seals a task-pilot replay receipt on its audit comment.
 const PILOT_ACTOR: &str = "task-pilot";
 /// The tag a `user_facing_ui` finding adds: tasks whose change a user sees.
-const UI_TAG: &str = "ui";
+const UI_TAG: &str = orbit_types::task::UI_TAG;
 
 /// Task-pilot audit comments that carry a receipt, newest first.
 ///

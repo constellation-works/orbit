@@ -45,6 +45,32 @@ impl OrbitRuntime {
         self.host_os
     }
 
+    /// Read the browser kit admission checks `ui` tasks against from `home`
+    /// rather than the current user's. A fixture composes a host with a kit,
+    /// or without one, in a home it controls.
+    pub fn with_browser_kit_home(mut self, home: &std::path::Path) -> Self {
+        self.browser_kit_home = Some(home.to_path_buf());
+        self
+    }
+
+    /// Whether this host's headless browser kit is verified now: installed,
+    /// with the smoke test `orbit browser-kit verify` recorded against the
+    /// Playwright version and browser revision it holds. Only then may a `ui`
+    /// task start here, and only then does a pull drain declare the kit to
+    /// its owner. Filesystem reads only, made on every call, so a kit
+    /// installed mid-window counts at the next admission pass.
+    pub fn browser_kit_verified(&self) -> bool {
+        use orbit_exec::browser_kit::{KitInspection, KitLayout};
+        let layout = match &self.browser_kit_home {
+            Some(home) => KitLayout::for_home(home),
+            None => match KitLayout::current_user() {
+                Ok(layout) => layout,
+                Err(_) => return false,
+            },
+        };
+        layout.root().is_dir() && KitInspection::inspect(&layout).is_verified()
+    }
+
     /// Replace the host-signal probe, so a fixture can present a scheduled
     /// shutdown without touching the real `/run` filesystem [ORB-12968].
     pub fn with_host_signal_probe(mut self, probe: Arc<dyn HostSignalProbe>) -> Self {
