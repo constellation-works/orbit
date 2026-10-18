@@ -2,7 +2,7 @@
 title: Task Publication — Design
 owner: codex
 last_updated: 2026-10-04
-last_validated: 2026-10-11
+last_validated: 2026-10-18
 status: Accepted
 feature: task-publication
 doc_role: design

@@ -2,7 +2,7 @@
 title: Terminal Interface — Overview
 owner: claude
 last_updated: 2026-08-02
-last_validated: 2026-10-11
+last_validated: 2026-10-18
 status: Accepted
 feature: terminal-interface
 doc_role: overview
@@ -41,7 +41,7 @@ None of these is severe alone. Together they mean output correctness is a proper
 | Table construction, preset, arrangement | [crates/orbit-cli/src/output/table.rs](../../../crates/orbit-cli/src/output/table.rs) | [T20260411-0335] |
 | Status and priority color vocabulary | [crates/orbit-cli/src/output/color.rs](../../../crates/orbit-cli/src/output/color.rs) | [T20260427-43] |
 | Structured output and error payloads | [crates/orbit-cli/src/output/json.rs](../../../crates/orbit-cli/src/output/json.rs) | [ORB-10356] |
-| Hand-padded audit line output | [crates/orbit-cli/src/command/audit/support.rs](../../../crates/orbit-cli/src/command/audit/support.rs) | [ORB-10228] |
+| Audit list table and JSON payload | [crates/orbit-cli/src/command/audit/support.rs](../../../crates/orbit-cli/src/command/audit/support.rs) | [ORB-10228] |
 | Per-command rendering (current, non-conforming) | [crates/orbit-cli/src/command/](../../../crates/orbit-cli/src/command/) | [ORB-00279] |
 | Target table contract | [./specs/table-rendering.md](./specs/table-rendering.md) | [Borderless Tables With Truncate-to-Width Rows](./4_decisions.md#borderless-tables-with-truncate-to-width-rows) |
 | Target color contract | [./specs/color-and-styling.md](./specs/color-and-styling.md) | [One Semantic Color Vocabulary, Gated at the Sink](./4_decisions.md#one-semantic-color-vocabulary-gated-at-the-sink) |
