@@ -5415,6 +5415,7 @@ fn runtime_opens(log_path: &Path) -> usize {
 mod upgrade;
 
 mod plugins;
+mod serving_hosts;
 
 /// Read-only presentation uses the production host's task filter and audit path.
 fn mcp_apps_presentation_reads_explicit_tasks_without_authority_or_workspace_fallback() {
