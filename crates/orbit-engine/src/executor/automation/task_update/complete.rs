@@ -6,6 +6,7 @@
 //! transition refuses any source status other than `review`, so an opt-in
 //! `--complete` run can never make a `proposed` task shippable, and it never
 //! writes a review verdict, so no independent-review signal is fabricated.
+//! A task that still owes a criterion after deploy stays in `review`.
 
 use orbit_common::OrbitError;
 use orbit_types::task::TaskStatus;
@@ -43,6 +44,7 @@ pub(in crate::executor::automation) fn complete_tasks<H: RuntimeHost + ?Sized>(
 ) -> Result<Value, OrbitError> {
     let mut completed_task_ids = Vec::new();
     let mut skipped_task_ids = Vec::new();
+    let mut owed_task_ids = Vec::new();
     for task_id in task_ids {
         let task = host.get_task(task_id)?;
         match task.status {
@@ -56,6 +58,13 @@ pub(in crate::executor::automation) fn complete_tasks<H: RuntimeHost + ?Sized>(
                     "task_complete: task '{task_id}' must be in review to be completed; current status is {other}"
                 )));
             }
+        }
+        // The latest delivery's unresolved criteria survive candidate reuse
+        // by a fresh run, which may skip implementation and create no new
+        // owed record. Keep the task in review until they are recorded met.
+        if !host.outstanding_owed_criteria(task_id, None)?.is_empty() {
+            owed_task_ids.push(task_id.clone());
+            continue;
         }
 
         host.update_task_from_activity(
@@ -80,6 +89,7 @@ pub(in crate::executor::automation) fn complete_tasks<H: RuntimeHost + ?Sized>(
         "phase": "complete",
         "completed_task_ids": completed_task_ids,
         "skipped_task_ids": skipped_task_ids,
+        "owed_task_ids": owed_task_ids,
         "authorization": authorization,
     }))
 }

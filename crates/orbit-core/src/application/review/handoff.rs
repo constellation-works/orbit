@@ -47,6 +47,8 @@ impl OrbitRuntime {
         observation: HandoffObservation,
     ) -> Result<ClaimMutationResult, OrbitError> {
         let claim_id = handoff.claim_id.clone();
+        // A worker cannot owe a criterion its pilot finding did not type.
+        self.check_owed_criteria(&self.get_task(&handoff.task_id)?, &handoff.owed_criteria)?;
         let context = context.clone().with_handoff_observation(observation);
         let result = self.mutate_execution_claim(
             Some(&context),

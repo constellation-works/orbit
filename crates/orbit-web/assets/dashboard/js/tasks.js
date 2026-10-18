@@ -1275,6 +1275,19 @@ function buildReviewGate(review) {
   return wrap;
 }
 
+function buildOwedCriteria(owed) {
+  const wrap = el("div", { class: "owed-criteria" });
+  for (const entry of owed) {
+    const parts = [
+      `${entry.criterion}. [${entry.state}] on ${entry.host}: ${entry.command} (target ${entry.target})`,
+    ];
+    if (entry.candidate_evidence) parts.push(`candidate: ${entry.candidate_evidence}`);
+    if (entry.evidence) parts.push(`recorded by ${entry.recorded_by ?? "—"}: ${entry.evidence}`);
+    wrap.appendChild(el("div", { text: parts.join(" · ") }));
+  }
+  return wrap;
+}
+
 function fmtSize(bytes) {
   const value = Number(bytes);
   if (!Number.isFinite(value) || value < 0) return "0 bytes";
@@ -2404,6 +2417,14 @@ function buildTaskDetail(task, context, drain = null) {
 
   if (showsEditor("acceptance_criteria")) {
     addField(leftCol, "Acceptance criteria", editor("acceptance_criteria"), true, true);
+  }
+
+  // Criteria the delivery owes until the deployed build is measured; an
+  // operator records each with a `post-deploy: met|failed <N>` comment.
+  if (Array.isArray(task.owed_criteria) && task.owed_criteria.length) {
+    addField(leftCol, "Owed after deploy", buildOwedCriteria(task.owed_criteria), true, false, {
+      count: task.owed_criteria.length,
+    });
   }
 
   if (task.plan && task.plan.trim()) {

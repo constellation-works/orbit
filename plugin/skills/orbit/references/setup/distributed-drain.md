@@ -163,7 +163,11 @@ a PR. A changed base or evidence requires fresh validation. When the tests that
 show the base resolves the task run only outside the agent sandbox, the
 implementer also names them as `already_resolved` `cargo test` selectors, and
 `claim_validate` replays each on the base on the claim host; a failing or empty
-replay never completes the task.
+replay never completes the task. A handoff may also carry `owed_criteria`:
+criteria the owner's pilot typed `post_deploy`, which only the deployed build
+can evidence. The owner refuses the settlement when its own pilot finding does
+not type each one, and otherwise lands the handoff with the task left in
+`review` until an operator records them (see the task-execution reference).
 
 
 A claimed PR leaf that fails before its normal commit preserves unfinished

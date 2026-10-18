@@ -11,6 +11,8 @@ use serde_json::{Value, json};
 use crate::application::sweep_filing::ci_failure::admission as ci_failure_admission;
 use crate::application::task::{MachineRequirement, NativeOsRequirement};
 
+use super::super::PostDeployRequirement;
+
 use super::super::apply_admission::{
     Admission, CheckedAdmission, PreparedTaskSnapshot, PromotionAuthority, ValidatedTask,
     approve_promoted, close_verified_no_diff,
@@ -25,10 +27,10 @@ use super::super::persist::{
 };
 use super::super::{
     CONTEXT_CREATION_RETAINED, CONTEXT_EVIDENCE_RETAINED, CONTEXT_REAUTHORIZATION_REQUIRED,
-    PILOT_NORMALIZATIONS, VALIDATION_TOOL_WARNINGS, normalize_evidence_gaps, required_machine,
-    required_os, required_string, required_string_array, retained_review_evidence, review_filed,
-    reviewed_evidence_drops, unauthorized_missing_targets, validate_after_selectors,
-    validate_recommendations,
+    PILOT_NORMALIZATIONS, VALIDATION_TOOL_WARNINGS, normalize_evidence_gaps, post_deploy,
+    required_machine, required_os, required_string, required_string_array,
+    retained_review_evidence, review_filed, reviewed_evidence_drops, unauthorized_missing_targets,
+    validate_after_selectors, validate_recommendations,
 };
 use super::{Applied, ApplyContext};
 
@@ -63,6 +65,7 @@ struct Assessed {
     current: Task,
     required_os: Vec<NativeOsRequirement>,
     required_machine: Option<MachineRequirement>,
+    post_deploy: Vec<PostDeployRequirement>,
 }
 
 pub(super) fn settle_task(
@@ -108,6 +111,7 @@ pub(super) fn settle_task(
         operation_id,
         required_os: assessed.required_os,
         required_machine: assessed.required_machine,
+        post_deploy: assessed.post_deploy,
         applied_material: None,
     };
     write(context, applied, validated, snapshot)
@@ -278,6 +282,15 @@ fn assess(
         context.runtime.automation_execution_location(),
     )
     .map_err(refused(task_id, "invalid"))?;
+    let post_deploy = post_deploy(
+        action,
+        task_id,
+        &assessment,
+        criteria,
+        &native_os,
+        native_machine.as_ref(),
+    )
+    .map_err(refused(task_id, "invalid"))?;
     attach_host_findings(
         &mut assessment,
         snapshot,
@@ -292,6 +305,7 @@ fn assess(
         current,
         required_os: native_os,
         required_machine: native_machine,
+        post_deploy,
     })
 }
 

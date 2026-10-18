@@ -184,6 +184,13 @@ pub use source_repair::{
     SourceRepairBinding, SourceRepairOwner, SourceRepairSuccessor, source_repair_reservations,
 };
 
+mod post_deploy;
+pub use post_deploy::{
+    OWED_CRITERIA_FIELD, OwedCriterion, POST_DEPLOY_HEADER, POST_DEPLOY_OWED_EVENT,
+    POST_DEPLOY_RECORDED_EVENT, PostDeployOutcome, PostDeployOwed, PostDeployResult,
+    post_deploy_header,
+};
+
 mod pr_base_update;
 pub use pr_base_update::{
     PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission, PrBaseUpdateReservation,

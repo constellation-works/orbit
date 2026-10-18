@@ -248,8 +248,16 @@ pub(super) fn apply_task(
                     target_status.cli_name()
                 ));
             }
-            let requirements = super::validation_tools::ImplementationLane::resolve(runtime)
+            let mut requirements = super::validation_tools::ImplementationLane::resolve(runtime)
                 .operator_requirements(&current);
+            // A typed post-deploy measurement is the operator's work after
+            // landing, not a tool requirement for candidate admission.
+            requirements.retain(|requirement| {
+                !task
+                    .post_deploy
+                    .iter()
+                    .any(|owed| owed.criterion == requirement.criterion)
+            });
             let mut assessed = current.clone();
             assessed.context_files = task.after.clone();
             assessed.tags = tags_after.clone();
@@ -308,6 +316,9 @@ pub(super) fn apply_task(
                         task.required_machine.clone(),
                     )
                 });
+            let post_deploy = (!task.post_deploy.is_empty()).then(|| {
+                super::post_deploy::PostDeployFinding::new(&assessed, task.post_deploy.clone())
+            });
             let mutation_params = AtomicTaskMutationParams {
                 actor: super::PILOT_ACTOR.to_string(),
                 operation_id: task.operation_id.clone(),
@@ -344,6 +355,7 @@ pub(super) fn apply_task(
                     "operator_validation_hold": operator_hold,
                     "host_operational_hold": host_operational_hold,
                     "native_os_hold": native_os_hold,
+                    "post_deploy": post_deploy,
                     "context_files_before": snapshot.context_files,
                     "complexity_before": snapshot.complexity,
                     "complexity_after": task.complexity,

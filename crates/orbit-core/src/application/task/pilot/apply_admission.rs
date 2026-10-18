@@ -56,6 +56,9 @@ pub(super) struct ValidatedTask {
     pub(super) required_os: Vec<crate::application::task::NativeOsRequirement>,
     /// The typed owner-machine finding, persisted in the same hold.
     pub(super) required_machine: Option<crate::application::task::MachineRequirement>,
+    /// The typed post-deploy finding, persisted as the audit's
+    /// `post_deploy`. It holds no admission.
+    pub(super) post_deploy: Vec<super::PostDeployRequirement>,
     /// Exact material certified by the atomic write, recovered from its audit
     /// on replay rather than adopted from a later task read.
     pub(super) applied_material: Option<AppliedTaskMaterial>,

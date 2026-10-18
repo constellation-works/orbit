@@ -174,6 +174,26 @@ outside the agent sandbox and pins the passing logs for the owner, so the task
 settles without a PR; a failing replay fails the claim with its output, and an
 empty list or a selector that runs no test is refused.
 
+When only the deployed build on a named host can evidence a criterion, after
+the change merges and is deployed there (that host's live service latency, the
+installed binary against its live store), the pilot records a `post_deploy`
+finding naming the criterion, the host and the exact measurement command,
+committed as `post_deploy` in its assessment audit. It is separate from
+`required_machine` and holds no admission: running on that host would still
+measure the deployed build, not the candidate. A criterion is typed in one of
+the two, never both. The finding only lets the implementer hand the criterion
+off as owed after deploy (see the task-execution reference); measurements the
+candidate can repeat, such as timing the worktree's own binary, are ordinary
+criteria.
+
+Write such work as two kinds of criteria. Candidate criteria are measured by
+the implementer with its own build: execve or request counts, payload size,
+CLI timing of the worktree build, a test server started from the candidate.
+Post-deploy targets are stated as such and name the host and the exact
+measurement command, for example "After deploy, on `<host>`: `<command>`
+reports p95 <= 150 ms over 20 paced samples". Only the second kind can be
+owed.
+
 Only typed findings route work: a host requirement stated in warning prose does
 not. Platform mentions, cross-compilation targets, mocked checks, negative
 tests and measurements any host could repeat are not findings.

@@ -369,6 +369,27 @@ pub trait RuntimeHost: Send + Sync {
         record: &orbit_types::workflow::FlakyValidation,
     ) -> Result<(), OrbitError>;
 
+    /// Admit an implementer's criteria owed after deploy against the task
+    /// pilot's post-deploy finding, refusing any criterion the pilot did not
+    /// type. An owner run records the admitted claim in task history; a
+    /// claimed leaf only checks it, because the owner admits it again when
+    /// it accepts the handoff.
+    fn admit_owed_criteria(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        owed: &[orbit_types::workflow::OwedCriterion],
+    ) -> Result<(), OrbitError>;
+
+    /// The criteria of the task's current post-deploy record that no
+    /// operator has recorded met. With `run_id`, only a record that run made
+    /// counts. A delivery that still owes any settles in `review`.
+    fn outstanding_owed_criteria(
+        &self,
+        task_id: &str,
+        run_id: Option<&str>,
+    ) -> Result<Vec<usize>, OrbitError>;
+
     // ── Config accessors ───────────────────────────────────────────────
 
     /// Commands every delivered candidate must pass

@@ -273,6 +273,16 @@ spec:
        - The task is wrong, contradictory, or should not be done as written:
          `reject` with the evidence.
        - The task is obsolete or superseded by other landed work: `archive`.
+       - The implementation is otherwise complete and its only unmet
+         criterion is one the task's latest task-pilot assessment lists in
+         `post_deploy`: evidence only the deployed build on the named host can
+         produce, which no run can meet before merge. That is not an
+         environmental failure. `resume` the failed implementation step with a
+         rationale naming each such criterion, its host and measurement
+         command, so the implementer hands it off as `owed_criteria`; the
+         delivery then waits in review until an operator records the
+         measurement. A criterion the pilot did not type is never owed:
+         classify it under the other cases.
        - Environmental failure (missing sandbox such as Bubblewrap, GitHub or
          provider permission, rate limit, policy denial): `requeue` only when
          you have evidence the environment has changed since the failure (for

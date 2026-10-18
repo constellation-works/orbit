@@ -1564,6 +1564,7 @@ fn handoff_with_logs(
         execution_summary: "Outcome: success\nRequired checks passed for pinned candidate".into(),
         validation: vec![],
         footprint_widening: vec![],
+        owed_criteria: vec![],
     };
     let artifacts = commands
         .iter()

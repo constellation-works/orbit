@@ -180,6 +180,21 @@ spec:
                     type: string
                   evidence:
                     type: string
+            post_deploy:
+              type: array
+              items:
+                type: object
+                required: [criterion, host, command, evidence]
+                properties:
+                  criterion:
+                    type: integer
+                    minimum: 1
+                  host:
+                    type: string
+                  command:
+                    type: string
+                  evidence:
+                    type: string
       summary:
         type: string
   instruction: |
@@ -348,7 +363,23 @@ spec:
        `owner_machine`, so when the criterion needs another machine, or
        `owner_machine` is null, leave `required_machine` empty and report the
        requirement in `utility_warnings` for an operator to arrange.
-       Keep the bar high for both findings: record one only when the
+       Also check whether a criterion can be evidenced only by the deployed
+       build on a named host, after the change merges and is deployed there:
+       the latency of that host's live service, or the installed binary's
+       behaviour against its live store. No candidate can meet it before
+       merge, wherever it runs: routing the task to that host still measures
+       the deployed build, not the candidate. Record each such criterion in
+       `post_deploy` as
+       `{"criterion":N,"host":"<host>","command":"<exact measurement command>","evidence":"..."}`
+       and not in `required_os` or `required_machine`; apply refuses a
+       criterion typed in both. It holds no admission: it only lets the
+       implementer hand the criterion off as owed after deploy instead of
+       failing, and the delivery then waits in review for an operator to
+       record the measurement. A measurement the candidate can repeat is an
+       ordinary criterion, not `post_deploy`: timing the worktree's own built
+       binary, an execve or request count of it, its payload size, or a test
+       server started from the candidate.
+       Keep the bar high for all three findings: record one only when the
        criterion cannot be met anywhere else. A host or platform mention,
        a measurement that any host could repeat on its own data, a
        cross-compilation target, a mocked platform check, or a negative test
@@ -451,7 +482,8 @@ spec:
         "utility_warnings":[],
         "surface_warnings":[],
         "required_os":[],
-        "required_machine":[]
+        "required_machine":[],
+        "post_deploy":[]
       }],
       "summary":"one short partition summary"
     },"error":null}

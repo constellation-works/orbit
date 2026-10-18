@@ -68,8 +68,9 @@ pub fn task_record_json(
 ///
 /// `next_step` says what to do about a task a failed run left `blocked`.
 /// `final_recovery` is the last automated final-recovery decision, with
-/// `run_id`, `decision`, `outcome` and `at`. Each key is present only when it
-/// applies. `orbit task show`, `orbit.task.show`, `GET /api/tasks/:id` and a
+/// `run_id`, `decision`, `outcome` and `at`. `owed_criteria` lists each
+/// criterion the delivery owes after deploy, with its host, command, target
+/// and state. Each key is present only when it applies. `orbit task show`, `orbit.task.show`, `GET /api/tasks/:id` and a
 /// routed remote show all serve this record and add only their own extras.
 pub fn task_show_json(
     runtime: &OrbitRuntime,
@@ -93,6 +94,9 @@ pub fn task_show_json(
                 "at": record.at,
             }),
         );
+    }
+    if let Some(owed) = super::owed_criteria_json(&row.history) {
+        object.insert("owed_criteria".to_string(), owed);
     }
     Ok(object)
 }

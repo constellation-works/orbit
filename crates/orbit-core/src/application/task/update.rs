@@ -484,6 +484,12 @@ impl OrbitRuntime {
         {
             append_history.push(resolution);
         }
+        if operator_write
+            && let Some(result) =
+                self.post_deploy_resolution(&task, params.comment.as_deref(), &effective_label)?
+        {
+            append_history.push(result);
+        }
         if let Some(history) = crew_redraw_history {
             append_history.push(history);
         } else if let Some(replacement) = params.crew.as_ref()

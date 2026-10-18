@@ -336,7 +336,7 @@ fn validation_material(task: &Task) -> String {
 
 /// What a [`NativeOsHold`] assessed: editing any acceptance criterion is a
 /// re-scope that releases it.
-fn criteria_digest(task: &Task) -> String {
+pub(super) fn criteria_digest(task: &Task) -> String {
     sha256_hex(json!(task.acceptance_criteria).to_string().as_bytes())
 }
 
@@ -530,14 +530,21 @@ impl OrbitRuntime {
                 operation_id,
                 ("material", &material),
             );
+            let post_deploy = super::post_deploy::requirements_from_audit(task, &audit)?;
+            let is_candidate_requirement = |requirement: &OperatorValidationRequirement| {
+                !post_deploy
+                    .iter()
+                    .any(|owed| owed.criterion == requirement.criterion)
+            };
             if let Some(hold) = audit
                 .get("operator_validation_hold")
                 .filter(|hold| !hold.is_null())
             {
-                let hold: OperatorValidationHold =
-                    serde_json::from_value(hold.clone()).map_err(|error| {
+                let mut hold: OperatorValidationHold = serde_json::from_value(hold.clone())
+                    .map_err(|error| {
                         OrbitError::Execution(format!("decode operator validation hold: {error}"))
                     })?;
+                hold.requirements.retain(is_candidate_requirement);
                 if hold.material == material && !hold.requirements.is_empty() && !operator_decision
                 {
                     return Ok(Some(PilotAdmissionHold::OperatorValidation(hold)));
@@ -551,7 +558,10 @@ impl OrbitRuntime {
                 if !edited {
                     let mut registered = self.allowlist_known_tool_names();
                     registered.sort();
-                    let requirements = operator_validation_requirements(task, &registered);
+                    let requirements = operator_validation_requirements(task, &registered)
+                        .into_iter()
+                        .filter(is_candidate_requirement)
+                        .collect::<Vec<_>>();
                     if !requirements.is_empty() {
                         return Ok(Some(PilotAdmissionHold::OperatorValidation(
                             OperatorValidationHold::new(task, requirements),

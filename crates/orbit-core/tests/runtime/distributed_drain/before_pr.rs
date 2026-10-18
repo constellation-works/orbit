@@ -402,6 +402,7 @@ impl ReviewedHandoff {
             execution_summary: "Outcome: success".into(),
             validation: vec![],
             footprint_widening: vec![],
+            owed_criteria: vec![],
         };
         if !commands.is_empty() {
             git(&repo, &["checkout", "-q", &branch]);

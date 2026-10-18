@@ -47,6 +47,7 @@ fn handoff(
             execution_summary: "Outcome: success".into(),
             validation: vec![],
             footprint_widening: vec![],
+            owed_criteria: vec![],
         },
         required_commands: vec![],
         accepted_at: Utc::now(),

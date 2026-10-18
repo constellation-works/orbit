@@ -260,6 +260,13 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
             final_recovery_text(record)
         );
     }
+    // Criteria the delivery owes until the deployed build is measured.
+    if let Some(owed) = task.get("owed_criteria") {
+        let _ = writeln!(out, "{}", bold("Owed After Deploy:"));
+        for line in owed_criteria_lines(owed) {
+            let _ = writeln!(out, "  {line}");
+        }
+    }
     if let Some(pr_status) = field("pr_status") {
         let _ = writeln!(out, "{} {}", bold("PR Status:"), pr_status);
     }
@@ -455,6 +462,29 @@ pub(crate) fn final_recovery_text(record: &Value) -> String {
         part("run_id"),
         timestamp(part("at"))
     )
+}
+
+/// One line per owed criterion on a task show: its state, host, command and
+/// target. Local and routed text both use this.
+pub(crate) fn owed_criteria_lines(owed: &Value) -> Vec<String> {
+    owed.as_array()
+        .into_iter()
+        .flatten()
+        .map(|entry| {
+            let part = |key: &str| entry.get(key).and_then(Value::as_str).unwrap_or_default();
+            format!(
+                "{}. [{}] on {}: `{}` (target {})",
+                entry
+                    .get("criterion")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
+                part("state"),
+                part("host"),
+                part("command"),
+                part("target")
+            )
+        })
+        .collect()
 }
 
 /// A sidecar the tool serialized from its typed records.

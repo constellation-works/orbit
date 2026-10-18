@@ -149,6 +149,11 @@ pub struct TaskHandoff {
     /// Recomputed from Git by the follower and independently by the owner.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub footprint_widening: Vec<String>,
+    /// Criteria the task pilot typed post-deploy that this delivery owes
+    /// until the deployed build is measured. The owner admits each against
+    /// its own pilot finding when it accepts the handoff.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owed_criteria: Vec<super::OwedCriterion>,
 }
 
 /// Captured command output in an owner-accessible task artifact, never an agent reply.
