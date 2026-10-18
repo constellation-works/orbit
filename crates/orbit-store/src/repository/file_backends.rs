@@ -385,6 +385,13 @@ impl TaskStoreBackend for TaskV2Store {
     ) -> Result<Vec<crate::contracts::TaskTerminalTransition>, OrbitError> {
         self.in_boundary(|| self.task_terminal_transitions(since))
     }
+
+    fn task_defect_filings(
+        &self,
+        since: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<Vec<crate::contracts::TaskDefectFiling>, OrbitError> {
+        self.in_boundary(|| self.task_defect_filings(since))
+    }
 }
 
 impl ScopedStore<Task> for TaskV2Store {

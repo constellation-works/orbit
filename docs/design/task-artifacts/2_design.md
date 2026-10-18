@@ -248,7 +248,7 @@ Task delete publishes a canonical-bundle tombstone, unregisters the binding from
 
 The bundle remains canonical. The registry maintains generated projections from each task envelope:
 
-- `task_bundle_index`: one row per registered task with workspace, status, priority, `job_run_id`, timestamps, terminal month, and complexity (empty string for unset; SQL `NULL` only until the first rebuild after the column was added).
+- `task_bundle_index`: one row per registered task with workspace, status, priority, `job_run_id`, timestamps, terminal month, complexity (empty string for unset; SQL `NULL` only until the first rebuild after the column was added), and task type (SQL `NULL` only until the defect trend's first rebuild after registry v2 added it).
 - `task_bundle_tags`: normalized tag rows with AND-style filtering semantics.
 - `task_bundle_relations`: directed `(source_task_id, relation_type, target_id)` rows plus an inverse lookup index for task targets.
 

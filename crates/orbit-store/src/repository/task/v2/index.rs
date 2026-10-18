@@ -4,7 +4,8 @@ use super::envelope_cache::EnvelopeStamp;
 use super::repair_gate::{RepairEvidence, RepairGate, RepairTicket};
 use super::*;
 use crate::contracts::{
-    EnvelopeStampRecord, IndexedTaskRow, TaskCompletionByComplexity, TaskTerminalTransition,
+    EnvelopeStampRecord, IndexedTaskRow, TaskCompletionByComplexity, TaskDefectFiling,
+    TaskTerminalTransition,
 };
 use orbit_common::StorageLayer;
 use orbit_common::fs::io::hold_step;
@@ -60,6 +61,32 @@ impl TaskV2Store {
         self.ensure_complexity_indexed()?;
         self.registry
             .terminal_transitions(&self.workspace_id, since)
+    }
+
+    pub(crate) fn task_defect_filings(
+        &self,
+        since: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<Vec<TaskDefectFiling>, OrbitError> {
+        self.ensure_task_type_indexed()?;
+        self.registry.defect_filings(&self.workspace_id, since)
+    }
+
+    /// One-time rebuild after registry v2 added `task_type` as a nullable
+    /// column. Best effort, like [`Self::ensure_complexity_indexed`]: rows a
+    /// refused or failed repair leaves `NULL` are simply not counted as bugs.
+    fn ensure_task_type_indexed(&self) -> Result<(), OrbitError> {
+        if !self
+            .registry
+            .workspace_index_has_null_task_type(&self.workspace_id)?
+        {
+            return Ok(());
+        }
+        if let Some(ticket) = self.admit_index_repair()?
+            && let Ok(bundles) = self.bundle_store.list_bundles()
+        {
+            self.attempt_index_repair(ticket, &bundles, "task_type column unpopulated");
+        }
+        Ok(())
     }
 
     /// One-time rebuild after `complexity` was added as a nullable column.

@@ -5,12 +5,15 @@ use super::partition_id::validate_partition_id;
 use super::queries::{TaskIndexWriter, task_bundle_by_id, task_ids_for_workspace};
 use super::relations::validate_replacement_relations;
 use super::store::TaskRegistryStore;
-use crate::contracts::{TaskCompletionByComplexity, TaskIndexFilter, TaskTerminalTransition};
+use crate::contracts::{
+    TaskCompletionByComplexity, TaskDefectFiling, TaskIndexFilter, TaskTerminalTransition,
+};
 use chrono::{DateTime, Utc};
 use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
-    TaskEnvelopeV2, TaskStatus, complexity_bucket, complexity_bucket_ord, normalize_task_tags,
+    TaskEnvelopeV2, TaskStatus, TaskType, complexity_bucket, complexity_bucket_ord,
+    normalize_task_tags,
 };
 use rusqlite::TransactionBehavior;
 use std::collections::{BTreeMap, BTreeSet};
@@ -232,6 +235,102 @@ impl TaskRegistryStore {
             .query_row([partition_id], |row| row.get(0))
             .map_err(sqlite_store_error)?;
         Ok(exists != 0)
+    }
+
+    /// True when this workspace still has index rows whose `task_type` column
+    /// was added by registry v2 and has not been written yet (`NULL`).
+    pub fn workspace_index_has_null_task_type(
+        &self,
+        partition_id: &str,
+    ) -> Result<bool, OrbitError> {
+        let partition_id = validate_partition_id(partition_id)?;
+        let conn = self.read()?;
+        let exists: i64 = conn
+            .prepare_cached(
+                "SELECT EXISTS(
+                    SELECT 1 FROM task_bundle_index
+                    WHERE workspace_id = ?1 AND task_type IS NULL
+                 )",
+            )
+            .map_err(sqlite_store_error)?
+            .query_row([partition_id], |row| row.get(0))
+            .map_err(sqlite_store_error)?;
+        Ok(exists != 0)
+    }
+
+    /// Indexed `bug` tasks created at or after `since` (all of them for
+    /// `None`), oldest first, with their tags and the indexed type of each
+    /// `regression_from` target.
+    pub fn defect_filings(
+        &self,
+        partition_id: &str,
+        since: Option<DateTime<Utc>>,
+    ) -> Result<Vec<TaskDefectFiling>, OrbitError> {
+        let partition_id = validate_partition_id(partition_id)?;
+        let conn = self.read()?;
+        let mut bugs = conn
+            .prepare_cached(
+                "SELECT task_id, created_at FROM task_bundle_index
+                 WHERE workspace_id = ?1 AND task_type = 'bug'
+                 ORDER BY created_at ASC, task_id ASC",
+            )
+            .map_err(sqlite_store_error)?;
+        let rows = bugs
+            .query_map([&partition_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(sqlite_store_error)?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (task_id, raw_created_at) = row.map_err(sqlite_store_error)?;
+            let filed_at = DateTime::parse_from_rfc3339(&raw_created_at)
+                .map_err(|e| {
+                    OrbitError::Store(format!(
+                        "invalid indexed created_at '{raw_created_at}' for task '{task_id}': {e}"
+                    ))
+                })?
+                .with_timezone(&Utc);
+            if since.is_some_and(|since| filed_at < since) {
+                continue;
+            }
+            out.push(TaskDefectFiling {
+                task_id,
+                filed_at,
+                tags: Vec::new(),
+                regression_from_types: Vec::new(),
+            });
+        }
+        let mut tags = conn
+            .prepare_cached("SELECT tag FROM task_bundle_tags WHERE task_id = ?1 ORDER BY tag")
+            .map_err(sqlite_store_error)?;
+        let mut causes = conn
+            .prepare_cached(
+                "SELECT target.task_type FROM task_bundle_relations relation
+                 LEFT JOIN task_bundle_index target
+                   ON target.task_id = relation.target_task_id
+                  AND target.workspace_id = relation.workspace_id
+                 WHERE relation.source_task_id = ?1
+                   AND relation.relation_type = 'regression_from'
+                 ORDER BY relation.target_task_id",
+            )
+            .map_err(sqlite_store_error)?;
+        for filing in &mut out {
+            filing.tags = tags
+                .query_map([&filing.task_id], |row| row.get::<_, String>(0))
+                .map_err(sqlite_store_error)?
+                .collect::<Result<_, _>>()
+                .map_err(sqlite_store_error)?;
+            let raw_types: Vec<Option<String>> = causes
+                .query_map([&filing.task_id], |row| row.get::<_, Option<String>>(0))
+                .map_err(sqlite_store_error)?
+                .collect::<Result<_, _>>()
+                .map_err(sqlite_store_error)?;
+            filing.regression_from_types = raw_types
+                .into_iter()
+                .map(|raw| raw.and_then(|raw| raw.parse::<TaskType>().ok()))
+                .collect();
+        }
+        Ok(out)
     }
 
     /// Status counts grouped by complexity bucket. `NULL`, empty, and

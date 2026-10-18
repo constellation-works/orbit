@@ -487,6 +487,19 @@ td .rel-rate { font-size: 12px; }
 .mx-s-medium { --mx-c: var(--mx-medium); }
 .mx-s-hard { --mx-c: var(--mx-hard); }
 .mx-s-other { --mx-c: var(--mx-other); }
+/* Defects: lineage (orange marks fixes that broke something) and origin
+   (seven finders in categorical order, the rest folded into Other). Both
+   palettes pass the dataviz validator on the dark card surface. */
+.mx-s-fix_for_fix { --mx-c: #d95926; }
+.mx-s-regression { --mx-c: #3987e5; }
+.mx-s-unattributed { --mx-c: #4a525d; }
+.mx-s-code-review { --mx-c: #3987e5; }
+.mx-s-full-code-review { --mx-c: #d95926; }
+.mx-s-delivery-code-review { --mx-c: #199e70; }
+.mx-s-qa-sweep { --mx-c: #c98500; }
+.mx-s-qa-full-sweep { --mx-c: #d55181; }
+.mx-s-security-review { --mx-c: #008300; }
+.mx-s-ci-failure-sweep { --mx-c: #9085e9; }
 .mx-muted { color: var(--fg-disabled); }
 .mx-card {
   display: flex; flex-direction: column; gap: 12px; min-width: 0;
@@ -611,7 +624,7 @@ td .rel-rate { font-size: 12px; }
 }
 .mx-vol-col.on { opacity: 1; }
 .mx-x-axis { position: relative; height: 18px; margin-top: 6px; }
-.mx-chart-completed .mx-x-axis { border-top: 1px solid var(--border); padding-top: 4px; }
+.mx-chart-completed .mx-x-axis, .mx-chart-defects .mx-x-axis { border-top: 1px solid var(--border); padding-top: 4px; }
 .mx-x-tick {
   position: absolute; transform: translateX(-50%);
   color: var(--fg-mute); font: 11px var(--font-mono); white-space: nowrap;

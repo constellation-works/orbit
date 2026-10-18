@@ -5,6 +5,7 @@
 //! `ledger` is the registry's own migration ledger, run by the store ledger engine,
 //! and documents the `user_version` fence kept for pre-ledger binaries.
 //! `baseline` is the frozen ledger v1 body that pre-ledger registries adopt through.
+//! `index_task_type` is the frozen ledger v2 body that indexes each task's `type`.
 //! `schema` adopts, migrates and admits a registry when it opens.
 //! `queries` contains internal SQL helpers and row-to-type mapping.
 //! `util` contains shared path, time, relation, and WAL helpers used by the registry.
@@ -26,6 +27,7 @@ mod baseline;
 mod bindings;
 mod envelope_stamps;
 mod index;
+mod index_task_type;
 pub(crate) mod ledger;
 mod listing;
 mod partition_id;

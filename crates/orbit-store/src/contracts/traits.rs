@@ -35,7 +35,8 @@ use super::v2_audit::{
 use crate::contracts::incident::{FailureIncidentQuery, FailureIncidentReport};
 use crate::contracts::{
     AuditActorAggregate, AuditAttributionAggregate, AuditEventFilter, AuditEventInsertParams,
-    AuditRoleAggregate, AuditToolAggregate, TaskCompletionByComplexity, TaskTerminalTransition,
+    AuditRoleAggregate, AuditToolAggregate, TaskCompletionByComplexity, TaskDefectFiling,
+    TaskTerminalTransition,
 };
 
 pub trait TaskStoreBackend: Send + Sync {
@@ -501,6 +502,15 @@ pub trait TaskStoreBackend: Send + Sync {
         &self,
         _since: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Vec<TaskTerminalTransition>, OrbitError> {
+        Ok(Vec::new())
+    }
+
+    /// `bug` tasks whose index `created_at` is at or after `since`, oldest
+    /// first. Default is empty; the v2 store answers from the SQLite index.
+    fn task_defect_filings(
+        &self,
+        _since: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<Vec<TaskDefectFiling>, OrbitError> {
         Ok(Vec::new())
     }
 }

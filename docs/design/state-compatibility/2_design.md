@@ -234,6 +234,13 @@ before anything is written. Seeding the allocator is data, not shape: every
 writable open that finds no `local` allocator row seeds it after the ledger
 has run.
 
+Registry v2, `index_task_type`, is `Additive`: it adds a nullable
+`task_bundle_index.task_type` column and an index on workspace, type and
+creation time, for the defect trend. Existing rows stay `NULL` until that
+trend's first read rebuilds the workspace's index from bundles. A binary
+without the entry keeps writing the registry; its upserts leave the column as
+it was and its inserts leave it `NULL` for the same rebuild.
+
 A registry whose ledger is newer than the binary is decided from its record,
 as in §3: additive-newer stays writable; read-compatible-newer opens with
 `query_only` on the writer connection and no read pool, so the registry

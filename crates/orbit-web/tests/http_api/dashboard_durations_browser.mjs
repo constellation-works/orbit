@@ -53,6 +53,10 @@ function payloadFor(url) {
       window: trendWindow(url), buckets: [0, 1, 2].map(i => ({ start: ago((3 - i) * 3600000), ...counts })), current: counts, previous: counts,
     };
     case '/api/tasks/completion-by-complexity': return { by_complexity: [] };
+    case '/api/diagnostics/defects': {
+      const empty = { total: 0, lineage: { fix_for_fix: 0, regression: 0, unattributed: 0 }, origin: { other: 0 } };
+      return { window: trendWindow(url), lineages: [], origins: ['other'], buckets: [0, 1, 2].map(i => ({ start: ago((3 - i) * 3600000), ...empty })), current: empty, previous: empty };
+    }
     case '/api/job-runs': return list([runningRun]);
     case '/api/runs/jrun-duration-fixture': return { run: runningRun, steps };
     case '/api/runs/jrun-duration-fixture/events':
