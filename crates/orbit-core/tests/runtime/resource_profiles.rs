@@ -856,12 +856,16 @@ fn no_diff_profiles_flag_build_like_deliveries_except_templates_that_build_by_de
 }
 
 /// Persisted provenance rejects partial or legacy Mac deliveries without
-/// changing raw evidence. Linux legacy rows remain usable on Linux.
+/// changing raw evidence. Linux legacy rows remain usable on Linux, and Mac
+/// rows from before orphans were adopted remain usable everywhere.
 fn profiles_exclude_untrusted_cpu_without_rewriting_raw_minutes() {
-    use orbit_store::contracts::{CPU_ACCOUNTING_LINUX, CPU_ACCOUNTING_MACOS};
+    use orbit_store::contracts::{
+        CPU_ACCOUNTING_LINUX, CPU_ACCOUNTING_MACOS, CPU_ACCOUNTING_MACOS_TREE_ONLY,
+    };
 
     for (accounting, eligible) in [
         (Some(CPU_ACCOUNTING_MACOS), true),
+        (Some(CPU_ACCOUNTING_MACOS_TREE_ONLY), true),
         (Some(CPU_ACCOUNTING_LINUX), true),
         (None, cfg!(target_os = "linux")),
         (Some("macos-absolute-v0"), false),

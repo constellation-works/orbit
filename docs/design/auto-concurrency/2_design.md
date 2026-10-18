@@ -185,8 +185,8 @@ class in `worker/delivery_class.rs`, the host reads in
   `orbit gc runs --apply`, and so the `store-gc` routine, prunes them
   host-wide.
 - **macOS process tree.** macOS has no scopes. Every 5 s the worker sums
-  its own process tree (`process_tree` and `TreeCpuAccount` in
-  `ancestry.rs`). A process's total is its own CPU plus the CPU of the
+  its own process tree and the orphans it adopts below (`SessionTree` and
+  `TreeCpuAccount` in `ancestry.rs`). A process's total is its own CPU plus the CPU of the
   children it has waited for (`ri_child_user_time` and
   `ri_child_system_time`, which carry what those children had reaped in
   turn). CPU time is the non-negative growth of the total of each process
@@ -204,7 +204,7 @@ class in `worker/delivery_class.rs`, the host reads in
   children) is still matched. If it is alive under the same parent, the walk
   missed it and it stays tracked. If it is alive under another parent, it
   was reparented away: what it ran in the tree stays charged and it owes
-  nothing. An exited process nobody has waited for stays listed and
+  nothing; if the sample adopted it as an orphan, it stays tracked. An exited process nobody has waited for stays listed and
   readable as a zombie, so one that left the walk was reaped before the walk
   reached it, and a reap by its owner shows in the owner's reaped total in
   that sample or at the owner's next sighting. A debt settles only at those
@@ -228,6 +228,48 @@ class in `worker/delivery_class.rs`, the host reads in
   overstate the tree the way `memory.current` does. A tree that cannot be
   read (a sandbox denial, for example) skips that sample and leaves the
   worker's run outcome unchanged.
+- **macOS orphans.** Parent links lose a descendant once launchd adopts it:
+  a build still running after the tool shell that started it exits, or a
+  compile server a short-lived client started. Such an orphan keeps its
+  session, since `setsid` is the only way out of one and no process can join
+  one. The worker calls `setsid` at spawn, and an agent's tool shell starts
+  its own session inside the tree, so each sample also walks launchd's
+  children in a session that the root or a sampled member leads
+  (`SessionTree` in `ancestry.rs`), with their descendants. An adopted
+  orphan has no parent in the sample, so its growth is charged and its exit
+  creates no debt. A session stays owned while a sample finds one of its
+  members, so an orphan whose session leader has exited is still adopted;
+  macOS allocates pids in order and never reuses a live session's id.
+  Minutes sampled this way carry `macos-mach-ns-v3` (§3.3).
+- **Measured macOS attribution.** `native_tree_attributes_a_build_like_workload`
+  (§8) runs a workload under a re-executed worker that leads its own
+  session and samples every 5 s: three wrapper-plus-compiler jobs, a 0.2 s
+  client whose compile server outlives it, and a shell that exits under a
+  2 s build. Each workload process reports its own `getrusage` CPU. Four
+  runs on the 14-core Mac (2026-10-18) gave 19.2 CPU-s of workload; the
+  session tree recorded 17.2 (89.6%) and parent links alone 12.4 (64.5%).
+  Parent links captured the tree-shaped build in full (12.4 of 12.4) and
+  missed the server and the orphaned build; the session tree added the
+  server (4.8 of 4.8). The 2 s orphan started and was reaped by launchd
+  between two samples, so neither walk saw it. Host-wide non-idle CPU over
+  the same 10 s was 70–96 CPU-s, because other deliveries were running; on a
+  shared host it does not isolate what the workload caused outside its tree.
+  The worker's tree misses:
+  - an orphan's CPU after the last sample that saw it, since launchd reaps
+    it, and an orphan that lives entirely between two samples;
+  - a process that starts its own session after leaving the tree (a daemon
+    that forks and calls `setsid`), everything it starts, and a session
+    whose leader and members all ran between two samples;
+  - work that system services do on a delivery's behalf, for example
+    Spotlight indexing new files, code-signing and malware checks of each
+    newly linked binary, file-system events, and kernel time for I/O and
+    memory compression. These services are not in any worker's session,
+    and many cannot be read at all: on this Mac, 276 of 742 processes
+    refused `proc_pid_rusage` to a process running as the Orbit user;
+  - Orbit work outside a delivery run's worker, such as the drain itself
+    and runs of non-delivery jobs.
+
+  Every one of these lands in the forecast's flat baseline (§4).
 - **No scope, no samples, on Linux.** A Linux worker without a scope
   records nothing: containment disabled, or no user manager. That host stays
   on today's admission (§5.4) until it has samples.
@@ -325,7 +367,11 @@ actually used.
 ### 3.3 The profile
 
 Worker minutes now carry nullable `cpu_accounting` provenance. New Linux
-minutes use `linux-cgroup-v1`; new Mac minutes use `macos-mach-ns-v2`.
+minutes use `linux-cgroup-v1`; new Mac minutes use `macos-mach-ns-v3`,
+which adds orphans adopted through their session (§2) to the reaped
+descendants that `macos-mach-ns-v2` already counted. Stored `v2` minutes
+stay as they are and their deliveries stay eligible: they counted every
+process in the tree the same way and only missed orphans.
 The Mac sampler converts each process's own and reaped-children user plus
 system Mach absolute ticks using the host's `mach_timebase_info` ratio, with
 wide integer arithmetic, and combines them across samples as §2 describes.
@@ -337,7 +383,7 @@ times over, so profiles exclude their deliveries on every platform. Every
 Mac delivery recorded before this change carries `macos-mach-ns-v1` or no
 provenance, so the exclusion empties every Mac profile at upgrade: Mac
 admission starts cold, as on a host without profiles (§5.4), and profiles
-return only as `macos-mach-ns-v2` deliveries accumulate.
+return only as `macos-mach-ns-v2` or later deliveries accumulate.
 Apple's [fill_task_rusage implementation](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/bsd_kern.c)
 copies task power totals into these counters; their units must not be assumed
 to be nanoseconds. For example, a 125/3 host needs its actual ratio.
@@ -362,7 +408,7 @@ The additive storage migration leaves every historical counter and its
 nullable provenance unchanged. On Mac, profiles exclude the entire delivery
 if any minute lacks recognized provenance, including otherwise valid sibling
 runs. Unknown and superseded (`macos-mach-ns-v1`) provenance is excluded on
-every platform. Legacy unmarked
+every platform; `macos-mach-ns-v2` stays eligible. Legacy unmarked
 Linux minutes remain eligible on Linux because their cgroup units did not
 change. This compatibility rule supports host-local history; importing
 unmarked Mac history into a Linux store is unsupported. Raw minute reads
@@ -935,10 +981,20 @@ through complete host minutes and the earliest recorded offset (+5 minutes),
 then retain a fresh accuracy report with measured pairs. A unit/fixture pass,
 a worker-only measurement, or forecasts with no paired host minutes does not
 satisfy this operational verification. New native Mac worker minutes carry
-`macos-mach-ns-v2` provenance, which counts reaped descendants. Historical
-unmarked and `macos-mach-ns-v1` Mac minutes remain stored but their
-deliveries are excluded from profiles; this host-reader change does not
-rescale, backfill or relabel them.
+`macos-mach-ns-v3` provenance, which counts reaped descendants and adopted
+orphans. Historical unmarked and `macos-mach-ns-v1` Mac minutes remain
+stored but their deliveries are excluded from profiles; `macos-mach-ns-v2`
+minutes remain stored and eligible. Neither change rescales, backfills or
+relabels stored minutes.
+
+To measure how much of a delivery-shaped workload the worker's tree
+captures, run `scripts/build-budget.py -- cargo test -p orbit-core --lib
+application::job::pipeline::worker::tests::usage_tree::native_tree_attributes_a_build_like_workload
+-- --ignored --exact --nocapture` on macOS. It prints one JSON line with the
+workload's own CPU by component, what the session tree and parent links
+alone recorded, and host-wide non-idle CPU over the same window, and it
+asserts that the session tree captured 85–110% of the workload (§2 records
+the measured figures).
 Linux eligibility and raw history retention remain unchanged.
 
 ### 8.1 The accuracy report

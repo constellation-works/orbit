@@ -13,7 +13,13 @@
 //! successful read is a baseline and charges nothing. An unreadable tree
 //! leaves that baseline where it was, so the next success still has a
 //! previous sample to diff.
+//!
+//! The tree a worker samples is a [`SessionTree`]: the worker leads its own
+//! session, so a descendant orphaned to launchd is still walked, and so is
+//! one in a session a member started.
 
+#[cfg(target_os = "macos")]
+use orbit_common::process::ancestry::SessionTree;
 use orbit_common::process::ancestry::{ProcessStartKey, ProcessTreeProcess, TreeCpuAccount};
 
 use super::scope::ScopeUsage;
@@ -53,4 +59,14 @@ impl TreeSampler {
             memory_bytes,
         })
     }
+}
+
+/// The snapshots a worker rooted at `root` samples: its tree plus the orphans
+/// still in a session it leads.
+#[cfg(target_os = "macos")]
+pub(super) fn session_tree_reader(
+    root: u32,
+) -> impl FnMut() -> Option<Vec<ProcessTreeProcess>> + Send + 'static {
+    let mut tree = SessionTree::new(root);
+    move || tree.snapshot()
 }
