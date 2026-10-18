@@ -10,7 +10,7 @@ use orbit_store::contracts::{
 use orbit_types::workflow::ClaimFailureClass;
 
 use super::failure::release_evidence;
-use super::{Bind, PullDrain, PullPeer, Reconciled, SettleScope};
+use super::{Bind, PullDrain, PullPeer, Reconciled, ReconciliationHold, SettleScope};
 use crate::application::distributed::{is_owner_refusal, is_owner_transport_failure};
 use crate::application::job::pipeline::WorkerLaunchError;
 
@@ -127,9 +127,9 @@ impl PullDrain<'_> {
                 Ok(Reconciled::Open) => {}
                 // The latest idle answer wins; a held settlement never hides it.
                 Ok(idle @ Reconciled::Idle(_)) => outcome = idle,
-                Ok(Reconciled::Held) => {
+                Ok(held @ Reconciled::Held(_)) => {
                     if matches!(outcome, Reconciled::Open) {
-                        outcome = Reconciled::Held;
+                        outcome = held;
                     }
                 }
                 Err(error) => {
@@ -278,10 +278,10 @@ impl PullDrain<'_> {
     }
 
     /// Returns [`Reconciled::Idle`] for a newly reconciled idle receipt, and
-    /// [`Reconciled::Held`] for a settlement the owner refuses while holding
-    /// its claim: nothing new is admitted against an owner that will not
-    /// accept what this executor already owes it. Historical idle records are
-    /// skipped so the next polling pass can allocate a fresh ID.
+    /// [`Reconciled::Held`] when forecast capacity is unavailable or the
+    /// owner refuses a settlement while holding its claim: nothing new is
+    /// admitted while an earlier admission cannot advance. Historical idle
+    /// records are skipped so the next polling pass can allocate a fresh ID.
     pub(super) fn reconcile(
         &self,
         mut record: LocalPullAdmission,
@@ -306,13 +306,13 @@ impl PullDrain<'_> {
             record = match record.phase {
                 LocalPullPhase::Requested => {
                     if !self.peer.prepare(&record.request)? {
-                        return Ok(Reconciled::Held);
+                        return Ok(Reconciled::Held(ReconciliationHold::ForecastCapacity));
                     }
                     self.request(&record)?
                 }
                 LocalPullPhase::Claimed => {
                     if !self.peer.capacity(&record)? {
-                        return Ok(Reconciled::Held);
+                        return Ok(Reconciled::Held(ReconciliationHold::ForecastCapacity));
                     }
                     self.update(&record, LocalPullMutation::CreateLeaf)?
                 }
@@ -376,7 +376,7 @@ impl PullDrain<'_> {
                 LocalPullPhase::Settling => {
                     let delivered = self.deliver(&record)?;
                     if delivered.phase == LocalPullPhase::Settling {
-                        return Ok(Reconciled::Held);
+                        return Ok(Reconciled::Held(ReconciliationHold::Settlement));
                     }
                     delivered
                 }
@@ -384,7 +384,7 @@ impl PullDrain<'_> {
                 LocalPullPhase::Idle => {
                     return Ok(match record.receipt {
                         Some(receipt) => Reconciled::Idle(Box::new(receipt)),
-                        None => Reconciled::Held,
+                        None => Reconciled::Held(ReconciliationHold::MissingReceipt),
                     });
                 }
             };

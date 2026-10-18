@@ -21,7 +21,7 @@ use orbit_store::contracts::{
     AdmissionForecastRecord, AdmissionLoadQuery, AdmissionLoadStoreBackend, AdmissionReservation,
     HostResourceMinute, ResourceUsageStoreBackend, RunResourceMinute,
 };
-use orbit_types::workflow::{JobRun, PullAdmissionFit};
+use orbit_types::workflow::{DrainPassOutcome, JobRun, PullAdmissionFit};
 
 const GIB: u64 = 1024 * 1024 * 1024;
 
@@ -706,6 +706,64 @@ fn pending_pull_capacity_serializes_other_host_admitters_and_recovers_lost_repli
                     "an expired request must reacquire capacity before re-send"
                 );
                 assert!(pair.leaf_runs().is_empty());
+                let counters = pair
+                    .follower
+                    .read_run_state(&drain)
+                    .unwrap()
+                    .unwrap()
+                    .pull_drain
+                    .drain_pass_counters
+                    .unwrap();
+                assert_eq!(counters.passes, 2, "{counters:?}");
+                assert_eq!(
+                    counters.outcome(DrainPassOutcome::GapFitHeld),
+                    1,
+                    "{counters:?}"
+                );
+                assert!(
+                    !counters.held_by_reason.contains_key("admissions_stopped"),
+                    "{counters:?}"
+                );
+                let shown = pair
+                    .follower
+                    .run_tool_with_context_and_role(
+                        "orbit.workflow.run.show",
+                        json!({"id": drain}),
+                        Role::Admin,
+                        ToolContext {
+                            session_context: ToolSessionContext {
+                                effective_capabilities: BTreeSet::from([McpCapability::Operator]),
+                                ..ToolSessionContext::default()
+                            },
+                            ..ToolContext::default()
+                        },
+                    )
+                    .unwrap();
+                assert!(
+                    shown["drain_last_pass"]["admission_refusal"]
+                        .as_str()
+                        .is_some_and(|reason| reason.starts_with("forecast_no_headroom:")),
+                    "{shown}"
+                );
+                let report = pair
+                    .follower
+                    .forecast_accuracy_selected(
+                        AccuracySelection {
+                            since: Utc::now() - ChronoDuration::minutes(1),
+                            drain: Some(drain.clone()),
+                            mode: None,
+                        },
+                        Utc::now(),
+                    )
+                    .unwrap();
+                let workspace = pair.follower.workspace_id().unwrap();
+                let limiter = report
+                    .limiters
+                    .iter()
+                    .find(|limiter| limiter.workspace_id == workspace && limiter.run_id == drain)
+                    .expect("the follower drain has a limiter report");
+                assert_eq!(limiter.counters, counters);
+                assert_eq!(limiter.shares[&DrainPassOutcome::GapFitHeld], 0.5);
                 let now = Utc::now();
                 pair.follower
                     .sqlite_store()
@@ -1024,3 +1082,62 @@ crate::scenario_table!(
     an_enforcing_follower_claims_a_template_it_has_no_profile_of,
     an_enforcing_follower_is_refused_a_profiled_template_without_room
 );
+
+/// A stop/cancel observed after settlement ends the open admission pass.
+#[test]
+fn an_operator_stop_during_pull_reconciliation_is_counted_as_stopped() {
+    if !isolated(
+        module_path!(),
+        "an_operator_stop_during_pull_reconciliation_is_counted_as_stopped",
+    ) {
+        return;
+    }
+    for cancel in [false, true] {
+        let pair = Pair::new(2);
+        let drain = pair.run_drain();
+        let leaf = pair.running_leaf(&drain, 1);
+        pair.leaf_hands_off(&leaf);
+        let operator = pair.follower.clone();
+        let operator_drain = drain.clone();
+        *pair.wire.before_settle.lock().unwrap() = Some(Box::new(move || {
+            if cancel {
+                operator
+                    .cancel_job_run_with_options(&operator_drain, "operator", "cli", None, false)
+                    .unwrap();
+            } else {
+                operator
+                    .stop_workspace_auto_admissions(orbit_core::DrainAdmissionsStopRequest {
+                        actor: "operator",
+                        source: "run_auto_stop",
+                        reason: None,
+                        claim_token: None,
+                        force: false,
+                    })
+                    .unwrap();
+            }
+        }));
+        let sends = pair.wire.calls("orbit.task.pull").len();
+        let pass = pair.pass(&drain);
+        assert!(pass["error"].is_null(), "{pass}");
+        assert_eq!(pass["admitted"], 0, "{pass}");
+        assert_eq!(pair.wire.calls("orbit.task.pull").len(), sends);
+        let counters = pair
+            .follower
+            .read_run_state(&drain)
+            .unwrap()
+            .unwrap()
+            .pull_drain
+            .drain_pass_counters
+            .unwrap();
+        assert_eq!(
+            counters.held_by_reason.get("admissions_stopped"),
+            Some(&1),
+            "{counters:?}"
+        );
+        assert_eq!(
+            counters.outcome(DrainPassOutcome::GapFitHeld),
+            0,
+            "{counters:?}"
+        );
+    }
+}

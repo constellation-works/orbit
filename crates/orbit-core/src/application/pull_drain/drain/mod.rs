@@ -133,14 +133,24 @@ pub(crate) struct RefillPass {
     pub(crate) answer: Option<Box<AdmissionReceipt>>,
     /// The pass stopped because every slot under its ceiling was taken.
     pub(crate) ceiling_full: bool,
+    /// Reconciliation held the pass before it could request more work.
+    pub(crate) hold: Option<ReconciliationHold>,
+}
+
+/// Why a carried admission cannot advance yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReconciliationHold {
+    ForecastCapacity,
+    Settlement,
+    MissingReceipt,
 }
 
 /// How far one admission carried, and what that leaves the pass free to do.
 enum Reconciled {
     /// Nothing the admission owes holds new requests back.
     Open,
-    /// A settlement the owner has not accepted holds new requests back.
-    Held,
+    /// An admission that cannot advance holds new requests back.
+    Held(ReconciliationHold),
     /// The owner answered a request idle: nothing ready for this executor.
     Idle(Box<AdmissionReceipt>),
 }
