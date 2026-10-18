@@ -107,7 +107,20 @@ impl Delivery {
             .unwrap()
             .into_iter()
             .filter(|entry| entry.event == KNOWN_RED_VALIDATION_EVENT)
-            .map(|entry| KnownRedValidation::from_text(entry.note.as_deref().unwrap()).unwrap())
+            .map(|entry| match entry.decision {
+                Some(TaskDecision::KnownRedValidation(known)) => {
+                    assert!(
+                        entry
+                            .note
+                            .as_deref()
+                            .is_some_and(|note| note.starts_with(&known.text(""))),
+                        "the note still carries the record: {:?}",
+                        entry.note
+                    );
+                    known
+                }
+                other => panic!("the known red is a typed decision: {other:?}"),
+            })
             .collect()
     }
 }
@@ -269,7 +282,13 @@ fn flaky_handoff_evidence_is_pinned_and_recorded_in_owner_history() {
             .unwrap()
             .into_iter()
             .filter(|entry| entry.event == FLAKY_VALIDATION_EVENT)
-            .map(|entry| FlakyValidation::from_text(entry.note.as_deref().unwrap()).unwrap())
+            .map(|entry| match entry.decision {
+                Some(TaskDecision::FlakyValidation(flaky)) => {
+                    assert_eq!(entry.note, Some(flaky.text()), "the note is unchanged");
+                    flaky
+                }
+                other => panic!("the flaky pass is a typed decision: {other:?}"),
+            })
             .collect::<Vec<_>>();
         if case == "valid" {
             outcome.expect("passing isolated replay evidence is accepted");

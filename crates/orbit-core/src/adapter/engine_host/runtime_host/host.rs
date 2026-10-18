@@ -474,7 +474,9 @@ impl RuntimeHost for OrbitRuntime {
                     from_status: None,
                     to_status: None,
                     operation_id: None,
-                    decision: None,
+                    decision: Some(orbit_types::task::TaskDecision::FlakyValidation(
+                        record.clone(),
+                    )),
                 }],
                 ..Default::default()
             },

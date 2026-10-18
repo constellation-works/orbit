@@ -11,8 +11,8 @@ use orbit_core::{AuditEventInsertParams, AuditEventStatus, OrbitError, TaskStatu
 use orbit_engine::RuntimeHost;
 use orbit_types::task::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep,
-    TASK_ARTIFACT_SCHEMA_VERSION, TASK_EVENTS_FILE_NAME, TaskEventRowV2, TaskRelation,
-    TaskRelationType,
+    TASK_ARTIFACT_SCHEMA_VERSION, TASK_EVENTS_FILE_NAME, TaskDecision, TaskEventRowV2,
+    TaskRelation, TaskRelationType,
 };
 use serde_json::{Value, json};
 
@@ -82,6 +82,19 @@ fn append_event(
     note: Option<String>,
     to_status: Option<TaskStatus>,
 ) {
+    append_decided_event(fixture, task_id, at, event, note, to_status, None);
+}
+
+/// [`append_event`], recording `decision` on the row.
+fn append_decided_event(
+    fixture: &Fixture,
+    task_id: &str,
+    at: DateTime<Utc>,
+    event: &str,
+    note: Option<String>,
+    to_status: Option<TaskStatus>,
+    decision: Option<TaskDecision>,
+) {
     let dir = bundle_dir(fixture.path("").as_path(), task_id).expect("fixture task bundle");
     let path = dir.join(TASK_EVENTS_FILE_NAME);
     let rows = fs::read_to_string(&path).unwrap().lines().count();
@@ -95,7 +108,7 @@ fn append_event(
         from_status: None,
         to_status,
         operation_id: None,
-        decision: None,
+        decision,
     };
     let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
     writeln!(file, "{}", serde_json::to_string(&row).unwrap()).unwrap();
@@ -122,21 +135,24 @@ fn transition_and_return(
     );
 }
 
-fn widen(fixture: &Fixture, task_id: &str, file: &str) {
-    let note = serde_json::to_string(&ContextFilesWidening {
+/// Record a widening onto `file`, as a typed decision beside its note, or,
+/// unless `typed`, as an older binary wrote it: the note alone.
+fn widen(fixture: &Fixture, task_id: &str, file: &str, typed: bool) {
+    let widening = ContextFilesWidening {
         run_id: "jrun-widen".into(),
         step: ContextWideningStep::Implement,
         activity: "agent_implement".into(),
         selectors: vec![format!("file:{file}")],
-    })
-    .unwrap();
-    append_event(
+    };
+    let note = serde_json::to_string(&widening).unwrap();
+    append_decided_event(
         fixture,
         task_id,
         Utc::now(),
         CONTEXT_FILES_WIDENED_EVENT,
         Some(note),
         None,
+        typed.then_some(TaskDecision::ContextFilesWidened(widening)),
     );
 }
 
@@ -416,10 +432,11 @@ fn codebase_sections_count_distinct_tasks_and_split_causes() {
                 );
             }
 
-            // Footprint misses: one task widened twice onto the same path.
+            // Footprint misses: one task widened twice onto the same path,
+            // once typed and once in the note-only shape of older history.
             let widened = add(&fixture, "widened", &["src/widened.rs"], vec![]);
-            widen(&fixture, &widened, "src/widened.rs");
-            widen(&fixture, &widened, "src/widened.rs");
+            widen(&fixture, &widened, "src/widened.rs", true);
+            widen(&fixture, &widened, "src/widened.rs", false);
             add(&fixture, "planned", &["src/widened.rs"], vec![]);
 
             // Blocked: auth infrastructure, unclassified, and a run failure.
@@ -546,7 +563,7 @@ fn codebase_sections_count_distinct_tasks_and_split_causes() {
             assert_eq!(rate_of(&low["footprint_misses"], "src/widened.rs"), (1, 2));
             assert_eq!(
                 miss["widenings"], 2,
-                "both events parsed from the note JSON"
+                "both events read, from the typed decision and from the legacy note"
             );
 
             let pair = low["change_coupling"]["rows"]

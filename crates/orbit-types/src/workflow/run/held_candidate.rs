@@ -7,12 +7,15 @@
 //! next run may be a claim on another host, whose object store does not have
 //! that commit. The handoff therefore pushes the candidate to the durable ref
 //! a claimed leaf uses (`refs/orbit/candidates/<task>/<run>`, [ORB-14338]) and
-//! records where it is in a [`CANDIDATE_HELD_EVENT`] history entry, whose note
-//! carries the typed [`HeldCandidate`] as JSON straight after
-//! [`CANDIDATE_HELD_MARKER`]. Admission reads it to hand the task's next
-//! claim the candidate, whichever host claims it.
+//! records where it is in a [`CANDIDATE_HELD_EVENT`] history entry, whose
+//! decision is the typed [`HeldCandidate`]. Its note carries the same JSON
+//! straight after [`CANDIDATE_HELD_MARKER`] for people and older binaries.
+//! Admission reads it to hand the task's next claim the candidate, whichever
+//! host claims it.
 
 use serde::{Deserialize, Serialize};
+
+use crate::task::{TaskDecision, TaskHistoryEntry};
 
 /// Task history event recording a candidate an owner-local run held.
 pub const CANDIDATE_HELD_EVENT: &str = "candidate_held";
@@ -63,14 +66,25 @@ impl HeldCandidate {
         )
     }
 
-    /// The held candidate a history note carries, if any.
+    /// The held candidate a history entry records: its decision, or for an
+    /// entry written before typed decisions, its note.
     #[must_use]
-    pub fn from_text(text: &str) -> Option<Self> {
+    pub fn from_entry(entry: &TaskHistoryEntry) -> Option<Self> {
+        match &entry.decision {
+            Some(TaskDecision::CandidateHeld(held)) => Some(held.clone()),
+            Some(_) => None,
+            None => Self::from_legacy_note(entry.note.as_deref()?),
+        }
+        .filter(|held| !held.run_id.trim().is_empty() && !held.head_sha.trim().is_empty())
+    }
+
+    /// Legacy reader: the held candidate a note written before typed
+    /// decisions carries after the marker.
+    fn from_legacy_note(text: &str) -> Option<Self> {
         let (_, rest) = text.split_once(CANDIDATE_HELD_MARKER)?;
         serde_json::Deserializer::from_str(rest.trim_start())
             .into_iter::<Self>()
             .next()?
             .ok()
-            .filter(|held| !held.run_id.trim().is_empty() && !held.head_sha.trim().is_empty())
     }
 }

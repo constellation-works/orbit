@@ -311,11 +311,7 @@ fn agent_changed_paths<'a, H: RuntimeHost + ?Sized>(
             .iter()
             .filter(|entry| entry.event == CONTEXT_FILES_WIDENED_EVENT)
         {
-            let Some(widening) = entry
-                .note
-                .as_deref()
-                .and_then(ContextFilesWidening::from_note)
-            else {
+            let Some(widening) = ContextFilesWidening::from_entry(entry) else {
                 continue;
             };
             for selector in widening.selectors {

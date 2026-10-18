@@ -363,7 +363,7 @@ fn held_candidate_offer(
         .iter()
         .rev()
         .find(|entry| entry.event == CANDIDATE_HELD_EVENT)?;
-    let held = HeldCandidate::from_text(entry.note.as_deref()?)?;
+    let held = HeldCandidate::from_entry(entry)?;
     if task.job_run_id.as_deref() != Some(held.run_id.as_str()) {
         return None;
     }

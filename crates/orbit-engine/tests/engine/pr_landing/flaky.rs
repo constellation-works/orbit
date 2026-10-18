@@ -116,6 +116,8 @@ fn pr_open_keeps_latest_matching_flaky_history() {
                     _ => unreachable!(),
                 }
                 newer.rerun_output = format!("unrelated replay for {mismatch}");
+                // History an older binary wrote: each record in its note
+                // alone, with no typed decision.
                 host.history
                     .lock()
                     .unwrap()
@@ -376,9 +378,7 @@ fn candidate_replay_rows(test: &str, route: &str, selected: &[&str]) {
                         .history(TASK_ID)
                         .into_iter()
                         .filter(|entry| entry.event == FLAKY_VALIDATION_EVENT)
-                        .map(|entry| {
-                            FlakyValidation::from_text(entry.note.as_deref().unwrap()).unwrap()
-                        })
+                        .map(|entry| FlakyValidation::from_entry(&entry).unwrap())
                         .collect::<Vec<_>>();
                     assert_eq!(history, records);
                     let log = host.validation_log(TASK_ID, "validation/jrun-landing/0.json");

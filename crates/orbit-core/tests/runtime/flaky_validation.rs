@@ -4,6 +4,7 @@ use orbit_core::OrbitRuntime;
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::FrictionListFilter;
 use orbit_store::friction_store::FrictionStore;
+use orbit_types::task::TaskDecision;
 use orbit_types::workflow::{FLAKY_VALIDATION_EVENT, FlakyValidation};
 use serde_json::json;
 use tempfile::TempDir;
@@ -75,7 +76,13 @@ fn flaky_signatures_are_filed_once_across_runs_and_tasks() {
         let observed = history
             .iter()
             .filter(|entry| entry.event == FLAKY_VALIDATION_EVENT)
-            .map(|entry| FlakyValidation::from_text(entry.note.as_deref().unwrap()).unwrap())
+            .map(|entry| match &entry.decision {
+                Some(TaskDecision::FlakyValidation(flaky)) => {
+                    assert_eq!(entry.note, Some(flaky.text()), "the note is unchanged");
+                    flaky.clone()
+                }
+                other => panic!("the flaky pass is a typed decision: {other:?}"),
+            })
             .collect::<Vec<_>>();
         assert!(!observed.is_empty());
         assert!(observed.iter().all(|entry| entry == &record));

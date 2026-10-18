@@ -1902,7 +1902,17 @@ fn handoff_widening_accepts_any_safe_path_and_replays_once() {
             let widenings = history
                 .iter()
                 .filter(|e| e.event == CONTEXT_FILES_WIDENED_EVENT)
-                .map(|e| ContextFilesWidening::from_note(e.note.as_deref().unwrap()).unwrap())
+                .map(|e| match &e.decision {
+                    Some(TaskDecision::ContextFilesWidened(widening)) => {
+                        assert_eq!(
+                            e.note.as_deref(),
+                            Some(serde_json::to_string(widening).unwrap().as_str()),
+                            "the note is unchanged beside the decision"
+                        );
+                        widening.clone()
+                    }
+                    other => panic!("the widening is a typed decision: {other:?}"),
+                })
                 .collect::<Vec<_>>();
             assert_eq!(
                 widenings.len(),

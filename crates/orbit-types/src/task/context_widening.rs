@@ -4,10 +4,13 @@
 //! Implementers, recovery agents and reviewers may change any path the work
 //! requires. Footprint locks stay a scheduling hint; delivery widens the
 //! task's `context_files` instead of refusing, and each widening appends one
-//! [`CONTEXT_FILES_WIDENED_EVENT`] history entry whose note is a
-//! [`ContextFilesWidening`] naming the step that introduced the paths.
+//! [`CONTEXT_FILES_WIDENED_EVENT`] history entry whose decision is a
+//! [`ContextFilesWidening`] naming the step that introduced the paths. Its note
+//! is the same record as JSON, for people and older binaries.
 
 use serde::{Deserialize, Serialize};
+
+use super::{TaskDecision, TaskHistoryEntry};
 
 /// History event recording selectors appended for agent-changed paths.
 pub const CONTEXT_FILES_WIDENED_EVENT: &str = "context_files_widened";
@@ -47,7 +50,7 @@ impl ContextWideningStep {
     }
 }
 
-/// The note of one [`CONTEXT_FILES_WIDENED_EVENT`] history entry.
+/// The decision of one [`CONTEXT_FILES_WIDENED_EVENT`] history entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextFilesWidening {
     /// The run whose agent changed the paths.
@@ -61,8 +64,20 @@ pub struct ContextFilesWidening {
 }
 
 impl ContextFilesWidening {
-    /// Parse a history note; `None` for a note of another shape.
-    pub fn from_note(note: &str) -> Option<Self> {
+    /// The widening a history entry records: its decision, or for an entry
+    /// written before typed decisions, its note.
+    #[must_use]
+    pub fn from_entry(entry: &TaskHistoryEntry) -> Option<Self> {
+        match &entry.decision {
+            Some(TaskDecision::ContextFilesWidened(widening)) => Some(widening.clone()),
+            Some(_) => None,
+            None => Self::from_legacy_note(entry.note.as_deref()?),
+        }
+    }
+
+    /// Legacy reader: a note written before typed decisions is the widening's
+    /// JSON; `None` for a note of another shape.
+    fn from_legacy_note(note: &str) -> Option<Self> {
         serde_json::from_str(note).ok()
     }
 }

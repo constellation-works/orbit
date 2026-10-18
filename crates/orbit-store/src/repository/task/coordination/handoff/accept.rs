@@ -4,7 +4,9 @@ use std::collections::BTreeSet;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
-use orbit_types::task::{CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep};
+use orbit_types::task::{
+    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, TaskDecision,
+};
 use orbit_types::workflow::{KNOWN_RED_VALIDATION_EVENT, KnownRedValidation, handoff::*};
 
 use super::super::lifecycle::{encode, invalid, row};
@@ -134,22 +136,23 @@ impl TaskCommitBoundary {
             // The handoff carries no per-path step, and a follower's commits
             // are host-made from its implementer's tree, so a claimed
             // attempt's additions are recorded as the implementer's.
+            let widening = ContextFilesWidening {
+                run_id: handoff.run_id.clone(),
+                step: ContextWideningStep::Implement,
+                activity: "claim_handoff".into(),
+                selectors: additions,
+            };
             params
                 .append_history
                 .push(orbit_types::task::TaskHistoryEntry {
                     at: Utc::now(),
                     by: params.actor.clone(),
                     event: CONTEXT_FILES_WIDENED_EVENT.into(),
-                    note: Some(encode(&ContextFilesWidening {
-                        run_id: handoff.run_id.clone(),
-                        step: ContextWideningStep::Implement,
-                        activity: "claim_handoff".into(),
-                        selectors: additions,
-                    })?),
+                    note: Some(encode(&widening)?),
                     from_status: None,
                     to_status: None,
                     operation_id: None,
-                    decision: None,
+                    decision: Some(TaskDecision::ContextFilesWidened(widening)),
                 });
         }
         if candidate.base_branch != ship.base_branch
@@ -190,7 +193,7 @@ impl TaskCommitBoundary {
                     from_status: None,
                     to_status: None,
                     operation_id: None,
-                    decision: None,
+                    decision: Some(TaskDecision::KnownRedValidation(known.clone())),
                 });
         }
         for reference in &handoff.validation {
@@ -208,7 +211,7 @@ impl TaskCommitBoundary {
                         from_status: None,
                         to_status: None,
                         operation_id: None,
-                        decision: None,
+                        decision: Some(TaskDecision::FlakyValidation(flaky)),
                     });
             }
         }

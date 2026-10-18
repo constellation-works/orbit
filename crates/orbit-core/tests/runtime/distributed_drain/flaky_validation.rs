@@ -3,6 +3,7 @@
 use super::*;
 use orbit_store::contracts::FrictionListFilter;
 use orbit_store::friction_store::FrictionStore;
+use orbit_types::task::TaskDecision;
 use orbit_types::workflow::{FLAKY_VALIDATION_EVENT, FlakyValidation};
 
 #[test]
@@ -106,8 +107,8 @@ fn claimed_flaky_evidence_records_history_and_reuses_local_signature() {
         history
             .iter()
             .any(|entry| entry.event == FLAKY_VALIDATION_EVENT
-                && FlakyValidation::from_text(entry.note.as_deref().unwrap())
-                    == Some(flaky.clone()))
+                && entry.decision == Some(TaskDecision::FlakyValidation(flaky.clone()))
+                && entry.note == Some(flaky.text()))
     );
     let store = FrictionStore::open(
         owner.sqlite_store().unwrap(),

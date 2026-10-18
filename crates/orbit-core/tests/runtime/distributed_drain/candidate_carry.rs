@@ -27,8 +27,8 @@
 //! tip to the durable ref, and the next claim on another host resumes it.
 
 use orbit_engine::TaskAutomationUpdate;
-use orbit_types::task::{CANDIDATE_RESUME_EVENT, TaskStatus};
-use orbit_types::workflow::BaselineRedHold;
+use orbit_types::task::{CANDIDATE_RESUME_EVENT, TaskDecision, TaskStatus};
+use orbit_types::workflow::{BaselineRedHold, CANDIDATE_HELD_EVENT};
 
 use super::*;
 
@@ -630,6 +630,22 @@ fn owner_run_held_on_red_base(pair: &Pair, task: &str, base: &str) -> (String, S
     assert_eq!(handoff["decision"], "held_baseline_red", "{handoff}");
     assert_eq!(handoff["head_sha"], head.as_str(), "{handoff}");
     assert_eq!(pair.owner_status(task), "backlog", "the task is held");
+    let history = owner.get_task_history(task).unwrap();
+    let entry = history
+        .iter()
+        .rev()
+        .find(|entry| entry.event == CANDIDATE_HELD_EVENT)
+        .expect("the hold records where the candidate is");
+    let Some(TaskDecision::CandidateHeld(held)) = &entry.decision else {
+        panic!("the held candidate is a typed decision: {entry:?}");
+    };
+    assert_eq!(held.head_sha, head);
+    assert_eq!(held.run_id, run);
+    assert_eq!(
+        entry.note,
+        Some(held.text()),
+        "the note is unchanged beside the decision"
+    );
     (run, head, handoff)
 }
 

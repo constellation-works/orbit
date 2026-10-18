@@ -135,10 +135,7 @@ pub(super) fn admitted_task_digest(
             && entry.at >= authorized_at
             && entry.event == orbit_types::task::CONTEXT_FILES_WIDENED_EVENT
     }) {
-        let widening = entry
-            .note
-            .as_deref()
-            .and_then(orbit_types::task::ContextFilesWidening::from_note)
+        let widening = orbit_types::task::ContextFilesWidening::from_entry(entry)
             .ok_or_else(|| refuse("unreadable host selector widening"))?;
         if widening.run_id == run_id {
             for selector in widening.selectors {
