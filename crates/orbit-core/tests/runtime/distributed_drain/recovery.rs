@@ -685,3 +685,170 @@ fn a_friction_the_claimed_recovery_records_leaves_its_requeue_standing() {
         "{requeued:?}"
     );
 }
+
+/// [ORB-16727] A claimed leaf that exhausted its review budget escalates
+/// with the owner's `task requeue`, never with a resume of the leaf: generic
+/// resume cannot carry the claim to a new run. Run as its action names it,
+/// the requeue returns the task to the backlog. Its next claim is a new owner
+/// admission bound to its own leaf, is offered the candidate the failed claim
+/// kept, and the owner accepts that leaf's handoff of the candidate.
+#[test]
+fn an_exhausted_claimed_review_requeues_onto_a_new_claim_that_hands_off() {
+    use orbit_types::workflow::{ReviewBudget, ReviewLedger};
+
+    if !isolated(
+        module_path!(),
+        "an_exhausted_claimed_review_requeues_onto_a_new_claim_that_hands_off",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let first = pair
+        .admission(&leaf)
+        .receipt
+        .and_then(|receipt| receipt.claim)
+        .expect("claim");
+
+    // The leaf's before-PR review spent its claim's whole budget on the
+    // candidate it synchronized.
+    let follower_workspace = pair.follower.workspace_id().unwrap();
+    let mut ledger = ReviewLedger::new(
+        &format!("{follower_workspace}/{task}/main/{}", first.claim_id),
+        vec![task.clone()],
+        ReviewBudget { minutes: 30 },
+        Utc::now(),
+    );
+    ledger.consumed_seconds = 1_800;
+    pair.follower
+        .review_store()
+        .unwrap()
+        .review_import_claimed_ledger(&follower_workspace, &ledger)
+        .unwrap();
+    let branch = format!("orbit/{task}-kept");
+    let head = "e".repeat(40);
+    let base = "c".repeat(40);
+    let mut state = pair
+        .follower_jobs
+        .read_run_state(&leaf)
+        .unwrap()
+        .unwrap_or_else(|| PipelineState::new(leaf.clone(), LEAF_JOB.into(), json!({})));
+    for (step, output) in [
+        ("commit", json!({"commit_sha": head})),
+        (
+            "prepare_branch",
+            json!({"head": branch, "head_sha": head, "base": "main", "base_sha": base}),
+        ),
+        (
+            "sync_base",
+            json!({"head": branch, "head_sha": head, "base": "main", "base_sha": base}),
+        ),
+        ("review_gate_admit", json!({"admitted": true})),
+    ] {
+        state.pipeline[step] = output;
+    }
+    state.final_recovery = Some(FinalRecoveryCheckpoint {
+        key: FinalRecoveryKey {
+            run_id: leaf.clone(),
+            attempt: 1,
+        },
+        failed_step_id: "review_gate_settle".into(),
+        task_id: task.clone(),
+        observed: None,
+        repair_commit: None,
+        resume_context: None,
+        base_ref: Some("main".into()),
+        admitted_at: Utc::now(),
+        decision: Some(FinalRecoveryDecision::Escalate {
+            diagnosis: "review budget exhausted".into(),
+            human_action: "Authorize a review reset".into(),
+        }),
+        outcome: Some("settled: recorded for the claim settlement".into()),
+    });
+    pair.follower.write_run_state(&leaf, &state).unwrap();
+    pair.leaf_fails_with(
+        &leaf,
+        "review_budget_exhausted: review_minutes_exhausted for this claim's lineage",
+    );
+    pair.pass_over(&drain, json!({"window_expired": true}));
+    assert_eq!(
+        pair.owner_claim(&first.claim_id)["claim"]["phase"],
+        "failed"
+    );
+    assert_eq!(pair.owner_status(&task), "blocked");
+
+    let comments = comments_of(&pair.owner_task(&task));
+    let requeue = format!("task requeue {task} --reason ");
+    assert!(
+        comments.contains(&requeue) && comments.contains("continues the candidate this claim kept"),
+        "the escalation names the owner's requeue onto the kept candidate: {comments}"
+    );
+    assert!(
+        !comments.contains(&format!("job resume {leaf}"))
+            && !comments.contains("task review-reset"),
+        "a claimed leaf is never reset and resumed: {comments}"
+    );
+
+    // The operator runs the requeue the action names.
+    pair.wire
+        .owner
+        .requeue_blocked_task(
+            &task,
+            "requeue after the claimed leaf exhausted its review budget",
+            false,
+        )
+        .expect("the owner requeues the blocked task");
+    assert_eq!(pair.owner_status(&task), "backlog");
+
+    *pair.wire.accept_handoffs.lock().unwrap() = true;
+    let drain = pair.run_drain();
+    let next = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&next), task, "the task is pulled again");
+    let record = pair.admission(&next);
+    let second = record
+        .receipt
+        .as_ref()
+        .and_then(|receipt| receipt.claim.clone())
+        .expect("a new claim");
+    assert_ne!(
+        second.claim_id, first.claim_id,
+        "the continuation is a new admission"
+    );
+    assert_eq!(record.leaf_run_id.as_deref(), Some(next.as_str()));
+    assert_eq!(
+        pair.owner_claim(&second.claim_id)["bound_run"]["run_id"],
+        next.as_str(),
+        "the owner binds the new claim to the new leaf only"
+    );
+    let offered = super::candidate_carry::claim_candidate(&pair, &next)
+        .expect("the requeue keeps the candidate");
+    assert_eq!(
+        (offered.branch.as_str(), offered.head_sha.as_str()),
+        (branch.as_str(), head.as_str())
+    );
+
+    let mut delivered = handoff(&record);
+    delivered.candidate.source_branch = branch.clone();
+    delivered.candidate.candidate.commit = head.clone();
+    pair.advance(
+        &next,
+        LocalPullMutation::Settle(Box::new(ClaimMutation::AcceptHandoff(delivered))),
+    );
+    pair.follower_jobs
+        .finalize_job_run(&next, JobRunState::Success, Utc::now(), None)
+        .unwrap();
+    let settled = pair.pass(&drain);
+    assert!(settled["error"].is_null(), "{settled}");
+    assert_eq!(
+        pair.owner_status(&task),
+        "review",
+        "the handoff is accepted"
+    );
+    assert_eq!(
+        pair.owner_claim(&first.claim_id)["claim"]["phase"],
+        "failed",
+        "the failed claim never regains authority"
+    );
+}

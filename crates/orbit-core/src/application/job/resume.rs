@@ -117,20 +117,17 @@ impl OrbitRuntime {
         &self,
         source_run_id: &str,
     ) -> Result<ResumePlan, OrbitError> {
-        // Refuse before show_job_run can reconcile local liveness. A live claim
-        // keeps its binding. A terminal pull resumes only after the owner reset
-        // that lineage and this follower adopted the decision [ORB-16699].
+        // Refuse before show_job_run can reconcile local liveness. Settled claims
+        // retain immutable bindings, so even a revoked attempt cannot resume.
         let recorded = self.get_job_run_backend(source_run_id)?;
-        let pull = self.stores().jobs().local_pull_for_run(source_run_id)?;
-        let claimed_reset = if let Some(pull) = pull.as_ref() {
-            let adopted = !pull.holds_capacity() && self.adopt_claimed_review_reset(pull);
-            if !adopted {
-                return Err(OrbitError::JobValidation("claimed execution cannot use generic resume; deliberately recover and admit a new attempt".into()));
-            }
-            true
-        } else {
-            false
-        };
+        if self
+            .stores()
+            .jobs()
+            .local_pull_for_run(source_run_id)?
+            .is_some()
+        {
+            return Err(OrbitError::JobValidation("claimed execution cannot use generic resume; deliberately recover and admit a new attempt".into()));
+        }
         // [ORB-12575] Read the claims as an ordinary participant, not through
         // the doctor's non-repairing inspection. A worker killed mid-commit
         // leaves its task's commit lease behind, and resume is the
@@ -149,16 +146,13 @@ impl OrbitRuntime {
             ))
         })?;
         if claims.iter().any(|claim| {
-            let bound = claim.bound_run.as_ref().is_some_and(|run| {
+            claim.bound_run.as_ref().is_some_and(|run| {
                 run.run_id == source_run_id
                     && recorded
                         .as_ref()
                         .and_then(|r| r.executed_on.as_ref())
                         .is_none_or(|origin| origin.machine_id == run.machine_id)
-            });
-            // A settled claim whose ledger the operator reset is the narrow
-            // exception. A claim that still holds its phase stays refused.
-            bound && !(claimed_reset && !claim.claim.phase.is_unsettled())
+            })
         }) {
             return Err(OrbitError::JobValidation("claimed execution cannot use generic resume; deliberately recover and admit a new attempt".into()));
         }
@@ -259,7 +253,7 @@ impl OrbitRuntime {
             .input
             .clone()
             .unwrap_or_else(|| Value::Object(Default::default()));
-        let mut resume_state = self.read_run_state(&source.run_id)?.filter(|state| {
+        let resume_state = self.read_run_state(&source.run_id)?.filter(|state| {
             state
                 .step_states
                 .values()
@@ -283,9 +277,6 @@ impl OrbitRuntime {
                 .map_err(|error| OrbitError::JobValidation(error.to_string()))?,
         )
         .map_err(orbit_engine::dispatch_error_to_orbit)?;
-        if claimed_reset && let Some(state) = resume_state.as_mut() {
-            rewind_claimed_review_to_validate(&definition, state);
-        }
         let review_checkpoints = resume_state
             .as_ref()
             .filter(|state| {
@@ -621,68 +612,6 @@ fn failure_handoff_run_id(note: &str) -> Option<&str> {
         .next()?
         .trim();
     (!id.is_empty()).then_some(id)
-}
-
-/// After an operator reset of a claimed-leaf review budget, continue from
-/// `validate` when the checkpoint had already reached it, and drop the
-/// recorded final-recovery decision so the resumed run does not escalate again.
-///
-/// A job with no `validate` step, or a checkpoint that stopped before it,
-/// keeps its step index. The ledger reset still lets the failed review gate
-/// admit again.
-fn rewind_claimed_review_to_validate(job: &JobV2, state: &mut PipelineState) {
-    state.final_recovery = None;
-    let Some(position) = job.steps.iter().position(|step| step.id == "validate") else {
-        return;
-    };
-    let Ok(index) = u32::try_from(position) else {
-        return;
-    };
-    let reached =
-        state.next_step_index > index || state.step_states.keys().any(|key| *key >= index);
-    if !reached {
-        return;
-    }
-    state.next_step_index = index;
-    state.step_states.retain(|key, _| *key < index);
-    state.step_outputs.retain(|key, _| *key < index);
-    state.pipeline_patches.retain(|key, _| *key < index);
-    state.compound_outputs.retain(|key, _| *key < index);
-    state.step_output_pointers.retain(|key, _| *key < index);
-    if let Some(pipeline) = state.pipeline.as_object_mut() {
-        for step in job.steps.iter().skip(position) {
-            drop_pipeline_keys(step, pipeline);
-        }
-    }
-}
-
-fn drop_pipeline_keys(
-    step: &orbit_types::workflow::JobV2Step,
-    pipeline: &mut serde_json::Map<String, Value>,
-) {
-    pipeline.remove(&step.id);
-    match &step.body {
-        JobV2StepBody::Parallel { parallel } => {
-            for branch in &parallel.branches {
-                drop_pipeline_keys(branch, pipeline);
-            }
-        }
-        JobV2StepBody::FanOut { fan_out, fan_in } => {
-            if let Some(collect) = &fan_in.collect {
-                pipeline.remove(collect);
-            }
-            if let Some(errors) = &fan_in.errors {
-                pipeline.remove(errors);
-            }
-            drop_pipeline_keys(&fan_out.worker, pipeline);
-        }
-        JobV2StepBody::Loop { loop_ } => {
-            for nested in &loop_.steps {
-                drop_pipeline_keys(nested, pipeline);
-            }
-        }
-        JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => {}
-    }
 }
 
 /// Resolve host actions, never agent claims or a step name alone. A promotion

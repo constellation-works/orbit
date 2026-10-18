@@ -1,6 +1,11 @@
-//! [ORB-16699] A claimed leaf's escalated final recovery names a review-reset
-//! and a resume that work when run as written, from a directory that is not
-//! the checkout.
+//! [ORB-16699] A claimed leaf's escalated final recovery names a command
+//! that works when run as written, from a directory that is not the checkout.
+//!
+//! [ORB-16727] A claim is one attempt, so an exhausted claimed review is
+//! recovered by the owner's `task requeue`, not by resuming the failed leaf:
+//! a resumed run on the production claimed definition has no claim, and its
+//! worker refuses it before validation. The task's next claim is a new owner
+//! admission that carries the kept candidate.
 
 #![cfg(unix)]
 
@@ -8,32 +13,32 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
-use orbit_common::process::identity::{ProcessLiveness, probe_process_liveness};
+use orbit_common::OrbitError;
 use orbit_common::test_env;
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::OrbitRuntimeRoots;
 use orbit_mcp::federated::{Destination, FederatedMcpHost, SshDestinationProbe};
 use orbit_types::tool::ToolSessionContext;
-use orbit_types::workflow::{
-    FinalRecoveryCheckpoint, FinalRecoveryDecision, FinalRecoveryKey, JobRunState, PipelineState,
-};
+use orbit_types::workflow::{JobRunState, PipelineState};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
 use super::isolated_test;
 
-const JOB: &str = "claimed_review_resume";
+/// The production claimed PR leaf definition.
+const JOB: &str = "task_claimed_pr_pipeline";
 const RUN_ID: &str = "jrun-claimed-review-source";
+const NEXT_RUN_ID: &str = "jrun-claimed-review-next";
 const REQUEST_ID: &str = "claimed-review-admission";
-const RESET_REASON: &str = "operator reset of exhausted claimed-leaf review budget";
+const NEXT_REQUEST_ID: &str = "claimed-review-requeue";
 
 #[test]
-fn claimed_leaf_review_reset_command_resets_and_resumes_from_validate() {
+fn claimed_leaf_review_escalation_requeues_onto_a_new_claim() {
     if isolated_test::run_in_child(
-        "review_reset_claimed::claimed_leaf_review_reset_command_resets_and_resumes_from_validate",
+        "review_reset_claimed::claimed_leaf_review_escalation_requeues_onto_a_new_claim",
     ) {
         return;
     }
@@ -48,11 +53,11 @@ fn claimed_leaf_review_reset_command_resets_and_resumes_from_validate() {
             "task",
             "add",
             "--title",
-            "Claimed review reset",
+            "Claimed review requeue",
             "--description",
             "A claimed leaf exhausted its review budget.",
             "--acceptance-criteria",
-            "The reset command resumes the run.",
+            "The requeue continues the kept candidate.",
             "--complexity",
             "low",
             "--context",
@@ -70,7 +75,7 @@ fn claimed_leaf_review_reset_command_resets_and_resumes_from_validate() {
             "update",
             &task_id,
             "--plan",
-            "Reset the claimed review ledger and resume.",
+            "Requeue the claimed task onto its kept candidate.",
         ],
     );
     owner.orbit(
@@ -91,18 +96,7 @@ fn claimed_leaf_review_reset_command_resets_and_resumes_from_validate() {
         probed["refusal"].is_null(),
         "probe refused admission: {probed}"
     );
-    let request = json!({
-        "request_id": REQUEST_ID,
-        "caller_version": probed["binary_version"],
-        "caller_schema": probed["protocol_schema"],
-        "caller_before_pr": false,
-        "run_context": {
-            "run_id": "follower-drain",
-            "job_name": "workspace_pull_pipeline",
-            "machine_name": "follower-host"
-        },
-        "ship": probed["ship"]
-    });
+    let request = pull_request(&probed, REQUEST_ID);
     let admitted = call(&probe, &selector, "orbit.task.pull", request.clone());
     let claim = admitted["receipt"]["claim"].clone();
     let claim_id = claim["claim_id"]
@@ -129,6 +123,8 @@ fn claimed_leaf_review_reset_command_resets_and_resumes_from_validate() {
         "revision": 1,
         "updated_at": "2026-10-18T10:40:00Z"
     });
+    let kept_branch = format!("orbit/{task_id}-kept");
+    let kept_head = "e".repeat(40);
     let settlement = json!({
         "claim_id": claim_id,
         "run_id": RUN_ID,
@@ -136,7 +132,17 @@ fn claimed_leaf_review_reset_command_resets_and_resumes_from_validate() {
             "summary": "review budget exhausted",
             "comment": null,
             "artifacts": [],
-            "failure": {"class": "candidate", "reason": "review_budget_exhausted"},
+            "failure": {
+                "class": "candidate",
+                "reason": "review_budget_exhausted",
+                "candidate": {
+                    "branch": kept_branch,
+                    "head_sha": kept_head,
+                    "source_run_id": RUN_ID,
+                    "failed_step_id": "review_gate_settle",
+                    "published": true
+                }
+            },
             "final_recovery": {
                 "run_id": RUN_ID,
                 "decision": {
@@ -166,107 +172,121 @@ fn claimed_leaf_review_reset_command_resets_and_resumes_from_validate() {
         .find(|message| message.contains("human_action:"))
         .unwrap_or_else(|| panic!("no human_action comment: {shown}"))
         .to_string();
+    // [ORB-16727] The reviewed revision named an owner review-reset and a
+    // follower `job resume`, whose new run had no claim and was refused by
+    // the worker before validation.
     let commands = orbit_commands(&action);
-    assert_eq!(commands.len(), 2, "{action}");
+    assert_eq!(commands.len(), 1, "one owner command: {action}");
     assert!(
-        commands[0].contains("task review-reset") && commands[0].contains("--workspace"),
-        "{action}"
-    );
-    assert!(
-        commands[1].contains("job resume")
-            && commands[1].contains(RUN_ID)
-            && !commands[1].contains("--wait"),
+        commands[0].contains(&format!("task requeue {task_id} "))
+            && commands[0].contains("--workspace")
+            && commands[0].contains("ORBIT_OPERATOR=1"),
         "{action}"
     );
 
-    seed_follower_run(
-        &follower,
-        &owner,
-        &task_id,
-        &claim_id,
-        &lineage_key,
-        &admitted,
-        &request,
-    );
+    // The failed leaf, on the production claimed definition, stays out of
+    // generic resume whatever the claim's state: live, settled, or after the
+    // owner has requeued the task. None of them inserts a run.
+    seed_follower_run(&follower, &owner, &claim_id, &admitted, &request);
     let neutral = tempfile::tempdir().unwrap();
-    let refused = sh(&commands[1], &follower.home, neutral.path(), &path);
-    let refused_text = format!(
+    let resume = format!(
+        "orbit --root '{}' --workspace '{}' job resume {RUN_ID}",
+        follower.global.display(),
+        follower.logical_id
+    );
+    set_pull_phase(&follower, "launched");
+    assert_resume_refused(&follower, &resume, neutral.path(), &path, "a live claim");
+    set_pull_phase(&follower, "settled");
+    assert_resume_refused(&follower, &resume, neutral.path(), &path, "a failed claim");
+
+    let requeued = sh(&commands[0], &owner.home, neutral.path(), &path);
+    assert!(
+        requeued.status.success(),
+        "requeue command failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&requeued.stdout),
+        String::from_utf8_lossy(&requeued.stderr)
+    );
+    let shown = owner.orbit_json(&owner.repo, &["task", "show", &task_id, "--json"]);
+    assert_eq!(shown["status"], "backlog", "{shown}");
+    assert_resume_refused(&follower, &resume, neutral.path(), &path, "a requeued task");
+
+    // The continuation is a new owner admission whose receipt carries the
+    // kept candidate, and the owner binds it to the new leaf alone.
+    let probe = federated(&owner.machine_id, &follower.machine_id, &path);
+    let next_request = pull_request(&probed, NEXT_REQUEST_ID);
+    let next = call(&probe, &selector, "orbit.task.pull", next_request);
+    let next_claim = next["receipt"]["claim"].clone();
+    let next_claim_id = next_claim["claim_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("requeued task was not claimed: {next}"))
+        .to_string();
+    assert_eq!(next_claim["task_id"], task_id, "{next}");
+    assert_ne!(next_claim_id, claim_id, "{next}");
+    let offered = &next["receipt"]["task"]["resume_candidate"];
+    assert_eq!(offered["branch"], kept_branch.as_str(), "{next}");
+    assert_eq!(offered["head_sha"], kept_head.as_str(), "{next}");
+    let stale = try_call(
+        &probe,
+        &selector,
+        "orbit.drain.claim.bind",
+        json!({"claim_id": claim_id, "run_id": NEXT_RUN_ID, "ship": probed["ship"]}),
+    );
+    assert!(
+        refused_binding(&stale),
+        "the failed claim cannot be bound to a new run: {stale:?}"
+    );
+    let rebound = call(
+        &probe,
+        &selector,
+        "orbit.drain.claim.bind",
+        json!({"claim_id": next_claim_id, "run_id": NEXT_RUN_ID, "ship": probed["ship"]}),
+    );
+    assert_eq!(rebound["phase"], "running", "{rebound}");
+    let foreign = try_call(
+        &probe,
+        &selector,
+        "orbit.drain.claim.bind",
+        json!({"claim_id": next_claim_id, "run_id": RUN_ID, "ship": probed["ship"]}),
+    );
+    assert!(
+        refused_binding(&foreign),
+        "the new claim cannot be rebound to the failed leaf: {foreign:?}"
+    );
+    drop(probe);
+    assert_resume_refused(&follower, &resume, neutral.path(), &path, "a rebound task");
+}
+
+/// `orbit job resume` of the failed leaf, run as `script` on `follower`,
+/// is refused as claimed execution and leaves the leaf the only claimed run.
+fn assert_resume_refused(
+    follower: &Host,
+    script: &str,
+    cwd: &Path,
+    path: &std::ffi::OsStr,
+    case: &str,
+) {
+    let refused = sh(script, &follower.home, cwd, path);
+    let text = format!(
         "{}\n{}",
         String::from_utf8_lossy(&refused.stdout),
         String::from_utf8_lossy(&refused.stderr)
     );
+    assert!(!refused.status.success(), "{case}: resume ran: {text}");
     assert!(
-        !refused.status.success(),
-        "resume before the reset must be refused: {refused_text}"
-    );
-    assert!(
-        refused_text.contains(
+        text.contains(
             "claimed execution cannot use generic resume; deliberately recover and admit a new attempt"
         ),
-        "{refused_text}"
+        "{case}: {text}"
     );
-
-    let reset = sh(&commands[0], &owner.home, neutral.path(), &path);
-    assert!(
-        reset.status.success(),
-        "review-reset command failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&reset.stdout),
-        String::from_utf8_lossy(&reset.stderr)
-    );
-    let owner_ledger = ledger_json(&owner, &lineage_key);
-    assert_eq!(owner_ledger["consumed_seconds"], 0, "{owner_ledger}");
-    assert_eq!(
-        owner_ledger["decisions"][0]["reason"], RESET_REASON,
-        "{owner_ledger}"
-    );
-
-    let resumed = sh(&commands[1], &follower.home, neutral.path(), &path);
-    let resumed_text = String::from_utf8_lossy(&resumed.stdout).to_string();
-    assert!(
-        resumed.status.success(),
-        "resume command failed\nstdout:\n{resumed_text}\nstderr:\n{}",
-        String::from_utf8_lossy(&resumed.stderr)
-    );
-    let new_run = resumed_text
-        .lines()
-        .find_map(|line| line.strip_prefix("Run ID: "))
-        .unwrap_or_else(|| panic!("resume did not name a run: {resumed_text}"))
-        .trim()
-        .to_string();
-    wait_for_run(&follower, &new_run);
-
-    let runtime = follower.runtime();
-    let state = runtime
-        .read_run_state(&new_run)
-        .unwrap()
-        .unwrap_or_else(|| panic!("resumed run has no checkpoint"));
-    assert!(state.final_recovery.is_none(), "{state:?}");
-    // Success compacts step outputs into pointers. The pipeline object keeps
-    // the skipped prepare checkpoint and the validate guard that re-ran.
-    assert_eq!(state.step_states.get(&0), Some(&JobRunState::Success));
-    assert_eq!(
-        state
-            .pipeline
-            .get("prepare")
-            .and_then(|output| output.get("checkpoint")),
-        Some(&json!("prepare")),
-        "prepare was re-executed: {state:?}"
-    );
-    assert_eq!(
-        state
-            .pipeline
-            .get("validate")
-            .and_then(|output| output.get("succeeded")),
-        Some(&json!(true)),
-        "validate did not run: {state:?}"
-    );
-    drop(runtime);
-    let follower_ledger = ledger_json(&follower, &lineage_key);
-    assert_eq!(
-        follower_ledger["decisions"][0]["reason"], RESET_REASON,
-        "{follower_ledger}"
-    );
-    assert_eq!(follower_ledger["consumed_seconds"], 0, "{follower_ledger}");
+    let db = Connection::open(follower.global.join("orbit.db")).unwrap();
+    let runs: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM job_runs WHERE workspace_id=?1 AND job_id=?2",
+            rusqlite::params![follower.partition_id, JOB],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(runs, 1, "{case}: resume inserted a run");
 }
 
 struct Host {
@@ -403,18 +423,50 @@ fn federated(
     )
 }
 
-fn call(host: &FederatedMcpHost, selector: &str, name: &str, mut input: Value) -> Value {
-    input["workspace"] = json!(selector);
-    host.call_internal_drain(name, input, ToolSessionContext::default())
-        .unwrap_or_else(|error| panic!("{name} failed: {error}"))
+fn call(host: &FederatedMcpHost, selector: &str, name: &str, input: Value) -> Value {
+    try_call(host, selector, name, input).unwrap_or_else(|error| panic!("{name} failed: {error}"))
 }
 
+fn try_call(
+    host: &FederatedMcpHost,
+    selector: &str,
+    name: &str,
+    mut input: Value,
+) -> Result<Value, OrbitError> {
+    input["workspace"] = json!(selector);
+    host.call_internal_drain(name, input, ToolSessionContext::default())
+}
+
+/// The owner's claim journal refused a bind that does not match the claim.
+fn refused_binding(answer: &Result<Value, OrbitError>) -> bool {
+    answer
+        .as_ref()
+        .is_err_and(|error| error.to_string().contains("mutation_mismatch"))
+}
+
+/// A follower drain's pull request under `request_id`.
+fn pull_request(probed: &Value, request_id: &str) -> Value {
+    json!({
+        "request_id": request_id,
+        "caller_version": probed["binary_version"],
+        "caller_schema": probed["protocol_schema"],
+        "caller_before_pr": false,
+        "run_context": {
+            "run_id": "follower-drain",
+            "job_name": "workspace_pull_pipeline",
+            "machine_name": "follower-host"
+        },
+        "ship": probed["ship"]
+    })
+}
+
+/// The failed leaf on the follower as the drain leaves it: a failed run of
+/// the production claimed definition with a reusable checkpoint, and its
+/// settled pull admission.
 fn seed_follower_run(
     follower: &Host,
     owner: &Host,
-    task_id: &str,
     claim_id: &str,
-    lineage_key: &str,
     admitted: &Value,
     request: &Value,
 ) {
@@ -426,36 +478,13 @@ fn seed_follower_run(
         ),
     )
     .unwrap();
-    let jobs = follower.global.join("resources/jobs");
-    fs::create_dir_all(&jobs).unwrap();
-    let job = json!({
-        "schemaVersion": 2,
-        "kind": "Job",
-        "metadata": {"name": JOB},
-        "spec": {
-            "state": "enabled",
-            "kind": "workflow",
-            "steps": [
-                {
-                    "id": "prepare",
-                    "default_input": {"result": {"status": "failed", "run_id": "prepare-must-stay-skipped"}},
-                    "spec": {"type": "deterministic", "action": "pipeline_success_guard", "config": {}}
-                },
-                {
-                    "id": "validate",
-                    "default_input": {"result": {"status": "succeeded"}},
-                    "spec": {"type": "deterministic", "action": "pipeline_success_guard", "config": {}}
-                }
-            ]
-        }
-    });
-    fs::write(jobs.join(format!("{JOB}.yaml")), job.to_string()).unwrap();
-
+    let task_id = &admitted["receipt"]["claim"]["task_id"];
     let now = chrono::Utc::now().to_rfc3339();
+    let input = json!({"task_ids": [task_id], "claimed": true}).to_string();
     let db = Connection::open(follower.global.join("orbit.db")).unwrap();
     db.execute(
         "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,finished_at,created_at) VALUES (?1,?2,?3,1,'failed',?4,?5,?5,?5,?5)",
-        rusqlite::params![RUN_ID, follower.partition_id, JOB, "{}", now],
+        rusqlite::params![RUN_ID, follower.partition_id, JOB, input, now],
     )
     .unwrap();
     let record = json!({
@@ -485,108 +514,27 @@ fn seed_follower_run(
         ],
     )
     .unwrap();
-    db.execute(
-        "INSERT INTO review_lineages (workspace_id,lineage_key,revision,ledger_json) VALUES (?1,?2,1,?3)",
-        rusqlite::params![
-            follower.partition_id,
-            lineage_key,
-            json!({
-                "lineage_key": lineage_key,
-                "task_ids": [task_id],
-                "budget": {"minutes": 30},
-                "attempts": [],
-                "consumed_seconds": 1800,
-                "revision": 1,
-                "updated_at": "2026-10-18T10:40:00Z"
-            })
-            .to_string()
-        ],
-    )
-    .unwrap();
     drop(db);
 
     let runtime = follower.runtime();
     let mut state = PipelineState::new(RUN_ID.to_string(), JOB.to_string(), json!({}));
-    let prepare = json!({"checkpoint": "prepare"});
-    state.record_step(0, JobRunState::Success, Some(prepare.clone()), None);
-    state.record_pipeline_output("prepare", prepare);
-    state.record_step(
-        1,
-        JobRunState::Failed,
-        Some(json!({"checkpoint": "validate-failed"})),
-        None,
-    );
-    state.final_recovery = Some(FinalRecoveryCheckpoint {
-        key: FinalRecoveryKey {
-            run_id: RUN_ID.to_string(),
-            attempt: 1,
-        },
-        failed_step_id: "validate".into(),
-        task_id: task_id.to_string(),
-        observed: None,
-        base_ref: None,
-        admitted_at: chrono::Utc::now(),
-        decision: Some(FinalRecoveryDecision::Escalate {
-            diagnosis: "review budget exhausted".into(),
-            human_action: "Authorize a review reset".into(),
-        }),
-        repair_commit: None,
-        resume_context: None,
-        outcome: None,
-    });
+    let worktree = json!({"checkpoint": "worktree"});
+    state.record_step(0, JobRunState::Success, Some(worktree.clone()), None);
+    state.record_pipeline_output("worktree", worktree);
     runtime.write_run_state(RUN_ID, &state).unwrap();
 }
 
-fn wait_for_run(follower: &Host, run_id: &str) {
-    let runtime = follower.runtime();
-    let deadline = Instant::now() + Duration::from_secs(45);
-    let mut last;
-    let mut worker: Option<(u32, Option<String>)> = None;
-    loop {
-        let shown = runtime.show_job_run_observed(run_id).unwrap();
-        if let Some(pid) = shown.pid {
-            worker = Some((pid, shown.pid_start_time.clone()));
-        }
-        if matches!(
-            shown.state,
-            JobRunState::Success | JobRunState::Failed | JobRunState::Timeout
-        ) {
-            let (pid, started) = worker.expect("resumed run records a worker");
-            while probe_process_liveness(pid, started.as_deref()) != ProcessLiveness::Exited {
-                if Instant::now() >= deadline {
-                    stop_worker(pid);
-                    panic!("worker {pid} did not exit; last state {}", shown.state);
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            assert_eq!(shown.state, JobRunState::Success, "{shown:?}");
-            return;
-        }
-        last = format!("{shown:?}");
-        if Instant::now() >= deadline {
-            if let Some((pid, _)) = worker {
-                stop_worker(pid);
-            }
-            panic!("run {run_id} did not finish: {last}");
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
-fn stop_worker(pid: u32) {
-    let _ = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
-}
-
-fn ledger_json(host: &Host, lineage_key: &str) -> Value {
-    let db = Connection::open(host.global.join("orbit.db")).unwrap();
-    let raw: String = db
-        .query_row(
-            "SELECT ledger_json FROM review_lineages WHERE workspace_id=?1 AND lineage_key=?2",
-            rusqlite::params![host.partition_id, lineage_key],
-            |row| row.get(0),
+/// Move the failed leaf's pull admission to `phase`.
+fn set_pull_phase(follower: &Host, phase: &str) {
+    let db = Connection::open(follower.global.join("orbit.db")).unwrap();
+    let changed = db
+        .execute(
+            "UPDATE local_pull_admissions SET record_json=json_set(record_json,'$.phase',?1) \
+             WHERE workspace_id=?2 AND leaf_run_id=?3",
+            rusqlite::params![phase, follower.partition_id, RUN_ID],
         )
-        .unwrap_or_else(|error| panic!("ledger {lineage_key} on {}: {error}", host.partition_id));
-    serde_json::from_str(&raw).unwrap()
+        .unwrap();
+    assert_eq!(changed, 1, "the failed leaf's admission");
 }
 
 fn orbit_commands(action: &str) -> Vec<String> {

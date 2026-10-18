@@ -390,13 +390,11 @@ fn admit(
         ReviewReservation::Exhausted { reason, consumed } => {
             return Err(OrbitError::CapabilityDenied(format!(
                 "review_budget_exhausted: {reason} for candidate {} in lineage '{lineage_key}' \
-                 ({}s of {}s); each candidate gets one review — an operator can run \
-                 orbit task review-reset {} --lineage '{lineage_key}' --reason '<decision>' \
-                 before resuming, or dispatch a fresh delivery run",
+                 ({}s of {}s); each candidate gets one review — {}",
                 candidate.head.commit,
                 consumed.seconds,
                 u64::from(ledger.budget.minutes) * 60,
-                context.task_ids[0]
+                budget_recovery(context, &lineage_key)
             )));
         }
     };
@@ -662,9 +660,28 @@ fn preflight_budget(runtime: &OrbitRuntime, context: &GateContext) -> Result<Val
         && ledger.remaining_at(Utc::now()).seconds == 0
     {
         return Err(OrbitError::CapabilityDenied(format!(
-            "review_budget_exhausted: review_minutes_exhausted for lineage '{lineage}'; an operator can run orbit task review-reset {} --lineage '{lineage}' --reason '<decision>' before resuming, or dispatch a fresh delivery run",
-            context.task_ids[0]
+            "review_budget_exhausted: review_minutes_exhausted for lineage '{lineage}'; {}",
+            budget_recovery(context, &lineage)
         )));
     }
     Ok(json!({"applies": true, "decision": "preflight_passed", "lineage_key": lineage}))
+}
+
+/// The operator's way past an exhausted budget. A claim is one attempt that
+/// keys its own lineage and is never resumed, so its budget is not reset:
+/// the owner requeues the task, and its next claim continues the candidate
+/// with a budget of its own.
+fn budget_recovery(context: &GateContext, lineage: &str) -> String {
+    let task_id = &context.task_ids[0];
+    if context.claimed {
+        format!(
+            "the owner can run orbit task requeue {task_id} --reason '<decision>'; the task's \
+             next claim continues this candidate with a review budget of its own"
+        )
+    } else {
+        format!(
+            "an operator can run orbit task review-reset {task_id} --lineage '{lineage}' \
+             --reason '<decision>' before resuming, or dispatch a fresh delivery run"
+        )
+    }
 }
