@@ -2,12 +2,14 @@
 //! UI. The kit is installed only on `--install-browser-kit` or a `y` typed at
 //! a terminal; anything else leaves a hint and installs nothing.
 
-use std::io::{BufRead, IsTerminal, Write};
+use std::io::{BufRead, Write};
 use std::path::Path;
 
 use orbit_cmd::browser_kit::{self, InstallOptions};
 use orbit_core::bootstrap::browser_kit::{KitInspection, KitLayout};
 use serde_json::{Value, json};
+
+use crate::output::sink::{stderr_is_terminal, stdin_is_terminal};
 
 const INSTALL: &str = "orbit browser-kit install";
 
@@ -83,7 +85,7 @@ pub(super) fn offer_browser_kit(root: &Path, install_requested: bool) -> Browser
 }
 
 fn interactive() -> bool {
-    std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+    stdin_is_terminal() && stderr_is_terminal()
 }
 
 fn operator_accepts(marker: &str) -> bool {

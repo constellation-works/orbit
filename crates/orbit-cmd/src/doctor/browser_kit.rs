@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use orbit_core::OrbitRuntime;
-use orbit_core::bootstrap::browser_kit::{KitLayout, WORKER_ENV_NAMES};
+use orbit_core::bootstrap::browser_kit::{KIT_HOME_RELATIVE, KitLayout, WORKER_ENV_NAMES};
 
 use super::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
 use crate::browser_kit::{KitStatus, NODE_FIX, find_in_path_value, kit_status};
@@ -27,12 +27,13 @@ pub(super) fn browser_kit_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorRes
     };
     let status = kit_status(&layout);
     if !status.inspection.present {
+        // Shown as `~/...` rather than the absolute path, so the message does not
+        // embed the home directory of whichever process rendered it.
         return vec![row(
             "browser-kit",
             WorkspaceDoctorStatus::Info,
             format!(
-                "no headless browser kit at {}; workers cannot check a UI in a browser",
-                layout.root().display()
+                "no headless browser kit at ~/{KIT_HOME_RELATIVE}; workers cannot check a UI in a browser"
             ),
             Some(format!(
                 "Run `{INSTALL}` on a host whose workers change web pages."
