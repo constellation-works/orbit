@@ -91,7 +91,11 @@ headless shell with `ldd` and closes any gap one of three ways:
   including some only headed Chromium needs.
 - Without it, on Debian or Ubuntu, `install` downloads the packages Playwright
   names (`apt-get download`) and unpacks them into `root/` (`dpkg-deb -x`)
-  without root. When `fc-list` finds no font it also unpacks fontconfig and
+  without root. It unpacks only the archive apt would write for each package's
+  current version and architecture (`apt-get download --print-uris`), including
+  when that exact file is already in `debs/`. Older or other-architecture
+  archives left in that cache stay on disk and are not unpacked. When
+  `fc-list` finds no font it also unpacks fontconfig and
   DejaVu and writes `fonts.conf`; a server without fonts crashes Chromium in
   Skia/FontConfig. `env.sh` then exports `LD_LIBRARY_PATH` and
   `FONTCONFIG_FILE` ahead of the Playwright pair.
