@@ -7,8 +7,8 @@ import io
 import json
 import os
 from pathlib import Path
+import self_test_hang
 import shutil
-import subprocess
 import sys
 import tarfile
 import tempfile
@@ -100,8 +100,10 @@ exec(compile(sys.stdin.read(), '<refresh-dashboard-vendor>', 'exec'))
         env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}", TMPDIR=str(self.tmp),
                    VENDOR_TEST_TARBALL=str(self.tarball), VENDOR_TEST_NPM_LOG=str(self.npm_log),
                    VENDOR_TEST_EXTRACTION_LOG=str(self.extraction_log))
-        return subprocess.run(["bash", str(self.scripts / "refresh-dashboard-vendor.sh")],
-                              cwd=self.repo, env=env, text=True, capture_output=True, timeout=30)
+        return self_test_hang.run(
+            ["bash", str(self.scripts / "refresh-dashboard-vendor.sh")],
+            step="refresh-dashboard-vendor",
+            cwd=self.repo, env=env, text=True, capture_output=True)
 
     def assert_refused(self, result):
         self.assertFalse(self.sentinel.exists(), "archive wrote outside its extraction directory")

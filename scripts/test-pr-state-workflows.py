@@ -6,11 +6,12 @@ import json
 import os
 from pathlib import Path
 import re
+import self_test_hang
 import shutil
-import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 
 try:
@@ -134,8 +135,10 @@ os.execv(os.environ["FIXTURE_GH"], [os.environ["FIXTURE_GH"], *args])
         script = step["run"]
         for expression, value in bindings.items():
             script = script.replace(expression, value)
-        result = subprocess.run([step["shell"], "-e", "-o", "pipefail", "-c", script],
-                                cwd=self.root, env=env, text=True, capture_output=True, timeout=10)
+        result = self_test_hang.run(
+            [step["shell"], "-e", "-o", "pipefail", "-c", script],
+            step=str(step.get("id") or "pr-state"),
+            cwd=self.root, env=env, text=True, capture_output=True)
         self.assertEqual(self.requests, [{"method": "GET", "path": "/repos/fixture/repository/pulls/42"}],
                          "each gate must make exactly one read of the bound pull request")
         self.assertEqual(json.loads(self.credentials.read_text()), {"token": "offline-token"})
@@ -250,11 +253,13 @@ class CompilerCacheWorkflowTests(unittest.TestCase):
             path.chmod(0o755)
         return path
 
-    def run_step(self, step):
+    def run_step(self, step, timeout=None):
         self.output.write_text("")
         self.envfile.write_text("")
-        result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", step["run"]],
-                                cwd=self.root, env=self.env, text=True, capture_output=True, timeout=20)
+        result = self_test_hang.run(
+            ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+            step=str(step.get("id") or step.get("name") or "workflow step"),
+            cwd=self.root, env=self.env, text=True, capture_output=True, timeout=timeout)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         outputs = dict(line.split("=", 1) for line in self.output.read_text().splitlines())
         exports = dict(line.split("=", 1) for line in self.envfile.read_text().splitlines())
@@ -314,8 +319,10 @@ class CompilerCacheWorkflowTests(unittest.TestCase):
                      "rust-toolchain.toml", "scripts/compiler-cache.sh", "scripts/rustc-compiler-cache.sh",
                      "scripts/ci-guardrails.sh", ".github/workflows/ci.yml", "src/lib.rs"):
             self.write(name, "original\n")
-        subprocess.run(["git", "init", "-q", str(self.root)], check=True, capture_output=True)
-        subprocess.run(["git", "add", "."], cwd=self.root, check=True, capture_output=True)
+        self_test_hang.run(["git", "init", "-q", str(self.root)], step="git init",
+                           check=True, capture_output=True)
+        self_test_hang.run(["git", "add", "."], step="git add", cwd=self.root,
+                           check=True, capture_output=True)
         step = self.steps["compiler-key"]
         baseline, _, _ = self.run_step(step)
         self.assertTrue(baseline["key"].startswith(baseline["prefix"]))
@@ -378,6 +385,24 @@ case "$1" in --show-stats|--zero-stats) exit "${FIXTURE_STATS_EXIT:-0}";; *) exi
         self.assertEqual(outputs["ready"], "false")
         self.assertEqual(exports["ORBIT_COMPILER_CACHE"], "0")
 
+    def test_slow_step_past_the_removed_cap_completes(self):
+        # Sleep stands in for a correct step that loses the CPU under idle
+        # scheduling. 25s is past the removed 10s and 20s caps.
+        step = {"id": "slow-compiler-step", "run": f"sleep {self_test_hang.SLOW_FIXTURE_SECONDS}\n"}
+        started = time.monotonic()
+        outputs, _, _ = self.run_step(step)
+        self.assertEqual(outputs, {})
+        self.assertGreater(time.monotonic() - started, 20)
+
+    def test_hung_step_fails_and_names_the_step(self):
+        step = {"id": "hung-compiler-step", "run": "sleep 30\n"}
+        with self.assertRaises(AssertionError) as caught:
+            self.run_step(step, timeout=self_test_hang.HANG_PROBE_SECONDS)
+        self.assertIn(
+            "hung step: hung-compiler-step "
+            f"(command bash exceeded {self_test_hang.HANG_PROBE_SECONDS:g}s)",
+            str(caught.exception))
+
 
 @unittest.skipIf(yaml is None, "PyYAML not installed; the workflow guard skips locally without it")
 class NextestShardWorkflowTests(unittest.TestCase):
@@ -404,9 +429,11 @@ class NextestShardWorkflowTests(unittest.TestCase):
         self.calls.write_text("")
         env = dict(PATH=f"{self.root / 'bin'}:{os.environ['PATH']}", RUNNER_TEMP=str(self.root),
                    **self.document["env"], **job.get("env", {}))
-        result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", step["run"]], cwd=self.root,
-                                env={key: str(value) for key, value in env.items()},
-                                text=True, capture_output=True, timeout=20)
+        result = self_test_hang.run(
+            ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+            step=name, cwd=self.root,
+            env={key: str(value) for key, value in env.items()},
+            text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return [json.loads(line) for line in self.calls.read_text().splitlines()]
 

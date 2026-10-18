@@ -5,8 +5,8 @@ import http.server
 import json
 import os
 from pathlib import Path
+import self_test_hang
 import shutil
-import subprocess
 import sys
 import tempfile
 import threading
@@ -77,9 +77,11 @@ os.execv({real_gh!r}, [{real_gh!r}, *args])
     def wait(self, *responses, timeout="10"):
         self.responses[:] = responses
         arguments = [argument for name in EXPECTED for argument in ("--job", name)]
-        return subprocess.run([sys.executable, str(SCRIPTS / "ci-await-jobs.py"), *arguments,
-                               "--poll-seconds", "0.01", "--timeout-seconds", timeout],
-                              env=self.env, text=True, capture_output=True, timeout=60)
+        return self_test_hang.run(
+            [sys.executable, str(SCRIPTS / "ci-await-jobs.py"), *arguments,
+             "--poll-seconds", "0.01", "--timeout-seconds", timeout],
+            step="ci-await-jobs",
+            env=self.env, text=True, capture_output=True)
 
     def test_waits_until_every_named_job_succeeds(self):
         building = [job("Test build", "in_progress"), job("Check / Clippy / Test", "in_progress")]

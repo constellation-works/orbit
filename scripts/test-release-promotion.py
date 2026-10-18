@@ -10,8 +10,8 @@ history and file contents.
 import os
 from pathlib import Path
 import re
+import self_test_hang
 import shlex
-import subprocess
 import tempfile
 import textwrap
 import unittest
@@ -143,12 +143,12 @@ class GitFixtureCase(unittest.TestCase):
         }
 
     def git(self, repo, *args, check=True):
-        result = subprocess.run(
+        result = self_test_hang.run(
             ["git", "-C", str(repo), *args],
+            step="git",
             env=self.env,
             text=True,
             capture_output=True,
-            timeout=30,
         )
         if check and result.returncode != 0:
             self.fail(
@@ -158,13 +158,13 @@ class GitFixtureCase(unittest.TestCase):
         return result
 
     def run_git(self, *args, check=True):
-        result = subprocess.run(
+        result = self_test_hang.run(
             ["git", *args],
+            step="git",
             cwd=self.root,
             env=self.env,
             text=True,
             capture_output=True,
-            timeout=30,
         )
         if check and result.returncode != 0:
             self.fail(
@@ -263,13 +263,13 @@ class ReleasePromotionRecoveryTests(GitFixtureCase):
 
         before_log = self.push_log()
         script = back_merge_script(RELEASING.read_text(encoding="utf-8"))
-        recovered = subprocess.run(
+        recovered = self_test_hang.run(
             ["bash", "-e", "-o", "pipefail", "-c", script],
+            step="hotfix back-merge",
             cwd=operator,
             env=self.env,
             text=True,
             capture_output=True,
-            timeout=60,
         )
         self.assertEqual(
             recovered.returncode,
@@ -375,13 +375,13 @@ class ReleasePromotionTests(GitFixtureCase):
         script = promotion_script(RELEASING.read_text(encoding="utf-8"), self.VERSION)
         self.log_before = len(self.push_log())
         # No `-e`: the documented block must stop itself, not rely on the shell.
-        return subprocess.run(
+        return self_test_hang.run(
             ["bash", "-o", "pipefail", "-c", script],
+            step="release promotion",
             cwd=self.operator,
             env=self.env,
             text=True,
             capture_output=True,
-            timeout=60,
         )
 
     def main_updates(self):
