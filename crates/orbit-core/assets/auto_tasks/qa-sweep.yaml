@@ -48,7 +48,12 @@ template:
     and add the matching regression-test location. Use existing paths where
     possible; for a test file that must be created, set
     `allow_missing_context: true` and identify that intended path. Never file a
-    finding without context selectors. Skip duplicates.
+    finding without context selectors. Skip duplicates. Add `ui` to the tags
+    of a finding in something a user sees (dashboard, web pages, docs site,
+    desktop app UI), and attach its screenshot to the filed task with
+    `orbit.task.artifact.put` at a stable path such as
+    `screenshots/<view>-<theme>-<width>.png`, under the 1 MiB artifact limit:
+    `.orbit/tmp/` is cleared with the worktree.
 
     A non-duplicate failing test that blocks the repository's
     standard validation command must be filed as a durable issue even when

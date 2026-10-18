@@ -30,7 +30,7 @@ use super::super::{
     PILOT_NORMALIZATIONS, VALIDATION_TOOL_WARNINGS, normalize_evidence_gaps, post_deploy,
     required_machine, required_os, required_string, required_string_array,
     retained_review_evidence, review_filed, reviewed_evidence_drops, unauthorized_missing_targets,
-    validate_after_selectors, validate_recommendations,
+    user_facing_ui, validate_after_selectors, validate_recommendations,
 };
 use super::{Applied, ApplyContext};
 
@@ -66,6 +66,7 @@ struct Assessed {
     required_os: Vec<NativeOsRequirement>,
     required_machine: Option<MachineRequirement>,
     post_deploy: Vec<PostDeployRequirement>,
+    user_facing_ui: bool,
 }
 
 pub(super) fn settle_task(
@@ -112,6 +113,7 @@ pub(super) fn settle_task(
         required_os: assessed.required_os,
         required_machine: assessed.required_machine,
         post_deploy: assessed.post_deploy,
+        user_facing_ui: assessed.user_facing_ui,
         applied_material: None,
     };
     write(context, applied, validated, snapshot)
@@ -291,6 +293,8 @@ fn assess(
         native_machine.as_ref(),
     )
     .map_err(refused(task_id, "invalid"))?;
+    let user_facing_ui =
+        user_facing_ui(action, task_id, &assessment).map_err(refused(task_id, "invalid"))?;
     attach_host_findings(
         &mut assessment,
         snapshot,
@@ -306,6 +310,7 @@ fn assess(
         required_os: native_os,
         required_machine: native_machine,
         post_deploy,
+        user_facing_ui,
     })
 }
 

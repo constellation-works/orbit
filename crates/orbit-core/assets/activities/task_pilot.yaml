@@ -195,6 +195,8 @@ spec:
                     type: string
                   evidence:
                     type: string
+            user_facing_ui:
+              type: [boolean, "null"]
       summary:
         type: string
   instruction: |
@@ -393,6 +395,12 @@ spec:
        requirements on several OSes add no tag; recommend separate
        host-scoped validation tasks rather than claiming tags arrange
        execution on all hosts.
+       Also set `user_facing_ui` to true when the task's criteria or context
+       files are UI a user sees (a dashboard, web pages, a docs site, a
+       desktop app UI), and false otherwise. When it is true and the task
+       lacks the `ui` tag, apply adds `ui`, which owes screenshots of the
+       changed views at delivery; you never edit tags yourself. Apply never
+       removes a `ui` tag, so false leaves an operator's tag in place.
     6. Assess the bounded logical repair, not alert severity, alert count, file
        count, version increment, or expected wall-clock time. Evaluate repair
        certainty, behavioral change, component coupling, and validation
@@ -487,7 +495,8 @@ spec:
         "surface_warnings":[],
         "required_os":[],
         "required_machine":[],
-        "post_deploy":[]
+        "post_deploy":[],
+        "user_facing_ui":false
       }],
       "summary":"one short partition summary"
     },"error":null}

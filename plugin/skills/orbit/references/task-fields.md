@@ -213,6 +213,13 @@ Requirement order does not matter. Changed criteria or requirements supersede
 the decision. Operator-validation and host-operational decisions remain scoped
 to the assessment they answered; a new assessment supersedes them.
 
+### User-facing UI
+
+When a task's criteria or context files are UI a user sees, the pilot records
+`user_facing_ui: true`, and the same atomic write adds the `ui` tag to a task
+that lacks it. `false`, null or an absent field adds nothing, and the pilot
+never removes a `ui` tag; any other value is refused for repair. The
+task-authoring reference (UI tag) defines the tag.
 
 ## Duplicate recovery
 

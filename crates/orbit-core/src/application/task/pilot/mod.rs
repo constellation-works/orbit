@@ -29,7 +29,9 @@
 //! `required_machine` finding is recorded with the native-host hold, so pull
 //! admission refuses every other machine. A `post_deploy` finding names
 //! criteria only the deployed build on a named host can evidence; it routes
-//! and holds nothing, and lets an implementer hand them off as owed.
+//! and holds nothing, and lets an implementer hand them off as owed. A
+//! `user_facing_ui` finding adds the `ui` tag to a task that lacks it; apply
+//! never removes one.
 //!
 //! An applied assessment also holds or gates the task: backlog holds from
 //! applied findings (`admission`), prerequisite resolution (`blockers`) and
@@ -61,8 +63,8 @@ pub(crate) use apply::apply;
 pub(super) use assessment::member_ready;
 use assessment::{
     normalize_evidence_gaps, required_machine, required_os, retained_review_evidence, review_filed,
-    reviewed_evidence_drops, routing_os, unauthorized_missing_targets, validate_after_selectors,
-    validate_recommendations,
+    reviewed_evidence_drops, routing_os, unauthorized_missing_targets, user_facing_ui,
+    validate_after_selectors, validate_recommendations,
 };
 pub(crate) use blockers::{normalize_pilot_self_blockers, pilot_blocker_task_ids};
 pub(crate) use drain_promotion::{
@@ -83,6 +85,8 @@ use serde_json::{Value, json};
 
 /// Actor that seals a task-pilot replay receipt on its audit comment.
 const PILOT_ACTOR: &str = "task-pilot";
+/// The tag a `user_facing_ui` finding adds: tasks whose change a user sees.
+const UI_TAG: &str = "ui";
 
 /// Task-pilot audit comments that carry a receipt, newest first.
 ///

@@ -59,6 +59,8 @@ pub(super) struct ValidatedTask {
     /// The typed post-deploy finding, persisted as the audit's
     /// `post_deploy`. It holds no admission.
     pub(super) post_deploy: Vec<super::PostDeployRequirement>,
+    /// The typed UI finding: add the `ui` tag when the task lacks it.
+    pub(super) user_facing_ui: bool,
     /// Exact material certified by the atomic write, recovered from its audit
     /// on replay rather than adopted from a later task read.
     pub(super) applied_material: Option<AppliedTaskMaterial>,

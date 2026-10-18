@@ -217,7 +217,7 @@ pub(super) const DASHBOARD_CSP: &str = concat!(
     "script-src 'self'; ",
     "style-src 'self' 'unsafe-inline'; ",
     "font-src 'self'; ",
-    "img-src 'self' data:; ",
+    "img-src 'self' data: blob:; ",
     "connect-src 'self'; ",
     "object-src 'none'; ",
     "base-uri 'none'; ",
