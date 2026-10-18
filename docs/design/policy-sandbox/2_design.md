@@ -4,7 +4,7 @@ type: design
 title: "Policy & Sandboxing — Design"
 owner: claude
 last_updated: 2026-10-12
-last_validated: 2026-10-12
+last_validated: 2026-10-18
 status: Draft
 feature: policy-sandbox
 doc_role: design
