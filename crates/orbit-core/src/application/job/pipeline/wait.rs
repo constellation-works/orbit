@@ -99,6 +99,30 @@ pub(super) fn announce_worker_exit() {
     changed.notify_all();
 }
 
+#[cfg(feature = "test-support")]
+static OBSERVED_WORKER_EXITS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Record that the startup observer for `run_id` finished all of its
+/// post-reap work (test support only; production builds keep no record).
+#[cfg(feature = "test-support")]
+pub(super) fn record_worker_exit(run_id: &str) {
+    OBSERVED_WORKER_EXITS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(run_id.to_string());
+}
+
+/// Whether the startup observer for `run_id` has finished all of its
+/// post-reap work in this process. Only recorded under `test-support`.
+#[cfg(feature = "test-support")]
+pub fn pipeline_worker_observer_completed(run_id: &str) -> bool {
+    OBSERVED_WORKER_EXITS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .any(|observed| observed == run_id)
+}
+
 /// Sleep for up to `duration` while the count still equals `exits_seen`.
 /// Spurious condvar wakeups resume the sleep; only a count change or the
 /// timeout ends it, so a missed wake costs at most the poll interval.

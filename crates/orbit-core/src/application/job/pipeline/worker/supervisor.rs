@@ -285,6 +285,8 @@ impl PipelineWorkerSupervisor {
     ) -> Result<(), OrbitError> {
         let settled = self.observe_startup(run_id, child, worker_log, worker_log_reader, actor);
         announce_worker_exit();
+        #[cfg(feature = "test-support")]
+        crate::application::job::pipeline::wait::record_worker_exit(run_id);
         settled
     }
 

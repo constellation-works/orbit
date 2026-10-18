@@ -43,7 +43,6 @@ const PARENT: &str = "child_wait_parent";
 const CHILD: &str = "child_wait_child";
 
 struct Fixture {
-    root: TempDir,
     global: PathBuf,
     repo: PathBuf,
     runtime: OrbitRuntime,
@@ -57,6 +56,13 @@ struct Fixture {
     cleaned: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(unix)]
     acquisition_events: Option<std::sync::mpsc::SyncSender<&'static str>>,
+    // Fields drop in declaration order after `Drop::drop`. `root` stays
+    // last as a backstop, but the guarantee comes from `Fixture::drop`:
+    // it reaps the workers and waits for each detached supervisor's own
+    // observer completion, and the fixture runtimes carry no background
+    // host-resource sampler (see `Fixture::new`), so no owner is left
+    // that can recreate a path inside the tree while `TempDir` removes it.
+    root: TempDir,
 }
 
 #[cfg(unix)]
@@ -113,7 +119,15 @@ impl Fixture {
             .unwrap(),
         )
         .unwrap();
-        let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
+        // No background host-resource sampler for this fixture: the
+        // default runtime's sampler thread holds the runtime through a
+        // `Weak` upgrade and writes `global/cache/host-resource-pressure.json`
+        // via an atomic write that recreates parent directories. It has
+        // no join handle, so it could recreate the tree after teardown.
+        // An injected probe keeps the monitor unsampled in the background.
+        let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
+            .unwrap()
+            .with_host_resource_probe(crate::dispatch_admission::PressureProbe::calm());
         let jobs = orbit_store::compose::workspace_job_run_store(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
@@ -160,8 +174,10 @@ impl Fixture {
                 #[cfg(unix)]
                 self.own_worker(&child).unwrap();
                 // A second runtime on the same roots, as a worker opens.
-                let runtime =
-                    OrbitRuntime::from_roots(&self.global, &self.repo.join(".orbit")).unwrap();
+                // Same no-background-sampler rule as `Fixture::new`.
+                let runtime = OrbitRuntime::from_roots(&self.global, &self.repo.join(".orbit"))
+                    .unwrap()
+                    .with_host_resource_probe(crate::dispatch_admission::PressureProbe::calm());
                 settle(&runtime, &child);
                 child
             });
@@ -430,6 +446,30 @@ impl Drop for Fixture {
             }
             // Bounded predicate observation, not an interleaving based on delay.
             std::thread::park_timeout(Duration::from_millis(20));
+        }
+        // Reaping a worker does not finish its detached supervisor: the
+        // observer thread spawned per worker rereads and settles the run
+        // after `wait()` returns. A run can already be terminal before
+        // that post-reap work runs, so terminal state is not the
+        // supervisor's completion signal. Wait for each worker's own
+        // observer completion, recorded only after its post-reap work,
+        // before teardown proceeds.
+        if failure.is_none() {
+            let settle_deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let settled = workers.iter().all(|worker| {
+                    orbit_core::test_support::pipeline_worker_observer_completed(&worker.run)
+                });
+                if settled {
+                    break;
+                }
+                if Instant::now() >= settle_deadline {
+                    self.root.disable_cleanup(true);
+                    failure = Some("supervisor settlement deadline; root retained".to_string());
+                    break;
+                }
+                std::thread::park_timeout(Duration::from_millis(20));
+            }
         }
         for worker in workers.iter() {
             if let Ok(log) = std::fs::read_to_string(
