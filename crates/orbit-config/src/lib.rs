@@ -118,9 +118,10 @@ pub use registry::{
     describe as describe_config_key, immutable_key_note, is_global_only_key,
 };
 pub use resolved::{
-    CodexExecutionPolicy, ExecutionEnvPolicy, PrSettings, RETIRED_SYSTEM_CREW,
-    RETIRED_SYSTEM_CREW_WARNING, ResolvedConfig, disabled_crew_message, executor_host_os,
-    names_retired_system_crew,
+    CodexExecutionPolicy, CompatibilityConfigKey, CompatibilityConfigKeyDisposition,
+    ExecutionEnvPolicy, PrSettings, RETIRED_SYSTEM_CREW, RETIRED_SYSTEM_CREW_WARNING,
+    ResolvedConfig, compatibility_config_keys_at, compatibility_config_keys_present,
+    disabled_crew_message, executor_host_os, names_retired_system_crew,
 };
 pub use roots::ConfigRoots;
 pub use seed::{ConfigSeed, seed_default_config};

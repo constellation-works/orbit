@@ -139,6 +139,70 @@ pub(super) fn deprecated_keys_present(document: &toml::Value) -> Vec<(&'static s
     keys_present(registry::DEPRECATED_CONFIG_KEYS, document)
 }
 
+/// Whether a key load still accepts is removed (ignored) or deprecated (still read).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompatibilityConfigKeyDisposition {
+    /// Load ignores the key and warns. `orbit config get` and `set` refuse it.
+    Removed,
+    /// Load still reads the key and warns. `orbit config get` and `set` refuse it.
+    Deprecated,
+}
+
+/// One retired or deprecated registry key still set in a config document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompatibilityConfigKey {
+    /// Dotted registry key, or a table name such as `semantic`.
+    pub key: &'static str,
+    /// Migration note shown when the key is warned about or refused.
+    pub note: &'static str,
+    /// Whether load ignores the key or still translates it.
+    pub disposition: CompatibilityConfigKeyDisposition,
+}
+
+/// Retired and deprecated registry keys `document` still sets.
+///
+/// Removed keys come first, then deprecated keys, both in registry order.
+pub fn compatibility_config_keys_present(document: &toml::Value) -> Vec<CompatibilityConfigKey> {
+    let mut keys = Vec::new();
+    for (key, note) in removed_keys_present(document) {
+        keys.push(CompatibilityConfigKey {
+            key,
+            note,
+            disposition: CompatibilityConfigKeyDisposition::Removed,
+        });
+    }
+    for (key, note) in deprecated_keys_present(document) {
+        keys.push(CompatibilityConfigKey {
+            key,
+            note,
+            disposition: CompatibilityConfigKeyDisposition::Deprecated,
+        });
+    }
+    keys
+}
+
+/// Retired and deprecated registry keys set in the config file at `path`.
+///
+/// A missing file has none. The read uses the same no-follow path check as
+/// other config loads, so a symlink is refused rather than followed.
+pub fn compatibility_config_keys_at(
+    path: &Path,
+) -> Result<Vec<CompatibilityConfigKey>, OrbitError> {
+    let Some(raw) = crate::store::read_config_file(path)? else {
+        return Ok(Vec::new());
+    };
+    if raw.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let document = toml::from_str(&raw).map_err(|error| {
+        OrbitError::InvalidInput(format!(
+            "invalid runtime config '{}': {error}",
+            redact_home_dir(&path.display().to_string())
+        ))
+    })?;
+    Ok(compatibility_config_keys_present(&document))
+}
+
 fn keys_present(
     keys: &[(&'static str, &'static str)],
     document: &toml::Value,

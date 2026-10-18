@@ -464,14 +464,21 @@ impl ConfigStore {
     /// below this machine's identity to fall back to, and clearing one of its
     /// three keys would leave a partial `[machine]` table that fails closed on
     /// the next load. `machine.worker_*` limits unset to their defaults.
+    ///
+    /// A removed or deprecated registry key is the other exception.
+    /// `orbit config get` and `set` refuse it, and this method still removes
+    /// it so `orbit doctor --fix-retired-config-keys` can delete a key the
+    /// operator can no longer write.
     pub fn unset_value(&mut self, key: &str) -> Result<bool, OrbitError> {
-        registry::admit_settable_config_key(key)?;
-        if registry::is_machine_identity_key(key) {
-            return Err(OrbitError::InvalidInput(format!(
-                "config key '{key}' cannot be unset: this machine's identity has no layer to \
-                 fall back to, and a partial [machine] table does not load. Rename it with \
-                 `orbit config set --global machine.name <value>` instead"
-            )));
+        if !registry::is_compatibility_config_key(key) {
+            registry::admit_settable_config_key(key)?;
+            if registry::is_machine_identity_key(key) {
+                return Err(OrbitError::InvalidInput(format!(
+                    "config key '{key}' cannot be unset: this machine's identity has no layer to \
+                     fall back to, and a partial [machine] table does not load. Rename it with \
+                     `orbit config set --global machine.name <value>` instead"
+                )));
+            }
         }
         Ok(self.remove_path(key))
     }

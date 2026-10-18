@@ -933,6 +933,173 @@ fn doctor_reports_the_worker_cpu_quota() {
     );
 }
 
+/// A retired key is reported with its file and left in place. The fix removes
+/// only that key, writes one backup, and a second run writes nothing more.
+#[test]
+fn doctor_lists_a_retired_config_key_and_the_fix_removes_only_that_key() {
+    let fixture = WorkCheckout::new();
+    let global_dir = fixture.home.join(".orbit");
+    fs::create_dir_all(&global_dir).expect("global root");
+    let global_config = global_dir.join("config.toml");
+    let global_body = "[workflow]\nbase_branch = \"main\"\n";
+    fs::write(&global_config, global_body).expect("global config");
+
+    let workspace_config = fixture.work.join(".orbit/config.toml");
+    let workspace_body = "\
+# keep this note
+[workflow]
+base_branch = \"agent-main\"
+system_crew = \"sol\"
+
+[scoring]
+enabled = false
+";
+    fs::write(&workspace_config, workspace_body).expect("workspace config");
+
+    let reported = doctor(&fixture, &[]);
+    assert_eq!(
+        fs::read_to_string(&workspace_config).expect("workspace config"),
+        workspace_body,
+        "diagnosis must not rewrite config"
+    );
+    assert_eq!(
+        fs::read_to_string(&global_config).expect("global config"),
+        global_body,
+        "diagnosis must not rewrite the other config"
+    );
+    assert!(
+        backup_names(&fixture.work.join(".orbit")).is_empty(),
+        "diagnosis must not write a backup"
+    );
+    let reported_rows = rows(&reported);
+    let retired = reported_rows
+        .iter()
+        .filter(|row| row["check"] == "retired-config-keys" && row["status"] == "warning")
+        .collect::<Vec<_>>();
+    assert!(
+        retired.iter().any(|row| mentions_key_and_file(
+            row,
+            "workflow.system_crew",
+            &workspace_config
+        )),
+        "doctor names the deprecated key and its file: {reported_rows:?}"
+    );
+    assert!(
+        retired
+            .iter()
+            .any(|row| mentions_key_and_file(row, "scoring.enabled", &workspace_config)),
+        "doctor names the removed key and its file: {reported_rows:?}"
+    );
+    assert!(
+        retired.iter().all(|row| row["remediation"]
+            .as_str()
+            .is_some_and(|text| text.contains("--fix-retired-config-keys"))),
+        "each retired key names the repair: {retired:?}"
+    );
+    assert!(
+        !reported_rows
+            .iter()
+            .any(|row| row["check"] == "fix-retired-config-keys"),
+        "the report does not run the repair"
+    );
+
+    let fixed = doctor(&fixture, &["--fix-retired-config-keys"]);
+    let fixed_rows = rows(&fixed);
+    let repair = row(&fixed_rows, "fix-retired-config-keys");
+    assert_eq!(repair["status"], "ok", "{repair}");
+    let repair_message = repair["message"].as_str().expect("repair message");
+    assert!(
+        repair_message.contains("workflow.system_crew")
+            && repair_message.contains("scoring.enabled")
+            && repair_message.contains(&workspace_config.display().to_string()),
+        "{repair}"
+    );
+    let updated = fs::read_to_string(&workspace_config).expect("updated config");
+    assert!(
+        updated.contains("# keep this note"),
+        "the repair keeps the operator's comment: {updated}"
+    );
+    assert!(
+        updated.contains("base_branch = \"agent-main\""),
+        "the repair keeps the neighboring key: {updated}"
+    );
+    assert!(
+        !updated.contains("system_crew") && !updated.contains("enabled"),
+        "the repair removes only the retired keys: {updated}"
+    );
+    assert_eq!(
+        fs::read_to_string(&global_config).expect("global config"),
+        global_body,
+        "the repair leaves a file with no retired keys untouched"
+    );
+    let backups = backup_names(&fixture.work.join(".orbit"));
+    assert_eq!(backups, vec!["config.toml.bak".to_string()], "{backups:?}");
+    let backup = fixture.work.join(".orbit").join(&backups[0]);
+    assert_eq!(
+        fs::read_to_string(&backup).expect("backup"),
+        workspace_body,
+        "the backup is the file from before the repair"
+    );
+    assert_eq!(
+        row(&fixed_rows, "retired-config-keys")["status"],
+        "ok",
+        "the report after the repair no longer warns: {fixed_rows:?}"
+    );
+
+    let settled = fs::read(&workspace_config).expect("settled config");
+    let backup_bytes = fs::read(&backup).expect("backup bytes");
+    let again = rows(&doctor(&fixture, &["--fix-retired-config-keys"]));
+    let again_repair = row(&again, "fix-retired-config-keys");
+    assert_eq!(again_repair["status"], "ok", "{again_repair}");
+    assert!(
+        again_repair["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("No retired or deprecated config keys")),
+        "{again_repair}"
+    );
+    assert_eq!(
+        fs::read(&workspace_config).expect("config after second run"),
+        settled,
+        "a second run does not rewrite the config"
+    );
+    assert_eq!(
+        fs::read(&backup).expect("backup after second run"),
+        backup_bytes,
+        "a second run does not rewrite the backup"
+    );
+    assert_eq!(
+        backup_names(&fixture.work.join(".orbit")),
+        backups,
+        "a second run writes no further backup"
+    );
+    assert_eq!(
+        fs::read_to_string(&global_config).expect("global config"),
+        global_body
+    );
+}
+
+fn mentions_key_and_file(row: &Value, key: &str, file: &std::path::Path) -> bool {
+    row["message"].as_str().is_some_and(|message| {
+        message.contains(key) && message.contains(&file.display().to_string())
+    })
+}
+
+fn backup_names(directory: &std::path::Path) -> Vec<String> {
+    let mut names = fs::read_dir(directory)
+        .expect("config directory")
+        .map(|entry| {
+            entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .filter(|name| name.starts_with("config.toml.bak"))
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
 /// `orbit doctor` reports mid-run steering's resolved settings, read through
 /// both config layers, so an operator can tell whether this workspace
 /// records steering watermarks.

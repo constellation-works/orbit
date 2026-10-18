@@ -151,8 +151,8 @@ mod keys;
 mod settings;
 
 pub(crate) use keys::{
-    DEPRECATED_CONFIG_KEYS, REMOVED_CONFIG_KEYS, deprecated_key_note, is_machine_identity_key,
-    parse_crew_field_key, removed_key_note,
+    DEPRECATED_CONFIG_KEYS, REMOVED_CONFIG_KEYS, deprecated_key_note, is_compatibility_config_key,
+    is_machine_identity_key, parse_crew_field_key, removed_key_note,
 };
 pub use keys::{
     GLOBAL_ONLY_KEY_PREFIX, admit_config_key, admit_settable_config_key, config_key_options,

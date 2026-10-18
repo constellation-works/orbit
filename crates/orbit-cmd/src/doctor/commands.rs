@@ -170,6 +170,9 @@ impl DoctorProbe {
 /// subsystems as `Skipped`.
 pub(crate) const WORKSPACE_PROBES: &[DoctorProbe] = &[
     DoctorProbe::many("config", |runtime, _| doctor_check_config(runtime)),
+    DoctorProbe::many("retired-config-keys", |runtime, _| {
+        super::retired_config::doctor_check_retired_config_keys(runtime)
+    }),
     DoctorProbe::one("database", doctor_check_database),
     DoctorProbe::one("disk-space", |runtime, _| doctor_check_disk_space(runtime)),
     DoctorProbe::one("search-index", |runtime, _| {
@@ -298,6 +301,10 @@ pub trait DoctorCommands {
     /// Cheap store write probe for health endpoints: open the store and
     /// acquire + roll back the write lock without mutating anything.
     fn health_check_store_writable(&self) -> Result<String, OrbitError>;
+
+    /// Back up each config file that still sets a retired or deprecated key,
+    /// then remove only those keys. A file with none is left untouched.
+    fn remove_retired_config_keys(&self) -> Result<super::RetiredConfigKeyRepair, OrbitError>;
 }
 
 impl DoctorCommands for OrbitRuntime {
@@ -362,5 +369,9 @@ impl DoctorCommands for OrbitRuntime {
     fn health_check_store_writable(&self) -> Result<String, OrbitError> {
         self.check_sqlite_store_writable()?;
         Ok("store database accepts writes".to_string())
+    }
+
+    fn remove_retired_config_keys(&self) -> Result<super::RetiredConfigKeyRepair, OrbitError> {
+        super::retired_config::remove_retired_config_keys(self)
     }
 }
