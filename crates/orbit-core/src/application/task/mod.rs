@@ -28,6 +28,7 @@ mod listing;
 mod params;
 mod paths;
 pub(crate) mod pilot;
+mod post_deploy;
 mod pr_closure;
 mod pull_request_links;
 mod query;
@@ -89,6 +90,7 @@ pub(crate) use pilot::{
     PilotAdmissionHold, VerifiedNoDiff, normalize_pilot_self_blockers,
     operator_validation_requirements, pilot_blocker_task_ids,
 };
+pub(crate) use post_deploy::owed_criteria_json;
 pub use provider_limit::{
     CrewProviderLimit, ProviderLimitReading, ProviderLimitThreshold, ProviderLimitsView,
     ProviderUsageStatus, UngatedLaneLimit, short_time,

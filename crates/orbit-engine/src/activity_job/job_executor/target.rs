@@ -114,6 +114,15 @@ pub(super) fn run_target(
         message,
         &mut dispatch,
     );
+    let (success, message) = accept_implementer_owed_criteria(
+        step,
+        t,
+        ctx,
+        &dispatched_input,
+        success,
+        message,
+        &mut dispatch,
+    );
     // Response envelopes belong to provider invocations. A deterministic
     // target already returns its structured output directly and can implement
     // a custom delivery activity without the provider's stdout contract.
@@ -352,6 +361,41 @@ fn accept_implementer_deferral(
                 serde_json::to_value(record),
             ) {
                 output.insert("deferred_sandbox_validation".to_string(), record);
+            }
+            (success, message)
+        }
+        Ok(None) => (success, message),
+        Err(refusal) => (false, Some(refusal)),
+    }
+}
+
+/// Admit an implementer step's criteria owed after deploy against the task
+/// pilot's post-deploy finding, failing the step for any criterion the pilot
+/// did not type. The admitted list replaces the field in the step's output.
+/// Like a refused deferral, it fails here, before anything is committed.
+fn accept_implementer_owed_criteria(
+    step: &JobV2Step,
+    target: &TargetStep,
+    ctx: &ExecCtx<'_>,
+    input: &Value,
+    success: bool,
+    message: Option<String>,
+    dispatch: &mut super::super::dispatcher::DispatchOutcome,
+) -> (bool, Option<String>) {
+    if !success || !is_implementer_step(step, target) {
+        return (success, message);
+    }
+    match crate::executor::automation::vcs::accept_implementer_owed_criteria(
+        ctx.host,
+        &ctx.run_id,
+        input,
+        &dispatch.output,
+    ) {
+        Ok(Some(owed)) => {
+            if let (Some(output), Ok(owed)) =
+                (dispatch.output.as_object_mut(), serde_json::to_value(owed))
+            {
+                output.insert(orbit_types::workflow::OWED_CRITERIA_FIELD.to_string(), owed);
             }
             (success, message)
         }

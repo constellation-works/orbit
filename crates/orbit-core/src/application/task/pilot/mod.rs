@@ -27,7 +27,9 @@
 //! `required_os` finding naming one OS adds its `os:` tag to a task that
 //! carries none (an operator's `os:` tags are never touched), and a
 //! `required_machine` finding is recorded with the native-host hold, so pull
-//! admission refuses every other machine.
+//! admission refuses every other machine. A `post_deploy` finding names
+//! criteria only the deployed build on a named host can evidence; it routes
+//! and holds nothing, and lets an implementer hand them off as owed.
 //!
 //! An applied assessment also holds or gates the task: backlog holds from
 //! applied findings (`admission`), prerequisite resolution (`blockers`) and
@@ -44,6 +46,7 @@ mod freshness;
 pub(crate) mod input;
 mod no_diff;
 mod persist;
+mod post_deploy;
 mod prepare;
 mod promotion;
 pub(crate) mod source;
@@ -67,6 +70,8 @@ pub(crate) use drain_promotion::{
 };
 use input::{requested_workspace_root, required_string, required_string_array};
 pub(crate) use no_diff::{NoDiffClosure, PILOT_VERIFIED_NO_DIFF, VerifiedNoDiff};
+pub(crate) use post_deploy::PostDeployRequirement;
+use post_deploy::post_deploy;
 pub(crate) use prepare::prepare;
 pub(crate) use promotion::{
     PromotionFindings, auto_approval_opted_out, promotion_findings, recommendation_has_evidence,

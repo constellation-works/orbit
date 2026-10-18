@@ -89,6 +89,7 @@ mod owner_busy;
 mod owner_gates;
 mod partial_candidate;
 mod pilot;
+mod post_deploy;
 mod provider_limit;
 mod rebased_landing;
 mod recovery;
@@ -1220,6 +1221,7 @@ fn handoff(record: &LocalPullAdmission) -> TaskHandoff {
         execution_summary: "Outcome: success".into(),
         validation: vec![],
         footprint_widening: vec![],
+        owed_criteria: vec![],
     }
 }
 

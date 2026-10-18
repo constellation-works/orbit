@@ -308,6 +308,9 @@ pub(super) fn apply_task(
                         task.required_machine.clone(),
                     )
                 });
+            let post_deploy = (!task.post_deploy.is_empty()).then(|| {
+                super::post_deploy::PostDeployFinding::new(&assessed, task.post_deploy.clone())
+            });
             let mutation_params = AtomicTaskMutationParams {
                 actor: super::PILOT_ACTOR.to_string(),
                 operation_id: task.operation_id.clone(),
@@ -344,6 +347,7 @@ pub(super) fn apply_task(
                     "operator_validation_hold": operator_hold,
                     "host_operational_hold": host_operational_hold,
                     "native_os_hold": native_os_hold,
+                    "post_deploy": post_deploy,
                     "context_files_before": snapshot.context_files,
                     "complexity_before": snapshot.complexity,
                     "complexity_after": task.complexity,

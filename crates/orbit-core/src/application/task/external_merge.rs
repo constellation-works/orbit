@@ -12,7 +12,9 @@
 //! - it is `blocked`, `in-progress` or `review`;
 //! - no run or unsettled claim of its own is live, and no live `run auto`
 //!   leaf carries it: that run lands or fails the task itself;
-//! - one of its delivery PRs is merged into the task's target branch.
+//! - one of its delivery PRs is merged into the task's target branch;
+//! - it owes no acceptance criterion after deploy that an operator has not
+//!   recorded met.
 //!
 //! A delivery PR is matched as the closure matches it: its head branch is
 //! `orbit/<TASK-ID>-…`, its body names the task, and it was authored by a
@@ -225,6 +227,9 @@ impl OrbitRuntime {
                     .to_string(),
             );
         }
+        if let Some(owed) = self.owed_settlement_hold(&task.id) {
+            return Err(owed);
+        }
         let candidate = Candidate {
             follower_prs: self.accepted_handoff_pull_requests(&task.id),
             task,
@@ -323,6 +328,9 @@ impl OrbitRuntime {
             if let Some(live) = self.live_task_delivery(&task) {
                 return Err(refused(id, &live));
             }
+            if let Some(owed) = self.owed_settlement_hold(id) {
+                return Err(refused(id, &owed));
+            }
             self.ensure_resolves_are_workspace_local(&task)?;
             let mut external_refs = task.external_refs.clone();
             push_external_ref_if_missing(
@@ -393,6 +401,24 @@ fn live_leaf_task_ids(runtime: &OrbitRuntime) -> Result<BTreeSet<String>, OrbitE
 /// Whether `merged` is on the task's delivery branch and names it.
 fn names_delivery(merged: &MergedPullRequest, task_id: &str) -> bool {
     names_task_delivery_pull_request(&merged.pull.head_branch, &merged.pull.body, task_id)
+}
+
+impl OrbitRuntime {
+    /// Why a delivered task that still owes criteria after deploy stays in
+    /// review, or `None` when it owes none. An unreadable history holds it.
+    fn owed_settlement_hold(&self, task_id: &str) -> Option<String> {
+        match self.outstanding_owed_criteria(task_id, None) {
+            Ok(owed) if owed.is_empty() => None,
+            Ok(owed) => Some(format!(
+                "it owes criteria {} after deploy; record each met before it settles",
+                owed.iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+            Err(error) => Some(format!("its owed criteria could not be read: {error}")),
+        }
+    }
 }
 
 fn refused(id: &str, reason: &str) -> OrbitError {

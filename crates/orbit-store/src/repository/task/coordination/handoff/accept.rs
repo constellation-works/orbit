@@ -212,6 +212,26 @@ impl TaskCommitBoundary {
                     });
             }
         }
+        // The owner admitted these against its pilot's post-deploy finding
+        // before this commit; the history entry is the task's owed record.
+        if !handoff.owed_criteria.is_empty() {
+            let owed = orbit_types::workflow::PostDeployOwed {
+                run_id: handoff.run_id.clone(),
+                criteria: handoff.owed_criteria.clone(),
+            };
+            params
+                .append_history
+                .push(orbit_types::task::TaskHistoryEntry {
+                    at: Utc::now(),
+                    by: params.actor.clone(),
+                    event: orbit_types::workflow::POST_DEPLOY_OWED_EVENT.into(),
+                    note: Some(encode(&owed)?),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: None,
+                    decision: None,
+                });
+        }
         let accepted = AcceptedHandoff {
             handoff_id: format!("handoff-{}", sha256_hex(encode(handoff)?.as_bytes())),
             handoff: handoff.clone(),

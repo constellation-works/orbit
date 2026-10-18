@@ -406,6 +406,23 @@ pub trait NullRuntimeHost: Send + Sync {
         Err(unsupported_runtime_capability("record_flaky_validation"))
     }
 
+    fn admit_owed_criteria(
+        &self,
+        _task_id: &str,
+        _run_id: &str,
+        _owed: &[orbit_types::workflow::OwedCriterion],
+    ) -> Result<(), OrbitError> {
+        Err(unsupported_runtime_capability("admit_owed_criteria"))
+    }
+
+    fn outstanding_owed_criteria(
+        &self,
+        _task_id: &str,
+        _run_id: Option<&str>,
+    ) -> Result<Vec<usize>, OrbitError> {
+        Ok(Vec::new())
+    }
+
     // ── Config accessors (implementors provide these) ──────────────────
 
     fn required_validation_commands(&self) -> Vec<String> {
@@ -1080,6 +1097,21 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
         record: &orbit_types::workflow::FlakyValidation,
     ) -> Result<(), OrbitError> {
         NullRuntimeHost::record_flaky_validation(self, task_id, record)
+    }
+    fn admit_owed_criteria(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        owed: &[orbit_types::workflow::OwedCriterion],
+    ) -> Result<(), OrbitError> {
+        NullRuntimeHost::admit_owed_criteria(self, task_id, run_id, owed)
+    }
+    fn outstanding_owed_criteria(
+        &self,
+        task_id: &str,
+        run_id: Option<&str>,
+    ) -> Result<Vec<usize>, OrbitError> {
+        NullRuntimeHost::outstanding_owed_criteria(self, task_id, run_id)
     }
     fn required_validation_commands(&self) -> Vec<String> {
         NullRuntimeHost::required_validation_commands(self)

@@ -336,7 +336,7 @@ fn validation_material(task: &Task) -> String {
 
 /// What a [`NativeOsHold`] assessed: editing any acceptance criterion is a
 /// re-scope that releases it.
-fn criteria_digest(task: &Task) -> String {
+pub(super) fn criteria_digest(task: &Task) -> String {
     sha256_hex(json!(task.acceptance_criteria).to_string().as_bytes())
 }
 

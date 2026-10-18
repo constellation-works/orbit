@@ -176,6 +176,37 @@ non-empty and unique. The commit verifier also requires a clean worktree and
 the current HEAD to equal `tested_head`; otherwise reconcile the changes and
 rerun validation before attaching the evidence.
 
+### Criteria owed after deploy
+
+A criterion the task's latest task-pilot assessment lists in `post_deploy` can
+be evidenced only by the deployed build on the host it names, so no candidate
+meets it before merge. Do not fail the run or return a blocker for it. Gather
+what the candidate can show and return the criterion in the implementer output:
+
+```json
+{"owed_criteria": [{"criterion": 1, "host": "<host>", "command": "<measurement command>",
+  "target": "p95 <= 150 ms", "candidate_evidence": "<what the candidate showed>"}]}
+```
+
+The implement step admits each entry against the pilot's finding, with the
+host it names, and fails the step for an owed criterion the pilot did not type.
+Every other unmet criterion fails as before. An owner run records the admitted
+entries as a `post_deploy_owed` history event; a claimed leaf carries them in
+its typed handoff, which the owner checks again before it accepts it. The
+delivery proceeds through PR, review and landing, then settles in `review`
+instead of `done`. `orbit task show` and the dashboard task detail list each
+owed criterion with its host, command, target and state; external-merge
+settlement leaves the task in `review` too.
+
+Measuring afterwards is the operator's job; nothing re-measures on its own. A
+human task comment whose first line is `post-deploy: met <N>` or
+`post-deploy: failed <N>`, with the measurement's evidence on the lines after
+it, records `post_deploy_recorded`. An agent comment of that shape records
+nothing. Once every owed criterion is recorded met, the operator approves the
+task to `done` (`orbit task approve`); a failed one is repaired through an
+ordinary new task. In the execution summary mark each owed criterion `not_run`
+(owed after deploy), never passed.
+
 **Keep `context_files` current.** You may declare newly identified modification targets
 through the task tools before editing, within the approved scope and activity
 rules. `orbit.task.update` replaces the whole context list when `context_files`

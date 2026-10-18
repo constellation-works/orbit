@@ -477,6 +477,23 @@ impl RuntimeHost for OrbitRuntime {
         )
     }
 
+    fn admit_owed_criteria(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        owed: &[orbit_types::workflow::OwedCriterion],
+    ) -> Result<(), OrbitError> {
+        OrbitRuntime::admit_owed_criteria(self, task_id, run_id, owed)
+    }
+
+    fn outstanding_owed_criteria(
+        &self,
+        task_id: &str,
+        run_id: Option<&str>,
+    ) -> Result<Vec<usize>, OrbitError> {
+        OrbitRuntime::outstanding_owed_criteria(self, task_id, run_id)
+    }
+
     fn record_claim_handoff(
         &self,
         handoff: &orbit_types::workflow::handoff::TaskHandoff,

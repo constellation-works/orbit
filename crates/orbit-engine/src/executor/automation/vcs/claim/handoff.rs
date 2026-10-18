@@ -92,6 +92,28 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
         ));
     }
     let review = handoff_review(input, &candidate)?;
+    // The implement step admitted these against the pilot's post-deploy
+    // finding; the owner admits them again when it accepts the handoff.
+    let owed_criteria = implementation_output(input)
+        .map(orbit_types::workflow::OwedCriterion::from_output)
+        .transpose()
+        .map_err(|defect| {
+            OrbitError::InvalidInput(format!("invalid implementer output: {defect}"))
+        })?
+        .unwrap_or_default();
+    if !owed_criteria.is_empty() {
+        execution_summary.push_str(&format!(
+            "\n\nOwed after deploy: {}.",
+            owed_criteria
+                .iter()
+                .map(|owed| format!(
+                    "criterion {} on {} (`{}`, target {})",
+                    owed.criterion, owed.host, owed.command, owed.target
+                ))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
+    }
 
     let handoff = TaskHandoff {
         schema_version: 1,
@@ -111,6 +133,7 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
             &candidate.candidate.commit,
         )?
         .1,
+        owed_criteria,
     };
     host.record_claim_handoff(&handoff)?;
 

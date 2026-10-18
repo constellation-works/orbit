@@ -142,6 +142,28 @@ spec:
             items:
               type: string
               description: "`cargo test -p <crate> --test <target> [<filter>]`"
+      # Criteria the task pilot typed post-deploy, which only the deployed
+      # build can evidence (item 7). The implement step admits each against
+      # that finding and fails the step for any other; the delivery then
+      # settles in review until an operator records the measurement.
+      owed_criteria:
+        type: array
+        items:
+          type: object
+          required: [criterion, host, command, target]
+          additionalProperties: false
+          properties:
+            criterion:
+              type: integer
+              minimum: 1
+            host:
+              type: string
+            command:
+              type: string
+            target:
+              type: string
+            candidate_evidence:
+              type: string
       # A real blocker (item 8). The step boundary records it and stops the run.
       blocker:
         type: object
@@ -404,6 +426,19 @@ spec:
        `baseline_red` command, and every other required command (formatting,
        lint, goldens, static-analysis extraction) keep their ordinary
        handling above.
+       A criterion the task's latest task-pilot assessment lists in
+       `post_deploy` can be evidenced only by the deployed build on the host
+       it names, so no candidate meets it before merge. Do not fail the run
+       or return a blocker for it. Gather what the candidate itself can show
+       (its own build's timings or request counts, a test server started
+       from the candidate) and return each such criterion as
+       `{"owed_criteria":[{"criterion":N,"host":"...","command":"...","target":"...","candidate_evidence":"..."}]}`,
+       copying the host and measurement command from that finding. The
+       delivery proceeds and settles in `review` until an operator records
+       the measurement. The step boundary refuses an owed criterion the
+       pilot did not type: every other unmet criterion still fails as
+       above. In the execution summary mark each owed criterion `not_run`
+       (owed after deploy), never as passed.
        Run only gates named by workspace policy. When a gate fails outside the
        delivery scope, reproduce it once on the unmodified baseline (the same
        command at the base commit or with your diff reverted). A failure there

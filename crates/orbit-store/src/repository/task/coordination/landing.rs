@@ -406,6 +406,8 @@ impl TaskCommitBoundary {
     /// Complete an authorized landing. `evidence` is the owner's verified merge
     /// evidence — the provider's merged pull request or the local target ref —
     /// recorded in task history alongside the transition it permitted.
+    /// A handoff that owes criteria after deploy lands with its task left in
+    /// `review` until an operator records them.
     pub(super) fn complete_landing_attempt(
         &self,
         auth: &ClaimInvocation,
@@ -434,7 +436,12 @@ impl TaskCommitBoundary {
             .replacements
             .push((old, row(ATTEMPT, handoff_id, &attempt)?));
         self.settle_landing_request(handoff_id, LandingStartState::Completed, effects)?;
-        params.status = Some(TaskStatus::Done);
+        let owes = !self
+            .accepted_handoff(&auth.claim_id)?
+            .handoff
+            .owed_criteria
+            .is_empty();
+        params.status = (!owes).then_some(TaskStatus::Done);
         params.status_note = Some(evidence.into());
         params.status_event = Some("landing_completed".into());
         Ok(())
