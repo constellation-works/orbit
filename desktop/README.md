@@ -10,17 +10,20 @@ dashboard's own host switcher.
 ## How it works
 
 - **Server.** The app runs `orbit web serve --port 0 --no-open --operator` with your home directory
-  as the working directory. It reads the bound address from the server's startup line. `--operator`
-  turns on the dashboard's governed controls, as `orbit web connect` does, because an app has no
-  terminal to confirm them in.
+  as the working directory. It reads the bound address from each startup line the server prints.
+  `--operator` turns on the dashboard's governed controls, as `orbit web connect` does, because an
+  app has no terminal to confirm them in.
 - **Finding `orbit`.** Apps started from the Dock or a desktop launcher get a minimal `PATH`. The
   app looks in `ORBIT_BIN` (an explicit path that overrides the search), `$ORBIT_INSTALL_DIR`,
   `~/.orbit/bin`, `PATH`, `~/.cargo/bin`, `~/.local/bin`, npm and nvm global bins,
   `/opt/homebrew/bin`, `/usr/local/bin` and `/usr/bin`. The npm package's `orbit` command is a Node
   launcher, so the app runs the native binary inside the package instead.
 - **Restarts.** If the server exits, the window returns to its status page and starts the server
-  again. Repeated quick failures back off up to 30 seconds; **Retry** skips the wait. A server that
-  replaces itself after `orbit update` keeps its process and port, so the window doesn't notice.
+  again. Repeated quick failures back off up to 30 seconds; **Retry** skips the wait.
+- **Updates.** After `orbit update`, the server hands over to the new binary in the same process.
+  It replays `--port 0`, so the new image can bind a different port; it prints its startup line
+  again, and the window loads the new address and stops allowing the old one. If the handover fails
+  and the server exits, the restart path above takes over.
 - **Quitting.** Quitting the app, or sending it SIGTERM, SIGINT or SIGHUP, stops the server. The
   server gets up to 12 seconds to drain before it is killed. On Linux the kernel also stops the
   server if the app crashes. On macOS, a crash that skips Rust's panic hook (a SIGKILL, for example)
@@ -68,9 +71,15 @@ window navigates only to the status page and the running dashboard. Every other 
 
 The shell is its own Cargo workspace (its `Cargo.toml` has its own `[workspace]` table), not a member of the root one, so `make ci` and the main CI
 jobs never build it. [`.github/workflows/desktop.yml`](../.github/workflows/desktop.yml) runs
-format and Clippy checks on macOS and Linux whenever `desktop/` changes. A manual run of that
+format, Clippy and test checks on macOS and Linux whenever `desktop/` changes. A manual run of that
 workflow also uploads unsigned bundles for testing. Releases are built separately, as
 described in [Releases](#releases).
+
+The server supervisor lives in the `orbit_desktop` library (`src/sidecar.rs`), apart from the
+window, so `tests/sidecar_lifecycle.rs` can drive it without a webview. That test binary acts as
+its own fake `orbit`: it re-executes itself on a new port in the same process, and the test checks
+that the window follows and that quitting stops the server. Run it with `cargo test` from
+`desktop/`.
 
 Linux needs the WebKitGTK development packages:
 
