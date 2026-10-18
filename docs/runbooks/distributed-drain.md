@@ -643,6 +643,17 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   crew is runnable, the drain requests nothing and reports
   `no_runnable_crew`. After you install a missing CLI, start a new drain to pick it up.
   Auth failures may recover in the same window through a declared probe (below).
+- Under `machine.auto_concurrency.mode = "enforce"` on the follower, each
+  pull request names the work its host load forecast has room for, and the
+  owner skips the rest as `capacity_unavailable`; they stay in its backlog.
+  A recurring `auto-task:` template the follower has a profile of is judged
+  by that profile and stays refused while it does not fit. A template the
+  follower has no profile of yet is judged by its base class (`no-diff` when
+  the task carries `no-diff-expected`, otherwise `change`), so a host that
+  has never run a template can still claim it. Owner and follower must run
+  builds with the same pull request fingerprint, so neither applies a rule
+  the other does not (`protocol_skew` otherwise). See
+  [`machine.auto_concurrency`](../CONFIG.md#machineauto_concurrency--host-forecast-admission).
 - Each iteration first carries earlier admissions forward — retries an
   unanswered request under the **same** ID, binds, launches, and delivers a
   finished leaf's settlement — then, while the window is open, tops free slots

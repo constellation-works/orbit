@@ -1,7 +1,7 @@
 ---
 title: Auto-concurrency — Design
 owner: claude
-last_updated: 2026-10-17
+last_updated: 2026-10-18
 last_validated: 2026-10-17
 status: Draft
 feature: auto-concurrency
@@ -786,19 +786,30 @@ admission lock (§5.2):
    holds no running delivery or reservation, every kind fits:
    - each work class `no-diff` and `change` with each complexity, unset
      included;
-   - each `auto-task:` template this workspace has a profile of on this host.
+   - each `auto-task:` template this workspace has a profile of on this host;
+   - a template with no profile on this host, once for each base class
+     (`no-diff`, `change`). Its exact key has no profile, so every such
+     template prices alike, by the fallback chain from its base class (§3),
+     exactly as its returned claim is reserved.
 2. Under `mode = enforce` the request carries the fits as `admissible` on its
-   `orbit.task.pull` request: `(work class, complexity)` keys and template
-   names. When nothing fits, the drain sends no request, records
-   `forecast_no_headroom` as its refusal, and polls again. The request identity
-   is allocated before the fit. In the same transaction as the decision,
-   pending capacity is reserved for the final admissible set (§5.2), before
-   the decision lock is released or the owner is contacted.
+   `orbit.task.pull` request: `(work class, complexity)` keys, the names of
+   the profiled templates that fit (`templates`) and of those that do not
+   (`unfit_templates`), and the base classes under which an unprofiled
+   template fits (`unprofiled_template_classes`). When nothing fits, the
+   drain sends no request, records `forecast_no_headroom` as its refusal, and
+   polls again. The request identity is allocated before the fit. In the
+   same transaction as the decision, pending capacity is reserved for the
+   final admissible set (§5.2), before the decision lock is released or the
+   owner is contacted.
 3. The owner skips a ready or repair candidate outside the list. A template
-   task is inside it when its template is listed; any other task when its
-   work class and complexity are. Each skipped task is returned in the
-   receipt's `capacity_unavailable`, which the follower records among its
-   excluded backlog as `capacity_unavailable`.
+   task is inside it when its template is in `templates`, and outside it
+   when its template is in `unfit_templates`. A template named in neither
+   has no profile on the executor, so it is inside the list when its base
+   class (`no-diff` for a task tagged `no-diff-expected`, otherwise
+   `change`) is in `unprofiled_template_classes` [ORB-16608]. Any other
+   task is inside it when its work class and complexity are. Each skipped
+   task is returned in the receipt's `capacity_unavailable`, which the
+   follower records among its excluded backlog as `capacity_unavailable`.
 4. A claim that returns atomically replaces the placeholder on the follower
    with precise task capacity, keyed by the class of this replica's copy of
    the task. This happens before leaf creation, not after bind or launch.
@@ -830,7 +841,11 @@ be read, nothing is computed and the request carries no list; the owner then
 selects as before.
 
 The new field changes the distributed-drain protocol fingerprint, so an owner
-on another binary refuses the pull as before.
+on another binary refuses the pull as before. The same holds for the
+`unfit_templates` and `unprofiled_template_classes` fields: an owner that
+read an unlisted template as unfit and a follower that omits only unprofiled
+templates would disagree, so builds on either side of the change refuse each
+other's pulls as `protocol_skew` instead.
 
 A pass bounds its requests by the drain's live ceiling, an operator's
 `orbit run concurrency` included. The forecast alone did not make the
@@ -838,9 +853,8 @@ submitted-ceiling quirk moot, because a drain with `off` forecasts nothing.
 
 Limitations:
 
-- A template this host has never run in the workspace is not listed, so under
-  `enforce` the owner keeps it for another executor until this host has a
-  profile of it.
+- A template this host has never run in the workspace is priced by its base
+  class, not by its own load, until this host has a profile of it.
 - The owner classifies a task by its own tags, and the follower reserves it
   by its replica's. A replica that lacks the task reserves it as `change`.
 

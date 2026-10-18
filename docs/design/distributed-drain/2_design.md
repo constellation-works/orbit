@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-10-14
+last_updated: 2026-10-18
 last_validated: 2026-10-13
 status: Draft
 feature: distributed-drain
@@ -183,9 +183,11 @@ by registry name, so a crew both sides configure must use the same name.
 
 *Host capacity* [ORB-15774]. Under `machine.auto_concurrency` `enforce`, a request also carries
 `admissible`: the work classes, complexities and templates the executor's host load forecast
-has room for. The owner skips a ready or repair candidate outside it, recording it in the
-receipt's `capacity_unavailable`, and the follower sends no request when nothing fits. A request
-without the list is unrestricted. The follower side is
+has room for. Every template the executor has a profile of is listed as fitting (`templates`) or
+not (`unfit_templates`), and `unprofiled_template_classes` names the base classes under which a
+template it has no profile of fits [ORB-16608]. The owner skips a ready or repair candidate
+outside it, recording it in the receipt's `capacity_unavailable`, and the follower sends no
+request when nothing fits. A request without the list is unrestricted. The follower side is
 [auto-concurrency §6](../auto-concurrency/2_design.md#6-pull-drains).
 
 *Operator restriction* [ORB-14174]. `orbit run auto --pull <selector> --allow-crew a,b` narrows the
