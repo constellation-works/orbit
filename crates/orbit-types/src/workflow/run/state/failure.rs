@@ -1,5 +1,6 @@
 //! Failure markers and claim failure classification.
 
+use super::super::failure_classification_text;
 use serde::{Deserialize, Serialize};
 
 /// Token a provider failure diagnostic carries when the provider itself could
@@ -22,7 +23,9 @@ pub const PROVIDER_UNAVAILABLE_MARKER: &str = "[provider_unavailable]";
 #[must_use]
 pub fn is_provider_unavailable(error_code: Option<&str>, message: Option<&str>) -> bool {
     error_code == Some(PROVIDER_UNAVAILABLE_ERROR_CODE)
-        || message.is_some_and(|message| message.contains(PROVIDER_UNAVAILABLE_MARKER))
+        || message.is_some_and(|message| {
+            failure_classification_text(message).contains(PROVIDER_UNAVAILABLE_MARKER)
+        })
         || is_provider_capacity_exhausted(error_code, message)
         || is_provider_limit(error_code, message)
 }
@@ -45,7 +48,9 @@ pub const PROVIDER_LIMIT_MARKER: &str = "[provider_limit]";
 #[must_use]
 pub fn is_provider_limit(error_code: Option<&str>, message: Option<&str>) -> bool {
     error_code == Some(PROVIDER_LIMIT_ERROR_CODE)
-        || message.is_some_and(|message| message.contains(PROVIDER_LIMIT_MARKER))
+        || message.is_some_and(|message| {
+            failure_classification_text(message).contains(PROVIDER_LIMIT_MARKER)
+        })
 }
 
 /// Token a provider failure diagnostic carries when the provider itself said
@@ -65,7 +70,9 @@ pub const PROVIDER_CAPACITY_MARKER: &str = "[provider_capacity]";
 #[must_use]
 pub fn is_provider_capacity_exhausted(error_code: Option<&str>, message: Option<&str>) -> bool {
     error_code == Some(PROVIDER_CAPACITY_ERROR_CODE)
-        || message.is_some_and(|message| message.contains(PROVIDER_CAPACITY_MARKER))
+        || message.is_some_and(|message| {
+            failure_classification_text(message).contains(PROVIDER_CAPACITY_MARKER)
+        })
 }
 
 /// Token a provider failure diagnostic carries when the provider's own
@@ -88,7 +95,9 @@ pub const PROVIDER_REFUSAL_MARKER: &str = "[provider_refusal]";
 #[must_use]
 pub fn is_provider_refusal(error_code: Option<&str>, message: Option<&str>) -> bool {
     error_code == Some(PROVIDER_REFUSAL_ERROR_CODE)
-        || message.is_some_and(|message| message.contains(PROVIDER_REFUSAL_MARKER))
+        || message.is_some_and(|message| {
+            failure_classification_text(message).contains(PROVIDER_REFUSAL_MARKER)
+        })
 }
 
 /// Whether a step failure is the provider's rather than the work's: it was
@@ -117,7 +126,9 @@ pub const VALIDATION_ENVIRONMENT_MARKER: &str = "[validation_environment]";
 #[must_use]
 pub fn is_validation_environment_failure(error_code: Option<&str>, message: Option<&str>) -> bool {
     error_code == Some(VALIDATION_ENVIRONMENT_ERROR_CODE)
-        || message.is_some_and(|message| message.contains(VALIDATION_ENVIRONMENT_MARKER))
+        || message.is_some_and(|message| {
+            failure_classification_text(message).contains(VALIDATION_ENVIRONMENT_MARKER)
+        })
 }
 
 /// Token a step failure carries when a claimed leaf could not reach its
@@ -138,7 +149,9 @@ pub const OWNER_ROUTE_UNAVAILABLE_MARKER: &str = "[owner_route_unavailable]";
 #[must_use]
 pub fn is_owner_route_unavailable(error_code: Option<&str>, message: Option<&str>) -> bool {
     error_code == Some(OWNER_ROUTE_UNAVAILABLE_ERROR_CODE)
-        || message.is_some_and(|message| message.contains(OWNER_ROUTE_UNAVAILABLE_MARKER))
+        || message.is_some_and(|message| {
+            failure_classification_text(message).contains(OWNER_ROUTE_UNAVAILABLE_MARKER)
+        })
 }
 
 /// Leads the failure Orbit raises when it refuses an implementer's handoff
@@ -154,7 +167,7 @@ pub const CONTRACT_REFUSAL_MARKER: &str = "implementer output rejected before de
 /// ([`CONTRACT_REFUSAL_MARKER`]).
 #[must_use]
 pub fn is_contract_refusal(message: &str) -> bool {
-    message.contains(CONTRACT_REFUSAL_MARKER)
+    failure_classification_text(message).contains(CONTRACT_REFUSAL_MARKER)
 }
 
 /// Token a step failure carries when its outcome was inconclusive for a
@@ -187,7 +200,7 @@ pub const OWNER_BUSY_MARKER: &str = "[owner_busy]";
 /// lock-wait deadline ([`OWNER_BUSY_MARKER`]).
 #[must_use]
 pub fn is_owner_busy(message: Option<&str>) -> bool {
-    message.is_some_and(|message| message.contains(OWNER_BUSY_MARKER))
+    message.is_some_and(|message| failure_classification_text(message).contains(OWNER_BUSY_MARKER))
 }
 
 /// Why a claimed leaf ended without its typed handoff, as its settlement
@@ -300,7 +313,9 @@ impl ClaimFailureClass {
     #[must_use]
     pub fn of_step_failure(error_code: Option<&str>, message: Option<&str>) -> Option<Self> {
         let typed = |code: &str, marker: &str| {
-            error_code == Some(code) || message.is_some_and(|message| message.contains(marker))
+            error_code == Some(code)
+                || message
+                    .is_some_and(|message| failure_classification_text(message).contains(marker))
         };
         if is_provider_failure(error_code, message) {
             Some(Self::Provider)
