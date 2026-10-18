@@ -34,7 +34,7 @@ There is no system crew lane [ORB-15663]. Orbit's own work draws from the four `
 
 A crew's `enabled` flag (default `true`, so configs without it resolve unchanged) keeps the crew listed but removes it from execution: complexity pools skip it, and a pool with no enabled member falls through to `default_crew` like an empty pool. An explicit crew, a task's `crew`, or `default_crew` that resolves to a disabled crew refuses dispatch with an error naming the crew and `orbit config set crews.<name>.enabled true`; there is no substitution. Config load still succeeds with a lane pointing at a disabled crew, and `orbit doctor` warns about it. Read-only surfaces (task show, the dashboard, preparation fingerprints) resolve disabled crews without refusing.
 
-`copilot`, `cursor`, `pi`, `antigravity`, and `opencode` are crews named for their *provider* rather than their model: those lanes can select models supplied by other vendors, so model-named crews would hide which execution lane actually runs. Antigravity (`agy`) is the current Google terminal CLI; `gemini` remains the model family and the legacy Gemini CLI lane. See [CONFIG.md § Antigravity CLI](../../CONFIG.md#antigravity-cli). [ORB-10946] [ORB-10945] [ORB-11299]
+`copilot`, `cursor`, `pi`, `antigravity`, `opencode`, and `muse` are crews named for their *provider* rather than their model: those lanes can select models supplied by other vendors, so model-named crews would hide which execution lane actually runs. Antigravity (`agy`) is the current Google terminal CLI; `gemini` remains the model family and the legacy Gemini CLI lane. See [CONFIG.md § Antigravity CLI](../../CONFIG.md#antigravity-cli). [ORB-10946] [ORB-10945] [ORB-11299]
 
 ## 3. Task and Tool Surface
 

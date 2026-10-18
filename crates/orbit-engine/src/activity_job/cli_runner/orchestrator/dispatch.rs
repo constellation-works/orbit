@@ -31,6 +31,7 @@ use super::super::envelope::{cli_agent_envelope_json, task_id_from_input, task_i
 use super::super::inspection_tools::prepare_inspection_tools;
 use super::super::launcher::{orbit_tool_env, resolve_provider_launcher};
 use super::super::plugin_broker::RunPluginBroker;
+use super::super::prompt_file::PromptFile;
 use super::super::spawn::SpawnError;
 use super::super::stdout_preview::{PROGRESS_MESSAGE_LIMIT_BYTES, bounded_assistant_message};
 use super::super::supervisor::{
@@ -180,6 +181,7 @@ pub(crate) fn run_cli_backend_for_step(
     //     transparently inside our outer sandbox.
     //   - gemini: drop `-s` / `--sandbox` from the executor's static args.
     //   - claude: nothing to do; claude has no OS-level sandbox flag.
+    //   - muse: append `--disable-sandbox` (see `neutralize_inner_sandbox`).
     // An explicit executor opt-out must not silently restore the provider's
     // inner sandbox when preparation selects a bare process.
     let explicitly_off = resolved_sandbox
@@ -232,9 +234,34 @@ pub(crate) fn run_cli_backend_for_step(
     let orbit_env = orbit_tool_env(&child_env)
         .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?;
 
+    let scratch_root = subprocess_cwd
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or_else(|| {
+            DispatchError::CliInvocationPermanent("cannot locate invocation scratch root".into())
+        })?;
+    let scratch = orbit_common::fs::path::ensure_orbit_scratch_dir(&scratch_root)
+        .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
+    // [ORB-16577] A CLI that cannot read stdin gets its prompt through a
+    // private file in this run's scratch directory instead, so the envelope
+    // still never reaches argv. The file is deleted when dispatch returns.
+    let prompt_file = invocation
+        .prompt_file_flag
+        .map(|flag| PromptFile::write(&scratch, &invocation.stdin).map(|file| (flag, file)))
+        .transpose()?;
+    let stdin_bytes: &[u8] = if prompt_file.is_some() {
+        &[]
+    } else {
+        &invocation.stdin
+    };
+
     let mut subprocess_args = Vec::with_capacity(cli_executor.args.len() + invocation.args.len());
     subprocess_args.extend(cli_executor.args.iter().cloned());
     subprocess_args.extend(invocation.args.iter().cloned());
+    if let Some((flag, file)) = &prompt_file {
+        subprocess_args.push((*flag).to_string());
+        subprocess_args.push(file.argument().to_string());
+    }
     if provider == "codex" {
         let orbit_bin = orbit_env
             .iter()
@@ -282,6 +309,7 @@ pub(crate) fn run_cli_backend_for_step(
     .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
     let argv_redacted: Vec<String> = audit_argv.iter().map(|a| redaction.apply_str(a)).collect();
 
+    // The prompt the provider receives, whether on stdin or in its file.
     let stdin_blob_ref = audit.write_blob(&invocation.stdin);
 
     // L-0095: Provider cwd is advisory; enforce the linked-worktree postcondition.
@@ -386,14 +414,6 @@ pub(crate) fn run_cli_backend_for_step(
         orbit_common::security::child_env::ACTIVITY_TIMEOUT_ENV.to_string(),
         timeout_seconds.saturating_mul(1000).to_string(),
     ));
-    let scratch_root = subprocess_cwd
-        .clone()
-        .or_else(|| std::env::current_dir().ok())
-        .ok_or_else(|| {
-            DispatchError::CliInvocationPermanent("cannot locate invocation scratch root".into())
-        })?;
-    let scratch = orbit_common::fs::path::ensure_orbit_scratch_dir(&scratch_root)
-        .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
     let build_wait_directory = tempfile::Builder::new()
         .prefix("build-waits-")
         .tempdir_in(&scratch)
@@ -637,7 +657,7 @@ pub(crate) fn run_cli_backend_for_step(
         spawn_with_timeout(SpawnWithTimeoutRequest {
             program: &resolved_program,
             args: &subprocess_args,
-            stdin_bytes: &invocation.stdin,
+            stdin_bytes,
             env: &child_env,
             cwd: subprocess_cwd.as_deref(),
             timeout: wall_clock_timeout,

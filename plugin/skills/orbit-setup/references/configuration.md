@@ -156,7 +156,7 @@ orbit config set crews.gemini.enabled true
 
 `orbit init` writes every built-in crew (Claude: `opus`, `sonnet`, `haiku`, `fable`;
 Codex: `astra`, `sol`, `luna`; one crew each for Antigravity, Gemini,
-Grok, Copilot, Cursor, Pi, OpenCode), with `enabled = true` on the crews whose
+Grok, Copilot, Cursor, Pi, OpenCode, Muse), with `enabled = true` on the crews whose
 agent CLI it detects and `enabled = false` on the rest, and points
 `workflow.default_crew` at the preferred family's default (`opus` on a Claude
 host). Interactive init offers the enabled crews by name; `--non-interactive`

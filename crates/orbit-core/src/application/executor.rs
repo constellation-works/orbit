@@ -22,6 +22,7 @@ pub(crate) const DEFAULT_EXECUTOR_FILES: &[(&str, &str)] = &[
         "opencode",
         include_str!("../../assets/executors/opencode.yaml"),
     ),
+    ("muse", include_str!("../../assets/executors/muse.yaml")),
     (
         "local-shell",
         include_str!("../../assets/executors/local-shell.yaml"),

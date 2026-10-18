@@ -115,9 +115,15 @@ pub(super) fn apply_trusted_host_provider_sandbox(
 }
 
 /// Pin codex's `--sandbox` to `danger-full-access`, drop gemini's `-s` /
-/// `--sandbox` toggle, and drop grok's `--sandbox <profile>` value so the
-/// inner CLI sandbox does not double-encode the outer orbit-exec sandbox.
-/// Claude has no native sandbox flag — nothing to neutralize.
+/// `--sandbox` toggle, drop grok's `--sandbox <profile>` value, and turn off
+/// Muse's default-on sandbox so the inner CLI sandbox does not double-encode
+/// the outer orbit-exec sandbox. Claude has no native sandbox flag — nothing
+/// to neutralize.
+///
+/// Muse Code enables its own sandbox by default (network `proxy-only`). Under
+/// Orbit's `sandbox-exec` profile a second Seatbelt profile cannot be applied
+/// from inside the first, and Orbit's profile is the filesystem boundary on
+/// both platforms, so `--disable-sandbox` is appended. [ORB-16577]
 pub(super) fn neutralize_inner_sandbox(
     provider: &str,
     provider_config: &mut HashMap<String, String>,
@@ -132,6 +138,9 @@ pub(super) fn neutralize_inner_sandbox(
         }
         "grok" => {
             *static_args = filter_grok_inner_sandbox_args(static_args);
+        }
+        "muse" if !static_args.iter().any(|arg| arg == "--disable-sandbox") => {
+            static_args.push("--disable-sandbox".to_string());
         }
         _ => {}
     }

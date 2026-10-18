@@ -1,0 +1,49 @@
+schemaVersion: 2
+kind: Executor
+metadata:
+  name: muse
+spec:
+  executor_type: direct_agent
+  command: muse
+  # Muse Code headless contract (Muse Code 1.4.10). Static flags only. The
+  # prompt is NOT passed here or on stdin: `muse exec` does not read stdin and
+  # refuses `--prompt-file /dev/stdin`, so Orbit writes the prompt to a
+  # private (0600) file in the run's scratch directory, appends
+  # `--prompt-file <path>`, and deletes the file when the run ends. The
+  # execution envelope never reaches argv, process listings, or audit argv.
+  # Under Orbit's OS sandbox the runner also appends `--disable-sandbox`.
+  # [ORB-16577]
+  args:
+    # Non-interactive subcommand: one turn, then exit.
+    - exec
+    # JSONL records on stdout, each with a `payload_type`. Orbit reads only
+    # `payload.text` of a `run.terminal.completed` record whose terminal is
+    # `completed`; see the `muse` stdout adapter for why prompt echoes,
+    # deltas, and child-task records are dropped rather than searched.
+    - --json
+    # Never stop to ask for approval: an unattended run has nobody to answer.
+    # This is not a security boundary; Orbit's OS sandbox remains the
+    # filesystem boundary and the activity `fsProfile` stays authoritative.
+    - --approval-mode
+    - never
+    # The agent cannot ask the user a question mid-turn; it must finish or
+    # report failure in its response envelope.
+    - --disable-request-user-input
+    # By default Muse also loads the operator's Claude Code and Codex personal
+    # rules and skills. A managed run follows the workspace's instructions and
+    # Orbit's envelope, not another tool's personal configuration.
+    - --no-foreign-personal-context
+    # Otherwise every turn spawns skill, goal, and verify reminder child
+    # agents, whose records and cost are not part of the Orbit task.
+    - --disable-reminders
+    # Each Orbit invocation is self-contained and leaves no session log behind
+    # (this also disables Muse's local session messaging).
+    - --no-session-log
+    # `--trust-workspace` is deliberately absent. A managed worktree is
+    # repository content Orbit does not vouch for, so its Muse skills and rules
+    # stay unloaded and agent delegation stays off. The envelope directs the
+    # agent to read the workspace's AGENTS.md itself.
+  stdout_format: envelope
+  sandbox: macos-sandbox-exec
+  model_flag: "--model"
+  env: {}

@@ -26,6 +26,7 @@ pub enum ProviderOptions {
     Ollama,
     Pi,
     Opencode,
+    Muse,
     Mock,
 }
 
@@ -48,6 +49,7 @@ impl ProviderOptions {
             Self::Ollama => "ollama",
             Self::Pi => "pi",
             Self::Opencode => "opencode",
+            Self::Muse => "muse",
             Self::Mock => "mock",
         }
     }

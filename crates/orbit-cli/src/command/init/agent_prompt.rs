@@ -129,7 +129,7 @@ fn yes_by_default(input: &str) -> bool {
     trimmed.is_empty() || trimmed.eq_ignore_ascii_case("y") || trimmed.eq_ignore_ascii_case("yes")
 }
 
-const AGENT_FAMILY_LABELS: [&str; 10] = [
+const AGENT_FAMILY_LABELS: [&str; 11] = [
     "Claude CLI",
     "Codex CLI",
     "Antigravity CLI",
@@ -139,6 +139,7 @@ const AGENT_FAMILY_LABELS: [&str; 10] = [
     "Cursor Agent CLI",
     "Pi CLI",
     "OpenCode CLI",
+    "Muse Code CLI",
     "Ollama CLI",
 ];
 
@@ -153,6 +154,7 @@ fn agent_families(detected: &DetectedAgents) -> impl Iterator<Item = (&'static s
         detected.cursor_cli,
         detected.pi_cli,
         detected.opencode_cli,
+        detected.muse_cli,
         detected.ollama_cli,
     ])
 }

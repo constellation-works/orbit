@@ -35,6 +35,7 @@ pub(super) fn append_linux_provider_state_roots(
     directories.extend(linux_cursor_state_roots_with(provider, home.as_deref()));
     directories.extend(linux_pi_state_roots(provider, home.as_deref()));
     directories.extend(linux_opencode_state_roots(provider, home.as_deref()));
+    directories.extend(linux_muse_state_roots(provider, home.as_deref()));
     for directory in directories {
         let canonical = ensure_linux_provider_directory(&directory, home.as_deref())?;
         append_unique_modify_root(resolved, canonical.display().to_string());
@@ -250,15 +251,8 @@ fn linux_opencode_state_roots_with(
     {
         return Vec::new();
     }
-    let scoped = |xdg_base: Option<PathBuf>, home_relative_default: &[&str]| -> Option<PathBuf> {
-        let base = xdg_base.or_else(|| {
-            home.map(|home| {
-                home_relative_default
-                    .iter()
-                    .fold(home.to_path_buf(), |path, segment| path.join(segment))
-            })
-        })?;
-        Some(base.join("opencode"))
+    let scoped = |xdg_base: Option<PathBuf>, home_relative_default: &[&str]| {
+        xdg_scoped_root(home, xdg_base, home_relative_default, "opencode")
     };
     [
         scoped(env.xdg_data_home, &[".local", "share"]),
@@ -266,6 +260,60 @@ fn linux_opencode_state_roots_with(
             .or_else(|| scoped(env.xdg_config_home, &[".config"])),
         scoped(env.xdg_state_home, &[".local", "state"]),
         scoped(env.xdg_cache_home, &[".cache"]),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// `<xdg base>/<app>`: the explicit XDG variable when set, otherwise its
+/// specified default relative to `$HOME`.
+fn xdg_scoped_root(
+    home: Option<&Path>,
+    xdg_base: Option<PathBuf>,
+    home_relative_default: &[&str],
+    app: &str,
+) -> Option<PathBuf> {
+    let base = xdg_base.or_else(|| {
+        home.map(|home| {
+            home_relative_default
+                .iter()
+                .fold(home.to_path_buf(), |path, segment| path.join(segment))
+        })
+    })?;
+    Some(base.join(app))
+}
+
+/// Writable state roots for an active Muse Code executor on Linux.
+///
+/// Muse keeps `settings.json` and the `muse login` credential `auth.json` in
+/// `$XDG_CONFIG_HOME/muse` (default `$HOME/.config/muse`), and local tracing,
+/// plugins, and skills in `$XDG_DATA_HOME/muse` (default
+/// `$HOME/.local/share/muse`). Its login is that file, not a keyring, so no
+/// other carve-out is needed. No other provider receives this grant — every
+/// entry in the caller's list is *created* by `ensure_linux_provider_directory`,
+/// so an unconditional entry would mkdir a `~/.config/muse` on hosts that
+/// never installed Muse. [ORB-16577]
+fn linux_muse_state_roots(provider: &str, home: Option<&Path>) -> Vec<PathBuf> {
+    if orbit_types::workflow::Provider::parse(provider).ok()
+        != Some(orbit_types::workflow::Provider::Muse)
+    {
+        return Vec::new();
+    }
+    // XDG treats an empty variable as unset.
+    let env_path = |name: &str| {
+        std::env::var_os(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    [
+        xdg_scoped_root(home, env_path("XDG_CONFIG_HOME"), &[".config"], "muse"),
+        xdg_scoped_root(
+            home,
+            env_path("XDG_DATA_HOME"),
+            &[".local", "share"],
+            "muse",
+        ),
     ]
     .into_iter()
     .flatten()

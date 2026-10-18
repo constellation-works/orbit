@@ -85,6 +85,10 @@ pub struct DetectedAgents {
     /// detected `opencode` is evidence of the OpenCode execution lane only,
     /// never of an Anthropic/OpenAI/Google lane. [ORB-11295]
     pub opencode_cli: bool,
+    /// Muse Code, Meta's terminal coding agent, whose launcher is `muse`.
+    /// A detected `muse` is evidence of the Muse execution lane only; the
+    /// model it runs is a separate crew choice. [ORB-16577]
+    pub muse_cli: bool,
     pub ollama_cli: bool,
 }
 
@@ -100,6 +104,7 @@ pub fn detect() -> DetectedAgents {
         cursor_cli: binary_on_path("cursor-agent"),
         pi_cli: binary_on_path("pi"),
         opencode_cli: binary_on_path("opencode"),
+        muse_cli: binary_on_path("muse"),
         ollama_cli: binary_on_path("ollama"),
     }
 }
@@ -136,6 +141,9 @@ pub fn available_crew_families(detected: &DetectedAgents) -> Vec<&'static str> {
     }
     if detected.opencode_cli {
         families.push("opencode");
+    }
+    if detected.muse_cli {
+        families.push("muse");
     }
     families
 }

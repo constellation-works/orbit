@@ -71,7 +71,10 @@ impl ReasoningEffort {
     /// `--thinking` flag validates against a fixed, model-independent set
     /// (`off, minimal, low, medium, high, xhigh, max`) that is a strict
     /// superset of this enum, and it rejects a value outside that set with a
-    /// diagnostic rather than ignoring it. [ORB-11296]
+    /// diagnostic rather than ignoring it. [ORB-11296] Muse does as well:
+    /// `muse exec --reasoning-effort` accepts
+    /// `none, minimal, low, medium, high, xhigh, max, ultra` (Muse Code
+    /// 1.4.10), a strict superset of this enum. [ORB-16577]
     ///
     /// Grok's published contract is model-specific, so unknown models fail
     /// closed instead of accepting a setting the CLI might silently
@@ -83,7 +86,7 @@ impl ReasoningEffort {
         model: Option<&str>,
     ) -> Result<(), ProviderModelError> {
         match provider {
-            "claude" | "codex" | "pi" => Ok(()),
+            "claude" | "codex" | "pi" | "muse" => Ok(()),
             "grok" => Self::validate_grok_model_effort(self, model),
             "antigravity" => Self::validate_antigravity_effort(self, model),
             "opencode" => Self::validate_opencode_effort(self),

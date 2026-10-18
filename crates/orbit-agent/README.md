@@ -2,7 +2,10 @@
 
 Provider CLI runtimes and audit contracts for Orbit. Provider adapters drive
 `claude`, `codex`, `copilot`, `cursor-agent`, `gemini`, `agy`, `grok`, `ollama`,
-`opencode`, `pi`, and `mock-agent` through subprocess command descriptors.
+`opencode`, `pi`, `muse`, and `mock-agent` through subprocess command
+descriptors. A descriptor sends the prompt on stdin, or, for a CLI that cannot
+read stdin (`muse`), names a prompt-file flag the engine fills with a private
+file path.
 The engine runs those descriptors through `orbit-exec`; stdout helpers project
 provider answers into Orbit response envelopes and diagnostics.
 

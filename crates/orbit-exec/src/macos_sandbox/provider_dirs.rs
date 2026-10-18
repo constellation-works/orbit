@@ -180,14 +180,56 @@ pub(crate) fn opencode_state_dirs(env: OpencodeDirEnv<'_>) -> Vec<PathBuf> {
             dirs.push(dir);
         }
     };
-    push(xdg_scoped_dir(home, xdg_data_home, &[".local", "share"]));
+    push(xdg_scoped_dir(
+        home,
+        xdg_data_home,
+        &[".local", "share"],
+        "opencode",
+    ));
     push(
         non_empty_env_path(opencode_config_dir)
-            .or_else(|| xdg_scoped_dir(home, xdg_config_home, &[".config"])),
+            .or_else(|| xdg_scoped_dir(home, xdg_config_home, &[".config"], "opencode")),
     );
-    push(xdg_scoped_dir(home, xdg_state_home, &[".local", "state"]));
-    push(xdg_scoped_dir(home, xdg_cache_home, &[".cache"]));
+    push(xdg_scoped_dir(
+        home,
+        xdg_state_home,
+        &[".local", "state"],
+        "opencode",
+    ));
+    push(xdg_scoped_dir(
+        home,
+        xdg_cache_home,
+        &[".cache"],
+        "opencode",
+    ));
     dirs
+}
+
+/// Writable directories an **active** Muse Code executor needs. [ORB-16577]
+///
+/// 1. `$XDG_CONFIG_HOME/muse`, else `$HOME/.config/muse` — `settings.json`
+///    and `auth.json`, the `muse login` credential.
+/// 2. `$XDG_DATA_HOME/muse`, else `$HOME/.local/share/muse` — local tracing,
+///    plugins, and skills.
+/// 3. `$HOME/Library/Application Support/Muse` — the session-name authority.
+///
+/// The login is the `auth.json` file, not a login-keychain item, so Muse is
+/// not a keychain provider. Like the other per-lane entries, this is gated on
+/// the active provider by its caller so an unrelated lane is not handed
+/// Muse's credential store.
+pub(crate) fn muse_state_dirs(
+    home: Option<&OsStr>,
+    xdg_config_home: Option<&OsStr>,
+    xdg_data_home: Option<&OsStr>,
+) -> Vec<PathBuf> {
+    [
+        xdg_scoped_dir(home, xdg_config_home, &[".config"], "muse"),
+        xdg_scoped_dir(home, xdg_data_home, &[".local", "share"], "muse"),
+        non_empty_env_path(home).map(|home| home.join("Library/Application Support/Muse")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 /// Env inputs that locate OpenCode's XDG roots.
@@ -201,12 +243,13 @@ pub(crate) struct OpencodeDirEnv<'a> {
     pub(crate) opencode_config_dir: Option<&'a OsStr>,
 }
 
-/// Resolve one `<xdg base>/opencode` root: the explicit XDG variable when set,
+/// Resolve one `<xdg base>/<app>` root: the explicit XDG variable when set,
 /// otherwise its specified default relative to `$HOME`.
 fn xdg_scoped_dir(
     home: Option<&OsStr>,
     xdg_base: Option<&OsStr>,
     home_relative_default: &[&str],
+    app: &str,
 ) -> Option<PathBuf> {
     let base = non_empty_env_path(xdg_base).or_else(|| {
         non_empty_env_path(home).map(|home| {
@@ -215,7 +258,7 @@ fn xdg_scoped_dir(
                 .fold(home, |path, segment| path.join(segment))
         })
     })?;
-    Some(base.join("opencode"))
+    Some(base.join(app))
 }
 
 /// Claude Code persists its main settings to `$HOME/.claude.json`, a sibling

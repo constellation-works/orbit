@@ -12,6 +12,7 @@ pub(crate) mod cursor;
 pub(crate) mod gemini;
 pub(crate) mod grok;
 pub(crate) mod mock_agent;
+pub(crate) mod muse;
 pub(crate) mod ollama;
 pub(crate) mod opencode;
 pub(crate) mod pi;
@@ -45,6 +46,7 @@ pub(crate) fn build_invocation_spec(
         stdout_schema_json: None,
         required_env_vars,
         fixed_env: &[],
+        prompt_file_flag: None,
     }
 }
 
@@ -55,7 +57,7 @@ pub(crate) fn build_invocation_spec(
 /// unsupported control-plane frames while retaining the provider-authored
 /// material needed for telemetry. Response/status projection applies the
 /// stricter [`project_cli_response`] boundary afterward.
-/// [ORB-10946] [ORB-10945] [ORB-11295]
+/// [ORB-10946] [ORB-10945] [ORB-11295] [ORB-16577]
 ///
 /// `provider` is the resolved canonical provider id. An unrecognized id is
 /// not an error here: normalization is a per-provider accommodation, and the
@@ -72,6 +74,7 @@ pub fn normalize_cli_stdout<'a>(provider: &str, stdout: &'a [u8]) -> Cow<'a, [u8
         "pi" => Cow::Owned(pi::normalize_pi_stdout(stdout)),
         "antigravity" | "agy" => Cow::Owned(antigravity::normalize_antigravity_stdout(stdout)),
         "opencode" => Cow::Owned(opencode::normalize_opencode_stdout(stdout)),
+        "muse" => Cow::Owned(muse::normalize_muse_stdout(stdout)),
         _ => Cow::Borrowed(stdout),
     }
 }
