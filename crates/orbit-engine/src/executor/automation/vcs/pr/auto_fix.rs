@@ -223,6 +223,12 @@ pub(super) fn stopped(pr_number: &str, reason: &str) -> OrbitError {
     ))
 }
 
+/// [`stopped`] on a provider read that failed with `cause`, keeping the class
+/// of the private VCS failure it reports.
+pub(super) fn stopped_by(pr_number: &str, reason: &str, cause: &OrbitError) -> OrbitError {
+    super::super::operations::carry_class(cause, stopped(pr_number, reason))
+}
+
 /// Ask the host to admit one repair of `head_sha`, returning the attempt
 /// the repair runs as. Every refusal is a stop with its diagnostics.
 pub(super) fn admit<H: RuntimeHost + ?Sized>(

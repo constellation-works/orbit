@@ -7,7 +7,7 @@ use orbit_types::workflow::activity_job::V2AuditEventKind;
 use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, DeterministicSpec};
 
 use crate::context::RuntimeHost;
-use orbit_common::{OrbitError, RecoverableVcsConflict};
+use orbit_common::{OrbitError, PrivateVcsFailureClass, RecoverableVcsConflict};
 use orbit_tools::{
     DeterministicStepPrograms, FsAuditLogger, FsCallEvent, FsCallEventKind, ToolCaller,
 };
@@ -163,6 +163,14 @@ pub enum DispatchError {
 
     #[error("deterministic action `{action}` failed: {message}")]
     DeterministicActionFailed { action: String, message: String },
+
+    /// [ORB-16307] `pr_complete` lost only a read-only completion observation
+    /// to a transient provider failure, before any completion mutation.
+    /// Displays exactly as [`DispatchError::DeterministicActionFailed`]; final
+    /// recovery may resume the unchanged completion once the host
+    /// authenticates its prefix.
+    #[error("deterministic action `{action}` failed: {message}")]
+    CompletionObservationUnavailable { action: String, message: String },
 
     /// A verified absorbed candidate. `message` retains the diagnostic's
     /// deterministic-action or post-recovery context without losing its facts.
@@ -623,6 +631,16 @@ fn run_deterministic(
                 },
                 OrbitError::TaskCompletionLiveRun { task_id, run_id } => {
                     DispatchError::TaskCompletionLiveRun { task_id, run_id }
+                }
+                error
+                    if error.private_vcs_failure().is_some_and(|failure| {
+                        failure.class == PrivateVcsFailureClass::CompletionObservationUnavailable
+                    }) =>
+                {
+                    DispatchError::CompletionObservationUnavailable {
+                        action: spec.action.clone(),
+                        message: error.to_string(),
+                    }
                 }
                 // Only the delivery push writes this hold; a refusal text
                 // that merely quotes the marker carries no parseable hold.

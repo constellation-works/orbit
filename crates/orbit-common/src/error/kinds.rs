@@ -304,3 +304,42 @@ impl std::fmt::Display for CandidateAbsorbed {
         )
     }
 }
+
+/// How a failed private automation VCS operation reads, decided once where
+/// the provider's diagnostic is read rather than from a rendered message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivateVcsFailureClass {
+    /// A transient gateway, transport or GraphQL failure that carries no
+    /// credential, permission or permanent-HTTP diagnostic, so a failed
+    /// read-only observation may be retried later.
+    TransientObservation,
+    /// A transient failure whose diagnostic also names a credential,
+    /// permission or permanent-HTTP refusal. A lookup may retry it; an
+    /// observation is not resumable on it.
+    Transient,
+    /// A read-only completion observation lost to a transient observation
+    /// failure before any completion mutation. The host may resume the
+    /// unchanged completion only after authenticating its prefix.
+    CompletionObservationUnavailable,
+    /// Any other failure.
+    Other,
+}
+
+impl PrivateVcsFailureClass {
+    /// Whether the provider failure was transient, whatever completion then
+    /// decided about it.
+    pub fn is_transient(self) -> bool {
+        !matches!(self, Self::Other)
+    }
+}
+
+/// A private automation VCS operation failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrivateVcsFailure {
+    /// The operation that failed.
+    pub operation: String,
+    /// How the provider's diagnostic reads.
+    pub class: PrivateVcsFailureClass,
+    /// The rendered message, without the `execution failed: ` prefix.
+    pub message: String,
+}

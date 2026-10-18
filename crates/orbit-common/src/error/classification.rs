@@ -2,7 +2,7 @@ use std::path::Path;
 
 use super::{
     ArtifactOrigin, ClaimRefusalKind, FrictionNotLocal, HostRegistryCode, NotFoundKind, OrbitError,
-    SqliteContention, StorageLayer, WorkspaceClaimHeld,
+    PrivateVcsFailure, SqliteContention, StorageLayer, WorkspaceClaimHeld,
 };
 
 impl OrbitError {
@@ -168,6 +168,14 @@ impl OrbitError {
     pub fn sqlite_contention(&self) -> Option<&SqliteContention> {
         match self {
             Self::SqliteContention(contention) => Some(contention),
+            _ => None,
+        }
+    }
+
+    /// The classified private automation VCS failure, if this is one.
+    pub fn private_vcs_failure(&self) -> Option<&PrivateVcsFailure> {
+        match self {
+            Self::PrivateVcs(failure) => Some(failure),
             _ => None,
         }
     }

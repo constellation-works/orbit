@@ -74,7 +74,7 @@ use super::super::remote_probe::fixed_wait as sleep;
 use std::path::Path;
 use std::time::Duration;
 
-use orbit_common::OrbitError;
+use orbit_common::{OrbitError, PrivateVcsFailure, PrivateVcsFailureClass};
 use orbit_types::task::{NO_DIFF_EXPECTED_TAG, Task};
 use orbit_types::workflow::{
     PR_COMPLETION_MUTATION_STARTED_EVENT, PrAutoFixBlocker, pr_completion_has_mutation_provenance,
@@ -497,7 +497,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
             &mut unreported,
             completion_deadline_ms,
         )
-        .map_err(|reason| observed(stopped(pr_number, &reason)))?;
+        .map_err(|refusal| observed(refusal.into_error(|reason| stopped(pr_number, reason))))?;
         if !base_refresh_wait
             && !base_adopted
             && (matches!(state, PrMergeState::Blocked(_)) || unreported.awaiting_policy_checks())
@@ -1217,7 +1217,10 @@ fn rebase_conflicting_pr_branch<H: RuntimeHost + ?Sized>(
 /// cumulative budget, with neither a mutation in this invocation nor durable
 /// repair or mutation provenance, becomes `completion_observation_unavailable`,
 /// which the host may resume only after authenticating the unchanged prefix.
-/// Every other failure keeps its own error and recovery path.
+/// The transport class is the one the provider boundary decided; the result
+/// carries [`PrivateVcsFailureClass::CompletionObservationUnavailable`] beside
+/// its unchanged message. Every other failure keeps its own error and
+/// recovery path.
 fn observation_failure<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
@@ -1228,14 +1231,20 @@ fn observation_failure<H: RuntimeHost + ?Sized>(
     let within_budget = deadline_ms.is_none_or(|deadline| {
         super::super::completion_deadline::now_ms().is_ok_and(|now| now < deadline)
     });
-    if !mutated
-        && within_budget
-        && super::super::operations::is_transient_observation_failure(&error.to_string())
-        && completion_history_is_read_only(host, input).unwrap_or(false)
-    {
-        OrbitError::Execution(format!("completion_observation_unavailable: {error}"))
-    } else {
-        error
+    match error.private_vcs_failure() {
+        Some(failure)
+            if !mutated
+                && within_budget
+                && failure.class == PrivateVcsFailureClass::TransientObservation
+                && completion_history_is_read_only(host, input).unwrap_or(false) =>
+        {
+            OrbitError::PrivateVcs(Box::new(PrivateVcsFailure {
+                operation: failure.operation.clone(),
+                class: PrivateVcsFailureClass::CompletionObservationUnavailable,
+                message: format!("completion_observation_unavailable: {error}"),
+            }))
+        }
+        _ => error,
     }
 }
 
@@ -1323,10 +1332,11 @@ fn resolved_capabilities<H: RuntimeHost + ?Sized>(
     }
     let capabilities =
         resolve_permitted_merge(host, workspace_path, pr_number).map_err(|error| {
-            OrbitError::Execution(format!(
+            let wrapper = OrbitError::Execution(format!(
                 "pr_complete: could not resolve a permitted merge method for pull request \
              #{pr_number}: {error}; the task stays in review"
-            ))
+            ));
+            super::super::operations::carry_class(&error, wrapper)
         })?;
     *selected = Some(capabilities.clone());
     Ok(capabilities)

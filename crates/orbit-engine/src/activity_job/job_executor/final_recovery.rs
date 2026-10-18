@@ -286,9 +286,10 @@ pub(super) fn attempt_final_recovery(
 
     // Read-only completion transport failures spend the same durable final
     // recovery budget, but need neither an agent nor a replacement candidate.
-    if matches!(error, DispatchError::DeterministicActionFailed { action, message }
-        if action == "pr_complete" && message.starts_with("execution failed: completion_observation_unavailable:"))
-    {
+    if matches!(
+        error,
+        DispatchError::CompletionObservationUnavailable { .. }
+    ) {
         let authentication = ctx
             .host
             .authenticate_completion_tail(&ctx.run_id, &task_id, &step.id);

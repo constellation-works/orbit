@@ -469,6 +469,50 @@ impl UnreportedChecks {
     }
 }
 
+/// Why a BLOCKED head's check wait could not be refined. Displays as its
+/// reason; `cause` is the provider read that failed, when one did, so a stop
+/// built from the reason keeps that failure's class.
+pub(in crate::executor::automation::vcs) struct CheckWaitRefusal {
+    reason: String,
+    cause: Option<Box<OrbitError>>,
+}
+
+impl CheckWaitRefusal {
+    /// The error `wrap` renders from the reason, carrying the class of the
+    /// failed provider read behind it.
+    pub(in crate::executor::automation::vcs) fn into_error(
+        self,
+        wrap: impl FnOnce(&str) -> OrbitError,
+    ) -> OrbitError {
+        let wrapper = wrap(&self.reason);
+        match &self.cause {
+            Some(cause) => operations::carry_class(cause, wrapper),
+            None => wrapper,
+        }
+    }
+}
+
+impl From<String> for CheckWaitRefusal {
+    fn from(reason: String) -> Self {
+        Self {
+            reason,
+            cause: None,
+        }
+    }
+}
+
+impl From<&str> for CheckWaitRefusal {
+    fn from(reason: &str) -> Self {
+        reason.to_string().into()
+    }
+}
+
+impl std::fmt::Display for CheckWaitRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.reason)
+    }
+}
+
 /// Refine BLOCKED only from authenticated current policy on the observed head,
 /// or an actually running check captured as owner-owed. A completed
 /// neutral/skipped result is never pending. An absent check is pending only
@@ -484,7 +528,7 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
     wait: BlockedCheckWait<'_>,
     unreported: &mut UnreportedChecks,
     deadline_ms: u64,
-) -> Result<PrMergeState, String> {
+) -> Result<PrMergeState, CheckWaitRefusal> {
     unreported.last = UnreportedWait::None;
     unreported.required_observation = json!({"state":"not_collected"});
     unreported.policy_observation = json!({"state":"not_collected"});
@@ -520,7 +564,10 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
         }),
     );
     let required = RequiredChecks::observe_response(response, &mut unreported.required_observation)
-        .map_err(|error| format!("required-check evidence is unavailable: {error}"))?;
+        .map_err(|error| CheckWaitRefusal {
+            reason: format!("required-check evidence is unavailable: {error}"),
+            cause: Some(Box::new(error)),
+        })?;
     if status.head_sha.as_deref() != Some(required.head_sha.as_str())
         || required.reported_head_sha.as_deref() != Some(required.head_sha.as_str())
     {
