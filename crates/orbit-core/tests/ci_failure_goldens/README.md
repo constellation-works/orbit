@@ -24,8 +24,10 @@ with `file_ci_failure_tasks`, then reads the filed task. A case with
 `--log-failed` output, runs host collection (`collect_ci_evidence`) over a
 local bare `origin`, then files that snapshot; its golden also records the
 diagnostic collection bound. `sweep.rs` holds that harness, the multi-sweep
-escalation test and the retired-ref investigation budget test. Every scenario
-has an isolated store; reruns within a scenario verify persisted deduplication.
+escalation test and the retired-ref investigation budget test. It also checks
+that dynamic GitHub-managed Dependabot updates are audited as skipped
+without blocking real repository failures or pull-request CI on Dependabot branches.
+Every scenario has an isolated store; reruns within a scenario verify persisted deduplication.
 `first_batch` submits distinct diagnostics together, as the original tests did,
 so pre-existing owner similarity cannot suppress the second diagnostic. It
 re-executes in a child with cleared authority, disposable HOME and a 120-second

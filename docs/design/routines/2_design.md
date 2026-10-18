@@ -446,6 +446,12 @@ A receipt failure is recorded per observation and does not abort independent
 landing-failure filing. Missing task owners
 remain retryable, and other non-landing failures are explicitly excluded.
 The existing freshness selection still precedes routing; it also sets aside runs on
+GitHub's managed `Dependabot Updates` workflow with event `dynamic`, recording
+their identities and reason `github_managed_dependabot_update` in collection's
+`skipped_runs` and the filing audit before branch probes or investigation. They
+are excluded from current, mixed-state and deferred failures; open security alerts
+belong to the Dependabot alert sweep. Pull-request CI on `dependabot/*` branches
+remains ordinary CI. Freshness selection also sets aside runs on
 branches whose pull request closed at the branch's current head with no open pull request,
 jobs a workflow concurrency group cancelled, and a run-scoped retryable error repeated on
 three distinct consecutive workflow sweeps is reported as persistent instead of failing every

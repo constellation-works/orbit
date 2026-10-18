@@ -407,7 +407,13 @@ pub(super) fn audit_summary(evidence: &Value, failures: &[Value]) -> Value {
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let skipped_runs = evidence
+        .get("skipped_runs")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     json!({
+        "skipped_runs": skipped_runs,
         "latest_runs_discovered": latest_run_ids.len(),
         "latest_run_ids": latest_run_ids,
         "current_failures": current_failure_run_ids.len(),

@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use super::collect::{Bounds, push_retryable_error};
 use super::optional_input_string;
-use super::partition::{run_branch, run_is_completed, run_is_unsuccessful};
+use super::partition::{is_dependabot_update, run_branch, run_is_completed, run_is_unsuccessful};
 use super::query::{CiQueries, RemoteBranchHeads};
 
 /// Which of the workspace's heads a run belongs to.
@@ -202,7 +202,11 @@ pub(super) fn probe_branches<Q: CiQueries + ?Sized>(
     let mut candidates: Vec<&str> = Vec::new();
     for run in runs {
         let branch = run_branch(run);
-        if branch.is_empty() || !run_is_completed(run) || !run_is_unsuccessful(run) {
+        if is_dependabot_update(run)
+            || branch.is_empty()
+            || !run_is_completed(run)
+            || !run_is_unsuccessful(run)
+        {
             continue;
         }
         if refs.iter().any(|scanned| scanned.branch == branch) || candidates.contains(&branch) {

@@ -11,6 +11,7 @@ use super::unsuccessful_conclusion;
 #[derive(Default)]
 pub(super) struct RunPartition {
     pub(super) latest: Vec<Value>,
+    pub(super) skipped: Vec<Value>,
     pub(super) current: Vec<Value>,
     pub(super) stale: Vec<Value>,
     pub(super) in_flight: Vec<Value>,
@@ -35,6 +36,8 @@ pub(super) struct RunPartition {
 /// Classify repository-wide runs by relevant workflow/ref identity.
 ///
 /// `latest_runs` still records the newest run of each workflow for audit.
+/// GitHub-managed dynamic Dependabot updates are audited as skipped before
+/// they can suppress repository runs or enter any failure partition.
 /// Current failures are the newest unsuccessful completed run per
 /// `(workflow, head_branch)` that a *relevant* newer success has not
 /// suppressed. A queued or in-progress successor is listed in `in_flight`
@@ -75,6 +78,20 @@ pub(super) fn partition_runs(
         };
         out.latest
             .push(run_summary(ref_for_run(refs, latest), latest));
+
+        workflow_runs.retain(|run| {
+            if !is_dependabot_update(run) {
+                return true;
+            }
+            let mut entry = run_summary(ref_for_run(refs, run), run);
+            entry["reason"] = json!("github_managed_dependabot_update");
+            entry["evidence"] = json!(
+                "GitHub-managed dependency update job, not repository CI; security alerts \
+                 are handled by the Dependabot alert sweep"
+            );
+            out.skipped.push(entry);
+            false
+        });
 
         let landing_success = workflow_runs.iter().copied().find(|run| {
             run_is_completed(run)
@@ -202,6 +219,13 @@ pub(super) fn partition_runs(
             }
         }
     }
+}
+
+/// GitHub's updater does not build repository code. Match both event and
+/// workflow so ordinary pull-request CI on Dependabot branches stays in scope.
+pub(super) fn is_dependabot_update(run: &Value) -> bool {
+    run.get("event").and_then(Value::as_str) == Some("dynamic")
+        && run.get("workflow").and_then(Value::as_str) == Some("Dependabot Updates")
 }
 
 /// Newer branch-event runs (push, schedule or dispatch) of `run`'s workflow
