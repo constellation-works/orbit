@@ -211,7 +211,10 @@ there is no task bundle to publish. Receipt compaction replaces the payload with
 tombstone; it never deletes the request identity and refuses unsettled claims.
 
 The public pull/lifecycle tools remain unavailable. Generic task writes refuse active
-execution claims until the lifecycle layer supplies a claim-scoped mutation path. Frozen
+execution claims; claimed work writes through claim-scoped mutations. The one exception is an
+operator's comment-only update: orbit-core flags it, and `update_task_history` admits it under
+the claim only when its sole effect is appending one comment, recording no creation grant.
+Every other write inside that update still takes the ordinary fence. Frozen
 claim footprints also participate in ordinary reservation conflicts after TTL expiry.
 
 ## When to reach for it

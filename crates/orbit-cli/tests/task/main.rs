@@ -24,6 +24,7 @@ mod auto_task_lifecycle_cli;
 mod auto_task_listing_cli;
 mod auto_task_settings_cli;
 mod claimed_delivery_recovery;
+mod claimed_operator_comment;
 mod config_show_task_reads;
 mod context_selector_external_root;
 mod context_selector_worktree;

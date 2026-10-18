@@ -205,7 +205,7 @@ impl TaskCommitBoundary {
 
     /// Narrow in SQL before decoding; keep the exact task and phase checks
     /// because a payload may mention the task in another field as well.
-    pub(super) fn protecting_claim_for_task(
+    pub(crate) fn protecting_claim_for_task(
         &self,
         task_id: &str,
     ) -> Result<Option<ExecutionClaim>, OrbitError> {

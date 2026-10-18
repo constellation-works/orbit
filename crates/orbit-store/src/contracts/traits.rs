@@ -387,6 +387,19 @@ pub trait TaskStoreBackend: Send + Sync {
         op()
     }
 
+    /// [`Self::with_task_write_lock`] for an operator's comment-only update
+    /// [ORB-16723]. The lock does not refuse an execution claim protecting
+    /// the task; each write inside still checks it, so under a claim only a
+    /// history write flagged `operator_comment` whose sole effect is one
+    /// comment lands, and every other write is refused as usual.
+    fn with_task_comment_write_lock(
+        &self,
+        _id: &str,
+        op: &mut dyn FnMut() -> Result<(), OrbitError>,
+    ) -> Result<(), OrbitError> {
+        op()
+    }
+
     /// Read a stable dependency snapshot while another task is mutated.
     /// This grants no write authority over the dependency, including a task
     /// protected by an execution claim; every mutation retains its own guard.

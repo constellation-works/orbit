@@ -1453,8 +1453,11 @@ fn ci_failure_claimed_branch_defers_attribution_until_the_claim_settles() {
     let refused = runtime
         .update_task_as_human(
             &owner.id,
+            // A comment alone is admitted under the claim [ORB-16723]; one
+            // that also edits the task is not.
             TaskUpdateParams {
                 comment: Some("operator note while the follower holds the claim".into()),
+                tags: Some(vec!["operator-note".into()]),
                 ..Default::default()
             },
             "human:fixture".into(),

@@ -805,6 +805,19 @@ task summaries, artifacts, comments, friction, run binding, failure settlement, 
 cleanup. Mutation request IDs deduplicate append/create retries. Operator edits remain separately
 authorized and audited.
 
+Any other write to a protected task is refused with `active execution claim requires a
+claim-scoped mutation`, naming the task and the claiming run. The one exception is a human
+operator's comment: a write through `orbit task update <id> --comment` or the dashboard comment
+path whose only effect is appending one comment. Orbit-core classifies it as an operator write
+from the entry point's authority; the store re-checks that the write appends exactly one comment
+and changes nothing else, inside the same fence. The comment joins the owner's comment log, so the
+claimed leaf's steering gate sees it ([mid-run steering](../mid-run-steering/2_design.md)), and
+the write changes no status, field, relation, tag, crew, footprint, artifact, creation grant or
+claim state. A comment combined with any other change, or any write from an agent identity
+(agent variables in the environment, an agent or model identity, or the agent-facing
+`orbit.task.update` tool route), is still refused. The operator classification trusts the
+caller's process environment, as other operator writes do; it is not an authentication boundary.
+
 - Ownership is the claim plus machine/run pair, enforced on the owner; the local run-ownership
   read in `vcs/handoff.rs::load_handoff_context` is not sufficient alone. Worker task writes must
   carry claim context; omitting it cannot bypass fencing.
