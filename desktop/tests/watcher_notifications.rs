@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use orbit_desktop::watcher::{PollSummary, Watcher};
 use serde_json::{Value, json};
@@ -218,6 +218,269 @@ fn failed_run(run_id: &str, workspace_id: &str, title: &str) -> Value {
         "job_id": "job",
         "tasks": [{"title": title}],
     })
+}
+
+#[derive(Default)]
+struct DrainDashboard {
+    routes: HashMap<String, Value>,
+    paths: Vec<String>,
+}
+
+impl DrainDashboard {
+    fn drains(&mut self, prefix: &str, rows: Vec<Value>) {
+        self.routes
+            .insert(format!("{prefix}/fleet/drains"), json!({"items": rows}));
+    }
+
+    fn readiness(&mut self, prefix: &str, workspace: &str, tasks: Vec<Value>) {
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("workspace", workspace)
+            .append_pair("limit", "500")
+            .finish();
+        self.routes.insert(
+            format!("{prefix}/workflows/auto/readiness?{query}"),
+            json!({"total": tasks.len(), "tasks": tasks}),
+        );
+    }
+
+    fn poll(&mut self, watcher: &mut Watcher) -> Vec<(String, String)> {
+        let mut notes = Vec::new();
+        watcher.poll(
+            |path| {
+                self.paths.push(path.into());
+                self.routes.get(path).cloned()
+            },
+            |title, body| notes.push((title.into(), body.into())),
+        );
+        notes
+    }
+}
+
+fn drain(workspace: &str, phase: &str, holds: &[&str]) -> Value {
+    json!({
+        "workspace_id": workspace,
+        "workspace_name": "Workspace A",
+        "phase": phase,
+        "holds": holds,
+    })
+}
+
+fn held_task(id: &str) -> Value {
+    json!({"task_id": id, "reason": "baseline_red_hold"})
+}
+
+#[test]
+fn a_running_drain_finishing_is_announced_once_after_a_quiet_first_read() {
+    for phase in ["draining", "winding_down", "pulling"] {
+        let mut dashboard = DrainDashboard::default();
+        let mut watcher = Watcher::default();
+        dashboard.drains(
+            "api",
+            vec![drain("workspace-a", phase, &["admissions stopped"])],
+        );
+        dashboard.readiness("api", "workspace-a", vec![held_task("private-old")]);
+        assert!(dashboard.poll(&mut watcher).is_empty());
+        dashboard.drains(
+            "api",
+            vec![drain("workspace-a", "idle", &["admissions stopped"])],
+        );
+        let notes = dashboard.poll(&mut watcher);
+        assert_eq!(
+            notes.len(),
+            1,
+            "{phase} followed by idle finishes one drain"
+        );
+        assert_eq!(notes[0].0, "Drain finished");
+        assert!(notes[0].1.contains("Workspace A"));
+        assert!(dashboard.poll(&mut watcher).is_empty());
+    }
+}
+
+#[test]
+fn new_holds_are_announced_once_and_task_identifiers_stay_private() {
+    let mut dashboard = DrainDashboard::default();
+    let mut watcher = Watcher::default();
+    dashboard.drains("api", vec![drain("workspace-a", "draining", &[])]);
+    dashboard.readiness("api", "workspace-a", vec![]);
+    assert!(dashboard.poll(&mut watcher).is_empty());
+
+    dashboard.drains(
+        "api",
+        vec![drain(
+            "workspace-a",
+            "draining",
+            &["admissions stopped", "admissions stopped"],
+        )],
+    );
+    dashboard.readiness(
+        "api",
+        "workspace-a",
+        vec![held_task("private-new"), held_task("private-new")],
+    );
+    let notes = dashboard.poll(&mut watcher);
+    assert_eq!(notes.len(), 2, "one fleet hold and one held task");
+    assert!(notes.iter().any(|(title, _)| title == "Task held"));
+    assert!(
+        notes
+            .iter()
+            .any(|(_, body)| body.contains("admissions stopped"))
+    );
+    assert!(
+        notes
+            .iter()
+            .all(|(_, body)| body.contains("Workspace A") && !body.contains("private-new"))
+    );
+    assert!(dashboard.poll(&mut watcher).is_empty());
+
+    dashboard.readiness(
+        "api",
+        "workspace-a",
+        vec![json!({"task_id": "private-new", "reason": "eligible"})],
+    );
+    assert!(dashboard.poll(&mut watcher).is_empty());
+    dashboard.readiness("api", "workspace-a", vec![held_task("private-new")]);
+    assert_eq!(
+        dashboard.poll(&mut watcher).len(),
+        1,
+        "a hold that cleared can appear again"
+    );
+}
+
+#[test]
+fn unavailable_workspaces_do_not_finish_drains_or_reset_hold_history() {
+    let mut dashboard = DrainDashboard::default();
+    let mut watcher = Watcher::default();
+    dashboard.drains("api", vec![drain("workspace-a", "unavailable", &[])]);
+    assert!(dashboard.poll(&mut watcher).is_empty());
+    dashboard.drains(
+        "api",
+        vec![drain("workspace-a", "idle", &["admissions stopped"])],
+    );
+    dashboard.readiness("api", "workspace-a", vec![held_task("private-old")]);
+    assert!(
+        dashboard.poll(&mut watcher).is_empty(),
+        "first available workspace read establishes its baseline"
+    );
+
+    dashboard.drains(
+        "api",
+        vec![drain("workspace-a", "draining", &["admissions stopped"])],
+    );
+    assert!(dashboard.poll(&mut watcher).is_empty());
+    dashboard.drains("api", vec![drain("workspace-a", "unavailable", &[])]);
+    dashboard.paths.clear();
+    assert!(
+        dashboard.poll(&mut watcher).is_empty(),
+        "unavailable is not idle"
+    );
+    assert!(
+        dashboard
+            .paths
+            .iter()
+            .all(|path| !path.contains("/readiness"))
+    );
+    dashboard.drains(
+        "api",
+        vec![drain("workspace-a", "draining", &["admissions stopped"])],
+    );
+    assert!(
+        dashboard.poll(&mut watcher).is_empty(),
+        "returning holds are already known"
+    );
+
+    dashboard.routes.remove("api/fleet/drains");
+    assert!(
+        dashboard.poll(&mut watcher).is_empty(),
+        "a failed route is not a drain end"
+    );
+    dashboard.drains(
+        "api",
+        vec![drain("workspace-a", "idle", &["admissions stopped"])],
+    );
+    assert_eq!(dashboard.poll(&mut watcher)[0].0, "Drain finished");
+}
+
+#[test]
+fn held_task_history_survives_failed_and_partial_readiness_reads() {
+    let mut dashboard = DrainDashboard::default();
+    let mut watcher = Watcher::default();
+    dashboard.drains("api", vec![drain("workspace-a &/+", "idle", &[])]);
+    dashboard.readiness("api", "workspace-a &/+", vec![held_task("private-old")]);
+    assert!(dashboard.poll(&mut watcher).is_empty());
+    let readiness_path = dashboard
+        .routes
+        .keys()
+        .find(|path| path.contains("/readiness"))
+        .unwrap()
+        .clone();
+    dashboard.routes.remove(&readiness_path);
+    assert!(dashboard.poll(&mut watcher).is_empty());
+    dashboard.routes.insert(
+        readiness_path.clone(),
+        json!({"total": 501, "tasks": [held_task("private-new")]}),
+    );
+    assert_eq!(dashboard.poll(&mut watcher).len(), 1);
+    dashboard.readiness(
+        "api",
+        "workspace-a &/+",
+        vec![held_task("private-old"), held_task("private-new")],
+    );
+    assert!(
+        dashboard.poll(&mut watcher).is_empty(),
+        "an omitted task in a partial snapshot did not leave its hold"
+    );
+    let path = Url::parse(&format!("http://127.0.0.1/{readiness_path}")).unwrap();
+    assert!(
+        path.query_pairs()
+            .any(|(key, value)| key == "workspace" && value == "workspace-a &/+")
+    );
+}
+
+#[test]
+fn remote_drain_and_hold_transitions_are_scoped_by_host_and_capped() {
+    let mut dashboard = DrainDashboard::default();
+    dashboard.routes.insert(
+        "api/hosts?probe=false".into(),
+        json!({"hosts": [
+            {"name": "local", "local": true}, {"name": "remote host", "local": false}
+        ]}),
+    );
+    for prefix in ["api", "api/on/remote%20host"] {
+        dashboard.drains(prefix, vec![drain("workspace-a", "draining", &[])]);
+        dashboard.readiness(prefix, "workspace-a", vec![held_task("private-old")]);
+    }
+    let mut watcher = Watcher::default();
+    assert!(dashboard.poll(&mut watcher).is_empty());
+    dashboard.routes.remove("api/on/remote%20host/fleet/drains");
+    dashboard.drains("api", vec![drain("workspace-a", "idle", &[])]);
+    let notes = dashboard.poll(&mut watcher);
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].0, "Drain finished");
+    assert!(notes[0].1.ends_with("local"));
+
+    dashboard.drains(
+        "api/on/remote%20host",
+        vec![drain("workspace-a", "idle", &[])],
+    );
+    dashboard.readiness(
+        "api/on/remote%20host",
+        "workspace-a",
+        (0..4).map(|i| held_task(&format!("private-{i}"))).collect(),
+    );
+    let notes = dashboard.poll(&mut watcher);
+    assert_eq!(
+        notes.len(),
+        2,
+        "one remote drain end and one summary for four holds"
+    );
+    assert!(notes.iter().any(|(title, _)| title == "Drain finished"));
+    assert!(notes.iter().any(|(title, _)| title == "4 tasks held"));
+    assert!(
+        notes
+            .iter()
+            .all(|(_, body)| body.contains("remote host") && !body.contains("private-"))
+    );
+    assert!(dashboard.poll(&mut watcher).is_empty());
 }
 
 #[test]

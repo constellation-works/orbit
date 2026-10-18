@@ -39,14 +39,29 @@ dashboard's own host switcher.
   probe session, then `/api/fleet/drains`, `/api/job-runs/all?state=failed&since=24h` and
   `/api/tasks/all?status=review` for this host and for each registered remote that the list does not
   already mark unreachable. Remote routes go through `/api/on/<host>/…` and cover every workspace on
-  that host. The menu's drain and failure counts are the sums of the hosts that answered. A host
-  that does not answer is unavailable, not zero: the tray does not keep a number that dropped that
+  that host. For each available workspace, it also reads
+  `/api/workflows/auto/readiness?workspace=<id>&limit=500` to find tasks held until the base branch
+  passes; these task holds are separate from the fleet's general hold labels. The menu's drain
+  and failure counts are the sums of the hosts that answered. A host that does not answer is
+  unavailable, not zero: the tray does not keep a number that dropped that
   host, and the host's previous runs and review tasks stay remembered, so they are not announced
-  again when the host returns. A run that newly appears as failed, or a task that newly appears in
-  review, raises a native notification naming the task title (or the job) and its workspace. When
-  more than one host is registered, the notification names the host too; with only this host, the
-  text stays the title and the workspace. More than three at once arrive as one summary. Review
-  reads follow every cursor page before comparing tasks, so older tasks entering review are covered
+  again when the host returns. Native notifications cover:
+
+  - A run that newly appears as failed, naming the task title (or the job) and workspace.
+  - A task that newly appears in review, naming its title and workspace.
+  - A drain moving from draining, pulling or winding down to idle (**Drain finished**).
+  - A new fleet hold (**Drain held**), naming the hold and workspace.
+  - A new task hold caused by a red base (**Task held**), naming the workspace and explaining that
+    it waits for the base branch to pass. Internal task identifiers are never displayed.
+
+  When more than one host is registered, the notification names the host too. More than three new
+  items of one kind in a poll arrive as one summary. Unchanged holds are not announced again;
+  a hold that clears and later returns is new. An unavailable workspace or a failed read never
+  counts as a drain ending and preserves its previous phases and holds. Its first available read
+  establishes a quiet baseline. Readiness reads cover up to 500 backlog tasks; a partial read
+  preserves remembered holds for omitted tasks, and holds beyond that window are detected only
+  when those tasks enter the window. Review reads follow every cursor page before comparing tasks,
+  so older tasks entering review are covered
   even with a large backlog. A failed page leaves the previous complete review baseline intact until
   a successful read. The first read after launch only records what is already there. A workspace
   that comes back after being unavailable does not re-announce its old failures, and a task that
