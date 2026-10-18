@@ -1,4 +1,5 @@
-//! The supervisor's wait loop.
+//! The supervisor's wait loop. A deadline ends a still-running child, not a
+//! completed child whose last timed wait was stale when the waiter resumed.
 
 use std::process::Child;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -370,6 +371,20 @@ impl SupervisedChild {
                 }
             } else if !streams_finished(&stdout_thread, &stderr_thread) {
                 std::thread::sleep(wait_slice);
+            }
+            if completed_status.is_none() && deadline.passed() {
+                // A timed wait's None describes its last poll. The waiter can
+                // lose the CPU after that poll while the child exits and the
+                // deadline passes. Recheck without another wait before calling
+                // this a timeout; otherwise even a completed no-op is killed
+                // and reported as timed out under scheduler contention.
+                completed_status =
+                    child.process.child_mut().try_wait().map_err(|e| {
+                        OrbitError::Execution(format!("final child wait error: {e}"))
+                    })?;
+                if completed_status.is_some() {
+                    child.release_process_group();
+                }
             }
             if let Some(status) = completed_status
                 .filter(|_| !require_eof || streams_finished(&stdout_thread, &stderr_thread))
