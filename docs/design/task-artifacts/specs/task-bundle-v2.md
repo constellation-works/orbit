@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Task Bundle V2"
 tags: ["task-artifacts"]
-last_validated: 2026-10-11
+last_validated: 2026-10-18
 ---
 
 # Spec: Task Bundle V2
@@ -25,7 +25,7 @@ Every canonical task bundle lives at:
 ~/.orbit/tasks/workspaces/<workspace-id>/<task-id>/
 ```
 
-`<task-id>` must be the canonical ID inside the current allocation authority. The canonical task ID grammar is `<prefix>-<digits>`: `<prefix>` is 2 to 5 uppercase ASCII letters (excluding reserved artifact namespaces `ADR`, `L`, and `F`) configured for the allocating authority (such as `ORB`, `DANI`, or `SHR`), and `<digits>` is a non-empty sequence of ASCII decimal digits. Minted IDs format the suffix with at least five digits (for example, `ORB-00000` or `DANI-00001`); validation accepts shorter and wider suffixes, without a numeric upper bound. Numeric parsing and allocation are separately bounded by `u32::MAX`. `ORB` remains valid for migrated machines but is reserved when configuring a new machine. `<workspace-id>` is assigned once per workspace as `<slug>-<6char>` and stored in `.orbit/config.yaml`. Old `T<YYYYMMDD>-<N>` IDs are not valid v2 identifiers or lookup aliases.
+`<task-id>` must be the canonical ID inside the current allocation authority. The canonical task ID grammar is `<prefix>-<digits>`: `<prefix>` is 2 to 5 uppercase ASCII letters (excluding reserved artifact namespaces `ADR`, `L`, and `F`) configured for the allocating authority (such as `ORB`, `DANI`, or `SHR`), and `<digits>` is a non-empty sequence of ASCII decimal digits. Minted IDs format the suffix with at least five digits (for example, `ORB-00000` or `DANI-00001`); validation accepts shorter and wider suffixes, without a numeric upper bound. Numeric parsing and allocation are separately bounded by `u32::MAX`. `ORB` remains valid for migrated machines but is reserved when configuring a new machine. `<workspace-id>` is assigned once per workspace and stored in `.orbit/config.yaml`: `orbit workspace init` assigns the canonical `ws_<name>` form, and legacy standalone bindings keep a generated `<slug>-<6char>` ID. Old `T<YYYYMMDD>-<N>` IDs are not valid v2 identifiers or lookup aliases.
 
 Required files:
 
