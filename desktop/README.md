@@ -128,6 +128,13 @@ failure never holds back a release. Re-run the failed job from Actions once it's
 attached. `desktop/Cargo.toml`'s version must match the tag, and the build fails otherwise.
 [RELEASING.md](../RELEASING.md#4-bump-versions) bumps it with the others.
 
+On retry, publication downloads existing assets and hashes those published bytes alongside any
+missing local bundles, so a rebuild cannot change what the signed checksums authenticate. The
+manifest and signature upload after all bundles and the version file. An interrupted manifest
+upload can resume without replacing it; a complete release is verified without uploading again.
+If older partial metadata conflicts with the available bundles, publication stops before adding
+assets. Fix forward in a new release rather than replacing published files.
+
 To check a download, verify the manifest against the release key, then the files against the
 manifest:
 
