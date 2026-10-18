@@ -1251,9 +1251,14 @@ and its machine, and the step the leaf stopped at. A leaf that failed before
 it committed keeps nothing and records no event. Without
 `--discard-candidate`, the requeue reports the candidate it resumes:
 `Resumes ... at <head>.` in text, or `resumes` with `source: claim` in JSON.
-The task's next run then continues that candidate, whether it is a claim or
-an owner-local run, and its `resume_candidate` output names it as
-`source_sha`. When the kept candidate was never pushed (`host_local: true`),
+A subsequent claim continues that candidate, and its `resume_candidate`
+output names it as `source_sha`. An owner-local run also continues it when
+the task still names a foreign run, or the owner-local leaf that kept it.
+If a later owner-local attempt stops without preserving a candidate, the next
+owner-local run implements fresh instead. In that case `resumes.owner_local`
+is `false`, while `source_run_id`, `machine_id` and `head_sha` identify the
+candidate still offered to claimed runs; `next_step` explains both routes.
+When the kept candidate was never pushed (`host_local: true`),
 only a run on the machine that made it continues the candidate; a run on
 another host implements fresh. If the task's description or acceptance
 criteria changed since the candidate was kept, the requeue is refused and

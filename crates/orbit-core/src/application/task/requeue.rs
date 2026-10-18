@@ -284,10 +284,11 @@ impl OrbitRuntime {
     }
 
     /// Requeue blocked task `id` as an operator decision. Without `discard`,
-    /// the next run resumes the candidate the task's stopped run published
-    /// through its failure handoff, or the latest candidate a claim of the
-    /// task kept — a later claim that ended without one does not replace it —
-    /// or implements fresh when there is neither. With `discard`, the
+    /// report names the candidate the task's stopped run published through its
+    /// failure handoff, or the latest candidate a claim of the task kept. A
+    /// later candidate-less claim does not replace it; a later candidate-less
+    /// owner-local binding makes only the next owner-local run implement fresh.
+    /// With neither candidate, the next run implements fresh. With `discard`, the
     /// published or kept candidate is discarded, the task's undelivered Orbit
     /// pull requests are closed, and the next run implements fresh.
     ///
@@ -321,6 +322,21 @@ impl OrbitRuntime {
         } else {
             self.kept_claim_requeue(&task)?
         };
+        // Owner-local setup follows the task's last binding. A foreign binding
+        // reads the latest kept claim; a local binding can fall back only to
+        // the candidate kept from that same local leaf. Claim admission can
+        // still offer an older candidate after a candidate-less local attempt.
+        let owner_local = kept.as_ref().is_some_and(|kept| {
+            let local = self.automation_machine_identity();
+            task.job_run_id.is_some()
+                && (kept.candidate.durable() || local == Some(kept.machine_id.as_str()))
+                && (task
+                    .job_run_machine
+                    .as_ref()
+                    .is_some_and(|origin| Some(origin.machine_id.as_str()) != local)
+                    || (local == Some(kept.machine_id.as_str())
+                        && task.job_run_id == kept.candidate.source_run_id))
+        });
         let mut answer = None;
         self.stores().tasks().with_task_write_lock(id, &mut || {
             let current = self.get_task(id)?;
@@ -384,9 +400,14 @@ impl OrbitRuntime {
                         } else {
                             "an earlier claim kept"
                         };
+                        let route = if owner_local {
+                            "requeued onto"
+                        } else {
+                            "requeued for claimed continuation of"
+                        };
                         (
                             format!(
-                                "requeued onto the candidate {whose} (head {} on {}): {reason}",
+                                "{route} the candidate {whose} (head {} on {}): {reason}",
                                 kept.candidate.head_sha, kept.candidate.branch
                             ),
                             None,
@@ -444,6 +465,8 @@ impl OrbitRuntime {
                 "head_sha": kept.candidate.head_sha,
                 "durable_ref": kept.candidate.durable_ref,
                 "machine_id": kept.machine_id,
+                "source_run_id": kept.candidate.source_run_id,
+                "owner_local": owner_local,
                 "host_local": !kept.candidate.durable(),
             })),
             (None, None) => None,
@@ -453,6 +476,26 @@ impl OrbitRuntime {
             (Some(_), _) => "The next run adopts this candidate and pull request without \
                              re-implementing, then validates, reviews and lands it afresh."
                 .to_string(),
+            (None, Some(kept)) if !owner_local => {
+                let claimed = if kept.candidate.durable() {
+                    "A claimed run continues".to_string()
+                } else {
+                    format!("A claimed run on {} continues", kept.machine_id)
+                };
+                format!(
+                    "The next owner-local run implements fresh. {claimed} the candidate at {} \
+                     kept from run '{}' on machine '{}', \
+                     then validates, reviews and lands it afresh.{}",
+                    kept.candidate.head_sha,
+                    kept.candidate.source_run_id.as_deref().unwrap_or("unknown"),
+                    kept.machine_id,
+                    if kept.candidate.durable() {
+                        ""
+                    } else {
+                        " A claimed run on another host implements fresh."
+                    }
+                )
+            }
             (None, Some(kept)) if !kept.candidate.durable() => format!(
                 "The candidate is only on {}: a run there continues it instead of implementing \
                  fresh, and a run on another host implements fresh.",

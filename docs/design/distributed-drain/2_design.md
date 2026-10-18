@@ -774,6 +774,11 @@ owns delivery:
   candidate the fresh reason names the foreign run's machine; a local run that happens to share
   the leaf's id is never read. A prior run on the owner that left no failure handoff — a claim's
   leaf the owner executed itself — falls back to the candidate kept from that leaf's claim.
+  This fallback requires both the source run and machine to match. A later owner-local
+  attempt without a preserving checkpoint or hold implements fresh, even if an older claim
+  candidate remains available to claimed admission. Requeue reports that distinction with
+  `resumes.owner_local: false`, the kept candidate's source run and machine, and route-specific
+  `next_step` guidance; it does not broaden owner-local candidate selection.
   A `Release` for a leaf that is still running (not `pending`, not terminal) is *held*: no pass
   delivers it until the leaf is seen to stop. The task is never back in the backlog while its
   first executor may still be working.
