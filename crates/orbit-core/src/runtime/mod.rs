@@ -60,6 +60,7 @@ pub mod workspace;
 mod tests;
 
 pub(crate) use config_path::{CONFIG_TOML_FILE, existing_config_file_path};
+pub(crate) use orbit_runtime::RuntimeConfigLoader;
 pub use orbit_runtime::{HostLifetime, OrbitRuntime, OrbitRuntimeRoots};
 pub use workspace::binding::{WorkspaceRuntimeBinding, workspace_runtime_binding};
 

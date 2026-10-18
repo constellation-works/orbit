@@ -598,10 +598,95 @@ fn a_purpose_assignment_redraws_within_its_pool_when_its_provider_is_limited() {
     assert_eq!(entry["reason"], "provider_limit", "{entry}");
 }
 
+/// A single live runtime and drain observe workspace and global policy edits.
+fn live_provider_policy_reloads_and_keeps_the_last_good_config() {
+    use orbit_engine::RuntimeHost;
+    use orbit_tools::ToolContext;
+    use orbit_types::workflow::PipelineState;
+
+    let fx = Fixture::new(&config(r#"["opus"]"#, ""));
+    let task = fx.task(Some("opus"));
+    fx.read_claude(93.0, false, Utc::now() + Duration::hours(2));
+    let runtime = fx.runtime();
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        runtime.sqlite_store().unwrap(),
+        runtime.workspace_id().unwrap(),
+    );
+    let run = jobs
+        .insert_job_run(
+            "workspace_auto_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({})),
+            None,
+        )
+        .unwrap();
+    runtime
+        .write_run_state(
+            &run.run_id,
+            &PipelineState::new(run.run_id.clone(), run.job_id, json!({})),
+        )
+        .unwrap();
+    jobs.mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .unwrap();
+    let pass = || {
+        runtime
+            .run_deterministic(
+                "classify_workspace_auto_tasks",
+                &json!({}),
+                &json!({"run_id": run.run_id, "max_active_leaf_runs": 1}),
+                ToolContext::default(),
+            )
+            .unwrap()
+    };
+    assert_eq!(pass()["loose_task_ids"], json!([]));
+    let global_config = runtime.global_root().join("config.toml");
+    std::fs::write(
+        &global_config,
+        "[workflow]\nprovider_limit_overrides = [\"claude:100\"]\n",
+    )
+    .unwrap();
+    assert_eq!(pass()["loose_task_ids"], json!([task]));
+
+    // An invalid replacement must neither fail the pass nor erase its policy.
+    let log = fx.root.path().join("reload.log");
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(std::sync::Mutex::new(std::fs::File::create(&log).unwrap()))
+        .finish();
+    tracing::subscriber::with_default(subscriber, || {
+        std::fs::write(&global_config, "[workflow\n").unwrap();
+        assert_eq!(pass()["loose_task_ids"], json!([task]));
+        assert_eq!(pass()["loose_task_ids"], json!([task]));
+    });
+    let warnings = std::fs::read_to_string(log).unwrap();
+    assert_eq!(
+        warnings
+            .matches("could not reload admission configuration; keeping previous policy")
+            .count(),
+        1,
+        "{warnings}"
+    );
+    // A workspace override then takes precedence and restores the gate.
+    std::fs::write(
+        &global_config,
+        "[workflow]\nprovider_limit_overrides = [\"claude:100\"]\n",
+    )
+    .unwrap();
+    fx.configure(&config(
+        r#"["opus"]"#,
+        "provider_limit_overrides = [\"claude:80\"]",
+    ));
+    assert_eq!(pass()["loose_task_ids"], json!([]));
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_task_waits_on_an_exhausted_provider_until_the_reset_scenarios,
     a_task_waits_on_an_exhausted_provider_until_the_reset,
+    live_provider_policy_reloads_and_keeps_the_last_good_config,
     an_explicit_crew_waits_unless_the_policy_draws_from_its_pool,
     an_override_at_one_hundred_gates_only_an_exhausted_window,
     an_off_override_leaves_an_exhausted_provider_eligible,

@@ -122,7 +122,7 @@ impl OrbitRuntime {
         now: DateTime<Utc>,
     ) -> Result<Vec<ProviderLimitObservation>, OrbitError> {
         let mut observations = self.provider_limits()?;
-        let policy = self.context.settings().provider_limit();
+        let policy = self.provider_limit_policy();
         for budget in &policy.budgets {
             let Ok(provider) = Provider::parse(&budget.provider) else {
                 continue;

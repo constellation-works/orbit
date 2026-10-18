@@ -575,6 +575,48 @@ fn per_run_mode_overrides_the_host_and_survives_reopen() {
     }
 }
 
+/// Inherited local modes follow host edits; explicit modes continue to win.
+fn a_live_local_drain_refreshes_only_its_inherited_mode() {
+    for explicit in ["off", "shadow"] {
+        let fixture = Fixture::new("shadow", "");
+        fixture.seed_profiles();
+        fixture.running_hard_delivery();
+        let heavy = fixture.task("heavy", TaskPriority::High, TaskComplexity::Medium);
+        let light = fixture.task("light", TaskPriority::Medium, TaskComplexity::Low);
+        let drain = fixture.drain();
+        let pass = |mode: &str, source: &str| {
+            crate::scenarios::with_immutable_host_load(|| {
+                fixture
+                    .runtime
+                    .run_deterministic(
+                        "classify_workspace_auto_tasks",
+                        &json!({}),
+                        &json!({"run_id": drain, "auto_concurrency": mode,
+                    "auto_concurrency_source": source, "max_active_leaf_runs": 4}),
+                        ToolContext::default(),
+                    )
+                    .unwrap()
+            })
+        };
+        assert_eq!(
+            admitted(&pass("shadow", "configured")),
+            vec![heavy.clone(), light.clone()]
+        );
+        let path = fixture.global.join("config.toml");
+        let config = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            &path,
+            config.replace("mode = \"shadow\"", "mode = \"enforce\""),
+        )
+        .unwrap();
+        assert_eq!(
+            admitted(&pass(explicit, "explicit")),
+            vec![heavy, light.clone()]
+        );
+        assert_eq!(admitted(&pass("shadow", "configured")), vec![light]);
+    }
+}
+
 /// `max_active_leaf_runs` is enforced before gap fit: with one free slot,
 /// two candidates that both fit admit one, and the other is queued, not
 /// skipped.
@@ -1256,6 +1298,7 @@ crate::scenario_table!(
     memory_fits_by_the_quantile_of_the_sum_not_the_sum_of_p90s,
     shadow_admits_as_off_and_records_what_enforce_would_do,
     per_run_mode_overrides_the_host_and_survives_reopen,
+    a_live_local_drain_refreshes_only_its_inherited_mode,
     the_ceiling_holds_before_gap_fit,
     the_throttle_holds_enforce_whatever_the_forecast_says,
     a_host_without_profiles_admits_in_enforce_as_off_does

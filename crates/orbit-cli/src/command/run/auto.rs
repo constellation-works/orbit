@@ -124,9 +124,10 @@ pub struct AutoCommand {
     #[arg(long, value_name = "N")]
     pub concurrency: Option<u32>,
     /// Forecast admission mode for this local drain: off, shadow or enforce.
-    /// Omitted, captures machine.auto_concurrency.mode when submitted. Survives
-    /// restart/resume and changes no configuration. Pull drains do not support
-    /// this override; configure their executor host mode instead.
+    /// Omitted, follows machine.auto_concurrency.mode on each admission pass.
+    /// Explicit overrides survive restart/resume. Host thresholds and provider
+    /// limits refresh next pass; invalid config keeps the previous policy.
+    /// Pull drains inherit their executor host mode and refuse this override.
     #[arg(long, value_name = "MODE", value_parser = ["off", "shadow", "enforce"])]
     pub auto_concurrency: Option<String>,
     /// Authorize this drain to finish delivery and move the tasks it ships to

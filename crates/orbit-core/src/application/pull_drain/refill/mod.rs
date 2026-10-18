@@ -150,6 +150,8 @@ pub(crate) fn pull_refill(
     action: &str,
     input: &Value,
 ) -> Result<Value, DispatchError> {
+    let snapshot = runtime.admission_policy_snapshot();
+    let runtime = &snapshot;
     let failed = |message: String| DispatchError::DeterministicActionFailed {
         action: action.to_string(),
         message,

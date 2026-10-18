@@ -2,6 +2,7 @@
 //! identity, host probes, persistence, configuration, and internal accessors.
 
 mod accessors;
+mod admission_policy;
 mod build;
 mod config;
 mod host;
@@ -21,6 +22,12 @@ use super::workspace::binding::WorkspaceRuntimeBinding;
 use super::workspace::catalog;
 use super::{builder, event_bus};
 use crate::context::OrbitContext;
+
+/// Configuration reload supplied by the composition root. Runtime policy
+/// refreshes may call it after config files change, but runtime never opens
+/// config layers itself.
+pub(crate) type RuntimeConfigLoader =
+    Arc<dyn Fn() -> Result<orbit_config::ResolvedConfig, orbit_common::OrbitError> + Send + Sync>;
 
 /// One-shot callback for the next orphaned-leaf reconciliation on a runtime.
 type OrphanReconcileCallback = Box<dyn FnOnce() + Send>;
@@ -69,6 +76,9 @@ pub struct OrbitRuntime {
     /// The host's resource profiles, shared by clones and kept across
     /// admission passes until a delivery finishes.
     resource_profiles: Arc<ResourceProfileCache>,
+    admission_policy: Arc<Mutex<Option<admission_policy::CachedPolicy>>>,
+    admission_policy_snapshot: Option<Arc<admission_policy::AdmissionPolicy>>,
+    config_loader: RuntimeConfigLoader,
     /// The host's measured load for the forecast baseline. It keeps only the
     /// previous CPU tick reading that utilization is measured against.
     host_load: Arc<HostLoadProbe>,
