@@ -450,6 +450,11 @@ pub(crate) struct OrbitRuntimeSettings {
     /// `workflow.unlocked_context_paths`: declared context that takes no
     /// context lock.
     unlocked_context_paths: crate::runtime::task::locks::UnlockedContextPaths,
+    /// `workflow.unlocked_path_validation_commands`: what a candidate that
+    /// changed only unlocked paths since its run's last full validation runs.
+    unlocked_path_validation_commands: Vec<String>,
+    /// `workflow.generated_paths`: path glob to regenerate command.
+    generated_paths: std::collections::BTreeMap<String, String>,
 }
 
 impl OrbitRuntimeSettings {
@@ -485,6 +490,8 @@ impl OrbitRuntimeSettings {
         mid_run_steering: orbit_config::MidRunSteeringSettings,
         tag_instructions: orbit_config::TagInstructionSettings,
         unlocked_context_paths: crate::runtime::task::locks::UnlockedContextPaths,
+        unlocked_path_validation_commands: Vec<String>,
+        generated_paths: std::collections::BTreeMap<String, String>,
     ) -> Self {
         Self {
             persistence,
@@ -517,6 +524,8 @@ impl OrbitRuntimeSettings {
             mid_run_steering,
             tag_instructions,
             unlocked_context_paths,
+            unlocked_path_validation_commands,
+            generated_paths,
         }
     }
 
@@ -532,6 +541,14 @@ impl OrbitRuntimeSettings {
         &self,
     ) -> &crate::runtime::task::locks::UnlockedContextPaths {
         &self.unlocked_context_paths
+    }
+
+    pub(crate) fn unlocked_path_validation_commands(&self) -> &[String] {
+        &self.unlocked_path_validation_commands
+    }
+
+    pub(crate) fn generated_paths(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.generated_paths
     }
 
     pub(crate) fn set_host_shutdown_hold_minutes(&mut self, minutes: u32) {

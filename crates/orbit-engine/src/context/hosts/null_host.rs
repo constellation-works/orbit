@@ -435,6 +435,28 @@ pub trait NullRuntimeHost: Send + Sync {
         Vec::new()
     }
 
+    fn unlocked_path_validation(&self) -> crate::context::UnlockedPathValidation {
+        crate::context::UnlockedPathValidation::default()
+    }
+
+    fn generated_paths(&self) -> Vec<crate::context::GeneratedPath> {
+        Vec::new()
+    }
+
+    fn record_validated_tree(
+        &self,
+        _tree: &crate::context::ValidatedTree,
+    ) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
+    fn validated_tree(
+        &self,
+        _run_id: &str,
+    ) -> Result<Option<crate::context::ValidatedTree>, OrbitError> {
+        Ok(None)
+    }
+
     fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates {
         orbit_types::workflow::HostValidationGates::local(orbit_types::workflow::ValidationGates {
             required_validation_commands: NullRuntimeHost::required_validation_commands(self),
@@ -1160,6 +1182,24 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     }
     fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates {
         NullRuntimeHost::validation_gates(self)
+    }
+    fn unlocked_path_validation(&self) -> crate::context::UnlockedPathValidation {
+        NullRuntimeHost::unlocked_path_validation(self)
+    }
+    fn generated_paths(&self) -> Vec<crate::context::GeneratedPath> {
+        NullRuntimeHost::generated_paths(self)
+    }
+    fn record_validated_tree(
+        &self,
+        tree: &crate::context::ValidatedTree,
+    ) -> Result<(), OrbitError> {
+        NullRuntimeHost::record_validated_tree(self, tree)
+    }
+    fn validated_tree(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<crate::context::ValidatedTree>, OrbitError> {
+        NullRuntimeHost::validated_tree(self, run_id)
     }
     fn host_os(&self) -> Option<orbit_types::workflow::EvidenceHostOs> {
         NullRuntimeHost::host_os(self)

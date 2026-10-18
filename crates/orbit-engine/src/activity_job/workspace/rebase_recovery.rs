@@ -18,6 +18,7 @@ use super::fingerprint::{
     GitWorktreeFingerprint, changed_paths, git_command_error, git_fingerprint, git_output_raw,
     git_stdout, git_stdout_bytes, nul_paths,
 };
+use super::generated_paths::{conflicted_generated_paths, regenerate};
 use super::rebase_repairs::{auto_merge_tree, earlier_companion_paths, unrepaired_conflict_paths};
 use super::recovery::safe_relative_path;
 use super::{DispatchError, WorktreeBoundaryGuard};
@@ -309,12 +310,57 @@ impl WorktreeBoundaryGuard {
                 "the provider changed HEAD, branch, or index instead of only repairing files",
             ));
         }
+        // Generated conflict files are rebuilt, not merged: take a side, run
+        // the configured command, and stage its output with the resolution.
+        // The command must leave Git metadata, HEAD, branch and index as the
+        // provider had to [ORB-16784].
+        let regenerated = conflicted_generated_paths(host, &checkpoint.conflicting_paths);
+        let after_agent = if regenerated.is_empty() {
+            after_agent
+        } else {
+            // The command runs in the checkout: only while this recovery
+            // still owns it, as staging is.
+            self.validate_rebase_checkpoint(checkpoint, &invalid)?;
+            recheck_recovery_owner(
+                host,
+                &self.run_id,
+                step_id,
+                task_ids,
+                &self.assigned_root,
+                &invalid,
+            )?;
+            regenerate(host, &self.assigned_root, &regenerated).map_err(|reason| {
+                invalid(&format!(
+                    "regenerating a generated conflict path failed: {reason}"
+                ))
+            })?;
+            checkpoint.metadata.verify(&self.assigned_root)?;
+            let regenerated_state = git_fingerprint(&self.assigned_root)?;
+            if regenerated_state.head != self.assigned_before.head
+                || regenerated_state.branch != self.assigned_before.branch
+                || !index_unchanged(&self.assigned_before, &regenerated_state)
+            {
+                return Err(invalid(
+                    "a generated-path command changed HEAD, branch, or index instead of only writing files",
+                ));
+            }
+            regenerated_state
+        };
+        let regenerated_paths = regenerated
+            .iter()
+            .map(|generated| generated.path.clone())
+            .collect::<Vec<_>>();
         let changed = changed_paths(&self.assigned_root, &self.assigned_before, &after_agent);
         // A conflict file counts as repaired when this invocation changed it,
         // or when an earlier actor (final recovery) already did [F2026-10-237].
-        if !unrepaired_conflict_paths(&self.assigned_root, &checkpoint.conflicting_paths, &changed)?
-            .is_empty()
-        {
+        // A regenerated file is repaired by its command.
+        let hand_repaired = checkpoint
+            .conflicting_paths
+            .iter()
+            .filter(|path| !regenerated_paths.contains(path))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unrepaired_conflict_paths(&self.assigned_root, &hand_repaired, &changed)?.is_empty() {
             return Err(invalid(
                 "one or more authorized conflict files were not repaired",
             ));
@@ -347,29 +393,26 @@ impl WorktreeBoundaryGuard {
             ));
         }
 
+        // Regenerated files hold their command's output, already checked for
+        // markers; whitespace there is the generator's, not a bad merge.
         let mut diff_check_args = vec!["diff", "--check", "--"];
-        diff_check_args.extend(checkpoint.conflicting_paths.iter().map(String::as_str));
-        let diff_check = git_output_raw(&self.assigned_root, &diff_check_args)?;
-        if !diff_check.success {
+        diff_check_args.extend(hand_repaired.iter().map(String::as_str));
+        if !hand_repaired.is_empty()
+            && !git_output_raw(&self.assigned_root, &diff_check_args)?.success
+        {
             return Err(invalid(
                 "a repaired file still contains conflict markers or whitespace errors",
             ));
         }
 
-        host.validate_step_recovery_mutation(&self.run_id, step_id, task_ids, &self.assigned_root)
-            .map_err(|error| {
-                invalid(&format!(
-                    "live run/task/worktree ownership changed: {error}"
-                ))
-            })?;
-        if let StepRecoveryAdmission::Denied { reason } = host
-            .authorize_step_recovery(&self.run_id, step_id)
-            .map_err(|error| invalid(&format!("recovery authorization recheck failed: {error}")))?
-        {
-            return Err(invalid(&format!(
-                "recovery authorization was revoked: {reason}"
-            )));
-        }
+        recheck_recovery_owner(
+            host,
+            &self.run_id,
+            step_id,
+            task_ids,
+            &self.assigned_root,
+            &invalid,
+        )?;
 
         let mut add_args = vec!["add", "--all", "--"];
         add_args.extend(checkpoint.conflicting_paths.iter().map(String::as_str));
@@ -471,6 +514,7 @@ impl WorktreeBoundaryGuard {
             "remote_sha_before": checkpoint.remote_sha_before,
             "head_sha": completed.head,
             "companion_paths": companion_paths,
+            "regenerated_paths": regenerated_paths,
             "rewritten": true,
             "recovery_attempt": checkpoint.attempt,
         })))
@@ -912,6 +956,34 @@ fn unmerged_paths(root: &Path) -> Result<Vec<String>, DispatchError> {
     Ok(paths)
 }
 
+/// Whether the live run, task and worktree still own this step recovery and
+/// its authorization stands; rechecked just before the host writes the
+/// checkout.
+fn recheck_recovery_owner(
+    host: &dyn RuntimeHost,
+    run_id: &str,
+    step_id: &str,
+    task_ids: &[String],
+    root: &Path,
+    invalid: &dyn Fn(&str) -> DispatchError,
+) -> Result<(), DispatchError> {
+    host.validate_step_recovery_mutation(run_id, step_id, task_ids, root)
+        .map_err(|error| {
+            invalid(&format!(
+                "live run/task/worktree ownership changed: {error}"
+            ))
+        })?;
+    if let StepRecoveryAdmission::Denied { reason } = host
+        .authorize_step_recovery(run_id, step_id)
+        .map_err(|error| invalid(&format!("recovery authorization recheck failed: {error}")))?
+    {
+        return Err(invalid(&format!(
+            "recovery authorization was revoked: {reason}"
+        )));
+    }
+    Ok(())
+}
+
 fn git_mutation(root: &Path, args: &[&str]) -> Result<(), DispatchError> {
     let output = git_mutation_output(root, args)?;
     if output.success {
@@ -921,7 +993,10 @@ fn git_mutation(root: &Path, args: &[&str]) -> Result<(), DispatchError> {
     }
 }
 
-fn git_mutation_output(root: &Path, args: &[&str]) -> Result<GitBytesOutcome, DispatchError> {
+pub(super) fn git_mutation_output(
+    root: &Path,
+    args: &[&str],
+) -> Result<GitBytesOutcome, DispatchError> {
     let output = git_run_bytes(root, args, None).map_err(|error| {
         DispatchError::CliInvocationPermanent(format!(
             "mutate Git state in '{}' with `git {}`: {error}",

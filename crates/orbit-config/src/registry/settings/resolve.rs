@@ -45,6 +45,40 @@ pub(super) fn resolve_unlocked_context_paths(
     Ok(patterns)
 }
 
+/// `workflow.unlocked_path_validation_commands`: blank entries are dropped,
+/// so a list of only blanks keeps full validation like an unset key.
+pub(super) fn resolve_unlocked_path_validation_commands(
+    raw: Option<Vec<String>>,
+) -> Result<Vec<String>, OrbitError> {
+    Ok(raw
+        .unwrap_or_default()
+        .into_iter()
+        .map(|command| command.trim().to_string())
+        .filter(|command| !command.is_empty())
+        .collect())
+}
+
+/// `workflow.generated_paths`: each key a relative path glob, each value a
+/// non-empty command. Unset regenerates nothing.
+pub(super) fn resolve_generated_paths(
+    raw: Option<BTreeMap<String, String>>,
+) -> Result<BTreeMap<String, String>, OrbitError> {
+    let mut resolved = BTreeMap::new();
+    for (pattern, command) in raw.unwrap_or_default() {
+        orbit_common::fs::path_glob::RelativePathGlob::new(&pattern).map_err(|error| {
+            OrbitError::InvalidInput(format!("workflow.generated_paths: {error}"))
+        })?;
+        let command = command.trim();
+        if command.is_empty() {
+            return Err(OrbitError::InvalidInput(format!(
+                "workflow.generated_paths: '{pattern}' names an empty command"
+            )));
+        }
+        resolved.insert(pattern, command.to_string());
+    }
+    Ok(resolved)
+}
+
 /// Built-in `workflow.final_recovery_crews`: the strongest reasoning crews, so
 /// the last automated look at a failed task is the most capable one.
 pub(crate) const DEFAULT_FINAL_RECOVERY_CREWS: &[&str] = &["sol:100", "opus:20"];

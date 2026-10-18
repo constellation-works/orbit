@@ -15,6 +15,7 @@ use orbit_common::fs::selector::anchor_path;
 /// silently produce contradictory text. No globs locks every entry.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct UnlockedContextPaths {
+    patterns: Vec<String>,
     globs: Vec<RelativePathGlob>,
 }
 
@@ -24,7 +25,15 @@ impl UnlockedContextPaths {
             .iter()
             .map(|pattern| RelativePathGlob::new(pattern))
             .collect::<Result<_, _>>()?;
-        Ok(Self { globs })
+        Ok(Self {
+            patterns: patterns.to_vec(),
+            globs,
+        })
+    }
+
+    /// The globs as configured.
+    pub(crate) fn patterns(&self) -> &[String] {
+        &self.patterns
     }
 
     /// The selectors of a canonical lock surface that take a lock.

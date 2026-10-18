@@ -411,6 +411,25 @@ pub trait RuntimeHost: Send + Sync {
     /// accepts or replays.
     fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates;
 
+    /// `workflow.unlocked_context_paths` and
+    /// `workflow.unlocked_path_validation_commands`: what a candidate that
+    /// changed only unlocked paths since its run's last fully validated tree
+    /// runs instead of the required list [ORB-16784].
+    fn unlocked_path_validation(&self) -> super::UnlockedPathValidation;
+
+    /// `workflow.generated_paths`: the conflicting paths conflict recovery
+    /// regenerates with a command instead of merging.
+    fn generated_paths(&self) -> Vec<super::GeneratedPath>;
+
+    /// Remember `tree` as the last tree its run passed the full required
+    /// list on. The record is the host's own, never task or run-state data
+    /// an agent can write; a host that cannot keep one records nothing, so
+    /// every later candidate of the run is validated in full.
+    fn record_validated_tree(&self, tree: &super::ValidatedTree) -> Result<(), OrbitError>;
+
+    /// The tree [`Self::record_validated_tree`] last recorded for `run_id`.
+    fn validated_tree(&self, run_id: &str) -> Result<Option<super::ValidatedTree>, OrbitError>;
+
     /// The OS this host runs implementers on, which decides the deferral
     /// kinds it admits [ORB-15587]: this process's OS for a local host.
     fn host_os(&self) -> Option<orbit_types::workflow::EvidenceHostOs>;

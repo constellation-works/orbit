@@ -195,7 +195,7 @@ fn blob_is_binary(root: &Path, oid: &str) -> Result<bool, DispatchError> {
 /// Whether `content` still holds a conflict hunk: an opening `<<<<<<<` and a
 /// closing `>>>>>>>` marker line. A lone `=======` is a Markdown underline as
 /// often as a marker; `git diff --check` judges what is left.
-fn has_conflict_markers(content: &[u8]) -> bool {
+pub(super) fn has_conflict_markers(content: &[u8]) -> bool {
     let has_line = |marker: &[u8]| {
         content
             .split(|byte| *byte == b'\n')

@@ -64,8 +64,11 @@ mod conflict_adoption;
 mod declared_reclaim;
 #[cfg(unix)]
 mod dirty_rescue;
+#[cfg(unix)]
+mod generated_regeneration;
 mod preparation;
 mod trash;
+mod unlocked_revalidation;
 
 // ---------------------------------------------------------------------------
 // worktree_gc
@@ -4277,6 +4280,13 @@ struct LifecycleHost {
     recovery_revocation: Mutex<Option<String>>,
     /// Deterministic race after host certification and before synchronization.
     preparation_hook: Mutex<Option<PreparationHook>>,
+    /// `workflow.unlocked_context_paths` with
+    /// `workflow.unlocked_path_validation_commands`.
+    unlocked_validation: Mutex<orbit_engine::UnlockedPathValidation>,
+    /// `workflow.generated_paths`.
+    generated_paths: Mutex<Vec<orbit_engine::GeneratedPath>>,
+    /// The host's record of each run's last fully validated tree.
+    validated_trees: Mutex<BTreeMap<String, orbit_engine::ValidatedTree>>,
 }
 
 type Widening = (String, ContextWideningStep, String, Vec<String>);
@@ -4314,6 +4324,8 @@ impl LifecycleHost {
             provider: Some(provider.to_path_buf()),
             tasks: Mutex::new(self.tasks.lock().unwrap().clone()),
             runs: Mutex::new(self.runs.lock().unwrap().clone()),
+            unlocked_validation: Mutex::new(self.unlocked_validation.lock().unwrap().clone()),
+            generated_paths: Mutex::new(self.generated_paths.lock().unwrap().clone()),
             ..Self::default()
         }
     }
@@ -4414,6 +4426,20 @@ impl LifecycleHost {
         let stored = artifacts.entry(task_id.to_string()).or_default();
         stored.retain(|existing| existing.path != artifact.path);
         stored.push(artifact);
+    }
+
+    fn set_unlocked_validation(&self, paths: &[&str], commands: &[&str]) {
+        *self.unlocked_validation.lock().unwrap() = orbit_engine::UnlockedPathValidation {
+            paths: paths.iter().map(ToString::to_string).collect(),
+            commands: commands.iter().map(ToString::to_string).collect(),
+        };
+    }
+
+    fn set_generated_path(&self, path: &str, command: &str) {
+        *self.generated_paths.lock().unwrap() = vec![orbit_engine::GeneratedPath {
+            path: path.to_string(),
+            command: command.to_string(),
+        }];
     }
 
     fn set_required_commands(&self, commands: &[&str]) {
@@ -4638,6 +4664,29 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
 
     fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation> {
         self.worker.clone()
+    }
+
+    fn unlocked_path_validation(&self) -> orbit_engine::UnlockedPathValidation {
+        self.unlocked_validation.lock().unwrap().clone()
+    }
+
+    fn generated_paths(&self) -> Vec<orbit_engine::GeneratedPath> {
+        self.generated_paths.lock().unwrap().clone()
+    }
+
+    fn record_validated_tree(&self, tree: &orbit_engine::ValidatedTree) -> Result<(), OrbitError> {
+        self.validated_trees
+            .lock()
+            .unwrap()
+            .insert(tree.run_id.clone(), tree.clone());
+        Ok(())
+    }
+
+    fn validated_tree(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<orbit_engine::ValidatedTree>, OrbitError> {
+        Ok(self.validated_trees.lock().unwrap().get(run_id).cloned())
     }
 
     fn register_worker_process(&self, _pid: u32) -> Result<(), OrbitError> {

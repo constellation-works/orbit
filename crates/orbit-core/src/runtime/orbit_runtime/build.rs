@@ -156,6 +156,7 @@ impl OrbitRuntime {
             layout_report: Arc::new(layout_report),
             _temp_dir: None,
             orphan_reconcile_hook: Arc::new(Mutex::new(None)),
+            validated_trees: Arc::default(),
             #[cfg(test)]
             transition_read_hook: Arc::new(Mutex::new(None)),
         })
@@ -228,6 +229,7 @@ impl OrbitRuntime {
             layout_report: Arc::new(orbit_store::workflow::layout::LayoutUpgradeReport::default()),
             _temp_dir: Some(Arc::new(temp_dir)),
             orphan_reconcile_hook: Arc::new(Mutex::new(None)),
+            validated_trees: Arc::default(),
             #[cfg(test)]
             transition_read_hook: Arc::new(Mutex::new(None)),
         })
