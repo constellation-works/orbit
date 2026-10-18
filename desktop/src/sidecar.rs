@@ -142,16 +142,15 @@ impl Sidecar {
     }
 
     /// Stop the server and wait for it, bounded by [`STOP_TIMEOUT`]. A
-    /// server that is being started is waited for and stopped too.
+    /// server that is being started is waited for and stopped too. Overlapping
+    /// callers wait for the same server to be stopped and reaped.
     pub fn shutdown(&self) {
         self.shutting_down.store(true, Ordering::SeqCst);
-        // Take the server before telling the supervisor, so this call, not
-        // the supervisor's exit, stops it: the app may end once this returns.
-        let child = lock(&self.child).take();
+        // Keep the slot locked through termination and reaping, including
+        // when another caller or the supervisor is already stopping it:
+        // the app may end once any shutdown call returns.
+        stop_server(self);
         let _ = self.control.try_send(Control::Shutdown);
-        if let Some(mut child) = child {
-            stop_child(&mut child);
-        }
     }
 
     pub fn is_shutting_down(&self) -> bool {

@@ -8,6 +8,8 @@
 //!
 //! A second scenario quits the app while a server has started but is not yet
 //! tracked, holding the supervisor at that point through [`Shell::spawned`].
+//! Draining scenarios hold a child after SIGTERM to check overlapping quits
+//! and the deadline for a server that never finishes draining.
 
 #[cfg(unix)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -16,7 +18,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return fake::serve();
     }
     handover::follows_a_new_address_in_the_same_process()?;
-    starting::quitting_while_a_server_starts_stops_it()
+    starting::quitting_while_a_server_starts_stops_it()?;
+    draining::overlapping_shutdowns_wait_for_reaping()?;
+    draining::unresponsive_server_is_killed()
 }
 
 #[cfg(not(unix))]
@@ -262,6 +266,148 @@ mod starting {
 }
 
 #[cfg(unix)]
+mod draining {
+    use std::error::Error;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpStream;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::mpsc::{self, SyncSender};
+    use std::time::{Duration, Instant};
+
+    use orbit_desktop::sidecar::{self, Shell, Sidecar};
+    use url::Url;
+
+    use crate::handover::{ensure, process_exists};
+
+    struct Window(SyncSender<Url>);
+
+    impl Shell for Window {
+        fn navigate(&self, url: Url) {
+            let _ = self.0.send(url);
+        }
+
+        fn eval(&self, _script: &str) {}
+
+        fn log_path(&self) -> Option<PathBuf> {
+            None
+        }
+
+        fn orbit(&self) -> Result<PathBuf, String> {
+            std::env::current_exe().map_err(|error| error.to_string())
+        }
+    }
+
+    pub(crate) fn overlapping_shutdowns_wait_for_reaping() -> Result<(), Box<dyn Error>> {
+        scenario(true)
+    }
+
+    pub(crate) fn unresponsive_server_is_killed() -> Result<(), Box<dyn Error>> {
+        scenario(false)
+    }
+
+    fn scenario(release: bool) -> Result<(), Box<dyn Error>> {
+        let (sidecar, control) = Sidecar::new();
+        let (navigation_tx, navigation) = mpsc::sync_channel(1);
+        let supervisor = {
+            let sidecar = Arc::clone(&sidecar);
+            std::thread::spawn(move || sidecar::supervise(Window(navigation_tx), sidecar, control))
+        };
+        let outcome = (|| {
+            let url = navigation.recv_timeout(Duration::from_secs(30))?;
+            let mut stream = TcpStream::connect((
+                url.host_str().ok_or("dashboard URL has no host")?,
+                url.port().ok_or("dashboard URL has no port")?,
+            ))?;
+            stream.set_read_timeout(Some(Duration::from_secs(20)))?;
+            write!(stream, "GET /drain HTTP/1.1\r\nHost: localhost\r\n\r\n")?;
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            // This test-only endpoint uses a line protocol: PID once SIGTERM
+            // is blocked, acknowledgement after receipt, then release byte.
+            reader.read_line(&mut line)?;
+            let pid: i32 = line.trim().parse()?;
+            let (first_tx, first_returned) = mpsc::sync_channel(1);
+            let first = {
+                let sidecar = Arc::clone(&sidecar);
+                std::thread::spawn(move || {
+                    sidecar.shutdown();
+                    let gone = !process_exists(pid);
+                    let _ = first_tx.send(());
+                    gone
+                })
+            };
+            let started = Instant::now();
+            let check = (|| {
+                line.clear();
+                reader.read_line(&mut line)?;
+                ensure(line == "draining\n", "child never acknowledged SIGTERM")?;
+                ensure(process_exists(pid), "held draining child exited early")?;
+                ensure(
+                    first_returned.try_recv().is_err(),
+                    "first shutdown returned while its child was draining",
+                )?;
+                if !release {
+                    first_returned.recv_timeout(Duration::from_secs(20))?;
+                    return ensure(
+                        started.elapsed() < Duration::from_secs(20),
+                        "shutdown did not bound the unresponsive server's drain",
+                    );
+                }
+                let (entered_tx, entered) = mpsc::sync_channel(1);
+                let (returned_tx, returned) = mpsc::sync_channel(1);
+                let second = {
+                    let sidecar = Arc::clone(&sidecar);
+                    std::thread::spawn(move || {
+                        let _ = entered_tx.send(());
+                        sidecar.shutdown();
+                        let gone = !process_exists(pid);
+                        let _ = returned_tx.send(());
+                        gone
+                    })
+                };
+                // Start the second caller only after the first one's SIGTERM
+                // has reached the child. No scheduling load or startup race.
+                let observation = (|| {
+                    entered.recv_timeout(Duration::from_secs(5))?;
+                    Ok::<_, Box<dyn Error>>(
+                        returned.recv_timeout(Duration::from_millis(500)).is_ok(),
+                    )
+                })();
+                // Release even when the assertion will fail, and join every
+                // caller before reporting it so the red regression is clean.
+                let released = reader.get_mut().write_all(b"x");
+                let second_gone = second.join().map_err(|_| "second shutdown panicked")?;
+                released?;
+                ensure(
+                    !observation?,
+                    "second shutdown returned while the first caller's child was still draining",
+                )?;
+                ensure(
+                    second_gone,
+                    "second shutdown returned before the child was reaped",
+                )
+            })();
+            // EOF also releases the child after a protocol error.
+            drop(reader);
+            let first_gone = first.join().map_err(|_| "first shutdown panicked")?;
+            check?;
+            ensure(
+                first_gone,
+                "first shutdown returned before the child was reaped",
+            )?;
+            ensure(
+                !process_exists(pid),
+                "draining child was left running or unreaped",
+            )
+        })();
+        sidecar.shutdown();
+        supervisor.join().map_err(|_| "supervisor panicked")?;
+        outcome
+    }
+}
+
+#[cfg(unix)]
 mod fake {
     use std::error::Error;
     use std::io::{BufRead, BufReader, Read, Write};
@@ -299,6 +445,9 @@ mod fake {
             while reader.read_line(&mut header)? > 2 {
                 header.clear();
             }
+            if request.starts_with("GET /drain ") {
+                return drain(stream);
+            }
             let body = std::process::id().to_string();
             write!(
                 stream,
@@ -315,6 +464,39 @@ mod fake {
                     .exec();
                 return Err(error.into());
             }
+        }
+        Ok(())
+    }
+
+    /// A deliberately held drain. This fake process is single-threaded, so
+    /// blocking SIGTERM here ensures it is consumed only by `sigwait`.
+    fn drain(mut stream: TcpStream) -> Result<(), Box<dyn Error>> {
+        // SAFETY: initialize a local signal set, block it on this thread, and
+        // wait with valid pointers. No signal handler or shared memory is used.
+        let signals = unsafe {
+            let mut signals: libc::sigset_t = std::mem::zeroed();
+            if libc::sigemptyset(&mut signals) != 0
+                || libc::sigaddset(&mut signals, libc::SIGTERM) != 0
+            {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            let error = libc::pthread_sigmask(libc::SIG_BLOCK, &signals, std::ptr::null_mut());
+            if error != 0 {
+                return Err(std::io::Error::from_raw_os_error(error).into());
+            }
+            signals
+        };
+        writeln!(stream, "{}", std::process::id())?;
+        let mut signal = 0;
+        // SAFETY: the set and output pointer are valid; SIGTERM is blocked.
+        let error = unsafe { libc::sigwait(&signals, &mut signal) };
+        if error != 0 {
+            return Err(std::io::Error::from_raw_os_error(error).into());
+        }
+        writeln!(stream, "draining")?;
+        let mut release = [0];
+        if stream.read(&mut release)? == 1 && release[0] != b'x' {
+            return Err("unexpected drain release byte".into());
         }
         Ok(())
     }
