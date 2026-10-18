@@ -277,7 +277,10 @@ actually runs. The same identity cannot be both a gap and a disposition.
 prose or a policy asset, and the reason must cite AGENTS.md. It still names
 the surviving behavioral selections. A disposition command is a separate
 `cargo test` with `--test` or `--lib`, and it must not filter on the retired
-identity. Its result is another row of the same scenario. A failure, a missing
+identity. Entries naming `command_tests` or `command_rows` require a valid
+executable `command`; dispositions without a separate command may only
+reference `required_tests` or `required_rows` selected by the primary scenario.
+Its result is another row of the same scenario. A failure, a missing
 name, or a `SKIP:`, `DEFERRED:`, or `skipping` notice fails that scenario.
 Bubblewrap and other sandbox deferrals stay `NOT_RUN`. A macOS-only capability
 stays `NOT_RUN` in this harness, and Linux evidence never verifies macOS.

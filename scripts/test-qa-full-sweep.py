@@ -375,6 +375,9 @@ def validate_retired_cases(scenario):
                 errors.append(
                     f"scenario {identifier} retired case {retired} {key} are not selected by the scenario")
         command = case.get("command")
+        if ("command_tests" in case or "command_rows" in case) and command is None:
+            errors.append(
+                f"scenario {identifier} retired case {retired} command_tests or command_rows require an executable command")
         if command is not None:
             if (not isinstance(command, list) or not is_cargo_test(command)
                     or ("--test" not in command and "--lib" not in command)):
@@ -438,7 +441,7 @@ def cargo_inventory_errors(repo, inventory, *, list_cases=False):
             try:
                 commands = [(scenario["command"], scenario.get("required_tests", []), None)]
                 for case in scenario.get("retired_cases") or []:
-                    if isinstance(case, dict) and "command" in case:
+                    if isinstance(case, dict) and case.get("command") is not None:
                         commands.append((case["command"], case.get("command_tests", []), case.get("retired")))
                 for command, required_tests, retired in commands:
                     validate_cargo_target(command, packages)
@@ -1915,6 +1918,25 @@ def retired_case_self_test():
             case.pop(key, None)
 
     expect(mutate(strip), "names no surviving executable selection")
+
+    def orphan_command_tests(body):
+        case = retired(body, "final-recovery-decision-applier", activity)
+        case.pop("command", None)
+
+    expect(mutate(orphan_command_tests), "command_tests or command_rows require an executable command")
+
+    def null_command(body):
+        case = retired(body, "final-recovery-decision-applier", activity)
+        case["command"] = None
+
+    expect(mutate(null_command), "command_tests or command_rows require an executable command")
+
+    def orphan_command_rows(body):
+        case = retired(body, "final-recovery-decision-applier", activity)
+        case.pop("command", None)
+        case.pop("command_tests", None)
+
+    expect(mutate(orphan_command_rows), "command_tests or command_rows require an executable command")
     expect(mutate(lambda body: retired(body, "mcp-process-boundary", eligible).update(notes="extra")),
            "unknown keys")
 
