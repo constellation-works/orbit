@@ -146,6 +146,22 @@ orbit tool run orbit.task.update --input '{"id": "<task-id>",
 
 The next admission honours it. A task already running or claimed is not moved.
 
+## UI tag
+
+Tag every task whose change a user will see (a dashboard, web pages, a docs
+site, a desktop app UI) `ui`. Topical tags such as `dashboard` or `website`
+may stay alongside it, but `ui` is the one tooling reads; don't invent
+variants (`web-ui`, `frontend`). Its delivery owes screenshots of each changed
+view as task artifacts ([task-execution.md](task-execution.md#screenshots-of-a-ui-change)),
+and its reviewer checks them. Browser-kit host routing will read the tag once
+it ships; today it routes nothing.
+
+When task-pilot finds a task's criteria or context files are user-facing UI
+and the task has no `ui` tag, it adds one; QA sweeps add it to the UI
+findings they file. Neither ever removes a `ui` tag someone set. The
+screenshot rule follows the diff, not the tag: an untagged UI change still
+owes screenshots.
+
 ## Modification footprint
 
 `context_files` is the task's lock footprint: list only likely creation,

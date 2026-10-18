@@ -163,13 +163,35 @@ const { chromium } = await import(process.env.PLAYWRIGHT_MODULE);
 '
 ```
 
-Save screenshots under `.orbit/tmp/`, open them to look at the result, and
-attach the ones that prove a criterion. Don't install Playwright, download a
-browser or run `sudo` yourself. When the variables are absent, the host has no
-verified kit: record the browser check as unavailable, naming
-`orbit browser-kit install` as the host fix. A missing `lib*.so`, a
-Skia/FontConfig crash or `Executable doesn't exist` is a host kit defect, not
-a defect in the code under test.
+Save screenshots under `.orbit/tmp/` and open them to look at the result.
+Don't install Playwright, download a browser or run `sudo` yourself. When the
+variables are absent, the host has no verified kit: record the browser check
+as unavailable, naming `orbit browser-kit install` as the host fix. A missing
+`lib*.so`, a Skia/FontConfig crash or `Executable doesn't exist` is a host kit
+defect, not a defect in the code under test.
+
+### Screenshots of a UI change
+
+A diff that changes something a user sees (dashboard, web pages, docs site,
+desktop app UI) owes screenshots of each changed view as task artifacts. The
+diff decides this, not the tag: an untagged UI change still owes them.
+`.orbit/tmp/` is cleared with the worktree, so a screenshot left only there is
+lost evidence.
+
+- Capture every theme the view supports (light and dark where both exist),
+  plus a 375px phone width when the layout is responsive.
+- Add a before shot from the base revision when it is practical and it shows
+  the change.
+- Write each under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`) and attach it with
+  `orbit.task.artifact.put` at a stable path such as
+  `screenshots/<view>-<theme>-<width>.png`. Claimed leaves attach the same
+  way; the broker forwards the put to the owner.
+- Keep each under the 1 MiB per-artifact limit: prefer a viewport capture to a
+  full-page one, or JPEG or WebP when a PNG is too large.
+- List the artifact paths in the execution summary.
+
+When the host has no browser kit or the view cannot render, say so in the
+handoff instead of claiming visual verification.
 
 ### Verified no-change implementation
 

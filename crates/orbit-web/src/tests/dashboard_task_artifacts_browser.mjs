@@ -5,11 +5,13 @@
 // a fixture server that can hold a response before its headers or inside its
 // body, retire the detail the ways the dashboard does (closing it, replacing it
 // and changing workspace), and check every blob URL the page created is revoked.
+// The fixture sends the dashboard's real CSP, so an image preview must render,
+// open in a new tab and download under the policy the shipped page enforces.
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { dashboardFile } from './dashboard_static.mjs';
+import { dashboardCsp, dashboardFile } from './dashboard_static.mjs';
 
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
 const evidence = path.resolve(process.argv[3]);
@@ -18,6 +20,7 @@ fs.mkdirSync(evidence, { recursive: true });
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
 const BIN = Buffer.from('fixture artifact bytes that are not an image or text\n'.repeat(4));
 const ARTIFACT_PREFIX = '/api/tasks/ART-1/artifacts/';
+const CSP = dashboardCsp();
 
 // `held-head-*` waits before sending headers; `held-body-*` sends headers and
 // the first bytes, then waits before finishing the body.
@@ -27,6 +30,7 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
   if (url.pathname === '/artifacts-harness') {
     res.setHeader('content-type', 'text/html');
+    res.setHeader('content-security-policy', CSP);
     res.end('<!doctype html><link rel="stylesheet" href="/static/dashboard.css">'
       + '<div id="tasks-count"></div><div id="tasks-body"></div><div id="ws-count"></div><div id="ws-body"></div>');
     return;
@@ -35,6 +39,7 @@ const server = http.createServer((req, res) => {
     const served = dashboardFile(url.pathname);
     if (!served) { res.writeHead(404); res.end(); return; }
     res.setHeader('content-type', served.type);
+    res.setHeader('content-security-policy', CSP);
     res.end(served.data);
     return;
   }
@@ -73,11 +78,13 @@ const until = async (label, predicate, timeout = 10000) => {
 
 const results = [];
 const pageErrors = [];
+const violations = [];
 let browser;
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   page.on('pageerror', error => { pageErrors.push(error.message); console.error(error); });
+  page.on('console', message => { if (/Content Security Policy/.test(message.text())) violations.push(message.text()); });
   // Record every blob URL the page creates and revokes, through the real API.
   await page.addInitScript(() => {
     window.objectUrls = { created: [], revoked: [] };
@@ -143,6 +150,14 @@ try {
     size_bytes: name.endsWith('.png') ? PNG.length : BIN.length,
   });
   const row = (name) => page.locator('.artifact-row', { hasText: name });
+  // The preview's download link saves the artifact's bytes under its name.
+  const downloads = async (name, bytes) => {
+    const [download] = await Promise.all([page.waitForEvent('download'), page.locator('.artifact-preview a[download]').click()]);
+    assert(download.suggestedFilename() === name, `${name}: the download keeps the artifact file name`);
+    const saved = path.join(evidence, `downloaded-${name}`);
+    await download.saveAs(saved);
+    assert(fs.readFileSync(saved).equals(bytes), `${name}: the download saves the artifact bytes`);
+  };
   const check = async (id, body) => {
     const before = await counts();
     await body(before);
@@ -158,16 +173,31 @@ try {
       await row(name).click();
       if (name.endsWith('.png')) {
         const image = page.locator('.artifact-preview img.artifact-image');
-        await image.waitFor({ state: 'visible' });
-        await until(`${name} decoded`, () => image.evaluate(node => node.complete && node.naturalWidth === 1));
-        assert((await image.getAttribute('src')).startsWith('blob:'), `${name}: the image renders from a blob URL`);
-        assert(await page.locator('.artifact-preview .artifact-open').getAttribute('href') === await image.getAttribute('src'), `${name}: Open uses the image's blob URL`);
+        const fallback = page.locator('.artifact-preview .artifact-error');
+        await until(`${name} rendered or refused`, async () => await fallback.count() > 0
+          || (await image.count() > 0 && await image.evaluate(node => node.complete && node.naturalWidth > 0)));
+        assert(await fallback.count() === 0, `${name}: the image must render under the dashboard CSP, not fall back to "${await fallback.first().textContent().catch(() => '')}"; CSP reports: ${violations.join('; ')}`);
+        assert(await image.evaluate(node => node.naturalWidth) === 1, `${name}: the image decodes to its 1px source`);
+        const src = await image.getAttribute('src');
+        assert(src.startsWith('blob:'), `${name}: the image renders from a blob URL`);
+        const open = page.locator('.artifact-preview .artifact-open');
+        assert(await open.getAttribute('href') === src, `${name}: Open uses the image's blob URL`);
+        if (how === 'close') {
+          await page.locator('.artifact-preview').screenshot({ path: path.join(evidence, 'artifact-preview.png') });
+          // Open: the blob URL in a new tab inherits the page's CSP and must
+          // still show the image.
+          const [tab] = await Promise.all([page.waitForEvent('popup'), open.click()]);
+          await tab.waitForLoadState();
+          const shown = tab.locator('img');
+          await until(`${name} opened in a new tab`, async () => await shown.count() > 0
+            && await shown.first().evaluate(node => node.complete));
+          assert(tab.url() === src && await shown.first().evaluate(node => node.naturalWidth) === 1, `${name}: Open shows the image in a new tab; CSP reports: ${violations.join('; ')}`);
+          await tab.close();
+          await downloads(name, PNG);
+        }
       } else {
-        const link = page.locator('.artifact-preview a[download]');
-        await link.waitFor({ state: 'visible' });
-        assert(await link.getAttribute('download') === name, `${name}: the download keeps the artifact file name`);
-        const bytes = await link.evaluate(async node => (await (await fetch(node.href)).text()));
-        assert(bytes === BIN.toString(), `${name}: the download link serves the artifact bytes`);
+        await page.locator('.artifact-preview a[download]').waitFor({ state: 'visible' });
+        await downloads(name, BIN);
       }
       const mounted = await counts();
       assert(mounted.created === before.created + 1 && mounted.live.length === 1, `${name}: a mounted preview holds exactly one live blob URL`);
@@ -226,7 +256,8 @@ try {
   });
 
   assert(pageErrors.length === 0, `page errors: ${pageErrors.join('; ')}`);
-  fs.writeFileSync(path.join(evidence, 'task-artifacts-assertions.json'), `${JSON.stringify({ results, requested }, null, 2)}\n`);
+  assert(violations.length === 0, `CSP violations: ${violations.join('; ')}`);
+  fs.writeFileSync(path.join(evidence, 'task-artifacts-assertions.json'), `${JSON.stringify({ csp: CSP, results, requested }, null, 2)}\n`);
   console.log(`task artifacts browser: ${results.length} checks passed`);
 } finally {
   await browser?.close();

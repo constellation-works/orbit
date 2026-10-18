@@ -455,6 +455,25 @@ pub(super) fn routing_os(requirements: &[NativeOsRequirement]) -> Option<HostOs>
         .then_some(os)
 }
 
+/// The pilot's typed UI finding: `user_facing_ui` is true when the task's
+/// criteria or context files are UI a user sees. Absent or null is false, so
+/// an older pilot result still applies. A true finding adds the `ui` tag;
+/// nothing removes it.
+pub(super) fn user_facing_ui(
+    action: &str,
+    task_id: &str,
+    assessment: &Value,
+) -> Result<bool, DispatchError> {
+    match assessment.get("user_facing_ui") {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(finding)) => Ok(*finding),
+        Some(_) => Err(DispatchError::action_failed(
+            action,
+            format!("task {task_id} user_facing_ui must be a boolean or null"),
+        )),
+    }
+}
+
 /// The pilot's typed machine finding: each `required_machine` entry names a
 /// 1-based criterion whose evidence only `owner`, the machine that owns this
 /// workspace's task store, can produce, and that evidence. Absent or empty is

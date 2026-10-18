@@ -630,6 +630,15 @@ node crates/orbit-web/src/tests/dashboard_operations_browser.mjs \
   "$PLAYWRIGHT_MODULE" .orbit/tmp/dashboard-browser
 ```
 
+`.orbit/tmp/` is cleaned with the worktree, so screenshots kept only there are lost. A task whose diff changes something a user sees (the dashboard, the website, docs pages, a desktop app UI) attaches screenshots of each changed view as task artifacts, whether or not it is tagged `ui`:
+
+- every theme the view supports (the dashboard is dark-only; the website has light and dark), and a 375px phone width when the layout is responsive;
+- a before shot from the base revision when it is practical and it shows the change;
+- each attached with `orbit.task.artifact.put` from `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`) at a stable path such as `screenshots/<view>-<theme>-<width>.png`, and the paths listed in the execution summary;
+- each under the 1 MiB artifact limit (`MAX_TASK_ARTIFACT_CONTENT_BYTES`): prefer a viewport capture to a full-page one, or JPEG or WebP when a PNG is too large.
+
+When the host has no browser kit or the view cannot render, say so in the handoff instead of claiming visual verification. A claimed leaf on another host attaches the same way; the broker forwards the put to the owner.
+
 To check a fixture under the worker sandbox on macOS without dispatching a run, substitute the placeholders in the leaf-worker profile golden and run the fixture under `sandbox-exec`:
 
 ```bash
@@ -682,7 +691,7 @@ Each runs as `node <script> "$PLAYWRIGHT_MODULE" .orbit/tmp/<evidence-dir>` and 
 | `crates/orbit-web/src/tests/dashboard_config_workspace_file_browser.mjs` | `config-workspace-file-browser` | Settings › Workspace file summary counts and the card filter, keys grouped by TOML table, the If removed column for a global-restating, a built-in-restating, a not-inherited and an unreported key, the Not set sidebar, inline edit with its CLI preview and a refused save, Add key's candidates, selecting and removing the redundant keys with one refused unset, 44px targets and a 375px phone. Promise-held Remove, Save and Add responses across host switches and workspace round trips check stale success/refusal settlement, request scope and ownership of a newer pending Save; bound requests retain remote write authorization and reject expired visits (`config-workspace-file-assertions.json`). |
 | `crates/orbit-web/src/tests/dashboard_config_global_file_browser.mjs` | `config-global-file-browser` | Settings › Global file header and machine card (id and task prefix read-only, Rename), the In effect / Overridden (same value) / Not inherited reach counts and card filter, each row's reach cell including an unreported one, the editor's reach warning for an in-effect, an overridden and a not-inherited key, a refused save, Remove from file, Add key, crew tables in place of "No crew is defined", 44px targets and a 375px phone. Promise-held Save, Add, Rename and Remove responses across host switches and workspace round trips check obsolete drafts, stale success/refusal settlement, request scope and ownership of a newer pending mutation. Owning refusals preserve drafts, and writes remain disabled through their reload, including obsolete reload finalizers (`config-global-file-assertions.json`). |
 | `crates/orbit-web/src/tests/dashboard_provider_limits_browser.mjs` | `provider-limits-browser` | Crews Limit column, Drain provider-limit waits, contrast under both emulated colour schemes (`provider-limits-assertions.json`). |
-| `crates/orbit-web/src/tests/dashboard_task_artifacts_browser.mjs` | `task-artifacts-browser` | Task detail artifact previews: a mounted image and download render from a blob URL that closing, replacing or changing workspace away from the detail revokes; a response held before its headers or inside its body is cancelled when the detail retires, and one that settles afterwards anyway is released without being mounted; clicks during a read do not refetch (`task-artifacts-assertions.json`). |
+| `crates/orbit-web/src/tests/dashboard_task_artifacts_browser.mjs` | `task-artifacts-browser` | Task detail artifact previews under the dashboard's real CSP (read from `DASHBOARD_CSP`): a mounted image renders, opens in a new tab and downloads, and a download saves its bytes, from a blob URL that closing, replacing or changing workspace away from the detail revokes; a response held before its headers or inside its body is cancelled when the detail retires, and one that settles afterwards anyway is released without being mounted; clicks during a read do not refetch (`task-artifacts-assertions.json`, `artifact-preview.png`). |
 
 ### Website changelog validation
 

@@ -202,6 +202,8 @@ A supported raster artifact (`image/png`, `image/jpeg`, `image/gif`, `image/webp
 
 When the browser cannot decode the bytes, the preview says so and still offers the file, rather than leaving a broken-image icon.
 
+The preview holds the fetched bytes in a `blob:` object URL, which Open and Download reuse. The dashboard's CSP therefore lists `blob:` in `img-src`, and in no other directive, so the page and the new tab Open shows (which inherits that CSP) can display it [ORB-16623]. The task-artifacts browser fixture serves the real `DASHBOARD_CSP`, so a policy that blocks the preview fails it.
+
 The set of types rendered inline mirrors the server's `nosniff` allowlist exactly. `image/svg+xml` and `text/html` are absent from both: they are viewable formats that are also script hosts, so they stay downloads. Everything else keeps its existing text render or download link.
 
 ## 9. Operations
@@ -239,6 +241,7 @@ Targeted axe scans cover contrast and scroll-region focus on the affected routes
 ## Task References
 
 - [ORB-11365] added the responsive task-artifact image preview and its open/download controls.
+- [ORB-16623] allowed `blob:` image previews under the dashboard CSP.
 - [T20260427-29] introduced the Canon Refined UI direction.
 - [T20260428-13] unified dashboard denial sources for the policy drill-down.
 - [T20260428-15] compacted scoreboard ratio columns.

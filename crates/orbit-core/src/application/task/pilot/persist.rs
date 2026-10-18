@@ -209,10 +209,15 @@ pub(super) fn apply_task(
             // A finding that names one OS routes the task by its tag, but only
             // when the task has no `os:` tag yet: an operator's choice of
             // hosts stands, and the hold below still names a conflict.
-            let add_tags = super::routing_os(&task.required_os)
+            let mut add_tags = super::routing_os(&task.required_os)
                 .filter(|_| TaskOsRequirement::from_tags(&current.tags).is_unrestricted())
                 .map(|os| vec![os.tag()])
                 .unwrap_or_default();
+            // A UI finding only ever adds `ui`; a task without the finding
+            // keeps whatever `ui` tag it has.
+            if task.user_facing_ui && !current.tags.iter().any(|tag| tag == super::UI_TAG) {
+                add_tags.push(super::UI_TAG.to_string());
+            }
             // Markers and holds below seal the material as written.
             let tags_after =
                 normalize_task_tags(current.tags.iter().chain(&add_tags).cloned().collect());

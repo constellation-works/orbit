@@ -178,6 +178,16 @@ template:
     > or `FAIL`. It never deploys. For other repositories, use their own
     > isolated dependency preparation and build commands.
     >
+    > `.orbit/tmp/` is cleared with the worktree, so attach the screenshots
+    > that evidence a UI scenario as task artifacts with
+    > `orbit tool run orbit.task.artifact.put --input '{"id":"<this area task ID>","source_path":".orbit/tmp/<file>","path":"screenshots/<view>-<theme>-<width>.png","model":"<agent-family>"}'`:
+    > each view in every theme it supports and, for a responsive layout, at
+    > 375px. Keep each under the 1 MiB artifact limit (a viewport capture
+    > rather than full-page, or JPEG or WebP when a PNG is too large), name
+    > the artifact paths in the scenario's `evidence`, and attach a finding's
+    > screenshot to its filed task too. When no browser can render the view,
+    > the scenario records that instead of a screenshot.
+    >
     > Write `.orbit/tmp/qa-progress.json` with `schema_version: 1`,
     > `pinned_sha`, `area`, `candidate` (how the build was made and its
     > identity) and `scenarios`. Each scenario records its `id`, `required`,
@@ -204,6 +214,8 @@ template:
     > `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["qa-full-sweep"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","workspace":"<current workspace path>","model":"<agent-family>"}'`.
     > Its description holds the exact reproducer, the pinned SHA, the
     > environment, expected and observed results and the evidence artifact.
+    > Add `ui` to its tags when the defect is in something a user sees
+    > (dashboard, web pages, docs site, desktop app UI).
     > Derive canonical `file:` selectors from the source that implements the
     > failing behaviour and add the matching regression-test location. Use
     > existing paths where possible; for a test file that must be created,

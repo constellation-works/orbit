@@ -6,6 +6,15 @@ browser. A worker checks UI by scripting headless Chromium through Playwright:
 it serves the page on loopback, drives and asserts it, and saves screenshots
 under its worktree's `.orbit/tmp/`, which it can then open and look at.
 
+`.orbit/tmp/` is cleared with the worktree, so a worker whose diff changes
+something a user sees attaches its screenshots as task artifacts with
+`orbit.task.artifact.put`: each changed view in every theme it supports, at a
+375px phone width when the layout is responsive, at a stable path such as
+`screenshots/<view>-<theme>-<width>.png`, each under the 1 MiB artifact limit,
+and listed in the handoff. A worker on a host without a verified kit says so
+in its handoff instead of claiming visual verification. The orbit skill's
+task-execution reference (Screenshots of a UI change) holds the full rule.
+
 `orbit browser-kit` builds that kit once per host. Run it as the user who runs
 workers, on the host, never inside a worker: on Linux Chromium's system
 libraries can need root, which the sandbox forbids (`no new privileges`), and
