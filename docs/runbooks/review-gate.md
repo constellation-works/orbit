@@ -5,7 +5,7 @@ tags: [operations, review-gate, delivery]
 paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure/handoff.rs"]
 related_features: [review-gate]
 related_artifacts: ["ORB-13989", "ORB-13992", "ORB-14194", "ORB-14849"]
-last_validated: 2026-10-11
+last_validated: 2026-10-17
 ---
 
 # Operate the Review Gate
