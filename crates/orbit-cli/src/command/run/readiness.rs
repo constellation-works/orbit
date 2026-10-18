@@ -7,6 +7,7 @@ use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::workflow::ResourceThrottle;
 use serde_json::Value;
 
+use super::format::{WaitingTaskFormatter, waiting_reason};
 use crate::command::{Block, CommandOut, Execute, Payload};
 
 const DEFAULT_LIMIT: usize = 50;
@@ -44,7 +45,7 @@ impl Execute for ReadinessCommand {
             self.limit,
             &self.allow_crew,
         )?;
-        readiness_payload(payload)
+        readiness_payload(payload, &WaitingTaskFormatter::new(runtime))
     }
 }
 
@@ -66,13 +67,13 @@ fn validate_task_ids(task_ids: &[String]) -> Result<(), OrbitError> {
     Ok(())
 }
 
-pub(crate) fn readiness_payload(payload: Value) -> CommandOut {
-    let lines = readiness_lines(&payload);
+fn readiness_payload(payload: Value, formatter: &WaitingTaskFormatter) -> CommandOut {
+    let lines = readiness_lines(&payload, formatter);
     Ok(Payload::blocks(payload, vec![Block::text(lines.join("\n"))]).into())
 }
 
 // pub(super) widened for sibling-layout tests in run/tests/readiness.rs
-fn readiness_lines(payload: &Value) -> Vec<String> {
+fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<String> {
     let capacity = &payload["capacity"];
     let mut lines = vec![format!(
         "Snapshot only — eligible does not guarantee a task will start. Active leaf runs: {}/{}; free slots: {}.",
@@ -168,15 +169,13 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
     if let Some(tasks) = payload["tasks"].as_array() {
         for task in tasks {
             let task_id = task["task_id"].as_str().unwrap_or("-");
-            let reason = task["reason"].as_str().unwrap_or("unknown");
+            let reason = waiting_reason(task["reason"].as_str().unwrap_or("unknown"));
             let eligible = task["eligible"].as_bool().unwrap_or(false);
             let crew = task["crew"]
                 .as_str()
                 .map(|crew| format!(" crew={crew}"))
                 .unwrap_or_default();
-            let blocked_by = blocking_task_ids(&task["blocking_task_ids"])
-                .map(|ids| format!(" blocked-by={ids}"))
-                .unwrap_or_default();
+            let blocked_by = formatter.blockers(task);
             // [ORB-15514] A blocker a follower's execution claim holds clears
             // when that claim settles, on the machine named here.
             let claimed = blocking_claims(&task["blocking_claims"])
@@ -366,13 +365,4 @@ fn blocking_claims(claims: &Value) -> Option<String> {
         })
         .collect::<Vec<_>>();
     (!named.is_empty()).then(|| named.join(","))
-}
-
-fn blocking_task_ids(blocking: &Value) -> Option<String> {
-    let ids = blocking
-        .as_array()?
-        .iter()
-        .filter_map(Value::as_str)
-        .collect::<Vec<_>>();
-    (!ids.is_empty()).then(|| ids.join(","))
 }

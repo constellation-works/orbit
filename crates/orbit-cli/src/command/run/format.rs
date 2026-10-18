@@ -2,6 +2,113 @@ use orbit_types::workflow::{
     JobRunState, JobRunTrigger, JobRunTriggerKind, PipelineState, run_id_role,
 };
 use serde::Serialize;
+use serde_json::Value;
+
+/// One text vocabulary for readiness payloads and recorded drain waits.
+/// Persisted reason codes and JSON projections remain unchanged.
+pub(crate) fn waiting_reason(reason: &str) -> &str {
+    match reason {
+        "dependency_not_done" => "unmet_dependency",
+        other => other,
+    }
+}
+
+/// Text-only blocker details. Statuses are read once per command; older
+/// checkpoints and unavailable tasks still render the IDs they recorded.
+pub(crate) struct WaitingTaskFormatter {
+    statuses: std::collections::BTreeMap<String, orbit_types::task::TaskStatus>,
+}
+
+impl WaitingTaskFormatter {
+    pub(crate) fn new(runtime: &orbit_core::OrbitRuntime) -> Self {
+        Self {
+            statuses: runtime.task_status_index().unwrap_or_else(|error| {
+                tracing::warn!(%error, "waiting task statuses unavailable");
+                Default::default()
+            }),
+        }
+    }
+
+    fn task_label(&self, id: &str, status: Option<&str>) -> String {
+        let status = status
+            .map(str::to_string)
+            .or_else(|| self.statuses.get(id).map(ToString::to_string));
+        match status {
+            Some(status) => format!("{id} ({status})"),
+            None => id.to_string(),
+        }
+    }
+
+    /// Readiness has conflicts and dependencies; drain checkpoints have only
+    /// `blocked_by`. Prefer the richer snapshot without repeating its IDs.
+    pub(crate) fn blockers(&self, task: &Value) -> String {
+        let reason = waiting_reason(task["reason"].as_str().unwrap_or("unknown"));
+        let dependencies = task["dependencies"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|dependency| {
+                let id = dependency["task_id"].as_str()?;
+                Some(self.task_label(id, dependency["status"].as_str()))
+            })
+            .collect::<Vec<_>>();
+        if !dependencies.is_empty() {
+            return format!(" waits-on {}", dependencies.join(", "));
+        }
+
+        // Preserve payload order, group files by holder, and count additional
+        // distinct files per holder rather than hiding other blocking tasks.
+        let mut holders: Vec<(&str, Vec<&str>)> = Vec::new();
+        for conflict in task["conflicts"].as_array().into_iter().flatten() {
+            let Some(id) = conflict["locking_task_id"].as_str() else {
+                continue;
+            };
+            let index = match holders.iter().position(|(holder, _)| *holder == id) {
+                Some(index) => index,
+                None => {
+                    holders.push((id, Vec::new()));
+                    holders.len() - 1
+                }
+            };
+            if let Some(file) = conflict["requested_file"].as_str()
+                && !holders[index].1.contains(&file)
+            {
+                holders[index].1.push(file);
+            }
+        }
+        let mut labels = holders
+            .iter()
+            .map(|(id, files)| {
+                let mut label = self.task_label(id, None);
+                if let Some(first) = files.first() {
+                    label.push_str(&format!(" on {first}"));
+                    if files.len() > 1 {
+                        label.push_str(&format!(" +{} more", files.len() - 1));
+                    }
+                }
+                label
+            })
+            .collect::<Vec<_>>();
+        for id in task["blocking_task_ids"]
+            .as_array()
+            .or_else(|| task["blocked_by"].as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            if !holders.iter().any(|(holder, _)| *holder == id) {
+                labels.push(self.task_label(id, None));
+            }
+        }
+        if labels.is_empty() {
+            String::new()
+        } else if reason == "unmet_dependency" {
+            format!(" waits-on {}", labels.join(", "))
+        } else {
+            format!(" blocked-by={}", labels.join(", "))
+        }
+    }
+}
 
 /// A failed run with no failed descendant, in child-dispatch traversal order.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
