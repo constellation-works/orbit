@@ -171,6 +171,12 @@ pub(crate) fn list_backlog_tasks(
                 message: format!("read executor host operating systems: {error}"),
             }
         })?;
+        let pools = runtime.auto_crew_pools_for_input(input).map_err(|error| {
+            DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message: error.to_string(),
+            }
+        })?;
         for task_id in &explicit_task_ids {
             let task = runtime.get_task(task_id).map_err(|err| {
                 DispatchError::DeterministicActionFailed {
@@ -182,7 +188,7 @@ pub(crate) fn list_backlog_tasks(
                 excluded.push(pilot_preparation_exclusion(&task.id));
                 continue;
             }
-            if let Some(exclusion) = host_os_exclusion(runtime, &task, &executor_host_os) {
+            if let Some(exclusion) = host_os_exclusion(runtime, &task, &executor_host_os, &pools) {
                 excluded.push(exclusion);
                 continue;
             }

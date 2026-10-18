@@ -262,17 +262,11 @@ impl OrbitRuntime {
             )?;
             // A task whose effective OS requirement this host cannot satisfy is
             // never started here; it would only fail on a platform it cannot
-            // run on. The requirement is the task's `os:` tags intersected
-            // with its assigned crew's executor `host_os`.
+            // run on. Check its tags and assigned crew, and the actual
+            // default fallback when its automatic route has no usable pool.
             let limits = self.executor_host_os_limits()?;
-            let wait = match orbit_types::task::TaskOsRequirement::for_crew(
-                &task.tags,
-                task.crew.as_deref(),
-                &limits,
-            ) {
-                Ok(requirement) => requirement.unsatisfied_reason(self.host_os()),
-                Err(reason) => Some(reason),
-            };
+            let pools = self.auto_crew_pools_for_input(&input)?;
+            let wait = self.task_host_os_wait(&task, &pools, &limits);
             if let Some(wait) = wait {
                 return Err(OrbitError::PolicyDenied(format!(
                     "explicit ship task '{task_id}' {wait}, and this host runs {}; ship it on \

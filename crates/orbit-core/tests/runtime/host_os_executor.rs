@@ -13,7 +13,7 @@ use orbit_core::{
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
 use orbit_types::task::HostOs;
-use orbit_types::workflow::{ExecutorDef, ExecutorType, JobRunTrigger, PipelineState};
+use orbit_types::workflow::{ExecutorDef, ExecutorType, JobRunState, JobRunTrigger, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -321,21 +321,223 @@ fn an_empty_os_intersection_is_refused_on_add_and_update() {
     assert_eq!(kept.tags, vec!["os:linux".to_string()]);
 }
 
-/// A default crew this host cannot run is left unset, and a macOS host pins it.
-fn an_excluded_default_crew_is_not_pinned() {
-    let (_root, linux) = runtime_on(HostOs::Linux, DEFAULT_MUSE);
-    let unpinned = add(&linux, "unpinned", None, &[]).expect("creation stays possible");
-    assert_eq!(unpinned.crew, None, "the excluded default is not pinned");
-    assert_eq!(
-        admitted(&backlog(&linux)),
-        vec![unpinned.id.clone()],
-        "an unassigned task is not withheld for a default it does not carry"
+/// Replay an empty delivery job in the foreground: real automatic crew
+/// admission runs, but no worker or provider is launched.
+fn select_task_crew(runtime: &OrbitRuntime, task: &str) -> Result<Value, OrbitError> {
+    let jobs_dir = runtime.paths().global_dir.join("resources/jobs");
+    std::fs::create_dir_all(&jobs_dir).unwrap();
+    std::fs::write(
+        jobs_dir.join("task_auto_pipeline.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: task_auto_pipeline\nspec:\n  state: enabled\n  steps: []\n",
+    ).unwrap();
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        runtime.sqlite_store().unwrap(),
+        runtime.workspace_id().unwrap(),
     );
+    let source = jobs
+        .insert_job_run(
+            "task_auto_pipeline",
+            1,
+            chrono::Utc::now(),
+            Some(json!({"task_ids": [task]})),
+            None,
+        )
+        .unwrap();
+    jobs.mark_job_run_running(&source.run_id, chrono::Utc::now(), std::process::id())
+        .unwrap();
+    jobs.finalize_job_run(
+        &source.run_id,
+        JobRunState::Failed,
+        chrono::Utc::now(),
+        Some(1),
+    )
+    .unwrap();
+    let before = jobs.list_job_runs("task_auto_pipeline").unwrap().len();
+    let replay = runtime.replay_job_run(&source.run_id);
+    if replay.is_err() {
+        assert_eq!(
+            jobs.list_job_runs("task_auto_pipeline").unwrap().len(),
+            before,
+            "refusal precedes delivery run insertion"
+        );
+    }
+    let replay = replay?;
+    assert!(replay.success, "{replay:?}");
+    Ok(jobs
+        .get_job_run(&replay.run_id)
+        .unwrap()
+        .unwrap()
+        .input
+        .unwrap())
+}
 
-    let mac = linux.clone().with_host_os(Some(HostOs::Macos));
-    let pinned = add(&mac, "pinned", None, &[]).expect("macOS pins the default");
-    assert_eq!(pinned.crew.as_deref(), Some("muse-wonder"));
-    assert!(admitted(&backlog(&mac)).contains(&pinned.id));
+/// Unsupported defaults stay unpinned but cannot be recovered by a later
+/// automatic draw, including when host filtering empties a configured pool.
+fn an_excluded_default_crew_is_not_pinned() {
+    for pool in [
+        "",
+        "medium_complexity_crews = [\"muse-wonder\"]",
+        "medium_complexity_crews = [\"muse-wonder\"]\n[workflow.purpose_crews]\nbaseline_red_repair = [\"muse-wonder\"]",
+    ] {
+        let config = DEFAULT_MUSE.replace(
+            "default_crew = \"muse-wonder\"",
+            &format!("default_crew = \"muse-wonder\"\n{pool}"),
+        );
+        let (_root, linux) = runtime_on(HostOs::Linux, &config);
+        let tags = if pool.contains("purpose_crews") {
+            vec!["baseline-red-repair"]
+        } else {
+            vec![]
+        };
+        let unpinned = add(&linux, "unpinned", None, &tags).expect("creation stays possible");
+        assert_eq!(unpinned.crew, None, "the excluded default is not pinned");
+        let refused = select_task_crew(&linux, &unpinned.id)
+            .expect_err("automatic draw must refuse the unsupported default");
+        assert!(
+            matches!(&refused, OrbitError::PolicyDenied(message) if message.contains(WAIT)),
+            "{refused}"
+        );
+        let discovered = backlog(&linux);
+        assert!(admitted(&discovered).is_empty(), "{discovered}");
+        let withheld = excluded(&discovered, &unpinned.id).unwrap();
+        assert_eq!(withheld["reason"], "host_os_mismatch", "{discovered}");
+        assert!(
+            withheld["detail"].as_str().unwrap().contains(WAIT),
+            "{discovered}"
+        );
+
+        if pool.is_empty() {
+            let explicit = linux
+                .run_deterministic(
+                    "list_backlog_tasks",
+                    &json!({}),
+                    &json!({"task_ids": [unpinned.id]}),
+                    ToolContext::default(),
+                )
+                .unwrap();
+            assert!(admitted(&explicit).is_empty(), "{explicit}");
+            assert_eq!(
+                excluded(&explicit, &unpinned.id).unwrap()["reason"],
+                "host_os_mismatch"
+            );
+            let warning = linux
+                .host_os_backlog_warning()
+                .expect("the drain explains its wait");
+            assert!(warning.contains(WAIT), "{warning}");
+            let readiness = linux.workspace_auto_readiness(&[], None, 50, &[]).unwrap();
+            let entry = readiness["tasks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["task_id"] == unpinned.id)
+                .unwrap();
+            assert_eq!(entry["reason"], "host_os_mismatch", "{readiness}");
+            let run = running_run(&linux);
+            let wave = linux
+                .run_deterministic(
+                    "classify_workspace_auto_tasks",
+                    &json!({}),
+                    &json!({"run_id": run, "max_active_leaf_runs": 4}),
+                    ToolContext::default(),
+                )
+                .unwrap();
+            assert_eq!(wave["loose_task_ids"], json!([]), "{wave}");
+            let refused = ship(&linux, &unpinned.id);
+            assert!(
+                matches!(&refused, OrbitError::PolicyDenied(message) if message.contains(WAIT)),
+                "{refused}"
+            );
+        }
+        let mac = linux.clone().with_host_os(Some(HostOs::Macos));
+        assert!(admitted(&backlog(&mac)).contains(&unpinned.id));
+        let selected = select_task_crew(&mac, &unpinned.id)
+            .expect("macOS draws the default or supported pool");
+        assert_eq!(selected["crew_selection"]["crew"], "muse-wonder");
+        let pinned = add(&mac, "pinned", None, &tags).expect("macOS pins the default or pool");
+        assert_eq!(pinned.crew.as_deref(), Some("muse-wonder"));
+        if pool.is_empty() {
+            // Also exercise the default-provenance fallback, rather than only
+            // the unassigned-task fallback above.
+            let refused = select_task_crew(&linux, &pinned.id)
+                .expect_err("a default assignment is not redrawn onto an unsupported default");
+            assert!(
+                matches!(&refused, OrbitError::PolicyDenied(message) if message.contains(WAIT)),
+                "{refused}"
+            );
+        }
+    }
+    let config = POOL.replace("default_crew = \"sol\"", "default_crew = \"muse-wonder\"");
+    let (_root, linux) = runtime_on(HostOs::Linux, &config);
+    let supported = add(&linux, "supported", None, &[]).unwrap();
+    assert_eq!(supported.crew.as_deref(), Some("sol"));
+    assert!(admitted(&backlog(&linux)).contains(&supported.id));
+    assert_eq!(
+        select_task_crew(&linux, &supported.id).unwrap()["crew_selection"]["crew"],
+        "sol",
+        "a supported pool remains usable beneath an unsupported default"
+    );
+}
+
+/// Both ordinary and native-inspection activity defaults obey executor host_os.
+/// Undeclared executors and explicit task pins keep their existing behavior.
+fn activity_defaults_and_unrestricted_crews_remain_consistent() {
+    let config = DEFAULT_MUSE
+        .replace("provider = \"muse\"", "provider = \"codex\"")
+        .replace(
+            "default_crew = \"muse-wonder\"",
+            "default_crew = \"muse-wonder\"\nmedium_complexity_crews = [\"muse-wonder\"]\n[workflow.purpose_crews]\nfailure_recovery = [\"muse-wonder\"]",
+        );
+    let (_root, linux) = runtime_on(HostOs::Linux, &config);
+    let mut executor = linux
+        .list_executor_defs()
+        .unwrap()
+        .into_iter()
+        .find(|def| def.name == "muse")
+        .unwrap();
+    executor.name = "codex".into();
+    linux.upsert_executor_def(&executor).unwrap();
+    for (key, inspection) in [
+        ("workflow.medium_complexity_crews", false),
+        ("workflow.medium_complexity_crews", true),
+        ("workflow.purpose_crews.failure_recovery", false),
+        ("workflow.purpose_crews.failure_recovery", true),
+    ] {
+        let run = running_run(&linux);
+        let mut input = json!({"run_id": run, "crew_config_key": key});
+        if inspection {
+            input["inspection_revision"] = json!("fixture-revision");
+            input["partition_index"] = json!(0);
+        }
+        let refused = linux
+            .agent_crew_config_for_input(&input)
+            .expect_err("unsupported activity default is refused");
+        assert!(refused.to_string().contains(WAIT), "{refused}");
+        assert!(
+            linux
+                .read_run_state(&run)
+                .unwrap()
+                .unwrap()
+                .activity_crew_draws
+                .is_empty()
+        );
+        let mac = linux.clone().with_host_os(Some(HostOs::Macos));
+        let selected = mac.agent_crew_config_for_input(&input).unwrap().unwrap();
+        assert_eq!(selected.model.as_deref(), Some("muse-spark-1.3"));
+    }
+    executor.host_os = None;
+    linux.upsert_executor_def(&executor).unwrap();
+    let unbounded = add(&linux, "unbounded", None, &[]).unwrap();
+    assert_eq!(unbounded.crew.as_deref(), Some("muse-wonder"));
+    assert!(admitted(&backlog(&linux)).contains(&unbounded.id));
+    assert_eq!(
+        select_task_crew(&linux, &unbounded.id).unwrap()["crew_selection"]["crew"],
+        "muse-wonder"
+    );
+    let explicit = add(&linux, "explicit", Some("sol"), &[]).unwrap();
+    assert_eq!(
+        select_task_crew(&linux, &explicit.id).unwrap()["crew_selection"]["crew"],
+        "sol"
+    );
 }
 
 /// Public init loads the shipped declarations and upgrades an installed default
@@ -420,5 +622,6 @@ crate::scenario_table!(
     a_linux_host_waits_on_a_muse_crew_and_a_macos_host_admits_it,
     an_empty_os_intersection_is_refused_on_add_and_update,
     an_excluded_default_crew_is_not_pinned,
-    init_seeds_host_os_and_preserves_operator_constraints
+    init_seeds_host_os_and_preserves_operator_constraints,
+    activity_defaults_and_unrestricted_crews_remain_consistent
 );
