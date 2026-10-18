@@ -133,8 +133,11 @@ outputs.
 ## Releases
 
 A release tag builds the app in [`release.yml`](../.github/workflows/release.yml) and attaches it to
-the GitHub Release when the repository variable `ORBIT_DESKTOP_RELEASE` is `true`. Until then the
-desktop jobs are skipped, and the CLI release is unaffected either way. The release attaches:
+the GitHub Release. The Linux bundles always build. The macOS bundle builds only when all six Apple
+secrets from [One-time setup](#one-time-setup) are present. Without them the run names the missing
+ones and the release ships the Linux bundles alone, so it never carries an unsigned or
+unnotarized macOS app. Setting the repository variable `ORBIT_DESKTOP_RELEASE` to `false` turns the
+desktop jobs off. The CLI release is unaffected either way. The release attaches:
 
 | Asset | Platform |
 |---|---|
@@ -142,7 +145,7 @@ desktop jobs are skipped, and the CLI release is unaffected either way. The rele
 | `orbit-desktop-x86_64-unknown-linux-gnu.deb` / `.AppImage` | Linux x86_64, glibc 2.35 or later |
 | `orbit-desktop-aarch64-unknown-linux-gnu.deb` / `.AppImage` | Linux arm64, glibc 2.35 or later |
 | `orbit-desktop-version.txt` | The release's version, which the app's update check reads |
-| `orbit-desktop-checksums.txt` / `.sig` | SHA-256 of every desktop asset, signed with the Orbit release key |
+| `orbit-desktop-checksums.txt` / `.sig` | SHA-256 of every desktop asset this release carries, signed with the Orbit release key |
 
 The names don't change between versions, so
 `https://github.com/constellation-works/orbit/releases/latest/download/<asset>` always points at
@@ -157,7 +160,13 @@ missing local bundles, so a rebuild cannot change what the signed checksums auth
 manifest and signature upload after all bundles and the version file. An interrupted manifest
 upload can resume without replacing it; a complete release is verified without uploading again.
 If older partial metadata conflicts with the available bundles, publication stops before adding
-assets. Fix forward in a new release rather than replacing published files.
+assets. Fix forward in a new release rather than replacing published files. That includes a release
+that shipped Linux-only: its signed manifest can't gain a macOS bundle later, so macOS arrives in
+the next release.
+
+A release that shipped without desktop bundles, such as v0.29.0, can get the missing ones from the
+workflow's manual run with the existing tag. It builds the tag's source and attaches under the same
+rules. See the [release runbook](../docs/runbooks/release.md#desktop-backfill).
 
 To check a download, verify the manifest against the release key, then the files against the
 manifest:
@@ -205,9 +214,11 @@ All of these steps are manual. Nothing in the repository creates or stores these
 
    The existing `ORBIT_RELEASE_SIGNING_KEY_PEM` secret also signs the desktop manifest. Linux needs
    no other secret.
-7. **Turn the jobs on.** Add the repository variable `ORBIT_DESKTOP_RELEASE` = `true` on the
-   Variables tab of the same page. The next release tag builds the app. If any Apple secret is
-   missing, the macOS job fails and names it, so a release never ships an unsigned app.
+7. **Check the next release.** No variable is needed. The next release tag checks for all six
+   secrets and adds the macOS leg. If any is missing, the run warns and names it, and
+   the release ships only the Linux bundles. A release never ships an unsigned app. If the
+   repository variable `ORBIT_DESKTOP_RELEASE` is `false`, delete it or set it to `true`; `false`
+   turns every desktop job off.
 
 Apple's first notarization of a new app can take hours, which is why the build job allows 180
 minutes. Later releases usually finish in minutes. The certificate is valid for five years. When
@@ -225,8 +236,9 @@ from your `orbit` CLI, which `orbit update` upgrades. The app updates only its o
   `constellation-works/orbit` through the GitHub API. It takes the newest stable release above its
   own version that carries `orbit-desktop-checksums.txt`, its `.sig`, `orbit-desktop-version.txt`
   and this platform's bundle. A release without desktop assets is skipped, not treated as an error.
-  That covers releases cut while `ORBIT_DESKTOP_RELEASE` is off, releases whose desktop jobs failed,
-  and the minutes before `publish-desktop` finishes. Drafts, prereleases and `-rc` tags are never
+  That covers releases cut with the desktop jobs off, Linux-only releases on macOS (the app keeps
+  looking for an older release with the `.dmg`), releases whose desktop jobs failed, and the
+  minutes before `publish-desktop` finishes. Drafts, prereleases and `-rc` tags are never
   offered.
 - **Verification.** Before offering anything, the app checks the manifest's signature against the
   Orbit release keys. These are a copy of the trust set in `install.sh`, the npm installer and

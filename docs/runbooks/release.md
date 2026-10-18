@@ -36,9 +36,11 @@ check verifies before it offers an update
 own copy of the Rust trust set, so it is the fourth trust set in the rotation
 below.
 
-The desktop release jobs run only when the repository variable
-`ORBIT_DESKTOP_RELEASE` is `true`, and the macOS bundle needs six Apple
-signing and notarization secrets. The account steps and the secret list are in
+The desktop release jobs run on every release tag unless the repository
+variable `ORBIT_DESKTOP_RELEASE` is `false`. The Linux bundles need no other
+secret. The macOS bundle needs six Apple signing and notarization secrets.
+Without all six, the release skips only macOS and warns which secrets are
+missing. The account steps and the secret list are in
 [desktop/README.md](../../desktop/README.md#one-time-setup).
 
 All four shipped release-signing trust sets contain only `orbit-release-key-3`,
@@ -146,11 +148,14 @@ an empty date remains optional.
    - update the Homebrew tap;
    - smoke the tagged shell installer and search help on macOS and Ubuntu;
    - smoke the bundled-Bubblewrap fallback on Ubuntu 22.04;
-   - when `ORBIT_DESKTOP_RELEASE` is `true`, build the signed and notarized
-     universal macOS `.dmg` and the Linux `.deb` and `.AppImage` for x86_64
-     and arm64, then attach them with `orbit-desktop-version.txt` and their
-     signed `orbit-desktop-checksums.txt`. These jobs run beside the CLI
-     release and never block it.
+   - unless `ORBIT_DESKTOP_RELEASE` is `false`, build the Linux `.deb` and
+     `.AppImage` for x86_64 and arm64 and, when all six Apple secrets are
+     present, the signed and notarized universal macOS `.dmg`, then attach
+     exactly the bundles built with `orbit-desktop-version.txt` and their
+     signed `orbit-desktop-checksums.txt`. `desktop-preflight` decides which
+     legs run. A missing secret skips only macOS, with a warning naming it.
+     A failed Linux leg holds back the desktop assets until it's fixed and
+     re-run. These jobs run beside the CLI release and never block it.
 
    Review the result of every job, but treat CI as informational on
    `agent-main`: no job is a merge gate. Failures are queued for asynchronous
@@ -189,6 +194,33 @@ an empty date remains optional.
 
 11. **Submit the Cursor marketplace listing manually.** See
     [Cursor marketplace listing](#cursor-marketplace-listing).
+
+## Desktop backfill
+
+A release whose desktop jobs were skipped or never ran (v0.29.0 shipped
+without desktop bundles) can get them later without a new tag. In Actions,
+open the `release` workflow and choose **Run workflow** on a branch that
+carries the current workflow, with `tag` set to the existing release tag. The
+manual run:
+
+- runs only `desktop-preflight`, `build-desktop` and `publish-desktop`, never
+  a CLI build, the Homebrew tap or the installer smokes;
+- refuses a tag that isn't `vMAJOR.MINOR.PATCH` or has no GitHub Release;
+- checks out the tag's source and builds it with the current workflow, so the
+  tag's `desktop/Cargo.toml` version must still match the tag;
+- ignores `ORBIT_DESKTOP_RELEASE`, since the run is itself the request;
+- adds macOS only when all six Apple secrets are present, as a tag push does;
+- attaches missing assets under the same rules as a release: published bytes
+  are never replaced, and a published manifest that doesn't match the
+  available bundles stops it before any upload.
+
+A release that already carries a Linux-only manifest can't gain a macOS bundle
+this way. That is a manifest conflict by design: fix forward, and macOS ships
+in the next release.
+
+Running a backfill against a real release is an operator decision. Check the
+release's assets afterwards with the verification commands in
+[desktop/README.md](../../desktop/README.md#releases).
 
 ## Cursor marketplace listing
 
@@ -324,8 +356,8 @@ Normal rotation uses an overlap window:
    with the same new key ID and expiry (`not_after` / npm `notAfter`).
 2. Publish a release and npm package still signed by the old key that ship
    both old and successor trust in the shell installer, npm installer,
-   native binary and desktop app, with `ORBIT_DESKTOP_RELEASE` on so the
-   desktop app updates to the new trust. Verify all four trust sets before
+   native binary and desktop app, with the desktop jobs on (and the Apple
+   secrets present, for macOS) so the desktop app updates to the new trust. Verify all four trust sets before
    switching the signer. A desktop app older than this release reports the
    first successor-signed update as rejected, and must be updated by hand.
 3. Update `ORBIT_RELEASE_SIGNING_KEY_PEM` and

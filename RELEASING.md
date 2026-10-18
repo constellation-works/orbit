@@ -13,7 +13,7 @@ How to cut an Orbit release. Follow the checklist top to bottom. Plugin, npm, si
 You need:
 
 - Actions secrets `ORBIT_RELEASE_SIGNING_KEY_PEM` (signs the checksum manifests) and `TAP_GITHUB_TOKEN` (pushes to `constellation-works/homebrew-tap`).
-- For the desktop app, when the repository variable `ORBIT_DESKTOP_RELEASE` is `true`: the six Apple signing and notarization secrets listed in [desktop/README.md](desktop/README.md#one-time-setup).
+- For the macOS desktop app: the six Apple signing and notarization secrets listed in [desktop/README.md](desktop/README.md#one-time-setup). Without all six, a release still ships the Linux desktop bundles and skips only macOS. The Linux bundles need no extra secret. Setting the repository variable `ORBIT_DESKTOP_RELEASE` to `false` turns the desktop jobs off for tag pushes. Unset or any other value leaves them on.
 - npm publish rights on `@orbit-tools` with your OTP. The npm package is published by hand.
 - Permission to create GitHub Releases and admin-merge on `constellation-works/orbit`.
 
@@ -276,10 +276,13 @@ Pushing a `v*` tag runs `.github/workflows/release.yml`:
 |---|---|
 | `build-release` | `cargo build -p orbit-cli --release --locked` for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, and `aarch64-unknown-linux-gnu` |
 | `publish-release` | Writes `orbit-checksums.txt`, signs it as `orbit-checksums.txt.sig`, and creates the GitHub Release with auto-generated notes |
-| `build-desktop` | Only when `ORBIT_DESKTOP_RELEASE` is `true`. Runs `cargo tauri build` in `desktop/` to make a signed, notarized universal macOS `.dmg` and the `.deb` and `.AppImage` for Linux x86_64 and arm64 |
-| `publish-desktop` | Writes `orbit-desktop-version.txt`, signs `orbit-desktop-checksums.txt` over it and the bundles, and attaches them all to the release once `publish-release` has created it |
+| `desktop-preflight` | Checks the six Apple secrets and plans the desktop build. Linux is always in the plan. macOS is added only when every secret is present; otherwise the run shows a warning naming the missing ones. Turns the desktop jobs off when `ORBIT_DESKTOP_RELEASE` is `false` |
+| `build-desktop` | Runs `cargo tauri build` in `desktop/` at the tag to make the `.deb` and `.AppImage` for Linux x86_64 and arm64, and, when the secrets are present, a signed, notarized universal macOS `.dmg` |
+| `publish-desktop` | Once `publish-release` has created the release and every planned desktop leg has succeeded, writes `orbit-desktop-version.txt`, signs `orbit-desktop-checksums.txt` over it and exactly the bundles built, and attaches them. A failed Linux leg stops it; a macOS leg the preflight left out does not |
 | `bump-homebrew-tap` | Updates `Formula/orbit.rb` in `constellation-works/homebrew-tap` (macOS only; Linux uses `install.sh`) |
 | `smoke-install-macos` / `smoke-install-ubuntu` | Installs from the tag's `install.sh` and runs `orbit --version` |
+
+A release that shipped without desktop bundles, such as v0.29.0, can get its missing desktop assets afterwards from the workflow's manual run: Actions → `release` → **Run workflow**, with `tag` set to the existing release tag. It runs only the desktop jobs, builds the tag's source with the current workflow, and attaches missing assets under the same rules. It refuses a tag without a GitHub Release, and it ignores `ORBIT_DESKTOP_RELEASE`. See the [runbook](docs/runbooks/release.md#desktop-backfill).
 
 npm isn't published from CI. The separate `smoke-npm-install.yml` workflow runs weekly, on every tag, and on demand.
 
@@ -287,7 +290,7 @@ Common failures:
 
 - **`--locked` build fails:** `Cargo.lock` wasn't refreshed. Fix it in the next patch.
 - **Homebrew step fails:** `TAP_GITHUB_TOKEN` expired, or tap branch protection rejected the push.
-- **Desktop job fails:** the CLI release has already published, so nothing is blocked. A missing Apple secret is named in the log, and an expired certificate or a revoked app-specific password shows up as a signing or notarization error. Fix the secret and re-run the failed jobs: `publish-desktop` adds only missing assets, hashing downloaded published bundles even if a rebuild differs. It uploads the checksum manifest and signature last; a complete retry verifies them without uploading again. Conflicting metadata from an older partial upload requires a new release rather than replacement assets. A version mismatch means `desktop/Cargo.toml` wasn't bumped, so fix it in the next patch.
+- **Desktop job fails:** the CLI release has already published, so nothing is blocked. A missing Apple secret skips only the macOS leg, and the preflight's warning names it. An expired certificate or a revoked app-specific password shows up as a signing or notarization error. Fix a broken secret and re-run the failed jobs: `publish-desktop` adds only missing assets, hashing downloaded published bundles even if a rebuild differs. It uploads the checksum manifest and signature last; a complete retry verifies them without uploading again. Conflicting metadata from an older partial upload requires a new release rather than replacement assets. A release that published a Linux-only manifest can't gain a macOS bundle later, because that is a manifest conflict by design: macOS ships in the next release. A version mismatch means `desktop/Cargo.toml` wasn't bumped, so fix it in the next patch.
 - **Installer smoke fails:** there's a regression in the tagged `install.sh`.
 - **npm smoke red after publish:** either the tagged script speaks an old CLI contract, or the published artifact is bad. Triage with the [runbook](docs/runbooks/release.md#npm-install-smoke-two-artifacts). Fix a script-only problem on `agent-main` without a patch release, and don't re-dispatch the old tag after the script has moved on.
 
