@@ -1,6 +1,7 @@
 //! A pull that names the work its host has room for is granted only a task
 //! inside that list; the rest stay in the owner's backlog as
-//! `capacity_unavailable`, and a pull naming no list is unchanged.
+//! `capacity_unavailable`, and a pull naming no list is unchanged. A template
+//! the executor has no profile of is judged by its base class.
 
 use super::*;
 use orbit_store::contracts::{AdmissionWorkFit, AdmissionWorkKey, TaskDocumentUpdateParams};
@@ -27,9 +28,14 @@ fn task(owner: &Coordinated, title: &str, tags: &[&str], complexity: TaskComplex
     task.id
 }
 
+fn names(names: &[&str]) -> Vec<String> {
+    names.iter().map(|name| (*name).to_string()).collect()
+}
+
 fn fitting(request: &str, keys: &[(&str, &str)], templates: &[&str]) -> AdmissionRequest {
-    AdmissionRequest {
-        admissible: Some(AdmissionWorkFit {
+    with_fit(
+        request,
+        AdmissionWorkFit {
             keys: keys
                 .iter()
                 .map(|(work_class, complexity)| AdmissionWorkKey {
@@ -37,8 +43,15 @@ fn fitting(request: &str, keys: &[(&str, &str)], templates: &[&str]) -> Admissio
                     complexity: Some((*complexity).into()),
                 })
                 .collect(),
-            templates: templates.iter().map(|name| (*name).to_string()).collect(),
-        }),
+            templates: names(templates),
+            ..Default::default()
+        },
+    )
+}
+
+fn with_fit(request: &str, fit: AdmissionWorkFit) -> AdmissionRequest {
+    AdmissionRequest {
+        admissible: Some(fit),
         ..owner_request(request)
     }
 }
@@ -69,6 +82,18 @@ fn a_pull_is_granted_only_work_its_host_has_room_for() {
     let change = task(&owner, "change", &[], TaskComplexity::Hard);
     let no_diff = task(&owner, "sweep", &["no-diff-expected"], TaskComplexity::Low);
     let template = task(&owner, "audit", &["auto-task:audit"], TaskComplexity::Low);
+    let unprofiled = task(
+        &owner,
+        "docs",
+        &["auto-task:doc-duties", "no-diff-expected"],
+        TaskComplexity::Low,
+    );
+    let every = HashSet::from([
+        change.clone(),
+        no_diff.clone(),
+        template.clone(),
+        unprofiled.clone(),
+    ]);
 
     let receipt = owner.pull(&fitting("hard-room", &[("change", "low")], &[]));
     assert_eq!(
@@ -78,10 +103,36 @@ fn a_pull_is_granted_only_work_its_host_has_room_for() {
     );
     assert_eq!(
         unfit(&receipt),
-        HashSet::from([change.clone(), no_diff.clone(), template.clone()]),
+        every,
         "each task left out is reported as kept off for capacity"
     );
     assert!(owner.claims().is_empty());
+
+    // A template with a profile that does not fit stays refused while
+    // unprofiled `change` templates fit; an unprofiled `no-diff` template is
+    // judged by its own base class.
+    let receipt = owner.pull(&with_fit(
+        "profiled-template-unfit",
+        AdmissionWorkFit {
+            unfit_templates: names(&["audit"]),
+            unprofiled_template_classes: names(&["change"]),
+            ..Default::default()
+        },
+    ));
+    assert_eq!(claimed(&receipt), None);
+    assert_eq!(unfit(&receipt), every);
+
+    // A template the executor has no profile of fits by its base class
+    // [ORB-16608].
+    let receipt = owner.pull(&with_fit(
+        "unprofiled-no-diff-room",
+        AdmissionWorkFit {
+            unfit_templates: names(&["audit"]),
+            unprofiled_template_classes: names(&["no-diff"]),
+            ..Default::default()
+        },
+    ));
+    assert_eq!(claimed(&receipt), Some(unprofiled));
 
     let receipt = owner.pull(&fitting("no-diff-room", &[("no-diff", "low")], &[]));
     assert_eq!(claimed(&receipt), Some(no_diff));

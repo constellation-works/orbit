@@ -55,12 +55,24 @@ fn finished_delivery(follower: &OrbitRuntime, bytes: u64) {
 }
 
 fn finished_delivery_using(follower: &OrbitRuntime, bytes: u64, cores: f64) {
+    finished_delivery_of(follower, "ORB-profiled", "change", bytes, cores);
+}
+
+/// One finished 31-minute delivery of `work_class` (`low` unless it is a
+/// template) for `task`, using `bytes` and `cores`, admitted two days ago.
+fn finished_delivery_of(
+    follower: &OrbitRuntime,
+    task: &str,
+    work_class: &str,
+    bytes: u64,
+    cores: f64,
+) {
     let store = follower.sqlite_store().unwrap();
     let workspace = follower.workspace_id().unwrap();
     let admitted = Utc::now() - ChronoDuration::days(2);
     let run = JobRun {
         executed_on: None,
-        run_id: "jrun-profiled".into(),
+        run_id: format!("jrun-{task}"),
         job_id: "task_pr_pipeline".into(),
         attempt: 1,
         state: JobRunState::Success,
@@ -71,7 +83,7 @@ fn finished_delivery_using(follower: &OrbitRuntime, bytes: u64, cores: f64) {
         created_at: admitted,
         pid: None,
         pid_start_time: None,
-        input: Some(json!({"task_id": "ORB-profiled"})),
+        input: Some(json!({"task_id": task})),
         retry_source_run_id: None,
         knowledge_metrics: None,
         resolved_crew: None,
@@ -88,9 +100,9 @@ fn finished_delivery_using(follower: &OrbitRuntime, bytes: u64, cores: f64) {
                 run_id: run.run_id.clone(),
                 minute_index: minute,
                 minute_started_at: admitted + ChronoDuration::minutes(i64::from(minute)),
-                task_id: "ORB-profiled".into(),
-                work_class: "change".into(),
-                complexity: Some("low".into()),
+                task_id: task.into(),
+                work_class: work_class.into(),
+                complexity: (!work_class.starts_with("auto-task:")).then(|| "low".into()),
                 resumed: false,
                 delivery_admitted_at: Some(admitted),
                 cpu_cores: cores,
@@ -289,6 +301,109 @@ fn an_enforcing_follower_requests_only_work_its_forecast_has_room_for() {
             .all(|point| point.memory_bytes == 16 * GIB),
         "4 GiB baseline plus the returned 12 GiB claim at every offset: {records:?}"
     );
+}
+
+/// Tag the owner's copy of `task` with `tags`.
+fn tag_owner_task(pair: &Pair, task: &str, tags: &[&str]) {
+    pair.wire
+        .owner
+        .update_task_as_human(
+            task,
+            orbit_core::application::task::TaskUpdateParams {
+                tags: Some(tags.iter().map(|tag| (*tag).to_string()).collect()),
+                ..Default::default()
+            },
+            "fixture operator".into(),
+        )
+        .unwrap();
+}
+
+/// A recurring task whose template this host has never run is priced by
+/// its base class, as its claim is reserved, and claimed once that fits; it
+/// is not kept from the host until the host has a profile of it [ORB-16608].
+fn an_enforcing_follower_claims_a_template_it_has_no_profile_of() {
+    let (pair, proc_root) = forecasting("enforce", 1);
+    tag_owner_task(&pair, &pair.tasks[0], &["auto-task:doc-duties"]);
+    neighbour_delivery(&pair.follower);
+    host_using(&proc_root, 16 * GIB);
+    let drain = pair.run_drain();
+
+    let pass = pair.pass(&drain);
+
+    assert!(pair.wire.calls("orbit.task.pull").is_empty(), "{pass}");
+    let fit = admission_fit(&pair, &drain).expect("the fit is recorded");
+    assert!(
+        fit.unfit
+            .iter()
+            .any(|unfit| unfit.work == "auto-task:*/change"),
+        "an unprofiled template is priced, not admitted unconditionally: {fit:?}"
+    );
+
+    host_using(&proc_root, 4 * GIB);
+    let pass = pair.pass(&drain);
+
+    let pulls = pair.wire.calls("orbit.task.pull");
+    assert_eq!(pulls.len(), 1, "{pass}");
+    let admissible = &pulls[0]["admissible"];
+    assert!(admissible.get("templates").is_none(), "{admissible}");
+    assert!(
+        admissible["unprofiled_template_classes"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("change")),
+        "{admissible}"
+    );
+    assert_eq!(
+        pair.leaf_runs().len(),
+        1,
+        "the owner grants the unprofiled template: {pass}"
+    );
+    assert!(pair.owner_has_claim_for_task(&pair.tasks[0]));
+    let fit = admission_fit(&pair, &drain).unwrap();
+    assert!(
+        fit.admissible
+            .iter()
+            .any(|work| work == "auto-task:*/change"),
+        "{fit:?}"
+    );
+}
+
+/// A template this host has a profile of that does not fit is refused, even
+/// while other work fits and unprofiled templates would.
+fn an_enforcing_follower_is_refused_a_profiled_template_without_room() {
+    let (pair, proc_root) = forecasting("enforce", 1);
+    tag_owner_task(&pair, &pair.tasks[0], &["auto-task:heavy"]);
+    finished_delivery_of(
+        &pair.follower,
+        "ORB-heavy",
+        "auto-task:heavy",
+        25 * GIB,
+        1.0,
+    );
+    neighbour_delivery(&pair.follower);
+    host_using(&proc_root, 4 * GIB);
+    let drain = pair.run_drain();
+
+    let pass = pair.pass(&drain);
+
+    let pulls = pair.wire.calls("orbit.task.pull");
+    assert_eq!(pulls.len(), 1, "change/low still fits: {pass}");
+    assert_eq!(
+        pulls[0]["admissible"]["unfit_templates"],
+        json!(["heavy"]),
+        "{}",
+        pulls[0]
+    );
+    assert!(pair.leaf_runs().is_empty(), "{pass}");
+    assert!(!pair.owner_has_claim_for_task(&pair.tasks[0]));
+    assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+    let fit = admission_fit(&pair, &drain).unwrap();
+    let unfit = fit
+        .unfit
+        .iter()
+        .find(|unfit| unfit.work == "auto-task:heavy")
+        .expect("the template is unfit");
+    assert_eq!(unfit.reason, "memory 91% at +0m", "{fit:?}");
 }
 
 /// Shadow mode records what it would have sent and requests as with `off`,
@@ -688,5 +803,7 @@ fn pending_pull_capacity_is_released_when_no_claim_will_execute() {
 crate::scenario_table!(
     an_enforcing_follower_requests_only_work_its_forecast_has_room_for_scenarios,
     an_enforcing_follower_requests_only_work_its_forecast_has_room_for,
-    shadow_and_off_followers_request_without_a_list
+    shadow_and_off_followers_request_without_a_list,
+    an_enforcing_follower_claims_a_template_it_has_no_profile_of,
+    an_enforcing_follower_is_refused_a_profiled_template_without_room
 );

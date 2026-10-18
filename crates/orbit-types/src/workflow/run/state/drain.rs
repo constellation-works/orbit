@@ -264,8 +264,10 @@ pub struct PullAdmissionFit {
     pub computed_at: DateTime<Utc>,
     /// Whether the request carried the list: under `enforce` only.
     pub sent: bool,
-    /// The work that fits: `change/hard`, `no-diff/unset` or
-    /// `auto-task:<template>`.
+    /// The work that fits: `change/hard`, `no-diff/unset`,
+    /// `auto-task:<template>` for a template the host has a profile of, or
+    /// `auto-task:*/change` and `auto-task:*/no-diff` for a template it has
+    /// none of, by its base class.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub admissible: Vec<String>,
     /// The work that does not.

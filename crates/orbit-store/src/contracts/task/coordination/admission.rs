@@ -340,30 +340,71 @@ pub struct AdmissionWorkKey {
 
 /// The work a pulling executor's host load forecast has room for, for the
 /// whole horizon of its resource profile. The owner admits only a task inside
-/// it: a recurring `auto-task:` task when its template is listed, any other
-/// task when its work class and complexity are.
+/// it: a recurring `auto-task:` task when its template is listed, or when the
+/// executor has no profile of its template and `unprofiled_template_classes`
+/// lists its base class; any other task when its work class and complexity
+/// are.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AdmissionWorkFit {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub keys: Vec<AdmissionWorkKey>,
-    /// Template names, without the `auto-task:` prefix.
+    /// Templates the executor has a profile of that fit, without the
+    /// `auto-task:` prefix.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub templates: Vec<String>,
+    /// Templates the executor has a profile of that do not fit, without the
+    /// `auto-task:` prefix. Every template the executor has a profile of is
+    /// in `templates` or here, so the owner can tell a template it has never
+    /// run from one with no room.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unfit_templates: Vec<String>,
+    /// The base classes, `no-diff` or `change`, under which a template the
+    /// executor has no profile of fits, priced as the executor would reserve
+    /// it: by the fallback chain from that base class.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unprofiled_template_classes: Vec<String>,
 }
 
 impl AdmissionWorkFit {
     /// Whether nothing fits, so a request carrying it could admit nothing.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.keys.is_empty() && self.templates.is_empty()
+        self.keys.is_empty()
+            && self.templates.is_empty()
+            && self.unprofiled_template_classes.is_empty()
     }
 
     /// Why `task` falls outside this fit, or `None` when it is inside it.
     #[must_use]
     pub fn unfit_reason(&self, task: &orbit_types::task::Task) -> Option<String> {
         if let Some(template) = orbit_types::task::auto_task_template(&task.tags) {
-            return (!self.templates.iter().any(|name| name == template)).then(|| {
-                format!("the executor's host load forecast has no room for template `{template}`")
+            let listed = |names: &[String]| names.iter().any(|name| name == template);
+            if listed(&self.templates) {
+                return None;
+            }
+            if listed(&self.unfit_templates) {
+                return Some(format!(
+                    "the executor's host load forecast has no room for template `{template}`"
+                ));
+            }
+            let base = if task
+                .tags
+                .iter()
+                .any(|tag| tag == orbit_types::task::NO_DIFF_EXPECTED_TAG)
+            {
+                orbit_types::task::NO_DIFF_WORK_CLASS
+            } else {
+                orbit_types::task::CHANGE_WORK_CLASS
+            };
+            return (!self
+                .unprofiled_template_classes
+                .iter()
+                .any(|class| class == base))
+            .then(|| {
+                format!(
+                    "the executor's host load forecast has no room for template `{template}`, \
+                     which it has no profile of, as {base} work"
+                )
             });
         }
         let key = AdmissionWorkKey {

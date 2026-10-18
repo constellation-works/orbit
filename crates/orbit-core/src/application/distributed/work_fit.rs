@@ -6,8 +6,12 @@
 //!
 //! - every `no-diff` and `change` complexity, unset included;
 //! - every `auto-task:` template this workspace has a profile of on this
-//!   host. A template it has never run here is not listed, so under
-//!   `enforce` it stays for another executor until this host has run it.
+//!   host, listed as fitting or not;
+//! - a template with no profile on this host, once per base class (`no-diff`
+//!   or `change`), priced by the fallback chain from that base class exactly
+//!   as its claim would be reserved. The owner admits a template the list
+//!   names neither way by its base class, so a template this host has never
+//!   run is not kept from it until it has.
 //!
 //! Each kind is judged by the local drain's rule, [`ForecastGap::fit`]: while
 //! the forecast holds no running delivery or reservation every kind fits, even
@@ -189,6 +193,14 @@ impl OrbitRuntime {
                                 && profile.base_class == BaseClass::NoDiff
                         });
                         ProfileLookup::new(&workspace, class, None, no_diff)
+                    }))
+                    .chain(fit.unprofiled_template_classes.iter().map(|class| {
+                        let base = if class == NO_DIFF_WORK_CLASS {
+                            BaseClass::NoDiff
+                        } else {
+                            BaseClass::Change
+                        };
+                        ProfileLookup::unprofiled_template(&workspace, base)
                     }))
                     .collect::<Vec<_>>();
                 let gap = forecast.gap(settings.admit_cpu_percent, settings.admit_memory_percent);
@@ -386,6 +398,15 @@ fn work_fit(
         );
         if judge(lookup.work_class.clone(), lookup) {
             fit.templates.push(template);
+        } else {
+            fit.unfit_templates.push(template);
+        }
+    }
+    for base in [BaseClass::NoDiff, BaseClass::Change] {
+        let lookup = ProfileLookup::unprofiled_template(workspace, base);
+        if judge(format!("{AUTO_TASK_TAG_PREFIX}*/{}", base.as_str()), lookup) {
+            fit.unprofiled_template_classes
+                .push(base.as_str().to_string());
         }
     }
     Some(PullWorkFit {

@@ -48,6 +48,19 @@ impl ProfileLookup {
         }
     }
 
+    /// A lookup for a template of `base_class` with no profile of its own: it
+    /// prices as every such template does, by the fallback chain from its
+    /// base class. Its work class is the bare `auto-task:` prefix, which no
+    /// template's profile carries.
+    pub fn unprofiled_template(workspace_id: impl Into<String>, base_class: BaseClass) -> Self {
+        Self {
+            workspace_id: workspace_id.into(),
+            work_class: AUTO_TASK_TAG_PREFIX.to_string(),
+            complexity: None,
+            base_class,
+        }
+    }
+
     fn is_template(&self) -> bool {
         self.work_class.starts_with(AUTO_TASK_TAG_PREFIX)
     }

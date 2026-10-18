@@ -123,7 +123,12 @@ For a pull drain (`orbit run auto --pull`), under `enforce` each
 `orbit.task.pull` request names the work this host's load forecast has room
 for, the owner grants only a task inside it, and the drain requests nothing
 while nothing fits (`forecast_no_headroom`). On an idle host every kind of
-work fits, as in a local drain. `shadow` records that list on
+work fits, as in a local drain. A recurring `auto-task:` template this host
+has a profile of is judged by that profile. A template it has no profile of
+yet is judged by the template's base class (`no-diff` when its task carries
+`no-diff-expected`, otherwise `change`), through the profile fallback chain
+its claim is reserved by, so the host can claim a template before it has
+ever run one. `shadow` records that list on
 the drain as `pull_admission_fit` and requests as with `off`. A host without
 resource profiles requests as with `off`. Claims are reserved before the
 next request is forecast. `profile_window`, `min_profile_deliveries` and
