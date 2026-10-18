@@ -157,12 +157,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 barrier = os.environ.get("FAKE_GH_BARRIER")
                 if barrier:
                     import socket
-                    gate = socket.socket(socket.AF_UNIX)
-                    gate.settimeout(15)
-                    gate.connect("\\0" + barrier)
-                    gate.sendall(os.environ.get("FAKE_GH_BARRIER_LABEL", "publish").encode())
-                    assert gate.recv(1) == b"+"
-                    gate.close()
+                    host, port = barrier.rsplit(":", 1)
+                    with socket.create_connection((host, int(port)), timeout=15) as gate:
+                        label = os.environ.get("FAKE_GH_BARRIER_LABEL", "publish")
+                        gate.sendall(label.encode() + b"\\n")
+                        assert gate.recv(1) == b"+"
                 fields = option("--json")
                 if fields == "tagName":
                     assert option("--jq") == ".tagName", args
@@ -555,29 +554,33 @@ class ReleaseWorkflowTests(unittest.TestCase):
                             self.desktop_publish_group("v9.9.9"))
         other = self.root / "other-tag"
         other_remote = self.stage_release_checkout(other)
-        barrier_name = f"orbit-desktop-{os.getpid()}-tags"
-        listening = threading.Event()
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(2)
+        listener.settimeout(15)
+        barrier_host, barrier_port = listener.getsockname()
+        barrier_address = f"{barrier_host}:{barrier_port}"
         labels = []
         errors = {}
 
         def serve():
-            listener = socket.socket(socket.AF_UNIX)
             connections = []
             try:
-                listener.bind("\0" + barrier_name)
-                listener.listen(2)
-                listener.settimeout(15)
-                listening.set()
                 for _ in range(2):
                     connection, _ = listener.accept()
                     connections.append(connection)
-                    labels.append(connection.recv(64).decode())
+                    label = bytearray()
+                    while not label.endswith(b"\n"):
+                        chunk = connection.recv(64)
+                        if not chunk:
+                            break
+                        label.extend(chunk)
+                    labels.append(label.rstrip(b"\n").decode())
                 for connection in connections:
                     connection.sendall(b"+")
             except Exception as exc:
                 errors["barrier"] = exc
             finally:
-                listening.set()
                 for connection in connections:
                     connection.close()
                 listener.close()
@@ -586,7 +589,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             try:
                 errors[tag] = self.publish_desktop(
                     cwd=cwd, timeout=20,
-                    FAKE_GH_BARRIER=barrier_name,
+                    FAKE_GH_BARRIER=barrier_address,
                     FAKE_GH_BARRIER_LABEL=tag,
                     FAKE_ACCEPT_TAGS=accept,
                     FAKE_RELEASE=str(remote),
@@ -598,7 +601,6 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
         server = threading.Thread(target=serve)
         server.start()
-        self.assertTrue(listening.wait(5), "overlap barrier did not start listening")
         first = threading.Thread(target=publish, args=("v1.2.3", self.root, self.remote, "v1.2.3"))
         second = threading.Thread(target=publish, args=("v9.9.9", other, other_remote, "v9.9.9"))
         first.start()
