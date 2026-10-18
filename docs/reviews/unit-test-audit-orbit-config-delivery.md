@@ -47,6 +47,6 @@ loader boundary with their original inputs and assertions. Empty resolved and
 layering test modules, retired store/operation/plugin modules, and unused seed
 filesystem support are removed. Private renderer seams and fixtures remain.
 
-Boundary modules are included by the existing `default_crew`, `review_layers`,
-`config_paths`, and `config_store` test binaries; no new integration binary is
+Boundary modules are `include!`d into the single existing `config` test binary
+(`crates/orbit-config/tests/config/main.rs`); no new integration binary is
 introduced. Public helpers prove these cases without CLI/provider setup.
