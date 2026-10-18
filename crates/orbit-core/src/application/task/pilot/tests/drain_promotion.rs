@@ -372,6 +372,19 @@ fn material_edit_after_the_pilot_write_is_held_for_revalidation() {
         ));
         let runtime = &workspace.runtime;
         let task = qualifying_task(runtime);
+        // The finding cites a native Linux launch. A portable criterion would
+        // be rejected before this race reaches approval.
+        runtime
+            .update_task(
+                &task.id,
+                TaskUpdateParams {
+                    acceptance_criteria: Some(vec![
+                        "A native Linux launch shows the change is in place.".into(),
+                    ]),
+                    ..Default::default()
+                },
+            )
+            .expect("criterion names Linux");
         if reason == "relations_changed" {
             let related = runtime
                 .add_task(TaskAddParams {

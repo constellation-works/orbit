@@ -291,7 +291,12 @@ It records each one as a typed finding, committed with the applied assessment
 as `native_os_hold`: `required_os` (the one-based criterion and the OS) for an
 OS requirement, `required_machine` (the criterion and the owner machine) for
 evidence only the owner's own store, services or data can produce. A
-requirement stated only in warning prose routes nothing. When every
+requirement stated only in warning prose routes nothing. Apply rejects
+a `required_os` entry whose criterion text names no OS or native facility
+(mac, macos, darwin, seatbelt, sandbox-exec, linux, bwrap, bubblewrap,
+windows, launchd, systemd, keychain, cgroup). The rejection tells the pilot
+to leave `required_os` empty for a portable criterion, and the repair pilot
+re-answers. When every
 `required_os` entry names one OS and the task carries no `os:` tag, the pilot's
 atomic apply adds that tag, so tag routing sends the task to a host of that OS
 and a follower of another OS sees it as `host_os_mismatch`. An `os:` tag the

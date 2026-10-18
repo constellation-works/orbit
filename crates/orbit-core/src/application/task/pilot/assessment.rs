@@ -331,16 +331,38 @@ pub(super) fn validate_recommendations(
     Ok(complexity)
 }
 
+/// OS and native-facility tokens a criterion must name before `required_os`
+/// may cite it. Matched as ASCII case-insensitive tokens, so a portable
+/// word such as "machine" is not read as "mac".
+const NATIVE_FACILITY_TERMS: &[&str] = &[
+    "mac",
+    "macos",
+    "darwin",
+    "seatbelt",
+    "sandbox-exec",
+    "linux",
+    "bwrap",
+    "bubblewrap",
+    "windows",
+    "launchd",
+    "systemd",
+    "keychain",
+    "cgroup",
+];
+
 /// The pilot's typed native-OS finding: each `required_os` entry names a
-/// 1-based criterion of the task's `criteria` acceptance criteria, the OS
-/// whose native host alone can produce its evidence, and that evidence.
-/// Absent or empty is no finding. Admission holds only this typed field,
-/// never warning prose.
+/// 1-based criterion of the task's acceptance criteria, the OS whose native
+/// host alone can produce its evidence, and that evidence. Absent or empty
+/// is no finding. Admission holds only this typed field, never warning prose.
+///
+/// A criterion that names none of [`NATIVE_FACILITY_TERMS`] cannot justify
+/// the finding. Apply rejects it so the repair pilot leaves `required_os`
+/// empty instead of holding a portable task on a native host.
 pub(super) fn required_os(
     action: &str,
     task_id: &str,
     assessment: &Value,
-    criteria: usize,
+    criteria: &[String],
 ) -> Result<Vec<NativeOsRequirement>, DispatchError> {
     let Some(entries) = assessment
         .get("required_os")
@@ -360,10 +382,11 @@ pub(super) fn required_os(
             .get("criterion")
             .and_then(Value::as_u64)
             .and_then(|criterion| usize::try_from(criterion).ok())
-            .filter(|criterion| (1..=criteria).contains(criterion))
+            .filter(|criterion| (1..=criteria.len()).contains(criterion))
             .ok_or_else(|| {
                 invalid(&format!(
-                    "criterion must be a 1-based index of the task's {criteria} acceptance criteria"
+                    "criterion must be a 1-based index of the task's {} acceptance criteria",
+                    criteria.len()
                 ))
             })?;
         let os = entry
@@ -377,12 +400,48 @@ pub(super) fn required_os(
             .map(str::trim)
             .filter(|evidence| !evidence.is_empty())
             .ok_or_else(|| invalid("evidence must be a non-empty string"))?;
+        // `criterion` is a checked 1-based index of `criteria`.
+        if !criterion_names_native_facility(&criteria[criterion - 1]) {
+            return Err(invalid(&format!(
+                "criterion {criterion} names no OS or native facility ({}); leave required_os \
+                 empty for portable criteria",
+                NATIVE_FACILITY_TERMS.join(", ")
+            )));
+        }
         let requirement = NativeOsRequirement { criterion, os };
         if !requirements.contains(&requirement) {
             requirements.push(requirement);
         }
     }
     Ok(requirements)
+}
+
+/// Whether `text` names an OS or native facility as a whole token.
+fn criterion_names_native_facility(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    NATIVE_FACILITY_TERMS
+        .iter()
+        .any(|term| contains_native_facility_term(&text, term))
+}
+
+fn contains_native_facility_term(text: &str, term: &str) -> bool {
+    let mut rest = text;
+    while let Some(index) = rest.find(term) {
+        let end = index + term.len();
+        let before = index == 0 || !is_facility_token_byte(rest.as_bytes()[index - 1]);
+        let after = end == rest.len() || !is_facility_token_byte(rest.as_bytes()[end]);
+        if before && after {
+            return true;
+        }
+        rest = &rest[index + 1..];
+    }
+    false
+}
+
+/// Letters, digits and `_` continue a token. A hyphen separates one, so
+/// `sandbox-exec` is its own term and does not match inside a longer word.
+fn is_facility_token_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
 /// The one OS a validated `required_os` finding routes the task to: every

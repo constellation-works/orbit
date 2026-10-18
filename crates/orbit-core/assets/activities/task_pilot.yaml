@@ -330,7 +330,11 @@ spec:
        such requirement in `required_os` as
        `{"criterion":N,"os":"macos|linux|windows","evidence":"..."}`, where
        `N` is the criterion's 1-based position, whether or not the task
-       already carries the matching tag. Admission reads only this typed
+       already carries the matching tag. Apply rejects an entry whose
+       criterion text names no OS or native facility: mac, macos, darwin,
+       seatbelt, sandbox-exec, linux, bwrap, bubblewrap, windows, launchd,
+       systemd, keychain, or cgroup — and tells you to leave `required_os`
+       empty for a portable criterion. Admission reads only this typed
        finding, never warning prose: a host requirement stated only in
        `utility_warnings` routes nothing, and a host that cannot meet it will
        claim the task. When every requirement names one OS and the task has no
