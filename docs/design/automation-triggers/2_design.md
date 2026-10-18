@@ -286,8 +286,8 @@ input/results and a stable creation key; scheduler records hold coordination and
 references. Forward-only store migrations and a recoverable cross-store protocol
 are required: task bundles and scheduler SQLite are not one current transaction.
 
-The Automation boundary claims pending members through Store and writes batch intent with compare-
-and-swap plus unique keys. It releases database locks before external I/O. Routine job submission
+The Automation boundary claims pending members through Store and writes batch intent with compare-and-swap
+plus unique keys. It releases database locks before external I/O. Routine job submission
 and common task creation now use durable action keys: the job store maps a key and input to one run
 identity, while the task registry reserves a key, input digest and task ID before bundle I/O.
 Replaying the same input returns the existing identity; changing input under the same key is
