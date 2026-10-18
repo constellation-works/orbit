@@ -3,8 +3,8 @@ summary: "Policy & Sandboxing — Design"
 type: design
 title: "Policy & Sandboxing — Design"
 owner: claude
-last_updated: 2026-10-12
-last_validated: 2026-10-12
+last_updated: 2026-10-18
+last_validated: 2026-10-18
 status: Draft
 feature: policy-sandbox
 doc_role: design
@@ -508,9 +508,14 @@ Risk-weighted regression tests sit beside the implementations they guard
   neither an in-place rename nor a move into a readable directory, a generated
   file stays readable, another process's `environ` is not, declared tool state
   is readable while its publish token is not, and `git` / `rg` / `cargo` /
-  `make` / `gh` still run. `crates/orbit-tools/tests/tools/proc_spawn_lockdown.rs`
-  reproduces the same alias bypass through the tool itself and pins the
-  request-time `/etc` denial ([ORB-11514]).
+  `make` / `gh` still run. These exercise the retained Landlock primitive,
+  not the `proc.spawn` boundary (§7.3).
+  `crates/orbit-tools/tests/tools/proc_spawn_lockdown.rs` exercises the public
+  tool registry: program-policy refusals, explicit environment admission,
+  Git configuration-write refusals, and inherited parent reads. Without an
+  enclosing OS mask, its children can read a benign host file, a `denyRead`
+  match and an explicit path outside the workspace; there is no request-time
+  filesystem read denial.
 - `crates/orbit-exec/tests/sandbox/macos_spawn.rs` — trusted wrapper
   resolution ignores `PATH`: a macOS runtime fixture places a fake
   `sandbox-exec` earlier on `PATH` and verifies it is not executed

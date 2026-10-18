@@ -2,8 +2,8 @@
 type: design
 summary: "Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest"
 tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
-last_updated: 2026-10-12
-last_validated: 2026-10-12
+last_updated: 2026-10-18
+last_validated: 2026-10-18
 ---
 
 # Scope: Orbit plugin standard
@@ -693,8 +693,9 @@ carried too, so it also constrains the injected selector; a plugin using one mus
 tools in `permissions.orbit_tools` ∩ granted ∩ reachable by the spawning caller
 (`ORBIT_ALLOWED_TOOLS` echoes this, as information only). Identity is a host-issued session: at
 spawn the host writes a record under `{global_root}/state/plugin-callbacks/` (plugin, pid,
-start time, tool ceiling) and stamps `ORBIT_PLUGIN_CALLBACK`; both entry points resolve it and
-enforce the recorded install. `ORBIT_PLUGIN` is not the gate.
+start time, tool ceiling, token) and hands the backend an open descriptor on that record,
+normally fd 3. Both entry points authenticate the descriptor and enforce the recorded
+install. `ORBIT_PLUGIN` and the retired `ORBIT_PLUGIN_CALLBACK` token are not the current gate.
 
 **The session carries the caller's ceiling.** One plugin is reachable from callers with
 different allowlists, so a name-only gate would admit the whole manifest list [ORB-12801].
@@ -712,10 +713,11 @@ call, neither read from the child's environment:
 - The *session* half is fixed at mint and never rewritten, so nothing done to the row
   afterwards (re-grant, widening upgrade, a backend rewriting its tree) widens a live child.
 
-**Session record schema.** Records state the ceiling from `schema_version: 2`. A record with no
-ceiling or an unreadable schema is refused and counted stale: `orbit plugin doctor` reports it
-and the next session mint's sweep removes it [ORB-12879]. Incomplete JSON is left alone, since
-a record is briefly empty between open and its single write.
+**Session record schema.** Current records use `schema_version: 3`, carrying their own token
+as well as the tool ceiling introduced in version 2. A record with no ceiling or a schema this
+host cannot read is refused and counted stale: `orbit plugin doctor` reports it and the next
+session mint's sweep removes it [ORB-12879]. Incomplete JSON is left alone, since a record is
+briefly empty between open and its single write.
 
 **Every other CLI command is refused.** The CLI resolves the callback session once, before it
 pins a generation or opens a runtime. A recognized plugin child may run only `orbit tool run
@@ -733,19 +735,25 @@ a read a refused command offered requests the serving tool instead:
 Reaching another machine through a federated destination still needs a `network` grant and
 `ssh` in `requires.programs`.
 
-**Credential binding.** A token is accepted only when its record's pid is the caller, its
-parent, or its process group (backends spawn with `process_group(0)`). A token from another
-record or carried past `setsid` is a mismatch; one matching no session is missing. Both are
-refused, never resolved to another plugin or to an ordinary caller. Start time is checked only
-when a *scan* proposes a record (rejecting pid reuse): a confined child cannot read another
-process's `/proc`.
+**Credential binding.** The descriptor must hold a current session record whose token names
+the same device and inode in the host-owned session directory; a forged file is no credential.
+The descriptor survives `setsid`, `exec` and a cleared environment when the backend keeps it
+open. `ORBIT_PLUGIN_CALLBACK_FD` selects the descriptor number, defaulting to 3.
+
+The deprecated token/process-ancestry path is accepted only while
+`plugin.legacy_callback_identity` is enabled (off by default). On that path a token is accepted
+only when its record's pid is the caller, its parent, or its process group (backends spawn with
+`process_group(0)`). A token carried past that ancestry, such as after `setsid`, is a mismatch;
+one matching no session is missing. Start time is checked when a *scan* proposes a record
+(rejecting pid reuse): a confined child cannot read another process's `/proc`.
 
 **A confined child with no credential is refused, not promoted.** Backends cannot list
 `state/plugin-callbacks/` (§4.3), so a caller that cannot is inside a plugin sandbox and, with
-no token, is refused on both entry points. A backend that scrubs its child env (`env -i`)
-denies itself callbacks. Ancestry alone identifies a backend only where that directory is
-readable (unsandboxed backends, in-process dispatch). Identity never reads another process's
-`environ`.
+no valid descriptor or accepted legacy credential, is refused on both entry points. Clearing
+the child environment (`env -i`) retains identity when fd 3 stays open; closing that descriptor
+loses the current credential. With the legacy flag enabled, ancestry alone identifies a
+backend only where that directory is readable (unsandboxed backends, in-process dispatch).
+Identity never reads another process's `environ`.
 
 ### 4.3 Sandboxing
 

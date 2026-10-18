@@ -1,8 +1,8 @@
 ---
 title: "Remote Access — Vision"
 owner: codex
-last_updated: 2026-10-08
-last_validated: 2026-10-12
+last_updated: 2026-10-18
+last_validated: 2026-10-18
 status: Accepted
 feature: remote-access
 doc_role: vision
@@ -18,7 +18,7 @@ related_artifacts: [ORB-11008, ORB-11009]
 
 Remote access should stay a thin way to reach a machine's existing Orbit Web state. It should not become an accidental synchronization service or an unauthenticated network daemon.
 
-The proposed federated MCP mux is specified in
+The shipped federated MCP mux (`orbit mcp serve --mode federated`) is specified in
 [federated-mcp](../federated-mcp/1_overview.md) ([ORB-11009], citing
 [ORB-11008]). It is not a change to current Web or direct-SSH MCP behavior,
 and it does not make Remote Access a replication feature.
