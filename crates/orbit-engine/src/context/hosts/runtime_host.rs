@@ -418,6 +418,10 @@ pub trait RuntimeHost: Send + Sync {
     /// settings (for example Codex reads `"sandbox"`, `"approval_policy"` and
     /// `"allow_login_shell"`).
     fn agent_provider_config(&self) -> HashMap<String, String>;
+    /// How long a provider process may produce no output and use no CPU
+    /// before its step fails as stalled. `None` disables the check and leaves
+    /// only the wall-clock deadline. The built-in window is 30 minutes.
+    fn agent_stall_window(&self) -> Option<std::time::Duration>;
     /// The complete environment an agent subprocess is launched with.
     ///
     /// Launchers clear the child environment and apply exactly what this

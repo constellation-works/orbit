@@ -253,6 +253,7 @@ pub(crate) fn build_context_from_roots(
             .snapshot
             .execution_proc_spawn_max_timeout_minutes,
     ) * 60_000;
+    let agent_stall_minutes = runtime_config.snapshot.execution_agent_stall_minutes;
     let persistence = runtime_config.persistence.clone();
     let actor = ActorIdentity::from_env();
     let automation_stall_window_minutes = runtime_config.automation_stall_window_minutes;
@@ -318,6 +319,7 @@ pub(crate) fn build_context_from_roots(
             execution_env_policy,
             codex_execution_policy,
             proc_spawn_max_timeout_ms,
+            agent_stall_minutes,
         ),
         OrbitRuntimeSettings::new(
             persistence,

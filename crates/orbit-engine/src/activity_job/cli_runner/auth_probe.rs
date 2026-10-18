@@ -133,7 +133,7 @@ pub fn run_auth_probe(
         return Err(DispatchError::CliInvocationPermanent(error.to_string()));
     }
     let cwd_text = cwd.display().to_string();
-    let (stdout, _, exit, _, timed_out) = spawn_with_timeout(SpawnWithTimeoutRequest {
+    let (stdout, _, exit, _, timed_out, _) = spawn_with_timeout(SpawnWithTimeoutRequest {
         program: &program,
         args: &probe.args,
         stdin_bytes: probe.stdin.as_bytes(),
@@ -152,6 +152,7 @@ pub fn run_auth_probe(
         on_progress: None,
         stopped_descendants: None,
         spawned_child: Some(spawned),
+        stall_window: host.agent_stall_window(),
     })
     .map_err(|SpawnError { message, .. }| DispatchError::CliInvocationPermanent(message))?;
     if let Some(guard) = guard {

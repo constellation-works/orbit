@@ -447,6 +447,10 @@ pub trait NullRuntimeHost: Send + Sync {
     fn agent_provider_config(&self) -> HashMap<String, String> {
         HashMap::new()
     }
+    fn agent_stall_window(&self) -> Option<std::time::Duration> {
+        // Matches the built-in `execution.agent_stall_minutes` of 30.
+        Some(std::time::Duration::from_secs(30 * 60))
+    }
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
         allowlisted_child_env(&[], required_env_vars)
     }
@@ -1132,6 +1136,9 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     }
     fn agent_provider_config(&self) -> HashMap<String, String> {
         NullRuntimeHost::agent_provider_config(self)
+    }
+    fn agent_stall_window(&self) -> Option<std::time::Duration> {
+        NullRuntimeHost::agent_stall_window(self)
     }
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
         NullRuntimeHost::agent_subprocess_environment(self, required_env_vars)

@@ -344,6 +344,7 @@
     },
     "orbit-engine": {
       "test_function_paths": [
+        "activity_job/cli_runner/orchestrator/tests/completion.rs::a_stalled_provider_fails_transient_without_a_wall_clock_timeout",
         "activity_job/cli_runner/orchestrator/tests/completion.rs::only_a_clean_exit_without_an_envelope_at_the_injected_budget_is_a_timeout",
         "activity_job/cli_runner/supervisor/tests/capture.rs::output_capture_redacts_boundary_tokens_before_blob_storage",
         "activity_job/cli_runner/supervisor/tests/output.rs::a_running_childs_output_is_sampled_before_it_exits",
@@ -353,6 +354,7 @@
         "activity_job/cli_runner/supervisor/tests/spawn.rs::stdin_delivery_and_finalization_run_in_an_isolated_child",
         "activity_job/cli_runner/supervisor/tests/spawn.rs::stdin_lifecycle_child",
         "activity_job/cli_runner/supervisor/tests/spawn.rs::stdin_provider",
+        "activity_job/cli_runner/supervisor/tests/stall.rs::silent_sleep_stalls_while_cpu_and_output_keep_the_run_alive",
         "activity_job/cli_runner/tests/inspection.rs::inspection_git_ignores_parent_locale_and_config",
         "activity_job/cli_runner/tests/inspection.rs::missing_commit_and_slot_ownership_are_permanent",
         "activity_job/cli_runner/tests/inspection.rs::slot_exhaustion_and_git_io_stay_retryable",

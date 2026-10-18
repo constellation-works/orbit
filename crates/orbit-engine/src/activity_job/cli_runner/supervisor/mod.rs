@@ -15,7 +15,9 @@
 //!   through WSL2.
 //! - **Hooks.** `on_spawn` receives the PID before any pipe setup.
 //!   `on_progress` samples the newest stdout lines on the supervising thread
-//!   between waits. Stopped descendants the supervisor ends are reported one
+//!   between waits. A configured stall window shares that check and ends a
+//!   tree whose stdout, stderr and CPU time have all stayed flat for the
+//!   window. Stopped descendants the supervisor ends are reported one
 //!   by one. The deadline is extended by build-budget queue credit read from
 //!   `WAIT_DIRECTORY_ENV`, re-read at most every 100 ms, and is kept on the
 //!   supervision clock that `with_cli_supervision_clock` replaces in tests.
@@ -40,6 +42,7 @@
 mod capture;
 mod output;
 mod spawn;
+mod stall;
 #[cfg(feature = "test-support")]
 mod test_support;
 

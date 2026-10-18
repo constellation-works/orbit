@@ -593,6 +593,11 @@ impl RuntimeHost for OrbitRuntime {
         orbit_types::workflow::EvidenceHostOs::current()
     }
 
+    fn agent_stall_window(&self) -> Option<std::time::Duration> {
+        let minutes = self.context.agent_stall_minutes();
+        (minutes > 0).then(|| std::time::Duration::from_secs(u64::from(minutes) * 60))
+    }
+
     fn agent_provider_config(&self) -> std::collections::HashMap<String, String> {
         let mut config = std::collections::HashMap::new();
         let policy = self.codex_execution_policy();

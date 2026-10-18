@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use orbit_common::process::build_budget::{WAIT_DIRECTORY_ENV, read_waits};
 use orbit_common::process::stopped_descendants::StoppedDescendant;
 use orbit_common::process::supervisor::{
-    Periodic, Stdin, Stream, SupervisedChild, Supervision, Termination,
+    Periodic, ProcessStopCause, Stdin, Stream, SupervisedChild, Supervision, Termination,
 };
 
 use super::super::super::dispatcher::ResolvedSandbox;
@@ -16,7 +16,14 @@ use super::capture::{
 };
 use super::output::{OutputLineContext, TracedCaptureSink};
 
-type SpawnOutput = (CapturedOutput, CapturedOutput, Option<i32>, Duration, bool);
+type SpawnOutput = (
+    CapturedOutput,
+    CapturedOutput,
+    Option<i32>,
+    Duration,
+    bool,
+    bool,
+);
 
 /// Newest stdout bytes a progress sample carries. Large enough for one
 /// provider event holding a long assistant message.
@@ -92,6 +99,10 @@ pub(in crate::activity_job::cli_runner) struct SpawnWithTimeoutRequest<'a> {
     /// works on it before supervision starts. Without it, the child is
     /// spawned from the request fields.
     pub(in crate::activity_job::cli_runner) spawned_child: Option<SpawnedChild>,
+    /// End the run when stdout, stderr and the process tree's CPU time have
+    /// all stayed flat for this long. `None` or zero leaves only the
+    /// wall-clock deadline.
+    pub(in crate::activity_job::cli_runner) stall_window: Option<Duration>,
 }
 
 /// Spawn the child [`spawn_with_timeout`] will supervise. A caller that needs
@@ -130,6 +141,7 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
         on_progress,
         stopped_descendants,
         spawned_child,
+        stall_window,
     } = request;
 
     let started = Instant::now();
@@ -188,18 +200,45 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
             None => real.checked_sub(clock - deadline).unwrap_or(real),
         }
     };
-    let mut sample_progress = || {
-        if let Some(progress) = on_progress.as_ref()
-            && let Ok(capture) = stdout_buf.lock()
-        {
-            let sample = OutputProgress {
-                observed_bytes: capture.observed_bytes,
-                recent: capture.recent(PROGRESS_WINDOW_BYTES),
-            };
-            drop(capture);
-            (progress.report)(&sample);
+    let root_pid = child.child_mut().id();
+    let mut stall_watch = stall_window
+        .filter(|window| !window.is_zero())
+        .map(|window| super::stall::StallWatch::new(window, root_pid));
+    // Read the interval before the callback borrows the watch.
+    let stall_interval = stall_watch
+        .as_ref()
+        .map(super::stall::StallWatch::sample_interval);
+    let mut last_progress: Option<Instant> = None;
+    let mut sample_supervision = || {
+        if let Some(progress) = on_progress.as_ref() {
+            let due = last_progress.is_none_or(|sampled| sampled.elapsed() >= progress.interval);
+            if due && let Ok(capture) = stdout_buf.lock() {
+                let sample = OutputProgress {
+                    observed_bytes: capture.observed_bytes,
+                    recent: capture.recent(PROGRESS_WINDOW_BYTES),
+                };
+                drop(capture);
+                (progress.report)(&sample);
+                last_progress = Some(Instant::now());
+            }
         }
-        None
+        let watch = stall_watch.as_mut()?;
+        let (Ok(stdout), Ok(stderr)) = (stdout_buf.lock(), stderr_buf.lock()) else {
+            return None;
+        };
+        let decision = watch.poll(stdout.observed_bytes, stderr.observed_bytes);
+        drop(stdout);
+        drop(stderr);
+        decision
+    };
+    let periodic_interval = match (
+        stall_interval,
+        on_progress.as_ref().map(|progress| progress.interval),
+    ) {
+        (Some(stall), Some(progress)) => Some(stall.min(progress)),
+        (Some(stall), None) => Some(stall),
+        (None, Some(progress)) => Some(progress),
+        (None, None) => None,
     };
     #[cfg(test)]
     let output_drain_budget = FIXTURE_DRAIN_BUDGET.with(std::cell::Cell::get);
@@ -231,9 +270,9 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
             .map(|reporter| reporter.threshold),
         on_stopped_descendant: stopped_descendants.as_ref().map(|reporter| reporter.report),
         on_spawn,
-        every: on_progress.as_ref().map(|progress| Periodic {
-            interval: progress.interval,
-            run: &mut sample_progress,
+        every: periodic_interval.map(|interval| Periodic {
+            interval,
+            run: &mut sample_supervision,
         }),
     });
     drop(mount_plan);
@@ -245,12 +284,21 @@ pub(in crate::activity_job::cli_runner) fn spawn_with_timeout(
     // leave them retryable.
     let outcome =
         outcome.map_err(|err| SpawnError::transient(format!("supervise {program}: {err}")))?;
+    let stalled = outcome.stop_causes.iter().any(|cause| {
+        matches!(
+            cause,
+            ProcessStopCause::Requested {
+                reason: super::stall::STALL_STOP_REASON,
+            }
+        )
+    });
     Ok((
         stdout,
         stderr,
         outcome.exit_code,
         started.elapsed(),
         outcome.timed_out,
+        stalled,
     ))
 }
 
