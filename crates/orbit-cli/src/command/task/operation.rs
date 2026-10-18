@@ -427,12 +427,19 @@ pub(crate) fn requeue_text(value: &Value) -> String {
     let mut lines = vec![format!("Requeued {id} to backlog.")];
     if let Some(resumes) = value.get("resumes").filter(|v| v.is_object()) {
         let field = |key: &str| resumes.get(key).and_then(Value::as_str).unwrap_or("-");
-        lines.push(format!(
-            "Resumes pull request #{} on {} at {}.",
-            field("pull_request"),
-            field("branch"),
-            field("head_sha")
-        ));
+        // A claim's kept candidate may not have reached a pull request yet.
+        lines.push(match resumes.get("pull_request").and_then(Value::as_str) {
+            Some(pull_request) => format!(
+                "Resumes pull request #{pull_request} on {} at {}.",
+                field("branch"),
+                field("head_sha")
+            ),
+            None => format!(
+                "Resumes the candidate on {} at {}.",
+                field("branch"),
+                field("head_sha")
+            ),
+        });
     }
     match value.get("discard_closure").and_then(Value::as_str) {
         Some("settled") => lines.push(

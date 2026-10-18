@@ -835,3 +835,129 @@ fn an_exhausted_claimed_review_requeues_onto_a_new_claim() {
         "the failed claim never regains authority"
     );
 }
+
+/// [ORB-16770] A claimed leaf that failed before its commit keeps no
+/// candidate: the owner's task records none, and its requeue says nothing is
+/// resumed. One that kept a candidate has it recorded on the task; once the
+/// task's specification changes its requeue is refused, as a published
+/// candidate's is, and `--discard-candidate` makes the next claim implement
+/// fresh.
+#[test]
+fn a_claimed_requeue_resumes_only_a_kept_candidate_the_task_still_answers_to() {
+    use orbit_types::task::CLAIM_CANDIDATE_KEPT_EVENT;
+
+    if !isolated(
+        module_path!(),
+        "a_claimed_requeue_resumes_only_a_kept_candidate_the_task_still_answers_to",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let kept_records = |task: &str| {
+        pair.wire
+            .owner
+            .get_task_history(task)
+            .unwrap()
+            .into_iter()
+            .filter(|entry| entry.event == CLAIM_CANDIDATE_KEPT_EVENT)
+            .count()
+    };
+
+    // The implementer failed before the leaf committed anything.
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    pair.leaf_fails_with(&leaf, "the implementer failed before committing");
+    pair.pass_over(&drain, json!({"window_expired": true}));
+    assert_eq!(pair.owner_status(&task), "blocked");
+    assert_eq!(kept_records(&task), 0, "no candidate, no record");
+    let requeued = pair
+        .wire
+        .owner
+        .requeue_blocked_task(&task, "nothing to keep", false)
+        .expect("the owner requeues the blocked task");
+    assert!(requeued["resumes"].is_null(), "{requeued:#}");
+    assert!(
+        requeued["next_step"]
+            .as_str()
+            .unwrap()
+            .contains("no published or kept candidate"),
+        "{requeued:#}"
+    );
+
+    // The next leaf commits and pushes its candidate, then fails.
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&leaf), task, "the task is pulled again");
+    let branch = format!("orbit/{task}-kept");
+    let head = "e".repeat(40);
+    let base = "c".repeat(40);
+    let mut state = pair
+        .follower_jobs
+        .read_run_state(&leaf)
+        .unwrap()
+        .unwrap_or_else(|| PipelineState::new(leaf.clone(), LEAF_JOB.into(), json!({})));
+    for (step, output) in [
+        ("commit", json!({"commit_sha": head})),
+        (
+            "prepare_branch",
+            json!({"head": branch, "head_sha": head, "base": "main", "base_sha": base}),
+        ),
+        (
+            "sync_base",
+            json!({"head": branch, "head_sha": head, "base": "main", "base_sha": base}),
+        ),
+        ("review_gate_admit", json!({"applies": false})),
+        ("review_gate_settle", json!({"applies": false})),
+        ("validate", json!({"decision": "passed"})),
+        ("push", json!({"branch": branch, "local_sha": head})),
+    ] {
+        state.pipeline[step] = output;
+    }
+    pair.follower.write_run_state(&leaf, &state).unwrap();
+    pair.leaf_fails_with(&leaf, "pr_open failed after the push");
+    pair.pass_over(&drain, json!({"window_expired": true}));
+    assert_eq!(pair.owner_status(&task), "blocked");
+    assert_eq!(kept_records(&task), 1, "the kept candidate is recorded");
+
+    // The operator rewrites the task: the candidate implements the old one.
+    pair.wire
+        .owner
+        .update_task_as_human(
+            &task,
+            orbit_core::application::task::TaskUpdateParams {
+                description: Some("A rewritten task the candidate does not implement.".into()),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .expect("the operator edits the task");
+    let refused = pair
+        .wire
+        .owner
+        .requeue_blocked_task(&task, "keep the candidate", false)
+        .expect_err("a candidate the task outgrew is not resumed");
+    let refused = refused.to_string();
+    assert!(
+        refused.contains("specification changed")
+            && refused.contains(&head)
+            && refused.contains("--discard-candidate"),
+        "{refused}"
+    );
+    assert_eq!(pair.owner_status(&task), "blocked", "nothing was changed");
+
+    let discarded = pair
+        .wire
+        .owner
+        .requeue_blocked_task(&task, "start over on the rewritten task", true)
+        .expect("the owner discards the candidate");
+    assert!(discarded["resumes"].is_null(), "{discarded:#}");
+    assert_eq!(discarded["candidate_discarded"], true, "{discarded:#}");
+    let drain = pair.run_drain();
+    let next = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&next), task, "the task is pulled again");
+    assert!(
+        super::candidate_carry::claim_candidate(&pair, &next).is_none(),
+        "the next claim implements fresh"
+    );
+}

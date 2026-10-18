@@ -121,17 +121,47 @@ fn a_requeued_claimed_review_continues_its_kept_candidate_through_the_bound_work
             && !comments.contains(&format!("job resume {first}")),
         "the escalation names the owner's requeue, never a resume: {comments}"
     );
+    // [ORB-16770] The owner's task records the candidate the claim kept.
+    let recorded = owner
+        .pair
+        .wire
+        .owner
+        .get_task_history(&task)
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.event == orbit_types::task::CLAIM_CANDIDATE_KEPT_EVENT)
+        .and_then(|entry| entry.note)
+        .expect("the settlement records the kept candidate on the task");
+    let branch = worktree["head_ref"].as_str().unwrap();
+    assert!(
+        recorded.contains(&kept) && recorded.contains(branch) && recorded.contains(&first),
+        "the record names the commit, its branch and the run: {recorded}"
+    );
 
     // The operator runs the requeue the escalation names, once the failed
-    // leaf's worker has exited.
+    // leaf's worker has exited. It reports the candidate it resumes.
     drop(worker);
-    owner
+    let requeued = owner
         .pair
         .wire
         .owner
         .requeue_blocked_task(&task, REQUEUE_REASON, false)
         .expect("the owner requeues the blocked task");
     assert_eq!(owner.pair.owner_status(&task), "backlog");
+    assert_eq!(requeued["resumes"]["source"], "claim", "{requeued:#}");
+    assert_eq!(
+        requeued["resumes"]["head_sha"],
+        kept.as_str(),
+        "{requeued:#}"
+    );
+    assert_eq!(requeued["resumes"]["branch"], branch, "{requeued:#}");
+    assert!(
+        !requeued["next_step"]
+            .as_str()
+            .unwrap()
+            .contains("no published"),
+        "ORB-16770: a kept candidate is never reported as missing: {requeued:#}"
+    );
 
     // The next claim's leaf is queued and bound as the launcher leaves it,
     // before its worker starts.

@@ -579,7 +579,9 @@ the same discard exit:
 - a task last delivered by an owner pull-request run, with no handoff receipt,
   that still has a pull request or preserved candidate on record, which its
   next run would refuse to start from. A claimed delivery keeps its own
-  candidate contract and is not refused this way;
+  candidate contract and is not refused this way: the requeue resumes the
+  candidate the owner kept from the claim, as the
+  [distributed drain runbook](distributed-drain.md) describes;
 - a stopped run whose publication an earlier requeue already preserved on the
   task, when the task has changed since in what its digest covers (its
   meaning, required tools, crew or complexity). That record no longer
