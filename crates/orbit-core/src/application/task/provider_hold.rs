@@ -117,8 +117,7 @@ impl OrbitRuntime {
             return Ok(Some((own, held(source))));
         }
         if hold.class == ProviderFailureClass::Limit
-            && self.context.settings().provider_limit().explicit_crews
-                == ProviderLimitExplicitCrews::Wait
+            && self.provider_limit_policy().explicit_crews == ProviderLimitExplicitCrews::Wait
             && self.explicit_task_crew(task)?
         {
             return Ok(None);

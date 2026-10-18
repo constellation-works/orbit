@@ -132,6 +132,8 @@ impl OrbitRuntime {
         Ok(Self {
             host_resources,
             resource_profiles: Default::default(),
+            admission_policy: Default::default(),
+            admission_policy_snapshot: None,
             host_load: Default::default(),
             context,
             write_free: false,
@@ -194,6 +196,8 @@ impl OrbitRuntime {
         Ok(Self {
             host_resources,
             resource_profiles: Default::default(),
+            admission_policy: Default::default(),
+            admission_policy_snapshot: None,
             host_load: Default::default(),
             context,
             write_free: false,

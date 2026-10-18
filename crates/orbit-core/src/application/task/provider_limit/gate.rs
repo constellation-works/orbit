@@ -232,7 +232,7 @@ impl OrbitRuntime {
     pub(crate) fn provider_limit_gate(&self, now: DateTime<Utc>) -> ProviderLimitGate {
         match self.provider_limit_observations(now) {
             Ok(observations) => {
-                ProviderLimitGate::new(&observations, self.context.settings().provider_limit(), now)
+                ProviderLimitGate::new(&observations, &self.provider_limit_policy(), now)
             }
             Err(error) => {
                 tracing::warn!("could not read this host's provider usage limits: {error}");

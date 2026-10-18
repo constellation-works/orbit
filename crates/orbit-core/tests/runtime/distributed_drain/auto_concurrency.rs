@@ -808,11 +808,51 @@ fn pending_pull_capacity_is_released_when_no_claim_will_execute() {
         }
     });
 }
+/// Host mode and threshold edits affect the same pull drain's next pass.
+fn a_live_pull_drain_reloads_host_policy() {
+    crate::scenarios::with_immutable_host_load(|| {
+        let (pair, proc_root) = forecasting("off", 0);
+        neighbour_delivery(&pair.follower);
+        host_using(&proc_root, 16 * GIB);
+        let drain = pair.run_drain();
+        pair.pass(&drain);
+        assert!(admission_fit(&pair, &drain).is_none());
+        let path = pair.follower.global_root().join("config.toml");
+        let config = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, config.replace("mode = \"off\"", "mode = \"shadow\"")).unwrap();
+        pair.pass(&drain);
+        let fit = admission_fit(&pair, &drain).unwrap();
+        assert_eq!(fit.mode, "shadow");
+        assert!(!fit.sent && fit.admissible.is_empty(), "{fit:?}");
+        let sent = pair.wire.calls("orbit.task.pull").len();
+        std::fs::write(
+            &path,
+            config.replace("mode = \"off\"", "mode = \"enforce\""),
+        )
+        .unwrap();
+        pair.pass(&drain);
+        assert_eq!(pair.wire.calls("orbit.task.pull").len(), sent);
+        let fit = admission_fit(&pair, &drain).unwrap();
+        assert!(fit.sent && fit.admissible.is_empty(), "{fit:?}");
+        std::fs::write(
+            &path,
+            config
+                .replace("mode = \"off\"", "mode = \"enforce\"")
+                .replace("admit_memory_percent = 75", "admit_memory_percent = 88"),
+        )
+        .unwrap();
+        pair.pass(&drain);
+        assert_eq!(pair.wire.calls("orbit.task.pull").len(), sent + 1);
+        assert!(!admission_fit(&pair, &drain).unwrap().admissible.is_empty());
+    });
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     an_enforcing_follower_requests_only_work_its_forecast_has_room_for_scenarios,
     an_enforcing_follower_requests_only_work_its_forecast_has_room_for,
     shadow_and_off_followers_request_without_a_list,
+    a_live_pull_drain_reloads_host_policy,
     an_enforcing_follower_claims_a_template_it_has_no_profile_of,
     an_enforcing_follower_is_refused_a_profiled_template_without_room
 );

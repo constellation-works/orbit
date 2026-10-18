@@ -131,7 +131,7 @@ impl OrbitRuntime {
         self.resource_profiles.profiles(
             &store,
             &|task_ids| tasks.task_ids_with_tag(NO_DIFF_EXPECTED_TAG, task_ids),
-            ProfileBounds::from(self.context.settings().auto_concurrency()),
+            ProfileBounds::from(&self.auto_concurrency_settings()),
             Utc::now(),
         )
     }
@@ -141,12 +141,6 @@ impl OrbitRuntime {
     /// `None` when the host cannot be read.
     pub fn host_capacity(&self) -> Option<HostCapacity> {
         self.host_load.capacity()
-    }
-
-    /// The `[machine.auto_concurrency]` settings admission runs with: its
-    /// thresholds and the bounds profiles are built under.
-    pub fn auto_concurrency_settings(&self) -> &orbit_config::AutoConcurrencySettings {
-        self.context.settings().auto_concurrency()
     }
 
     /// The profile describing one delivery, and the fallback step that found
@@ -290,11 +284,7 @@ impl OrbitRuntime {
         decide: impl FnOnce(&HostLoadForecast) -> Result<ForecastDecision<T>, OrbitError>,
     ) -> Result<T, OrbitError> {
         let profiles = self.resource_profiles()?;
-        let horizon = self
-            .context
-            .settings()
-            .auto_concurrency()
-            .horizon_cap_minutes;
+        let horizon = self.auto_concurrency_settings().horizon_cap_minutes;
         let store = self.sqlite_store()?;
         // Any wait for a CPU window happens here, outside the lock.
         self.host_load.prepare();

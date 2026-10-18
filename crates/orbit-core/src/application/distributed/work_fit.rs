@@ -129,7 +129,7 @@ impl OrbitRuntime {
         &self,
         request_id: &str,
     ) -> Result<Option<PullWorkFit>, OrbitError> {
-        let settings = self.context.settings().auto_concurrency().clone();
+        let settings = self.auto_concurrency_settings();
         let enforce = match settings.mode.as_str() {
             ENFORCE => true,
             SHADOW => false,
@@ -164,7 +164,7 @@ impl OrbitRuntime {
         &self,
         request: &AdmissionRequest,
     ) -> Result<bool, OrbitError> {
-        let settings = self.context.settings().auto_concurrency();
+        let settings = self.auto_concurrency_settings();
         if settings.mode != ENFORCE {
             return Ok(true);
         }
@@ -262,7 +262,7 @@ impl OrbitRuntime {
         let Some(request) = self.pulled_claim_reservation(receipt)? else {
             return Ok(false);
         };
-        let settings = self.context.settings().auto_concurrency();
+        let settings = self.auto_concurrency_settings();
         if !matches!(settings.mode.as_str(), ENFORCE | SHADOW) {
             return Ok(true);
         }

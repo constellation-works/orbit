@@ -1,4 +1,4 @@
-//! Capture the controller mode once at the shared durable submission boundary.
+//! Capture explicit mode overrides and retain live host-policy inheritance.
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::AutoConcurrencyMode;
@@ -30,7 +30,7 @@ impl OrbitRuntime {
             Some(value) => (parse_mode(value)?, "explicit"),
             None => (configured_mode(self)?, "configured"),
         };
-        // Resumes/restarts keep both the captured policy and its provenance.
+        // Resumes/restarts keep explicit overrides and inheritance provenance.
         if !retain_snapshot || input.get("auto_concurrency_source").is_none() {
             input["auto_concurrency_source"] = json!(source);
         }
@@ -38,7 +38,7 @@ impl OrbitRuntime {
         Ok(())
     }
 
-    /// Read the submitted effective controller policy, rather than current configuration.
+    /// Read the current effective controller policy, retaining explicit overrides.
     pub fn run_auto_concurrency(&self, run_id: &str) -> Result<Value, OrbitError> {
         let run = self.show_job_run(run_id)?;
         let input = run.input.unwrap_or_else(|| json!({}));
@@ -47,7 +47,12 @@ impl OrbitRuntime {
 
     pub(crate) fn auto_concurrency_view(&self, input: Option<&Value>) -> Result<Value, OrbitError> {
         let configured = configured_mode(self)?;
-        let mode = match input.and_then(|input| input.get("auto_concurrency")) {
+        let mode = match input
+            .filter(|input| {
+                input.get("auto_concurrency_source").and_then(Value::as_str) != Some("configured")
+            })
+            .and_then(|input| input.get("auto_concurrency"))
+        {
             None | Some(Value::Null) => configured,
             Some(value) => parse_mode(value)?,
         };
@@ -60,32 +65,24 @@ impl OrbitRuntime {
     }
 }
 
-// Dashboard and MCP runtimes can outlive a configuration write. Resolve the
-// global-only default at submission/readback, while existing runs continue
-// using their captured input and admission keeps its existing host thresholds.
+// Inherited modes follow the last-known-good host policy at each pass.
 fn configured_mode(runtime: &OrbitRuntime) -> Result<AutoConcurrencyMode, OrbitError> {
-    orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(
-        runtime.global_root(),
-        runtime.shared_root(),
-    ))?
-    .auto_concurrency
-    .mode
-    .parse()
-    .map_err(invalid_mode)
+    runtime
+        .auto_concurrency_settings()
+        .mode
+        .parse()
+        .map_err(invalid_mode)
 }
 
 pub(super) fn effective_mode(
     runtime: &OrbitRuntime,
     input: &Value,
 ) -> Result<AutoConcurrencyMode, OrbitError> {
+    if input.get("auto_concurrency_source").and_then(Value::as_str) == Some("configured") {
+        return configured_mode(runtime);
+    }
     match input.get("auto_concurrency") {
-        None | Some(Value::Null) => runtime
-            .context
-            .settings()
-            .auto_concurrency()
-            .mode
-            .parse()
-            .map_err(invalid_mode),
+        None | Some(Value::Null) => configured_mode(runtime),
         Some(value) => parse_mode(value),
     }
 }

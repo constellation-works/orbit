@@ -83,9 +83,11 @@ assuming a value.
 `[machine]` settings are global-only. An authorized local drain can select its
 own forecast mode with `orbit run auto --auto-concurrency <MODE>` (`off`,
 `shadow` or `enforce`); MCP `orbit_workflow_auto` `action: "start"` accepts the
-same `auto_concurrency` input. When omitted, submission captures the configured
-`machine.auto_concurrency.mode`; the captured value and source survive
-restart/resume without a configuration write. `orbit run show <id> --json` and
+same `auto_concurrency` input. When omitted, each admission pass follows the
+configured `machine.auto_concurrency.mode`. Explicit overrides survive
+restart/resume without a configuration write. Host thresholds and effective
+provider-limit policy refresh next pass, caching unchanged config by mtime;
+invalid config warns and retains the previous policies. `orbit run show <id> --json` and
 `orbit run readiness --json` expose `mode`, `source` (`explicit` or
 `configured`), and the current `configured_mode`. Pull drains refuse the
 override and use the executor host's configured mode.

@@ -89,6 +89,8 @@ pub(crate) fn classify_workspace_auto_tasks(
     action: &str,
     input: &Value,
 ) -> Result<Value, DispatchError> {
+    let snapshot = runtime.admission_policy_snapshot();
+    let runtime = &snapshot;
     match admission_pass(runtime, action, input) {
         Ok(output) => Ok(output),
         Err(error) if error.is_lock_busy() => defer_lock_busy_pass(runtime, action, input, error),
@@ -285,7 +287,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
             gap_fit,
         )
     };
-    // Gap fit (the captured per-drain mode) judges the wave against the
+    // Gap fit (the effective per-drain mode) judges the wave against the
     // host load forecast after every check above, so it only removes
     // candidates; the ceiling and the throttle have already set
     // `free_slots`. `off` never builds a forecast.
@@ -602,7 +604,7 @@ fn gap_fit_selection(
     can_admit: bool,
     select: &dyn Fn(Option<&mut GapFit<'_>>) -> AdmissionSelection,
 ) -> Result<GapFitPass, PassError> {
-    let settings = runtime.context.settings().auto_concurrency();
+    let settings = runtime.auto_concurrency_settings();
     let previous = previous_head(runtime, input);
     let head_wait = HeadWait {
         previous: previous.as_ref(),

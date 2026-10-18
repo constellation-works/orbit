@@ -154,10 +154,11 @@ does not demonstrate forecast accuracy or enforcement readiness.
 
 ## Per-drain control
 
-Local drains capture the configured host mode when submitted, or an explicit
-`orbit run auto --auto-concurrency off|shadow|enforce` override. Dashboard
-operators and registered MCP/HTTP starts use the same core contract. The
-captured mode survives resume and restart without editing configuration;
-readiness and receipts distinguish it from the current host default. Pull
-drains currently inherit executor host configuration and reject explicit
-per-drain overrides. See [surfaces and configuration](2_design.md#7-surfaces-and-configuration).
+Local drains inherit the configured host mode on each admission pass, or use an
+explicit `orbit run auto --auto-concurrency off|shadow|enforce` override.
+Dashboard operators and registered MCP/HTTP starts use the same core contract.
+Explicit overrides survive resume and restart without editing configuration.
+Local and pull drains reload host thresholds and effective provider-limit
+policy on the next pass, caching unchanged configuration by mtime; invalid
+configuration warns and retains the previous policies. Pull drains inherit
+executor host mode and reject explicit per-drain overrides. See [surfaces and configuration](2_design.md#7-surfaces-and-configuration).

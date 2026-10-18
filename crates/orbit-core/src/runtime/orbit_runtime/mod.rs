@@ -2,6 +2,7 @@
 //! identity, host probes, persistence, configuration, and internal accessors.
 
 mod accessors;
+mod admission_policy;
 mod build;
 mod config;
 mod host;
@@ -69,6 +70,8 @@ pub struct OrbitRuntime {
     /// The host's resource profiles, shared by clones and kept across
     /// admission passes until a delivery finishes.
     resource_profiles: Arc<ResourceProfileCache>,
+    admission_policy: Arc<Mutex<Option<admission_policy::CachedPolicy>>>,
+    admission_policy_snapshot: Option<Arc<admission_policy::AdmissionPolicy>>,
     /// The host's measured load for the forecast baseline. It keeps only the
     /// previous CPU tick reading that utilization is measured against.
     host_load: Arc<HostLoadProbe>,

@@ -76,11 +76,13 @@ and resource throttle. Inspect read-only `orbit run profiles` for delivery
 profiles and sparse fallback, `orbit run profiles --accuracy` for forecast
 error and shadow decisions, and `orbit run show <drain-run-id> --json` for the
 recorded pass. For one local drain, `orbit run auto --auto-concurrency <MODE>`
-selects its captured mode (`off`, `shadow` or `enforce`); omitting the flag
-captures `machine.auto_concurrency.mode` at submission. MCP
+selects an explicit mode (`off`, `shadow` or `enforce`); omitting the flag
+follows `machine.auto_concurrency.mode` each admission pass. MCP
 `orbit_workflow_auto` `action: "start"` accepts the same `auto_concurrency`
-values. The selected mode and its source (`explicit` or `configured`) survive
-restart/resume without writing configuration. Run show and readiness expose
+values. Explicit overrides and inheritance source (`explicit` or `configured`)
+survive restart/resume without writing configuration. Host thresholds and
+provider-limit policy refresh next pass; unchanged config is cached by mtime,
+and invalid config warns and retains the previous policies. Run show and readiness expose
 `mode`, `source`, and the current `configured_mode`. Pull drains refuse this
 override; set the executor host's mode instead. No profiles means forecasting
 adds no restriction. Preserve operator policy when explaining waits: this

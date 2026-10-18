@@ -44,6 +44,8 @@ pub fn explain_workspace_auto_readiness(
     limit: usize,
     allowed_crews: &[String],
 ) -> Result<Value, OrbitError> {
+    let snapshot = runtime.admission_policy_snapshot();
+    let runtime = &snapshot;
     if !(1..=MAX_READINESS_LIMIT).contains(&limit) {
         return Err(OrbitError::InvalidInput(format!(
             "readiness limit must be between 1 and {MAX_READINESS_LIMIT}"
@@ -606,7 +608,7 @@ pub fn explain_workspace_auto_readiness(
         .and_then(|state| state.pull_drain.drain_last_pass.as_ref())
         .and_then(|pass| pass.admission_forecast.as_ref());
     let project_forecast = |forecast: &orbit_types::workflow::DrainAdmissionForecast| {
-        let settings = runtime.context.settings().auto_concurrency();
+        let settings = runtime.auto_concurrency_settings();
         let mut view = json!(forecast);
         view["headroom"] = json!({
             "cpu_percent": forecast.cpu_peak.as_ref().and_then(|peak| peak.percent)

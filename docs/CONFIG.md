@@ -86,29 +86,28 @@ even when it does not fit, so work larger than the thresholds still runs on
 an idle host; its admission records the miss as `idle_host`.
 
 For one local drain, `orbit run auto --auto-concurrency off|shadow|enforce`
-overrides only its forecast mode. Omission captures the configured host mode
-at submission. The persisted `input.auto_concurrency` and
-`input.auto_concurrency_source` (`explicit` or `configured`) survive restart
-and resume, so subsequent configuration changes affect new drains. No
-configuration is edited implicitly; concurrency ceilings, throttle, fit
-thresholds, profiles, accuracy recording, idle-host fallback and starvation
-protection keep their existing behavior.
+overrides only its forecast mode. Omission follows the configured host mode on
+each admission pass, including on pull drains. Explicit overrides and their
+`input.auto_concurrency_source = "explicit"` provenance survive restart and
+resume; configured drains retain `"configured"` provenance and follow host edits.
 
-Long-lived dashboard and MCP sessions resolve the host mode from the current
-global configuration at each inherited submission and readiness read. A
-supported configuration change updates the next inherited choice without
-restarting the session; previously submitted drains retain their captured mode.
+Local and pull drains refresh `[machine.auto_concurrency]` and the effective
+`workflow.provider_limit_*` policy at the start of each admission pass. Global
+and workspace `config.toml` mtimes cache resolution; unchanged files are not
+parsed again. Host settings remain global-only, while provider policy retains
+normal workspace-over-global precedence. A parse or validation error logs a
+warning and keeps both previous policies until a later valid edit. Running
+leaves continue; no drain restart is needed.
 
 The dashboard's **Auto-concurrency mode** control offers **Inherit host**,
 **Off**, **Shadow** and **Enforce** in an operator session. MCP
 `orbit.workflow.auto` accepts `auto_concurrency` on `action: start`; HTTP
 `POST /api/workflows/auto` accepts the same field. Start receipts carry an
 `auto_concurrency` object with `mode`, `source` and current `configured_mode`,
-read from the durable run input. CLI/MCP/HTTP run inspection also exposes
-`auto_concurrency.mode` and `source` from that snapshot (under `run` in CLI and HTTP detail
-JSON). Readiness reports the status drain's
-captured mode separately from the current configured mode used by the next
-inherited start. Unknown values, non-string modes and settings on stop or
+with explicit overrides read from durable run input. Live drain views and
+readiness resolve inherited mode from the current last-known-good host policy.
+CLI/MCP/HTTP historical run projections retain the submitted mode under `run`
+in CLI and HTTP detail JSON. Unknown values, non-string modes and settings on stop or
 resize are refused before effects. CLI `--stop` and `--pull` conflict with
 `--auto-concurrency`: pull overrides are unsupported, and pull drains
 continue using their executor host configuration.

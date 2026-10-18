@@ -396,8 +396,8 @@ pub(crate) struct OrbitRuntimeSettings {
     /// (`[workflow] auto_ship` in `config.toml`, default `false`).
     workflow_auto_ship: bool,
     resource_throttle: orbit_config::ResourceThrottleSettings,
-    /// Global `[machine.auto_concurrency]`: profile bounds and, later, the
-    /// forecast admission thresholds.
+    /// Initial global `[machine.auto_concurrency]` policy, used as the
+    /// admission cache's last-known-good fallback before its first refresh.
     auto_concurrency: orbit_config::AutoConcurrencySettings,
     /// Commands this owner requires a distributed execution claim to pass on
     /// its exact candidate before the delivery handoff is accepted
@@ -422,8 +422,8 @@ pub(crate) struct OrbitRuntimeSettings {
     final_recovery_crews: Vec<String>,
     /// Admitted `workflow.purpose_crews.<purpose>` pools; empty is unset.
     purpose_crews: orbit_config::PurposeCrewPools,
-    /// Admitted `workflow.provider_limit_*`: how close to a usage limit a
-    /// provider's crews stay admissible.
+    /// Initial `workflow.provider_limit_*` policy for the admission cache's
+    /// last-known-good fallback before its first refresh.
     provider_limit: orbit_config::ProviderLimitPolicy,
     /// Resolved `[operation]` review preferences with provenance [ORB-11333].
     operation: orbit_config::OperationPolicy,

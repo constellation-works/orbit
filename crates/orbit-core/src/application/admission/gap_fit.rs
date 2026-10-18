@@ -1,4 +1,4 @@
-//! Gap-fit admission for a local drain pass under its captured mode.
+//! Gap-fit admission for a local drain pass under its effective mode.
 //!
 //! `select_admissions` asks [`GapFit::admits`] about each candidate that
 //! passed every other check: the ceiling, the footprint guard and conflicts.

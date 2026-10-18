@@ -116,9 +116,10 @@ spec:
     # authority only; merging still needs `completion: done`. Forwarded to
     # every leaf like `completion`.
     auto_fix: false
-    # New submissions capture a mode in Core. Historical runs without it
-    # retain host-config fallback when resumed with this definition.
+    # Core captures explicit overrides and whether mode is inherited.
+    # Inherited host policy refreshes at each admission pass.
     auto_concurrency: null
+    auto_concurrency_source: null
     # Complexity pools are captured by Core at coordinator admission from
     # workflow configuration and low/medium/hard/xhard_complexity_crews run
     # overrides.
@@ -183,6 +184,7 @@ spec:
             target: activity:classify_workspace_auto_tasks
             default_input:
               auto_concurrency: "{{ input.auto_concurrency }}"
+              auto_concurrency_source: "{{ input.auto_concurrency_source }}"
               max_tasks: "{{ input.max_tasks }}"
               max_active_leaf_runs: "{{ input.max_active_leaf_runs }}"
               poll_sleep_seconds: "{{ input.poll_sleep_seconds }}"
