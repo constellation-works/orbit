@@ -52,6 +52,12 @@ spec:
   # No job-level ceiling: the drain's own worker limit (`--concurrency`, retuned
   # live by `orbit run concurrency`) bounds how many of these run at once.
   max_active_runs: 0
+  # Owner-routed steering is not available yet. With steering enabled this
+  # invokes the host's fail-closed refusal before commit; a leaf never
+  # certifies its replica. With steering disabled the gate is inert.
+  steering_gate:
+    before: commit
+    round: implement_bundle
   default_input:
     task_ids: []
     base_branch: main

@@ -61,7 +61,6 @@ mod auth_recovery;
 mod auto_concurrency;
 mod before_landing;
 mod before_pr;
-mod browser_kit;
 mod cancel;
 mod candidate_carry;
 mod capacity_backoff;

@@ -63,9 +63,6 @@ const WAIT_LABELS = {
   task_pilot_preparation_required: "needs pilot",
   unmet_dependency: "waits on deps",
   baseline_red_hold: "base red",
-  // A `ui` task on a host without a verified browser kit; the badge's title
-  // carries the detail, which names the install command.
-  browser_kit_missing: "needs browser kit",
 };
 
 // Dependencies an `unmet_dependency` entry names, each with its status.

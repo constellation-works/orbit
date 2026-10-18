@@ -50,11 +50,7 @@ verification there until its latest verification record is CONFIRMED and its
 2. **`verify_finding`** (agent, `fsProfile: reviewer`). One worker runs per
    partition, with that partition's crew, at `inspection_revision`. It
    returns one verifier report per task. It has no task-update, lifecycle,
-   dispatch or repository-write grant. Its explicit `tool_disallow_list`
-   withholds mutation and dispatch tools, and the reviewer filesystem profile
-   keeps repository inspection read-only. Shipped activities declare their
-   tool policy explicitly; an empty policy in a custom activity still warns
-   when loaded.
+   dispatch or repository-write grant.
 3. **`apply_finding_verification`** (deterministic). It validates each report
    (§3), then either escalates it (§4) or records it (§5). A second
    `verify_finding` fan-out and a second apply run only when there are

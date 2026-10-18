@@ -22,8 +22,7 @@ use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery};
 
 use super::TaskCommitBoundary;
 use super::admission::{
-    ADMISSION_RESERVATION_TTL_SECONDS, RECEIPT_KIND, StoredReceipt, browser_kit_unavailable,
-    digest, os_unavailable,
+    ADMISSION_RESERVATION_TTL_SECONDS, RECEIPT_KIND, StoredReceipt, digest, os_unavailable,
 };
 use super::lifecycle::{CLAIM, STATE, decode_state, encode, row};
 use super::selection::Screen;
@@ -123,10 +122,6 @@ impl TaskCommitBoundary {
             }
             if let Some(reason) = os_unavailable(task, request, executor_host_os) {
                 receipt.os_unavailable.push(diagnose(reason));
-                continue;
-            }
-            if let Some(reason) = browser_kit_unavailable(task, request) {
-                receipt.browser_kit_unavailable.push(diagnose(reason));
                 continue;
             }
             if let Some(reason) = request

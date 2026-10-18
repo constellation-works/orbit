@@ -455,12 +455,6 @@ pub struct AdmissionRequest {
     /// tasks without an `os:` tag are admitted to it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub os: Option<orbit_types::task::HostOs>,
-    /// Whether the executor's host has a verified headless browser kit, which
-    /// a candidate tagged `ui` needs. A request without the field (one
-    /// recorded before it existed, or from an executor with no kit) declares
-    /// none, so no `ui` task is admitted to it.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub browser_kit: bool,
     /// The work the executor's host load forecast has room for, under
     /// `machine.auto_concurrency.mode = "enforce"`. Absent otherwise, and from
     /// an executor with no resource profiles: then every work class and
@@ -521,11 +515,6 @@ pub struct AdmissionReceipt {
     /// executor runs. They stay in the backlog for a host that does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub os_unavailable: Vec<AdmissionDiagnostic>,
-    /// Ready candidates tagged `ui` skipped because the executor declared no
-    /// verified browser kit ([`AdmissionRequest::browser_kit`]). They stay
-    /// in the backlog for a host that has one.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub browser_kit_unavailable: Vec<AdmissionDiagnostic>,
     /// Ready candidates skipped because their work is outside the request's
     /// [`AdmissionRequest::admissible`] fit. They stay in the backlog until
     /// the executor's host has room, or for another host.

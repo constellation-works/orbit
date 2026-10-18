@@ -538,6 +538,13 @@ fn resume_of_a_lineage_binding_keeps_the_checkpoint_batch_id() {
             at: Utc::now(),
         }),
     );
+    source_state.steering_rounds.insert(
+        source_task.clone(),
+        vec![orbit_types::workflow::SteeringRound {
+            admitted_at: Utc::now(),
+            outstanding: Vec::new(),
+        }],
+    );
     fx.jobs.write_run_state(&source, &source_state).unwrap();
     fx.bind(&source_task, &source);
     let admitted = fx
@@ -552,6 +559,10 @@ fn resume_of_a_lineage_binding_keeps_the_checkpoint_batch_id() {
     assert!(
         seeded.steering_watermarks.is_empty(),
         "a steering watermark names what one run's prompts carried; the resume starts its own"
+    );
+    assert!(
+        seeded.steering_rounds.is_empty(),
+        "steering rounds are one run's budget; the resume starts with all of its own"
     );
     assert_eq!(
         seeded.step_output(0).unwrap()["job_run_id"],

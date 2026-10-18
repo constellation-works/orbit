@@ -1,61 +1,19 @@
 //! The `browser-kit` rows: the host's headless browser kit, the Linux
-//! libraries Chromium needs, `node` on the PATH workers get, and the `ui`
-//! backlog tasks that wait for a kit this host lacks.
+//! libraries Chromium needs, and `node` on the PATH workers get.
 //!
 //! A host without a kit is informational: many hosts never run UI checks.
-//! It becomes a warning once `ui` tasks this host could otherwise start wait
-//! for it, so a single-host user's UI work never waits unexplained.
 
 use std::path::Path;
 
 use orbit_core::OrbitRuntime;
 use orbit_core::bootstrap::browser_kit::{KIT_HOME_RELATIVE, KitLayout, WORKER_ENV_NAMES};
-use orbit_types::task::BROWSER_KIT_INSTALL_COMMAND;
 
 use super::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
 use crate::browser_kit::{KitStatus, NODE_FIX, find_in_path_value, kit_status};
 
+const INSTALL: &str = "orbit browser-kit install";
+
 pub(super) fn browser_kit_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
-    let mut rows = kit_rows(runtime);
-    rows.extend(backlog_row(runtime));
-    rows
-}
-
-/// A warning when backlog tasks tagged `ui` wait only for this host's kit:
-/// its OS satisfies them and its kit is not verified. `None` when nothing
-/// waits for it.
-fn backlog_row(runtime: &OrbitRuntime) -> Option<WorkspaceDoctorResult> {
-    let waiting = match runtime.browser_kit_backlog_waits() {
-        Ok(waiting) => waiting,
-        Err(error) => {
-            return Some(row(
-                "browser-kit-backlog",
-                WorkspaceDoctorStatus::Warning,
-                format!("cannot read the backlog for `ui` tasks: {error}"),
-                Some("Rerun `orbit doctor` once the task store is readable.".to_string()),
-            ));
-        }
-    };
-    if waiting.is_empty() {
-        return None;
-    }
-    Some(row(
-        "browser-kit-backlog",
-        WorkspaceDoctorStatus::Warning,
-        format!(
-            "{} backlog task(s) tagged `ui` wait for a host with a verified browser kit, and this \
-             host has none: {}",
-            waiting.len(),
-            waiting.join(", ")
-        ),
-        Some(format!(
-            "Run `{BROWSER_KIT_INSTALL_COMMAND}` on this host, or leave them for a pull-drain \
-             follower that has a verified kit."
-        )),
-    ))
-}
-
-fn kit_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
     let layout = match KitLayout::current_user() {
         Ok(layout) => layout,
         Err(error) => {
@@ -78,7 +36,7 @@ fn kit_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
                 "no headless browser kit at ~/{KIT_HOME_RELATIVE}; workers cannot check a UI in a browser"
             ),
             Some(format!(
-                "Run `{BROWSER_KIT_INSTALL_COMMAND}` on a host whose workers change web pages."
+                "Run `{INSTALL}` on a host whose workers change web pages."
             )),
         )];
     }

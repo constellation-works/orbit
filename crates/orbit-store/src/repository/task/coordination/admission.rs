@@ -97,19 +97,6 @@ pub(super) fn os_unavailable(
     };
     Some(format!("{wait}; the executor runs {runs}"))
 }
-/// Why a `ui` task excludes the requesting executor, or `None` when it
-/// admits it: the request declares no verified browser kit.
-pub(super) fn browser_kit_unavailable(
-    task: &orbit_types::task::Task,
-    request: &AdmissionRequest,
-) -> Option<String> {
-    (!request.browser_kit && orbit_types::task::requires_browser_kit(&task.tags)).then(|| {
-        format!(
-            "{}; the executor reports no verified kit",
-            orbit_types::task::browser_kit_wait()
-        )
-    })
-}
 pub(super) fn overlaps(left: &[String], right: &[String]) -> bool {
     left.iter()
         .any(|a| right.iter().any(|b| workspace_relative_paths_overlap(a, b)))
@@ -394,7 +381,6 @@ impl TaskCommitBoundary {
             deferred_conflicts: Vec::new(),
             crew_unavailable: Vec::new(),
             os_unavailable: Vec::new(),
-            browser_kit_unavailable: Vec::new(),
             capacity_unavailable: Vec::new(),
             queue_depth: snapshot
                 .backlog

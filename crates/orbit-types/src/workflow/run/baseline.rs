@@ -24,7 +24,6 @@
 //! task and the pull request record those tests as known red
 //! ([`KnownRedValidation`]).
 
-use super::failure_classification_text;
 use crate::identity::lower_hex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -51,9 +50,7 @@ pub const KNOWN_RED_MARKER: &str = "[known_red]";
 #[must_use]
 pub fn is_baseline_red_failure(error_code: Option<&str>, message: Option<&str>) -> bool {
     error_code == Some(BASELINE_RED_ERROR_CODE)
-        || message.is_some_and(|message| {
-            failure_classification_text(message).contains(BASELINE_RED_MARKER)
-        })
+        || message.is_some_and(|message| message.contains(BASELINE_RED_MARKER))
 }
 
 /// Which base a required command failed on, and the command.
@@ -276,7 +273,6 @@ impl BaselineRedHold {
     /// The hold a failure message or history note carries, if any.
     #[must_use]
     pub fn from_text(text: &str) -> Option<Self> {
-        let text = failure_classification_text(text);
         let (_, rest) = text.split_once(BASELINE_RED_MARKER)?;
         serde_json::Deserializer::from_str(rest.trim_start())
             .into_iter::<Self>()
@@ -316,7 +312,6 @@ impl KnownRedValidation {
     /// The record a history note carries, if any.
     #[must_use]
     pub fn from_text(text: &str) -> Option<Self> {
-        let text = failure_classification_text(text);
         let (_, rest) = text.split_once(KNOWN_RED_MARKER)?;
         serde_json::Deserializer::from_str(rest.trim_start())
             .into_iter::<Self>()

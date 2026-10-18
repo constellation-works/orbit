@@ -14,8 +14,8 @@ use orbit_common::process::build_budget::BuildBudgetWaits;
 use orbit_common::security::redaction::{PatternRedactor, redact_all_json};
 use orbit_types::workflow::activity_job::AgentLoopSpec;
 use orbit_types::workflow::{
-    CLI_STDERR_TAIL_SEPARATOR, ProviderFailureClass, ProviderLimitFailure, STALLED_MARKER,
-    TRANSIENT_FAILURE_MARKER, provider_failure_text,
+    ProviderFailureClass, ProviderLimitFailure, STALLED_MARKER, TRANSIENT_FAILURE_MARKER,
+    provider_failure_text,
 };
 use serde_json::Value;
 
@@ -422,9 +422,8 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
                         bounded_diagnostic(diagnostic, redaction)
                     )
                 })
-            });
-        let generic_diagnostic = diagnostic.is_none();
-        let diagnostic = diagnostic.unwrap_or_else(exit_message);
+            })
+            .unwrap_or_else(exit_message);
         // [ORB-13941] A provider that could not authenticate is unusable on
         // this host, not a failed attempt at the work. Only text the provider
         // wrote about itself is read, never the agent's transcript; the typed
@@ -491,22 +490,6 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
                     bounded_diagnostic(&refusal, redaction)
                 ),
             ))
-        } else if generic_diagnostic {
-            // Context only: classify the unchanged exit message, never words
-            // or typed markers a provider happens to quote on stderr.
-            let mut tail: Vec<_> = stderr_text
-                .lines()
-                .rev()
-                .filter(|line| !line.trim().is_empty())
-                .take(4)
-                .collect();
-            tail.reverse();
-            let tail = bounded_diagnostic(&tail.join("\n"), redaction);
-            Some(if tail.is_empty() {
-                diagnostic
-            } else {
-                format!("{diagnostic}{CLI_STDERR_TAIL_SEPARATOR}{tail}")
-            })
         } else {
             Some(diagnostic)
         }

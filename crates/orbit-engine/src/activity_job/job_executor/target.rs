@@ -1,6 +1,11 @@
 use super::reviewer::ReviewerInvocation;
 use super::*;
 
+/// Run-input keys the executor owns and hands every nested target of the
+/// step they belong to unchanged: a final-recovery `resume`'s context and a
+/// steering round's.
+const ENGINE_CONTEXT_KEYS: [&str; 2] = ["final_recovery_resume", STEERING_ROUND_KEY];
+
 pub(super) fn run_target(
     step: &JobV2Step,
     t: &TargetStep,
@@ -13,9 +18,12 @@ pub(super) fn run_target(
         // Recovery's rationale and refused output are opaque data. An
         // inherited input must not render template tokens inside that data;
         // the engine-owned context is inserted unchanged after rendering.
+        // A steering round's context is engine-owned the same way.
         let mut inherited_input = ctx.input.clone();
         if let Some(input) = inherited_input.as_object_mut() {
-            input.remove("final_recovery_resume");
+            for key in ENGINE_CONTEXT_KEYS {
+                input.remove(key);
+            }
         }
         render_input(
             t.default_input.as_ref(),
@@ -24,10 +32,12 @@ pub(super) fn run_target(
             t.input_schema_json.as_ref(),
         )?
     };
-    if let Some(context) = ctx.input.get("final_recovery_resume")
-        && let Some(input) = rendered_input.as_object_mut()
-    {
-        input.insert("final_recovery_resume".to_string(), context.clone());
+    for key in ENGINE_CONTEXT_KEYS {
+        if let Some(context) = ctx.input.get(key)
+            && let Some(input) = rendered_input.as_object_mut()
+        {
+            input.insert(key.to_string(), context.clone());
+        }
     }
     // A rendered activity `crew` or `crew_config_key` selects an assignment;
     // otherwise dispatch inherits the run's resolved crew.

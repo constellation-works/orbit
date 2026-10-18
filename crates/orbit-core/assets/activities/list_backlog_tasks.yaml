@@ -42,9 +42,6 @@ spec:
     re-scoping the acceptance criteria, a newer assessment without the
     finding, or the same evidenced operator decision (recorded as
     `native_os_requirement_resolved`) clears it.
-    A task tagged `ui` on a host whose headless browser kit is not verified
-    is withheld as `browser_kit_missing`, after any `host_os_mismatch`, with
-    `detail` naming `orbit browser-kit install`. The kit is read every pass.
     A review-filed bug (type `bug`, tagged `code-review`,
     `delivery-code-review`, `security-review` or `qa-sweep`) without a
     CONFIRMED verdict from `finding_verification_pipeline` is withheld as
@@ -175,7 +172,6 @@ spec:
                 - delivery_job_unavailable
                 - group_member_conflict
                 - host_os_mismatch
-                - browser_kit_missing
                 - inherited_only_epic_root
                 - local_route_before_pr
                 - provider_backoff

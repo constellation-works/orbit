@@ -32,9 +32,10 @@ use super::{
     FinalRecoveryApplication, FinalRecoveryApplied, HandoffLandingContext, HandoffLandingUpdate,
     PluginBrokerHandle, PluginBrokerRun, PrAutoFixAdmission, PrAutoFixRequest, PrConfig,
     RebaseRecoveryAttemptScope, ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
-    ReviewReportCorrectionRequest, ReviewerInvocationRequest, ScratchGcReport,
-    StepRecoveryAdmission, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
-    StepRecoveryDecisionSlot, TaskActivityUpdate, TaskAutomationUpdate, WorktreeGcTaskLookup,
+    ReviewReportCorrectionRequest, ReviewerInvocationRequest, ScratchGcReport, SteeringGateReading,
+    SteeringRoundAdmission, StepRecoveryAdmission, StepRecoveryDecisionRead,
+    StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, TaskActivityUpdate,
+    TaskAutomationUpdate, WorktreeGcTaskLookup,
 };
 
 /// A [`RuntimeHost`] base for test doubles.
@@ -689,6 +690,23 @@ pub trait NullRuntimeHost: Send + Sync {
         _output: &Value,
     ) -> Result<(), DispatchError> {
         Ok(())
+    }
+
+    fn steering_gate(
+        &self,
+        _run_id: &str,
+        _task_id: &str,
+    ) -> Result<SteeringGateReading, OrbitError> {
+        Ok(SteeringGateReading::Disabled)
+    }
+
+    fn admit_steering_round(
+        &self,
+        _run_id: &str,
+        _task_id: &str,
+        _outstanding: &[orbit_types::workflow::CommentLogMark],
+    ) -> Result<SteeringRoundAdmission, OrbitError> {
+        Err(unsupported_runtime_capability("admit_steering_round"))
     }
 
     fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
@@ -1354,6 +1372,21 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
         request: &FinalRecoveryAdmissionRequest,
     ) -> Result<FinalRecoveryAdmission, OrbitError> {
         NullRuntimeHost::admit_final_recovery(self, run_id, request)
+    }
+    fn steering_gate(
+        &self,
+        run_id: &str,
+        task_id: &str,
+    ) -> Result<SteeringGateReading, OrbitError> {
+        NullRuntimeHost::steering_gate(self, run_id, task_id)
+    }
+    fn admit_steering_round(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        outstanding: &[orbit_types::workflow::CommentLogMark],
+    ) -> Result<SteeringRoundAdmission, OrbitError> {
+        NullRuntimeHost::admit_steering_round(self, run_id, task_id, outstanding)
     }
     fn apply_final_recovery(
         &self,

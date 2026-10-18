@@ -29,9 +29,10 @@ use super::{
     FinalRecoveryApplication, FinalRecoveryApplied, HandoffLandingContext, HandoffLandingUpdate,
     PluginBrokerHandle, PluginBrokerRun, PrAutoFixAdmission, PrAutoFixRequest, PrConfig,
     RebaseRecoveryAttemptScope, ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
-    ReviewReportCorrectionRequest, ReviewerInvocationRequest, ScratchGcReport,
-    StepRecoveryAdmission, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
-    StepRecoveryDecisionSlot, TaskActivityUpdate, TaskAutomationUpdate, WorktreeGcTaskLookup,
+    ReviewReportCorrectionRequest, ReviewerInvocationRequest, ScratchGcReport, SteeringGateReading,
+    SteeringRoundAdmission, StepRecoveryAdmission, StepRecoveryDecisionRead,
+    StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, TaskActivityUpdate,
+    TaskAutomationUpdate, WorktreeGcTaskLookup,
 };
 
 /// The single capability boundary between the job executor and its runtime.
@@ -674,6 +675,36 @@ pub trait RuntimeHost: Send + Sync {
     fn mid_run_steering_enabled(&self) -> bool {
         false
     }
+
+    /// Read mid-run steering's promotion gate for `task_id` of `run_id`,
+    /// before the step the job's `steering_gate` guards
+    /// (`docs/design/mid-run-steering/2_design.md` §3).
+    ///
+    /// With `workflow.mid_run_steering.enabled` off the host reads nothing
+    /// and answers `Disabled`. On, it re-reads the task and its comment log
+    /// and judges them against the run's own watermark; a run that holds no
+    /// watermark for the task counts every operator comment written after
+    /// the run started. The reading comes from those durable records alone,
+    /// never from agent output. A record it cannot read is an error, which
+    /// the gate treats as a refusal. A claimed leaf's host refuses: the
+    /// owner's record is authoritative there, and a replica is never
+    /// certified.
+    fn steering_gate(&self, run_id: &str, task_id: &str)
+    -> Result<SteeringGateReading, OrbitError>;
+
+    /// Admit one more promotion-gate steering round of `run_id` for
+    /// `task_id`, whose gate found `outstanding` undelivered.
+    ///
+    /// The host records an admitted round in the run's state before
+    /// answering, so the round is spent even when its dispatch then fails. It
+    /// refuses once the run spent `workflow.mid_run_steering.max_rounds`, or
+    /// when its last round was admitted for exactly `outstanding`.
+    fn admit_steering_round(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        outstanding: &[orbit_types::workflow::CommentLogMark],
+    ) -> Result<SteeringRoundAdmission, OrbitError>;
 
     /// Resolve a deny-mode activity's callable tools for one agent launch.
     ///

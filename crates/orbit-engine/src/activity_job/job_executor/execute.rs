@@ -119,6 +119,9 @@ pub fn execute_job_with_resume(
     let mut resume_context = resume
         .and_then(|state| state.final_recovery.as_ref())
         .and_then(|checkpoint| checkpoint.resume_context.clone());
+    // Mid-run steering: the round the promotion gate sent the run back for,
+    // as its top-level step index and the context that step receives.
+    let mut steering_round: Option<(usize, Value)> = None;
     let mut overall_ok = true;
     let mut overall_message = None;
     let mut evidence_hold = None;
@@ -144,12 +147,48 @@ pub fn execute_job_with_resume(
             index += 1;
             continue;
         }
+        match run_steering_gate(job, &ctx, step) {
+            SteeringGateOutcome::Proceed => {}
+            SteeringGateOutcome::Round {
+                index: target,
+                context,
+            } => {
+                forget_step_outputs_from(&ctx, job, target);
+                steering_round = Some((target, context));
+                rerunning = true;
+                index = target;
+                continue;
+            }
+            SteeringGateOutcome::Stop(message) => {
+                overall_ok = false;
+                overall_message = Some(message);
+                break;
+            }
+        }
+        // A steering round reruns its step even when its `when:` is false:
+        // a carried candidate still gets the agent step that delivers.
+        let round = steering_round.take_if(|(round_index, _)| *round_index == index);
+        let forced_step;
+        let step = match round {
+            Some(_) => {
+                forced_step = JobV2Step {
+                    when: None,
+                    ..step.clone()
+                };
+                &forced_step
+            }
+            None => step,
+        };
         // Compound steps write nested entries into the shared pipeline; the
         // pre-step map is what tells them apart from earlier steps' entries.
         let pipeline_before = step_is_compound(step).then(|| ctx.pipeline_snapshot());
         // Only the resumed phase receives the context. Nested targets inherit
         // it, even when their default_input replaces the job's input.
         if let Some(input) = ctx.input.as_object_mut() {
+            input.remove(STEERING_ROUND_KEY);
+            if let Some((_, context)) = round.as_ref() {
+                input.insert(STEERING_ROUND_KEY.to_string(), context.clone());
+            }
             input.remove("final_recovery_resume");
             if let Some(context) = resume_context
                 .as_ref()

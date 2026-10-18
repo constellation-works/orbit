@@ -53,8 +53,6 @@ const CLAUDE_REVOKED_TOKEN: &str = r#"{"is_error":true,"api_error_status":401,"r
 mod build_budget;
 #[cfg(unix)]
 mod no_diff;
-#[cfg(unix)]
-mod stderr_failure;
 
 /// Provider failures are control-plane evidence; transcripts and Orbit work
 /// failures must never exclude a crew. Recorded Claude payload: ORB-13965.
@@ -1225,6 +1223,7 @@ fn synthetic_loop_session_job() -> JobV2 {
         resolved_failure_activity: None,
         final_recovery_activity: None,
         resolved_final_recovery_activity: None,
+        steering_gate: None,
         max_active_runs: 1,
         kind: JobKind::Workflow,
         steps: vec![loop_step],

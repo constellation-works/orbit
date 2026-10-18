@@ -170,8 +170,8 @@ pub use audit_envelope::{
 };
 pub use job_v2::{
     BackoffStrategy, FanInSpec, FanOutBlock, JobKind, JobTaskDelivery, JobV2, JobV2Step,
-    JobV2StepBody, JoinMode, LoopBlock, ParallelBlock, PipelineRef, RetrySpec, TargetRef,
-    TargetStep,
+    JobV2StepBody, JoinMode, LoopBlock, ParallelBlock, PipelineRef, RetrySpec, SteeringGateSpec,
+    TargetRef, TargetStep,
 };
 pub use retired::{RetiredFeatureError, validate_job_retired_sessions};
 pub use schema_header::SchemaHeader;

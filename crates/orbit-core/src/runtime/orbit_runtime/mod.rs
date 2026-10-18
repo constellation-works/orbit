@@ -58,10 +58,6 @@ pub struct OrbitRuntime {
     /// This binary's own by default; a fixture composes another so one process
     /// can stand in for a host of each OS.
     host_os: Option<orbit_types::task::HostOs>,
-    /// The home whose headless browser kit admission reads for `ui` tasks.
-    /// `None` is the current user's, read again on every admission pass; a
-    /// fixture points it at a home it controls.
-    browser_kit_home: Option<std::path::PathBuf>,
     /// One shared base-run budget per owner claim settlement. Leaves five
     /// minutes of the routed call's fifteen for observation, cleanup and reply.
     pub(crate) claim_known_red_budget: std::time::Duration,

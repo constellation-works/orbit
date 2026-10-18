@@ -205,12 +205,6 @@ const PULL: OperationSpec<DrainVerb> = OperationSpec {
             false,
             "The executor's host OS: `linux`, `macos` or `windows`. A task tagged `os:<name>` is admitted only to an executor whose OS it names, and is otherwise skipped and stays in the backlog. Omitted: only tasks without an `os:` tag are admissible.",
         ),
-        param(
-            "browser_kit",
-            ParamType::Boolean,
-            false,
-            "Whether the executor's host has a verified headless browser kit. A task tagged `ui` is admitted only to an executor that declares one, and is otherwise skipped and stays in the backlog. Omitted: `false`.",
-        ),
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
