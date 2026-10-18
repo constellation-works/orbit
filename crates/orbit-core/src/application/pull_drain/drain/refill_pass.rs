@@ -45,6 +45,7 @@ impl PullDrain<'_> {
             admitted: 0,
             error: None,
             answer: None,
+            ceiling_full: ceiling == 0,
         };
         pass.error = self
             .refill_into(
@@ -133,6 +134,7 @@ impl PullDrain<'_> {
             {
                 Ok(Some(record)) => record,
                 Ok(None) => {
+                    pass.ceiling_full = true;
                     self.peer.discard(&request)?;
                     break;
                 }

@@ -5,8 +5,8 @@ use orbit_engine::DispatchError;
 use orbit_store::contracts::{AdmissionForecastRecord, OwnerWaveCandidate};
 use orbit_types::task::{NO_DIFF_EXPECTED_TAG, Task};
 use orbit_types::workflow::{
-    DrainAdmissionForecast, DrainAdmissionPass, DrainCapacity, DrainWaitingTask, GapFitHead,
-    RunStateUpdate,
+    DrainAdmissionForecast, DrainAdmissionPass, DrainCapacity, DrainPassObservation,
+    DrainPassOutcome, DrainWaitingTask, GapFitHead, RunStateUpdate,
 };
 use serde_json::{Value, json};
 
@@ -24,6 +24,7 @@ use crate::application::admission::pass_error::PassError;
 use crate::application::admission::stuck_head::report_stuck_head;
 use crate::application::admission::unknown_footprint::{FootprintGuard, whole_tree_holder};
 use crate::runtime::host_resource::forecast::{ForecastDecision, ForecastPoints};
+use crate::runtime::host_signal::HOST_SHUTDOWN_SCHEDULED;
 use crate::runtime::task::locks::lock_context_files_for_task;
 
 use super::drains::{
@@ -415,10 +416,37 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
         degraded: false,
         admission_forecast,
     };
+    let observation = LocalPass {
+        admitted: !admitted.is_empty(),
+        admissions_stopped,
+        host_shutdown_holding: host_shutdown_holding.is_some(),
+        throttle: resource.throttle.as_ref(),
+        pending: !pending.is_empty(),
+        ceiling_full: unthrottled_slots == 0,
+        gap_fit_held: !gap_fit_waiting.is_empty(),
+        // From the full lists: the pass records a bounded excluded list.
+        waiting_reasons: snapshot
+            .excluded
+            .iter()
+            .map(|entry| waiting_reason(entry.reason))
+            .chain(
+                selection
+                    .deferred
+                    .iter()
+                    .map(|deferred| deferred.reason.as_str().to_string()),
+            )
+            .chain(
+                gap_fit_waiting
+                    .iter()
+                    .filter_map(|task| task.reason.clone()),
+            )
+            .collect(),
+    }
+    .observe();
     // Persist the stall's identity before its external friction effect. At
     // threshold one, a first protected pass or a progress reset creates the
     // identity now; losing it after filing would give a retry a different key.
-    let pass_recorded = record_last_pass(runtime, input, pass.clone());
+    let pass_recorded = record_last_pass(runtime, input, pass.clone(), Some(observation));
     // Only `enforce` idles the drain behind a stuck head, so only it files;
     // `shadow` records the stall as what `enforce` would have reported.
     let friction_recorded = if let (true, Some(GapFitMode::Enforce), Some(run_id), Some(head)) = (
@@ -449,7 +477,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
     if friction_recorded {
         // Best effort: even if this id write fails, the durable stall start
         // makes the next pass reuse the friction that was just filed.
-        record_last_pass(runtime, input, pass.clone());
+        record_last_pass(runtime, input, pass.clone(), None);
     }
 
     Ok(json!({
@@ -490,6 +518,56 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
 
 /// The waiting reason of a candidate `enforce` gap fit kept out of a pass.
 const GAP_FIT_REASON: &str = "gap_fit";
+
+/// What decided a local pass's outcome, for its drain's pass counters.
+struct LocalPass<'a> {
+    admitted: bool,
+    admissions_stopped: bool,
+    host_shutdown_holding: bool,
+    throttle: Option<&'a orbit_types::workflow::ResourceThrottle>,
+    /// Admissible candidates not already claimed remained.
+    pending: bool,
+    /// Every slot under the live ceiling was occupied.
+    ceiling_full: bool,
+    /// `enforce` gap fit kept a candidate out.
+    gap_fit_held: bool,
+    waiting_reasons: BTreeSet<String>,
+}
+
+impl LocalPass<'_> {
+    /// The pass's one outcome, in [`DrainPassOutcome`]'s precedence.
+    fn observe(self) -> DrainPassObservation {
+        let mut observation = DrainPassObservation {
+            waiting_reasons: self.waiting_reasons,
+            ..DrainPassObservation::default()
+        };
+        observation.outcome = if self.admitted {
+            DrainPassOutcome::Admitted
+        } else if self.admissions_stopped || self.host_shutdown_holding {
+            observation.held_reason = Some(
+                if self.admissions_stopped {
+                    "admissions_stopped"
+                } else {
+                    HOST_SHUTDOWN_SCHEDULED
+                }
+                .to_string(),
+            );
+            DrainPassOutcome::Held
+        } else if let Some(throttle) = self.throttle {
+            observation.throttled = throttle.kinds();
+            DrainPassOutcome::Throttle
+        } else if !self.pending {
+            DrainPassOutcome::NoCandidate
+        } else if self.ceiling_full {
+            DrainPassOutcome::CeilingFull
+        } else if self.gap_fit_held {
+            DrainPassOutcome::GapFitHeld
+        } else {
+            DrainPassOutcome::Deferred
+        };
+        observation
+    }
+}
 
 /// A pass's wave and, under `shadow` or `enforce`, its gap fit.
 struct GapFitPass {
@@ -698,6 +776,16 @@ fn previous_head(runtime: &OrbitRuntime, input: &Value) -> Option<GapFitHead> {
 /// list so a truncated one still reads as truncated.
 const EXCLUDED_BACKLOG_RECORDED: usize = 20;
 
+/// An exclusion's reason code, as the drain records it.
+fn waiting_reason(
+    reason: crate::application::admission::backlog_exclusion::BacklogTaskExclusionReason,
+) -> String {
+    serde_json::to_value(reason)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_else(|| "excluded".to_string())
+}
+
 fn waiting_excluded(
     excluded: &[BacklogTaskExclusion],
     claim_holders: &ClaimHolders,
@@ -723,9 +811,7 @@ fn waiting_excluded(
             );
             DrainWaitingTask {
                 task_id: entry.id.clone(),
-                reason: serde_json::to_value(entry.reason)
-                    .ok()
-                    .and_then(|value| value.as_str().map(str::to_string)),
+                reason: Some(waiting_reason(entry.reason)),
                 blocked_by,
                 detail: match (entry.detail.clone(), claims) {
                     (Some(detail), Some(claims)) => Some(format!("{detail} {claims}")),
@@ -842,16 +928,29 @@ fn record_admission_forecast(
 /// `orbit run show` can report it after the drain ends. Best effort: a run
 /// that cannot record it must still admit work. Returns whether the pass
 /// was persisted, so an external report can rely on its durable identity.
-fn record_last_pass(runtime: &OrbitRuntime, input: &Value, pass: DrainAdmissionPass) -> bool {
+///
+/// `observation`, when given, counts the pass in the drain's pass counters
+/// in the same write; a rewrite of an already counted pass passes `None`.
+fn record_last_pass(
+    runtime: &OrbitRuntime,
+    input: &Value,
+    pass: DrainAdmissionPass,
+    observation: Option<DrainPassObservation>,
+) -> bool {
     let Some(run_id) = drain_run_id(input) else {
         return false;
     };
-    let mut pass = Some(pass);
+    let mut pass = Some((pass, observation));
     match runtime
         .stores()
         .jobs()
         .update_run_state(run_id, &mut |_, state| {
-            if let Some(pass) = pass.take() {
+            if let Some((pass, observation)) = pass.take() {
+                if let Some(observation) = observation {
+                    state
+                        .pull_drain
+                        .count_admission_pass(&observation, pass.recorded_at);
+                }
                 state.pull_drain.record_admission_pass(pass);
             }
             Ok(())
@@ -911,6 +1010,13 @@ fn defer_lock_busy_pass(
         .update_run_state(run_id, &mut |_, state| {
             let pass = deferred_pass(state.pull_drain.drain_last_pass.as_ref(), &reason);
             failures = Some(pass.consecutive_pass_failures);
+            state.pull_drain.count_admission_pass(
+                &DrainPassObservation {
+                    outcome: DrainPassOutcome::Failed,
+                    ..DrainPassObservation::default()
+                },
+                pass.recorded_at,
+            );
             state.pull_drain.record_admission_pass(pass);
             Ok(())
         });

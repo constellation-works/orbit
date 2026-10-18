@@ -367,6 +367,21 @@ fn passes_held_out_by_a_shared_holder() {
     let pass = last_pass(&runtime, &drain);
     assert_eq!(pass["consecutive_pass_failures"], 0, "{pass}");
     assert_eq!(pass.get("last_pass_error_code"), None, "{pass}");
+    let counters = runtime
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .pull_drain
+        .drain_pass_counters
+        .expect("the drain counts its passes");
+    assert_eq!(
+        counters.outcomes,
+        std::collections::BTreeMap::from([
+            (orbit_types::workflow::DrainPassOutcome::Admitted, 1),
+            (orbit_types::workflow::DrainPassOutcome::Failed, 1),
+        ]),
+        "the deferred pass counts as failed, the next as admitted: {counters:?}"
+    );
     let mut expected = before;
     expected.push(task.id.clone());
     assert_eq!(

@@ -42,7 +42,8 @@ use std::collections::BTreeMap;
 use orbit_common::OrbitError;
 use orbit_store::contracts::PullDestination;
 use orbit_types::workflow::{
-    DrainAdmissionPass, JobRunTrigger, PullSinglePass, ResourceThrottle, ValidationGates,
+    DrainAdmissionPass, DrainPassObservation, JobRunTrigger, PullSinglePass, ResourceThrottle,
+    ValidationGates,
 };
 use serde_json::{Value, json};
 
@@ -88,6 +89,11 @@ impl crate::OrbitRuntime {
     /// `admission_refusal` is why this pass requested no new claim [ORB-15637],
     /// recorded so `orbit run show` and readiness can say so; it is never
     /// carried to a later pass.
+    ///
+    /// `observation`, when given, counts the pass in the drain's pass
+    /// counters in the same write, with every reason an idle answer gave for
+    /// a task it kept off this host.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_pull_pass(
         &self,
         run_id: &str,
@@ -96,6 +102,7 @@ impl crate::OrbitRuntime {
         error: Option<&str>,
         error_code: Option<&str>,
         owner_answer: OwnerAnswer<'_>,
+        observation: Option<DrainPassObservation>,
     ) -> Result<DrainAdmissionPass, OrbitError> {
         let mut recorded = None;
         let answer = match owner_answer {
@@ -166,6 +173,15 @@ impl crate::OrbitRuntime {
                         || consecutive_pass_failures >= PASS_FAILURE_THRESHOLD,
                     admission_forecast: None,
                 };
+                if let Some(observation) = &observation {
+                    let mut observation = observation.clone();
+                    if let Some(answer) = &answer {
+                        observation
+                            .waiting_reasons
+                            .extend(answer.by_reason.keys().cloned());
+                    }
+                    state.pull_drain.count_admission_pass(&observation, now);
+                }
                 state.pull_drain.drain_last_pass = Some(pass.clone());
                 recorded = Some(pass);
                 Ok(())

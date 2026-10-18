@@ -1,12 +1,13 @@
 //! The workspace auto-drain's deterministic actions: the per-iteration
 //! admission classifier, the `--approve-proposed` selection, pilot wait and
-//! report, the drain window, and the read-only readiness projection, plus the live drain
-//! and leaf-run reads they share.
+//! report, the drain window, the read-only readiness projection and limiter
+//! shares, plus the live drain and leaf-run reads they share.
 
 mod adopt;
 mod approvals;
 mod classify;
 mod drains;
+mod limiters;
 mod mode;
 mod readiness;
 mod window;

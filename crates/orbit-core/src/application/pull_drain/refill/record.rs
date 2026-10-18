@@ -5,7 +5,9 @@
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_store::contracts::PullDestination;
-use orbit_types::workflow::{PullAdmissionFit, PullBreaker};
+use orbit_types::workflow::{
+    DrainPassObservation, DrainPassOutcome, PullAdmissionFit, PullBreaker, ResourceThrottle,
+};
 
 use crate::OrbitRuntime;
 use crate::application::distributed::{OwnerAnswer, RefusedPullSettlement};
@@ -27,6 +29,7 @@ pub(super) fn protocol_skew_failure(
         Some(&format!("protocol_skew: {message}")),
         Some("protocol_skew"),
         OwnerAnswer::None,
+        None,
     ) {
         Ok(_) => DispatchError::ProtocolSkew(message),
         Err(error) => DispatchError::DeterministicActionFailed {
@@ -34,6 +37,83 @@ pub(super) fn protocol_skew_failure(
             message: format!("pull drain could not record pass health: {error}"),
         },
     }
+}
+
+/// What decided a pull pass's outcome, for its drain's pass counters. Only a
+/// pass whose window was open is counted: a settle-only pass admits nothing
+/// by design.
+pub(super) struct PullPass<'a> {
+    pub(super) admitted: bool,
+    /// The pass recorded an error.
+    pub(super) failed: bool,
+    /// The drain was already degraded when the pass began.
+    pub(super) degraded: bool,
+    /// Why the pass requested no new claim, as it records it.
+    pub(super) refusal: Option<&'a str>,
+    pub(super) throttle: Option<&'a ResourceThrottle>,
+    /// The refill stopped because every slot under the ceiling was taken.
+    pub(super) ceiling_full: bool,
+    /// The owner answered the pass's last request idle.
+    pub(super) owner_idle: bool,
+}
+
+/// The refusal code of a pass the load forecast held.
+const FORECAST_NO_HEADROOM: &str = "forecast_no_headroom";
+
+impl PullPass<'_> {
+    /// The pass's one outcome, in [`DrainPassOutcome`]'s precedence. The
+    /// owner's idle answer adds its waiting reasons when the pass is recorded.
+    ///
+    /// The forecast is judged before a slot is allocated, so a pass with a
+    /// full ceiling and no forecast room counts as `gap_fit_held`, and one
+    /// whose ceiling is full never asks the owner, so it cannot tell whether
+    /// the backlog had a candidate.
+    pub(super) fn observe(&self) -> DrainPassObservation {
+        let mut observation = DrainPassObservation::default();
+        let refusal = self.refusal.map(refusal_code);
+        observation.outcome = if self.admitted {
+            DrainPassOutcome::Admitted
+        } else if self.failed {
+            DrainPassOutcome::Failed
+        } else if self.degraded {
+            observation.held_reason = Some("pass_failures".to_string());
+            DrainPassOutcome::Held
+        } else if let Some(code) = refusal.clone().filter(|code| code != FORECAST_NO_HEADROOM) {
+            observation.held_reason = Some(code);
+            DrainPassOutcome::Held
+        } else if let Some(throttle) = self.throttle {
+            observation.throttled = throttle.kinds();
+            DrainPassOutcome::Throttle
+        } else if refusal.is_some() {
+            DrainPassOutcome::GapFitHeld
+        } else if self.ceiling_full {
+            DrainPassOutcome::CeilingFull
+        } else if self.owner_idle {
+            DrainPassOutcome::NoCandidate
+        } else {
+            // Nothing else ends a refill early: an operator stop or cancel
+            // recorded while the pass was requesting did.
+            observation.held_reason = Some("admissions_stopped".to_string());
+            DrainPassOutcome::Held
+        };
+        observation
+    }
+}
+
+/// The code a refusal leads with (`circuit_open: ...`), or `owner_refused`
+/// for an owner's free-form answer.
+fn refusal_code(refusal: &str) -> String {
+    refusal
+        .split_once(':')
+        .map(|(code, _)| code.trim())
+        .filter(|code| {
+            code.starts_with(|c: char| c.is_ascii_lowercase())
+                && code
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        })
+        .unwrap_or("owner_refused")
+        .to_string()
 }
 
 /// Record the drain's failure breaker as this pass left it; `None` closes it
