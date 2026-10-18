@@ -12,7 +12,8 @@
 //! cannot reach `review -> done` through this path either.
 use chrono::Utc;
 use orbit_common::{ClaimRefusalKind, OrbitError};
-use orbit_types::task::TaskStatus;
+use orbit_types::task::{TaskHistoryEntry, TaskStatus};
+use orbit_types::workflow::PostDeployRecord;
 use orbit_types::workflow::handoff::*;
 use serde_json::Value;
 
@@ -406,14 +407,16 @@ impl TaskCommitBoundary {
     /// Complete an authorized landing. `evidence` is the owner's verified merge
     /// evidence — the provider's merged pull request or the local target ref —
     /// recorded in task history alongside the transition it permitted.
-    /// A handoff that owes criteria after deploy lands with its task left in
-    /// `review` until an operator records them.
+    /// Persisted unresolved criteria, including a prior handoff's obligations,
+    /// leave the task in `review` until an operator records them met.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn complete_landing_attempt(
         &self,
         auth: &ClaimInvocation,
         state: &ClaimInspection,
         handoff_id: &str,
         evidence: &str,
+        history: &[TaskHistoryEntry],
         params: &mut TaskCoordinationCommitParams,
         effects: &mut ClaimCommitEffects,
     ) -> Result<(), OrbitError> {
@@ -436,11 +439,8 @@ impl TaskCommitBoundary {
             .replacements
             .push((old, row(ATTEMPT, handoff_id, &attempt)?));
         self.settle_landing_request(handoff_id, LandingStartState::Completed, effects)?;
-        let owes = !self
-            .accepted_handoff(&auth.claim_id)?
-            .handoff
-            .owed_criteria
-            .is_empty();
+        let owes =
+            PostDeployRecord::read(history).is_some_and(|record| !record.outstanding().is_empty());
         params.status = (!owes).then_some(TaskStatus::Done);
         params.status_note = Some(evidence.into());
         params.status_event = Some("landing_completed".into());

@@ -8,88 +8,19 @@
 //! comment with evidence records each result. Nothing re-measures on its own,
 //! and a failed criterion is repaired through an ordinary new task.
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{Task, TaskHistoryEntry};
 use orbit_types::workflow::{
-    OwedCriterion, POST_DEPLOY_OWED_EVENT, POST_DEPLOY_RECORDED_EVENT, PostDeployOutcome,
-    PostDeployOwed, PostDeployResult, post_deploy_header,
+    OwedCriterion, POST_DEPLOY_OWED_EVENT, POST_DEPLOY_RECORDED_EVENT, PostDeployOwed,
+    PostDeployRecord as OwedRecord, PostDeployResult, post_deploy_header,
 };
 use serde_json::{Value, json};
 
 use super::TaskRecordUpdateParams;
-use super::helpers::{SYSTEM_ACTOR_LABEL, is_automation_actor};
+use super::helpers::SYSTEM_ACTOR_LABEL;
 use crate::OrbitRuntime;
-
-/// An operator's recorded result for one owed criterion.
-struct Recorded {
-    result: PostDeployResult,
-    by: String,
-    at: DateTime<Utc>,
-}
-
-/// The task's current owed record: the newest [`POST_DEPLOY_OWED_EVENT`],
-/// with the latest operator result after it for each criterion.
-struct OwedRecord {
-    owed: PostDeployOwed,
-    recorded: Vec<Option<Recorded>>,
-}
-
-impl OwedRecord {
-    fn read(history: &[TaskHistoryEntry]) -> Option<Self> {
-        let (start, owed) = history
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(index, entry)| {
-                (entry.event == POST_DEPLOY_OWED_EVENT)
-                    .then(|| serde_json::from_str::<PostDeployOwed>(entry.note.as_deref()?).ok())
-                    .flatten()
-                    .map(|owed| (index, owed))
-            })?;
-        let mut recorded: Vec<Option<Recorded>> = owed.criteria.iter().map(|_| None).collect();
-        for entry in &history[start + 1..] {
-            if entry.event != POST_DEPLOY_RECORDED_EVENT || is_automation_actor(&entry.by) {
-                continue;
-            }
-            let Some(result) = entry
-                .note
-                .as_deref()
-                .and_then(|note| serde_json::from_str::<PostDeployResult>(note).ok())
-            else {
-                continue;
-            };
-            if let Some(slot) = owed
-                .criteria
-                .iter()
-                .position(|owed| owed.criterion == result.criterion)
-            {
-                recorded[slot] = Some(Recorded {
-                    result,
-                    by: entry.by.clone(),
-                    at: entry.at,
-                });
-            }
-        }
-        Some(Self { owed, recorded })
-    }
-
-    /// Criteria no operator has recorded met.
-    fn outstanding(&self) -> Vec<usize> {
-        self.owed
-            .criteria
-            .iter()
-            .zip(&self.recorded)
-            .filter(|(_, recorded)| {
-                !recorded
-                    .as_ref()
-                    .is_some_and(|recorded| recorded.result.outcome == PostDeployOutcome::Met)
-            })
-            .map(|(owed, _)| owed.criterion)
-            .collect()
-    }
-}
 
 /// The `owed_criteria` section of a task record: each criterion the current
 /// delivery owes after deploy, with its state (`owed`, `met` or `failed`).

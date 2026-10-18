@@ -81,14 +81,12 @@ fn hand_off_owing(pair: &Pair) -> (Value, TaskHandoff, String) {
     (pair.pass(&drain), delivered, drain)
 }
 
-fn a_claimed_handoff_owing_a_typed_criterion_lands_in_review() {
-    let pair = Pair::new(1);
-    assess(&pair, true);
-    let (settled, delivered, _) = hand_off_owing(&pair);
-    assert!(settled["error"].is_null(), "{settled}");
+fn authorize_landing(pair: &Pair, delivered: &TaskHandoff) -> (String, ClaimInvocation) {
     let owner = &pair.wire.owner;
-    let claim = &owner.distributed_claim_console().unwrap()["claims"][0];
-    let handoff_id = claim["handoff"]["handoff_id"].as_str().unwrap().to_string();
+    let handoff_id = owner
+        .accepted_task_handoff(&delivered.claim_id)
+        .unwrap()
+        .handoff_id;
     let context = ClaimInvocation::trusted_operator(
         delivered.task_id.clone(),
         delivered.claim_id.clone(),
@@ -122,6 +120,16 @@ fn a_claimed_handoff_owing_a_typed_criterion_lands_in_review() {
             .mutate_execution_claim(Some(&context), id, &mutation)
             .unwrap();
     }
+    (handoff_id, context)
+}
+
+fn a_claimed_handoff_owing_a_typed_criterion_lands_in_review() {
+    let pair = Pair::new(1);
+    assess(&pair, true);
+    let (settled, delivered, _) = hand_off_owing(&pair);
+    assert!(settled["error"].is_null(), "{settled}");
+    let owner = &pair.wire.owner;
+    let (handoff_id, _) = authorize_landing(&pair, &delivered);
     RuntimeHost::record_handoff_landing(owner, &orbit_engine::HandoffLandingUpdate {
         handoff_id,
         step: orbit_engine::HandoffLandingStep::Complete,
@@ -162,9 +170,141 @@ fn a_claimed_handoff_owing_an_untyped_criterion_is_refused() {
     assert!(task.get("owed_criteria").is_none(), "{task}");
 }
 
+/// A repair or replacement must honor the accepted history. Operator results
+/// are recorded after the original landing releases its claim; the automatic
+/// repair case keeps the original, still-unmeasured obligation.
+fn a_repair_omitting_criteria_preserves_the_prior_operator_obligation() {
+    for outcome in ["owed", "failed", "met"] {
+        let pair = Pair::new(1);
+        assess(&pair, true);
+        let (settled, first, drain) = hand_off_owing(&pair);
+        assert!(settled["error"].is_null(), "{settled}");
+        let owner = &pair.wire.owner;
+        let (first_id, _) = authorize_landing(&pair, &first);
+        if outcome == "owed" {
+            RuntimeHost::record_handoff_landing(
+                owner,
+                &orbit_engine::HandoffLandingUpdate {
+                    handoff_id: first_id,
+                    step: orbit_engine::HandoffLandingStep::Stop { repairable: true },
+                    observed: None,
+                    evidence: "candidate conflicts with its moved base".into(),
+                },
+            )
+            .unwrap();
+            assert_eq!(pair.owner_status(&first.task_id), "in-progress");
+        } else {
+            RuntimeHost::record_handoff_landing(owner, &orbit_engine::HandoffLandingUpdate {
+                handoff_id: first_id,
+                step: orbit_engine::HandoffLandingStep::Complete,
+                observed: Some(first.candidate.clone()),
+                evidence: json!({"delivery": {"merge_commit": "e".repeat(40), "pr_number": "42"}, "pull_request": 42}).to_string(),
+            }).unwrap();
+            assert_eq!(pair.owner_status(&first.task_id), "review");
+            record_measurement(&pair, &first.task_id, outcome);
+            owner
+                .update_task_as_human(
+                    &first.task_id,
+                    orbit_core::application::task::TaskUpdateParams {
+                        status: Some(orbit_types::task::TaskStatus::Backlog),
+                        ..Default::default()
+                    },
+                    "human:fixture".into(),
+                )
+                .unwrap();
+        }
+
+        let leaf = pair.running_leaf(&drain, 1);
+        let record = pair.admission(&leaf);
+        assert_eq!(
+            record
+                .receipt
+                .as_ref()
+                .unwrap()
+                .claim
+                .as_ref()
+                .unwrap()
+                .repair
+                .is_some(),
+            outcome == "owed",
+        );
+        let replacement = handoff(&record);
+        // Exercise the persisted handoff wire contract's omitted-field default.
+        let mut wire = serde_json::to_value(&replacement).unwrap();
+        wire.as_object_mut().unwrap().remove("owed_criteria");
+        let replacement: TaskHandoff = serde_json::from_value(wire).unwrap();
+        assert!(replacement.owed_criteria.is_empty());
+        pair.advance(
+            &leaf,
+            LocalPullMutation::Settle(Box::new(ClaimMutation::AcceptHandoff(replacement.clone()))),
+        );
+        pair.follower_jobs
+            .finalize_job_run(&leaf, JobRunState::Success, Utc::now(), None)
+            .unwrap();
+        let settled = pair.pass(&drain);
+        assert!(settled["error"].is_null(), "{settled}");
+        let (handoff_id, _) = authorize_landing(&pair, &replacement);
+        RuntimeHost::record_handoff_landing(owner, &orbit_engine::HandoffLandingUpdate {
+            handoff_id,
+            step: orbit_engine::HandoffLandingStep::Complete,
+            observed: Some(replacement.candidate.clone()),
+            evidence: json!({"delivery": {"merge_commit": "e".repeat(40), "pr_number": "42"}, "pull_request": 42}).to_string(),
+        }).unwrap();
+        let shown = pair.owner_task(&first.task_id);
+        assert_eq!(
+            shown["status"],
+            if outcome == "met" { "done" } else { "review" },
+            "a replacement must honor the persisted {outcome} obligation: {shown}"
+        );
+        assert_eq!(shown["owed_criteria"][0]["state"], outcome, "{shown}");
+        assert_eq!(shown["owed_criteria"][0]["run_id"], first.run_id, "{shown}");
+        assert_eq!(shown["owed_criteria"][0]["criterion"], 1, "{shown}");
+        assert_eq!(shown["owed_criteria"][0]["host"], HOST, "{shown}");
+        assert_eq!(shown["owed_criteria"][0]["command"], COMMAND, "{shown}");
+        if outcome != "met" {
+            record_measurement(&pair, &first.task_id, "met");
+            let completed = orbit_engine::execute_deterministic_action(
+                owner,
+                "task_complete",
+                &json!({}),
+                &json!({"run_id": replacement.run_id, "task_id": first.task_id}),
+                false,
+                &Default::default(),
+                None,
+            )
+            .unwrap();
+            assert_eq!(
+                completed["completed_task_ids"],
+                json!([first.task_id]),
+                "{completed}"
+            );
+            let shown = pair.owner_task(&first.task_id);
+            assert_eq!(shown["status"], "done", "{shown}");
+            assert_eq!(shown["owed_criteria"][0]["state"], "met", "{shown}");
+        }
+    }
+}
+
+fn record_measurement(pair: &Pair, task: &str, outcome: &str) {
+    pair.wire
+        .owner
+        .update_task_as_human(
+            task,
+            orbit_core::application::task::TaskUpdateParams {
+                comment: Some(format!(
+                    "post-deploy: {outcome} 1\nMeasured on the deployed owner host."
+                )),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_claimed_handoff_owing_a_typed_criterion_lands_in_review_scenarios,
     a_claimed_handoff_owing_a_typed_criterion_lands_in_review,
-    a_claimed_handoff_owing_an_untyped_criterion_is_refused
+    a_claimed_handoff_owing_an_untyped_criterion_is_refused,
+    a_repair_omitting_criteria_preserves_the_prior_operator_obligation
 );
