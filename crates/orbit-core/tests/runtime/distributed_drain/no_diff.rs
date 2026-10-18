@@ -4,6 +4,8 @@ use super::*;
 use orbit_types::tool::WorkerInvocation;
 use orbit_types::workflow::handoff::already_landed_scope;
 
+mod task_artifacts;
+
 const CHECK: &str = "git diff --exit-code";
 
 fn engine_action(host: &OrbitRuntime, action: &str, input: &Value) -> Result<Value, OrbitError> {

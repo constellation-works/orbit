@@ -157,9 +157,17 @@ the owner accepts while its copy of the task keeps the tag, and a tagged claim
 that changes code is refused as `no_diff_expected_changed`. An ordinary claim that proves its
 implementation changes nothing may also hand off `NoDiff`. In claimed mode the implementer writes the verifier report
 and its logs beneath `.orbit/tmp/` and returns `no_diff_artifacts` scratch
-references; commit imports and verifies them through the claim. The owner
-rechecks the report against its live base before authorized completion without
-a PR. A changed base or evidence requires fresh validation. When the tests that
+references; commit imports and verifies them through the claim. Required
+ledgers, screenshots and other task artifacts use a separate
+`task_artifacts: [{path, source_path}]` output for diff and no-diff candidates,
+including `no-diff-expected` tasks. Keep sources beneath the leaf's `.orbit/tmp/`
+and each file at most 1 MiB. Commit validates all files before attachment and
+refuses missing or oversized files, scratch escapes and invalid or duplicate
+artifact paths, naming the path. Task artifacts cannot use either clean-tree
+report name or a report's declared log names; `no_diff_artifacts` remains
+limited to the report and its logs. Owner mode uses `orbit.task.artifact.put`.
+The owner rechecks the report against its live base before authorized completion
+without a PR. A changed base or evidence requires fresh validation. When the tests that
 show the base resolves the task run only outside the agent sandbox, the
 implementer also names them as `already_resolved` `cargo test` selectors, and
 `claim_validate` replays each on the base on the claim host; a failing or empty

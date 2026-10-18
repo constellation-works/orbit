@@ -343,6 +343,14 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
             head_moved,
         ));
     }
+    if claimed {
+        super::super::claim::import_implementation_evidence(
+            host,
+            &task.id,
+            &workspace_path,
+            input,
+        )?;
+    }
     stage_paths(&workspace_path, &candidate_paths)?;
 
     let changed_files = staged_changed_files(&workspace_path)?;
@@ -374,14 +382,6 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         if input.get("verify_already_landed").and_then(Value::as_bool) == Some(true)
             && let Some(base_sha) = base_sha.as_deref()
         {
-            if claimed {
-                super::super::claim::import_implementation_evidence(
-                    host,
-                    &task.id,
-                    &workspace_path,
-                    input,
-                )?;
-            }
             return verify_clean_tree(host, &task, &workspace_path, run_id, base_sha).map_err(
                 |error| match empty_stage_error(&task.id, &workspace_path, Some(base_sha)) {
                     Ok(OrbitError::Execution(observed)) => {

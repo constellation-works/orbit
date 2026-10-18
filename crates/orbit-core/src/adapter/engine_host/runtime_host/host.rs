@@ -422,7 +422,7 @@ impl RuntimeHost for OrbitRuntime {
                 "artifacts": [{
                     "path": path,
                     "content": content,
-                    "media_type": "application/json",
+                    "media_type": orbit_types::task::media_type_for_artifact_path(path),
                 }],
             }),
             Default::default(),

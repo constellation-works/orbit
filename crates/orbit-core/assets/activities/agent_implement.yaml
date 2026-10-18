@@ -105,6 +105,20 @@ spec:
               type: string
             description:
               type: string
+      # Claimed mode: required task artifacts for diff and no-diff candidates.
+      # Commit validates every bounded scratch file before attaching through
+      # the claim; names cannot collide with clean-tree reports or their logs.
+      task_artifacts:
+        type: array
+        items:
+          type: object
+          required: [path, source_path]
+          additionalProperties: false
+          properties:
+            path:
+              type: string
+            source_path:
+              type: string
       # Claimed no-diff evidence: the deterministic commit step imports only
       # these bounded scratch files and verifies them before delivery.
       # On an unchanged claimed base without the no-diff-expected tag, missing
@@ -230,9 +244,22 @@ spec:
       under the checkout's `.orbit/tmp/`. Return `no_diff_artifacts` as
       `[{"path":"no-diff.json","source_path":".orbit/tmp/no-diff.json"}, ...]`,
       including each report-referenced log. The deterministic commit step
-      attaches these bytes through the claim and runs the existing verifier;
-      the sandboxed implementer does not call owner artifact tools. This
-      replaces the artifact-attachment requirement in item 12 for claimed mode.
+      attaches these bytes through the claim and runs the existing verifier.
+      `no_diff_artifacts` admits only the clean-tree report and its declared
+      validation logs; required task artifacts belong in `task_artifacts`.
+      This replaces the clean-tree evidence attachment in item 12 for claimed mode.
+    - In claimed mode, for both diff and no-diff candidates (including
+      `no-diff-expected`), write required task artifacts such as ledgers and
+      screenshots under the checkout's `.orbit/tmp/` and return
+      `task_artifacts` as `[{"path":"doc-duties-ledger.json","source_path":".orbit/tmp/doc-duties-ledger.json"}, ...]`.
+      The deterministic commit step validates every file and attaches it
+      through the claim. Missing, oversized, outside-scratch files, duplicate
+      artifact paths, or paths colliding with a clean-tree report or its
+      declared logs refuse the handoff; none are silently dropped. The engine's
+      `no-diff-handoff/<claim>.json` and `validation/<claim>/` names are also
+      reserved for its own checkpoint and validation logs.
+      The sandboxed implementer does not call owner artifact tools. Owner
+      mode continues to use `orbit.task.artifact.put` as item 12 requires.
     - In claimed mode, for tasks without `no-diff-expected`, when the base
       already resolves the task but the tests that show it run only outside
       the agent sandbox (they skip or
