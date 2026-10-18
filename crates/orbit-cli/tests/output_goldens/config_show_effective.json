@@ -473,6 +473,12 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.resource_throttle.cpu_source": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.resource_throttle.disk_high_percent": {
       "scope": "built-in",
       "state": "default",

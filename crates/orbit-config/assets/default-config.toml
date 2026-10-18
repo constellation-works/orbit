@@ -59,6 +59,9 @@ base_branch = "main"
 # Host pressure verdict: high readings sustained for 10 seconds, held until
 # below resume. Unknown/stale readings fail open and are shown distinctly.
 enabled = true
+# Linux: load or utilization (excludes idle and I/O wait).
+# macOS uses Mach utilization for either source.
+cpu_source = "load"
 cpu_high_percent = 90
 cpu_resume_percent = 85
 # While only CPU holds admissions, up to this many `no-diff-expected`

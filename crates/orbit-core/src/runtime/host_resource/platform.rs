@@ -10,7 +10,8 @@ use super::{DiskSample, HostCpuTickHistory, HostResourceProbe, HostResourceSampl
 pub(super) struct NativeProbe {
     cache: Mutex<Option<NativeCache>>,
     now: Arc<dyn Fn() -> Instant + Send + Sync>,
-    #[cfg(target_os = "macos")]
+    proc_root: PathBuf,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     cpu_ticks: Mutex<HostCpuTickHistory>,
 }
 
@@ -19,8 +20,21 @@ impl NativeProbe {
         Self {
             cache: Mutex::new(None),
             now,
-            #[cfg(target_os = "macos")]
+            proc_root: PathBuf::from("/proc"),
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             cpu_ticks: Mutex::new(HostCpuTickHistory::default()),
+        }
+    }
+}
+
+impl NativeProbe {
+    pub(super) fn with_proc_root(
+        root: PathBuf,
+        now: Arc<dyn Fn() -> Instant + Send + Sync>,
+    ) -> Self {
+        Self {
+            proc_root: root,
+            ..Self::with_clock(now)
         }
     }
 }
@@ -35,6 +49,7 @@ struct NativeCache {
     at: Instant,
     sampled_at: chrono::DateTime<chrono::Utc>,
     cpu_percent: Option<f64>,
+    cpu_utilization_percent: Option<f64>,
     memory_percent: Option<f64>,
     io_full_percent: Option<f64>,
     disks: BTreeMap<PathBuf, Option<f64>>,
@@ -57,13 +72,14 @@ impl HostResourceProbe for NativeProbe {
             (self.now)().saturating_duration_since(cache.at) >= super::RESOURCE_CACHE_TTL
         });
         if expired {
-            let (cpu_percent, memory_percent) = self.cpu_memory(history);
+            let (cpu_percent, cpu_utilization_percent, memory_percent) = self.cpu_memory(history);
             *guard = Some(NativeCache {
                 at: (self.now)(),
                 sampled_at: chrono::Utc::now(),
                 cpu_percent,
+                cpu_utilization_percent,
                 memory_percent,
-                io_full_percent: io_full_avg60(),
+                io_full_percent: io_full_avg60(&self.proc_root),
                 disks: BTreeMap::new(),
             });
         }
@@ -82,10 +98,26 @@ impl HostResourceProbe for NativeProbe {
                 *history = local.clone();
             }
         }
+        #[cfg(target_os = "linux")]
+        {
+            let local = self
+                .cpu_ticks
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if local.proc.as_ref().is_some_and(|latest| {
+                history
+                    .proc
+                    .as_ref()
+                    .is_none_or(|shared| latest.sampled_at > shared.sampled_at)
+            }) {
+                history.proc = local.proc.clone();
+            }
+        }
         let Some(cache) = guard.as_mut() else {
             return HostResourceSample {
                 sampled_at: chrono::Utc::now(),
                 cpu_percent: None,
+                cpu_utilization_percent: None,
                 memory_percent: None,
                 io_full_percent: None,
                 disks: paths
@@ -115,6 +147,7 @@ impl HostResourceProbe for NativeProbe {
         HostResourceSample {
             sampled_at: cache.sampled_at,
             cpu_percent: cache.cpu_percent,
+            cpu_utilization_percent: cache.cpu_utilization_percent,
             memory_percent: cache.memory_percent,
             io_full_percent: cache.io_full_percent,
             disks,
@@ -126,10 +159,10 @@ impl HostResourceProbe for NativeProbe {
 /// I/O (`/proc/pressure/io`, `full avg60`). Absent where the host has no
 /// pressure stall information, which admission treats as not gated.
 #[cfg(target_os = "linux")]
-fn io_full_avg60() -> Option<f64> {
+fn io_full_avg60(proc_root: &Path) -> Option<f64> {
     use std::io::Read;
     let mut data = String::new();
-    std::fs::File::open("/proc/pressure/io")
+    std::fs::File::open(proc_root.join("pressure/io"))
         .ok()?
         .take(4096)
         .read_to_string(&mut data)
@@ -138,7 +171,7 @@ fn io_full_avg60() -> Option<f64> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn io_full_avg60() -> Option<f64> {
+fn io_full_avg60(_proc_root: &Path) -> Option<f64> {
     None
 }
 
@@ -184,8 +217,11 @@ fn nearest_existing_ancestor(path: &Path) -> Option<PathBuf> {
 
 #[cfg(target_os = "linux")]
 impl NativeProbe {
-    fn cpu_memory(&self, _history: &mut HostCpuTickHistory) -> (Option<f64>, Option<f64>) {
-        fn read(path: &str) -> Option<String> {
+    fn cpu_memory(
+        &self,
+        history: &mut HostCpuTickHistory,
+    ) -> (Option<f64>, Option<f64>, Option<f64>) {
+        fn read(path: &Path) -> Option<String> {
             use std::io::Read;
             let mut data = String::new();
             std::fs::File::open(path)
@@ -195,14 +231,14 @@ impl NativeProbe {
                 .ok()?;
             Some(data)
         }
-        let cpu = read("/proc/loadavg").and_then(|data| {
+        let cpu = read(&self.proc_root.join("loadavg")).and_then(|data| {
             let load: f64 = data.split_whitespace().next()?.parse().ok()?;
             // SAFETY: sysconf with this constant has no pointer arguments. Use
             // all online host CPUs, not the caller's affinity/cgroup budget.
             let cores = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
             (cores > 0 && load.is_finite() && load >= 0.0).then(|| 100.0 * load / cores as f64)
         });
-        let memory = read("/proc/meminfo").and_then(|data| {
+        let memory = read(&self.proc_root.join("meminfo")).and_then(|data| {
             let mut total = None;
             let mut available = None;
             for line in data.lines() {
@@ -224,18 +260,52 @@ impl NativeProbe {
             (total > 0 && available <= total)
                 .then(|| 100.0 * (total - available) as f64 / total as f64)
         });
-        (cpu, memory)
+        let mut local = self
+            .cpu_ticks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if history.proc.as_ref().is_some_and(|shared| {
+            local
+                .proc
+                .as_ref()
+                .is_none_or(|old| shared.sampled_at > old.sampled_at)
+        }) {
+            local.proc = history.proc.clone();
+        }
+        let current = super::read_host_usage(&self.proc_root).map(|reading| ProcCpuTickSample {
+            sampled_at: chrono::Utc::now(),
+            reading,
+        });
+        let utilization = current.as_ref().and_then(|current| {
+            let old = local.proc.as_ref()?;
+            let age = current
+                .sampled_at
+                .signed_duration_since(old.sampled_at)
+                .to_std()
+                .ok()?;
+            if age.is_zero() || age > super::RESOURCE_MAX_AGE {
+                return None;
+            }
+            let (busy, total) = current.reading.cpu_delta(old.reading)?;
+            Some(100.0 * busy as f64 / total as f64)
+        });
+        local.proc = current;
+        history.proc = local.proc.clone();
+        (cpu, utilization, memory)
     }
 }
 
 #[cfg(target_os = "macos")]
 impl NativeProbe {
-    fn cpu_memory(&self, history: &mut HostCpuTickHistory) -> (Option<f64>, Option<f64>) {
+    fn cpu_memory(
+        &self,
+        history: &mut HostCpuTickHistory,
+    ) -> (Option<f64>, Option<f64>, Option<f64>) {
         with_mach_host(|host| {
             let cpu = self.cpu_percent(host, history);
             let memory =
                 host_memory_bytes(host).map(|(used, total)| 100.0 * used as f64 / total as f64);
-            (cpu, memory)
+            (cpu, cpu, memory)
         })
     }
 }
@@ -467,7 +537,18 @@ pub(super) fn host_cpu_ticks(host: libc::mach_port_t) -> Option<[u32; 4]> {
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 impl NativeProbe {
-    fn cpu_memory(&self, _history: &mut HostCpuTickHistory) -> (Option<f64>, Option<f64>) {
-        (None, None)
+    fn cpu_memory(
+        &self,
+        _history: &mut HostCpuTickHistory,
+    ) -> (Option<f64>, Option<f64>, Option<f64>) {
+        (None, None, None)
     }
+}
+
+/// Linux tick baseline, shared by short-lived admission and readiness processes.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(super) struct ProcCpuTickSample {
+    sampled_at: chrono::DateTime<chrono::Utc>,
+    reading: super::HostUsageReading,
 }

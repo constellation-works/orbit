@@ -136,6 +136,9 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
     ) {
         lines.push(hold);
     }
+    if let Some(source) = capacity["resource_cpu_source"].as_str() {
+        lines.push(format!("Resource throttle CPU source: {source}."));
+    }
     // [ORB-13901] Named up front like a shutdown hold: it holds every task.
     if let Ok(throttle) =
         serde_json::from_value::<ResourceThrottle>(capacity["resource_throttle"].clone())

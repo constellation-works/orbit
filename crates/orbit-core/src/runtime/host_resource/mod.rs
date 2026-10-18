@@ -24,6 +24,7 @@ pub use monitor::HostResourceMonitor;
 pub use pressure::{ResourceAdmission, ResourcePressureEvaluator};
 pub use probe::{
     CachedHostResourceProbe, default_host_resource_probe, host_resource_probe_with_clock,
+    host_resource_probe_with_proc_root,
 };
 pub(crate) use usage::{HostUsageReading, RESOURCE_SAMPLE_INTERVAL, read_host_usage};
 
@@ -49,7 +50,10 @@ pub struct DiskSample {
 #[derive(Debug, Clone)]
 pub struct HostResourceSample {
     pub sampled_at: DateTime<Utc>,
+    /// Legacy pressure signal: Linux load per core, Mach utilization on macOS.
     pub cpu_percent: Option<f64>,
+    /// Measured busy tick share, excluding idle and Linux I/O wait.
+    pub cpu_utilization_percent: Option<f64>,
     pub memory_percent: Option<f64>,
     /// Linux `/proc/pressure/io` `full avg60`. Absent where the host has no
     /// pressure stall information; that is not gated and not unknown.
@@ -65,14 +69,17 @@ pub struct HostCpuTickHistory {
     previous: Option<platform::CpuTickSample>,
     #[serde(default)]
     latest: Option<platform::CpuTickSample>,
+    #[cfg(target_os = "linux")]
+    #[serde(default)]
+    proc: Option<platform::ProcCpuTickSample>,
 }
 
 /// Injectable observation boundary; implementations must use bounded, cheap reads.
 pub trait HostResourceProbe: Send + Sync {
     fn sample(&self, disk_paths: &[PathBuf]) -> HostResourceSample;
 
-    /// Sample with the host's persisted CPU window. Injected and non-Mach probes
-    /// need no tick history and retain their ordinary sampling behavior.
+    /// Sample with the host's persisted CPU window. Injected probes that do not
+    /// measure tick deltas retain their ordinary sampling behavior.
     fn sample_with_cpu_history(
         &self,
         disk_paths: &[PathBuf],

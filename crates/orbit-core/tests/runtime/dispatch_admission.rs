@@ -1446,6 +1446,7 @@ impl HostResourceProbe for PressureProbe {
         HostResourceSample {
             sampled_at: at,
             cpu_percent: cpu,
+            cpu_utilization_percent: None,
             memory_percent: memory,
             io_full_percent: *self.io.lock().unwrap(),
             disks: paths

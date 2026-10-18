@@ -316,6 +316,7 @@ impl ConfigSnapshot {
     pub fn resource_throttle(&self) -> ResourceThrottleSettings {
         ResourceThrottleSettings {
             enabled: self.workflow_resource_throttle_enabled,
+            cpu_source: self.workflow_resource_throttle_cpu_source.clone(),
             cpu_high_percent: self.workflow_resource_throttle_cpu_high_percent,
             cpu_resume_percent: self.workflow_resource_throttle_cpu_resume_percent,
             cpu_light_leaves: self.workflow_resource_throttle_cpu_light_leaves,

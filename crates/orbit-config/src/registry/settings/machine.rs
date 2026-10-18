@@ -99,6 +99,8 @@ impl MachineSettings {
 pub struct ResourceThrottleSettings {
     /// Evaluate a throttle verdict while always retaining pressure telemetry.
     pub enabled: bool,
+    /// CPU signal: `load` (default) or measured `utilization`.
+    pub cpu_source: String,
     /// CPU high-water percentage.
     pub cpu_high_percent: u8,
     /// CPU recovery percentage, strictly below the high-water mark.

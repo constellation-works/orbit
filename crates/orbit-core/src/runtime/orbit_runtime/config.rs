@@ -3,6 +3,11 @@
 use super::OrbitRuntime;
 
 impl OrbitRuntime {
+    /// Effective host resource throttle policy for this runtime.
+    pub fn resource_throttle_settings(&self) -> &orbit_config::ResourceThrottleSettings {
+        self.context.settings().resource_throttle()
+    }
+
     /// Minutes a deferred delivery-automation reason may persist before the
     /// evaluator escalates it to a warning and one friction record.
     pub fn automation_stall_window_minutes(&self) -> u32 {

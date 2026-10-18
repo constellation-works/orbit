@@ -316,6 +316,7 @@ A scheduled host shutdown is a separate hold. `machine.host_shutdown_hold_minute
 | Key | Default | What it does |
 |---|---|---|
 | `workflow.resource_throttle.enabled` | `true` | Enable the throttle verdict. `false` restores unthrottled admission; telemetry and severity are still reported. |
+| `workflow.resource_throttle.cpu_source` | `"load"` | CPU signal: `load` or `utilization`. Linux utilization excludes idle and I/O wait; macOS uses Mach utilization for either choice. |
 | `workflow.resource_throttle.cpu_high_percent` | `90` | CPU high-water mark. |
 | `workflow.resource_throttle.cpu_resume_percent` | `85` | Resume below this CPU percentage. |
 | `workflow.resource_throttle.cpu_light_leaves` | `2` | Leaves a local drain still starts for `no-diff-expected` auto-tasks (reviews, curation) while CPU is the only held resource; memory, disk and I/O pressure hold them too. `0..=32`; `0` holds them with everything else. |
@@ -328,14 +329,23 @@ A scheduled host shutdown is a separate hold. `machine.host_shutdown_hold_minute
 
 **Why disk I/O uses `full`, not `some`.** The CPU, memory and filesystem-space marks cannot see disk bandwidth: a host whose storage saturates before its CPU keeps admitting deliveries into I/O contention. `some` counts time when at least one task waits on I/O, which a healthy build host does constantly. `full` counts time when no runnable task could make progress, so it rises only when the disk, not one slow process, is the bottleneck. `avg60` smooths bursts such as a single link step; the ten-second sustain window below still applies. A 47% `full avg60` on a single NVMe running a dozen validating deliveries is the saturation this guards; the 20% / 10% defaults hold new admissions well before that and release once the backlog drains. Raise `io_full_high_percent` on storage that sustains more concurrent builds, or lower the drain ceiling instead. The mark guards admission only: running deliveries are never cancelled or paused, and a held reading reads `io full` in readiness and the drain's last pass.
 
-Percentages are integers `1..=100`; each resume mark must be below its high mark. A workspace override applies only to that workspace's admission. Each resource's hysteresis history is shared by workspaces with identical high and resume marks; different marks keep independent sustain windows and holds against the same host readings. The host dashboard uses the serving machine's global values, read when its monitor first opens, so restart it after changing them.
+Percentages are integers `1..=100`; each resume mark must be below its high mark. A workspace override applies only to that workspace's admission. Each resource's hysteresis history is shared by workspaces with identical high and resume marks; CPU history also requires the same source. Different marks or CPU sources keep independent sustain windows and holds against the same host readings. The host dashboard uses the serving machine's global values, read when its monitor first opens, so restart it after changing them.
 
 `machine.auto_concurrency.admit_memory_percent` must stay below this table's
 global `memory_high_percent`, since both memory thresholds count non-reclaimable
 memory. Its CPU threshold measures forecast utilization. On Linux this
-table's CPU percentage is load-based (`/proc/loadavg` divided by online CPUs),
-includes the run queue, and can exceed 100%; it is a different quantity from
-CPU utilization.
+table's default CPU source is load-based (`/proc/loadavg` divided by online CPUs),
+includes the run queue and I/O wait, and can exceed 100%. Opt into
+`cpu_source = "utilization"` to use the same busy tick accounting as
+auto-concurrency. It measures the interval between fresh samples (normally
+five seconds during admission), with the same ten-second sustain window and
+high/resume marks as load mode. The first Linux sample, a missing counter,
+a counter reset, a CPU-count change, or a gap over fifteen seconds makes
+utilization unknown and fails open until a usable pair arrives; it never falls
+back to load. I/O pressure remains independently gated by `io full`.
+Readiness reports `capacity.resource_cpu_source` in JSON and a CPU source line
+in text, including while admission is healthy or the throttle is disabled;
+`orbit doctor` reports the effective source as well.
 
 **Verdict.** Below resume is `ok`, between resume and high `elevated`, at or above high `critical`. A resource is held once its high readings span ten seconds (repeated reads of one cached sample do not count; a gap over fifteen seconds restarts the window) and stays held until below resume. A sample that is unavailable, invalid, future-dated or older than fifteen seconds is `unknown` and releases that resource's hold (fail open). Readiness, `orbit run show`, `orbit run auto`, MCP and the dashboard Drain card name the held resource, value, threshold and since-when.
 
@@ -343,7 +353,7 @@ CPU utilization.
 
 | Resource | Linux | macOS |
 |---|---|---|
-| CPU | One-minute load ÷ online CPUs × 100; can exceed 100% and includes I/O wait. | Busy fraction of aggregate Mach CPU tick deltas. A fresh process reuses a CPU tick window from the host's shared pressure history when its baseline is at most fifteen seconds old. Without a usable baseline it waits about 1.1 seconds and reads again, crossing the kernel's shared statistics cache window. |
+| CPU | `load` (default): one-minute load ÷ online CPUs × 100; can exceed 100% and includes I/O wait. `utilization`: busy `/proc/stat` tick deltas excluding idle and I/O wait. | Busy fraction of aggregate Mach CPU tick deltas. A fresh process reuses a CPU tick window from the host's shared pressure history when its baseline is at most fifteen seconds old. Without a usable baseline it waits about 1.1 seconds and reads again, crossing the kernel's shared statistics cache window. |
 | Memory | `(MemTotal - MemAvailable) / MemTotal` | Physical memory minus free and reclaimable inactive pages, so compressed and wired memory count as used (speculative pages are already free; purgeable pages overlap other categories). See Apple's [VM](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/mach/vm_statistics.h) and [host CPU](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/mach/host_info.h) statistics. |
 | Disk | `(total - available) / total` with space available to the current user, for each checkout's filesystem, `.orbit/state/worktrees` (or its nearest existing ancestor) and the global Orbit root (`~/.orbit` or the serving root override). | Same. |
 
