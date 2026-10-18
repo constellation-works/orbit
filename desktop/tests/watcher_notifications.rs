@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 
-use orbit_desktop::watcher::Watcher;
+use orbit_desktop::watcher::{PollSummary, Watcher};
 use serde_json::{Value, json};
 use url::Url;
 
@@ -13,13 +13,31 @@ struct Dashboard {
     review: Vec<Value>,
     fail_page: Option<usize>,
     requests: Vec<(usize, usize)>,
+    /// Every route the watcher asked for, in order.
+    paths: Vec<String>,
     /// Review rows for these workspaces are omitted from this read.
     hidden_review: HashSet<String>,
     /// When set, `hidden_review` is also reported as `unavailable`.
     report_review_unavailable: bool,
     failed: Vec<Value>,
+    /// Overrides `failed.len()` as the local failed-run total.
+    failed_total: Option<u64>,
+    drains: Vec<Value>,
     hidden_failed: HashSet<String>,
     report_failed_unavailable: bool,
+    remote: Option<RemoteHost>,
+}
+
+struct RemoteHost {
+    name: String,
+    /// Every route for this host fails to answer.
+    silent: bool,
+    /// `false` lists the host as unreachable, so the watcher does not poll it.
+    reachable: bool,
+    drains: Vec<Value>,
+    failed: Vec<Value>,
+    failed_total: u64,
+    review: Vec<Value>,
 }
 
 impl Dashboard {
@@ -31,15 +49,26 @@ impl Dashboard {
             hidden_review: HashSet::new(),
             report_review_unavailable: false,
             failed: Vec::new(),
+            failed_total: None,
+            drains: Vec::new(),
             hidden_failed: HashSet::new(),
             report_failed_unavailable: false,
+            paths: Vec::new(),
+            remote: None,
         }
     }
 
     fn get(&mut self, path: &str) -> Option<Value> {
+        self.paths.push(path.to_string());
         let url = Url::parse(&format!("http://127.0.0.1/{path}")).unwrap();
+        if let Some(rest) = url.path().strip_prefix("/api/on/") {
+            return self.remote_route(rest, &url);
+        }
         match url.path() {
-            "/api/fleet/drains" => return Some(json!({"items": [], "total": 0})),
+            "/api/hosts" => return Some(self.hosts_body()),
+            "/api/fleet/drains" => {
+                return Some(json!({"items": self.drains, "total": self.drains.len()}));
+            }
             "/api/job-runs/all" => return Some(self.failed_body()),
             "/api/tasks/all" => {}
             other => panic!("unexpected dashboard route: {other}"),
@@ -78,6 +107,46 @@ impl Dashboard {
         Some(body)
     }
 
+    fn hosts_body(&self) -> Value {
+        let mut hosts = vec![json!({"name": "this-host", "local": true, "reachable": true})];
+        if let Some(remote) = &self.remote {
+            hosts.push(json!({
+                "name": remote.name,
+                "local": false,
+                "reachable": remote.reachable,
+            }));
+        }
+        json!({"hosts": hosts})
+    }
+
+    fn remote_route(&self, rest: &str, url: &Url) -> Option<Value> {
+        let remote = self
+            .remote
+            .as_ref()
+            .unwrap_or_else(|| panic!("remote route without a remote host: {rest}"));
+        let (name, api) = rest
+            .split_once('/')
+            .unwrap_or_else(|| panic!("remote route has no host: {rest}"));
+        assert_eq!(name, remote.name, "forward names the registered host");
+        if remote.silent {
+            return None;
+        }
+        match api {
+            "fleet/drains" => Some(json!({"items": remote.drains, "total": remote.drains.len()})),
+            "job-runs/all" => Some(json!({"items": remote.failed, "total": remote.failed_total})),
+            "tasks/all" => {
+                let query: std::collections::HashMap<_, _> = url.query_pairs().collect();
+                assert_eq!(query.get("status").unwrap().as_ref(), "review");
+                Some(json!({
+                    "items": remote.review,
+                    "total": remote.review.len(),
+                    "next_cursor": null,
+                }))
+            }
+            other => panic!("unexpected remote route: {other}"),
+        }
+    }
+
     fn failed_body(&self) -> Value {
         let items: Vec<&Value> = self
             .failed
@@ -89,7 +158,7 @@ impl Dashboard {
             .collect();
         let mut body = json!({
             "items": items,
-            "total": items.len(),
+            "total": self.failed_total.unwrap_or(items.len() as u64),
         });
         if self.report_failed_unavailable {
             body["unavailable"] = unavailable_entries(&self.hidden_failed);
@@ -98,12 +167,16 @@ impl Dashboard {
     }
 
     fn poll(&mut self, watcher: &mut Watcher) -> Vec<(String, String)> {
+        self.poll_summary(watcher).0
+    }
+
+    fn poll_summary(&mut self, watcher: &mut Watcher) -> (Vec<(String, String)>, PollSummary) {
         let mut notifications = Vec::new();
-        watcher.poll(
+        let summary = watcher.poll(
             |path| self.get(path),
             |title, body| notifications.push((title.to_string(), body.to_string())),
         );
-        notifications
+        (notifications, summary)
     }
 }
 
@@ -305,5 +378,151 @@ fn a_failed_run_from_an_unavailable_workspace_is_not_announced_again() {
     assert!(
         dashboard.poll(&mut watcher).is_empty(),
         "failed-run recovery still suppresses every item of a workspace that was unavailable, including a failure first seen after recovery"
+    );
+}
+
+#[test]
+fn a_remote_failed_run_names_the_host_even_when_the_run_id_matches_locally() {
+    let mut dashboard = Dashboard::new(0);
+    dashboard
+        .failed
+        .push(failed_run("run-1", "workspace-a", "Local failure"));
+    dashboard.remote = Some(RemoteHost {
+        name: "owner".into(),
+        silent: false,
+        reachable: true,
+        drains: Vec::new(),
+        failed: Vec::new(),
+        failed_total: 0,
+        review: Vec::new(),
+    });
+    let mut watcher = Watcher::default();
+    assert!(dashboard.poll(&mut watcher).is_empty());
+    dashboard.paths.clear();
+
+    let remote = dashboard.remote.as_mut().unwrap();
+    remote
+        .failed
+        .push(failed_run("run-1", "workspace-a", "Remote failure"));
+    remote.failed_total = 1;
+    assert_eq!(
+        dashboard.poll(&mut watcher),
+        vec![(
+            "Run failed".into(),
+            "Remote failure · Workspace A · owner".into()
+        )]
+    );
+    let host_lists: Vec<&str> = dashboard
+        .paths
+        .iter()
+        .filter(|path| path.starts_with("api/hosts"))
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        host_lists,
+        vec!["api/hosts?probe=false"],
+        "each poll lists hosts once and does not probe them"
+    );
+    assert!(
+        dashboard
+            .paths
+            .iter()
+            .any(|path| path.starts_with("api/on/owner/job-runs/all?")),
+        "the remote failed-run route is read through the host forward"
+    );
+    assert!(dashboard.poll(&mut watcher).is_empty());
+}
+
+#[test]
+fn tray_counts_sum_across_hosts_and_a_silent_host_keeps_its_baseline() {
+    let mut dashboard = Dashboard::new(0);
+    dashboard.drains = vec![json!({"phase": "draining"}), json!({"phase": "idle"})];
+    dashboard
+        .failed
+        .push(failed_run("local-old", "workspace-a", "Local old"));
+    dashboard.failed_total = Some(2);
+    dashboard.remote = Some(RemoteHost {
+        name: "owner".into(),
+        silent: false,
+        reachable: true,
+        drains: vec![
+            json!({"phase": "pulling"}),
+            json!({"phase": "winding_down"}),
+            json!({"phase": "unavailable"}),
+        ],
+        failed: vec![failed_run("remote-old", "workspace-b", "Remote old")],
+        failed_total: 3,
+        review: vec![task_in(7, "workspace-b", "Workspace B")],
+    });
+    let mut watcher = Watcher::default();
+
+    let (notes, summary) = dashboard.poll_summary(&mut watcher);
+    assert!(notes.is_empty(), "the first read only records the baseline");
+    assert_eq!(
+        summary,
+        PollSummary::Live {
+            drains: Some(3),
+            failed: Some(5)
+        }
+    );
+
+    dashboard.remote.as_mut().unwrap().silent = true;
+    dashboard
+        .failed
+        .push(failed_run("local-new", "workspace-a", "Local new"));
+    dashboard.failed_total = Some(3);
+    let (notes, summary) = dashboard.poll_summary(&mut watcher);
+    assert_eq!(
+        notes,
+        vec![(
+            "Run failed".into(),
+            "Local new · Workspace A · this-host".into()
+        )]
+    );
+    assert_eq!(
+        summary,
+        PollSummary::Live {
+            drains: None,
+            failed: None
+        },
+        "a host that returns nothing is unavailable, not a zero counted into the sum"
+    );
+
+    dashboard.remote.as_mut().unwrap().silent = false;
+    let (notes, summary) = dashboard.poll_summary(&mut watcher);
+    assert!(
+        notes.is_empty(),
+        "failed runs and review tasks the silent host already had are not announced when it returns"
+    );
+    assert_eq!(
+        summary,
+        PollSummary::Live {
+            drains: Some(3),
+            failed: Some(6)
+        }
+    );
+
+    let remote = dashboard.remote.as_mut().unwrap();
+    remote.reachable = false;
+    dashboard.paths.clear();
+    let (notes, summary) = dashboard.poll_summary(&mut watcher);
+    assert!(
+        notes.is_empty(),
+        "a host the list marks unreachable keeps its baseline"
+    );
+    assert_eq!(
+        summary,
+        PollSummary::Live {
+            drains: None,
+            failed: None
+        },
+        "an unreachable host is unavailable, not zero"
+    );
+    assert!(
+        dashboard
+            .paths
+            .iter()
+            .all(|path| !path.starts_with("api/on/")),
+        "an unreachable host is not polled"
     );
 }

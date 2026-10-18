@@ -1,17 +1,21 @@
 //! Reads the app's own dashboard server for the tray summary and native
 //! notifications.
 //!
-//! Every [`INTERVAL`] the watcher reads three `/api` routes of the server the
-//! [`Sidecar`] runs: the fleet drain rows, the failed runs of the last day and
-//! the tasks in review, all across this host's workspaces. The first answer
-//! of each only records what is there; later ones notify for failed runs and
-//! review tasks that were not in the previous answer. Review tasks of a
-//! workspace the server marks unavailable stay remembered, so recovery does
-//! not announce them again; a task that newly appears in review there still
-//! does.
+//! Every [`INTERVAL`] the watcher reads `api/hosts` once, without probing, then
+//! the fleet drain rows, the failed runs of the last day and the tasks in
+//! review. Those three routes are read for this host and for each registered
+//! remote that is not already known to be unreachable, the remotes through
+//! `api/on/<host>/…`. The first answer of each only records what is there;
+//! later ones notify for failed runs and review tasks that were not in the
+//! previous answer. A host that does not answer keeps that baseline, so
+//! recovery does not announce those items again, and its counts stay
+//! unavailable instead of becoming zero. Review tasks of a workspace the
+//! server marks unavailable stay remembered, so recovery does not announce
+//! them again; a task that newly appears in review there still does.
 //!
 //! Notification text names what the dashboard's lists show for the item (a
 //! task title, else the job name) and its workspace, never a run or task id.
+//! When more than one host is registered, it names the host as well.
 
 use std::sync::Arc;
 use std::time::Duration;
