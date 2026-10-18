@@ -796,6 +796,16 @@ impl OrbitRuntime {
                 )));
             }
         }
+        if params.crew.is_some() || params.tags.is_some() {
+            let tags = params.tags.as_deref().unwrap_or(&task.tags);
+            let crew = match &params.crew {
+                Some(crew) => crew.clone(),
+                None => task.crew.clone(),
+            };
+            if let Some(crew) = crew.as_deref() {
+                self.refuse_unsatisfiable_os_crew(tags, crew)?;
+            }
+        }
         if params.status == Some(TaskStatus::Done) && task.status != TaskStatus::Done {
             let mut preview = task.clone();
             if let Some(relations) = &params.relations {

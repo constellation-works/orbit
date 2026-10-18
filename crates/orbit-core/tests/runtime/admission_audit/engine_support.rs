@@ -27,6 +27,7 @@ pub(crate) fn seed_executor(
             env: HashMap::new(),
             sandbox,
             allow_fallback: false,
+            host_os: None,
             created_at: Some(now),
             updated_at: Some(now),
         })

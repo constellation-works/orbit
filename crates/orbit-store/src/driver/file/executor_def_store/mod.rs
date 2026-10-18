@@ -81,6 +81,7 @@ impl ExecutorDefFileStore {
                     env: def.env.clone(),
                     sandbox: def.sandbox,
                     allow_fallback: def.allow_fallback,
+                    host_os: def.host_os.clone(),
                     created_at: def.created_at,
                     updated_at: def.updated_at,
                 },

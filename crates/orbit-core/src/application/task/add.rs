@@ -193,6 +193,12 @@ impl OrbitRuntime {
         params.crew = crew_assignment
             .as_ref()
             .map(|assignment| assignment.crew.clone());
+        if let Some(crew) = params.crew.as_deref() {
+            // An explicit crew is kept, including one this host cannot run: it
+            // waits for a host that can. An empty intersection with the task's
+            // `os:` tags is refused here, before the task is stored.
+            self.refuse_unsatisfiable_os_crew(&normalized_tags, crew)?;
+        }
         params.orchestrator = self.canonical_crew_name(params.orchestrator.as_deref())?;
         if params.orchestrator.is_some()
             && !matches!(initial_status, TaskStatus::Proposed | TaskStatus::Backlog)

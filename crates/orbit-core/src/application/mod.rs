@@ -22,6 +22,7 @@ pub mod config;
 pub mod distributed;
 pub mod epic_retirement;
 pub(crate) mod executor;
+pub(crate) mod executor_host_os;
 pub mod gc;
 pub mod health;
 pub mod job;

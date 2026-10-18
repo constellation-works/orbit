@@ -304,7 +304,7 @@ impl OrbitRuntime {
         };
         let registry = self.context.settings().crews();
         let entries = canonical_crew_pool_entries(&pool.crews, registry, &pool.source)?;
-        let crews = entries
+        let enabled = entries
             .iter()
             .filter(|entry| registry.get(&entry.name).is_some_and(|crew| crew.enabled))
             .map(|entry| {
@@ -314,10 +314,26 @@ impl OrbitRuntime {
                 })
             })
             .collect::<Result<Vec<_>, OrbitError>>()?;
-        if crews.is_empty() {
+        if enabled.is_empty() {
             tracing::info!(
                 source = %pool.source,
                 "every crew in the pool is disabled; routing to workflow.default_crew",
+            );
+            return Ok(None);
+        }
+        // A crew whose executor `host_os` excludes this host is not drawn, so
+        // admission does not select it and then withhold it. Crews with no
+        // declaration stay, with their weights, so an unconstrained pool draws
+        // as before. An explicit crew never reaches this draw.
+        let declared = self.declared_executor_host_os()?;
+        let crews = enabled
+            .into_iter()
+            .filter(|candidate| self.crew_runs_on_host(&candidate.crew, &declared))
+            .collect::<Vec<_>>();
+        if crews.is_empty() {
+            tracing::info!(
+                source = %pool.source,
+                "every crew in the pool is excluded by its executor host_os; routing to workflow.default_crew",
             );
             return Ok(None);
         }
@@ -444,6 +460,13 @@ impl OrbitRuntime {
         // dispatch refuse against `workflow.default_crew` by name.
         let default = self.lookup_crew_for_task(None, None)?;
         if !default.enabled {
+            return Ok(None);
+        }
+        // An excluded default is not pinned: the field stays unset rather than
+        // assigning a crew this host would then withhold. An explicit crew is
+        // returned above and is never replaced.
+        let declared = self.declared_executor_host_os()?;
+        if !self.crew_runs_on_host(&default, &declared) {
             return Ok(None);
         }
         Ok(Some(CreationCrewAssignment {

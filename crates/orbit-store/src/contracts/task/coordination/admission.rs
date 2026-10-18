@@ -1,5 +1,7 @@
 //! Admission authority, wire protocol, and receipt contracts.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::{ClaimCandidateRef, ExecutionClaim};
@@ -17,6 +19,10 @@ pub struct AdmissionOrdering {
     /// The owner's validation gates, captured in the receipt
     /// ([`AdmissionReceipt::gates`]) [ORB-15622].
     pub gates: Option<orbit_types::workflow::ValidationGates>,
+    /// Crew name to the executor `host_os` that constrains tasks assigned to
+    /// it. Empty leaves admission on the task's `os:` tags alone. Not part of
+    /// the follower's request, so it does not change the request fingerprint.
+    pub executor_host_os: BTreeMap<String, orbit_types::task::ExecutorOsLimit>,
 }
 
 /// Authority supplied by the embedding runtime, never deserialized from tool input.

@@ -45,5 +45,11 @@ spec:
     # agent to read the workspace's AGENTS.md itself.
   stdout_format: envelope
   sandbox: macos-sandbox-exec
+  # Muse Code ships macOS and Windows builds. Orbit admits it only on macOS:
+  # native Windows is not an Orbit runtime (ORB-13857), and spawning the
+  # native Windows Muse binary from Orbit-in-WSL2 is unverified. Adding
+  # Windows later is this one line, once that launch is verified.
+  host_os:
+    - macos
   model_flag: "--model"
   env: {}

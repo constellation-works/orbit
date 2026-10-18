@@ -1,6 +1,6 @@
 //! Crew admission, optional-property diagnostics and the workflow default lane.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
@@ -12,6 +12,7 @@ use orbit_common::model_defaults::{
 };
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::{Crew, CrewAssignment, ReasoningEffort, validate_antigravity_model};
+use orbit_types::task::HostOs;
 use orbit_types::workflow::activity_job::Provider;
 
 use super::compatibility::reject_retired_crew_backend;
@@ -180,6 +181,28 @@ pub(crate) fn default_crews() -> BTreeMap<String, Crew> {
         );
     }
     crews
+}
+
+/// Host operating systems `provider`'s executor declares, when it declares any.
+///
+/// `declared` holds only executors that set `host_os`. The provider is
+/// trimmed, matched exactly, then ASCII case-insensitively. An unknown
+/// provider or an omitted declaration is unrestricted (`None`).
+pub fn executor_host_os<'a>(
+    provider: &str,
+    declared: &'a BTreeMap<String, BTreeSet<HostOs>>,
+) -> Option<&'a BTreeSet<HostOs>> {
+    let provider = provider.trim();
+    if provider.is_empty() {
+        return None;
+    }
+    if let Some(hosts) = declared.get(provider) {
+        return Some(hosts);
+    }
+    declared
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(provider))
+        .map(|(_, hosts)| hosts)
 }
 
 fn crew_assignment(model: &str, provider: &str) -> CrewAssignment {

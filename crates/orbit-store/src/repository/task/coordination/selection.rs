@@ -74,6 +74,9 @@ pub(super) struct Screen<'a> {
     /// Each task the owner's local drain admitted whose gate may not have
     /// reserved yet, with its footprint [ORB-15514].
     pub(super) owner_wave: &'a [(String, Vec<String>)],
+    /// Crew name to its executor `host_os`, when the executor declares one.
+    pub(super) executor_host_os:
+        &'a std::collections::BTreeMap<String, orbit_types::task::ExecutorOsLimit>,
 }
 
 impl Screen<'_> {
@@ -151,7 +154,7 @@ impl Screen<'_> {
         // A task whose `os:` tags the executor's OS does not satisfy stays
         // for a host that does, rather than being claimed and failed. The
         // tags are read at each admission, so a retag applies to the next.
-        if let Some(reason) = os_unavailable(task, request) {
+        if let Some(reason) = os_unavailable(task, request, self.executor_host_os) {
             receipt.os_unavailable.push(diagnostic(reason, Vec::new()));
             return None;
         }

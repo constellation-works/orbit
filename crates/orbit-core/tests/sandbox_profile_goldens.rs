@@ -303,6 +303,7 @@ fn seed_linux_executor(runtime: &OrbitRuntime, provider: &str) {
             env: Default::default(),
             sandbox: Some(ExecutorSandboxKind::LinuxBwrap),
             allow_fallback: false,
+            host_os: None,
             created_at: None,
             updated_at: None,
         })

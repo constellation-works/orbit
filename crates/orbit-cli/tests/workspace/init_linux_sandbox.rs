@@ -273,6 +273,26 @@ fn linux_bwrap_dispatch_after_warned_init_refuses_to_launch_the_provider() {
         Some(other) => panic!("unexpected Bubblewrap source {other}: {codex}"),
     }
     assert_eq!(codex["allow_fallback"], false, "{codex}");
+    let muse = providers
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|provider| provider["name"] == "muse")
+        .expect("muse executor");
+    assert_eq!(
+        muse["availability"], "unsupported on this OS",
+        "a macOS-only lane is not a missing binary: {muse}"
+    );
+    let claude = providers
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|provider| provider["name"] == "claude")
+        .expect("claude executor");
+    assert_eq!(
+        claude["availability"], "not installed",
+        "an unrestricted missing binary stays not installed: {claude}"
+    );
     fs::write(root.join("resources/jobs/sandbox_probe.yaml"), "schemaVersion: 2\nkind: Job\nmetadata:\n  name: sandbox_probe\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: probe\n      spec:\n        type: agent_loop\n        description: Sandbox refusal probe\n        instruction: Return the fixture response\n        provider: codex\n        backend: cli\n        wall_clock_timeout_seconds: 5\n").unwrap();
     let output = fixture
         .command()

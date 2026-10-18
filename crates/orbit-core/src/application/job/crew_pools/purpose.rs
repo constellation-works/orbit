@@ -85,7 +85,7 @@ impl OrbitRuntime {
         let settings = self.context.settings();
         let registry = settings.crews();
         let pool = canonical_crew_pool(settings.purpose_crews().pool(purpose), registry, key)?;
-        let candidates = pool
+        let enabled = pool
             .entries
             .iter()
             .filter(|entry| registry.get(&entry.name).is_some_and(|crew| crew.enabled))
@@ -96,13 +96,25 @@ impl OrbitRuntime {
                 })
             })
             .collect::<Result<Vec<_>, OrbitError>>()?;
-        if candidates.is_empty() {
+        if enabled.is_empty() {
             if !pool.entries.is_empty() {
                 tracing::info!(
                     pool = %key,
                     "every crew in the purpose pool is disabled; the purpose keeps its fallback route",
                 );
             }
+            return Ok(None);
+        }
+        let declared = self.declared_executor_host_os()?;
+        let candidates = enabled
+            .into_iter()
+            .filter(|candidate| self.crew_runs_on_host(&candidate.crew, &declared))
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            tracing::info!(
+                pool = %key,
+                "every crew in the purpose pool is excluded by its executor host_os; the purpose keeps its fallback route",
+            );
             return Ok(None);
         }
         if !inspection {

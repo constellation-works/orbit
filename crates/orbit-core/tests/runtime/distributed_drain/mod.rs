@@ -77,6 +77,7 @@ mod failure_class;
 mod flaky_validation;
 #[cfg(unix)]
 mod forge_hold;
+mod host_os_executor;
 #[cfg(unix)]
 mod interrupted_review;
 mod landing_attribution;
@@ -1016,6 +1017,13 @@ fn launchable_providers(runtime: &OrbitRuntime) {
 
 /// Point `provider` at `command`, as an operator's executor definition does.
 fn follower_cli(runtime: &OrbitRuntime, provider: &str, command: &str) {
+    // Rewriting the command must keep a declared `host_os`. Dropping it would
+    // make a Mac-only executor look unrestricted on this stand-in.
+    let host_os = runtime
+        .get_executor_def(provider)
+        .ok()
+        .flatten()
+        .and_then(|def| def.host_os);
     runtime
         .upsert_executor_def(&ExecutorDef {
             name: provider.to_string(),
@@ -1030,6 +1038,7 @@ fn follower_cli(runtime: &OrbitRuntime, provider: &str, command: &str) {
             env: Default::default(),
             sandbox: None,
             allow_fallback: false,
+            host_os,
             created_at: None,
             updated_at: None,
         })

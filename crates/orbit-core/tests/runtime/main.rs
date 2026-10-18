@@ -85,6 +85,7 @@ mod step_recovery;
 mod system_work_crews;
 mod workspace_seed;
 
+mod host_os_executor;
 mod host_os_routing;
 mod host_resources;
 mod implement_blocker;

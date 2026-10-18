@@ -242,6 +242,7 @@ fn seed_executor(runtime: &OrbitRuntime, provider: &str, sandbox: ExecutorSandbo
             env: Default::default(),
             sandbox: Some(sandbox),
             allow_fallback: false,
+            host_os: None,
             created_at: None,
             updated_at: None,
         })

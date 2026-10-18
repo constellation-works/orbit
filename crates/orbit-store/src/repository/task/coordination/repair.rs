@@ -52,8 +52,10 @@ impl TaskCommitBoundary {
         orbit_dir: &Path,
         tasks: &[Task],
         receipt: &mut AdmissionReceipt,
+        executor_host_os: &std::collections::BTreeMap<String, orbit_types::task::ExecutorOsLimit>,
     ) -> Result<bool, OrbitError> {
-        let candidates = self.repair_candidates(identity, request, tasks, receipt)?;
+        let candidates =
+            self.repair_candidates(identity, request, tasks, receipt, executor_host_os)?;
         receipt.queue_depth += candidates.len();
         for candidate in candidates {
             if self.commit_repair_claim(
@@ -76,6 +78,7 @@ impl TaskCommitBoundary {
         request: &AdmissionRequest,
         tasks: &'a [Task],
         receipt: &mut AdmissionReceipt,
+        executor_host_os: &std::collections::BTreeMap<String, orbit_types::task::ExecutorOsLimit>,
     ) -> Result<Vec<RepairCandidate<'a>>, OrbitError> {
         let mut candidates = Vec::new();
         for state in self.claim_states_locked()? {
@@ -113,7 +116,7 @@ impl TaskCommitBoundary {
                 receipt.invalid_candidates.push(diagnose(reason));
                 continue;
             }
-            if let Some(reason) = os_unavailable(task, request) {
+            if let Some(reason) = os_unavailable(task, request, executor_host_os) {
                 receipt.os_unavailable.push(diagnose(reason));
                 continue;
             }
