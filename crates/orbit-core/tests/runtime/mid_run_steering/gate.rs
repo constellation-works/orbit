@@ -13,6 +13,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use orbit_common::OrbitError;
+use orbit_core::OrbitRuntime;
 use orbit_core::TaskStatus;
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_engine::activity_job::load_job_asset;
@@ -20,20 +21,21 @@ use orbit_engine::{
     DispatchError, JobOutcome, RuntimeHost, SteeringGateReading, SteeringRoundAdmission,
     TaskAutomationUpdate, V2AuditWriter, execute_job_with_resume,
 };
-use orbit_tools::{OwnerCoordinator, ToolContext};
+use orbit_tools::ToolContext;
 use orbit_types::task::ExecutionLocation;
-use orbit_types::tool::{ToolSessionContext, WorkerInvocation};
+use orbit_types::tool::WorkerInvocation;
 use orbit_types::workflow::activity_job::JobV2;
 use orbit_types::workflow::{CommentLogMark, JobRunState, PipelineState};
 use serde_json::{Value, json};
 
+use super::claimed::SimulatedOwner;
 use super::{ENABLED, Fixture};
 
 const PIPELINES: [&str; 2] = ["task_local_pipeline", "task_pr_pipeline"];
 
 /// The shipped `pipeline`'s steps up to and including `commit`, each target
 /// replaced by a scripted `probe` labelled with its step id.
-fn pipeline_head(pipeline: &str) -> JobV2 {
+pub(super) fn pipeline_head(pipeline: &str) -> JobV2 {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("assets/jobs/{pipeline}.yaml"));
     let asset: Value = serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let steps = asset["spec"]["steps"].as_array().unwrap();
@@ -88,38 +90,40 @@ fn probe(step: &Value) -> Value {
 
 /// What the scripted implement step does after it built its prompt, given
 /// how many implement prompts the run built before it.
-type OnImplement = Box<dyn Fn(&Fixture, usize) + Send + Sync>;
+pub(super) type OnImplement = Box<dyn Fn(&Fixture, usize) + Send + Sync>;
 
 /// Scripts the deterministic steps; the gate, its rounds, delivery and task
 /// writes are the fixture runtime's.
-struct Pipeline<'a> {
+pub(super) struct Pipeline<'a> {
     fx: &'a Fixture,
     run: String,
     /// `candidate_resume`'s verdict: false carries a candidate past
     /// `implement_bundle`.
-    implement: bool,
-    on_implement: OnImplement,
+    pub(super) implement: bool,
+    pub(super) on_implement: OnImplement,
     /// The gate reads a task that does not exist, so every read fails.
     unreadable: bool,
-    /// The gate has a claimed worker binding and no authoritative owner read.
-    claimed: bool,
+    /// The owner a claimed leaf's binding reaches. With one, the implement
+    /// prompts and the gate run as the claimed leaf of `fx`'s task, whose
+    /// local store is then only the follower's replica.
+    pub(super) owner: Option<Arc<SimulatedOwner>>,
     /// The implement prompt of a steering round fails to read the task.
     round_read_fails: bool,
     /// An operator comment lands right after the gate's next read.
     comment_after_gate_read: Mutex<bool>,
     calls: Mutex<Vec<(String, Value)>>,
-    prompts: Mutex<Vec<Value>>,
+    pub(super) prompts: Mutex<Vec<Value>>,
 }
 
 impl<'a> Pipeline<'a> {
-    fn new(fx: &'a Fixture, run: &str) -> Self {
+    pub(super) fn new(fx: &'a Fixture, run: &str) -> Self {
         Self {
             fx,
             run: run.to_string(),
             implement: true,
             on_implement: Box::new(|_, _| {}),
             unreadable: false,
-            claimed: false,
+            owner: None,
             round_read_fails: false,
             comment_after_gate_read: Mutex::new(false),
             calls: Mutex::new(Vec::new()),
@@ -127,7 +131,7 @@ impl<'a> Pipeline<'a> {
         }
     }
 
-    fn labels(&self) -> Vec<String> {
+    pub(super) fn labels(&self) -> Vec<String> {
         self.calls
             .lock()
             .unwrap()
@@ -172,23 +176,35 @@ impl<'a> Pipeline<'a> {
         .map_err(|error| error.to_string())
     }
 
-    fn execute(&self, job: &JobV2, resume: Option<&PipelineState>) -> JobOutcome {
+    pub(super) fn execute(&self, job: &JobV2, resume: Option<&PipelineState>) -> JobOutcome {
         self.try_execute(job, resume).unwrap()
     }
-}
 
-struct UnreachableOwner;
-
-impl OwnerCoordinator for UnreachableOwner {
-    fn call(
-        &self,
-        _name: &str,
-        _input: Value,
-        _session: ToolSessionContext,
-    ) -> Result<Value, OrbitError> {
-        Err(OrbitError::Execution(
-            "steering fixture owner is unreachable".into(),
-        ))
+    /// The runtime this run's host steps use: `fx`'s own, or with an
+    /// [`Self::owner`] the claimed leaf's, bound to that owner.
+    fn runtime(&self) -> OrbitRuntime {
+        let Some(owner) = &self.owner else {
+            return self.fx.runtime.clone();
+        };
+        self.fx
+            .runtime
+            .clone()
+            .with_worker_invocation(
+                WorkerInvocation {
+                    owner_machine_id: "hm_owner".into(),
+                    owner_workspace_id: "ws_owner".into(),
+                    owner_destination: "owner".into(),
+                    task_id: self.fx.task.clone(),
+                    claim_id: "claim-steering".into(),
+                    execution: ExecutionLocation {
+                        machine_id: "hm_follower".into(),
+                        machine_name: None,
+                    },
+                    bound_run_id: self.run.clone(),
+                },
+                owner.clone(),
+            )
+            .unwrap()
     }
 }
 
@@ -224,7 +240,7 @@ impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
                     input["task_id"].as_str().unwrap()
                 };
                 let prompt = RuntimeHost::task_context_for_agent_input(
-                    &self.fx.runtime,
+                    &self.runtime(),
                     &self.run,
                     "implement_one",
                     &json!({ "task_id": task }),
@@ -252,26 +268,7 @@ impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
         } else {
             task_id
         };
-        let runtime = if self.claimed {
-            self.fx.runtime.clone().with_worker_invocation(
-                WorkerInvocation {
-                    owner_machine_id: "hm_owner".into(),
-                    owner_workspace_id: "ws_owner".into(),
-                    owner_destination: "owner".into(),
-                    task_id: task_id.into(),
-                    claim_id: "claim-steering".into(),
-                    execution: ExecutionLocation {
-                        machine_id: "hm_follower".into(),
-                        machine_name: None,
-                    },
-                    bound_run_id: run_id.into(),
-                },
-                Arc::new(UnreachableOwner),
-            )?
-        } else {
-            self.fx.runtime.clone()
-        };
-        let reading = RuntimeHost::steering_gate(&runtime, run_id, task);
+        let reading = RuntimeHost::steering_gate(&self.runtime(), run_id, task);
         if std::mem::take(&mut *self.comment_after_gate_read.lock().unwrap()) {
             self.fx
                 .operator_comment("STEER-LATE: written while the gate's verdict stands.");
@@ -298,7 +295,7 @@ impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
 }
 
 /// The task, moved to `in-progress` as admission leaves it.
-fn admitted(config: &str) -> Fixture {
+pub(super) fn admitted(config: &str) -> Fixture {
     let fx = Fixture::new(config);
     for status in [TaskStatus::Backlog, TaskStatus::InProgress] {
         fx.runtime
@@ -329,14 +326,14 @@ fn with(mut labels: Vec<&'static str>, tail: &[&'static str]) -> Vec<String> {
     labels.into_iter().map(str::to_string).collect()
 }
 
-fn rounds(fx: &Fixture, run: &str) -> usize {
+pub(super) fn rounds(fx: &Fixture, run: &str) -> usize {
     fx.state(run)
         .steering_rounds
         .get(&fx.task)
         .map_or(0, Vec::len)
 }
 
-fn history_events(fx: &Fixture, event: &str) -> Vec<String> {
+pub(super) fn history_events(fx: &Fixture, event: &str) -> Vec<String> {
     fx.runtime
         .get_task_history(&fx.task)
         .unwrap()
@@ -540,42 +537,6 @@ fn a_first_prompt_steering_round_keeps_truncated_guidance_outstanding() {
             "steering_unconsumed"
         );
         assert_eq!(fx.deliveries()[0]["delivered"], json!([]));
-    }
-}
-
-fn claimed_pipelines_fail_closed_when_the_gate_cannot_certify_the_task() {
-    for pipeline in ["task_claimed_local_pipeline", "task_claimed_pr_pipeline"] {
-        for config in ["", ENABLED] {
-            let fx = admitted(config);
-            let run = fx.run(None);
-            let mut host = Pipeline::new(&fx, &run);
-            host.claimed = true;
-            host.on_implement = Box::new(|fx, _| {
-                fx.operator_comment("STEER: the replica cannot certify delivery.");
-            });
-            let outcome = host.execute(&pipeline_head(pipeline), None);
-            if config.is_empty() {
-                assert!(outcome.success, "{pipeline}: steering off remains inert");
-                assert!(host.labels().iter().any(|label| label == "commit"));
-            } else {
-                assert!(
-                    !outcome.success,
-                    "{pipeline}: an uncertifiable comment log cannot commit"
-                );
-                assert!(
-                    !host.labels().iter().any(|label| label == "commit"),
-                    "{pipeline}"
-                );
-                assert_eq!(outcome.pipeline["commit"]["decision"], "unreadable");
-                assert!(
-                    outcome
-                        .message
-                        .unwrap()
-                        .contains("replica is never certified")
-                );
-            }
-            assert_eq!(rounds(&fx, &run), 0, "{pipeline}");
-        }
     }
 }
 
@@ -795,7 +756,6 @@ crate::scenario_table!(
     a_refusal_spends_one_round_whose_prompt_delivers_and_then_commits,
     a_first_prompt_steering_round_delivers_comments_omitted_from_task_context,
     a_first_prompt_steering_round_keeps_truncated_guidance_outstanding,
-    claimed_pipelines_fail_closed_when_the_gate_cannot_certify_the_task,
     an_unresolved_resume_lineage_fails_closed_instead_of_forgetting_steering,
     exhausted_or_unobservable_rounds_block_the_task_as_steering_unconsumed,
     a_round_that_cannot_read_the_task_is_spent_and_keeps_its_own_failure,

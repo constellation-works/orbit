@@ -72,6 +72,7 @@ mod claimed_host_gates;
 mod claimed_owed_evidence;
 mod claimed_owner;
 mod claimed_review;
+mod claimed_steering;
 mod desktop_completion;
 mod failure_class;
 mod flaky_validation;

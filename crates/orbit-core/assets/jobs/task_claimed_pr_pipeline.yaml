@@ -127,9 +127,10 @@ spec:
   # [ORB-14338] Carry a committed, unpublished candidate to a durable ref on
   # `origin` for the task's next claim, on whatever host it runs.
   failure_activity: claim_candidate_carry
-  # Owner-routed steering is not available yet. With steering enabled this
-  # invokes the host's fail-closed refusal before commit; a leaf never
-  # certifies its replica. With steering disabled the gate is inert.
+  # With steering enabled the gate reads the task's comment log and the
+  # leaf's watermark from the owner, never the replica, and an owner it
+  # cannot read fails the run before commit. With steering disabled the gate
+  # is inert.
   steering_gate:
     before: commit
     round: implement_bundle

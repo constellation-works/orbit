@@ -22,6 +22,7 @@ use orbit_types::workflow::{CommentLogMark, PipelineState, SteeringWatermark};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod claimed;
 mod gate;
 
 const ENABLED: &str = "[workflow.mid_run_steering]\nenabled = true\n";

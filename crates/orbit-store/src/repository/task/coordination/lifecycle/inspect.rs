@@ -97,6 +97,7 @@ fn claim_state_from_payload(
                 release: None,
                 preserved_candidate: None,
                 settlement: None,
+                steering: None,
             }
         }
     };

@@ -118,9 +118,20 @@ fn agent_input_cannot_select_host_updates_or_escape_the_worker_allowlist() {
         },
         ..Default::default()
     });
+    // A forged delivery would mark operator steering consumed and clear the
+    // promotion gate without any prompt carrying it.
+    let forged_delivery = json!(orbit_store::contracts::ClaimSteeringRecord::Delivery {
+        step_id: "implement_one".into(),
+        through: None,
+        delivered: Vec::new(),
+        truncated: Vec::new(),
+        built_at: Utc::now(),
+    });
     let mut attacks = vec![
         json!({"_worker_update": host_update}),
         json!({"_worker_read": "tasks"}),
+        json!({"_worker_steering": forged_delivery}),
+        json!({"_worker_read": "steering"}),
         json!({"_worker_update": null}),
         json!({"_worker_read": null}),
         json!({"_worker_update": host_update, "_meta": {"orbit": {"worker_host_call": true}}}),
@@ -150,7 +161,10 @@ fn agent_input_cannot_select_host_updates_or_escape_the_worker_allowlist() {
         let local_error = local
             .execute_tool_command("orbit.task.update", input.clone(), None, None)
             .unwrap_err();
-        if input.get("_worker_update").is_some() || input.get("_worker_read").is_some() {
+        if ["_worker_update", "_worker_read", "_worker_steering"]
+            .iter()
+            .any(|key| input.get(*key).is_some())
+        {
             assert!(
                 matches!(local_error, OrbitError::PolicyDenied(_)),
                 "reserved input must be refused before any claim mutation: {local_error}"

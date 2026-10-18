@@ -9,7 +9,7 @@ use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_store::contracts::{
-    ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimRun, ClaimWorkerUpdate,
+    ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimRun, ClaimSteeringRecord, ClaimWorkerUpdate,
 };
 use orbit_tools::OrbitBuiltinAction;
 use orbit_types::tool::{ToolSessionContext, WorkerInvocation};
@@ -157,6 +157,17 @@ pub(crate) fn execute(
             "comments" => serde_json::to_value(runtime.get_task_comments(id)?),
             "history" => serde_json::to_value(runtime.get_task_history(id)?),
             "dependency_history" => serde_json::to_value(runtime.dependency_history(id)?),
+            // Mid-run steering's records for this worker's own claim, never
+            // another task's: its promotion gate certifies only what the
+            // owner holds.
+            "steering" => {
+                if id != binding.task_id {
+                    return Err(OrbitError::PolicyDenied(
+                        "worker task binding mismatch".into(),
+                    ));
+                }
+                serde_json::to_value(runtime.worker_claim_steering(&worker_auth(binding))?)
+            }
             "dependency" => match runtime.resolve_dependency_task(id)? {
                 orbit_store::RegisteredTaskResolution::Resolved(task) => serde_json::to_value(task),
                 _ => {
@@ -352,6 +363,18 @@ fn worker_update(
         return Err(OrbitError::PolicyDenied(
             "worker task binding mismatch".into(),
         ));
+    }
+    // The host's own record of what a prompt it built carried; agent tool
+    // calls cannot reach this channel (`check_worker_host_input`).
+    if let Some(record) = input.get("_worker_steering") {
+        let record: ClaimSteeringRecord = serde_json::from_value(record.clone())
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+        return apply(
+            runtime,
+            session,
+            ClaimMutation::Steering(record),
+            Vec::new(),
+        );
     }
     if let Some(update) = input.get("_worker_update") {
         let update: ClaimWorkerUpdate = serde_json::from_value(update.clone())

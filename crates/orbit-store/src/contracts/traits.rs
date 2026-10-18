@@ -116,6 +116,22 @@ pub trait TaskStoreBackend: Send + Sync {
     fn verify_worker_claim(&self, _context: &super::ClaimInvocation) -> Result<(), OrbitError> {
         Err(OrbitError::Store("claim lifecycle unavailable".into()))
     }
+    /// A claimed leaf's mid-run steering records, refused as `stale_claim`
+    /// unless its claim is still running. Unavailable backends fail closed.
+    fn worker_claim_steering(
+        &self,
+        _context: &super::ClaimInvocation,
+    ) -> Result<super::ClaimSteeringReading, OrbitError> {
+        Err(OrbitError::Store("claim lifecycle unavailable".into()))
+    }
+    /// The mid-run steering watermark the task's most recent claim recorded.
+    /// A store without a claim journal recorded none.
+    fn task_claim_steering(
+        &self,
+        _task_id: &str,
+    ) -> Result<Option<orbit_types::workflow::SteeringWatermark>, OrbitError> {
+        Ok(None)
+    }
     fn inspect_execution_claims(&self) -> Result<Vec<super::ClaimInspection>, OrbitError> {
         Err(OrbitError::Store("claim inspection unavailable".into()))
     }

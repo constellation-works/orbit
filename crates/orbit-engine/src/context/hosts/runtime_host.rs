@@ -686,9 +686,9 @@ pub trait RuntimeHost: Send + Sync {
     /// watermark for the task counts every operator comment written after
     /// the run started. The reading comes from those durable records alone,
     /// never from agent output. A record it cannot read is an error, which
-    /// the gate treats as a refusal. A claimed leaf's host refuses: the
-    /// owner's record is authoritative there, and a replica is never
-    /// certified.
+    /// the gate treats as a refusal. A claimed leaf's host reads the task,
+    /// its comment log and the leaf's watermark from the owner's record,
+    /// never its replica, and an owner it cannot read is such an error.
     fn steering_gate(&self, run_id: &str, task_id: &str)
     -> Result<SteeringGateReading, OrbitError>;
 

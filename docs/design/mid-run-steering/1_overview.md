@@ -1,8 +1,8 @@
 ---
 title: Mid-Run Operator Steering — Overview
 owner: muse
-last_updated: 2026-10-17
-last_validated: 2026-10-17
+last_updated: 2026-10-18
+last_validated: 2026-10-18
 status: Draft
 feature: mid-run-steering
 doc_role: overview
@@ -34,7 +34,7 @@ This is structural, not a prompting lapse. `agent_task_context_json` (`crates/or
 
 ## 3. At a Glance
 
-All paths below name where the mechanism lives or would live. The configuration keys, the snapshot watermark, delivery at safe points and the promotion gate are implemented; owner-routed reads for claimed leaves are not ([2_design.md](./2_design.md)).
+All paths below name where the mechanism lives or would live. The configuration keys, the snapshot watermark, delivery at safe points and the promotion gate are implemented, including owner-authoritative reads and records for claimed leaves ([2_design.md](./2_design.md)).
 
 | Concern | File | Task |
 |---------|------|------|
