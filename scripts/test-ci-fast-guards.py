@@ -610,6 +610,82 @@ log("end {name}")
             "-- cargo +1.89 check --workspace --locked",
         ])
 
+    def test_static_runs_file_guards_and_rejects_public_ids_without_build_or_network(self):
+        """Early handoff catches shipped IDs while retaining fast's file guards."""
+        self.prepare_ci()
+        fast = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(fast.returncode, 0, fast.stderr)
+        expected = {path.name for path in self.guard_calls.iterdir()
+                    if not path.name.startswith("test-") or path.name == "test-qa-full-sweep.py"}
+        expected -= {"check-workflow-action-pins.sh", "check-desktop-ui.sh", "smoke-plugin-install.sh"}
+        self.log.unlink()
+        # A real production-string guard, not a stubbed failure. Check clean,
+        # seeded bad and repaired input through the new public Make command.
+        shutil.copy2(SCRIPTS / "check-public-artifact-ids.py", self.scripts)
+        shutil.copy2(SCRIPTS.parent / "Makefile", self.root)
+        self.write_executable(self.scripts / "check-stability.sh",
+                              '#!/bin/sh\n[ "$CARGO_NET_OFFLINE" = true ] || exit 7\n'
+                              ': > "$GUARD_TEST_CALLS/check-stability.sh"\n'
+                              'cargo metadata --no-deps --format-version 1 --locked >/dev/null\n')
+        source = self.root / "crates/example/src/lib.rs"
+        source.parent.mkdir(parents=True)
+        for text, succeeds in (("pub const ERROR: &str = \"task <id> failed\";", True),
+                               ("pub const ERROR: &str = \"task ORB-12345 failed\";", False),
+                               ("pub const ERROR: &str = \"task <id> failed\";", True)):
+            with self.subTest(succeeds=succeeds):
+                source.write_text(text)
+                self.log.unlink(missing_ok=True)
+                for call in self.guard_calls.iterdir():
+                    call.unlink()
+                result = subprocess.run(["make", "ci-guards"], cwd=self.root,
+                                        env=self.env, text=True, capture_output=True)
+                self.assertEqual(result.returncode == 0, succeeds, result.stdout + result.stderr)
+                # The real guard has no call receipt; every other file guard
+                # still ran. Excluded network/behavior/self-test stubs did not.
+                actual = {path.name for path in self.guard_calls.iterdir()}
+                self.assertEqual(actual, expected - {"check-public-artifact-ids.py"})
+                calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+                self.assertEqual(calls, [["metadata", "--no-deps", "--format-version", "1", "--locked"]],
+                                 "static mode must use only offline metadata, never build or format")
+                if not succeeds:
+                    self.assertIn("FAILED check-public-artifact-ids.py", result.stderr)
+                    self.assertIn("concrete artifact ID", result.stderr)
+
+    def test_static_qa_inventory_uses_offline_metadata_and_no_self_tests(self):
+        """QA's isolated child must retain the static lane's no-network contract."""
+        (self.scripts / "qa-full-sweep-inventory.json").write_text(json.dumps({"scenarios": []}))
+        self.write_executable(self.bin / "cargo", f'''#!/usr/bin/env python3
+import json, sys
+from pathlib import Path
+Path({str(self.log)!r}).write_text(json.dumps(sys.argv[1:]))
+assert sys.argv[1] == "metadata" and "--offline" in sys.argv, sys.argv
+print(json.dumps({{"packages": []}}))
+''')
+        driver = self.root / "driver.py"
+        driver.write_text('''import importlib.util, sys
+spec = importlib.util.spec_from_file_location("qa", sys.argv.pop(1))
+qa = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(qa)
+qa.validate_inventory = lambda *_: ([], {})
+def forbidden():
+    raise AssertionError("static inventory ran fixture self-tests")
+qa.self_test = forbidden
+qa.main()
+''')
+        command = [sys.executable, str(driver), str(SCRIPTS / "test-qa-full-sweep.py"),
+                   "--repo-root", str(self.root), "--check", "--static"]
+        result = subprocess.run(command, env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(self.log.read_text()),
+                         ["metadata", "--no-deps", "--format-version", "1", "--locked", "--offline"])
+        self.log.unlink()
+        for argument in ("--check-cargo-selections", "--run-commands", "--self-test"):
+            with self.subTest(argument=argument):
+                result = subprocess.run([*command, argument], env=self.env,
+                                        text=True, capture_output=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(self.log.exists(), "invalid static mode launched Cargo")
+
     def test_fast_does_not_enumerate_or_compile_tests(self):
         self.prepare_ci()
         result = self.run_guard("ci-guardrails.sh", "--fast")

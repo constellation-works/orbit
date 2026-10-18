@@ -383,6 +383,24 @@ spec:
        summary, never as passed. A clean no-op or already-landed handoff
        skips that validation, so it runs and records every required check
        (item 12). Without the field, you own every check.
+       For a candidate diff, when the workspace provides `make ci-guards`,
+       run it before handoff and fix every reported static guard violation, even
+       when `make ci-fast` is listed for pipeline final validation. In Rust
+       workspaces, also run `cargo fmt --all -- --check`, covering test targets
+       as well as production code. When applying rustfmt fixes, include changed
+       test files too; never restrict formatting to `src/` or library files.
+       For changed test `.rs` files, also run `rustfmt --check --edition <edition> <path> ...`
+       using the owning crate's edition. In workspaces providing
+       `ci-lint` and `scripts/build-budget.py`, mirror
+       these checks for each changed crate (`<crate>` is its package name):
+       - `scripts/build-budget.py -- cargo clippy -p <crate> --lib --bins -- -D warnings -D clippy::disallowed_methods`
+       - `scripts/build-budget.py -- cargo clippy -p <crate> --all-targets -- -D warnings -A clippy::disallowed_methods`
+       - `RUSTDOCFLAGS="-D warnings" scripts/build-budget.py -- cargo doc --no-deps -p <crate>`
+       The production pass retains the channel restriction; the all-targets
+       pass covers test targets, and rustdoc rejects broken/private links.
+       These focused checks do not replace final validation: leave whole
+       `task.final_validation_commands` entries to the pipeline, which
+       remains authoritative. Record commands and outcomes in the handoff.
        If workspace guidance requires
        a check on another platform, record it as not run and arrange the
        evidence that guidance specifies rather than claiming it passed.
@@ -480,6 +498,8 @@ spec:
     10. Review the deliverable and diff for accuracy, unintended changes, and
         stale material; run required checks unless tagged `no-diff-expected`,
         leaving a diff's `task.final_validation_commands` to the pipeline.
+        On a diff, complete item 7's early static guards and scoped Rust
+        checks after your last repair before handing off.
         Run-owned non-deliverable output is only what `git status --short` adds to the
         item 3 baseline; ignored build output, caches, and sandbox-owned paths
         like `<worktree>/target` are not yours to remove and never block
