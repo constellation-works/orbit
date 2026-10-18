@@ -102,13 +102,15 @@ impl OrbitRuntime {
                 .into_iter()
                 .rev()
                 .find(|step| {
-                    step.error_message
-                        .as_deref()
-                        .is_some_and(|message| !message.is_empty())
-                        || matches!(
-                            step.state.as_deref(),
-                            Some("error" | "failed" | "timeout" | "interrupted")
-                        )
+                    step.state.as_deref() != Some("skipped")
+                        && (step
+                            .error_message
+                            .as_deref()
+                            .is_some_and(|message| !message.is_empty())
+                            || matches!(
+                                step.state.as_deref(),
+                                Some("error" | "failed" | "timeout" | "interrupted")
+                            ))
                 })
                 .map(|step| step.step_id)
         };
