@@ -287,7 +287,7 @@ Common failures:
 
 - **`--locked` build fails:** `Cargo.lock` wasn't refreshed. Fix it in the next patch.
 - **Homebrew step fails:** `TAP_GITHUB_TOKEN` expired, or tap branch protection rejected the push.
-- **Desktop job fails:** the CLI release has already published, so nothing is blocked. A missing Apple secret is named in the log, and an expired certificate or a revoked app-specific password shows up as a signing or notarization error. Fix the secret and re-run the failed jobs: `publish-desktop` adds the missing assets. A version mismatch means `desktop/Cargo.toml` wasn't bumped, so fix it in the next patch.
+- **Desktop job fails:** the CLI release has already published, so nothing is blocked. A missing Apple secret is named in the log, and an expired certificate or a revoked app-specific password shows up as a signing or notarization error. Fix the secret and re-run the failed jobs: `publish-desktop` adds only missing assets, hashing downloaded published bundles even if a rebuild differs. It uploads the checksum manifest and signature last; a complete retry verifies them without uploading again. Conflicting metadata from an older partial upload requires a new release rather than replacement assets. A version mismatch means `desktop/Cargo.toml` wasn't bumped, so fix it in the next patch.
 - **Installer smoke fails:** there's a regression in the tagged `install.sh`.
 - **npm smoke red after publish:** either the tagged script speaks an old CLI contract, or the published artifact is bad. Triage with the [runbook](docs/runbooks/release.md#npm-install-smoke-two-artifacts). Fix a script-only problem on `agent-main` without a patch release, and don't re-dispatch the old tag after the script has moved on.
 

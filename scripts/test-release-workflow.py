@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Execute release metadata and Homebrew scripts offline with hostile inputs."""
+"""Execute release publication and Homebrew scripts offline with hostile inputs."""
 
 import base64
+import hashlib
+import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import tempfile
+import textwrap
 import unittest
 
 try:
@@ -17,6 +20,16 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github/workflows/release.yml"
+DESKTOP_BUNDLES = (
+    "orbit-desktop-universal-apple-darwin.dmg",
+    "orbit-desktop-x86_64-unknown-linux-gnu.deb",
+    "orbit-desktop-x86_64-unknown-linux-gnu.AppImage",
+    "orbit-desktop-aarch64-unknown-linux-gnu.deb",
+    "orbit-desktop-aarch64-unknown-linux-gnu.AppImage",
+)
+DESKTOP_VERSION = "orbit-desktop-version.txt"
+DESKTOP_MANIFEST = "orbit-desktop-checksums.txt"
+DESKTOP_SIGNATURE = DESKTOP_MANIFEST + ".sig"
 
 
 @unittest.skipIf(yaml is None, "PyYAML not installed; the workflow guard skips locally without it")
@@ -54,8 +67,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
             output = re.fullmatch(r"\$\{\{ needs\.publish-release\.outputs\.(\w+) \}\}", value)
             if output:
                 env[key] = self.outputs[output[1]]
-            elif value == "${{ secrets.TAP_GITHUB_TOKEN }}":
+            elif value in ("${{ secrets.TAP_GITHUB_TOKEN }}", "${{ github.token }}"):
                 env[key] = "offline-test-token"
+            elif value == "${{ secrets.ORBIT_RELEASE_SIGNING_KEY_PEM }}":
+                env[key] = self.signing_key.read_text()
             else:
                 self.fail(f"unsupported workflow env binding: {key}")
         env.update(values)
@@ -67,6 +82,197 @@ class ReleaseWorkflowTests(unittest.TestCase):
                                 text=True, capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout.strip()
+
+    def prepare_desktop(self):
+        self.remote = self.root / "release"
+        self.remote.mkdir()
+        self.upload_log = self.root / "uploads.jsonl"
+        self.signing_key = self.root / "signing-key.pem"
+        public_key = self.root / "npm/release-signing.pub"
+        public_key.parent.mkdir()
+        for args in (("genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256",
+                      "-out", str(self.signing_key)),
+                     ("pkey", "-in", str(self.signing_key), "-pubout", "-out", str(public_key))):
+            result = subprocess.run(["openssl", *args], capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        for name in DESKTOP_BUNDLES:
+            (self.root / "dist" / name).write_bytes(f"rebuilt {name}".encode())
+
+        # A file-backed release API at the public gh command boundary. In
+        # particular, upload checks ALL names before writing any file, as gh
+        # does without --clobber. No network or real release credentials.
+        binary_dir = self.root / "bin"
+        binary_dir.mkdir()
+        gh = binary_dir / "gh"
+        gh.write_text(textwrap.dedent('''\
+            #!/usr/bin/env python3
+            import json
+            import os
+            from pathlib import Path
+            import shutil
+            import sys
+
+            args = sys.argv[1:]
+            remote = Path(os.environ["FAKE_RELEASE"])
+            assert args[0] == "release", args
+            command, tag = args[1:3]
+            assert tag == "v1.2.3", args
+            options = args[3:]
+            def option(name):
+                index = options.index(name)
+                value = options[index + 1]
+                del options[index:index + 2]
+                return value
+            assert option("--repo") == "offline/orbit", args
+            if command == "view":
+                assert option("--json") == "assets", args
+                assert option("--jq") == ".assets[].name", args
+                assert not options, args
+                print("\\n".join(sorted(p.name for p in remote.iterdir())))
+            elif command == "download":
+                name = option("--pattern")
+                destination = Path(option("--dir")) / name
+                assert options == ["--clobber"], args
+                shutil.copyfile(remote / name, destination)
+            elif command == "upload":
+                paths = [Path(value) for value in options]
+                assert paths and not any(value.startswith("--") for value in options), args
+                if any((remote / path.name).exists() for path in paths):
+                    sys.exit("asset under the same name already exists")
+                for path in paths:
+                    log = Path(os.environ["FAKE_UPLOAD_LOG"])
+                    count = len(log.read_text().splitlines()) if log.exists() else 0
+                    if count == int(os.environ.get("FAIL_AFTER_UPLOADS", "-1")):
+                        sys.exit("injected upload interruption")
+                    shutil.copyfile(path, remote / path.name)
+                    with log.open("a") as output:
+                        output.write(json.dumps(path.name) + "\\n")
+            else:
+                raise AssertionError(args)
+            '''))
+        gh.chmod(0o755)
+        self.env.update(PATH=str(binary_dir) + os.pathsep + self.env["PATH"],
+                        FAKE_RELEASE=str(self.remote), FAKE_UPLOAD_LOG=str(self.upload_log),
+                        GITHUB_REF_NAME="v1.2.3", GITHUB_REPOSITORY="offline/orbit")
+
+    def publish_desktop(self):
+        for step in self.jobs["publish-desktop"]["steps"]:
+            if "run" in step:
+                result = self.run_script(step)
+                if result.returncode:
+                    return result
+        return result
+
+    def uploaded_names(self):
+        return [json.loads(line) for line in self.upload_log.read_text().splitlines()] \
+            if self.upload_log.exists() else []
+
+    def assert_desktop_authenticated(self):
+        result = subprocess.run(
+            ["openssl", "dgst", "-sha256", "-verify", str(self.root / "npm/release-signing.pub"),
+             "-signature", str(self.remote / DESKTOP_SIGNATURE), str(self.remote / DESKTOP_MANIFEST)],
+            text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        digests = {name: digest for digest, name in
+                   (line.split("  ") for line in
+                    (self.remote / DESKTOP_MANIFEST).read_text().splitlines())}
+        self.assertEqual(set(digests), {*DESKTOP_BUNDLES, DESKTOP_VERSION})
+        for name, digest in digests.items():
+            self.assertEqual(digest, hashlib.sha256((self.remote / name).read_bytes()).hexdigest(),
+                             f"signed manifest must authenticate published {name}")
+        self.assertEqual((self.remote / DESKTOP_VERSION).read_text(), "1.2.3\n")
+
+    def test_desktop_fresh_and_complete_publication(self):
+        self.prepare_desktop()
+        # Fresh release: all bundles precede the authenticated metadata.
+        result = self.publish_desktop()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(set(self.uploaded_names()),
+                         {*DESKTOP_BUNDLES, DESKTOP_VERSION, DESKTOP_MANIFEST, DESKTOP_SIGNATURE})
+        self.assertEqual(self.uploaded_names()[-2:], [DESKTOP_MANIFEST, DESKTOP_SIGNATURE])
+        self.assert_desktop_authenticated()
+        published = {path.name: path.read_bytes() for path in self.remote.iterdir()}
+
+        # Complete retry with different build bytes must preserve every asset.
+        for name in DESKTOP_BUNDLES:
+            (self.root / "dist" / name).write_bytes(b"another rebuild")
+        result = self.publish_desktop()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.uploaded_names()), 8)
+        self.assertEqual({path.name: path.read_bytes() for path in self.remote.iterdir()}, published)
+        self.assert_desktop_authenticated()
+
+    def test_desktop_partial_retry_hashes_published_bundle_bytes(self):
+        self.prepare_desktop()
+        dmg = DESKTOP_BUNDLES[0]
+        (self.remote / dmg).write_bytes(b"previously published DMG; differs from local rebuild")
+        published = (self.remote / dmg).read_bytes()
+        result = self.publish_desktop()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(set(self.uploaded_names()),
+                         {*DESKTOP_BUNDLES[1:], DESKTOP_VERSION, DESKTOP_MANIFEST, DESKTOP_SIGNATURE})
+        self.assertEqual((self.remote / dmg).read_bytes(), published)
+        self.assert_desktop_authenticated()
+
+    def test_desktop_recovers_upload_interruptions_including_unsigned_manifest(self):
+        self.prepare_desktop()
+        for count in (1, 6, 7):
+            with self.subTest(uploaded_before_failure=count):
+                for path in self.remote.iterdir():
+                    path.unlink()
+                self.upload_log.write_text("")
+                self.env["FAIL_AFTER_UPLOADS"] = str(count)
+                result = self.publish_desktop()
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(len(self.uploaded_names()), count)
+                published = {path.name: path.read_bytes() for path in self.remote.iterdir()}
+                self.env.pop("FAIL_AFTER_UPLOADS")
+                for name in DESKTOP_BUNDLES:
+                    (self.root / "dist" / name).write_bytes(f"rebuild after {count}".encode())
+                result = self.publish_desktop()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(len(self.uploaded_names()), 8)
+                for name, data in published.items():
+                    self.assertEqual((self.remote / name).read_bytes(), data)
+                self.assert_desktop_authenticated()
+
+    def test_desktop_legacy_metadata_must_match_before_any_new_upload(self):
+        self.prepare_desktop()
+        result = self.publish_desktop()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        original = {path.name: path.read_bytes() for path in self.remote.iterdir()}
+        # The old glob upload could publish metadata before all bundles.
+        # Recover if the missing bundle is still available with the same bytes.
+        dmg = DESKTOP_BUNDLES[0]
+        (self.remote / dmg).unlink()
+        self.upload_log.write_text("")
+        result = self.publish_desktop()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.uploaded_names(), [dmg])
+        self.assert_desktop_authenticated()
+
+        # Changed rebuilt bytes cannot satisfy an immutable published manifest.
+        (self.remote / dmg).unlink()
+        (self.root / "dist" / dmg).write_bytes(b"different build")
+        self.upload_log.write_text("")
+        result = self.publish_desktop()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.uploaded_names(), [])
+        self.assertEqual({path.name: path.read_bytes() for path in self.remote.iterdir()},
+                         {name: data for name, data in original.items() if name != dmg})
+
+        # An orphan signature from an old partial upload is also authoritative:
+        # reject mismatched candidate bytes even when its manifest is absent.
+        (self.remote / DESKTOP_MANIFEST).unlink()
+        result = self.publish_desktop()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.uploaded_names(), [])
+        (self.root / "dist" / dmg).write_bytes(original[dmg])
+        result = self.publish_desktop()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.uploaded_names(), [dmg, DESKTOP_MANIFEST])
+        self.assertEqual({path.name: path.read_bytes() for path in self.remote.iterdir()}, original)
+        self.assert_desktop_authenticated()
 
     def test_metadata_accepts_release_and_prerelease_tags(self):
         for tag in ("v0.0.0", "v12.34.56", "v1.2.3-rc.1", "v1.2.3-alpha-beta.2"):
