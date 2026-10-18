@@ -11,29 +11,45 @@ license = "MIT"
 description = "Desktop window for the Orbit dashboard"
 publish = false
 
+# The polling library can run without native webview dependencies.
+[features]
+default = ["native"]
+native = [
+    "dep:tauri-build", "dep:notify-rust", "dep:tauri", "dep:tauri-plugin-autostart",
+    "dep:tauri-plugin-dialog", "dep:tauri-plugin-opener", "dep:tauri-plugin-window-state",
+    "dep:ureq", "dep:signal-hook", "dep:chrono", "dep:rsa", "dep:sha2",
+]
+
+[[bin]]
+name = "orbit-desktop"
+path = "src/main.rs"
+required-features = ["native"]
+
 [build-dependencies]
-tauri-build = { version = "2.7", features = [] }
+tauri-build = { version = "2.7", features = [], optional = true }
 
 [dependencies]
 # Update checks compare a key's not_after and revoked_at with today's date.
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
-notify-rust = "4"
+chrono = { version = "0.4", default-features = false, features = ["clock"], optional = true }
+notify-rust = { version = "4", optional = true }
 # Release manifest verification, as in orbit-common::security::release.
-rsa = { version = "0.10.0-rc.18", features = ["sha2"] }
+rsa = { version = "0.10.0-rc.18", features = ["sha2"], optional = true }
 serde_json = "1"
-sha2 = "0.11"
-tauri = { version = "2.12", features = ["tray-icon"] }
-tauri-plugin-autostart = "2.5"
-tauri-plugin-dialog = "2"
-tauri-plugin-opener = "2.7"
-tauri-plugin-window-state = "2"
+sha2 = { version = "0.11", optional = true }
+tauri = { version = "2.12", features = ["tray-icon"], optional = true }
+tauri-plugin-autostart = { version = "2.5", optional = true }
+tauri-plugin-dialog = { version = "2", optional = true }
+tauri-plugin-opener = { version = "2.7", optional = true }
+tauri-plugin-window-state = { version = "2", optional = true }
 # Loopback HTTP to the app's own server, and HTTPS to GitHub for update checks.
-ureq = { version = "3.1", default-features = false, features = ["rustls"] }
+ureq = { version = "3.1", default-features = false, features = ["rustls"], optional = true }
 url = "2"
 
 [target.'cfg(unix)'.dependencies]
+# The supervisor signals the dashboard server. It stays available when the
+# native shell is off so headless tests can drive that process boundary.
 libc = "0.2"
-signal-hook = "0.4"
+signal-hook = { version = "0.4", optional = true }
 
 # Its own fake `orbit`, so it takes the supervisor's `web serve` arguments
 # without libtest's argument parser.

@@ -20,7 +20,7 @@ mod watch;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use orbit_desktop::sidecar::{self, Shell, Sidecar};
+pub(crate) use orbit_desktop::sidecar::{self, Shell, Sidecar};
 use serde_json::Value;
 use tauri::webview::{NewWindowResponse, PageLoadEvent};
 use tauri::{AppHandle, Manager, RunEvent, State, Url, WebviewUrl, WebviewWindowBuilder};
