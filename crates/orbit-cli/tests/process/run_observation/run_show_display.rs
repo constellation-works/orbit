@@ -69,6 +69,210 @@ fn shown(fixture: &Fixture, extra: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+fn seed_provider_process(
+    fixture: &Fixture,
+    run_id: &str,
+    invocation_id: &str,
+    ts: &str,
+    pid: u32,
+    waits: orbit_common::process::build_budget::BuildBudgetWaits,
+) {
+    let workspace_id = fixture.workspace_id();
+    let db = fixture.db();
+    for (event_id, timestamp, mut payload) in [
+        (
+            format!("{invocation_id}-01-process"),
+            ts.to_string(),
+            serde_json::json!({
+                "body_kind": "cli_invocation_process",
+                "provider": "claude",
+                "pid": pid,
+            }),
+        ),
+        (
+            format!("{invocation_id}-02-waits"),
+            ts.to_string(),
+            serde_json::json!({
+                "body_kind": "cli_invocation_build_budget",
+                "provider": "claude",
+                "count": waits.count,
+                "total_ms": waits.total_ms,
+                "longest_ms": waits.longest_ms,
+                "queued_wall_ms": waits.queued_wall_ms,
+                "deadline_extension_ms": waits.deadline_extension_ms,
+            }),
+        ),
+        (
+            format!("{invocation_id}-03-finished"),
+            ts.to_string(),
+            serde_json::json!({
+                "body_kind": "cli_invocation_finished",
+                "provider": "claude",
+                "exit_code": 0,
+            }),
+        ),
+    ] {
+        payload["event_id"] = serde_json::json!(event_id);
+        payload["parent_event_id"] = serde_json::json!(invocation_id);
+        payload["step_id"] = serde_json::json!("implement_one");
+        payload["ts"] = serde_json::json!(timestamp);
+        db.execute(
+            "INSERT INTO v2_audit_events (workspace_id, event_id, source, schema_version,
+                event_type, ts, run_id, agent_identity, payload_json)
+             VALUES (?1, ?2, 'v2_envelope', 1, 'activity.progress', ?3, ?4, 'fixture', ?5)",
+            params![
+                workspace_id,
+                event_id,
+                timestamp,
+                run_id,
+                payload.to_string()
+            ],
+        )
+        .expect("seed provider process event");
+    }
+}
+
+fn seed_run_with_state(fixture: &Fixture, run_id: &str, state: &str) {
+    let workspace_id = fixture.workspace_id();
+    fixture
+        .db()
+        .execute(
+            "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state,
+                scheduled_at, started_at, finished_at, created_at)
+             VALUES (?1, ?2, 'fixture_job', 1, ?3,
+                '2026-10-08T00:00:00+00:00', '2026-10-08T00:00:01+00:00',
+                '2026-10-08T00:00:02+00:00', '2026-10-08T00:00:00+00:00')",
+            params![run_id, workspace_id, state],
+        )
+        .expect("seed run");
+}
+
+fn run_show_omits_empty_build_budget_waits_and_deduplicates_per_step() {
+    let fixture = Fixture::terminal();
+    seed_run_with_state(&fixture, "jrun-empty-build-budget", "success");
+    seed_provider_process(
+        &fixture,
+        "jrun-empty-build-budget",
+        "empty-invocation",
+        "2026-10-08T00:00:03+00:00",
+        900_001,
+        Default::default(),
+    );
+    let empty = fixture
+        .orbit()
+        .args(["run", "show", "jrun-empty-build-budget", "--no-reconcile"])
+        .output()
+        .expect("show empty waits run");
+    assert!(empty.status.success(), "{empty:?}");
+    let empty = String::from_utf8_lossy(&empty.stdout);
+    assert!(!empty.contains("Build-budget waits"), "{empty}");
+    let empty_json = fixture.json(&[
+        "run",
+        "show",
+        "jrun-empty-build-budget",
+        "--no-reconcile",
+        "--json",
+    ]);
+    assert_eq!(
+        empty_json["provider_processes"][0]["build_budget_waits"]["count"], 0,
+        "{empty_json}"
+    );
+
+    seed_run_with_state(&fixture, "jrun-extended-build-budget", "success");
+    seed_provider_process(
+        &fixture,
+        "jrun-extended-build-budget",
+        "extended-invocation",
+        "2026-10-08T00:00:03+00:00",
+        900_003,
+        orbit_common::process::build_budget::BuildBudgetWaits {
+            deadline_extension_ms: 1000,
+            ..Default::default()
+        },
+    );
+    let extended = fixture
+        .orbit()
+        .args([
+            "run",
+            "show",
+            "jrun-extended-build-budget",
+            "--no-reconcile",
+        ])
+        .output()
+        .expect("show deadline extension run");
+    assert!(extended.status.success(), "{extended:?}");
+    let extended = String::from_utf8_lossy(&extended.stdout);
+    assert_eq!(
+        extended
+            .matches("Build-budget waits (implement_one)")
+            .count(),
+        1,
+        "{extended}"
+    );
+    assert!(extended.contains("deadline extended 1.000s"), "{extended}");
+
+    seed_run_with_state(&fixture, "jrun-repeated-build-budget", "success");
+    let waits = orbit_common::process::build_budget::BuildBudgetWaits {
+        count: 2,
+        total_ms: 5500,
+        longest_ms: 3500,
+        queued_wall_ms: 5000,
+        deadline_extension_ms: 4000,
+    };
+    for (index, invocation) in ["wait-invocation-a", "wait-invocation-b"]
+        .into_iter()
+        .enumerate()
+    {
+        seed_provider_process(
+            &fixture,
+            "jrun-repeated-build-budget",
+            invocation,
+            &format!("2026-10-08T00:00:0{}+00:00", index + 3),
+            900_002 + index as u32,
+            waits.clone(),
+        );
+    }
+    let repeated = fixture
+        .orbit()
+        .args([
+            "run",
+            "show",
+            "jrun-repeated-build-budget",
+            "--no-reconcile",
+        ])
+        .output()
+        .expect("show repeated waits run");
+    assert!(repeated.status.success(), "{repeated:?}");
+    let repeated = String::from_utf8_lossy(&repeated.stdout);
+    assert_eq!(
+        repeated
+            .matches("Build-budget waits (implement_one)")
+            .count(),
+        1,
+        "{repeated}"
+    );
+    assert!(repeated.contains("count 2; total 5.500s"), "{repeated}");
+    let repeated_json = fixture.json(&[
+        "run",
+        "show",
+        "jrun-repeated-build-budget",
+        "--no-reconcile",
+        "--json",
+    ]);
+    assert_eq!(
+        repeated_json["provider_processes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2,
+        "{repeated_json}"
+    );
+    assert_eq!(
+        repeated_json["provider_processes"][0]["build_budget_waits"]["count"], 2,
+        "{repeated_json}"
+    );
+}
+
 fn run_show_prints_human_durations_and_one_based_steps_in_every_human_mode() {
     let fixture = Fixture::terminal();
     seed_interrupted_run(&fixture);
@@ -449,6 +653,51 @@ fn run_show_reports_the_failed_step_before_a_later_skip() {
     let json = fixture.json(&["run", "show", PARENT, "--no-reconcile", "--json"]);
     assert_eq!(json["run"]["root_cause"]["leaf_run_id"], CHILD, "{json}");
     assert_eq!(json["run"]["root_cause"]["step"], "commit_task", "{json}");
+
+    const FAILED: &str = "jrun-root-cause-logs";
+    seed_run_with_state(&fixture, FAILED, "failed");
+    let workspace_id = fixture.workspace_id();
+    fixture
+        .db()
+        .execute(
+            "INSERT INTO job_run_steps (workspace_id, run_id, step_index, target_type,
+                target_id, state, started_at, finished_at, error_message)
+             VALUES (?1, ?2, 0, 'job', 'implement_one', 'failed',
+                '2026-10-18T00:00:01+00:00', '2026-10-18T00:00:03+00:00',
+                'provider exited unsuccessfully')",
+            params![workspace_id, FAILED],
+        )
+        .expect("seed failed run step");
+    let human = fixture
+        .orbit()
+        .args(["run", "show", FAILED, "--no-reconcile"])
+        .output()
+        .expect("show failed run");
+    assert!(human.status.success(), "{human:?}");
+    let human = String::from_utf8_lossy(&human.stdout);
+    assert!(
+        human.contains(&format!("Root cause: run={FAILED} step=implement_one")),
+        "{human}"
+    );
+    assert!(
+        human.contains(&format!("Logs: orbit run logs {FAILED} -s implement_one")),
+        "{human}"
+    );
+
+    seed_run_with_state(&fixture, "jrun-success-without-root-cause", "success");
+    let success = fixture
+        .orbit()
+        .args([
+            "run",
+            "show",
+            "jrun-success-without-root-cause",
+            "--no-reconcile",
+        ])
+        .output()
+        .expect("show successful run");
+    assert!(success.status.success(), "{success:?}");
+    let success = String::from_utf8_lossy(&success.stdout);
+    assert!(!success.contains("Logs:"), "{success}");
 }
 
 #[test]
@@ -457,6 +706,10 @@ fn run_show_contracts() {
         return;
     }
     for (name, check) in [
+        (
+            "run_show_omits_empty_build_budget_waits_and_deduplicates_per_step",
+            run_show_omits_empty_build_budget_waits_and_deduplicates_per_step as fn(),
+        ),
         (
             "run_show_prints_human_durations_and_one_based_steps_in_every_human_mode",
             run_show_prints_human_durations_and_one_based_steps_in_every_human_mode as fn(),
