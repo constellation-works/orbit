@@ -651,6 +651,13 @@ then run the ignored HTTP test
 decode the forwarded routines and job-runs JSON; `result.json` records both
 responses in the evidence directory.
 
+The run-detail scenarios also check the Requests held panel for open and half-open
+breakers, refused settlements and owner-busy backoff, including healthy-drain absence
+and safe text wrapping at 1440 and 375 px. `dashboard_loading_browser.mjs --run-detail`
+(with the usual module and evidence arguments before the flag) writes
+`requests-held-result.json` and `requests-held-*.png`. Both browser color preferences
+are checked; the dashboard retains its supported dark palette in each.
+
 Each runs as `node <script> "$PLAYWRIGHT_MODULE" .orbit/tmp/<evidence-dir>` and saves screenshots and any JSON named below. The dashboard is dark-only, so there is no light-theme pass. The loading and distributed scenarios also run in the QA sweep.
 
 | Script | Evidence dir | Covers |

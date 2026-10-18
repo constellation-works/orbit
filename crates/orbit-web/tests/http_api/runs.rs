@@ -1305,3 +1305,115 @@ fn run_detail_projects_shared_provider_processes_and_worker_identity() {
         },
     );
 }
+
+/// A drain that holds requests must expose its live breaker and refused
+/// settlements over HTTP, including after the run ends. Healthy and ordinary
+/// runs retain the same response shape with no hold records.
+#[test]
+fn run_detail_exposes_pull_request_holds() {
+    isolated("runs::run_detail_exposes_pull_request_holds", || {
+        use orbit_store::compose::workspace_job_run_store;
+        use orbit_store::contracts::{
+            AdmissionRequest, LocalPullPhase, PullDestination, SettlementRefusal,
+        };
+        use orbit_types::workflow::PullBreaker;
+
+        let fixture = Fixture::new();
+        let drain = fixture.seed_run(
+            "jrun-request-holds",
+            "workspace_pull_pipeline",
+            JobRunState::Running,
+        );
+        let healthy = fixture.seed_run(
+            "jrun-healthy-pull",
+            "workspace_pull_pipeline",
+            JobRunState::Running,
+        );
+        let ordinary = fixture.seed_run("jrun-ordinary", "fixture", JobRunState::Success);
+        let breaker = PullBreaker {
+            failures: 3,
+            failure_classes: vec!["candidate".into(), "task_input".into()],
+            opened_at: at(8, 0),
+            half_open_at: at(8, 15),
+        };
+        let mut state = PipelineState::new(drain.run_id.clone(), drain.job_id.clone(), json!({}));
+        state.pull_drain.pull_breaker = Some(breaker.clone());
+        write_state(&fixture, &drain, &state);
+
+        let workspace = fixture.runtime.workspace_id().unwrap();
+        let store = fixture.runtime.sqlite_store().unwrap();
+        let jobs = workspace_job_run_store(store.clone(), workspace.clone());
+        let destination = PullDestination {
+            owner_machine_id: "hm_owner".into(),
+            owner_workspace_id: "ws_owner".into(),
+            selector: "owner/workspace".into(),
+            execution_machine_id: "hm_follower".into(),
+        };
+        let request: AdmissionRequest = serde_json::from_value(json!({
+            "request_id": "request-hold-fixture",
+            "caller_version": env!("CARGO_PKG_VERSION"), "caller_schema": 1,
+            "run_context": { "run_id": drain.run_id, "job_name": drain.job_id, "machine_name": "follower" },
+            "ship": { "mode": "pr", "base_branch": "agent-main", "landing_branch": "agent-main", "completion": "review" },
+        })).unwrap();
+        let mut admission = jobs
+            .allocate_pull_request(&destination, &request, 4)
+            .unwrap()
+            .unwrap();
+        // Seed a persisted refused delivery without contacting another host.
+        admission.phase = LocalPullPhase::Settling;
+        admission.leaf_run_id = Some("jrun-refused-leaf".into());
+        admission.settlement_refusal = Some(SettlementRefusal {
+            reason: "owner validation commands missing".into(),
+            refusals: 2,
+            first_refused_at: at(8, 1),
+            last_refused_at: at(8, 2),
+            retry_after: at(8, 3),
+        });
+        store.connection().lock().unwrap().execute(
+            "UPDATE local_pull_admissions SET leaf_run_id=?1, record_json=?2 WHERE workspace_id=?3 AND request_id=?4",
+            (admission.leaf_run_id.as_deref(), serde_json::to_string(&admission).unwrap(), &workspace, &request.request_id),
+        ).unwrap();
+        let expected_settlements = serde_json::to_value(
+            fixture
+                .runtime
+                .pull_drain_refused_settlements(&drain.run_id)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(expected_settlements.as_array().unwrap().len(), 1);
+        assert_eq!(
+            expected_settlements[0]["reason"],
+            "owner validation commands missing"
+        );
+        assert!(
+            expected_settlements[0]["remedy"]
+                .as_str()
+                .is_some_and(|text| !text.is_empty())
+        );
+
+        let server = fixture.server(false);
+        for run in [&healthy, &ordinary] {
+            let detail = json_ok(server.get(&format!("/api/runs/{}", run.run_id)));
+            assert_eq!(detail.get("pull_breaker"), Some(&Value::Null), "{detail}");
+            assert_eq!(
+                detail.get("refused_settlements"),
+                Some(&json!([])),
+                "{detail}"
+            );
+        }
+        for terminal in [false, true] {
+            if terminal {
+                let mut ended = drain.clone();
+                ended.state = JobRunState::Cancelled;
+                ended.finished_at = Some(Utc::now());
+                fixture.save_run(&ended);
+            }
+            let detail = json_ok(server.get(&format!("/api/runs/{}", drain.run_id)));
+            assert_eq!(detail["pull_breaker"], json!(breaker), "{detail}");
+            assert_eq!(
+                detail["refused_settlements"], expected_settlements,
+                "{detail}"
+            );
+        }
+    });
+}
