@@ -321,15 +321,13 @@ fn a_check_failing_identically_on_the_pinned_base_holds_the_kept_candidate() {
         .unwrap();
     fixture
         .runtime
-        .update_task_with_identity(
+        .apply_task_automation_update(
             &fixture.task_id,
-            TaskUpdateParams {
+            orbit_engine::TaskAutomationUpdate {
                 status: Some(TaskStatus::InProgress),
-                job_run_id: Some(Some(next.run_id.clone())),
+                job_run_id: Some(next.run_id.clone()),
                 ..Default::default()
             },
-            Some("codex".into()),
-            None,
         )
         .unwrap();
     fixture.input["job_run_id"] = json!(next.run_id);
