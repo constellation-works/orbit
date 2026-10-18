@@ -37,6 +37,9 @@ pub(super) enum ApplyTaskOutcome {
     AlreadyApplied(Option<String>),
     Stale(&'static str, String),
     Superseded(Value),
+    /// The final assessed tags and crew cannot run on any host, so the
+    /// assessment is refused as invalid without writing any task material.
+    Invalid(String),
 }
 
 /// Share the durable receipt check between replay admission and the locked
@@ -265,6 +268,20 @@ pub(super) fn apply_task(
                 runtime.rerate_task_crew(&mut assessed, Some(task.complexity))?;
             assessed.complexity = Some(task.complexity);
             assessed.status = target_status;
+            // The final crew (kept, or redrawn for the assessed complexity)
+            // and tags (the task's own plus any native-OS tag added above)
+            // must share a host. Refusing here, before the atomic mutation,
+            // leaves every stored field and approval untouched.
+            if let Some(crew) = assessed.crew.as_deref()
+                && let Err(error) = runtime.refuse_unsatisfiable_os_crew(&assessed.tags, crew)
+            {
+                let detail = match error {
+                    OrbitError::InvalidInput(detail) => detail,
+                    error => error.to_string(),
+                };
+                outcome = Some(ApplyTaskOutcome::Invalid(detail));
+                return Ok(());
+            }
             // Seal the exact authorized output while the same task and graph
             // locks still cover it. Approval must never certify a later read.
             let fingerprints = snapshot
