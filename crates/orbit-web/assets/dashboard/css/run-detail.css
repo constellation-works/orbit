@@ -109,6 +109,9 @@ a.failure-id-link:focus-visible {
   margin-bottom: 4px;
 }
 .child-dispatch-meta { color: var(--fg-dim); }
+.requests-held { border-left: 3px solid var(--state-held); overflow-wrap: anywhere; }
+.requests-held .child-dispatch-notice:last-child { margin-bottom: 0; }
+.settlement-remedy { margin: 0 0 8px; color: var(--fg-dim); line-height: 1.5; }
 .waiting-task { color: var(--fg-dim); }
 .waiting-task-link { color: var(--accent); text-decoration: none; }
 .waiting-task-link:hover { text-decoration: underline; }

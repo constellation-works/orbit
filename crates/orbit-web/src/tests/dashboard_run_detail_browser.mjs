@@ -268,6 +268,7 @@ async function assertTaskLinksOpenUnderFilter(page, { ids, show, selector }) {
 }
 
 export async function assertRunDetailPresentation(page, evidence) {
+  await assertRequestsHeld(page, evidence);
   await page.setViewportSize({ width: 1440, height: 1100 });
   const render = async (run, steps, logs = []) => page.evaluate(async ({ run, steps, logs }) => {
     const detail = await import('/js/run-detail.js');
@@ -661,4 +662,81 @@ export async function assertRunDetailPresentation(page, evidence) {
   if (await page.locator('.step-log-block.stderr .log-wrap-toggle').getAttribute('aria-pressed') !== 'true') throw new Error('Wrap toggles must act only on their own stream');
   if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth || window.logHtmlExecuted)) throw new Error('Log display must neither widen the page nor execute HTML');
   fs.writeFileSync(path.join(evidence, 'run-detail-result.json'), JSON.stringify({ passed: true, viewport: 1440, heldColor, stdoutLayout: layout, scenarios: ['held reason and color', 'one-based single step', 'empty logs', 'missing and zero knowledge metrics', 'active and terminal replay', 'timeline legend', 'mixed JSON and malformed stdout', 'independent wrap toggles', 'safe text rendering'] }, null, 2));
+}
+
+// The shipped page must explain a drain that requests no claims, including
+// owner refusals, without turning healthy drains into warnings.
+export async function assertRequestsHeld(page, evidence) {
+  const now = Date.now();
+  const stamp = offset => new Date(now + offset).toISOString();
+  const breaker = {
+    failures: 3, failure_classes: ['candidate', 'candidate', 'task_input'],
+    opened_at: stamp(-60000), half_open_at: stamp(900000),
+  };
+  const remedy = "the owner refuses this recorded outcome while it holds the claim; fix the condition its reason names on the owner. Automatic passes retry with backoff, at most every 15 minutes, and settle it once the owner accepts; `orbit run auto --stop` retries it at once. Recovering the claim on the owner's dashboard closes it instead";
+  const settlement = {
+    leaf_run_id: 'jrun-refused-leaf', owner: 'owner/workspace', refusals: 2,
+    first_refused_at: stamp(-120000), retry_after: stamp(60000),
+    reason: '<img src=x onerror="window.refusalHtmlExecuted=true"> required validation commands missing', remedy,
+  };
+  const scenarios = [
+    { code: 'circuit_open', text: 'the failure breaker is open; inspect the failed claims and fix the cause meanwhile, or start a new drain to reset it', breaker },
+    { code: 'circuit_half_open', text: '1 claim(s) this drain carries have not settled yet', breaker: { ...breaker, half_open_at: stamp(-1000) } },
+    { code: 'settlement_refused', text: 'the owner refused 2 recorded settlement(s) while holding their claims, so no new claim is requested', settlements: [settlement, { ...settlement, leaf_run_id: 'jrun-second-leaf', reason: 'owner policy changed' }] },
+    { code: 'owner_busy_backoff', text: `a claimed leaf was released because the owner's store stayed locked (database is locked); this drain requests no claim until ${stamp(60000)}, when requests resume by themselves` },
+  ];
+  const render = async ({ code, text, breaker = null, settlements = [] } = {}) => page.evaluate(async data => {
+    const detail = await import('/js/run-detail.js');
+    for (const pane of document.querySelectorAll('.tab-pane')) pane.classList.toggle('active', pane.dataset.tab === 'run-detail');
+    detail.setActiveRunDetail({
+      run: { run_id: 'jrun-requests-held', job_id: 'workspace_pull_pipeline', state: 'running',
+        drain_last_pass: { recorded_at: data.recordedAt, ...(data.code ? { admission_refusal: `${data.code}: ${data.text}` } : {}) } },
+      pull_breaker: data.breaker, refused_settlements: data.settlements, steps: [],
+    });
+    detail.renderRunDetailMeta();
+  }, { code, text, breaker, settlements, recordedAt: stamp(0) });
+  const results = [];
+  for (const colorScheme of ['dark', 'light']) {
+    await page.emulateMedia({ colorScheme });
+    for (const width of [1440, 375]) {
+      await page.setViewportSize({ width, height: 1100 });
+      for (const scenario of scenarios) {
+        await render(scenario);
+        const panel = page.locator('#run-detail-meta .requests-held');
+        await panel.waitFor({ state: 'visible', timeout: 5000 });
+        const text = await panel.textContent();
+        if (!text.includes(`Requests held: ${scenario.code}: ${scenario.text}`) || !text.includes('last pass')) {
+          throw new Error(`Requests held must name the refusal and its pass: ${text}`);
+        }
+        if (scenario.breaker && (!text.includes('3 consecutive failed claims (candidate, candidate, task_input)')
+          || !text.includes(scenario.code === 'circuit_open' ? 'to admit one probe claim' : 'half-open since')
+          || (scenario.code === 'circuit_open' && !/\(in \d+m \d+s\)/.test(text)))) {
+          throw new Error(`Breaker must explain failures and its next probe: ${text}`);
+        }
+        if (scenario.settlements && (await panel.locator('.refused-settlement').count() !== 2
+          || !text.includes(settlement.reason) || !text.includes(remedy) || !text.includes('jrun-second-leaf')
+          || !text.includes('next attempt after'))) throw new Error('Each refused settlement must name its reason, next retry and remedy');
+        const layout = await panel.evaluate(node => {
+          const bounds = node.getBoundingClientRect();
+          return { left: bounds.left, right: bounds.right, width: innerWidth,
+            overflow: node.scrollWidth > node.clientWidth, htmlExecuted: !!window.refusalHtmlExecuted,
+            injectedElements: node.querySelectorAll('img').length };
+        });
+        if (layout.left < 0 || layout.right > width + 1 || layout.overflow || layout.htmlExecuted || layout.injectedElements) {
+          throw new Error(`Requests held must wrap safely inside the viewport: ${JSON.stringify(layout)}`);
+        }
+        await panel.scrollIntoViewIfNeeded();
+        await page.screenshot({ path: path.join(evidence, `requests-held-${scenario.code}-${colorScheme}-${width}.png`), fullPage: true });
+        results.push({ code: scenario.code, colorScheme, width, layout });
+      }
+      // Supplementary records still explain a hold without a pass refusal.
+      await render({ breaker, settlements: [settlement] });
+      if (await page.locator('.requests-held .pull-breaker').count() !== 1
+        || await page.locator('.requests-held .refused-settlement').count() !== 1) throw new Error('Hold records must remain visible without a pass refusal');
+      await render();
+      if (await page.locator('.requests-held').count()) throw new Error('A healthy drain must have no Requests held panel');
+    }
+  }
+  fs.writeFileSync(path.join(evidence, 'requests-held-result.json'), JSON.stringify({ passed: true, scenarios: results,
+    healthy: 'no panel', theme: 'The dashboard supports a dark palette; both browser color preferences preserve it.' }, null, 2));
 }

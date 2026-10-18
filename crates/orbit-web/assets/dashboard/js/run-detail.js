@@ -357,6 +357,8 @@ export function renderRunDetailMeta() {
   if (leaves) wrap.appendChild(leaves);
   const crews = buildCrewWindow(detail.crew_window || null);
   if (crews) wrap.appendChild(crews);
+  const requestsHeld = buildRequestsHeld(detail);
+  if (requestsHeld) wrap.appendChild(requestsHeld);
   const unsetEnv = buildUnsetEnvPass(run.env_pass_unset);
   if (unsetEnv) wrap.appendChild(unsetEnv);
   const passWarning = buildPassWarning(run);
@@ -368,6 +370,36 @@ export function renderRunDetailMeta() {
   const processes = buildProviderProcesses(detail.provider_processes);
   if (processes) wrap.appendChild(processes);
   syncNodes(meta, [wrap, feedback]);
+}
+
+// Match the CLI's Requests held, Breaker and Settlement refused lines. The
+// pass refusal is already operator-facing text; render it and remedies as text.
+function buildRequestsHeld(detail) {
+  const pass = detail.run.drain_last_pass;
+  const refusal = pass?.admission_refusal;
+  const breaker = detail.pull_breaker;
+  const settlements = Array.isArray(detail.refused_settlements) ? detail.refused_settlements : [];
+  if (!refusal && !breaker && !settlements.length) return null;
+  const panel = el("section", { class: "child-dispatch-panel requests-held", "aria-label": "Requests held" });
+  const line = (label, text, className = "") => panel.appendChild(el("div", {
+    class: `child-dispatch-notice ${className}`,
+  }, [el("strong", { text: `${label}: ` }), el("span", { text })]));
+  line("Requests held", refusal
+    ? `${refusal}${pass.recorded_at ? ` (last pass ${fmtAbsTime(pass.recorded_at)})` : ""}`
+    : "See the breaker or refused settlements below.");
+  if (breaker) {
+    const remaining = Math.max(0, Math.ceil((Date.parse(breaker.half_open_at) - Date.now()) / 1000));
+    const classes = breaker.failure_classes?.length ? ` (${breaker.failure_classes.join(", ")})` : "";
+    const next = remaining > 0
+      ? `half-opens at ${fmtAbsTime(breaker.half_open_at)} (in ${Math.floor(remaining / 60)}m ${remaining % 60}s) to admit one probe claim`
+      : `half-open since ${fmtAbsTime(breaker.half_open_at)}: admits one probe claim once nothing this drain claimed is unsettled`;
+    line("Breaker", `open after ${breaker.failures} consecutive failed claims${classes} since ${fmtAbsTime(breaker.opened_at)}; ${next}`, "pull-breaker");
+  }
+  for (const settlement of settlements) {
+    line("Settlement refused", `leaf ${settlement.leaf_run_id || "-"} owner ${settlement.owner} refused it ${settlement.refusals} time(s) since ${fmtAbsTime(settlement.first_refused_at)}: ${settlement.reason}; next attempt after ${fmtAbsTime(settlement.retry_after)}`, "refused-settlement");
+    panel.appendChild(el("p", { class: "settlement-remedy", text: settlement.remedy }));
+  }
+  return panel;
 }
 
 // Provider children of this run's agent steps. Each object is

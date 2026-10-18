@@ -2017,6 +2017,14 @@ its window was open: the `Requests held:` line, from `admission_refusal` under
 themselves at the time it names),
 `host_shutdown_scheduled` (a shutdown or reboot inside
 `machine.host_shutdown_hold_minutes`), or the owner probe's refusal.
+
+The dashboard run detail shows the same refusal in its **Requests held** panel beside
+crew and waiting information. It includes the breaker failure classes, the time until
+it half-opens, and each refused settlement's reason, next retry and remedy. Healthy
+drains have no panel. The run-detail API returns `pull_breaker` (null while closed)
+and `refused_settlements` (an empty array when none are refused) alongside `run`;
+`run.drain_last_pass.admission_refusal` supplies the last pass's refusal text.
+
 The value is set afresh each pass. This host's resource throttle has its own `Throttled:` line,
 and degradation has its own warning. Follower readiness repeats the refusal as
 `Pull drain requests held:` (`capacity.pull_drain_refusal`).

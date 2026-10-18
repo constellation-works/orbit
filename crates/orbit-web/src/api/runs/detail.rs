@@ -117,6 +117,14 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
         run_id,
         "claimed leaves",
     );
+    let pull_breaker = state
+        .as_ref()
+        .and_then(|state| state.pull_drain.pull_breaker.as_ref());
+    let refused_settlements = or_warn(
+        runtime.pull_drain_refused_settlements(run_id),
+        run_id,
+        "refused settlements",
+    );
 
     // A pull drain's crew window: the crews it runs and those it excluded for
     // its window, with why [ORB-13941]. Null for every other run.
@@ -131,6 +139,8 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
         "run": full,
         "pull_claim": pull_claim,
         "claimed_leaves": claimed_leaves,
+        "pull_breaker": pull_breaker,
+        "refused_settlements": refused_settlements,
         "crew_window": crew_window,
         "steps": steps.to_json(),
         "steps_source": steps.source.as_str(),
