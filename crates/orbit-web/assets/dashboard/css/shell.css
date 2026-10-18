@@ -298,7 +298,7 @@
 /* Room for `load 12.3× cores` and `mem 100%` beside the bar; a longer reading
    widens its chip. */
 .host-resource[data-resource="cpu"] { min-width: 11.75rem; }
-.host-resource[data-resource="memory"], .host-resource[data-resource="disk"] { min-width: 7.75rem; }
+.host-resource[data-resource="memory"], .host-resource[data-resource="disk"], .host-resource[data-resource="io"] { min-width: 7.75rem; }
 .host-resource .v { font-weight: 500; color: var(--fg); font-variant-numeric: tabular-nums; }
 .host-resource .unit { font-weight: 400; }
 .host-resource-bar { flex: none; width: 36px; height: 4px; border-radius: 2px; background: #232a33; overflow: hidden; }
@@ -315,15 +315,21 @@
   overflow: hidden; clip-path: inset(50%); white-space: nowrap;
 }
 
-/* Provider usage: one chip per provider and window, the host chips' key and
-   value without the bar. Every chip has a fixed width (a long key is cut with
-   an ellipsis; the title has it all), so a new reading does not move the bar.
-   A stale reading is dashed and dimmed, a gating-off one dashed, and each says
-   so in a flag as well. Where the list would not fit beside the drain label
-   and Refresh, one summary chip (the worst reading, every reading in its title)
-   replaces it. */
+/* Provider usage, set off from the host readings by a thin rule: one chip per
+   provider holding each of its windows (`claude 15% 5h | 32% 7d`), the host
+   chips' key and value without the bar. Each value has a fixed minimum width
+   (a long key is cut with an ellipsis; the title has it all), so a new reading
+   does not move the bar. A stale reading is dashed and dimmed, a gating-off one
+   dashed, and each window says so in a flag as well. Where the list would not
+   fit beside the drain label and Refresh, one summary chip (the worst reading,
+   every reading in its title) replaces it. */
+.provider-usage-chips::before { content: ""; flex: none; align-self: center; width: 1px; height: 18px; background: var(--border-strong); }
 .provider-usage { width: 6.75rem; }
-.provider-usage-item { width: 9.5rem; }
+.provider-usage-item { width: auto; min-width: 6.75rem; gap: 5px; }
+.provider-usage-item .k { margin-right: 3px; }
+.provider-usage-item .v { min-width: 4ch; text-align: right; }
+.provider-usage-window { color: var(--fg-dim); }
+.provider-usage-sep { padding: 0 2px; color: var(--fg-disabled); }
 .provider-usage-more { width: 5.5rem; }
 .provider-usage .k { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .provider-usage.stale { border-style: dashed; border-color: var(--border-strong); opacity: 0.75; }
@@ -335,12 +341,22 @@
   .provider-usage-chips .provider-usage-summary { display: inline-flex; }
 }
 
-/* Shorter meters and gaps give the usage summary chip its room, so the host's
-   name and the connection text keep theirs. */
-@media (max-width: 1340px) {
+/* Shorter meters, gaps and chips give the usage summary chip and the io chip
+   their room, so the host's name and the connection text keep theirs. */
+@media (max-width: 1599px) {
   .host-resource { gap: 6px; }
   .host-resource-bar { width: 20px; }
   .host-resource[data-resource="cpu"] { min-width: 10.25rem; }
+  .host-resource[data-resource="memory"], .host-resource[data-resource="disk"], .host-resource[data-resource="io"] { min-width: 6.75rem; }
+}
+/* While the chips still share the bar's one row, the narrowest widths drop
+   the meters (the tint still carries severity), so four host chips, the
+   divider and the summary chip leave the host's name and the refresh line
+   their room. Below 1024px the chips get their own row and keep the meters. */
+@media (min-width: 1024px) and (max-width: 1419px) {
+  .host-resource-bar { display: none; }
+  .host-resource[data-resource="cpu"] { min-width: 7.75rem; }
+  .host-resource[data-resource="memory"], .host-resource[data-resource="disk"], .host-resource[data-resource="io"] { min-width: 5.25rem; }
 }
 
 /* Below 1240px the bar tightens its spacing, so the widest destination, the
@@ -492,7 +508,7 @@
   .host-resource { gap: 5px; padding: 0 4px; }
   .host-resource-bar { width: 20px; }
   .host-resource[data-resource="cpu"] { min-width: 9.75rem; }
-  .host-resource[data-resource="memory"], .host-resource[data-resource="disk"] { min-width: 6.5rem; }
+  .host-resource[data-resource="memory"], .host-resource[data-resource="disk"], .host-resource[data-resource="io"] { min-width: 6.5rem; }
   .topbar .global-drain-state,
   .topbar .refresh-btn {
     display: inline-flex;
