@@ -303,7 +303,8 @@ pub trait DoctorCommands {
     fn health_check_store_writable(&self) -> Result<String, OrbitError>;
 
     /// Back up each config file that still sets a retired or deprecated key,
-    /// then remove only those keys. A file with none is left untouched.
+    /// migrating translated review settings before removal. Refuse legacy
+    /// after-landing policies before any write. A file with none is untouched.
     fn remove_retired_config_keys(&self) -> Result<super::RetiredConfigKeyRepair, OrbitError>;
 }
 

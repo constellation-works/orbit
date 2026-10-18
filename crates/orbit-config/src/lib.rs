@@ -100,6 +100,7 @@ pub use memory_limit::{MemoryLimit, MemoryUnit};
 pub use operation::{
     OPERATION_POLICY_VERSION, OperationField, OperationLayerSource, OperationPolicy,
     REVIEW_BEFORE_PR_KEY, REVIEW_CREW_KEY, REVIEW_MINUTES_KEY, ReviewCrewSetting,
+    translate_legacy_review_keys,
 };
 pub use persistence::PersistenceConfig;
 pub use plugin_enablement::{

@@ -27,7 +27,7 @@ SQLite `PRAGMA quick_check`; it reads the entire store and can take much longer 
 | Check | What it reports | Status and next step |
 |---|---|---|
 | `config` | Effective global + workspace configuration | `ok` when valid; `warning` for ignored crew properties or lanes pointing at disabled crews (possibly several rows); `error` for selection/parse failures. Correct the named config field. |
-| `retired-config-keys` | Retired or deprecated registry keys still set in the global or workspace `config.toml` | `ok` when none are set; one `warning` per key, naming the key and the file that sets it. `orbit doctor --fix-retired-config-keys` backs up that file and removes only those keys. A file that cannot be read is a `warning` and names the path. |
+| `retired-config-keys` | Retired or deprecated registry keys still set in the global or workspace `config.toml` | `ok` when none are set; one `warning` per key, naming the key and the file that sets it. `orbit doctor --fix-retired-config-keys` backs up that file and removes the keys while migrating translated review values within the same layer. A legacy after-landing policy requires manual migration before any config write. A file that cannot be read is a `warning` and names the path. |
 | `database` | Store DB readability and schema-ledger version versus this binary; `--deep` adds `PRAGMA quick_check` | `ok` when readability and version match (and integrity passes with `--deep`); `warning` for an older schema or unreadable ledger; `error` for open/integrity failure or a newer schema. Follow the diagnostic; newer schemas need a newer binary. |
 | `disk-space` | Free space on the volume holding the local `.orbit` | `warning` below 1 GiB or 5%, or when the probe fails; `error` below 256 MiB or 1%. Free space on that volume. |
 | `search-index` | Lexical index chunk count and indexed-task count versus stored-task count | `ok` when task counts agree, including an empty workspace; `warning` on a count mismatch or read failure. A mismatch names `orbit search reindex`; this check does not inspect embeddings or prove freshness when counts agree. |
@@ -122,7 +122,13 @@ Do not run a repair merely to collect health evidence.
 | `fix-retired-activity-backends` | `ok`, number of activity files repaired; skipped files are reported on stderr |
 | `fix-orphan-task-stores` | `ok`, empty/populated partition and deleted bundle counts; requires `--confirm` |
 | `fix-automation-pins` | `ok`, reclaimed owned attempt pins and the in-flight, live-run, assessed, legacy and foreign-owner pins retained; `warning` when ownership was refused while owned pins exist or a pin could not be deleted (see [below](#release-leaked-automation-attempt-pins)) |
-| `fix-retired-config-keys` | `ok`, the retired and deprecated keys removed and the backup written beside each edited `config.toml`. A run that finds none removes nothing and writes no backup |
+| `fix-retired-config-keys` | `ok`, the retired and deprecated keys removed, translated review values preserved in the same layer, and the original backup written beside each edited `config.toml`. Explicit modern values win. A run that finds none writes nothing; any legacy after-landing policy refuses before either config is changed or backed up |
+
+For an after-landing refusal, choose the intended consumer state with
+`orbit auto-task toggle delivery-code-review on` or `off`, set `review.before_pr`
+and `review.minutes` explicitly as needed, then remove the legacy
+`operation.review_policy` manually and rerun the repair. This also applies to
+a legacy policy masked by another config layer.
 
 Example excerpt (other checks omitted; counts vary by workspace):
 
