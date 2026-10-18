@@ -149,3 +149,68 @@ fn unknown_literal_dotted_key_cleanup_never_removes_a_known_path() {
         ResolvedConfig::load(&ConfigRoots::new(directory.path(), directory.path())).expect("load");
     assert_eq!(config.snapshot.workflow_base_branch, "agent-main");
 }
+
+const HOST_EVIDENCE_RULE: &str = "[[review.host_evidence]]\n\
+    kind = \"codeql\"\n\
+    name = \"Rust CodeQL (Linux)\"\n\
+    paths = [\"**/*.rs\"]\n\
+    os = \"linux\"\n\
+    command = \"scripts/codeql-rust-local.sh\"\n\
+    artifact = \"evidence/codeql.json\"\n";
+
+#[test]
+fn review_host_evidence_is_a_known_setting_and_its_neighbours_stay_unknown() {
+    if !isolated("review_host_evidence_is_a_known_setting_and_its_neighbours_stay_unknown") {
+        return;
+    }
+    let directory = tempfile::tempdir().expect("config roots");
+    let roots = ConfigRoots::new(
+        directory.path().join("global"),
+        directory.path().join("workspace"),
+    );
+    for root in [roots.global(), roots.workspace()] {
+        fs::create_dir_all(root).expect("config directory");
+    }
+    let global = roots.global().join("config.toml");
+    let workspace = roots.workspace().join("config.toml");
+    fs::write(&global, HOST_EVIDENCE_RULE).expect("global rules");
+    assert!(
+        orbit_config::unknown_config_keys_at(&global)
+            .expect("global diagnosis")
+            .is_empty(),
+        "live host-evidence rules are not unknown"
+    );
+    fs::write(&workspace, "[review]\nhost_evidence = []\nreviewers = 2\n").expect("workspace");
+    let keys = orbit_config::unknown_config_keys_at(&workspace).expect("workspace diagnosis");
+    assert_eq!(
+        keys.iter().map(|key| key.key.as_str()).collect::<Vec<_>>(),
+        ["review.reviewers"],
+        "only the neighbouring key is unknown"
+    );
+    let config = ResolvedConfig::load(&roots).expect("host evidence loads");
+    let rules = &config.operation.review_host_evidence;
+    assert_eq!(rules.source, OperationLayerSource::Workspace);
+    assert!(
+        rules.value.is_empty(),
+        "an explicit empty list clears the global rule: {rules:?}"
+    );
+    let mut store = ConfigStore::open(ConfigScope::Workspace, &workspace).expect("store");
+    for key in &keys {
+        assert!(store.remove_unknown_key(key).expect("remove neighbour"));
+        assert!(
+            !store
+                .remove_unknown_key(key)
+                .expect("stale diagnosis removes nothing")
+        );
+    }
+    store.save().expect("save");
+    let updated: toml::Value =
+        toml::from_str(&fs::read_to_string(&workspace).expect("updated")).expect("TOML");
+    assert_eq!(
+        updated["review"]["host_evidence"].as_array().map(Vec::len),
+        Some(0),
+        "the explicit empty list survives cleanup"
+    );
+    assert!(updated["review"].get("reviewers").is_none());
+    assert!(orbit_config::unknown_config_keys_present(&updated).is_empty());
+}

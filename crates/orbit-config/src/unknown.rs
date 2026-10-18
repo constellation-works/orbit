@@ -7,6 +7,7 @@ use std::sync::{Mutex, OnceLock};
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
 
+use crate::operation::REVIEW_HOST_EVIDENCE_KEY;
 use crate::registry::{
     CONFIG_KEY_REGISTRY, CREW_CONFIG_FIELDS, DEPRECATED_CONFIG_KEYS, REMOVED_CONFIG_KEYS,
 };
@@ -49,6 +50,8 @@ pub fn unknown_config_keys_present(document: &toml::Value) -> Vec<UnknownConfigK
             "plugins",
             "plugin_enablement",
             crate::TAG_INSTRUCTIONS_KEY,
+            // Read by the operation layer; the settings registry has no row for it.
+            REVIEW_HOST_EVIDENCE_KEY,
         ])
         .map(|key| key.split('.').map(str::to_owned).collect())
         .collect();
