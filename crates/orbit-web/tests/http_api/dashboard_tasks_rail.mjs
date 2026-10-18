@@ -216,6 +216,25 @@ assert.ok(header.textContent.endsWith(' of 101'), `aggregate header reports the 
 paint(aggregate(50, 50));
 assert.equal(rail.textContent, '101', 'aggregate rail keeps the total on the next page');
 
+// Crew-only limits appear in both the list and detail; config-only changes
+// refresh them even when task tags and crew assignment have not changed.
+common.setWorkspace('ws_orbit');
+const constrained = task(67, { crew: 'fixture-crew', tags: [], os_requirement: {
+  any_of: ['macos'], state: 'restricted', describe: 'macOS hosts (crew fixture-crew)',
+  source: { tags: [], crew: 'fixture-crew', executor: 'fixture-executor' },
+} });
+paint({ total: 1, limit: 50, offset: 0, next_cursor: null }, [constrained]);
+let osRow = byId['tasks-body'].querySelectorAll('.row').find(row => row.dataset.key === 'task-ORB-67');
+assert.equal(osRow.querySelector('.os-badge').title, `Runs on ${constrained.os_requirement.describe}`);
+const osTitle = osRow.querySelector('button.title');
+osTitle.parentNode.dispatch('click', { target: osTitle });
+assert.equal(byId['tasks-body'].querySelector('.task-os-readout').textContent, constrained.os_requirement.describe);
+constrained.os_requirement = { any_of: [], state: 'unresolved', describe: 'unresolved (crew fixture-crew)' };
+paint({ total: 1, limit: 50, offset: 0, next_cursor: null }, [constrained]);
+osRow = byId['tasks-body'].querySelectorAll('.row').find(row => row.dataset.key === 'task-ORB-67');
+assert.equal(osRow.querySelector('.os-badge').textContent, 'unresolved');
+assert.equal(byId['tasks-body'].querySelector('.task-os-readout').textContent, constrained.os_requirement.describe);
+
 // The expanded task detail paints transitions from the same history projection
 // the CLI reads, while older entries without statuses retain their event label.
 common.setWorkspace('ws_orbit');

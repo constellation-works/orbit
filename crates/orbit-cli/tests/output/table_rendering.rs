@@ -55,6 +55,71 @@ fn task_list_renders_one_line_per_task() {
     assert_both_forms(&workspace, &["task", "list"], 3, "orbit task list");
 }
 
+/// The CLI exposes a crew-only OS limit in human and projected readouts.
+#[test]
+fn task_effective_os_readout_and_filter_use_the_assigned_executor() {
+    let workspace = workspace();
+    let tasks = workspace.seed_tasks(&[workspace.task_seed("Crew constrained readout")]);
+    let id = tasks[0]["id"].as_str().unwrap();
+    let config_path = workspace.work.join(".orbit/config.toml");
+    let config = if config_path.exists() {
+        std::fs::read_to_string(&config_path).unwrap()
+    } else {
+        String::new()
+    };
+    std::fs::write(
+        config_path,
+        format!("{config}\n[crews.readout]\nmodel = \"fixture\"\nprovider = \"readout\"\n"),
+    )
+    .unwrap();
+    let executors = workspace.home.join(".orbit/resources/executors");
+    std::fs::create_dir_all(&executors).unwrap();
+    std::fs::write(executors.join("readout.yaml"),
+        "schemaVersion: 2\nkind: Executor\nmetadata:\n  name: readout\nspec:\n  executor_type: direct_agent\n  command: readout\n  host_os: [macos]\n").unwrap();
+    workspace.run(
+        &[
+            "tool",
+            "run",
+            "orbit.task.update",
+            "--input",
+            &serde_json::json!({"id": id, "crew": "readout", "model": "codex"}).to_string(),
+        ],
+        "assign constrained crew",
+    );
+    let shown = workspace.run(&["task", "show", id], "human task show");
+    assert!(String::from_utf8_lossy(&shown.stdout).contains("Runs on: macOS hosts (crew readout)"));
+    let shown = workspace.run(&["task", "show", id, "--json"], "JSON task show");
+    let task: Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(
+        task["os_requirement"]["any_of"],
+        serde_json::json!(["macos"])
+    );
+    let field = workspace.run(
+        &["task", "show", id, "--fields", "os_requirement", "--json"],
+        "projected task show",
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&field.stdout).unwrap(),
+        task["os_requirement"]
+    );
+    for (os, count) in [("macos", 1), ("linux", 0)] {
+        let listed = workspace.run(
+            &["task", "list", "--runs-on", os, "--json"],
+            "effective OS filter",
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&listed.stdout)
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            count
+        );
+    }
+    let listed = workspace.run(&["task", "list", "--format", "table"], "task OS column");
+    assert!(String::from_utf8_lossy(&listed.stdout).contains("macOS hosts (crew readout)"));
+}
+
 /// A stored title may carry a line feed, carriage return, or tab. The plain form
 /// escapes them so the record stays one line with a stable field count, while
 /// JSON and NDJSON carry the value exactly as stored (spec §1).

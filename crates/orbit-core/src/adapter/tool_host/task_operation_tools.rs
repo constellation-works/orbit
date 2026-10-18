@@ -8,13 +8,15 @@ use orbit_common::OrbitError;
 use orbit_common::governance::operation::{OperationInput, OperationVerb};
 use orbit_common::governance::task::TaskVerb;
 use orbit_types::task::{
-    ExternalRef, TASK_SHOW_DELIVERY_FIELD, Task, TaskStatus, is_task_show_projection_field,
+    ExternalRef, HostOs, TASK_SHOW_DELIVERY_FIELD, Task, TaskStatus, is_task_show_projection_field,
     task_base_json, unknown_task_show_field_message,
 };
 use serde_json::{Map, Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::task::{TaskEligibilityQuery, TaskListFilter, TaskListQuery};
+use crate::application::task::{
+    TaskEligibilityQuery, TaskListFilter, TaskListQuery, TaskOsReadout,
+};
 
 use super::dispatch::ToolCaller;
 use super::input::{parse_task_priority, parse_task_status, parse_task_type};
@@ -239,16 +241,31 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
             ..Default::default()
         },
         ready: input.optional_bool("ready")? == Some(true),
+        runs_on: input
+            .optional_string("runs_on")?
+            .map(|value| {
+                HostOs::parse(&value).ok_or_else(|| {
+                    OrbitError::InvalidInput(format!(
+                        "unsupported runs_on `{value}`; expected linux, macos or windows"
+                    ))
+                })
+            })
+            .transpose()?,
         path: input.optional_string("path")?,
         limit: super::input::task_list_limit(input.as_value())?,
     })?;
     let status_by_id = page.status_by_id;
+    let os_readout = TaskOsReadout::new(runtime)?;
     let tasks = page
         .items
         .into_iter()
         .map(|row| match &fields {
-            None => Ok(Value::Object(task_base_json(&row.task, &status_by_id))),
-            Some(fields) => project_listed_task(runtime, &row.task, fields),
+            None => {
+                let mut object = task_base_json(&row.task, &status_by_id);
+                os_readout.insert_into(&row.task, &mut object);
+                Ok(Value::Object(object))
+            }
+            Some(fields) => project_listed_task(runtime, &row.task, fields, &os_readout),
         })
         .collect::<Result<Vec<_>, OrbitError>>()?;
     let total = page.total;
@@ -275,12 +292,17 @@ fn project_listed_task(
     runtime: &OrbitRuntime,
     task: &Task,
     fields: &[String],
+    os_readout: &TaskOsReadout,
 ) -> Result<Value, OrbitError> {
     let mut projected = Map::new();
     for field in fields {
         projected.insert(
             field.clone(),
-            task_fields_to_json(runtime, task, std::slice::from_ref(field))?,
+            if field == "os_requirement" {
+                os_readout.requirement(task)
+            } else {
+                task_fields_to_json(runtime, task, std::slice::from_ref(field))?
+            },
         );
     }
     Ok(Value::Object(projected))

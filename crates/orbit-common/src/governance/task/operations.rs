@@ -217,7 +217,7 @@ const LIST: TaskOperation = TaskOperation {
     verb: TaskVerb::List,
     cli_path: &["list"],
     tool_name: "orbit.task.list",
-    tool_description: "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Optional filters: status, parent, type, tag, dependency readiness, path.",
+    tool_description: "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Optional filters: status, parent, type, tag, dependency readiness, path, runs_on. os_requirement is derived from OS tags intersected with the stored crew executor host_os, with source and unresolved/conflict states.",
     cli_about: "List tasks with optional filters",
     cli_help: CliHelp {
         constraints: &[],
@@ -237,6 +237,7 @@ const LIST: TaskOperation = TaskOperation {
             "external_ref",
             "has_ref",
             "ready",
+            "runs_on",
             "path",
             "ops",
             "full",
@@ -309,6 +310,17 @@ const LIST: TaskOperation = TaskOperation {
                     "Filter by tag. Repeat for AND semantics",
                 ),
                 &["tags"],
+            ),
+            both(
+                "runs_on",
+                ParamType::Enum(&[
+                    EnumValue::helped("linux", "Linux hosts"),
+                    EnumValue::helped("macos", "macOS hosts"),
+                    EnumValue::helped("windows", "Windows hosts"),
+                ]),
+                "Filter by effective host OS: linux, macos or windows. Intersects OS tags with the stored crew executor. Unrestricted tasks match; unresolved crews and conflicts do not.",
+                CliArgKind::flag("runs-on"),
+                "Filter by effective host OS: tags intersected with the stored crew executor; unrestricted tasks match, unresolved crews and conflicts do not",
             ),
             both(
                 "ready",
@@ -464,9 +476,14 @@ const SHOW: TaskOperation = TaskOperation {
     verb: TaskVerb::Show,
     cli_path: &["show"],
     tool_name: "orbit.task.show",
-    tool_description: "Fetch a single Orbit task as JSON. `id` is a globally unique primary key resolved through the host task registry by default; cwd, MCP initialize metadata, and linked-worktree runtime identities are not used as filters. An optional `workspace` argument is an explicit fail-closed filter only. Use the optional `fields` projection (or single-field alias `field`) to retrieve only specific task fields, including the derived read-only `terminal` field. The `crew` field selects execution, while `orchestrator` records orchestration attribution. `field: \"delivery\"` (optional `run_id`) reports what a delivery run committed and landed for the task: typed status, base/head and landed commit SHAs, PR number, timestamps and provenance only, from the host's own commit and merge step records. Missing or inconsistent evidence is reported as unavailable, never inferred. Full run details stay on the operator-only `orbit.workflow.run.show`.",
+    tool_description: "Fetch a single Orbit task as JSON. `id` is a globally unique primary key resolved through the host task registry by default; cwd, MCP initialize metadata, and linked-worktree runtime identities are not used as filters. An optional `workspace` argument is an explicit fail-closed filter only. Use the optional `fields` projection (or single-field alias `field`) to retrieve only specific task fields, including the derived read-only `terminal` field. `os_requirement` reports tags intersected with the stored crew executor host_os, its source, and unresolved/conflict states; it is never persisted. The `crew` field selects execution, while `orchestrator` records orchestration attribution. `field: \"delivery\"` (optional `run_id`) reports what a delivery run committed and landed for the task: typed status, base/head and landed commit SHAs, PR number, timestamps and provenance only, from the host's own commit and merge step records. Missing or inconsistent evidence is reported as unavailable, never inferred. Full run details stay on the operator-only `orbit.workflow.run.show`.",
     cli_about: "Show detailed information about a task, found by ID with an optional workspace filter",
-    cli_help: CliHelp::NONE,
+    cli_help: CliHelp {
+        long_about: Some(
+            "Show a task by ID. Runs on reports OS tags intersected with the stored crew executor host_os, naming the source or an unresolved/conflicting constraint. This readout is derived and never stored. An unset crew leaves automatic routing undecided.",
+        ),
+        ..CliHelp::NONE
+    },
     effect: Effect::Read,
     params: &[
         &[

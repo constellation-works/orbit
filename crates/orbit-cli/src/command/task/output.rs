@@ -114,6 +114,7 @@ pub(super) struct TaskTableFilters {
     pub(super) status: bool,
     pub(super) priority: bool,
     pub(super) task_type: bool,
+    pub(super) runs_on: bool,
 }
 
 /// Build the list view for `orbit task list` from the tool's task records.
@@ -133,6 +134,12 @@ pub(super) fn task_table(
         Column::new("STATUS").fixed().filtered(filtered.status),
         Column::new("PRIORITY").fixed().filtered(filtered.priority),
         Column::new("TYPE").fixed().filtered(filtered.task_type),
+        Column::new("RUNS ON").filtered(
+            filtered.runs_on
+                || tasks
+                    .iter()
+                    .any(|task| task.get("os_requirement").is_some()),
+        ),
     ];
     if full {
         columns.extend([
@@ -151,6 +158,16 @@ pub(super) fn task_table(
             crate::output::color::cell(field("status"), Domain::TaskStatus),
             crate::output::color::cell(field("priority"), Domain::Priority),
             crate::output::color::cell(field("type"), Domain::TaskType),
+            Cell::new(
+                task.get("os_requirement")
+                    .and_then(|os| os.get("describe"))
+                    .and_then(Value::as_str)
+                    .unwrap_or(if field("crew").is_empty() {
+                        "any host from OS tags (crew unassigned)"
+                    } else {
+                        "any host"
+                    }),
+            ),
         ];
         if full {
             row.extend([

@@ -63,6 +63,14 @@ Options:
       --ready
           Keep only tasks whose dependencies are already satisfied
 
+      --runs-on <RUNS_ON>
+          Filter by effective host OS: tags intersected with the stored crew executor; unrestricted tasks match, unresolved crews and conflicts do not
+
+          Possible values:
+          - linux:   Linux hosts
+          - macos:   macOS hosts
+          - windows: Windows hosts
+
       --path <PATH>
           Filter to tasks whose `context_files` selectors apply to this path. Selector forms supported: `file:`, `dir:`, `symbol:`, and bare paths. Bidirectional containment — passing a directory matches every selector under it
 

@@ -1,4 +1,4 @@
-Show detailed information about a task, found by ID with an optional workspace filter
+Show a task by ID. Runs on reports OS tags intersected with the stored crew executor host_os, naming the source or an unresolved/conflicting constraint. This readout is derived and never stored. An unset crew leaves automatic routing undecided.
 
 Usage: orbit task show [OPTIONS] <ID>
 
