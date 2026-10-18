@@ -4,7 +4,7 @@ type: design
 title: "Glossary — Host Registry"
 owner: codex
 last_updated: 2026-10-12
-last_validated: 2026-10-12
+last_validated: 2026-10-18
 status: Accepted
 feature: host-registry
 doc_role: reference
