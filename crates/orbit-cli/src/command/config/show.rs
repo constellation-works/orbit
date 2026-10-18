@@ -16,9 +16,9 @@ pub struct ConfigShowArgs {
     /// including built-in defaults for keys that file omits.
     #[arg(long, value_enum, default_value_t = ConfigScopeArg::Effective)]
     pub scope: ConfigScopeArg,
-    /// List every key, including sections whose keys are all unset and
-    /// therefore collapse to a one-line summary by default.
-    #[arg(long)]
+    /// List every key, including unconfigured advanced keys and sections
+    /// whose keys are all unset.
+    #[arg(long, visible_alias = "advanced")]
     pub all: bool,
 }
 

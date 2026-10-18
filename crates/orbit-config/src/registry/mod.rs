@@ -130,6 +130,26 @@ impl ConfigSection {
     }
 }
 
+/// Display tier for a registered configuration key. Loading and editing do not
+/// depend on this tier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigKeyTier {
+    /// Shown in the ordinary configuration overview.
+    Standard,
+    /// Shown when configured in any layer or explicitly requested.
+    Advanced,
+}
+
+impl ConfigKeyTier {
+    /// Stable lowercase token for configuration JSON metadata.
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::Advanced => "advanced",
+        }
+    }
+}
+
 /// One settable `config.toml` key, as advertised by `orbit config keys`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConfigKeyDescriptor {
@@ -141,6 +161,8 @@ pub struct ConfigKeyDescriptor {
     pub description: &'static str,
     /// Grouping for `orbit config show`/`keys`.
     pub section: ConfigSection,
+    /// Visibility in the ordinary configuration overview.
+    pub tier: ConfigKeyTier,
     /// Relevance ordinal within the section; lower renders first. Registry
     /// declaration order stays alphabetical (a store test enforces it), so
     /// this is what puts the settings an operator reaches for at the top.

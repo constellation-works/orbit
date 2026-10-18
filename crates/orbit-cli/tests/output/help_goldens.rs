@@ -25,6 +25,7 @@ const CASES: &[(&[&str], &str)] = &[
     (&["host", "add"], "host/add.txt"),
     (&["host", "remove"], "host/remove.txt"),
     (&["doctor"], "doctor.txt"),
+    (&["config", "show"], "config-show.txt"),
     (&["search"], "search.txt"),
     (&["search", "reindex"], "search-reindex.txt"),
     (&["codebase"], "codebase/root.txt"),

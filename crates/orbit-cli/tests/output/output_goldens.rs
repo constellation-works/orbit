@@ -867,6 +867,7 @@ fn config_show_effective_provenance_matches_golden() {
         &fixture.run(&["config", "show", "--json"], &[]),
         "config show",
     );
+    assert_config_show_tiers(&fixture, &shown);
     let settings = shown["settings"].as_object().expect("settings object");
     let mut provenance = serde_json::Map::new();
     for (key, entry) in shown["provenance"].as_object().expect("provenance object") {
@@ -874,6 +875,7 @@ fn config_show_effective_provenance_matches_golden() {
         let mut projected = serde_json::Map::new();
         projected.insert("scope".to_string(), json!(scope));
         projected.insert("state".to_string(), entry["state"].clone());
+        projected.insert("tier".to_string(), entry["tier"].clone());
         projected.insert("path".to_string(), entry["path"].clone());
         if scope != "built-in" {
             projected.insert("value".to_string(), settings[key].clone());
@@ -890,6 +892,146 @@ fn config_show_effective_provenance_matches_golden() {
         serde_json::to_string_pretty(&projection).expect("serialize projection")
     );
     assert_golden("config_show_effective.json", &fixture.redact(&rendered));
+}
+
+/// Exercise the public renderer against its JSON metadata, so every registered
+/// advanced row is hidden only while unconfigured and every section's count
+/// describes the rows actually omitted. Keep policy choices in the registry.
+fn assert_config_show_tiers(fixture: &Fixture, shown: &Value) {
+    use orbit_config::{CONFIG_KEY_REGISTRY, ConfigSection};
+
+    let plain = fixture.run(&["config", "show"], &[]);
+    let plain = String::from_utf8(plain.stdout).expect("config show text");
+    let all = fixture.run(&["config", "show", "--all"], &[]);
+    let all = String::from_utf8(all.stdout).expect("config show --all text");
+    let advanced = fixture.run(&["config", "show", "--advanced"], &[]);
+    assert_eq!(all.as_bytes(), advanced.stdout);
+    let has_row = |text: &str, label: &str| {
+        text.lines()
+            .any(|line| line.starts_with("  ") && line.split_whitespace().next() == Some(label))
+    };
+    for section in ConfigSection::ORDER {
+        let mut hidden = 0;
+        for descriptor in CONFIG_KEY_REGISTRY
+            .iter()
+            .filter(|entry| entry.section == *section)
+        {
+            let key = descriptor.key;
+            let metadata = &shown["provenance"][key];
+            let tier = metadata["tier"].as_str().expect("every key has a tier");
+            assert!(matches!(tier, "standard" | "advanced"));
+            let label = section
+                .key_prefix()
+                .and_then(|prefix| key.strip_prefix(prefix))
+                .and_then(|rest| rest.strip_prefix('.'))
+                .unwrap_or(key);
+            assert!(has_row(&all, label), "--all omitted {key}");
+            if tier == "advanced" {
+                let configured = metadata["scope"] != "built-in"
+                    || !metadata["shadowed_by"]
+                        .as_array()
+                        .expect("shadowed array")
+                        .is_empty();
+                assert_eq!(has_row(&plain, label), configured, "visibility of {key}");
+                hidden += usize::from(!configured);
+            }
+        }
+        let heading = plain
+            .lines()
+            .find(|line| line.starts_with(section.title()))
+            .expect("section heading");
+        if hidden > 0 {
+            assert!(
+                heading.contains(&format!("{hidden} advanced hidden")),
+                "{heading}"
+            );
+        } else {
+            assert!(!heading.contains("advanced hidden"), "{heading}");
+        }
+    }
+    assert!(all.len() > plain.len());
+
+    // Set-in-any-layer includes false, empty arrays, and a security value the
+    // workspace does not inherit. set/get continue admitting advanced keys.
+    for (key, value, expected, global) in [
+        (
+            "workflow.validation_env.cargo_incremental",
+            "false",
+            json!(false),
+            true,
+        ),
+        ("workflow.provider_limit_budgets", "[]", json!([]), false),
+        (
+            "execution.codex.approval_policy",
+            "never",
+            json!("never"),
+            true,
+        ),
+    ] {
+        let mut args = vec!["config", "set", key, value];
+        if global {
+            args.push("--global");
+        }
+        fixture.run(&args, &[]);
+        let scope = if global { "global" } else { "effective" };
+        let got = parse_json_stdout(
+            &fixture.run(&["config", "get", key, "--scope", scope, "--json"], &[]),
+            "config get advanced",
+        );
+        assert_eq!(got["value"], expected);
+    }
+    let configured = fixture.run(&["config", "show"], &[]);
+    let configured = String::from_utf8(configured.stdout).expect("configured text");
+    for label in [
+        "validation_env.cargo_incremental",
+        "provider_limit_budgets",
+        "codex.approval_policy",
+    ] {
+        assert!(
+            has_row(&configured, label),
+            "configured advanced key {label}"
+        );
+    }
+    let loaded = parse_json_stdout(
+        &fixture.run(&["config", "show", "--json"], &[]),
+        "configured show",
+    );
+    assert_eq!(
+        loaded["settings"]["workflow.validation_env.cargo_incremental"],
+        false
+    );
+    assert_eq!(
+        loaded["settings"]["workflow.provider_limit_budgets"],
+        json!([])
+    );
+    assert_eq!(
+        loaded["settings"]["execution.codex.approval_policy"],
+        Value::Null
+    );
+    assert_eq!(
+        loaded["provenance"]["execution.codex.approval_policy"]["shadowed_by"][0]["reason"],
+        "not-inherited"
+    );
+
+    for scope in ["global", "workspace"] {
+        let scoped = fixture.run(&["config", "show", "--scope", scope], &[]);
+        let scoped = String::from_utf8(scoped.stdout).expect("scoped text");
+        assert!(!has_row(&scoped, "proc_spawn_max_timeout_minutes"));
+        assert_eq!(has_row(&scoped, "codex.approval_policy"), scope == "global");
+        let all = fixture.run(&["config", "show", "--scope", scope, "--advanced"], &[]);
+        assert!(has_row(
+            &String::from_utf8(all.stdout).expect("scoped all text"),
+            "proc_spawn_max_timeout_minutes"
+        ));
+        let json = parse_json_stdout(
+            &fixture.run(&["config", "show", "--scope", scope, "--json"], &[]),
+            "scoped JSON",
+        );
+        assert_eq!(
+            json["provenance"]["execution.codex.approval_policy"]["tier"],
+            "advanced"
+        );
+    }
 }
 
 /// The configuration reference's "Settable keys" table promises to match

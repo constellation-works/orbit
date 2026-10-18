@@ -20,8 +20,9 @@ use std::path::Path;
 
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_config::{
-    CONFIG_KEY_REGISTRY, ConfigSection, ConfigSnapshot, ConfigStore, ConfigValueSourceKind,
-    ConfigValueState, EffectiveConfigValue, ShadowReason, describe_config_key,
+    CONFIG_KEY_REGISTRY, ConfigKeyTier, ConfigSection, ConfigSnapshot, ConfigStore,
+    ConfigValueSourceKind, ConfigValueState, EffectiveConfigValue, ShadowReason,
+    describe_config_key,
 };
 use orbit_core::OrbitRuntime;
 use serde_json::{Map, Value as JsonValue, json};
@@ -134,7 +135,7 @@ pub(super) fn effective_text(
 
     // The effective view always composes the subprocess environment from the
     // allowlist; the invariant is surfaced here rather than as a settable key.
-    let rows = effective_rows(values, false);
+    let rows = effective_rows(values, false, all);
     write_sections(&mut out, &rows, values, all);
     write_paths(&mut out, runtime, None);
     out
@@ -168,7 +169,7 @@ pub(super) fn scoped_text(
         let _ = writeln!(out, "{line}");
     }
 
-    let rows = scoped_rows(store, settings, snapshot.execution_env_inherit);
+    let rows = scoped_rows(store, settings, snapshot.execution_env_inherit, all);
     write_sections(&mut out, &rows, &[], all);
     write_paths(&mut out, runtime, Some(store.path()));
     out
@@ -190,6 +191,7 @@ pub(super) fn effective_provenance_json(entry: &EffectiveConfigValue) -> JsonVal
         },
     );
     object.insert("section".to_string(), section_token(&entry.key));
+    object.insert("tier".to_string(), tier_json(&entry.key));
     object.insert("description".to_string(), description_json(&entry.key));
     object.insert("state".to_string(), json!(entry.state().label()));
     object.insert(
@@ -223,6 +225,7 @@ pub(super) fn scoped_provenance_json(
         "scope": scoped_state(store, key, value).0,
         "path": if store.is_key_set(key) { json!(store.path().to_string_lossy()) } else { JsonValue::Null },
         "section": section_token(key),
+        "tier": tier_json(key),
         "description": description_json(key),
         "state": scoped_state(store, key, value).1,
         "shadowed_by": JsonValue::Array(Vec::new()),
@@ -257,6 +260,14 @@ fn write_sections(
             .collect::<Vec<_>>(),
     );
     for section in rows {
+        let hidden = if section.hidden_advanced == 0 {
+            String::new()
+        } else {
+            format!(
+                " — {} advanced hidden (pass --all or --advanced to list them)",
+                section.hidden_advanced
+            )
+        };
         let _ = writeln!(out);
         if section.section == ConfigSection::Crews {
             write_crews(out, values, section);
@@ -271,7 +282,7 @@ fn write_sections(
         if all_unset && !all {
             let _ = writeln!(
                 out,
-                "{:<HEADING_WIDTH$} {} — {} keys unset (pass --all to list them)",
+                "{:<HEADING_WIDTH$} {} — {} keys unset (pass --all to list them){hidden}",
                 section.section.title(),
                 section.section.blurb(),
                 settable.len()
@@ -280,7 +291,7 @@ fn write_sections(
         }
         let _ = writeln!(
             out,
-            "{:<HEADING_WIDTH$} {}{}",
+            "{:<HEADING_WIDTH$} {}{}{hidden}",
             section.section.title(),
             section.section.blurb(),
             section.heading_suffix
@@ -300,6 +311,7 @@ struct SectionRows {
     rows: Vec<Row>,
     /// Appended to the section heading, for the execution security warning.
     heading_suffix: String,
+    hidden_advanced: usize,
 }
 
 fn clone_row(row: &Row) -> Row {
@@ -312,18 +324,33 @@ fn clone_row(row: &Row) -> Row {
     }
 }
 
-fn effective_rows(values: &[EffectiveConfigValue], env_inherit: bool) -> Vec<SectionRows> {
+fn effective_rows(
+    values: &[EffectiveConfigValue],
+    env_inherit: bool,
+    all: bool,
+) -> Vec<SectionRows> {
     let mut sections = Vec::new();
     let workspace_present = values
         .iter()
         .any(|entry| entry.source.kind() == ConfigValueSourceKind::Workspace);
     for section in ConfigSection::ORDER {
         let mut rows = Vec::new();
+        let mut hidden_advanced = 0;
         if *section != ConfigSection::Crews {
             for descriptor in ordered_keys(*section) {
                 let Some(entry) = values.iter().find(|entry| entry.key == descriptor.key) else {
                     continue;
                 };
+                // Even a non-inherited global security setting is configured:
+                // keep its explanatory row visible.
+                if !all
+                    && descriptor.tier == ConfigKeyTier::Advanced
+                    && entry.source.kind() == ConfigValueSourceKind::BuiltIn
+                    && entry.shadowed_by.is_empty()
+                {
+                    hidden_advanced += 1;
+                    continue;
+                }
                 rows.push(Row {
                     label: label_for(*section, &entry.key),
                     value: render_value(&entry.value),
@@ -338,12 +365,14 @@ fn effective_rows(values: &[EffectiveConfigValue], env_inherit: bool) -> Vec<Sec
         }
         let has_crews = *section == ConfigSection::Crews
             && values.iter().any(|entry| entry.key.starts_with("crews."));
-        if rows.is_empty() && !has_crews && *section != ConfigSection::Crews {
+        if rows.is_empty() && hidden_advanced == 0 && !has_crews && *section != ConfigSection::Crews
+        {
             continue;
         }
         sections.push(SectionRows {
             section: *section,
             rows,
+            hidden_advanced,
             heading_suffix: if *section == ConfigSection::Execution && workspace_present {
                 "          ⚠ workspace file present: global execution values are ignored"
                     .to_string()
@@ -359,6 +388,7 @@ fn scoped_rows(
     store: &ConfigStore,
     settings: &[(&'static str, JsonValue)],
     env_inherit: bool,
+    all: bool,
 ) -> Vec<SectionRows> {
     let mut sections = Vec::new();
     for section in ConfigSection::ORDER {
@@ -366,10 +396,15 @@ fn scoped_rows(
             continue;
         }
         let mut rows = Vec::new();
+        let mut hidden_advanced = 0;
         for descriptor in ordered_keys(*section) {
             let Some((key, value)) = settings.iter().find(|(key, _)| *key == descriptor.key) else {
                 continue;
             };
+            if !all && descriptor.tier == ConfigKeyTier::Advanced && !store.is_key_set(key) {
+                hidden_advanced += 1;
+                continue;
+            }
             rows.push(Row {
                 label: label_for(*section, key),
                 value: render_value(value),
@@ -381,12 +416,13 @@ fn scoped_rows(
         if *section == ConfigSection::Execution {
             rows.push(env_inherit_row(env_inherit));
         }
-        if rows.is_empty() {
+        if rows.is_empty() && hidden_advanced == 0 {
             continue;
         }
         sections.push(SectionRows {
             section: *section,
             rows,
+            hidden_advanced,
             heading_suffix: String::new(),
         });
     }
@@ -593,6 +629,15 @@ fn write_paths(out: &mut String, runtime: &OrbitRuntime, config_path: Option<&Pa
     for (label, value) in rows {
         let _ = writeln!(out, "  {label:<width$}  {value}");
     }
+}
+
+/// Display metadata for registered keys and dynamic crew fields.
+fn tier_json(key: &str) -> JsonValue {
+    json!(
+        describe_config_key(key)
+            .map_or(ConfigKeyTier::Standard, |entry| entry.tier)
+            .token()
+    )
 }
 
 /// Registry rows for one section, most relevant first.

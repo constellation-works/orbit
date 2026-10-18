@@ -10,7 +10,7 @@ use serde_json::{Value as JsonValue, json};
 
 use super::super::{
     CODEX_APPROVAL_POLICIES, CONSTELLATION_DEFAULT_PROVIDER_ENV, ConfigKeyDescriptor,
-    ConfigSection, DEFAULT_WORKFLOW_BASE_BRANCH, SECURITY_ALERT_SEVERITIES,
+    ConfigKeyTier, ConfigSection, DEFAULT_WORKFLOW_BASE_BRANCH, SECURITY_ALERT_SEVERITIES,
 };
 use super::resolve::{
     DEFAULT_JOURNAL_RETENTION_DAYS, DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES, DEFAULT_RETENTION_DAYS,
@@ -36,6 +36,7 @@ macro_rules! define_config_settings {
             description: $description:literal,
             section: $section:expr,
             order: $order:literal,
+            $(tier: $tier:expr,)?
             resolve: $resolve:expr $(,)?
         }
     ),+ $(,)?) => {
@@ -58,6 +59,7 @@ macro_rules! define_config_settings {
                 description: $description,
                 section: $section,
                 order: $order,
+                tier: define_config_settings!(@tier $($tier)?),
             },)+
         ];
 
@@ -220,6 +222,8 @@ macro_rules! define_config_settings {
             }
         }
     };
+    (@tier $tier:expr) => { $tier };
+    (@tier) => { ConfigKeyTier::Standard };
 }
 
 define_config_settings! {
@@ -227,6 +231,7 @@ define_config_settings! {
         key: "ci_failure.operator_suppression_hours", value_type: "integer",
         description: "Hours an archived or rejected exact-key CI sweep task without covered_by suppresses re-filing (0..=720, default 6).",
         section: ConfigSection::Housekeeping, order: 21,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u32>| {
             let hours = raw.unwrap_or(6);
             if hours > 720 {
@@ -238,12 +243,14 @@ define_config_settings! {
         key: "automation.stall_window_minutes", value_type: "integer",
         description: "Minutes a deferred delivery-automation reason may persist before the evaluator logs it at warn and files one friction (1..=1440).",
         section: ConfigSection::Housekeeping, order: 20,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u32>| resolve_bounded_minutes(raw, DEFAULT_STALL_WINDOW_MINUTES, "automation.stall_window_minutes"),
     },
     codex_approval_policy: Option<String> => String {
         key: "execution.codex.approval_policy", value_type: "string",
         description: "Codex approval policy: one of untrusted, on-request, never.",
         section: ConfigSection::Execution, order: 20,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<String>| resolve_optional_choice(raw, "execution.codex.approval_policy", CODEX_APPROVAL_POLICIES),
     },
     codex_sandbox: String => String {
@@ -262,12 +269,14 @@ define_config_settings! {
         key: "execution.proc_spawn_max_timeout_minutes", value_type: "integer",
         description: "Longest timeout one proc.spawn call may run with inside a managed activity, which also caps it at the activity's remaining wall-clock budget (1..=1440, default 45). Outside an activity the ceiling stays 60 seconds.",
         section: ConfigSection::Execution, order: 40,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u32>| resolve_bounded_minutes(raw, DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES, "execution.proc_spawn_max_timeout_minutes"),
     },
     execution_agent_stall_minutes: u32 => u32 {
         key: "execution.agent_stall_minutes", value_type: "integer",
         description: "Minutes a provider process may produce no output and use no CPU before its step fails as stalled and is retried (0 disables, at most 1440, default 30).",
         section: ConfigSection::Execution, order: 50,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u32>| resolve_agent_stall_minutes(raw),
     },
     machine_id: Option<String> => String {
@@ -292,12 +301,14 @@ define_config_settings! {
         key: "machine.auto_concurrency.head_max_wait_minutes", value_type: "integer",
         description: "Starvation guard: maximum wait for the queue head, in minutes (default 30).",
         section: ConfigSection::Machine, order: 38,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u32>| Ok::<_, OrbitError>(raw.unwrap_or(30)),
     },
     machine_auto_concurrency_head_stuck_passes: u32 => u32 {
         key: "machine.auto_concurrency.head_stuck_passes", value_type: "integer",
         description: "Starvation guard: consecutive protected passes whose miss has not improved before a drain reports the queue head stuck (>= 1, default 20).",
         section: ConfigSection::Machine, order: 39,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u32>| match raw.unwrap_or(20) {
             0 => Err(OrbitError::InvalidInput("machine.auto_concurrency.head_stuck_passes must be at least 1".into())),
             passes => Ok(passes),
@@ -307,6 +318,7 @@ define_config_settings! {
         key: "machine.auto_concurrency.horizon_cap_minutes", value_type: "integer",
         description: "Maximum forecast horizon for a candidate, in minutes (default 120).",
         section: ConfigSection::Machine, order: 37,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u32>| Ok::<_, OrbitError>(raw.unwrap_or(120)),
     },
     machine_auto_concurrency_min_profile_deliveries: u32 => u32 {
@@ -325,12 +337,14 @@ define_config_settings! {
         key: "machine.auto_concurrency.profile_window", value_type: "integer",
         description: "Most recent completed deliveries retained per profile key; at least min_profile_deliveries (default 50).",
         section: ConfigSection::Machine, order: 35,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u32>| Ok::<_, OrbitError>(raw.unwrap_or(50)),
     },
     machine_host_shutdown_hold_minutes: u32 => u32 {
         key: "machine.host_shutdown_hold_minutes", value_type: "integer",
         description: "Hold new unattended admissions only when a scheduled host shutdown or reboot is this many minutes away or sooner (>= 1, default 180). A later schedule is still reported and admission continues.",
         section: ConfigSection::Machine, order: 31,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u32>| resolve_host_shutdown_hold_minutes(raw),
     },
     machine_name: Option<String> => String {
@@ -361,24 +375,28 @@ define_config_settings! {
         key: "machine.worker_memory_high", value_type: "string",
         description: "MemoryHigh= for each contained worker scope, where the kernel starts throttling the run: bytes with an optional K/M/G/T suffix, a percentage of physical RAM, or infinity (default 40%).",
         section: ConfigSection::Machine, order: 50,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<String>| resolve_memory_limit(raw, DEFAULT_WORKER_MEMORY_HIGH, "machine.worker_memory_high"),
     },
     machine_worker_memory_max: MemoryLimit => String {
         key: "machine.worker_memory_max", value_type: "string",
         description: "MemoryMax= for each contained worker scope, where the kernel OOM-kills inside the run instead of the host: bytes with an optional K/M/G/T suffix, a percentage of physical RAM, or infinity (default 50%).",
         section: ConfigSection::Machine, order: 60,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<String>| resolve_memory_limit(raw, DEFAULT_WORKER_MEMORY_MAX, "machine.worker_memory_max"),
     },
     machine_worker_tasks_max: u32 => u32 {
         key: "machine.worker_tasks_max", value_type: "integer",
         description: "TasksMax= for each contained worker scope: processes and threads the run may hold at once before fork/clone fails (>= 1, default 4096).",
         section: ConfigSection::Machine, order: 70,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u32>| resolve_worker_tasks_max(raw),
     },
     machine_worker_cpu_quota: u32 => u32 {
         key: "machine.worker_cpu_quota", value_type: "integer",
         description: "CPUQuota= for each contained worker scope, as a percentage of one core (400 caps a run at four cores) so one run cannot saturate the host. 0 or unset sets no CPU limit. Linux only; enforced when the systemd user manager delegates the cpu controller.",
         section: ConfigSection::Machine, order: 75,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u32>| Ok::<_, OrbitError>(raw.unwrap_or(0)),
     },
     operation_review_crew: Option<Vec<String>> => operation::ReviewCrewSetting {
@@ -391,24 +409,28 @@ define_config_settings! {
         key: "security_alert_sweep.min_severity", value_type: "string",
         description: "Minimum severity filed by the security alert sweep for Dependabot and Code scanning: low, moderate (default), high, or critical. Run input overrides workspace then global config; secret scanning is always filed.",
         section: ConfigSection::Housekeeping, order: 90,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<String>| resolve_choice(raw, "moderate", "security_alert_sweep.min_severity", SECURITY_ALERT_SEVERITIES),
     },
     pr_close_on_terminal: bool => bool {
         key: "pr.close_on_terminal", value_type: "bool",
         description: "Close a task's open Orbit-authored pull requests (delivery and preservation PRs for blocked tasks) when the task lands (done), is rejected or is archived, with a comment naming the landing or the decision. Branches are kept; a forge error is a warning, never a failure (default true).",
         section: ConfigSection::Delivery, order: 140,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
     },
     pr_delivery_authors: Vec<String> => Vec<String> {
         key: "pr.delivery_authors", value_type: "array<string>",
         description: "Forge logins whose pull requests count as Orbit-authored for pr.close_on_terminal and for settling a task to done from its delivery PR merged outside Orbit. Empty (default) means the login the forge CLI is authenticated as on this machine.",
         section: ConfigSection::Delivery, order: 141,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(normalize_logins(raw.unwrap_or_default())),
     },
     pr_task_url_template: Option<String> => String {
         key: "pr.task_url_template", value_type: "string",
         description: "URL template used to link a task ID in PR descriptions.",
         section: ConfigSection::Housekeeping, order: 70,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<String>| Ok::<_, OrbitError>(raw),
     },
     review_before_pr: bool => bool {
@@ -439,6 +461,7 @@ define_config_settings! {
         key: "review.verify_findings", value_type: "bool",
         description: "Review findings must be verified before approval: a review-filed bug (tagged code-review, delivery-code-review, security-review or qa-sweep) is refused at approval, promotion and drain admission until `finding_verification_pipeline` records a CONFIRMED verdict for it. Off by default, when verification state is ignored. Read when the gate is checked, so a change applies to running drains and the dashboard. Turning it on does not enable the seeded `finding_verification` routine.",
         section: ConfigSection::Review, order: 40,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
     },
     retention_audit_days: u32 => u32 {
@@ -457,30 +480,35 @@ define_config_settings! {
         key: "retention.journal_days", value_type: "integer",
         description: "Days after a task commit is applied before `orbit gc journal` may delete its commit journal row (1..=36500; default 14). Recovery replays only prepared and committed rows, so an applied row is history kept for diagnosis; prepared, committed and aborted rows, and each task's newest applied row, are never deleted.",
         section: ConfigSection::Housekeeping, order: 112,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u32>| resolve_retention_days(raw, "retention.journal_days", DEFAULT_JOURNAL_RETENTION_DAYS),
     },
     retention_store_warn_bytes: u64 => u64 {
         key: "retention.store_warn_bytes", value_type: "integer",
         description: "Warn from `orbit doctor` when the host store file is larger than this many bytes and this workspace has no enabled store-gc routine (default 1073741824, 1 GiB). Zero warns for any non-empty file. The check stays quiet under the threshold or while a store-gc routine is enabled.",
         section: ConfigSection::Housekeeping, order: 115,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u64>| Ok::<_, OrbitError>(raw.unwrap_or(DEFAULT_STORE_WARN_BYTES)),
     },
     worktree_reclaim: Vec<String> => Vec<String> {
         key: "worktree.reclaim", value_type: "array<string>",
         description: "Rebuildable paths to reclaim in terminal, registered run worktrees: relative globs with '*' within a component and '**' across components. Replaces earlier lists; defaults to ['target', '.orbit/tmp/*-target', '.orbit/tmp/base-wt']. Symlinks, tracked content and live or undecidable workers are protected. Collection never runs a command.",
         section: ConfigSection::Housekeeping, order: 120,
+        tier: ConfigKeyTier::Advanced,
         resolve: resolve_reclaim,
     },
     worktree_reclaim_below_free_mib: Option<u64> => u64 {
         key: "worktree.reclaim_below_free_mib", value_type: "integer",
         description: "When free MiB under the state directory falls below this optional threshold, admission reclaims declared paths in oldest terminal worktrees first. Unset disables admission reclamation.",
         section: ConfigSection::Housekeeping, order: 130,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u64>| Ok::<_, OrbitError>(raw),
     },
     worktree_parked_reclaim_after_hours: u64 => u64 {
         key: "worktree.parked_reclaim_after_hours", value_type: "integer",
         description: "Hours a task must stay parked in `someday`, counted from that status change, before worktree GC may remove the worktree of a terminal run serving it. Removal also needs no live worker, no unsettled claim and no Git worktree lock. A clean tree goes only when its run branch's commits are reachable from another ref or on origin; otherwise the worktree and branch stay as `skipped:unpublished_commits` (0..=876000, default 336).",
         section: ConfigSection::Housekeeping, order: 135,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u64>| match raw {
             Some(hours) if hours > 876_000 => Err(OrbitError::InvalidInput(format!(
                 "worktree.parked_reclaim_after_hours must be at most 876000, got {hours}"
@@ -498,12 +526,14 @@ define_config_settings! {
         key: "runtime.log_max_file_mb", value_type: "integer",
         description: "Roll the active operational orbit.jsonl log once it grows past this many MiB (must be >= 1 and <= runtime.log_max_total_mb).",
         section: ConfigSection::Housekeeping, order: 50,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u64>| Ok::<_, OrbitError>(raw.unwrap_or_else(|| default_log_rotation().max_file_bytes / (1024 * 1024))),
     },
     runtime_log_max_total_mb: u64 => u64 {
         key: "runtime.log_max_total_mb", value_type: "integer",
         description: "Total size budget (MiB) across operational orbit.jsonl archives; oldest are pruned first when exceeded (must be >= 1).",
         section: ConfigSection::Housekeeping, order: 40,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u64>| Ok::<_, OrbitError>(raw.unwrap_or_else(|| default_log_rotation().max_total_bytes / (1024 * 1024))),
     },
     runtime_log_retention_days: u64 => u64 {
@@ -528,6 +558,7 @@ define_config_settings! {
         key: "workflow.base_branch", value_type: "string",
         description: "Config fallback for ship/auto/pilot base branch when no registered workspace base_branch is bound.",
         section: ConfigSection::Delivery, order: 10,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<String>| resolve_non_empty(raw, DEFAULT_WORKFLOW_BASE_BRANCH, "workflow.base_branch"),
     },
     workflow_default_crew: Option<String> => String {
@@ -582,24 +613,28 @@ define_config_settings! {
         key: "workflow.mid_run_steering.max_rounds", value_type: "integer",
         description: "Steering rounds a run may consume at the promotion gate before it holds as `steering_unconsumed` (1..=10, default 2).",
         section: ConfigSection::Delivery, order: 141,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u8>| resolve_mid_run_steering_max_rounds(raw),
     },
     workflow_provider_limit_budgets: Vec<String> => Vec<String> {
         key: "workflow.provider_limit_budgets", value_type: "array<string>",
         description: "Operator-declared rolling budgets for providers that report no usage, each `provider:<amount><usd|tokens>/<n><h|d>` such as `grok:30usd/5h`, with each provider named once. Orbit reads this host's spend from its invocation ledger and treats the provider as used `spent / budget`; none by default.",
         section: ConfigSection::Delivery, order: 109,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<Vec<String>>| crate::provider_limit_budget::admit_budgets(raw),
     },
     workflow_provider_limit_explicit_crews: String => String {
         key: "workflow.provider_limit_explicit_crews", value_type: "string",
         description: "What delivery admission does with a task whose explicit crew is at its provider's usage limit: `wait` (default) keeps it in the backlog until the limit lifts; `pool` draws it from the unlimited members of its complexity pool.",
         section: ConfigSection::Delivery, order: 108,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<String>| crate::provider_limit::admit_explicit_crews(raw),
     },
     workflow_provider_limit_max_used_pct: u8 => u8 {
         key: "workflow.provider_limit_max_used_pct", value_type: "integer",
         description: "Delivery admission skips a crew while a live usage window of its provider, or of its model, is exhausted or used at or above this percent (1..=100, default 90; 100 skips only on exhaustion).",
         section: ConfigSection::Delivery, order: 106,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u8>| resolve_percent(raw, crate::provider_limit::DEFAULT_PROVIDER_LIMIT_MAX_USED_PCT, "workflow.provider_limit_max_used_pct"),
     },
     workflow_provider_limit_overrides: Vec<String> => Vec<String> {
@@ -672,6 +707,7 @@ define_config_settings! {
         key: "workflow.resource_throttle.cpu_light_leaves", value_type: "integer",
         description: "Leaves reserved for CPU-light work (`no-diff-expected` auto-tasks) while only CPU pressure throttles admissions; memory, disk and I/O pressure still hold them (0..=32, default 2; 0 holds them too).",
         section: ConfigSection::Delivery, order: 137,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u8>| resolve_cpu_light_leaves(raw),
     },
     workflow_resource_throttle_cpu_resume_percent: u8 => u8 {
@@ -696,12 +732,14 @@ define_config_settings! {
         key: "workflow.resource_throttle.enabled", value_type: "bool",
         description: "Enable the host resource throttle verdict; disabled still reports pressure.",
         section: ConfigSection::Delivery, order: 134,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
     },
     workflow_resource_throttle_io_full_high_percent: u8 => u8 {
         key: "workflow.resource_throttle.io_full_high_percent", value_type: "integer",
         description: "Linux disk I/O high-water mark: the share of the last minute (`/proc/pressure/io` `full avg60`) in which every runnable task was stalled on I/O (1..=100, default 20). Hosts without pressure stall information are not gated.",
         section: ConfigSection::Delivery, order: 138,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u8>| resolve_percent(raw, 20, "workflow.resource_throttle.io_full_high_percent"),
     },
     workflow_resource_throttle_io_full_resume_percent: u8 => u8 {
@@ -726,12 +764,14 @@ define_config_settings! {
         key: "workflow.task_pilot_freshness.material_fields", value_type: "array<string>",
         description: "Task inputs whose edit makes an accepted task-pilot assessment stale, from title, description, criteria, plan, selectors, tags, crew, tools, type, complexity, relations, dependencies, instructions (default title, description, criteria, plan, selectors). A routine's trigger.state.freshness overrides it.",
         section: ConfigSection::Delivery, order: 110,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<Vec<MaterialField>>| resolve_material_fields(raw),
     },
     workflow_task_pilot_freshness_source_sensitivity: SourceSensitivity => SourceSensitivity {
         key: "workflow.task_pilot_freshness.source_sensitivity", value_type: "string",
         description: "Whether a branch-head move makes an accepted task-pilot assessment stale: ignore (default), context_files (only when the head changed a path the task's selectors name) or any. A routine's trigger.state.freshness overrides it.",
         section: ConfigSection::Delivery, order: 120,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<SourceSensitivity>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
     workflow_unlocked_context_paths: Vec<String> => Vec<String> {
@@ -774,12 +814,14 @@ define_config_settings! {
         key: "workflow.validation_env.cargo_incremental", value_type: "bool",
         description: "When false (default), required validation, host evidence, baseline reruns and recovery that bind a host validation target force CARGO_INCREMENTAL=0 so one-shot targets do not accumulate an incremental cache. True leaves CARGO_INCREMENTAL untouched. Applied where Orbit spawns those commands. No binding allocates nothing and does not set the variable.",
         section: ConfigSection::Delivery, order: 66,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
     },
     workflow_validation_env_path_mode: String => String {
         key: "workflow.validation_env.path_mode", value_type: "string",
         description: "How `workflow.validation_env.path` combines with the resolved PATH: `prepend` (default) puts it first, `replace` makes it the whole PATH.",
         section: ConfigSection::Delivery, order: 64,
+        tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<String>| resolve_validation_path_mode(raw),
     },
     workflow_xhard_complexity_crews: Vec<String> => Vec<String> {
