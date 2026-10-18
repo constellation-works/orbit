@@ -395,6 +395,13 @@ pub(super) fn dispatch_host(command: Commands, context: DispatchContext<'_>) -> 
     }
 }
 
+pub(super) fn dispatch_browser_kit(command: Commands, _context: DispatchContext<'_>) -> CommandOut {
+    match command {
+        Commands::BrowserKit(command) => command.execute_without_runtime(),
+        _ => dispatch_mismatch("BrowserKit"),
+    }
+}
+
 pub(super) fn dispatch_migrate(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
         Commands::Migrate(command) if !command.confirm => {

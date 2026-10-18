@@ -12,6 +12,7 @@ use orbit_types::task::HostOs;
 use orbit_types::workflow::ExecutorDef;
 use serde_json::{Value, json};
 
+use super::browser_kit::browser_kit_rows;
 use super::git_protection::git_protection_row;
 use super::permissions::state_directory_permissions_row;
 use super::worker_containment::worker_containment_row;
@@ -41,6 +42,7 @@ const REPORT_PROBES: &[DoctorProbe] = &[
     DoctorProbe::one("hosts", |runtime, _| {
         crate::hosts::doctor_hosts_row(&runtime.global_root())
     }),
+    DoctorProbe::many("browser-kit", |runtime, _| browser_kit_rows(runtime)),
 ];
 
 fn build_budget_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {

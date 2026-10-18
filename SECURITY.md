@@ -60,7 +60,7 @@ Agent filesystem access is scoped by an `fsProfile` (`read` and `modify` globs) 
 - Claude, Copilot, Cursor, Antigravity, and Muse runs may *read* `~/Library/Keychains` for credentials stored there. Nothing gets keychain writes. The system keychains stay denied, and an `fsProfile` that denies `~/Library` or `~/Library/Keychains` still wins.
 - Sandboxed Codex gets `CODEX_CA_CERTIFICATE=/etc/ssl/cert.pem`, unless you set that or `SSL_CERT_FILE` yourself. The bundle holds public trust anchors only and doesn't weaken TLS verification.
 
-**Environment.** Agent subprocess environments are built from an allowlist: a documented baseline, your `[execution.env]` pass list, and the variables each provider declares it needs. Nothing is inherited just because it has a harmless-looking name.
+**Environment.** Agent subprocess environments are built from an allowlist: a documented baseline, your `[execution.env]` pass list, and the variables each provider declares it needs. Nothing is inherited just because it has a harmless-looking name. Orbit adds the headless browser kit's locators (`PLAYWRIGHT_BROWSERS_PATH`, `PLAYWRIGHT_MODULE`, `ORBIT_BROWSER_KIT_ENV`) only while the kit under the child's home has passed `orbit browser-kit verify` at its installed version. They name paths and carry no secret. The kit's unpacked libraries reach only a shell that sources its `env.sh`, never every agent's `LD_LIBRARY_PATH`, so they cannot shadow libraries other tools load.
 
 **Symlinks.** Policy matches the real path. Orbit canonicalizes the target, or the nearest existing ancestor for a new file, and follows dangling links to their target. A symlink from an allowed tree into a denied one is denied, and so is any path that resolves outside the workspace.
 

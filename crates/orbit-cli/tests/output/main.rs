@@ -18,6 +18,7 @@ mod task_workspace;
 #[path = "../support/output.rs"]
 mod output;
 
+mod browser_kit;
 mod doctor;
 mod error_output;
 mod global_json;

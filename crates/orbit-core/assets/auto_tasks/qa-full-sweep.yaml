@@ -148,11 +148,14 @@ template:
     > status.
     >
     > Prepare capabilities before marking a browser or website scenario unrun.
-    > When `~/.local/chromium-deps/env.sh` exists, source it in the worker
-    > shell and use its `PLAYWRIGHT_MODULE` and `PLAYWRIGHT_BROWSERS_PATH`.
-    > Also forward `LD_LIBRARY_PATH` and `FONTCONFIG_FILE` on Linux when
-    > provided; macOS needs no Linux loader or font inputs. Read the shared
-    > kit without modifying it. If it is absent, use the repository's
+    > When the host's browser kit is verified, your environment carries
+    > `ORBIT_BROWSER_KIT_ENV`: source it in the worker shell and use its
+    > `PLAYWRIGHT_MODULE` and `PLAYWRIGHT_BROWSERS_PATH`. Also forward
+    > `LD_LIBRARY_PATH` and `FONTCONFIG_FILE` on Linux when it sets them;
+    > macOS needs no Linux loader or font inputs. Read the shared kit without
+    > modifying it, and never run `orbit browser-kit` from the worker. When
+    > the variable is absent, record `orbit browser-kit install` as the host
+    > fix in the capability probe. If no kit is usable, use the repository's
     > disposable Playwright/Chromium recipe under `.orbit/tmp/` (for this
     > repository, docs/runbooks/website-validation.md), unpacking missing
     > Linux libraries without root. Do not install host packages or bypass

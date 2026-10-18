@@ -42,6 +42,8 @@
 //!   whether it runs a network `fetch` phase at all
 //! - [`ValidationEnvironment`] — the login-shell-resolved environment
 //!   owner-side repository tooling (required validation, `local_shell`) runs in
+//! - [`browser_kit`] — the host's headless browser kit: its layout, state
+//!   and the variables a worker receives once it is verified
 //! - [`physical_with_missing_tail`] — the one resolution a granted path
 //!   gets, shared by the layer that validates it and the layer that compiles
 //!   the rule for it
@@ -49,6 +51,7 @@
 //! # Dependency direction
 //! `orbit-types` → `orbit-exec` → orbit-tools
 
+pub mod browser_kit;
 mod build_sandbox;
 mod credential_paths;
 mod linux_landlock;

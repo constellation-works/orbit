@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use orbit_types::workspace::WorkspaceCheckoutRole;
 
 mod args;
+mod browser_kit;
 mod execute;
 mod report;
 mod validate;

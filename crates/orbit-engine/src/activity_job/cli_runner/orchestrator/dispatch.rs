@@ -50,7 +50,8 @@ use super::prepare::{
 use crate::context::RuntimeHost;
 
 use super::environment::{
-    activity_deadline_env, codex_home, provider_child_environment, require_claude_worker_credential,
+    activity_deadline_env, add_browser_kit_env, codex_home, provider_child_environment,
+    require_claude_worker_credential,
 };
 use super::evidence::{
     emit_build_waits, record_scratch_removals, step_error_after_provider_evidence,
@@ -511,6 +512,7 @@ pub(crate) fn run_cli_backend_for_step(
             .map(|(key, value)| ((*key).to_string(), (*value).to_string())),
     );
     child_env.extend(dispatch_env);
+    add_browser_kit_env(&mut child_env);
     if host.worker_invocation().is_some() {
         child_env.push(("ORBIT_WORKER_CONTEXT_REQUIRED".into(), "1".into()));
     }

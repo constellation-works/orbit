@@ -86,8 +86,9 @@ which stays fail-closed until `orbit doctor providers` reports it ready. If a
 disposable init or another prerequisite step fails, the report keeps that FAIL
 and marks every scenario it blocked `NOT_RUN` with the reason in `stderr`.
 
-For the browser leg, prefer the prepared host kit. Source
-`~/.local/chromium-deps/env.sh` when it exists, then pass its module, browser
+For the browser leg, prefer the prepared host kit. Orbit hands a worker
+`ORBIT_BROWSER_KIT_ENV` once `orbit browser-kit install` (or `verify`) has
+passed on the host. Source it when set, then pass its module, browser
 directory and optional Linux loader/font inputs explicitly. macOS needs only
 the module and browsers; a loader search path may contain multiple directories
 separated by colons. The harness forwards these declared inputs into its clean
@@ -100,12 +101,12 @@ The worker sandbox permits reads of `~/.local/chromium-deps` on both Linux
 different boundary and is not used by this sweep. See the
 [browser kit reference](../../crates/orbit-core/assets/skills/orbit-setup/references/browser-checks.md)
 for host preparation and sandbox checks. Do not install into or modify the
-shared kit during a sweep.
+shared kit during a sweep; `orbit browser-kit` refuses to run inside a worker.
 
 ```bash
 browser_args=()
-if [ -f "$HOME/.local/chromium-deps/env.sh" ]; then
-  . "$HOME/.local/chromium-deps/env.sh"
+if [ -n "${ORBIT_BROWSER_KIT_ENV:-}" ]; then
+  . "$ORBIT_BROWSER_KIT_ENV"
   browser_args+=(--playwright-module "$PLAYWRIGHT_MODULE"
     --playwright-browsers-path "$PLAYWRIGHT_BROWSERS_PATH")
   if [ -n "${LD_LIBRARY_PATH:-}" ]; then

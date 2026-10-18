@@ -27,6 +27,11 @@ checklist. An injected task snapshot is your starting context.
   the assigned work; the pipeline owns delivery and lifecycle transitions.
 - Verify artifacts, task/run state, diffs and checks. Agent messages are
   advisory. Do not report skipped validation as passing or merged as deployed.
+- To check a UI change in a browser, use the host's headless browser kit:
+  when it is verified, your environment carries `PLAYWRIGHT_MODULE`,
+  `PLAYWRIGHT_BROWSERS_PATH` and `ORBIT_BROWSER_KIT_ENV`. Source
+  `"$ORBIT_BROWSER_KIT_ENV"` in the shell that runs the check
+  ([Task execution](references/task-execution.md#checking-a-ui-in-a-browser)).
 - Use the installed `orbit` binary, never `cargo run -- ...`. Bare
   `orbit task ...` subcommands are the human surface and skip agent
   provenance; agents call `orbit tool run orbit.task.*`. Task IDs come from

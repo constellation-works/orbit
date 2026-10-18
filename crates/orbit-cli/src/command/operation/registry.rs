@@ -102,6 +102,27 @@ impl Commands {
                     dispatch_host,
                 )
             }
+            Commands::BrowserKit(command) => {
+                use super::super::browser_kit::BrowserKitSubcommand;
+                let subcommand = match &command.command {
+                    BrowserKitSubcommand::Status(_) => "status",
+                    BrowserKitSubcommand::Install(_) => "install",
+                    BrowserKitSubcommand::Verify(_) => "verify",
+                    BrowserKitSubcommand::Remove(_) => "remove",
+                };
+                CommandOperation::new(
+                    // The kit belongs to the host user; no workspace is opened.
+                    RuntimeNeed::Forbidden,
+                    Some(admin_meta(
+                        "browser-kit",
+                        Some(subcommand),
+                        Some("installation"),
+                        None,
+                    )),
+                    None,
+                    dispatch_browser_kit,
+                )
+            }
             Commands::Migrate(command) => CommandOperation::new(
                 if command.confirm {
                     RuntimeNeed::Required

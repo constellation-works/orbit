@@ -108,9 +108,12 @@ candidate dependencies, generated pages and output directories are untouched.
 
 ## Stage Playwright and Chromium without root
 
-Prefer sourcing `~/.local/chromium-deps/env.sh` if the host already has a
-[prepared browser kit](../../crates/orbit-core/assets/skills/orbit-setup/references/browser-checks.md).
-The disposable installation below is the fallback when that file is absent.
+Prefer the host's
+[browser kit](../../crates/orbit-core/assets/skills/orbit-setup/references/browser-checks.md):
+in a worker, source `"$ORBIT_BROWSER_KIT_ENV"`, which Orbit sets once
+`orbit browser-kit install` has verified the kit; by hand, source
+`~/.local/chromium-deps/env.sh`. The disposable installation below is the
+fallback when neither is available.
 
 Install Playwright and its browser under the scratch root. `playwright install-deps` is not a
 solution in a job-run sandbox: it installs operating-system packages and therefore needs

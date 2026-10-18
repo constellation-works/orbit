@@ -1970,6 +1970,8 @@ dependencies = [
  "orbit-common",
  "orbit-types",
  "regex",
+ "serde",
+ "serde_json",
  "tempfile",
  "wait-timeout",
 ]

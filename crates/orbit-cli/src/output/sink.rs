@@ -240,10 +240,10 @@ pub fn stdin_is_terminal() -> bool {
     std::io::stdin().is_terminal()
 }
 
-/// Whether stderr has a terminal for an explicit administrator authentication
-/// prompt. A shell installer may arrive via a stdin pipe while stderr still
-/// points at the user's terminal.
-#[cfg(target_os = "linux")]
+/// Whether stderr has a terminal for an explicit prompt, such as an
+/// administrator authentication prompt or the browser-kit offer. A shell
+/// installer may arrive via a stdin pipe while stderr still points at the
+/// user's terminal.
 pub fn stderr_is_terminal() -> bool {
     std::io::stderr().is_terminal()
 }

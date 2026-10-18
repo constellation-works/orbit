@@ -148,6 +148,29 @@ blocker when the task owns that outcome. A real authority refusal, unavailable
 prerequisite or unresolved product decision is: record the specific evidence and
 what is needed to proceed. A clean baseline check is not feature validation.
 
+### Checking a UI in a browser
+
+When the host has a verified headless browser kit, your environment carries
+`PLAYWRIGHT_BROWSERS_PATH`, `PLAYWRIGHT_MODULE` and `ORBIT_BROWSER_KIT_ENV`.
+Check a changed page by serving it on loopback and scripting headless
+Chromium. In the same shell, source the kit first, then import `chromium`
+from the module:
+
+```bash
+. "$ORBIT_BROWSER_KIT_ENV" && node --input-type=module -e '
+const { chromium } = await import(process.env.PLAYWRIGHT_MODULE);
+// launch, goto http://127.0.0.1:<port>/, assert, screenshot to .orbit/tmp/
+'
+```
+
+Save screenshots under `.orbit/tmp/`, open them to look at the result, and
+attach the ones that prove a criterion. Don't install Playwright, download a
+browser or run `sudo` yourself. When the variables are absent, the host has no
+verified kit: record the browser check as unavailable, naming
+`orbit browser-kit install` as the host fix. A missing `lib*.so`, a
+Skia/FontConfig crash or `Executable doesn't exist` is a host kit defect, not
+a defect in the code under test.
+
 ### Verified no-change implementation
 
 This section applies only to tasks without `no-diff-expected`. When the

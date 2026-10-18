@@ -105,7 +105,7 @@ filters, and reload persistence). The kit's `env.sh` exports
 `FONTCONFIG_FILE` on Linux:
 
 ```sh
-. ~/.local/chromium-deps/env.sh
+. "${ORBIT_BROWSER_KIT_ENV:-$HOME/.local/chromium-deps/env.sh}"
 ORBIT_PLAYWRIGHT_MODULE="$PLAYWRIGHT_MODULE" \
 ORBIT_LOG_BROWSER_EVIDENCE_DIR="$PWD/.orbit/tmp/log-browser" \
 ./scripts/build-budget.py -- cargo test -p orbit-web --test http_api \

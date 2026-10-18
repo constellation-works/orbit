@@ -93,3 +93,30 @@ pub(crate) fn provider_child_environment(
     env_names.extend([CODEX_CA_CERTIFICATE_ENV, SSL_CERT_FILE_ENV]);
     host.agent_subprocess_environment(&env_names)
 }
+
+/// Hand the agent the host's headless browser kit when it is verified
+/// (`orbit browser-kit verify`), so a UI check needs no host-specific path.
+///
+/// Orbit adds the three variables itself rather than admitting them from the
+/// parent, so the allowlist stays explicit, and replaces any same-named value
+/// the operator's policy forwarded. Without a verified kit nothing is added.
+/// The kit is the one under the agent's own `HOME`. Its unpacked Linux
+/// libraries never go on this environment's `LD_LIBRARY_PATH`, where they
+/// could shadow system libraries for cargo and tests: only the shell that
+/// sources `$ORBIT_BROWSER_KIT_ENV` gets them.
+pub(super) fn add_browser_kit_env(child_env: &mut Vec<(String, String)>) {
+    let Some(home) = child_env
+        .iter()
+        .rev()
+        .find(|(key, value)| key == "HOME" && !value.is_empty())
+        .map(|(_, home)| PathBuf::from(home))
+    else {
+        return;
+    };
+    let kit_env = orbit_exec::browser_kit::worker_env_for_home(&home);
+    if kit_env.is_empty() {
+        return;
+    }
+    child_env.retain(|(key, _)| !orbit_exec::browser_kit::WORKER_ENV_NAMES.contains(&key.as_str()));
+    child_env.extend(kit_env);
+}
