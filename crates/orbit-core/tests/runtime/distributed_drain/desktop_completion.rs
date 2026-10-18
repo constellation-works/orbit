@@ -590,6 +590,70 @@ impl Delivery {
     }
 }
 
+/// A timed wait can report still-running, then lose the CPU until after both
+/// the child's exit and the deadline. That stale poll must not turn a completed
+/// provider read into an operator submission failure.
+#[test]
+fn a_completed_pr_read_survives_a_delayed_waiter() {
+    use orbit_common::test_env::{SupervisorSeam, with_supervision_clock, with_supervisor_seam};
+    use std::io::Write;
+    use std::{cell::Cell, rc::Rc, time::Instant};
+
+    if !isolated(
+        module_path!(),
+        "a_completed_pr_read_survives_a_delayed_waiter",
+    ) {
+        return;
+    }
+    let delivery = Delivery::handed_off(&["test -f src/f0.rs"]);
+    delivery.recover();
+    delivery.merged();
+    delivery.reviewer_reports("accept", json!([]));
+    // Mark the child whose wait we delay, so this regression cannot silently
+    // inject into an unrelated Git or process-identity probe instead.
+    let gh = home().join("bin/gh");
+    std::fs::write(
+        &gh,
+        "#!/bin/sh\nprintf '%s\\n' \"$$\" > \"$HOME/gh.pid\"\nexec cat \"$HOME/pr.json\"\n",
+    )
+    .unwrap();
+    executable(&gh);
+    let elapsed = Rc::new(Cell::new(Duration::ZERO));
+    let clock_elapsed = Rc::clone(&elapsed);
+    let wait_elapsed = Rc::clone(&elapsed);
+    let injected = Rc::new(Cell::new(false));
+    let wait_injected = Rc::clone(&injected);
+    let seam = SupervisorSeam {
+        wait: Some(Box::new(move |child| {
+            let status = child.wait()?;
+            let provider_pid = std::fs::read_to_string(home().join("gh.pid"))
+                .ok()
+                .and_then(|pid| pid.trim().parse::<u32>().ok());
+            if provider_pid == Some(child.id()) && !wait_injected.replace(true) {
+                // Force the ordering without load or sleeps: the poll was
+                // empty, the child exits, and only then the waiter resumes.
+                assert!(status.success(), "the no-op provider exited: {status}");
+                wait_elapsed.set(Duration::from_secs(16));
+                writeln!(
+                    std::io::stderr(),
+                    "delayed PR waiter: child exited zero; returning stale None after 16s of supervision time"
+                )
+                .expect("report the injected waiter delay");
+                return Ok(None);
+            }
+            Ok(Some(status))
+        })),
+        ..Default::default()
+    };
+    let submitted = with_supervision_clock(
+        move || Instant::now() + clock_elapsed.get(),
+        || with_supervisor_seam(seam, || delivery.submit("delayed-pr-waiter")),
+    );
+    assert!(injected.get(), "the provider wait must be exercised");
+    let settled = delivery.run(&submitted);
+    assert_eq!(settled["outcome"], "accepted", "{settled:#}");
+}
+
 /// The recovered Mac delivery that motivated this: the follower handed off
 /// PR #42, the owner's landing stopped, an operator fixed and merged the PR
 /// by hand, revoked the handoff and recovered the claim. The changed merged
