@@ -1,7 +1,7 @@
 //! Mid-run steering's snapshot watermark: which task comments the prompts of
 //! one run already carried.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -37,9 +37,15 @@ pub struct StepSteeringSnapshot {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SteeringWatermark {
     /// The newest comment any of the run's prompts included; absent while
-    /// none included a comment.
+    /// none included a comment. A steering block advances it only past the
+    /// comments it carried in full.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment: Option<CommentLogMark>,
+    /// Comments past `comment` that a steering block already carried in
+    /// full. They stay ahead of the watermark only while an older operator
+    /// comment the block had to cut down still awaits delivery.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub delivered: BTreeSet<CommentLogMark>,
     /// Each step's own snapshot, keyed by step id.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub steps: BTreeMap<String, StepSteeringSnapshot>,
@@ -50,6 +56,8 @@ impl SteeringWatermark {
     /// keeping the later of each recorded mark and `newest`.
     pub fn record(&mut self, step_id: &str, newest: Option<CommentLogMark>, at: DateTime<Utc>) {
         self.comment = self.comment.max(newest);
+        let floor = self.comment;
+        self.delivered.retain(|mark| Some(*mark) > floor);
         let step = self
             .steps
             .entry(step_id.to_string())
@@ -59,5 +67,29 @@ impl SteeringWatermark {
             });
         step.comment = step.comment.max(newest);
         step.recorded_at = step.recorded_at.max(at);
+    }
+
+    /// Record that `step_id` built a prompt whose steering block carried
+    /// `delivered` in full, and after which every operator comment up to
+    /// `through` has reached one of the run's prompts in full. Delivered
+    /// comments past `through` are kept so no later block carries them again.
+    pub fn record_delivery(
+        &mut self,
+        step_id: &str,
+        through: Option<CommentLogMark>,
+        delivered: &[CommentLogMark],
+        at: DateTime<Utc>,
+    ) {
+        self.record(step_id, through, at);
+        let floor = self.comment;
+        self.delivered
+            .extend(delivered.iter().filter(|mark| Some(**mark) > floor));
+    }
+
+    /// Whether the comment at `position` is behind the watermark or was
+    /// already carried in full by one of the run's steering blocks.
+    pub fn covers(&self, position: u64) -> bool {
+        self.comment.is_some_and(|mark| position <= mark.position)
+            || self.delivered.iter().any(|mark| mark.position == position)
     }
 }

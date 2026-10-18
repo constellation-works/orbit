@@ -207,6 +207,24 @@ impl PipelineState {
         self.updated_at = now;
     }
 
+    /// Record that `step_id` of this run built a task-context prompt whose
+    /// steering block carried `delivered` in full for `task_id`; see
+    /// [`SteeringWatermark::record_delivery`].
+    pub fn record_steering_delivery(
+        &mut self,
+        task_id: &str,
+        step_id: &str,
+        through: Option<CommentLogMark>,
+        delivered: &[CommentLogMark],
+    ) {
+        let now = Utc::now();
+        self.steering_watermarks
+            .entry(task_id.to_string())
+            .or_default()
+            .record_delivery(step_id, through, delivered, now);
+        self.updated_at = now;
+    }
+
     /// The compare-and-set handle for [`PullDrainState::drain_worker_limit`]. Zero means
     /// no operator adjustment has been accepted yet.
     pub fn drain_worker_limit_revision(&self) -> u32 {

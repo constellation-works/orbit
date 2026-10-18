@@ -566,7 +566,7 @@ define_config_settings! {
     },
     workflow_mid_run_steering_enabled: bool => bool {
         key: "workflow.mid_run_steering.enabled", value_type: "bool",
-        description: "Record which task comments each agent prompt embedding task context included, as the run's steering watermark (default false). Delivery and the promotion gate are not implemented yet.",
+        description: "Record which task comments each agent prompt embedding task context included, as the run's steering watermark, and deliver operator comments written after it at the run's later prompts (default false). The promotion gate is not implemented yet.",
         section: ConfigSection::Delivery, order: 140,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
     },
