@@ -1,8 +1,8 @@
 ---
 title: Operations as Data — Design
 owner: claude
-last_updated: 2026-10-13
-last_validated: 2026-10-13
+last_updated: 2026-10-18
+last_validated: 2026-10-18
 status: Accepted
 feature: operations-as-data
 doc_role: design
@@ -21,7 +21,8 @@ This doc describes the friction implementation and the revisions accepted on
 is **Implemented** (true of the code today, on the migrated nouns) or
 **Planned** (accepted but not yet built). Kernel v2's structure, its richer
 parameter kinds and its input validation are implemented, the validation in
-warn mode for unknown fields except on the task writes, which refuse them. Both follow the rules in
+warn mode for unknown fields except on the task writes, the operator review,
+requeue and retry tools and `orbit.workflow.auto`, which refuse them. Both follow the rules in
 [4_decisions.md](./4_decisions.md). As a phase lands, its sections move from
 Planned to Implemented. The order in which nouns migrate is in §9;
 forward-looking questions are in
@@ -168,9 +169,9 @@ What each kernel v2 piece is for:
   `add`'s `plan`, `status`, `parent_id` and the other creation-time fields,
   which name `orbit.task.update`), or `verbatim` (task `update`'s
   `required_tools` spellings, `force` and `artifacts`).
-- **`CliGroup`** names an intermediate subcommand and its `--help` summary. No
-  migrated noun declares one yet; the CLI adapter builds groups when the first
-  nested noun (task, phase 3) needs them.
+- **`CliGroup`** names an intermediate subcommand and its `--help` summary.
+  `task` declares two (`artifact` and `locks`), which the CLI adapter builds as
+  nested groups.
 - **`OperationVerb`** is what the generic adapters are generic over. The
   `operation_registry!` macro (§3) implements it.
 
@@ -180,7 +181,7 @@ What each kernel v2 piece is for:
 
 ```rust
 pub enum ParamType {
-    String, StringList, Integer, UnsignedInteger, Boolean,
+    String, Path, StringList, Integer, UnsignedInteger, Boolean,
     Switch,                          // presence flag on the CLI; boolean on the wire
     Enum(&'static [EnumValue]),      // fixed values; a string on the wire
     EnumList(&'static [EnumValue]),  // several fixed values; a string list on the wire
@@ -218,6 +219,7 @@ pub struct CliHelp {
     pub long_about: Option<&'static str>,  // `--help` description; `-h` keeps `cli_about`
     pub after_help: Option<&'static str>,  // examples printed after the options
     pub flag_order: &'static [&'static str], // `--help` order, when not declaration order
+    pub constraints: &'static [CliConstraint], // conflicts and required-unless pairs of arguments
 }
 ```
 
@@ -244,9 +246,10 @@ What each addition is for:
   --status` take several enum values (`EnumList`, a `string_list` on the
   wire); `show --fields id title` takes several values after one flag
   (`multiple`); `lint [ID]` takes an optional positional. `CliHelp` carries
-  the long description and examples `show` and `list` print, and
-  `flag_order` keeps `--help` in the hand-written order where the MCP schema
-  lists parameters differently. Every other spec declares `CliHelp::NONE`.
+  the long description and examples that `list`, `eligible` and `lint` print,
+  and `flag_order` keeps `--help` in the hand-written order where the MCP schema
+  lists parameters differently. A spec with no help beyond its summary, such as
+  `show`, declares `CliHelp::NONE`.
   The parameter builders (`both`, `mcp_only`, `cli_only`, `required` and the
   other modifiers) moved into the kernel from the auto-task registry, and the
   task enum value tables moved to the task registry, so both nouns share them.
@@ -303,9 +306,13 @@ enum order and `--help` order. The noun's `NounSpec` const sits beside it.
 
 ## 4. Input validation at the tool entry
 
-**Implemented (warn mode)** on friction, auto-task, drain, workspace claim and
-the task read verbs: unknown fields are reported, not yet refused. The task
-writes declare `unknown_fields: Refuse`, because `orbit.task.add` and
+**Implemented (warn mode)** on friction, auto-task, drain, workspace claim,
+search, task artifacts and locks, the task read verbs, and the workflow-run
+tools other than `orbit.workflow.auto`: unknown fields are reported, not yet
+refused. The task writes, the operator review, requeue and retry tools
+(`reconcile_review`, `review_reset`, `requeue`, `retry_handoff`) and
+`orbit.workflow.auto` declare `unknown_fields: Refuse`; the inactive `reject`
+and `delete` warn. The task writes refuse because `orbit.task.add` and
 `orbit.task.update` refused unknown fields before they migrated; the refusal
 names the field and suggests a declared one.
 
@@ -392,9 +399,10 @@ under both runtimes, because the read-only open still binds the checkout's
 replica owner.
 
 `effect` gives the default, not the whole answer. The task arm shows what else
-the CLI's runtime choice depends on: `task show` and `task artifact get` bind
-the workspace that owns the task ID (`RuntimeNeed::TaskOwner`), and `task lint`
-needs the full runtime only with `--restore-pruned`. For the migrated task
+the CLI's runtime choice depends on: `task artifact get` binds the workspace
+that owns the task ID (`RuntimeNeed::TaskOwner`), `task show` stays read-only
+and resolves that owner through `task_owner_id`, and `task lint` needs the full
+runtime only with `--restore-pruned`. For the migrated task
 verbs both overrides live in `task_operation`
 ([spec.rs](../../../crates/orbit-cli/src/command/operation/spec.rs)), the task
 noun's CLI table around `registry_operation`. `lint` declares `Write`, because
@@ -442,8 +450,8 @@ requires a workspace; it carries no placement or capability policy beyond that.
 phase 2 similarly replaces six drain variants with `Drain(DrainVerb)` and three
 workspace-claim variants with `WorkspaceClaim(WorkspaceClaimVerb)`, and phase
 3a replaces the four task read variants with `Task(TaskVerb)`, and phase 3b
-folds `TaskAdd` and `TaskUpdate` into it; the other task variants stay until
-their slices land.
+folds `TaskAdd` and `TaskUpdate` into it, and phases 3c and 3d fold the
+remaining task variants, so `Task(TaskVerb)` is the only task variant.
 `orbit-tools` implements `From<V>` for each. Downstream matches pattern-match
 on the inner verb. Friction needs no module of its own in `orbit-tools`.
 
@@ -480,8 +488,10 @@ flag; `list` is not advertised over MCP, where agents list frictions with
 explicit `with_notes` mode has one stable object shape, `{records, notes}`.
 
 **Decided (phase 1):** an `Enum` parameter keeps its allowed values, and any
-default, in its MCP description, and the schema emits no `enum` or `default`
-keyword. `ParamType::Enum` maps to the `string` tool type and a `default`
+default, in its MCP description, and the spec-derived schema emits no `enum` or
+`default` keyword. A legacy overlay in `tool_parameter_enum_values` still adds
+`enum` for `model` and for task `type`, `status` and `complexity`.
+`ParamType::Enum` maps to the `string` tool type and a `default`
 affects only the CLI. Auto-task's migration is therefore wire-identical: the MCP
 snapshot did not move. Emitting the keywords stays possible later as an
 additive change that re-blesses the snapshot.
@@ -534,8 +544,10 @@ structured fields and refuses conflicting schedule or waiver flags, and
 
 **Implemented for task reads: a noun can be part migrated.** `orbit task`
 keeps its hand-wired verbs beside the migrated ones: `TaskSubcommand` holds
-a flattened `Operation(Invocation<TaskVerb>)` variant, which contributes the
-registry's subcommands to the same clap tree. Its comment must be `//`, not
+a flattened `Operation(TaskInvocation)` variant; its `Registry` arm
+(`Invocation<TaskVerb>`) contributes the registry's subcommands to the same clap
+tree, and its `Contention` arm keeps the existing contention command, which has
+no tool. Its comment must be `//`, not
 `///`, because clap renders a doc comment on a flattened variant as help.
 [command/task/operation.rs](../../../crates/orbit-cli/src/command/task/operation.rs)
 holds `prepare` (`list` consumes `--all`, `--ops` and `--full`; `show` consumes
@@ -804,9 +816,9 @@ behavior neutrality.
 
 ### Phase 3d: task review and lifecycle (Implemented)
 
-`orbit.task.reconcile_review` and `orbit.task.review_reset`, the operator
-review tools, and the inactive `orbit.task.reject` and `orbit.task.delete`
-are declared in
+`orbit.task.reconcile_review`, `orbit.task.review_reset`, `orbit.task.requeue`
+and `orbit.task.retry_handoff`, the operator tools, and the inactive
+`orbit.task.reject` and `orbit.task.delete` are declared in
 [lifecycle_operations.rs](../../../crates/orbit-common/src/governance/task/lifecycle_operations.rs)
 and served by `OperationTool<TaskVerb>`. The handler table in
 [task_operation_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/task_operation_tools.rs)
@@ -845,6 +857,7 @@ added tool would move the all-tools authorization golden.
 | `reindex` | Stays hand-wired. A local maintenance repair of the registry index. |
 | `recheck-blocked` | Stays hand-wired. An operator sweep resolving provider launchers from this shell's `PATH` and `HOME`, which a tool caller does not share. |
 | `archive` | Stays hand-wired. An operator lifecycle command with no MCP counterpart; giving it one is a placement decision, not a migration. |
+| `settle-merged` | Stays hand-wired. Settles tasks to done whose delivery pull request was merged outside Orbit; an operator repair with no MCP counterpart, like `archive`. |
 | `pilot-comment` | Not a subcommand. It is `show`'s rendering of task-pilot receipts, already on the migrated `show` path. |
 | `blocked-next-step` | Not a subcommand. Phase 3a moved it into `orbit-core`, where it is part of `orbit.task.show`'s answer. |
 
