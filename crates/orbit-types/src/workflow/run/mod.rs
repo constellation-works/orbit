@@ -66,12 +66,12 @@ pub use state::{
     PROVIDER_UNAVAILABLE_ERROR_CODE, PROVIDER_UNAVAILABLE_MARKER, PipelineState, PullAdmissionFit,
     PullAuthExclusion, PullAuthRecovery, PullBreaker, PullCrewPreflight, PullDrainState,
     PullSinglePass, PullUnfitWork, PullWindowClose, ResourcePressure, ResourceThrottle,
-    STALLED_ERROR_CODE, STALLED_MARKER, SteeringWatermark, StepSteeringSnapshot,
-    TRANSIENT_FAILURE_ERROR_CODE, TRANSIENT_FAILURE_MARKER, TaskCancellationPolicy,
-    VALIDATION_ENVIRONMENT_ERROR_CODE, VALIDATION_ENVIRONMENT_MARKER, is_contract_refusal,
-    is_owner_busy, is_owner_route_unavailable, is_provider_capacity_exhausted, is_provider_failure,
-    is_provider_limit, is_provider_refusal, is_provider_unavailable,
-    is_validation_environment_failure,
+    STALLED_ERROR_CODE, STALLED_MARKER, STEERING_UNCONSUMED_EVENT, STEERING_UNCONSUMED_MARKER,
+    SteeringRound, SteeringWatermark, StepSteeringSnapshot, TRANSIENT_FAILURE_ERROR_CODE,
+    TRANSIENT_FAILURE_MARKER, TaskCancellationPolicy, VALIDATION_ENVIRONMENT_ERROR_CODE,
+    VALIDATION_ENVIRONMENT_MARKER, is_contract_refusal, is_owner_busy, is_owner_route_unavailable,
+    is_provider_capacity_exhausted, is_provider_failure, is_provider_limit, is_provider_refusal,
+    is_provider_unavailable, is_validation_environment_failure,
 };
 pub use transient_infra::{
     MAX_TRANSIENT_INFRA_REQUEUES, TRANSIENT_INFRA_BLOCKED_EVENT,

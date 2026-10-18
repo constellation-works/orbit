@@ -33,4 +33,7 @@ pub use recovery::{
     ActivityCrewDraw, ActivityCrewPoolMember, FailureActivityCheckpoint, FinalRecoveryCheckpoint,
     FinalRecoveryKey, FinalRecoveryObservedTask, FinalRecoveryRepairCommit, FinalRecoveryResume,
 };
-pub use steering::{CommentLogMark, SteeringWatermark, StepSteeringSnapshot};
+pub use steering::{
+    CommentLogMark, STEERING_UNCONSUMED_EVENT, STEERING_UNCONSUMED_MARKER, SteeringRound,
+    SteeringWatermark, StepSteeringSnapshot,
+};

@@ -11,12 +11,18 @@
 //! records a [`STEERING_DELIVERED_EVENT`] on the task and advances the
 //! watermark past what the block carried in full. Agent output never reaches
 //! either record.
+//!
+//! The promotion gate reads the same records (§3): before `commit`, an
+//! operator comment past the run's watermark that no block carried in full
+//! is outstanding. Each refusal spends one steering round, recorded on the
+//! run before its agent step is dispatched again.
 
 use chrono::SecondsFormat;
 use orbit_common::OrbitError;
 use orbit_common::text::{ceil_char_boundary, floor_char_boundary};
+use orbit_engine::{SteeringGateReading, SteeringRoundAdmission};
 use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, refuses_implementer_writes};
-use orbit_types::workflow::{CommentLogMark, PipelineState, SteeringWatermark};
+use orbit_types::workflow::{CommentLogMark, PipelineState, SteeringRound, SteeringWatermark};
 use serde_json::{Value, json};
 
 use super::SYSTEM_ACTOR_LABEL;
@@ -32,6 +38,11 @@ pub(crate) const STEERING_DELIVERED_EVENT: &str = "steering_delivered";
 /// evict the task itself from the prompt; past this the block keeps its head
 /// and tail around a marker, as recovery diagnostics do [ORB-12467].
 const MAX_STEERING_BLOCK_BYTES: usize = 32 * 1024;
+
+/// Resume-lineage ancestors the gate walks for a watermark before it falls
+/// back to the oldest one's start; past this the lineage is judged from that
+/// start, which only counts more comments as outstanding.
+const MAX_LINEAGE_HOPS: usize = 32;
 
 const STEERING_LABEL: &str = "Operator guidance received after this run was dispatched, oldest \
      first. It amends the task below with the same standing as its description; weigh it \
@@ -133,6 +144,150 @@ impl OrbitRuntime {
             "snapshot": watermark.comment,
             "comments": text,
         })))
+    }
+
+    /// The promotion gate's reading of `task_id` for `run_id`, from the task,
+    /// its comment log and the run's state as they are now.
+    ///
+    /// Off, nothing is read. A claimed leaf refuses: its comment log is a
+    /// replica of the owner's, which this gate never certifies. Any record it
+    /// cannot read is an error, so the gate fails closed. A comment written
+    /// after this read is the next gate's or run's steering.
+    pub(crate) fn steering_gate_reading(
+        &self,
+        run_id: &str,
+        task_id: &str,
+    ) -> Result<SteeringGateReading, OrbitError> {
+        if !self.mid_run_steering().enabled {
+            return Ok(SteeringGateReading::Disabled);
+        }
+        if self.worker_invocation().is_some() {
+            return Err(OrbitError::Execution(format!(
+                "the promotion gate reads task {task_id}'s comment log from its owner, and a \
+                 claimed leaf cannot reach the owner's record here; its replica is never \
+                 certified"
+            )));
+        }
+        let task = self.get_task(task_id)?;
+        let comments = self.get_task_comments(task_id)?;
+        let state = self
+            .stores()
+            .jobs()
+            .read_run_state(run_id)?
+            .ok_or_else(|| {
+                OrbitError::Execution(format!("run {run_id} has no pipeline state to gate"))
+            })?;
+        let outstanding = match state.steering_watermarks.get(task_id) {
+            Some(watermark) => pending_operator_comments(watermark, &comments)
+                .into_iter()
+                .map(|comment| comment.mark)
+                .collect(),
+            None => self.inherited_outstanding(run_id, task_id, &comments)?,
+        };
+        Ok(if refuses_implementer_writes(task.status) {
+            SteeringGateReading::Terminal {
+                status: task.status,
+                outstanding,
+            }
+        } else if outstanding.is_empty() {
+            SteeringGateReading::Clear
+        } else {
+            SteeringGateReading::Outstanding(outstanding)
+        })
+    }
+
+    /// Outstanding steering for a run that built no prompt for the task, such
+    /// as a resume whose implement step was already checkpointed. Its
+    /// candidate came from the nearest run of its resume lineage that did, so
+    /// that run's watermark is the baseline. Without one, every operator
+    /// comment written after the lineage started is outstanding.
+    fn inherited_outstanding(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        comments: &[TaskComment],
+    ) -> Result<Vec<CommentLogMark>, OrbitError> {
+        let jobs = self.stores().jobs();
+        let record = |run_id: &str| {
+            jobs.get_job_run(run_id)?.ok_or_else(|| {
+                OrbitError::Execution(format!("run {run_id} has no run record to gate"))
+            })
+        };
+        let mut run = record(run_id)?;
+        for _ in 0..MAX_LINEAGE_HOPS {
+            let Some(source) = run.retry_source_run_id.clone() else {
+                break;
+            };
+            if let Some(watermark) = jobs
+                .read_run_state(&source)?
+                .and_then(|mut state| state.steering_watermarks.remove(task_id))
+            {
+                return Ok(pending_operator_comments(&watermark, comments)
+                    .into_iter()
+                    .map(|comment| comment.mark)
+                    .collect());
+            }
+            run = record(&source)?;
+        }
+        let started = run.started_at.unwrap_or(run.created_at);
+        Ok(comments
+            .iter()
+            .enumerate()
+            .filter(|(_, comment)| comment.at > started && !is_automation_actor(&comment.by))
+            .filter_map(|(position, _)| comment_mark(comments, position))
+            .collect())
+    }
+
+    /// Admit one more steering round of `run_id` for `task_id`, recording it
+    /// in the run's state before answering. Refused once the run spent
+    /// `workflow.mid_run_steering.max_rounds`, or when its last round was
+    /// admitted for exactly `outstanding` and so delivered none of it.
+    pub(crate) fn admit_steering_round(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        outstanding: &[CommentLogMark],
+    ) -> Result<SteeringRoundAdmission, OrbitError> {
+        let max_rounds = self.mid_run_steering().max_rounds;
+        let mut admission = None;
+        self.update_steering_watermark(run_id, |state| {
+            let rounds = state
+                .steering_rounds
+                .entry(task_id.to_string())
+                .or_default();
+            let spent = u8::try_from(rounds.len()).unwrap_or(u8::MAX);
+            admission = Some(
+                if rounds
+                    .last()
+                    .is_some_and(|round| round.outstanding == outstanding)
+                {
+                    SteeringRoundAdmission::Unobservable {
+                        rounds: spent,
+                        max_rounds,
+                    }
+                } else if spent >= max_rounds {
+                    SteeringRoundAdmission::Exhausted {
+                        rounds: spent,
+                        max_rounds,
+                    }
+                } else {
+                    rounds.push(SteeringRound {
+                        admitted_at: chrono::Utc::now(),
+                        outstanding: outstanding.to_vec(),
+                    });
+                    state.updated_at = chrono::Utc::now();
+                    SteeringRoundAdmission::Admitted {
+                        round: spent.saturating_add(1),
+                        max_rounds,
+                    }
+                },
+            );
+        })?;
+        admission.ok_or_else(|| {
+            OrbitError::Execution(format!(
+                "run {run_id} has no pipeline state to record a steering round"
+            ))
+        })
     }
 
     fn update_steering_watermark(

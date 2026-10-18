@@ -13,7 +13,7 @@ use crate::workflow::child_dispatch::{ChildCancellation, ChildDispatch, ChildDis
 use super::{
     ActivityCrewDraw, CommentLogMark, DrainAdmissionsStop, DrainCancelRequest,
     DrainWindowExtension, DrainWorkerLimit, FailureActivityCheckpoint, FinalRecoveryCheckpoint,
-    PullDrainState, SteeringWatermark, TaskCancellationPolicy,
+    PullDrainState, SteeringRound, SteeringWatermark, TaskCancellationPolicy,
 };
 
 /// The PR leaf step that admits the before-landing review of its open pull
@@ -152,6 +152,14 @@ pub struct PipelineState {
     /// recorded before steering existed.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub steering_watermarks: BTreeMap<String, SteeringWatermark>,
+    /// Mid-run steering's promotion-gate rounds, keyed by task id, oldest
+    /// first. Only the host writes them, when the gate before `commit`
+    /// admits a round; they are this run's budget against
+    /// `workflow.mid_run_steering.max_rounds`, so a resumed run starts
+    /// without them. Absent otherwise and on runs recorded before the gate
+    /// existed.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub steering_rounds: BTreeMap<String, Vec<SteeringRound>>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -185,6 +193,7 @@ impl PipelineState {
             env_pass_unset: Vec::new(),
             root_cause: None,
             steering_watermarks: BTreeMap::new(),
+            steering_rounds: BTreeMap::new(),
             updated_at: Utc::now(),
         }
     }

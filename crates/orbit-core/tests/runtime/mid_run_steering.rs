@@ -7,7 +7,8 @@
 //! which never moves backwards and belongs to one run. Every later prompt of
 //! the run leads with one bounded steering block of the operator comments
 //! past the watermark, records a `steering_delivered` task history event and
-//! advances the watermark past what it carried in full.
+//! advances the watermark past what it carried in full. Before `commit`, the
+//! promotion gate ([`gate`]) refuses while such a comment is undelivered.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -20,6 +21,8 @@ use orbit_store::contracts::JobRunStoreBackend;
 use orbit_types::workflow::{CommentLogMark, PipelineState, SteeringWatermark};
 use serde_json::{Value, json};
 use tempfile::TempDir;
+
+mod gate;
 
 const ENABLED: &str = "[workflow.mid_run_steering]\nenabled = true\n";
 

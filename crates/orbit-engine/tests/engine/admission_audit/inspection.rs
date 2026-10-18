@@ -53,6 +53,7 @@ fn short_inspection_revision_fails_a_retried_task_pilot_once() {
         resolved_failure_activity: None,
         final_recovery_activity: None,
         resolved_final_recovery_activity: None,
+        steering_gate: None,
         max_active_runs: 1,
         kind: JobKind::Workflow,
         steps: vec![JobV2Step {
