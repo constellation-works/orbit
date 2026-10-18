@@ -30,7 +30,9 @@ fn candidate(owner: &Coordinated, title: &str, priority: TaskPriority, tags: &[&
 /// retain age order; an undeclared requester still cannot take tagged work.
 #[test]
 fn affinity_respects_priority_expiry_and_os_eligibility() {
-    if !allocation_admission_isolated("ordering::affinity_respects_priority_expiry_and_os_eligibility") {
+    if !allocation_admission_isolated(
+        "ordering::affinity_respects_priority_expiry_and_os_eligibility",
+    ) {
         return;
     }
     use HostOs::{Linux, Macos};
