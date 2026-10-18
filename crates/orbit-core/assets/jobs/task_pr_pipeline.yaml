@@ -91,9 +91,13 @@ spec:
   # the last one delivered nothing, the task is blocked as `steering_unconsumed`
   # naming the outstanding comments. An unreadable gate or a task gone terminal
   # stops the run before `commit` as well. Steering off, nothing is read.
+  # A candidate `resume_candidate` carries past `implement_bundle` was built by
+  # the run it names as `source_run_id`, so the gate judges from that run's
+  # watermark, never from this run's start.
   steering_gate:
     before: commit
     round: implement_bundle
+    candidate: resume_candidate
   # Preserve recoverable work after terminal failures while keeping the
   # original error authoritative. Completion-stage failures retain the
   # already-published PR instead of fabricating a conflict handoff.

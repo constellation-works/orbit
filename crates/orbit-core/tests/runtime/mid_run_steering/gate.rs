@@ -100,6 +100,8 @@ pub(super) struct Pipeline<'a> {
     /// `candidate_resume`'s verdict: false carries a candidate past
     /// `implement_bundle`.
     pub(super) implement: bool,
+    /// The run `candidate_resume` names as the candidate's source.
+    source: Option<String>,
     pub(super) on_implement: OnImplement,
     /// The gate reads a task that does not exist, so every read fails.
     unreadable: bool,
@@ -121,6 +123,7 @@ impl<'a> Pipeline<'a> {
             fx,
             run: run.to_string(),
             implement: true,
+            source: None,
             on_implement: Box::new(|_, _| {}),
             unreadable: false,
             owner: None,
@@ -129,6 +132,13 @@ impl<'a> Pipeline<'a> {
             calls: Mutex::new(Vec::new()),
             prompts: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Carry `source`'s candidate past `implement_bundle`, as
+    /// `candidate_resume` does for a completed candidate.
+    fn carry(&mut self, source: &str) {
+        self.implement = false;
+        self.source = Some(source.to_string());
     }
 
     pub(super) fn labels(&self) -> Vec<String> {
@@ -231,7 +241,11 @@ impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
                 "prior_job_run_id": null,
                 "prior_foreign_run": null,
             }),
-            "resume_candidate" => json!({ "implement": self.implement, "repair": null }),
+            "resume_candidate" => json!({
+                "implement": self.implement,
+                "repair": null,
+                "source_run_id": self.source,
+            }),
             "implement_one" => {
                 // Agent dispatch builds the envelope's task context this way.
                 let task = if self.round_read_fails && input.get("steering_round").is_some() {
@@ -262,13 +276,14 @@ impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
         &self,
         run_id: &str,
         task_id: &str,
+        candidate_source: Option<&str>,
     ) -> Result<SteeringGateReading, OrbitError> {
         let task = if self.unreadable {
             "ORB-missing"
         } else {
             task_id
         };
-        let reading = RuntimeHost::steering_gate(&self.runtime(), run_id, task);
+        let reading = RuntimeHost::steering_gate(&self.runtime(), run_id, task, candidate_source);
         if std::mem::take(&mut *self.comment_after_gate_read.lock().unwrap()) {
             self.fx
                 .operator_comment("STEER-LATE: written while the gate's verdict stands.");
@@ -281,8 +296,15 @@ impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
         run_id: &str,
         task_id: &str,
         outstanding: &[CommentLogMark],
+        candidate_source: Option<&str>,
     ) -> Result<SteeringRoundAdmission, OrbitError> {
-        RuntimeHost::admit_steering_round(&self.fx.runtime, run_id, task_id, outstanding)
+        RuntimeHost::admit_steering_round(
+            &self.fx.runtime,
+            run_id,
+            task_id,
+            outstanding,
+            candidate_source,
+        )
     }
 
     fn apply_task_automation_update(
@@ -414,20 +436,22 @@ fn a_refusal_spends_one_round_whose_prompt_delivers_and_then_commits() {
         assert_eq!(fx.deliveries().len(), 1, "{pipeline}: delivered once");
         assert_eq!(rounds(&fx, &run), 1, "{pipeline}");
         assert_eq!(
-            RuntimeHost::steering_gate(&fx.runtime, &run, &fx.task).unwrap(),
+            RuntimeHost::steering_gate(&fx.runtime, &run, &fx.task, None).unwrap(),
             SteeringGateReading::Clear
         );
     }
 
     // A carried candidate skips `implement_bundle`, so the run built no
-    // prompt and holds no watermark: an operator comment after it started is
-    // undelivered, and the round runs the implementer despite the guard.
+    // prompt and holds no watermark. Its source built none either, so an
+    // operator comment after the source started is undelivered, and the
+    // round runs the implementer despite the guard.
     for pipeline in PIPELINES {
         let fx = admitted(ENABLED);
+        let source = fx.run(None);
         let run = fx.run(None);
         fx.operator_comment("STEER: the carried candidate needs a test.");
         let mut host = Pipeline::new(&fx, &run);
-        host.implement = false;
+        host.carry(&source);
         let outcome = host.execute(&pipeline_head(pipeline), None);
         assert!(outcome.success, "{pipeline}: {outcome:?}");
         let mut expected = head_labels(pipeline);
@@ -492,13 +516,14 @@ fn a_refusal_spends_one_round_whose_prompt_delivers_and_then_commits() {
 fn a_first_prompt_steering_round_delivers_comments_omitted_from_task_context() {
     for pipeline in PIPELINES {
         let fx = admitted(ENABLED);
+        let source = fx.run(None);
         let run = fx.run(None);
         fx.operator_comment("STEER-OLDEST: cover the public failure path.");
         for _ in 0..20 {
             fx.comment("AGENT: progress update.");
         }
         let mut host = Pipeline::new(&fx, &run);
-        host.implement = false;
+        host.carry(&source);
         let outcome = host.execute(&pipeline_head(pipeline), None);
         assert!(outcome.success, "{pipeline}: {outcome:?}");
         let prompts = host.prompts.lock().unwrap();
@@ -515,13 +540,59 @@ fn a_first_prompt_steering_round_delivers_comments_omitted_from_task_context() {
     }
 }
 
+// A fresh run that carries an earlier run's candidate built no prompt; its
+// source did. Guidance written after the source's prompt predates the new
+// run, yet no agent saw it, so the gate judges from the source's watermark
+// and the first round delivers that guidance, and only it, before `commit`.
+fn a_fresh_run_carrying_a_candidate_delivers_guidance_written_after_its_source_prompt() {
+    for pipeline in PIPELINES {
+        let fx = admitted(ENABLED);
+        fx.operator_comment("STEER-SEEN: the source's prompt carried this.");
+        let source = fx.run(None);
+        fx.prompt(&source, "implement_one");
+        fx.operator_comment("STEER-BETWEEN: written after the source's prompt.");
+        let run = fx.run(None);
+        let mut host = Pipeline::new(&fx, &run);
+        host.carry(&source);
+        let outcome = host.execute(&pipeline_head(pipeline), None);
+
+        assert!(outcome.success, "{pipeline}: {outcome:?}");
+        let mut expected = head_labels(pipeline);
+        expected.pop();
+        assert_eq!(
+            host.labels(),
+            with(expected, &["implement_one", "commit"]),
+            "{pipeline}: the round delivers before commit is reached"
+        );
+        assert_eq!(rounds(&fx, &run), 1, "{pipeline}");
+        let prompts = host.prompts.lock().unwrap();
+        let block = prompts[0]["steering"]["comments"].as_str().unwrap();
+        assert!(block.contains("STEER-BETWEEN"), "{pipeline}: {block}");
+        assert!(
+            !block.contains("STEER-SEEN"),
+            "{pipeline}: the source's prompt already carried it"
+        );
+        assert_eq!(fx.deliveries().len(), 1, "{pipeline}");
+        assert_eq!(
+            RuntimeHost::steering_gate(&fx.runtime, &run, &fx.task, Some(&source)).unwrap(),
+            SteeringGateReading::Clear
+        );
+    }
+}
+
+// The carried candidate's source built its prompt before a comment too long
+// for any block. The first round's prompt can only cut it, so it stays
+// outstanding and the task is held rather than committed.
 fn a_first_prompt_steering_round_keeps_truncated_guidance_outstanding() {
     for pipeline in PIPELINES {
         let fx = admitted(ENABLED);
-        let run = fx.run(None);
+        let source = fx.run(None);
+        fx.prompt(&source, "implement_one");
         fx.operator_comment(&format!("STEER-HUGE {}", "x".repeat(40 * 1024)));
+        let huge = fx.runtime.get_task_comments(&fx.task).unwrap().len() as u64 - 1;
+        let run = fx.run(None);
         let mut host = Pipeline::new(&fx, &run);
-        host.implement = false;
+        host.carry(&source);
         let outcome = host.execute(&pipeline_head(pipeline), None);
         assert!(
             !outcome.success,
@@ -537,21 +608,63 @@ fn a_first_prompt_steering_round_keeps_truncated_guidance_outstanding() {
             "steering_unconsumed"
         );
         assert_eq!(fx.deliveries()[0]["delivered"], json!([]));
+        assert_eq!(fx.deliveries()[0]["truncated"][0]["position"], huge);
+        assert!(!fx.watermark(&run).covers(huge), "{pipeline}");
+    }
+}
+
+// A carried candidate the gate cannot trace to a baseline is never judged
+// from the new run's start: a source this store holds no run of the task
+// for, with no claim baseline, or no source at all, fails closed. Steering
+// off, the same run commits without a read.
+fn a_carried_candidate_without_a_resolvable_source_fails_closed() {
+    for pipeline in PIPELINES {
+        let mut fx = admitted(ENABLED);
+        let run = fx.run(None);
+        let mut host = Pipeline::new(&fx, &run);
+        host.carry("jrun-elsewhere");
+        let unknown = host.execute(&pipeline_head(pipeline), None);
+        host.source = None;
+        let unnamed = host.execute(&pipeline_head(pipeline), None);
+        for outcome in [unknown, unnamed] {
+            assert!(!outcome.success, "{pipeline}: {outcome:?}");
+            assert_eq!(outcome.pipeline["commit"]["decision"], "unreadable");
+            assert!(
+                outcome
+                    .message
+                    .unwrap()
+                    .contains("[steering_gate_unreadable]")
+            );
+        }
+        assert!(!host.labels().iter().any(|label| label == "commit"));
+        assert_eq!(rounds(&fx, &run), 0, "{pipeline}");
+        drop(host);
+
+        fx.reconfigure("");
+        let run = fx.run(None);
+        let mut host = Pipeline::new(&fx, &run);
+        host.implement = false;
+        let outcome = host.execute(&pipeline_head(pipeline), None);
+        assert!(outcome.success, "{pipeline}: {outcome:?}");
+        let mut expected = head_labels(pipeline);
+        expected.pop();
+        assert_eq!(host.labels(), with(expected, &["commit"]), "{pipeline}");
     }
 }
 
 // A bounded ancestry walk cannot certify a baseline it never reached.
 fn an_unresolved_resume_lineage_fails_closed_instead_of_forgetting_steering() {
     let fx = admitted(ENABLED);
-    let mut run = fx.run(None);
-    fx.prompt(&run, "implement_one");
+    let root = fx.run(None);
+    fx.prompt(&root, "implement_one");
     fx.operator_comment("STEER-ANCESTOR: this candidate still needs the correction.");
+    let mut run = root.clone();
     for _ in 0..33 {
         run = fx.run(Some(&run));
     }
     for pipeline in PIPELINES {
         let mut host = Pipeline::new(&fx, &run);
-        host.implement = false;
+        host.carry(&root);
         let outcome = host.execute(&pipeline_head(pipeline), None);
         assert!(
             !outcome.success,
@@ -693,7 +806,7 @@ fn an_unreadable_gate_fails_closed_and_a_later_comment_waits_for_the_next_gate()
         assert!(fx.deliveries().is_empty(), "{pipeline}");
         let late = fx.runtime.get_task_comments(&fx.task).unwrap().len() - 1;
         let SteeringGateReading::Outstanding(outstanding) =
-            RuntimeHost::steering_gate(&fx.runtime, &run, &fx.task).unwrap()
+            RuntimeHost::steering_gate(&fx.runtime, &run, &fx.task, None).unwrap()
         else {
             panic!("{pipeline}: the late comment is the next gate's steering");
         };
@@ -755,7 +868,9 @@ crate::scenario_table!(
     steering_off_and_nothing_outstanding_leave_both_pipelines_as_they_are,
     a_refusal_spends_one_round_whose_prompt_delivers_and_then_commits,
     a_first_prompt_steering_round_delivers_comments_omitted_from_task_context,
+    a_fresh_run_carrying_a_candidate_delivers_guidance_written_after_its_source_prompt,
     a_first_prompt_steering_round_keeps_truncated_guidance_outstanding,
+    a_carried_candidate_without_a_resolvable_source_fails_closed,
     an_unresolved_resume_lineage_fails_closed_instead_of_forgetting_steering,
     exhausted_or_unobservable_rounds_block_the_task_as_steering_unconsumed,
     a_round_that_cannot_read_the_task_is_spent_and_keeps_its_own_failure,

@@ -855,8 +855,9 @@ impl RuntimeHost for OrbitRuntime {
         &self,
         run_id: &str,
         task_id: &str,
+        candidate_source: Option<&str>,
     ) -> Result<SteeringGateReading, OrbitError> {
-        self.steering_gate_reading(run_id, task_id)
+        self.steering_gate_reading(run_id, task_id, candidate_source)
     }
 
     fn admit_steering_round(
@@ -864,8 +865,9 @@ impl RuntimeHost for OrbitRuntime {
         run_id: &str,
         task_id: &str,
         outstanding: &[CommentLogMark],
+        candidate_source: Option<&str>,
     ) -> Result<SteeringRoundAdmission, OrbitError> {
-        OrbitRuntime::admit_steering_round(self, run_id, task_id, outstanding)
+        OrbitRuntime::admit_steering_round(self, run_id, task_id, outstanding, candidate_source)
     }
 
     fn run_deferral_probe(

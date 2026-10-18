@@ -16,6 +16,11 @@
 //! round that fails takes the run's ordinary failure path with its own
 //! failure. Back at the gate, the comment log is read again.
 //!
+//! A run that carries a candidate past its implementer built no prompt for
+//! it. When the gate names its `candidate` step, the run that step says the
+//! candidate came from is handed to the host with each reading and round, so
+//! the host judges from that run's baseline rather than this run's start.
+//!
 //! Once the host refuses another round — the run spent
 //! `workflow.mid_run_steering.max_rounds`, or the last round was admitted for
 //! the very comments still outstanding and delivered none of them — the task
@@ -28,7 +33,9 @@
 //! its worktree, as the gate found it.
 
 use chrono::SecondsFormat;
+use orbit_common::OrbitError;
 use orbit_types::task::{TaskComment, TaskStatus};
+use orbit_types::workflow::activity_job::SteeringGateSpec;
 use orbit_types::workflow::{
     CommentLogMark, STEERING_UNCONSUMED_EVENT, STEERING_UNCONSUMED_MARKER,
 };
@@ -64,9 +71,22 @@ pub(super) fn run_steering_gate(
     else {
         return SteeringGateOutcome::Proceed;
     };
+    let candidate = carried_candidate_source(gate, ctx);
+    let candidate_source = candidate.as_ref().ok().and_then(Option::as_deref);
     let mut outstanding = Vec::new();
     for task_id in gate_task_ids(&ctx.input) {
-        match ctx.host.steering_gate(&ctx.run_id, &task_id) {
+        let reading = ctx
+            .host
+            .steering_gate(&ctx.run_id, &task_id, candidate_source)
+            .and_then(|reading| match (&candidate, reading) {
+                // A carried candidate without its source has no baseline, but
+                // steering off still reads nothing.
+                (Err(error), reading) if reading != SteeringGateReading::Disabled => {
+                    Err(OrbitError::Execution(error.clone()))
+                }
+                (_, reading) => Ok(reading),
+            });
+        match reading {
             Ok(SteeringGateReading::Disabled) => return SteeringGateOutcome::Proceed,
             Ok(SteeringGateReading::Clear) => {}
             Ok(SteeringGateReading::Terminal {
@@ -135,7 +155,7 @@ pub(super) fn run_steering_gate(
     for (task_id, comments) in &outstanding {
         match ctx
             .host
-            .admit_steering_round(&ctx.run_id, task_id, comments)
+            .admit_steering_round(&ctx.run_id, task_id, comments, candidate_source)
         {
             Ok(SteeringRoundAdmission::Admitted { round, max_rounds }) => {
                 admitted = Some((round, max_rounds));
@@ -199,6 +219,36 @@ pub(super) fn run_steering_gate(
                 .collect::<Vec<_>>(),
         }),
     }
+}
+
+/// The run whose candidate this run carries past its implementer, as the
+/// gate's `candidate` step recorded it. A step that reports `implement:
+/// false` without naming that run leaves the gate no baseline, which is an
+/// error rather than a reading from this run's start.
+fn carried_candidate_source(
+    gate: &SteeringGateSpec,
+    ctx: &ExecCtx<'_>,
+) -> Result<Option<String>, String> {
+    let Some(step) = gate.candidate.as_deref() else {
+        return Ok(None);
+    };
+    let Some(output) = ctx.pipeline_snapshot().get(step).map(unwrap_step_output) else {
+        return Ok(None);
+    };
+    if output.get("implement").and_then(Value::as_bool) != Some(false) {
+        return Ok(None);
+    }
+    output
+        .get("source_run_id")
+        .and_then(Value::as_str)
+        .filter(|source| !source.is_empty())
+        .map(|source| Some(source.to_string()))
+        .ok_or_else(|| {
+            format!(
+                "step `{step}` carries a candidate past the implementer without naming the run \
+                 it came from, so its steering baseline cannot be resolved"
+            )
+        })
 }
 
 /// Block `task_id` under [`STEERING_UNCONSUMED_EVENT`] and stop the run.

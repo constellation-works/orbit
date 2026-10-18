@@ -122,4 +122,9 @@ pub struct SteeringRound {
     /// The operator comments the gate found undelivered when it admitted the
     /// round, oldest first.
     pub outstanding: Vec<CommentLogMark>,
+    /// The run whose candidate this run carries past its implementer, when
+    /// the gate read the baseline from it. The round's first prompt delivers
+    /// from the same baseline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_source: Option<String>,
 }

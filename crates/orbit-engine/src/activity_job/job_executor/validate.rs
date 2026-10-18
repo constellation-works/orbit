@@ -156,6 +156,18 @@ pub fn validate_job(job: &JobV2) -> Result<(), DispatchError> {
                 gate.round, gate.before
             )));
         }
+        if let Some(candidate) = &gate.candidate
+            && !matches!(
+                (position(candidate), position(&gate.round)),
+                (Some(candidate), Some(round)) if candidate < round
+            )
+        {
+            return Err(DispatchError::JobValidation(format!(
+                "job steering_gate: `candidate` (`{candidate}`) must name a top-level step \
+                 before the top-level step `round` names (`{}`)",
+                gate.round
+            )));
+        }
     }
     for step in &job.steps {
         validate_step(step)?;

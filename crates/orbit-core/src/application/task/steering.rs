@@ -44,6 +44,7 @@ use serde_json::{Value, json};
 use super::SYSTEM_ACTOR_LABEL;
 use super::helpers::is_automation_actor;
 use crate::OrbitRuntime;
+use crate::runtime::run_input::carried_task_ids;
 
 /// Largest steering block text, in bytes. A long comment thread must not
 /// evict the task itself from the prompt; past this the block keeps its head
@@ -88,21 +89,25 @@ impl OrbitRuntime {
     ) -> Result<Option<Value>, OrbitError> {
         let state = self.stores().jobs().read_run_state(run_id)?;
         let mut watermark = self.steering_watermark(&task.id, state.as_ref())?;
+        let round = state
+            .as_ref()
+            .and_then(|state| state.steering_rounds.get(&task.id)?.last());
         let pending = if let Some(watermark) = &watermark {
             pending_operator_comments(watermark, comments)
-        } else if state.as_ref().is_some_and(|state| {
-            state
-                .steering_rounds
-                .get(&task.id)
-                .is_some_and(|rounds| !rounds.is_empty())
-        }) {
+        } else if let Some(round) = round {
             // A carried candidate or checkpointed resume can first build a
             // prompt in a steering round. Its ordinary task context is
             // bounded, so taking a fresh snapshot here could cover comments
-            // that context omitted. Deliver from the gate's inherited
-            // baseline instead, including comments since the gate read.
+            // that context omitted. Deliver from the baseline the gate
+            // inherited, from the candidate source it admitted the round
+            // with, including comments since the gate read.
             let outstanding: BTreeSet<_> = self
-                .inherited_outstanding(run_id, &task.id, comments)?
+                .inherited_outstanding(
+                    run_id,
+                    &task.id,
+                    comments,
+                    round.candidate_source.as_deref(),
+                )?
                 .into_iter()
                 .collect();
             let baseline = SteeringWatermark::default();
@@ -154,19 +159,22 @@ impl OrbitRuntime {
     /// The promotion gate's reading of `task_id` for `run_id`, from the task,
     /// its comment log and the run's state as they are now.
     ///
-    /// Off, nothing is read. A claimed leaf reads the task, its comment log
-    /// and its watermark from the owner, never its replica. Any record it
-    /// cannot read is an error, so the gate fails closed. A comment written
+    /// Off, nothing is read. `candidate_source` names the run whose
+    /// candidate `run_id` carries past its implementer. A claimed leaf reads
+    /// the task, its comment log and its watermark from the owner, never its
+    /// replica. Any record it cannot read, and any baseline it cannot
+    /// resolve, is an error, so the gate fails closed. A comment written
     /// after this read is the next gate's or run's steering.
     pub(crate) fn steering_gate_reading(
         &self,
         run_id: &str,
         task_id: &str,
+        candidate_source: Option<&str>,
     ) -> Result<SteeringGateReading, OrbitError> {
         if !self.mid_run_steering().enabled {
             return Ok(SteeringGateReading::Disabled);
         }
-        let reading = self.read_steering_gate(run_id, task_id);
+        let reading = self.read_steering_gate(run_id, task_id, candidate_source);
         if self.worker_invocation().is_none() {
             return reading;
         }
@@ -182,6 +190,7 @@ impl OrbitRuntime {
         &self,
         run_id: &str,
         task_id: &str,
+        candidate_source: Option<&str>,
     ) -> Result<SteeringGateReading, OrbitError> {
         let task = self.get_task(task_id)?;
         let comments = self.get_task_comments(task_id)?;
@@ -197,23 +206,28 @@ impl OrbitRuntime {
                 .into_iter()
                 .map(|comment| comment.mark)
                 .collect(),
-            None => self.inherited_outstanding(run_id, task_id, &comments)?,
+            None => self.inherited_outstanding(run_id, task_id, &comments, candidate_source)?,
         };
         Ok(gate_verdict(task.status, outstanding))
     }
 
     /// Outstanding steering for a run that built no prompt for the task, such
-    /// as a resume whose implement step was already checkpointed. Its
-    /// candidate came from the nearest run of its resume lineage that did, so
-    /// that run's watermark is the baseline. Past the lineage, the watermark
-    /// the task's most recent claim kept through its settlement is, since the
-    /// run carries that claim's candidate. Without either, every operator
-    /// comment written after the lineage started is outstanding.
+    /// as a resume whose implement step was already checkpointed, or a run
+    /// carrying a candidate past its implementer. Its candidate came from the
+    /// nearest earlier run that built one, whose watermark is the baseline:
+    /// first along its resume lineage, then from `candidate_source`, the run
+    /// the carried candidate names, and along that run's own lineage. Past
+    /// those runs, the watermark the task's most recent claim kept through its
+    /// settlement is, since the run carries that claim's candidate. Without
+    /// either, every operator comment written after the earliest run reached
+    /// started is outstanding. A carried candidate from a run this store does
+    /// not hold for the task, with no claim baseline either, is unresolved.
     fn inherited_outstanding(
         &self,
         run_id: &str,
         task_id: &str,
         comments: &[TaskComment],
+        candidate_source: Option<&str>,
     ) -> Result<Vec<CommentLogMark>, OrbitError> {
         let jobs = self.stores().jobs();
         let record = |run_id: &str| {
@@ -231,20 +245,42 @@ impl OrbitRuntime {
         // machine's run state.
         let claimed = self.worker_invocation().is_some();
         let mut run = record(run_id)?;
+        let mut carried = candidate_source;
+        let mut unresolved = None;
         for _ in 0..MAX_LINEAGE_HOPS {
-            let Some(source) = run.retry_source_run_id.clone() else {
+            let source = if let Some(source) = run.retry_source_run_id.clone() {
+                record(&source)?
+            } else if let Some(source) = carried.take() {
+                // Only a run this store recorded for the task is the
+                // candidate's local source. A claimed leaf's candidate came
+                // through its owner, and another machine's run is not here:
+                // the claim baseline below is theirs.
+                match jobs.get_job_run(source)?.filter(|source| {
+                    !claimed
+                        && source
+                            .input
+                            .as_ref()
+                            .is_some_and(|input| carried_task_ids(input).contains(task_id))
+                }) {
+                    Some(source) => source,
+                    None => {
+                        unresolved = Some(source);
+                        break;
+                    }
+                }
+            } else {
                 break;
             };
             if !claimed
                 && let Some(watermark) = jobs
-                    .read_run_state(&source)?
+                    .read_run_state(&source.run_id)?
                     .and_then(|mut state| state.steering_watermarks.remove(task_id))
             {
                 return Ok(pending(&watermark));
             }
-            run = record(&source)?;
+            run = source;
         }
-        if run.retry_source_run_id.is_some() {
+        if run.retry_source_run_id.is_some() || carried.is_some() {
             return Err(OrbitError::Execution(format!(
                 "run {run_id}'s steering baseline for task {task_id} remains unresolved after \
                  {MAX_LINEAGE_HOPS} resume-lineage ancestors; refusing to certify a newer \
@@ -258,6 +294,13 @@ impl OrbitRuntime {
         };
         if let Some(watermark) = claim_baseline {
             return Ok(pending(&watermark));
+        }
+        if let Some(source) = unresolved {
+            return Err(OrbitError::Execution(format!(
+                "run {run_id} carries task {task_id}'s candidate from run {source}, whose \
+                 steering baseline neither this store nor a settled claim holds; refusing to \
+                 certify a newer dispatch timestamp that could omit undelivered comments"
+            )));
         }
         let started = run.started_at.unwrap_or(run.created_at);
         Ok(comments
@@ -378,7 +421,8 @@ impl OrbitRuntime {
     }
 
     /// Admit one more steering round of `run_id` for `task_id`, recording it
-    /// in the run's state before answering. Refused once the run spent
+    /// with the gate's `candidate_source` in the run's state before
+    /// answering. Refused once the run spent
     /// `workflow.mid_run_steering.max_rounds`, or when its last round was
     /// admitted for exactly `outstanding` and so delivered none of it.
     pub(crate) fn admit_steering_round(
@@ -386,6 +430,7 @@ impl OrbitRuntime {
         run_id: &str,
         task_id: &str,
         outstanding: &[CommentLogMark],
+        candidate_source: Option<&str>,
     ) -> Result<SteeringRoundAdmission, OrbitError> {
         let max_rounds = self.mid_run_steering().max_rounds;
         let mut admission = None;
@@ -413,6 +458,7 @@ impl OrbitRuntime {
                     rounds.push(SteeringRound {
                         admitted_at: chrono::Utc::now(),
                         outstanding: outstanding.to_vec(),
+                        candidate_source: candidate_source.map(str::to_string),
                     });
                     state.updated_at = chrono::Utc::now();
                     SteeringRoundAdmission::Admitted {
