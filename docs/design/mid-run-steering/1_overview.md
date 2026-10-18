@@ -34,7 +34,7 @@ This is structural, not a prompting lapse. `agent_task_context_json` (`crates/or
 
 ## 3. At a Glance
 
-All paths below name where the mechanism would live; nothing in this folder is implemented yet.
+All paths below name where the mechanism lives or would live. The configuration keys, the snapshot watermark and delivery at safe points are implemented; the promotion gate is not ([2_design.md](./2_design.md)).
 
 | Concern | File | Task |
 |---------|------|------|

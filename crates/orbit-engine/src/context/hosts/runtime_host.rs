@@ -653,7 +653,9 @@ pub trait RuntimeHost: Send + Sync {
     /// without leaking store or task-query details into orbit-engine. A host
     /// with run storage and `workflow.mid_run_steering.enabled` records, while
     /// building the snapshot, the newest task comment it carries as the run's
-    /// steering watermark for that step; the snapshot itself is the same
+    /// steering watermark for that step. At a later prompt of the same run, it
+    /// delivers operator comments past that watermark as a leading `steering`
+    /// block and records the delivery; otherwise the snapshot is the same
     /// either way.
     fn task_context_for_agent_input(
         &self,
