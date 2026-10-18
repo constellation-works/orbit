@@ -37,6 +37,10 @@ fn keychain_backed_provider_failures_report_sandbox_access_or_real_logout() {
             "Authentication required. Please run agent login first",
         ),
         ("antigravity", "authentication required"),
+        (
+            "muse",
+            "missing meta credentials: run `muse login` or set META_API_KEY",
+        ),
     ];
 
     for (provider, output) in providers {

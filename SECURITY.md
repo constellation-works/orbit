@@ -57,7 +57,7 @@ Agent filesystem access is scoped by an `fsProfile` (`read` and `modify` globs) 
 
 **Provider-specific carve-outs (macOS):**
 - Every supported provider's state directory (`~/.claude`, `~/.codex`, `~/.gemini`, `~/.grok`) is writable in every run, whichever provider is active. A file planted in another provider's directory could persist across sessions.
-- Claude, Copilot, Cursor, and Antigravity runs may *read* `~/Library/Keychains` for credentials stored there. Nothing gets keychain writes. The system keychains stay denied, and an `fsProfile` that denies `~/Library` or `~/Library/Keychains` still wins.
+- Claude, Copilot, Cursor, Antigravity, and Muse runs may *read* `~/Library/Keychains` for credentials stored there. Nothing gets keychain writes. The system keychains stay denied, and an `fsProfile` that denies `~/Library` or `~/Library/Keychains` still wins.
 - Sandboxed Codex gets `CODEX_CA_CERTIFICATE=/etc/ssl/cert.pem`, unless you set that or `SSL_CERT_FILE` yourself. The bundle holds public trust anchors only and doesn't weaken TLS verification.
 
 **Environment.** Agent subprocess environments are built from an allowlist: a documented baseline, your `[execution.env]` pass list, and the variables each provider declares it needs. Nothing is inherited just because it has a harmless-looking name.

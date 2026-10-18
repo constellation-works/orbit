@@ -275,7 +275,8 @@ fn compile_macos_sandbox_profile_with_env(
     // root, tracing/plugins/skills under its XDG data root, and its session
     // name authority under Application Support. Granted only to the active
     // Muse executor; `META_API_KEY` is an explicit environment opt-in and
-    // needs no additional path. [ORB-16577]
+    // needs no additional path. Its login-keychain read is the carve-out in
+    // `provider_reads_macos_login_keychain`. [ORB-16577] [ORB-16612]
     if Provider::parse(provider).ok() == Some(Provider::Muse) {
         for state_dir in super::provider_dirs::muse_state_dirs(home, xdg_config_home, xdg_data_home)
         {
@@ -331,6 +332,9 @@ fn compile_macos_sandbox_profile_with_env(
 /// `github-copilot-app`, `cursor-access-token` / `cursor-refresh-token`). The
 /// Antigravity CLI (`agy`) also stores its OAuth token in the login keychain
 /// and does not persist a readable token under its state directory by default.
+/// Muse Code's `muse exec` needs the login keychain too, although `muse login`
+/// also writes `auth.json` under its config root: with the keychain hidden it
+/// reports `missing meta credentials` for a valid login. [ORB-16612]
 /// Codex, Gemini, and Grok keep credentials in plain files under their own
 /// state directories, which are already granted, so they keep the deny. Names
 /// that do not resolve to a canonical [`Provider`] keep the deny too — the
@@ -341,7 +345,13 @@ fn compile_macos_sandbox_profile_with_env(
 fn provider_reads_macos_login_keychain(provider: &str) -> bool {
     matches!(
         Provider::parse(provider).ok(),
-        Some(Provider::Claude | Provider::Copilot | Provider::Cursor | Provider::Antigravity)
+        Some(
+            Provider::Claude
+                | Provider::Copilot
+                | Provider::Cursor
+                | Provider::Antigravity
+                | Provider::Muse
+        )
     )
 }
 

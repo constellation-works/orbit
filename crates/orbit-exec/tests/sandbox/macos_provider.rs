@@ -35,6 +35,44 @@ fn copilot_reallows_the_user_keychain_but_not_github_cli_credentials() {
 }
 
 #[test]
+fn muse_reallows_the_user_keychain_but_not_the_system_keychains() {
+    if super::audit_support::run_isolated(
+        "macos_provider::muse_reallows_the_user_keychain_but_not_the_system_keychains",
+    ) {
+        return;
+    }
+    // `muse exec` reads part of its login from the macOS login keychain:
+    // under the default user keychain deny it exits 1 with "missing meta
+    // credentials" although `auth.json` is present. Read-only re-allow of
+    // the user directory, as for Copilot; system keychains stay denied.
+    // [ORB-16612]
+    let resolved = profile("default", &["/Users/test/repo"], &["/Users/test/repo/src"]);
+
+    let text = compile_with_env(
+        &resolved,
+        "muse",
+        EnvOverrides {
+            home: Some("/Users/test"),
+            ..Default::default()
+        },
+    );
+
+    let deny = "(deny file-read* (subpath \"/Users/test/Library/Keychains\"))";
+    let allow = "(allow file-read* (subpath \"/Users/test/Library/Keychains\"))";
+    let deny_pos = text.find(deny).expect("default user keychain deny");
+    let allow_pos = text.find(allow).expect("muse user keychain re-allow");
+    assert!(
+        deny_pos < allow_pos,
+        "re-allow must follow the default deny"
+    );
+    assert!(!text.contains("(allow file-write* (subpath \"/Users/test/Library/Keychains\"))"));
+    for system in ["/Library/Keychains", "/System/Library/Keychains"] {
+        assert!(text.contains(&format!("(deny file-read* (subpath \"{system}\"))")));
+        assert!(!text.contains(&format!("(allow file-read* (subpath \"{system}\"))")));
+    }
+}
+
+#[test]
 fn only_the_confined_muse_lane_may_write_muse_state_roots() {
     if super::audit_support::run_isolated(
         "macos_provider::only_the_confined_muse_lane_may_write_muse_state_roots",
@@ -43,8 +81,7 @@ fn only_the_confined_muse_lane_may_write_muse_state_roots() {
     }
     // Muse Code keeps settings and its `auth.json` login under its XDG config
     // root, tracing/plugins/skills under its XDG data root, and the session
-    // name authority under Application Support. Its login is a file, so the
-    // user keychain stays denied. [ORB-16577]
+    // name authority under Application Support. [ORB-16577]
     let resolved = profile("default", &["/Users/test/repo"], &["/Users/test/repo/src"]);
     let grant = |dir: &str| format!("(allow file-write* (subpath \"{dir}\"))");
     let defaults = [
@@ -61,7 +98,6 @@ fn only_the_confined_muse_lane_may_write_muse_state_roots() {
     for dir in defaults {
         assert!(text.contains(&grant(dir)), "muse must write {dir}");
     }
-    assert!(!text.contains("(allow file-read* (subpath \"/Users/test/Library/Keychains\"))"));
 
     for provider in ["claude", "codex", "opencode", "pi"] {
         let text = compile_with_env(&resolved, provider, home());
