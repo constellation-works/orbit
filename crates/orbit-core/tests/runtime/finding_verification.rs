@@ -28,6 +28,78 @@ use tempfile::TempDir;
 
 const JOB: &str = "finding_verification_pipeline";
 
+#[test]
+fn shipped_activities_have_unambiguous_tool_policies() {
+    let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/activities");
+    for entry in std::fs::read_dir(assets).unwrap() {
+        let path = entry.unwrap().path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "yaml")
+        {
+            let asset = load_activity_asset(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert!(
+                orbit_types::workflow::activity_tool_policy_deprecation(&asset.spec).is_none(),
+                "{} must load without a tool policy deprecation warning",
+                asset.name
+            );
+        }
+    }
+}
+
+fn verifier_resolved_tools_preserve_its_read_only_boundary() {
+    let fixture = Fixture::new();
+    let asset = load_activity_asset(
+        &std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/activities/verify_finding.yaml"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let ActivityV2Spec::AgentLoop(spec) = asset.spec.spec else {
+        panic!("finding verification must run an agent");
+    };
+    let resolved = fixture
+        .runtime
+        .resolve_activity_tool_denials(&[], &asset.name, &spec.tool_disallow_list.unwrap())
+        .unwrap();
+    assert!(
+        resolved
+            .effective_tools
+            .iter()
+            .any(|tool| tool == "orbit.task.show")
+    );
+    for tool in [
+        "orbit.agent.invoke",
+        "orbit.auto_task.add",
+        "orbit.auto_task.mint",
+        "orbit.auto_task.update",
+        "orbit.command.exec",
+        "orbit.pipeline.invoke",
+        "orbit.workflow.run.resume",
+        "orbit.workflow.ship",
+        "orbit.task.add",
+        "orbit.task.update",
+        "orbit.task.artifact.put",
+        "orbit.task.reconcile_review",
+        "orbit.friction.add",
+        "orbit.friction.update",
+    ] {
+        assert!(
+            !resolved
+                .effective_tools
+                .iter()
+                .any(|allowed| allowed == tool),
+            "finding verification must withhold mutation and dispatch tool {tool}"
+        );
+    }
+}
+
+crate::scenario_table!(
+    verifier_tool_policy_scenarios,
+    verifier_resolved_tools_preserve_its_read_only_boundary
+);
+
 struct Fixture {
     _root: TempDir,
     runtime: OrbitRuntime,
