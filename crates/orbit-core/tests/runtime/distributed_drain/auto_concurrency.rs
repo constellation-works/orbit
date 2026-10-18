@@ -13,12 +13,13 @@
 //! nothing measured, keeps the forecast from being idle without adding to it.
 
 use super::*;
-use chrono::Duration as ChronoDuration;
+use chrono::{Duration as ChronoDuration, DurationRound};
+use orbit_core::runtime::host_resource::accuracy::AccuracySelection;
 use orbit_core::runtime::host_resource::forecast::{AdmissionReservationRequest, ForecastDecision};
 use orbit_core::runtime::host_resource::profile::ProfileLookup;
 use orbit_store::contracts::{
     AdmissionForecastRecord, AdmissionLoadQuery, AdmissionLoadStoreBackend, AdmissionReservation,
-    ResourceUsageStoreBackend, RunResourceMinute,
+    HostResourceMinute, ResourceUsageStoreBackend, RunResourceMinute,
 };
 use orbit_types::workflow::{JobRun, PullAdmissionFit};
 
@@ -606,12 +607,17 @@ fn pending_pull_capacity_serializes_other_host_admitters_and_recovers_lost_repli
             neighbour_delivery(&pair.follower);
             host_using(&proc_root, 4 * GIB);
             let second = another_workspace(&pair, &proc_root);
+            let second_workspace = second.follower.workspace_id().unwrap();
             assert_ne!(
                 second.follower.workspace_id().unwrap(),
                 pair.follower.workspace_id().unwrap()
             );
             let second_drain = second.run_drain();
+            let second_drain_for_barrier = second_drain.clone();
             let follower = pair.follower.clone();
+            let observer = second.follower.clone();
+            let captured_points = Arc::new(Mutex::new(None));
+            let captured_points_in_barrier = Arc::clone(&captured_points);
             let wire = pair.wire.clone();
             let barrier = move || {
                 let held = reservations(&follower);
@@ -636,8 +642,25 @@ fn pending_pull_capacity_serializes_other_host_admitters_and_recovers_lost_repli
                     !local_admission(&follower, "local-in-flight"),
                     "local work cannot fill the pending pull's gap"
                 );
+                let accuracy = observer
+                    .admit_against_forecast(|forecast| {
+                        let accuracy = forecast.accuracy_points();
+                        assert!(
+                            accuracy
+                                .covered_deliveries
+                                .iter()
+                                .any(|delivery| delivery.task_id.starts_with("pending:")),
+                            "the other workspace's forecast captures the pending pull"
+                        );
+                        Ok(ForecastDecision {
+                            outcome: accuracy,
+                            admitted: Vec::new(),
+                        })
+                    })
+                    .unwrap();
+                *captured_points_in_barrier.lock().unwrap() = Some(accuracy);
                 let before = wire.calls("orbit.task.pull").len();
-                let pass = second.pass(&second_drain);
+                let pass = second.pass(&second_drain_for_barrier);
                 assert_eq!(wire.calls("orbit.task.pull").len(), before, "{pass}");
                 assert!(
                     second.leaf_runs().is_empty(),
@@ -750,6 +773,151 @@ fn pending_pull_capacity_serializes_other_host_admitters_and_recovers_lost_repli
                     })
                 })
                 .unwrap();
+
+            // The other workspace captured its forecast while this request
+            // had only a pending reservation identity. Once the owner returns
+            // the task, both it and a later unrelated admission have measured
+            // load in the target minute. The raw host pair remains available,
+            // but attribution for the unresolved pending cohort must not
+            // report the known baseline as its complete measured value.
+            let accuracy = captured_points
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the other workspace captured its forecast in flight");
+            let forecast_at = accuracy.at;
+            let covered = accuracy.covered_deliveries.clone();
+            let Some(pending) = covered
+                .iter()
+                .find(|delivery| delivery.task_id.starts_with("pending:"))
+            else {
+                panic!("the forecast captured the in-flight pull reservation: {covered:#?}");
+            };
+            assert_eq!(pending.workspace_id, pair.follower.workspace_id().unwrap());
+            assert!(
+                !covered
+                    .iter()
+                    .any(|delivery| delivery.task_id == "unrelated-later"),
+                "a later admission is outside the captured forecast cohort"
+            );
+
+            let record = AdmissionForecastRecord {
+                workspace_id: second_workspace,
+                run_id: "jrun-pending-accuracy".into(),
+                forecast_at,
+                mode: "enforce".into(),
+                cpu_count: accuracy.cpu_count,
+                memory_total_bytes: accuracy.memory_total_bytes,
+                // Use known baselines so this fixture would expose the old
+                // baseline-only comparison if attribution ignored the miss.
+                baseline_cpu_cores: Some(1.0),
+                baseline_memory_bytes: Some(4 * GIB),
+                covered_deliveries: Some(covered),
+                points: accuracy.into_points(),
+                admitted: Vec::new(),
+                fit_admitted: Vec::new(),
+                fit_skipped: Vec::new(),
+                pull: None,
+            };
+            let store = pair.follower.sqlite_store().unwrap();
+            store.record_admission_forecast(&record).unwrap();
+
+            let minute_at = record
+                .forecast_at
+                .duration_trunc(ChronoDuration::minutes(1))
+                .unwrap()
+                + ChronoDuration::minutes(5);
+            let workspace = pair.follower.workspace_id().unwrap();
+            let admitted = reservations(&pair.follower)[0].reserved_at;
+            let later_admitted_at = record.forecast_at + ChronoDuration::minutes(1);
+            pair.follower
+                .admit_against_forecast_at(later_admitted_at, |_forecast| {
+                    Ok(ForecastDecision {
+                        outcome: (),
+                        admitted: vec![AdmissionReservationRequest {
+                            task_id: "unrelated-later".into(),
+                            lookup: ProfileLookup::new(
+                                &workspace,
+                                "change",
+                                Some("low".into()),
+                                false,
+                            ),
+                        }],
+                    })
+                })
+                .unwrap();
+            assert!(
+                reservations(&pair.follower)
+                    .iter()
+                    .any(|reservation| reservation.task_id == "unrelated-later")
+            );
+            let leaf = pair.leaf_runs()[0].clone();
+            let unrelated = "jrun-unrelated-later".to_string();
+            for (run_id, task_id, delivery_admitted_at, cpu_cores, memory_bytes) in [
+                (&leaf, pair.tasks[0].as_str(), admitted, 3.0, 3 * GIB),
+                (
+                    &unrelated,
+                    "unrelated-later",
+                    later_admitted_at,
+                    2.0,
+                    2 * GIB,
+                ),
+            ] {
+                store
+                    .record_run_resource_minute(&RunResourceMinute {
+                        workspace_id: workspace.clone(),
+                        run_id: run_id.clone(),
+                        minute_index: 0,
+                        minute_started_at: minute_at,
+                        task_id: task_id.to_string(),
+                        work_class: "change".into(),
+                        complexity: Some("low".into()),
+                        resumed: false,
+                        delivery_admitted_at: Some(delivery_admitted_at),
+                        cpu_cores,
+                        cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
+                        memory_bytes,
+                        samples: 12,
+                    })
+                    .unwrap();
+            }
+            store
+                .offer_host_resource_minute(&HostResourceMinute {
+                    minute_at,
+                    cpu_cores: 5.0,
+                    cpu_count: 15,
+                    memory_bytes: 5 * GIB,
+                    memory_total_bytes: 32 * GIB,
+                    samples: 12,
+                    recorded_by_run_id: Some(leaf),
+                })
+                .unwrap();
+
+            let report = pair
+                .follower
+                .forecast_accuracy_selected(
+                    AccuracySelection {
+                        since: record.forecast_at - ChronoDuration::minutes(1),
+                        drain: Some(record.run_id.clone()),
+                        mode: Some("enforce".into()),
+                    },
+                    minute_at + ChronoDuration::minutes(1),
+                )
+                .unwrap();
+            let [pair] = report.pairs.as_slice() else {
+                panic!("expected the mature +5 minute pair: {report:#?}");
+            };
+            assert_eq!(pair.measured_cpu_cores, 5.0);
+            assert_eq!(pair.measured_memory_bytes, 5 * GIB);
+            assert!(pair.attributed_cpu_cores.is_none());
+            assert!(pair.attributed_memory_bytes.is_none());
+            let offset = report
+                .offsets
+                .iter()
+                .find(|offset| offset.offset_minutes == 5)
+                .unwrap();
+            assert_eq!(offset.paired, 1);
+            assert_eq!(offset.attributed_paired, 0);
         }
     });
 }
