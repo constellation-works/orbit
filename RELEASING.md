@@ -277,7 +277,7 @@ Pushing a `v*` tag runs `.github/workflows/release.yml`:
 | `build-release` | `cargo build -p orbit-cli --release --locked` for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, and `aarch64-unknown-linux-gnu` |
 | `publish-release` | Writes `orbit-checksums.txt`, signs it as `orbit-checksums.txt.sig`, and creates the GitHub Release with auto-generated notes |
 | `build-desktop` | Only when `ORBIT_DESKTOP_RELEASE` is `true`. Runs `cargo tauri build` in `desktop/` to make a signed, notarized universal macOS `.dmg` and the `.deb` and `.AppImage` for Linux x86_64 and arm64 |
-| `publish-desktop` | Signs `orbit-desktop-checksums.txt` and attaches it and the desktop bundles to the release once `publish-release` has created it |
+| `publish-desktop` | Writes `orbit-desktop-version.txt`, signs `orbit-desktop-checksums.txt` over it and the bundles, and attaches them all to the release once `publish-release` has created it |
 | `bump-homebrew-tap` | Updates `Formula/orbit.rb` in `constellation-works/homebrew-tap` (macOS only; Linux uses `install.sh`) |
 | `smoke-install-macos` / `smoke-install-ubuntu` | Installs from the tag's `install.sh` and runs `orbit --version` |
 

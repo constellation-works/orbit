@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Fail the build when install.sh, npm/scripts/install-binary.js, and the
-# shared Rust release trust set disagree on any trusted key's id, not_after,
-# revoked_at, or PEM. npm/release-signing.pub must still appear as a subset
-# of that set (L-0044).
+# Fail the build when install.sh, npm/scripts/install-binary.js, the shared
+# Rust release trust set and the desktop app's copy of it disagree on any
+# trusted key's id, not_after, revoked_at, or PEM. npm/release-signing.pub
+# must still appear as a subset of that set (L-0044).
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -13,6 +13,7 @@ trap 'rm -rf "$tmp_dir"' EXIT
 INSTALL_SH="install.sh"
 INSTALL_JS="npm/scripts/install-binary.js"
 RELEASE_RS="crates/orbit-common/src/security/release.rs"
+DESKTOP_RS="desktop/src/update/trust.rs"
 
 die() {
   echo "check-installer-pubkey: $*" >&2
@@ -311,7 +312,7 @@ extract_release_rs() {
       next
     }
 
-    /pub const TRUSTED_RELEASE_KEYS/ { in_list = 1 }
+    /pub(\(crate\))? const TRUSTED_RELEASE_KEYS/ { in_list = 1 }
 
     in_list && /TrustedReleaseKey[ \t]*\{/ {
       in_key = 1
@@ -436,6 +437,24 @@ compare_record_sets() {
   done < "$tmp_dir/all-ids"
 }
 
+# The desktop app's copy must equal the shared Rust set exactly.
+compare_with_reference() {
+  local ref="$1"
+  local ref_label="$2"
+  local copy="$3"
+  local copy_label="$4"
+  local id field
+
+  cmp -s "$ref/ids" "$copy/ids" || die "$copy_label key ids differ from $ref_label"
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    for field in not_after revoked_at pem; do
+      cmp -s "$ref/$id/$field" "$copy/$id/$field" \
+        || die "$copy_label $field for $id does not match $ref_label"
+    done
+  done < "$ref/ids"
+}
+
 [ -f "$canonical_key" ] || die "canonical key file missing: npm/release-signing.pub"
 canonical_norm="$tmp_dir/canonical.pem"
 normalize_pem_text < "$canonical_key" > "$canonical_norm"
@@ -447,18 +466,23 @@ rust_dir="$tmp_dir/release.rs"
 install_stream="$tmp_dir/install.sh.records"
 npm_stream="$tmp_dir/install-binary.js.records"
 rust_stream="$tmp_dir/release.rs.records"
+desktop_dir="$tmp_dir/desktop-trust.rs"
+desktop_stream="$tmp_dir/desktop-trust.rs.records"
 
 extract_install_sh "$repo_root/$INSTALL_SH" > "$install_stream"
 extract_install_js "$repo_root/$INSTALL_JS" > "$npm_stream"
 extract_release_rs "$repo_root/$RELEASE_RS" > "$rust_stream"
+extract_release_rs "$repo_root/$DESKTOP_RS" > "$desktop_stream"
 ingest_records "$install_dir" "$INSTALL_SH" < "$install_stream"
 ingest_records "$npm_dir" "$INSTALL_JS" < "$npm_stream"
 ingest_records "$rust_dir" "$RELEASE_RS" < "$rust_stream"
+ingest_records "$desktop_dir" "$DESKTOP_RS" < "$desktop_stream"
 
 compare_record_sets \
   "$install_dir" "$INSTALL_SH" \
   "$npm_dir" "$INSTALL_JS" \
   "$rust_dir" "$RELEASE_RS"
+compare_with_reference "$rust_dir" "$RELEASE_RS" "$desktop_dir" "$DESKTOP_RS"
 
 # L-0044: Keep every release checksum-signature consumer on the canonical signing key.
 assert_contains_canonical_key "$INSTALL_SH" "$install_dir"

@@ -5,7 +5,7 @@ Mechanisms every layer needs: `OrbitError` plus responsibility-named modules (`e
 - Never add a module named after a caller or a vertical feature. If code fits no existing responsibility, it belongs in the crate that needs it. `mod.rs` = declarations + `#[cfg(test)] mod tests;` only.
 - Single-owner invariants — never reimplement at a call site:
   - `security::child_env` — the only agent-subprocess env builder; allowlist over a cleared environment.
-  - `security::release` — the only Rust copy of release keys and manifest verification (`scripts/check-installer-pubkey.sh` guards drift with the shell/npm installers).
+  - `security::release` — the release keys and manifest verification for the workspace crates. The desktop app, a separate workspace, keeps a copy in `desktop/src/update/trust.rs`; `scripts/check-installer-pubkey.sh` guards drift between them and the shell/npm installers.
   - `security::redaction` — the only redaction implementation (guardrail script forbids surface-local `fn redact_*`).
   - `fs::selector` — owns `SelectorParseError` and its `OrbitError` translator; no caller crate may translate it.
   - `error` — owns the `impl From<orbit_types::…Error> for OrbitError` translators, since `orbit-types` cannot name `OrbitError`; each is listed in `from_registry` in `scripts/check-error-translation.sh`.

@@ -10,24 +10,27 @@ dashboard's own host switcher.
 ## How it works
 
 - **Server.** The app runs `orbit web serve --port 0 --no-open --operator` with your home directory
-  as the working directory. It reads the bound address from the server's startup line. `--operator`
-  turns on the dashboard's governed controls, as `orbit web connect` does, because an app has no
-  terminal to confirm them in.
+  as the working directory. It reads the bound address from each startup line the server prints.
+  `--operator` turns on the dashboard's governed controls, as `orbit web connect` does, because an
+  app has no terminal to confirm them in.
 - **Finding `orbit`.** Apps started from the Dock or a desktop launcher get a minimal `PATH`. The
   app looks in `ORBIT_BIN` (an explicit path that overrides the search), `$ORBIT_INSTALL_DIR`,
   `~/.orbit/bin`, `PATH`, `~/.cargo/bin`, `~/.local/bin`, npm and nvm global bins,
   `/opt/homebrew/bin`, `/usr/local/bin` and `/usr/bin`. The npm package's `orbit` command is a Node
   launcher, so the app runs the native binary inside the package instead.
 - **Restarts.** If the server exits, the window returns to its status page and starts the server
-  again. Repeated quick failures back off up to 30 seconds; **Retry** skips the wait. A server that
-  replaces itself after `orbit update` keeps its process and port, so the window doesn't notice.
+  again. Repeated quick failures back off up to 30 seconds; **Retry** skips the wait.
+- **Updates.** After `orbit update`, the server hands over to the new binary in the same process.
+  It replays `--port 0`, so the new image can bind a different port; it prints its startup line
+  again, and the window loads the new address and stops allowing the old one. If the handover fails
+  and the server exits, the restart path above takes over.
 - **Quitting.** Quitting the app, or sending it SIGTERM, SIGINT or SIGHUP, stops the server. The
   server gets up to 12 seconds to drain before it is killed. On Linux the kernel also stops the
   server if the app crashes. On macOS, a crash that skips Rust's panic hook (a SIGKILL, for example)
   can leave the server running until you stop it yourself.
 - **Menu bar and tray.** The icon's menu shows how many drains are running and how many runs
-  failed in the last 24 hours, with **Open Orbit**, **Restart Dashboard Server**, **Launch at Login**
-  and **Quit Orbit**. On macOS the counts also appear beside the icon (`▶` drains, `✕` failed runs),
+  failed in the last 24 hours, with **Open Orbit**, **Restart Dashboard Server**, **Check for
+  Updates…** (see [Auto-update](#auto-update)), **Launch at Login** and **Quit Orbit**. On macOS the counts also appear beside the icon (`▶` drains, `✕` failed runs),
   and closing the window keeps the app in the menu bar; **Quit Orbit** or ⌘Q ends it. On Linux,
   closing the window quits, because a desktop without an AppIndicator host has no tray to return
   from. Restarting the server reloads the window once the new server is ready.
@@ -58,11 +61,13 @@ The dashboard loads from its own `http://127.0.0.1:<port>` origin, so its Host/O
 unchanged. To Tauri the dashboard is a remote origin: no capability grants it a command, and the
 app's commands are declared in an app manifest, which puts them under the access-control list.
 Only the bundled status page (`capabilities/status-page.json`) can call `status` and `retry`.
-No page is granted the autostart plugin's commands; only the tray menu changes the login item.
+No page is granted the autostart or dialog plugin's commands; only the tray menu changes the login
+item, and only the update thread opens the install confirmation.
 Notifications come from Rust, not from Tauri's notification plugin: that plugin replaces
 `window.Notification` in every page, the dashboard included, which would turn the dashboard's own
 notification button into IPC calls the dashboard isn't allowed to make. The tray and notifications
-read the server with plain loopback GETs; the dashboard page gains nothing. The
+read the server with plain loopback GETs; the dashboard page gains nothing. The only other network
+traffic is the update check's HTTPS requests to `api.github.com` and `github.com`. The
 window navigates only to the status page and the running dashboard. Every other link, including
 `target=_blank` links and `window.open`, opens in your default browser.
 
@@ -70,9 +75,15 @@ window navigates only to the status page and the running dashboard. Every other 
 
 The shell is its own Cargo workspace (its `Cargo.toml` has its own `[workspace]` table), not a member of the root one, so `make ci` and the main CI
 jobs never build it. [`.github/workflows/desktop.yml`](../.github/workflows/desktop.yml) runs
-format, watcher regression tests and Clippy checks on macOS and Linux whenever `desktop/` changes.
-A manual run of that workflow also uploads unsigned bundles for testing. Releases are built
-separately, as described in [Releases](#releases).
+format, watcher regression tests without the webview stack, Clippy and test checks on macOS and
+Linux whenever `desktop/` changes. A manual run of that workflow also uploads unsigned bundles for
+testing. Releases are built separately, as described in [Releases](#releases).
+
+The server supervisor lives in the `orbit_desktop` library (`src/sidecar.rs`), apart from the
+window, so `tests/sidecar_lifecycle.rs` can drive it without a webview. That test binary acts as
+its own fake `orbit`: it re-executes itself on a new port in the same process, and the test checks
+that the window follows and that quitting stops the server. Run it with `cargo test` from
+`desktop/`.
 
 Linux needs the WebKitGTK development packages:
 
@@ -80,7 +91,8 @@ Linux needs the WebKitGTK development packages:
 sudo apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libxdo-dev libssl-dev patchelf
 ```
 
-The polling library also runs without the native webview stack. From `desktop/`, run the
+The same library holds the dashboard polling (`src/watcher.rs`) and builds without the native
+webview stack. From `desktop/`, run the
 notification regressions against paginated API-shaped responses with:
 
 ```bash
@@ -118,6 +130,7 @@ desktop jobs are skipped, and the CLI release is unaffected either way. The rele
 | `orbit-desktop-universal-apple-darwin.dmg` | macOS 11 or later, Apple silicon and Intel. Signed with a Developer ID certificate, notarized, and stapled. |
 | `orbit-desktop-x86_64-unknown-linux-gnu.deb` / `.AppImage` | Linux x86_64, glibc 2.35 or later |
 | `orbit-desktop-aarch64-unknown-linux-gnu.deb` / `.AppImage` | Linux arm64, glibc 2.35 or later |
+| `orbit-desktop-version.txt` | The release's version, which the app's update check reads |
 | `orbit-desktop-checksums.txt` / `.sig` | SHA-256 of every desktop asset, signed with the Orbit release key |
 
 The names don't change between versions, so
@@ -186,29 +199,59 @@ replace `APPLE_PASSWORD`.
 
 ### Auto-update
 
-The app doesn't update itself. Install a new release over the old one. Most changes don't need
-that anyway, because the dashboard comes from your `orbit` CLI, which `orbit update` upgrades. The
-shell itself rarely changes.
+The app checks for a newer release a minute after launch, then once a day. **Check for Updates…**
+in the tray menu checks right away. Many changes don't need a new app, because the dashboard comes
+from your `orbit` CLI, which `orbit update` upgrades. The app updates only its own shell.
 
-[`tauri-plugin-updater`](https://v2.tauri.app/plugin/updater/) is left out on purpose because it
-doesn't fit Orbit's release-integrity model:
+- **Finding a release.** The app lists the 20 most recent releases of
+  `constellation-works/orbit` through the GitHub API. It takes the newest stable release above its
+  own version that carries `orbit-desktop-checksums.txt`, its `.sig`, `orbit-desktop-version.txt`
+  and this platform's bundle. A release without desktop assets is skipped, not treated as an error.
+  That covers releases cut while `ORBIT_DESKTOP_RELEASE` is off, releases whose desktop jobs failed,
+  and the minutes before `publish-desktop` finishes. Drafts, prereleases and `-rc` tags are never
+  offered.
+- **Verification.** Before offering anything, the app checks the manifest's signature against the
+  Orbit release keys. These are a copy of the trust set in `install.sh`, the npm installer and
+  `orbit update`, with the same `not_after` and `revoked_at` records. A revoked or expired key fails
+  closed. The signed manifest also lists `orbit-desktop-version.txt`, and that file must name the
+  release's own tag. Asset names carry no version, so this check stops an older signed set from
+  being passed off as a newer release. The bundle is checked against its signed SHA-256 after it
+  downloads, before anything is replaced.
+- **Prompting.** A verified update raises one notification, and the tray item becomes
+  **Install Orbit X.Y.Z…**. Choosing it opens a confirmation dialog. Nothing is downloaded or
+  installed until you choose **Install**. An unreachable GitHub stays silent unless you asked for
+  the check. A manifest that fails verification always notifies, because its assets can't be
+  trusted.
+- **macOS.** The app mounts the verified `.dmg` read-only and checks the new `Orbit.app` with
+  `codesign --verify --deep --strict` against the running app's bundle identifier and Team ID. Its
+  `CFBundleShortVersionString` must match the release. The app then copies the new bundle next to
+  the current one, swaps the two, and restarts. If the app can't replace itself, it opens the
+  verified `.dmg` for you to drag Orbit into Applications. That happens when the folder isn't
+  writable, macOS runs the app from a translocated copy or from the disk image, or the running copy
+  isn't Developer ID signed.
+- **Linux AppImage.** When `$APPIMAGE` is set, the new AppImage replaces the file it names, and the
+  app restarts. If that directory isn't writable, the AppImage is saved to Downloads instead.
+- **Linux `.deb`.** An apt-installed app can't replace itself without root, and it never asks for
+  root. It saves the verified `.deb` to Downloads, opens the folder, and shows the
+  `sudo apt install` command.
+- **Development builds** (`cargo run`) never check.
 
-- It only verifies minisign (Ed25519) signatures against one public key compiled into the app. The
-  Orbit release key is RSA-3072, so the updater would need a second private key with its own
-  custody, plus a fourth trust surface next to `install.sh`, the npm postinstall and
-  `TRUSTED_RELEASE_KEYS`.
-- That key has no `not_after` or `revoked_at` record. A leaked updater key can be revoked only by
-  shipping a release signed with the leaked key.
-- It updates the `.app` and AppImage only. `.deb` installs stay manual.
-- It reads a `latest.json` that the release would have to publish. Any release without desktop
-  assets, such as one made before `ORBIT_DESKTOP_RELEASE` is set, breaks the update check.
+The app restarts only after it has quit, so the old and new copies never run side by side.
+`ORBIT_RELEASE_TRUSTED_KEYS_FILE` has no effect here. An app started from the Dock or a launcher
+doesn't see your shell environment, so the compiled-in trust set is the only one.
 
-Add auto-update as its own change once the signed bundles are in use. Either adopt the updater and
-add its key to the rotation runbook in [docs/runbooks/release.md](../docs/runbooks/release.md),
-or have the app check `orbit-desktop-checksums.txt.sig` against the existing release trust set.
+Rotating the release key rotates this copy too: it is the fourth trust set in
+[docs/runbooks/release.md](../docs/runbooks/release.md#release-signing-key-rotation-and-revocation),
+and `scripts/check-installer-pubkey.sh` fails CI when it drifts. An app older than the release that
+first ships a successor key reports that key's first update as rejected. Update it by hand once.
+
+[`tauri-plugin-updater`](https://v2.tauri.app/plugin/updater/) isn't used. It verifies only
+minisign signatures against a single compiled-in key, which would mean a second private key with no
+expiry or revocation record. It would also need a `latest.json` that breaks whenever the newest
+release has no desktop assets.
 
 ## Not done yet
 
-- Auto-update (see above) and a Homebrew cask.
+- A Homebrew cask.
 - A monochrome template icon for the macOS menu bar; the tray uses the app icon.
 - Clicking a notification doesn't open the run or task; desktop notifications have no click action.

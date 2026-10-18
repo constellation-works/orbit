@@ -2,7 +2,7 @@
 //!
 //! The window first shows a local status page, starts `orbit web serve` from
 //! the user's install (see [`sidecar`]), then loads the dashboard from its
-//! loopback address. Loading the served page directly keeps every API call
+//! loopback address, following it if the server re-announces. Loading the served page directly keeps every API call
 //! same-origin, so the dashboard's Host/Origin checks apply unchanged, and
 //! host switching works exactly as in the browser.
 //!
@@ -11,23 +11,49 @@
 //! and the running dashboard. Other links open in the default browser.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
-mod sidecar;
 mod tray;
+mod update;
 mod watch;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use orbit_desktop::sidecar::{self, Shell, Sidecar};
 use serde_json::Value;
 use tauri::webview::{NewWindowResponse, PageLoadEvent};
-use tauri::{Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, RunEvent, State, Url, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_opener::OpenerExt;
 
-use crate::sidecar::Sidecar;
-
 /// Label of the one dashboard window.
 pub(crate) const MAIN_WINDOW: &str = "main";
+
+/// The supervisor's view of the app: its one window and its log directory.
+struct Window(AppHandle);
+
+impl Shell for Window {
+    fn navigate(&self, url: Url) {
+        if let Some(window) = self.0.get_webview_window(MAIN_WINDOW) {
+            let _ = window.navigate(url);
+        }
+    }
+
+    fn eval(&self, script: &str) {
+        if let Some(window) = self.0.get_webview_window(MAIN_WINDOW) {
+            let _ = window.eval(script);
+        }
+    }
+
+    fn log_path(&self) -> Option<PathBuf> {
+        self.0
+            .path()
+            .app_log_dir()
+            .ok()
+            .map(|dir| dir.join("dashboard-server.log"))
+    }
+}
 
 /// The current startup status, for the status page.
 #[tauri::command]
@@ -53,6 +79,8 @@ fn main() {
     }));
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // Only the update thread uses it, from Rust; no page is granted it.
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         // Its commands are not granted to any page; the tray toggles it.
         .plugin(tauri_plugin_autostart::init(
@@ -100,7 +128,12 @@ fn main() {
                 })
                 .build()?;
             exit_on_signal(handle.clone())?;
-            let tray = tray::build(&handle, Arc::clone(&sidecar))?;
+            let (updates, update_requests) = update::channel();
+            let (tray, update_item) = tray::build(&handle, Arc::clone(&sidecar), updates)?;
+            let updater = handle.clone();
+            std::thread::Builder::new()
+                .name("updates".into())
+                .spawn(move || update::run(updater, update_item, update_requests))?;
             let watched = Arc::clone(&sidecar);
             let watcher = handle.clone();
             std::thread::Builder::new()
@@ -109,7 +142,7 @@ fn main() {
             let supervised = Arc::clone(&sidecar);
             std::thread::Builder::new()
                 .name("dashboard-server".into())
-                .spawn(move || sidecar::supervise(handle, supervised, control))?;
+                .spawn(move || sidecar::supervise(Window(handle), supervised, control))?;
             Ok(())
         })
         .build(tauri::generate_context!());
@@ -132,7 +165,7 @@ fn main() {
 }
 
 /// Hand a link the window will not load to the default browser.
-fn open_external(app: &tauri::AppHandle, url: &tauri::Url) {
+fn open_external(app: &AppHandle, url: &Url) {
     if matches!(url.scheme(), "http" | "https" | "mailto") {
         let _ = app.opener().open_url(url.as_str(), None::<&str>);
     }
@@ -141,7 +174,7 @@ fn open_external(app: &tauri::AppHandle, url: &tauri::Url) {
 /// Turn SIGTERM, SIGINT and SIGHUP into a normal exit, so the exit handler
 /// stops the dashboard server instead of leaving it running.
 #[cfg(unix)]
-fn exit_on_signal(app: tauri::AppHandle) -> std::io::Result<()> {
+fn exit_on_signal(app: AppHandle) -> std::io::Result<()> {
     use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
     let mut signals = signal_hook::iterator::Signals::new([SIGTERM, SIGINT, SIGHUP])?;
     std::thread::Builder::new()
@@ -155,6 +188,6 @@ fn exit_on_signal(app: tauri::AppHandle) -> std::io::Result<()> {
 }
 
 #[cfg(not(unix))]
-fn exit_on_signal(_app: tauri::AppHandle) -> std::io::Result<()> {
+fn exit_on_signal(_app: AppHandle) -> std::io::Result<()> {
     Ok(())
 }
