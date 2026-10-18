@@ -7,14 +7,15 @@
 //! plus reaped-children CPU, so short-lived descendants count through the
 //! parent that waited for them. The last observed total of a process that
 //! exited is owed by the member that will reap it, so a sampled child is not
-//! counted again when reaped; one reparented away owes nothing. A debt that
-//! the owner's next sighting does not settle lapses, so a descendant reaped
+//! counted again when reaped; one reparented away owes nothing, but keeps its
+//! last CPU total so adopting it after a missed snapshot charges only growth.
+//! A debt the owner's next sighting does not settle lapses, so a descendant reaped
 //! outside the tree hides at most one window of the owner's reaped growth. The first
 //! successful read is a baseline and charges nothing. An unreadable tree
 //! leaves that baseline where it was, so the next success still has a
 //! previous sample to diff.
 //!
-//! The tree a worker samples is a [`SessionTree`]: the worker leads its own
+//! The tree a worker samples is a `SessionTree`: the worker leads its own
 //! session, so a descendant orphaned to launchd is still walked, and so is
 //! one in a session a member started.
 

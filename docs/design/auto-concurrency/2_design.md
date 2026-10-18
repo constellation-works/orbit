@@ -203,8 +203,11 @@ class in `worker/delivery_class.rs`, the host reads in
   reap that lands samples later (the walk reads a parent before its
   children) is still matched. If it is alive under the same parent, the walk
   missed it and it stays tracked. If it is alive under another parent, it
-  was reparented away: what it ran in the tree stays charged and it owes
-  nothing; if the sample adopted it as an orphan, it stays tracked. An exited process nobody has waited for stays listed and
+  was reparented away: its last CPU total stays tracked without a parent or
+  debt. If a later sample adopts it as an orphan after a missed snapshot,
+  only growth since that total is charged, so its lifetime is not charged
+  twice. No CPU is charged while it is absent from the snapshots. An exited
+  process nobody has waited for stays listed and
   readable as a zombie, so one that left the walk was reaped before the walk
   reached it, and a reap by its owner shows in the owner's reaped total in
   that sample or at the owner's next sighting. A debt settles only at those

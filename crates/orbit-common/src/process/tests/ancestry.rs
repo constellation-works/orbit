@@ -241,6 +241,67 @@ fn contains_pid(processes: &[ProcessTreeProcess], pid: u32) -> bool {
     processes.iter().any(|process| process.key.pid == pid)
 }
 
+/// A child reparented between its listing and measurement must not lose its
+/// accounting identity for one sample and charge its lifetime a second time.
+#[test]
+fn session_cpu_counts_a_child_once_when_orphaned_during_a_walk() {
+    use ancestry::{ProcessStartKey, TreeCpuAccount};
+
+    let root = ProcessTreeProcess {
+        key: ProcessStartKey {
+            pid: 10,
+            starttime: 10,
+        },
+        parent: None,
+        cpu_time_ns: 0,
+        reaped_cpu_time_ns: 0,
+        phys_footprint: 0,
+    };
+    let child = ProcessTreeProcess {
+        key: ProcessStartKey {
+            pid: 20,
+            starttime: 20,
+        },
+        parent: Some(root.key),
+        cpu_time_ns: 10,
+        ..root
+    };
+    let mut account = TreeCpuAccount::new();
+    account.observe(&[root], |_| None);
+    account.observe(&[root, child], |_| None);
+    // The child was queued under its old parent, then rejected because it
+    // was reparented to launchd. It can miss the orphan scan too, but the
+    // public identity probe still finds this same process alive.
+    account.observe(&[root], |pid| {
+        assert_eq!(pid, child.key.pid);
+        Some((child.key, 1))
+    });
+    account.observe(&[root], |_| Some((child.key, 1)));
+    assert_eq!(account.cumulative_ns(), 10, "an absent orphan adds no CPU");
+    let orphan = ProcessTreeProcess {
+        parent: None,
+        cpu_time_ns: 20,
+        ..child
+    };
+    account.observe(&[root, orphan], |_| None);
+    assert_eq!(
+        account.cumulative_ns(),
+        20,
+        "reparenting during a snapshot must not charge an orphan's previously observed CPU twice"
+    );
+    account.observe(&[root], |_| Some((child.key, 1)));
+    let root = ProcessTreeProcess {
+        reaped_cpu_time_ns: 5,
+        ..root
+    };
+    account.observe(&[root], |_| None);
+    assert_eq!(
+        account.cumulative_ns(),
+        25,
+        "an orphan reaped outside the tree must not hide the root's unrelated reaped CPU"
+    );
+}
+
 struct DirectRusage {
     phys_footprint: u64,
     resident_size: u64,

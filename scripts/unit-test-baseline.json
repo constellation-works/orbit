@@ -84,6 +84,7 @@
         "process/tests/ancestry.rs::an_orphan_stays_in_the_session_tree_its_shell_led",
         "process/tests/ancestry.rs::native_cpu_time_agrees_with_getrusage",
         "process/tests/ancestry.rs::native_tree_cpu_counts_reaped_descendants_once",
+        "process/tests/ancestry.rs::session_cpu_counts_a_child_once_when_orphaned_during_a_walk",
         "process/tests/ancestry.rs::tree_walk_omits_reused_pids_and_reparented_children",
         "process/tests/bounded.rs::argv_probe_recovers_when_a_live_child_outgrows_the_queried_buffer",
         "process/tests/bounded.rs::blocked_child_leak_check_fails_while_the_writer_lives_and_cleanup_kills_only_that_pid",

@@ -127,7 +127,7 @@ fn darwin_start_and_parent(pid: u32) -> Option<(u64, u32)> {
 pub struct ProcessTreeProcess {
     pub key: ProcessStartKey,
     /// The tree member that listed this process as its child; `None` for the
-    /// root and for an orphan [`SessionTree`] adopted from launchd.
+    /// root and for an orphan `SessionTree` adopted from launchd.
     pub parent: Option<ProcessStartKey>,
     /// Own user plus system CPU time, in nanoseconds.
     pub cpu_time_ns: u64,
@@ -166,11 +166,11 @@ pub struct ProcessTreeProcess {
 ///   a later snapshot.
 /// - Alive under the same parent: the walk missed it. It stays tracked, so
 ///   it is neither charged again nor written off.
-/// - Alive under another parent: it was reparented away. What it ran here
-///   stays charged, and nothing in the tree will reap it, so it creates no
-///   debt. Debt it was owed is dropped with it. A snapshot that adopts the
-///   orphan again ([`SessionTree`]) keeps it tracked instead, with no parent,
-///   and goes on charging its growth.
+/// - Alive under another parent: it was reparented away. Its last CPU total
+///   stays tracked without a parent or debt, so its exit creates no debt.
+///   If a later snapshot adopts it again (`SessionTree`), only growth since
+///   that last total is charged, not its already charged lifetime. No usage
+///   is charged while it is absent from the snapshots.
 ///
 /// An exited process that has not been waited for stays listed and readable
 /// as a zombie, so one that left the walk had already been reaped before
@@ -251,9 +251,23 @@ impl TreeCpuAccount {
             };
             match locate(key.pid) {
                 Some((now, ppid)) if now == key => {
-                    if tracked.parent.is_some_and(|parent| parent.pid == ppid) {
-                        next.insert(key, tracked);
-                    }
+                    let still_under_parent =
+                        tracked.parent.is_some_and(|parent| parent.pid == ppid);
+                    next.insert(
+                        key,
+                        if still_under_parent {
+                            tracked
+                        } else {
+                            // A reparented child can miss the snapshot's orphan
+                            // scan and reappear later. Preserve its charged CPU
+                            // baseline, but no tree member can reap it anymore.
+                            Tracked {
+                                parent: None,
+                                owed_ns: 0,
+                                ..tracked
+                            }
+                        },
+                    );
                 }
                 _ => {
                     exited.insert(key, tracked);
