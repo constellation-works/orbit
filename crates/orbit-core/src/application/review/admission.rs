@@ -6,9 +6,10 @@
 //! parent's snapshot exactly; every other delivery run resolves from
 //! workspace configuration at that moment, strengthened by the run's
 //! `--review` request, if any [ORB-16572]. The request can only add the layer
-//! workspace policy does not apply: the same layer is a no-op and the other
-//! layer is refused. Ordinary input naming the reserved key is refused, and a
-//! resume carries its persisted input forward unchanged.
+//! workspace policy does not apply: a matching layer keeps its policy
+//! provenance but still requires a reviewer crew, and the other layer is
+//! refused. Ordinary input naming the reserved key is refused, and a resume
+//! carries its persisted input forward unchanged.
 //! `review.before_pr` or `review.before_landing` on `task_local_pipeline` is
 //! local-only final delivery with no PR, and is refused outright. After-landing review is the `delivery-code-review`
 //! auto-task, not an admission value, so it never reaches a snapshot.
@@ -225,8 +226,9 @@ pub(crate) fn admit_review_request(
 
 /// The admission a run without a parent captures: workspace policy, with the
 /// run's `--review` request added when policy applies no layer before
-/// landing [ORB-16572]. The request never removes or swaps a layer, and it
-/// needs the same `operation.review_crew` a configured layer does.
+/// landing [ORB-16572]. The request never removes or swaps a layer. A matching
+/// layer keeps policy provenance, and both matching and added layers need
+/// the same `operation.review_crew` a configured layer does.
 pub(crate) fn resolve(
     runtime: &OrbitRuntime,
     request: Option<ReviewLayer>,
@@ -236,6 +238,7 @@ pub(crate) fn resolve(
         return Ok(admission);
     };
     if admission.timing == layer.timing() {
+        require_reviewer_crew(&admission, layer, Some(&admission.timing_source))?;
         return Ok(admission);
     }
     if let Some(applied) = ReviewLayer::from_timing(admission.timing) {
@@ -250,17 +253,37 @@ pub(crate) fn resolve(
             applied.as_str(),
         )));
     }
-    if admission.crew.is_none() && admission.crew_pool.is_empty() {
-        return Err(OrbitError::InvalidInput(format!(
+    require_reviewer_crew(&admission, layer, None)?;
+    admission.timing = layer.timing();
+    admission.timing_source = REVIEW_RUN_OPTION_SOURCE.to_string();
+    Ok(admission)
+}
+
+/// Refuse a requested layer when neither a reviewer crew nor a reviewer pool
+/// is configured. When workspace policy already applies the layer, name that
+/// policy source and do not suggest removing `--review`.
+fn require_reviewer_crew(
+    admission: &ReviewAdmission,
+    layer: ReviewLayer,
+    applied_source: Option<&str>,
+) -> Result<(), OrbitError> {
+    if admission.crew.is_some() || !admission.crew_pool.is_empty() {
+        return Ok(());
+    }
+    let message = match applied_source {
+        Some(source) => format!(
+            "{} ({source}) requires a reviewer crew, but operation.review_crew is unset; \
+             configure operation.review_crew (automatic review never inherits the implementer's crew)",
+            layer.config_key()
+        ),
+        None => format!(
             "--review {} needs a reviewer crew, but operation.review_crew is unset; configure \
              operation.review_crew (automatic review never inherits the implementer's crew) or \
              submit without --review",
             layer.as_str()
-        )));
-    }
-    admission.timing = layer.timing();
-    admission.timing_source = REVIEW_RUN_OPTION_SOURCE.to_string();
-    Ok(admission)
+        ),
+    };
+    Err(OrbitError::InvalidInput(message))
 }
 
 /// Build the snapshot from the workspace's resolved review settings, keeping
