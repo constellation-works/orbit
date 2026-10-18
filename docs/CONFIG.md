@@ -1408,7 +1408,7 @@ The remaining keys, grouped as `orbit config show` groups them.
 
 ### `[review]` and `[operation]` — automatic review
 
-Both tables resolve built-in → global → workspace, and an unknown key in either fails load. Design: [review gate](design/review-gate/2_design.md); operations: [review-gate runbook](runbooks/review-gate.md).
+Both tables resolve built-in → global → workspace. Unknown keys warn and are ignored; known values still validate at load. Design: [review gate](design/review-gate/2_design.md); operations: [review-gate runbook](runbooks/review-gate.md).
 
 | Key | Default | What it does |
 |---|---|---|
@@ -1555,8 +1555,12 @@ Config is parsed at startup, and invalid entries fail loud. Common errors:
 | `invalid type: string "…", expected a boolean` for `enabled` | Write `enabled = true` or `enabled = false`, unquoted. |
 | `config schema no longer supports [agent.<role>] tables` | Migrate to `[crews.<name>]`. |
 | `execution.codex.sandbox has invalid value '<x>'` | Use `read-only`, `workspace-write` or `danger-full-access`. |
-| `[operation] has unknown key '<x>'`, `[review] has unknown key '<x>'`, `operation.review_policy has invalid value '<x>'` | The review keys are a closed set. |
+| `operation.review_policy has invalid value '<x>'` | Use a supported legacy value or migrate to `[review]`. |
 | `[task] artifact_store is no longer supported` | Remove the key. |
+
+**Unknown keys and tables warn and are ignored.** Loading names the file and unknown path, suggests a nearby known key when available, and warns once per process for each file and path. An unknown table is reported once as a whole, including when empty; known section headers such as `[runtime]` stay quiet. This includes unknown `[operation]` and `[review]` fields; known values still undergo validation. Plugin-owned settings (`[plugins.<ns>]`), workspace plugin toggles and registered table-valued settings retain their own validation.
+
+`orbit doctor` lists unknown paths alongside retired keys. `orbit doctor --fix-retired-config-keys` backs up each affected file, then removes unknown keys or whole unknown tables as well as compatibility keys. Check the list before repairing a file shared with a newer binary: a setting unknown to this version may belong to that newer version. Known settings, plugin sections and unrelated comments are preserved.
 
 **Retired keys warn and are ignored.** Delete them; `orbit config get`/`set` reject them with migration notes. `orbit doctor` lists each one with the file that still sets it, and `orbit doctor --fix-retired-config-keys` backs up that file and removes those keys, preserving translated review settings as described below.
 

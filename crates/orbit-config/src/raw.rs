@@ -12,7 +12,8 @@ use std::collections::BTreeMap;
 pub(crate) struct RawRuntimeConfig {
     // Deliberately no `deny_unknown_fields`: config.toml is also home to
     // forward-compatible extension tables. Runtime admission reads only its
-    // owned keys, while explicit migration guards below reject retired
+    // owned keys; crate::unknown diagnoses unrecognised paths without failing.
+    // Explicit migration guards below reject retired
     // runtime keys whose continued acceptance would be unsafe or misleading.
     pub(crate) task: Option<RawTaskSection>,
     pub(crate) knowledge: Option<RawKnowledgeConfig>,

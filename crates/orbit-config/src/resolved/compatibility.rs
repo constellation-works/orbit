@@ -120,6 +120,7 @@ impl CompatibilityKeys {
 }
 
 pub(crate) fn warn_compatibility_keys(document: &toml::Value, config_path: &Path) {
+    crate::unknown::warn_unknown_keys(document, config_path);
     CompatibilityKeys {
         deprecated_task_id_pattern: value_at_path(document, "knowledge.task_id_pattern").is_some(),
         retired_duel: value_at_path(document, "duel").is_some(),

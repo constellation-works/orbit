@@ -61,7 +61,7 @@ pub struct DoctorCommand {
     #[arg(long)]
     pub fix_automation_pins: bool,
 
-    /// Back up config.toml and remove retired or deprecated keys, preserving translated review settings. Refuses legacy after-landing policies until manually migrated.
+    /// Back up config.toml and remove retired, deprecated or unknown keys, preserving translated review settings. Refuses legacy after-landing policies until manually migrated.
     #[arg(long)]
     pub fix_retired_config_keys: bool,
 
@@ -518,7 +518,7 @@ fn orphan_task_store_removal_message(removed: &OrphanTaskStoreRemoval) -> String
 /// written beside each edited file. An empty repair changed nothing.
 fn retired_config_key_repair_message(repair: &RetiredConfigKeyRepair) -> String {
     if repair.removed.is_empty() {
-        return "No retired or deprecated config keys were present.".to_string();
+        return "No retired, deprecated or unknown config keys were present.".to_string();
     }
     let mut groups: Vec<(String, String, Vec<&str>)> = Vec::new();
     for entry in &repair.removed {
@@ -539,7 +539,7 @@ fn retired_config_key_repair_message(repair: &RetiredConfigKeyRepair) -> String 
         .join("; ");
     let count = repair.removed.len();
     format!(
-        "Removed {count} retired or deprecated config key{}: {detail}.",
+        "Removed {count} retired, deprecated or unknown config key{}: {detail}.",
         if count == 1 { "" } else { "s" }
     )
 }
