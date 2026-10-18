@@ -20,18 +20,19 @@ fn status_changes_respect_local_run_ownership_and_explicit_force() {
     let fixture = Fixture::new();
     let shown = fixture.json(&["workspace", "show", "--format", "json"]);
     assert_eq!(shown["registered"], true);
+    // macOS temp dirs live under /var, a symlink to /private/var: compare
+    // canonical paths so the assertions hold for either spelling.
+    let canonical = |path: &str| Path::new(path).canonicalize().unwrap();
     assert_eq!(
-        Path::new(shown["checkout"]["repo_root"].as_str().unwrap()),
+        canonical(shown["checkout"]["repo_root"].as_str().unwrap()),
         fixture.repo.canonicalize().unwrap()
     );
     assert_eq!(
-        Path::new(shown["checkout"]["orbit_dir"].as_str().unwrap()),
-        Path::new(shown["orbit_root"].as_str().unwrap())
-            .canonicalize()
-            .unwrap()
+        canonical(shown["checkout"]["orbit_dir"].as_str().unwrap()),
+        canonical(shown["orbit_root"].as_str().unwrap())
     );
     assert!(
-        Path::new(shown["orbit_root"].as_str().unwrap())
+        canonical(shown["orbit_root"].as_str().unwrap())
             .starts_with(fixture._temp.path().canonicalize().unwrap())
     );
     let runtime = OrbitRuntime::from_roots(
