@@ -99,6 +99,34 @@ pub(super) fn announce_worker_exit() {
     changed.notify_all();
 }
 
+#[cfg(feature = "test-support")]
+static OBSERVED_WORKER_EXITS: Mutex<Vec<(PathBuf, String, u32)>> = Mutex::new(Vec::new());
+
+/// Record that the startup observer for `run_id` finished all of its
+/// post-reap work (test support only; production builds keep no record).
+#[cfg(feature = "test-support")]
+pub(super) fn record_worker_exit(workspace: &Path, run_id: &str, worker_pid: u32) {
+    OBSERVED_WORKER_EXITS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push((workspace.to_path_buf(), run_id.to_string(), worker_pid));
+}
+
+/// Whether this workspace's startup observer for `run_id` and `worker_pid`
+/// has finished all of its post-reap work in this process. Run IDs are
+/// workspace-local, and two observers of the same run can own different
+/// workers. Only recorded under `test-support`.
+#[cfg(feature = "test-support")]
+pub fn pipeline_worker_observer_completed(workspace: &Path, run_id: &str, worker_pid: u32) -> bool {
+    OBSERVED_WORKER_EXITS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .any(|(observed_workspace, observed_run, observed_pid)| {
+            observed_workspace == workspace && observed_run == run_id && *observed_pid == worker_pid
+        })
+}
+
 /// Sleep for up to `duration` while the count still equals `exits_seen`.
 /// Spurious condvar wakeups resume the sleep; only a count change or the
 /// timeout ends it, so a missed wake costs at most the poll interval.

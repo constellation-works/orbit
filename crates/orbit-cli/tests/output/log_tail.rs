@@ -411,15 +411,20 @@ fn tail_merges_agent_history_and_follows_both_feeds() {
     .unwrap();
     let follower = Follower::start(&fixture, &path, true);
     follower.expect_record("agent-history", true);
+    // Live follow polls one feed, then the other, with no merged ordering
+    // across feeds. Appending to both before observing either lets the
+    // follower's poll land between the appends and emit them in either
+    // order. Observe each record before appending the next, so the
+    // sequence the follower can emit is the sequence asserted here.
     append(
         &path,
         format!("{}\n", event("operational-live", "WARN", "orbit.test")).as_bytes(),
     );
+    follower.expect_record("operational-live", true);
     append(
         &agent,
         format!("{}\n", event("agent-live", "WARN", "orbit.test")).as_bytes(),
     );
-    follower.expect_record("operational-live", true);
     follower.expect_record("agent-live", true);
     fs::rename(&agent, fixture.work.join("orbit-agent.jsonl.old")).unwrap();
     fs::write(
