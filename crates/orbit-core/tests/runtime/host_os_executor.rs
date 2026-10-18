@@ -802,9 +802,118 @@ fn init_seeds_host_os_and_preserves_operator_constraints() {
     );
 }
 
+/// The only medium crew is macOS-only, so the draw is deterministic.
+const MUSE_ONLY_POOL: &str = r#"
+[workflow]
+default_crew = "sol"
+medium_complexity_crews = ["muse-wonder"]
+
+[crews.sol]
+model = "gpt-6.1-sol"
+provider = "codex"
+
+[crews.muse-wonder]
+model = "muse-spark-1.3"
+provider = "muse"
+"#;
+
+/// Medium draws sol here; hard's only crew is macOS-only.
+const RERATE_POOL: &str = r#"
+[workflow]
+default_crew = "sol"
+medium_complexity_crews = ["sol"]
+hard_complexity_crews = ["muse-wonder"]
+
+[crews.sol]
+model = "gpt-6.1-sol"
+provider = "codex"
+
+[crews.muse-wonder]
+model = "muse-spark-1.3"
+provider = "muse"
+"#;
+
+/// A Linux owner with a registered macOS pull follower serving it can draw
+/// the macOS-only crew at creation and on a complexity re-rate, with pool
+/// provenance. The drawn task then waits on the Linux owner — excluded,
+/// never redrawn — and a macOS host admits it. Without a macOS follower the
+/// same pools fall back exactly as before, and an explicit crew is kept.
+fn a_linux_owner_with_a_macos_follower_draws_the_macos_only_crew() {
+    let (_root, linux) = runtime_on(HostOs::Linux, MUSE_ONLY_POOL);
+    let owner = linux.clone().with_serving_host_oses([HostOs::Macos]);
+    let drawn = add(&owner, "serving-drawn", None, &[]).expect("pool draw");
+    assert_eq!(
+        drawn.crew.as_deref(),
+        Some("muse-wonder"),
+        "a macOS follower serves the workspace, so the draw may pick muse-wonder"
+    );
+    assert_eq!(
+        drawn.crew_source.as_deref(),
+        Some("pool:medium"),
+        "the draw records pool provenance"
+    );
+
+    // The Linux owner itself does not admit it and does not redraw it.
+    let discovered = backlog(&owner);
+    assert!(admitted(&discovered).is_empty(), "{discovered}");
+    let skipped = excluded(&discovered, &drawn.id).expect("drawn task waits");
+    assert_eq!(skipped["reason"], "host_os_mismatch", "{discovered}");
+    assert_eq!(skipped["detail"], WAIT, "{discovered}");
+    assert_eq!(
+        owner.get_task(&drawn.id).unwrap().crew.as_deref(),
+        Some("muse-wonder"),
+        "the pool-drawn muse crew is not redrawn on the Linux owner"
+    );
+
+    // A macOS host admits the same task.
+    let mac = linux.clone().with_host_os(Some(HostOs::Macos));
+    assert_eq!(admitted(&backlog(&mac)), vec![drawn.id.clone()]);
+
+    // No macOS follower: the macOS-only pool is skipped and the default
+    // chain answers, as before. An explicit crew is unaffected either way.
+    let fallback = add(&linux, "no-follower", None, &[]).expect("fallback draw");
+    assert_eq!(fallback.crew.as_deref(), Some("sol"));
+    let explicit = add(&linux, "explicit-muse", Some("muse-wonder"), &[]).expect("explicit");
+    assert_eq!(explicit.crew.as_deref(), Some("muse-wonder"));
+
+    // A complexity re-rate on the serving owner redraws into the hard pool's
+    // macOS-only crew; without a follower it falls back to the default.
+    let (_root2, rerate_linux) = runtime_on(HostOs::Linux, RERATE_POOL);
+    let rerate_owner = rerate_linux.clone().with_serving_host_oses([HostOs::Macos]);
+    let task = add(&rerate_owner, "rerated", None, &[]).expect("medium draw");
+    assert_eq!(task.crew.as_deref(), Some("sol"));
+    rerate_owner
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": task.id, "complexity": "hard", "model": "codex"}),
+        )
+        .expect("complexity re-rate");
+    let rerated = rerate_owner.get_task(&task.id).unwrap();
+    assert_eq!(
+        rerated.crew.as_deref(),
+        Some("muse-wonder"),
+        "the re-rate draw counts the macOS follower as serving"
+    );
+    assert_eq!(rerated.crew_source.as_deref(), Some("pool:hard"));
+
+    let plain = add(&rerate_linux, "rerated-plain", None, &[]).expect("medium draw");
+    rerate_linux
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": plain.id, "complexity": "hard", "model": "codex"}),
+        )
+        .expect("complexity re-rate without a follower");
+    assert_eq!(
+        rerate_linux.get_task(&plain.id).unwrap().crew.as_deref(),
+        Some("sol"),
+        "without a macOS follower the re-rate falls back as before"
+    );
+}
+
 crate::scenario_table!(
     a_linux_host_waits_on_a_muse_crew_and_a_macos_host_admits_it_scenarios,
     a_linux_host_waits_on_a_muse_crew_and_a_macos_host_admits_it,
+    a_linux_owner_with_a_macos_follower_draws_the_macos_only_crew,
     an_empty_os_intersection_is_refused_on_add_and_update,
     an_excluded_default_crew_is_not_pinned,
     a_supported_explicit_run_crew_survives_discovery_and_replay,

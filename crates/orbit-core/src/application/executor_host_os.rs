@@ -57,6 +57,26 @@ impl OrbitRuntime {
         }
     }
 
+    /// Whether `crew`'s executor can run on any host serving with this one:
+    /// this host, or a registered pull follower whose OS the composition
+    /// layer declared through `with_serving_host_oses`. Creation-time draws
+    /// use this wider set so an owner can assign a crew only a follower can
+    /// run; the task then waits for that follower under the ordinary
+    /// effective-OS intersection. Admission keeps [`Self::crew_runs_on_host`].
+    pub(crate) fn crew_runs_on_serving_host(
+        &self,
+        crew: &Crew,
+        declared: &BTreeMap<String, BTreeSet<HostOs>>,
+    ) -> bool {
+        match executor_host_os(&crew.assignment.provider, declared) {
+            None => true,
+            Some(hosts) => self
+                .serving_host_oses()
+                .iter()
+                .any(|host| hosts.contains(host)),
+        }
+    }
+
     /// The OS wait for an assigned task, or for the default its automatic
     /// route actually reaches. Inspect the same candidates as the draw so a
     /// supported purpose/complexity pool can still run under an unsupported

@@ -145,6 +145,7 @@ impl OrbitRuntime {
             coordination_write_owner: None,
             automation_execution_location: None,
             host_os: orbit_types::task::HostOs::current(),
+            serving_host_oses: Default::default(),
             browser_kit_home: None,
             claim_known_red_budget: std::time::Duration::from_secs(600),
             ci_failure_time: None,
@@ -212,6 +213,7 @@ impl OrbitRuntime {
             coordination_write_owner: None,
             automation_execution_location: None,
             host_os: orbit_types::task::HostOs::current(),
+            serving_host_oses: Default::default(),
             // An in-memory runtime reads no user's browser kit: its data root
             // holds none.
             browser_kit_home: Some(data_root.to_path_buf()),

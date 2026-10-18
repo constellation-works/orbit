@@ -45,6 +45,28 @@ impl OrbitRuntime {
         self.host_os
     }
 
+    /// Declare the operating systems of the other hosts that serve
+    /// workspaces with this one: the registered pull fleet an owner's
+    /// creation-time complexity draws may assign work to. The composition
+    /// layer reads them from the host registry; a fixture composes a fleet
+    /// the same way it composes [`Self::with_host_os`]. This host's own OS
+    /// always counts as serving and need not be listed.
+    pub fn with_serving_host_oses(
+        mut self,
+        oses: impl IntoIterator<Item = orbit_types::task::HostOs>,
+    ) -> Self {
+        self.serving_host_oses = oses.into_iter().collect();
+        self
+    }
+
+    /// The operating systems that count as serving for creation-time draws:
+    /// this host's, when known, plus every registered follower OS.
+    pub fn serving_host_oses(&self) -> std::collections::BTreeSet<orbit_types::task::HostOs> {
+        let mut oses = self.serving_host_oses.clone();
+        oses.extend(self.host_os);
+        oses
+    }
+
     /// Read the browser kit admission checks `ui` tasks against from `home`
     /// rather than the current user's. A fixture composes a host with a kit,
     /// or without one, in a home it controls.

@@ -608,5 +608,22 @@ pub(super) fn attach_registry_context(
         runtime.with_automation_execution_location(location),
         global_root,
     );
+    // Creation-time crew draws on an owner count a crew as runnable when a
+    // registered host can run it, so declare the fleet's recorded operating
+    // systems. Best-effort: an unreadable host file leaves the set empty,
+    // which is exactly the single-host draw behaviour, and never fails the
+    // open. Entries registered before discovery reported an OS contribute
+    // nothing until re-added.
+    let serving = orbit_registry::hosts::load_host_registry(global_root)
+        .map(|registry| {
+            registry
+                .hosts()
+                .entries()
+                .iter()
+                .filter_map(|entry| entry.host_os)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let runtime = runtime.with_serving_host_oses(serving);
     crate::worker_coordination::attach(runtime)
 }

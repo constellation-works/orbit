@@ -33,6 +33,7 @@ pub fn local_host_facts(global_root: &Path, machine_id: &str) -> HostFacts {
         task_prefix: identity.map(|identity| identity.task_prefix),
         binary_version: Some(local_binary_version().to_string()),
         protocol_fingerprint: Some(local_protocol_fingerprint().to_string()),
+        host_os: orbit_types::task::HostOs::current(),
     }
 }
 

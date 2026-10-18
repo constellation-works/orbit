@@ -58,6 +58,13 @@ pub struct OrbitRuntime {
     /// This binary's own by default; a fixture composes another so one process
     /// can stand in for a host of each OS.
     host_os: Option<orbit_types::task::HostOs>,
+    /// Operating systems of other hosts registered to serve workspaces with
+    /// this one (the owner's pull fleet), supplied by the registry-owning
+    /// composition layer. Creation-time complexity draws count a crew as
+    /// runnable when any serving host can run it; admission and activity
+    /// draws keep checking only [`Self::host_os`]. Empty on a standalone
+    /// runtime, which then draws exactly as a single-host owner always has.
+    serving_host_oses: std::collections::BTreeSet<orbit_types::task::HostOs>,
     /// The home whose headless browser kit admission reads for `ui` tasks.
     /// `None` is the current user's, read again on every admission pass; a
     /// fixture points it at a home it controls.
