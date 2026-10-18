@@ -275,12 +275,15 @@ pub(crate) fn prerequisite_read_after_mutation_provenance_never_resumes() {
 
 /// Substitute `gh` for one completion observation. `required` starts BLOCKED so
 /// the required-checks query runs; `merge` starts CLEAN so the first provider
-/// read after status is the merge-capability query. `kind` fails that read once.
+/// read after status is the merge-capability query. Required-check failures
+/// happen once; merge-capability failures persist until a fresh PR observation
+/// so this fixture still exercises workflow recovery after retry exhaustion.
 fn observation_forge(f: &Fixture, mode: &str, kind: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let root = f._root.path();
     let calls = root.join("observation-calls");
     let lost = root.join("lost-read");
+    let resumed = root.join("resumed-read");
     let merged = root.join("merged");
     let file = |name: &str, value: Value| {
         let path = root.join(name);
@@ -317,7 +320,7 @@ fn observation_forge(f: &Fixture, mode: &str, kind: &str) -> PathBuf {
             r#"#!/bin/sh
 printf '%s\n' "$*" >> '{calls}'
 fault_read() {{
-    if [ -f '{lost}' ]; then
+    if [ -f '{lost}' ] && {{ [ '{mode}' != merge ] || [ -f '{resumed}' ]; }}; then
         return 1
     fi
     touch '{lost}'
@@ -342,6 +345,7 @@ fault_read() {{
 }}
 case "$*" in
  'pr view'*)
+    if [ -f '{lost}' ]; then touch '{resumed}'; fi
     if [ -f '{merged}' ]; then {landed}
     elif [ -f '{lost}' ] || [ '{mode}' = merge ]; then {clean}
     else {blocked}
@@ -359,6 +363,7 @@ esac
 "#,
             calls = calls.display(),
             lost = lost.display(),
+            resumed = resumed.display(),
             kind = kind,
             merged = merged.display(),
             landed = cat(&landed),
@@ -395,11 +400,19 @@ fn assert_resumed_merge(
         .position(|line| line.starts_with("pr view"))
         .unwrap_or_else(|| panic!("fresh observation after the failed read: {requests:#?}"));
     let fresh = failed + 1 + next_view;
+    assert_eq!(
+        requests[failed + 1..fresh]
+            .iter()
+            .filter(|line| line.contains(token))
+            .count(),
+        if reread { 2 } else { 0 },
+        "merge capabilities exhaust three attempts; deadline-bounded required checks resume immediately: {requests:#?}"
+    );
     assert!(
         !requests[failed + 1..fresh]
             .iter()
-            .any(|line| line.contains(token) || line.contains("/pulls/17/merge")),
-        "the failed read is not retried in-process and does not count as passing checks: {requests:#?}"
+            .any(|line| line.contains("/pulls/17/merge")),
+        "exhausted reads never count as passing checks: {requests:#?}"
     );
     let later = requests[fresh..]
         .iter()
@@ -459,7 +472,7 @@ fn assert_resumed_merge(
 }
 
 /// [ORB-16340] A REST TLS handshake timeout on the required-checks read, and an
-/// HTTP 5xx on the merge-capability read, resume only that completion.
+/// persistent HTTP 5xx on the merge-capability read, resume only that completion.
 pub(crate) fn transient_required_check_and_merge_capability_reads_resume_completion() {
     for (mode, kind, token, reread) in [
         ("required", "tls", "isRequired(pullRequestNumber", false),
