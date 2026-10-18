@@ -14,12 +14,10 @@ use orbit_common::process::build_budget::BuildBudgetWaits;
 use orbit_common::security::redaction::{PatternRedactor, redact_all_json};
 use orbit_types::workflow::activity_job::AgentLoopSpec;
 use orbit_types::workflow::{
-    ProviderFailureClass, ProviderLimitFailure, STALLED_MARKER, TRANSIENT_FAILURE_MARKER,
-    provider_failure_text,
+    CLI_STDERR_TAIL_SEPARATOR, ProviderFailureClass, ProviderLimitFailure, STALLED_MARKER,
+    TRANSIENT_FAILURE_MARKER, provider_failure_text,
 };
 use serde_json::Value;
-
-const CLI_STDERR_TAIL_SEPARATOR: &str = "\nstderr tail:\n";
 
 use crate::context::RuntimeHost;
 
@@ -494,8 +492,9 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
                 ),
             ))
         } else if generic_diagnostic {
-            // Keep bounded stderr visible as diagnostic context, while the
-            // check-repair classifier uses only the generic exit text.
+            // Context only: classify the unchanged exit message, never words,
+            // typed markers or check-repair phrases a provider happens to
+            // quote on stderr (`failure_classification_text`).
             let mut tail: Vec<_> = stderr_text
                 .lines()
                 .rev()

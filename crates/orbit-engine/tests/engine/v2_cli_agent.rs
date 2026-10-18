@@ -53,6 +53,8 @@ const CLAUDE_REVOKED_TOKEN: &str = r#"{"is_error":true,"api_error_status":401,"r
 mod build_budget;
 #[cfg(unix)]
 mod no_diff;
+#[cfg(unix)]
+mod stderr_failure;
 
 /// Provider failures are control-plane evidence; transcripts and Orbit work
 /// failures must never exclude a crew. Recorded Claude payload: ORB-13965.
@@ -198,56 +200,6 @@ fn provider_authentication_results_are_typed_without_reading_transcripts() {
             }
         }
     }
-}
-
-/// A provider quoting the watcher's check-repair marker on stderr is context,
-/// not admission: the generic failure keeps its diagnostic tail without
-/// entering automatic CI-repair routing.
-#[cfg(unix)]
-#[test]
-fn generic_stderr_quoting_a_check_repair_marker_is_not_a_check_repair() {
-    let quoted = format!(
-        "{}: pull request #123",
-        orbit_types::workflow::PR_AUTO_FIX_CHECK_REPAIR_MARKER
-    );
-    let fake = fake_cli(
-        "codex",
-        &format!("#!/bin/sh\ncat > /dev/null\ncat >&2 <<'STDERR'\n{quoted}\nSTDERR\nexit 1\n"),
-    )
-    .unwrap();
-    let host = ScriptHost::new(fake.cli_path());
-    let mut spec = cli_agent_loop_spec(Some(Provider::Codex));
-    spec.model = None;
-    let outcome = dispatch_v2_activity(V2DispatchInput {
-        activity_name: "stderr_fixture",
-        spec: &ActivityV2Spec::AgentLoop(spec),
-        fs_profile: None,
-        input: serde_json::json!({"prompt": "test"}),
-        audit: Arc::new(V2AuditWriter::new(
-            "stderr-fixture",
-            "fixture",
-            Arc::new(orbit_agent::loop_engine::audit::NullSink),
-        )),
-        run_id: "stderr-fixture",
-        host: Some(&host),
-    })
-    .unwrap();
-    assert!(!outcome.success, "a nonzero provider exit fails the step");
-    let message = outcome.message.unwrap();
-    assert_eq!(
-        message,
-        format!("step `stderr_fixture`: cli subprocess exited with code 1\nstderr tail:\n{quoted}"),
-        "the generic exit keeps its stderr tail as context"
-    );
-    assert!(
-        !orbit_types::workflow::is_pr_auto_fix_check_repair(&message),
-        "{message}"
-    );
-    let wrapped = format!("step implement_one: {message}");
-    assert!(
-        !orbit_types::workflow::is_pr_auto_fix_check_repair(&wrapped),
-        "{wrapped}"
-    );
 }
 
 /// On a host that would otherwise let `claude` start on the Claude Desktop

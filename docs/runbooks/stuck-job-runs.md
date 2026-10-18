@@ -26,6 +26,14 @@ orbit run events <run_id>           # audit events for the run
 orbit run trace  <run_id>           # parent/child event tree
 ```
 
+When a provider exits unsuccessfully without a more specific diagnostic, the step
+error is `cli subprocess exited with code N`, followed by `stderr tail:` and the
+last four non-empty stderr lines. The tail is redacted and capped at 1024
+characters (plus a truncation indicator). It is context only: typed failure
+markers or check-repair phrases quoted in it do not change failure
+classification, recovery, incident grouping or claim settlement. Use
+`orbit run logs <run_id>` for the full captured output.
+
 Before changing run state, confirm the recorded owner PID and whether that exact process
 is still alive. A long-running run is not necessarily stuck.
 
