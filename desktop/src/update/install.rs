@@ -701,9 +701,8 @@ mod mac {
         // The swap is several renames. One lock covers the move aside, the
         // publish, and putting the previous bundle back if the publish fails.
         let _lock =
-            exclusive_lock(&parent.join(".orbit-desktop-update.lock")).map_err(|error| {
+            exclusive_lock(&parent.join(".orbit-desktop-update.lock")).inspect_err(|_| {
                 let _ = std::fs::remove_dir_all(&staged);
-                error
             })?;
         std::fs::rename(bundle, &previous).map_err(|error| {
             let _ = std::fs::remove_dir_all(&staged);
@@ -765,6 +764,7 @@ mod mac {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .mode(0o600)
             .open(path)
             .map_err(|error| format!("could not lock {}: {error}", path.display()))?;
