@@ -49,6 +49,40 @@ pub(super) fn ledgers_held_by(
         .collect()
 }
 
+/// Ledgers whose lineage key ends with `/{claim_id}`. The caller still checks
+/// that the ledger's task set contains the claim's task.
+pub(super) fn ledgers_for_claim(
+    conn: &Connection,
+    workspace_id: &str,
+    claim_id: &str,
+) -> Result<Vec<ReviewLedger>, OrbitError> {
+    if claim_id.is_empty() {
+        return Ok(Vec::new());
+    }
+    let pattern = format!("%/{}", like_literal(claim_id));
+    let mut statement = conn
+        .prepare(
+            "SELECT ledger_json FROM review_lineages \
+             WHERE workspace_id=?1 AND lineage_key LIKE ?2 ESCAPE '\\'",
+        )
+        .map_err(sqlite_store_error)?;
+    let rows = statement
+        .query_map(params![workspace_id, pattern], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(sqlite_store_error)?;
+    rows.map(|raw| raw.map_err(sqlite_store_error).and_then(|raw| decode(&raw)))
+        .collect()
+}
+
+/// Escape `\`, `%` and `_` so a claim id is a literal LIKE suffix.
+fn like_literal(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
 /// Write the ledger, fencing on the revision the caller read. The holder
 /// column mirrors the run still holding an attempt, so a terminating run
 /// finds what it must release without decoding every ledger.

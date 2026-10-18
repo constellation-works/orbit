@@ -94,6 +94,27 @@ pub trait ReviewStoreBackend: Send + Sync {
         run_id: &str,
     ) -> Result<Vec<ReviewLedger>, OrbitError>;
 
+    /// Ledgers whose lineage key ends with `/{claim_id}` and whose task set
+    /// contains `task_id`. A settled attempt has no holder, so a claim cannot
+    /// be found through [`Self::review_ledgers_held_by`]. An empty `claim_id`
+    /// or `task_id` matches nothing.
+    fn review_ledgers_for_claim(
+        &self,
+        workspace_id: &str,
+        claim_id: &str,
+        task_id: &str,
+    ) -> Result<Vec<ReviewLedger>, OrbitError>;
+
+    /// Copy one claimed-leaf ledger into this workspace under its existing
+    /// lineage key. A missing row is inserted. A local row with at least as
+    /// many operator decisions is kept, so a replay cannot clobber a reset.
+    /// A row with fewer decisions is replaced, fenced on the local revision.
+    fn review_import_claimed_ledger(
+        &self,
+        workspace_id: &str,
+        ledger: &ReviewLedger,
+    ) -> Result<ReviewLedger, OrbitError>;
+
     /// Reserve a reviewer start. An open attempt for the same candidate and
     /// task meaning is resumed rather than charged again; a different
     /// candidate releases the open attempt as incomplete, charging its

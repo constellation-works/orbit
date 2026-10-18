@@ -247,6 +247,13 @@ impl PullDrain<'_> {
         record: &LocalPullAdmission,
         settlement: ClaimMutation,
     ) -> Result<LocalPullAdmission, OrbitError> {
+        let settlement = super::attach_claimed_review(
+            settlement,
+            record
+                .leaf_run_id
+                .as_deref()
+                .and_then(|run_id| (self.claimed_review)(run_id)),
+        );
         match self.update(record, LocalPullMutation::Settle(Box::new(settlement))) {
             Ok(settling) => Ok(settling),
             Err(error) => match self.reread(record)? {

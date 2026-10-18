@@ -114,6 +114,7 @@ impl PullDrain<'_> {
             peer: &fenced,
             launcher: self.launcher,
             refused_delivery: self.refused_delivery,
+            claimed_review: self.claimed_review,
         };
         let mut outcome = Reconciled::Open;
         let mut first_error = None;
@@ -163,6 +164,7 @@ impl PullDrain<'_> {
             peer: &fenced,
             launcher: self.launcher,
             refused_delivery: self.refused_delivery,
+            claimed_review: self.claimed_review,
         };
         let mut first_error = None;
         for mut record in self.jobs.unsettled_local_pull_admissions()? {
