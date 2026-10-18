@@ -682,7 +682,16 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   and its validation logs beneath `.orbit/tmp/`, returning their artifact paths
   and scratch `source_path`s as `no_diff_artifacts`. Commit imports these
   bounded files through the claim and verifies them before the leaf skips PR
-  preparation and publication.
+  preparation and publication. Required task artifacts (such as ledgers and
+  screenshots) use a separate `task_artifacts: [{path, source_path}]` output
+  on both diff and no-diff deliveries, including `no-diff-expected` tasks.
+  Sources must be regular files beneath the leaf's `.orbit/tmp/`, at most
+  1 MiB each. Commit validates the entire batch before attachment and refuses
+  missing files, scratch escapes, invalid or duplicate artifact paths, and
+  names colliding with either clean-tree report or its declared logs, naming
+  the refused path. The engine's `no-diff-handoff/<claim>.json` checkpoint
+  and `validation/<claim>/` logs are reserved too. `no_diff_artifacts` still
+  admits only the report and its logs. Owner-mode agents continue using `orbit.task.artifact.put`.
   The handoff pins that verifier report; the owner rechecks it against its live
   base and completes without a PR under the same completion authority. A moved
   base or changed report requires fresh validation; a skip flag alone is refused.

@@ -339,9 +339,9 @@ pub trait RuntimeHost: Send + Sync {
     /// must never fall back to an unauthenticated local identity.
     fn claim_execution_context(&self) -> Result<ClaimExecutionContext, OrbitError>;
 
-    /// Attach one captured validation log to the claimed task on the owner, so
-    /// the evidence the owner later re-reads lives in the owner's coordination
-    /// store rather than on the executor's disk.
+    /// Attach captured validation or required task evidence to the claimed
+    /// task on the owner, using the path's media type. The evidence the owner
+    /// later re-reads lives in its coordination store, not on the executor's disk.
     fn attach_claim_validation_log(&self, path: &str, content: Vec<u8>) -> Result<(), OrbitError>;
 
     /// Record the typed handoff as this claim's durable pending settlement.
