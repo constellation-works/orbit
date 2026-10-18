@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use orbit_config::{AutoConcurrencySettings, ConfigRoots, ProviderLimitPolicy, ResolvedConfig};
+use orbit_config::{AutoConcurrencySettings, ProviderLimitPolicy};
 
 use super::OrbitRuntime;
 
@@ -45,9 +45,8 @@ impl OrbitRuntime {
         let previous = cache
             .as_ref()
             .map_or_else(initial, |cached| cached.policy.clone());
-        let roots = ConfigRoots::new(self.global_root(), self.shared_root());
-        let stamps = match stamp(&roots.global().join("config.toml")).and_then(|global| {
-            stamp(&roots.workspace().join("config.toml")).map(|workspace| [global, workspace])
+        let stamps = match stamp(&self.global_root().join("config.toml")).and_then(|global| {
+            stamp(&self.shared_root().join("config.toml")).map(|workspace| [global, workspace])
         }) {
             Ok(stamps) => stamps,
             Err(error) => {
@@ -58,7 +57,7 @@ impl OrbitRuntime {
         if cache.as_ref().is_some_and(|cached| cached.stamps == stamps) {
             return previous;
         }
-        let policy = match ResolvedConfig::load(&roots) {
+        let policy = match (self.config_loader)() {
             Ok(config) => Arc::new(AdmissionPolicy {
                 provider_limit: config.snapshot.provider_limit_policy(),
                 auto_concurrency: config.auto_concurrency,
