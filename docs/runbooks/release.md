@@ -30,23 +30,26 @@ key whose public half matches
 workflow signs `orbit-checksums.txt` as `orbit-checksums.txt.sig`;
 `install.sh`, the npm postinstall, and `orbit update` authenticate
 that signature before trusting release-hosted SHA-256 values. The same key
-signs `orbit-desktop-checksums.txt` for the desktop app. No shipped code
-verifies that manifest; users check it by hand as
-[desktop/README.md](../../desktop/README.md#releases) describes, so it adds no
-trust set to the rotation below.
+signs `orbit-desktop-checksums.txt` for the desktop app, which the app's update
+check verifies before it offers an update
+([desktop/README.md](../../desktop/README.md#auto-update)). The app carries its
+own copy of the Rust trust set, so it is the fourth trust set in the rotation
+below.
 
 The desktop release jobs run only when the repository variable
 `ORBIT_DESKTOP_RELEASE` is `true`, and the macOS bundle needs six Apple
 signing and notarization secrets. The account steps and the secret list are in
 [desktop/README.md](../../desktop/README.md#one-time-setup).
 
-All three shipped release-signing trust sets contain only `orbit-release-key-3`,
+All four shipped release-signing trust sets contain only `orbit-release-key-3`,
 valid through `2029-12-31` and not revoked: [`install.sh`](../../install.sh),
-[`npm/scripts/install-binary.js`](../../npm/scripts/install-binary.js), and
+[`npm/scripts/install-binary.js`](../../npm/scripts/install-binary.js),
 [`orbit-common::security::release::TRUSTED_RELEASE_KEYS`](../../crates/orbit-common/src/security/release.rs)
-(used by `orbit update` and bundled Bubblewrap verification). No successor is
-pre-staged. Ship successor trust in all three surfaces before signing releases
-with that key.
+(used by `orbit update` and bundled Bubblewrap verification), and the desktop
+app's copy in [`desktop/src/update/trust.rs`](../../desktop/src/update/trust.rs).
+[`scripts/check-installer-pubkey.sh`](../../scripts/check-installer-pubkey.sh)
+fails CI when any of them disagree. No successor is pre-staged. Ship successor
+trust in all four surfaces before signing releases with that key.
 
 Key IDs are generation labels, not dates. During verification the installers
 try each known public key, then reject a matching key when its `not_after`
@@ -145,9 +148,9 @@ an empty date remains optional.
    - smoke the bundled-Bubblewrap fallback on Ubuntu 22.04;
    - when `ORBIT_DESKTOP_RELEASE` is `true`, build the signed and notarized
      universal macOS `.dmg` and the Linux `.deb` and `.AppImage` for x86_64
-     and arm64, then attach them with their signed
-     `orbit-desktop-checksums.txt`. These jobs run beside the CLI release
-     and never block it.
+     and arm64, then attach them with `orbit-desktop-version.txt` and their
+     signed `orbit-desktop-checksums.txt`. These jobs run beside the CLI
+     release and never block it.
 
    Review the result of every job, but treat CI as informational on
    `agent-main`: no job is a merge gate. Failures are queued for asynchronous
@@ -315,17 +318,21 @@ Normal rotation uses an overlap window:
 
 1. Generate the successor keypair offline, with independent private-key
    custody. Add the public half to **every** trust set in `install.sh`,
-   [`npm/scripts/install-binary.js`](../../npm/scripts/install-binary.js)
-   and [`orbit-common::security::release::TRUSTED_RELEASE_KEYS`](../../crates/orbit-common/src/security/release.rs)
+   [`npm/scripts/install-binary.js`](../../npm/scripts/install-binary.js),
+   [`orbit-common::security::release::TRUSTED_RELEASE_KEYS`](../../crates/orbit-common/src/security/release.rs)
+   and [`desktop/src/update/trust.rs`](../../desktop/src/update/trust.rs)
    with the same new key ID and expiry (`not_after` / npm `notAfter`).
 2. Publish a release and npm package still signed by the old key that ship
-   both old and successor trust in the shell installer, npm installer, and
-   native binary. Verify all three trust sets before switching the signer.
+   both old and successor trust in the shell installer, npm installer,
+   native binary and desktop app, with `ORBIT_DESKTOP_RELEASE` on so the
+   desktop app updates to the new trust. Verify all four trust sets before
+   switching the signer. A desktop app older than this release reports the
+   first successor-signed update as rejected, and must be updated by hand.
 3. Update `ORBIT_RELEASE_SIGNING_KEY_PEM` and
    [`npm/release-signing.pub`](../../npm/release-signing.pub), then cut the
    first release signed by the successor.
 4. After the overlap window, remove the old key or mark its revocation date
-   (`revoked_at` / npm `revokedAt`) in all three trust sets.
+   (`revoked_at` / npm `revokedAt`) in all four trust sets.
 
 Emergency revocation only protects users who upgrade: already-published npm
 packages retain their embedded trust sets. Publish a patch signed by a

@@ -11,8 +11,10 @@
 //! and the running dashboard. Other links open in the default browser.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
 mod tray;
+mod update;
 mod watch;
 
 use std::path::PathBuf;
@@ -77,6 +79,8 @@ fn main() {
     }));
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // Only the update thread uses it, from Rust; no page is granted it.
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         // Its commands are not granted to any page; the tray toggles it.
         .plugin(tauri_plugin_autostart::init(
@@ -124,7 +128,12 @@ fn main() {
                 })
                 .build()?;
             exit_on_signal(handle.clone())?;
-            let tray = tray::build(&handle, Arc::clone(&sidecar))?;
+            let (updates, update_requests) = update::channel();
+            let (tray, update_item) = tray::build(&handle, Arc::clone(&sidecar), updates)?;
+            let updater = handle.clone();
+            std::thread::Builder::new()
+                .name("updates".into())
+                .spawn(move || update::run(updater, update_item, update_requests))?;
             let watched = Arc::clone(&sidecar);
             let watcher = handle.clone();
             std::thread::Builder::new()

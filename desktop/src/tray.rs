@@ -3,7 +3,7 @@
 //! It shows how many drains are running and how many runs failed in the last
 //! day, as [`crate::watch`] last read them from the app's dashboard server,
 //! and holds the app's global actions: open the window, restart the server,
-//! launch at login and quit.
+//! check for or install an update, launch at login and quit.
 
 use std::sync::Arc;
 
@@ -14,9 +14,11 @@ use tauri_plugin_autostart::ManagerExt;
 
 use crate::MAIN_WINDOW;
 use crate::sidecar::Sidecar;
+use crate::update::{self, Requests};
 
 const OPEN: &str = "open";
 const RESTART: &str = "restart";
+const UPDATE: &str = "update";
 const LOGIN: &str = "launch-at-login";
 const QUIT: &str = "quit";
 
@@ -86,10 +88,17 @@ impl Tray {
     }
 }
 
-pub(crate) fn build(app: &AppHandle, sidecar: Arc<Sidecar>) -> tauri::Result<Tray> {
+/// Build the tray. The returned item is the update entry, which the update
+/// thread relabels.
+pub(crate) fn build(
+    app: &AppHandle,
+    sidecar: Arc<Sidecar>,
+    updates: Requests,
+) -> tauri::Result<(Tray, MenuItem<Wry>)> {
     let status = MenuItem::with_id(app, "status", Summary::Offline.line(), false, None::<&str>)?;
     let open = MenuItem::with_id(app, OPEN, "Open Orbit", true, None::<&str>)?;
     let restart = MenuItem::with_id(app, RESTART, "Restart Dashboard Server", true, None::<&str>)?;
+    let update = MenuItem::with_id(app, UPDATE, update::CHECK_LABEL, true, None::<&str>)?;
     let login = CheckMenuItem::with_id(
         app,
         LOGIN,
@@ -107,6 +116,7 @@ pub(crate) fn build(app: &AppHandle, sidecar: Arc<Sidecar>) -> tauri::Result<Tra
             &open,
             &restart,
             &PredefinedMenuItem::separator(app)?,
+            &update,
             &login,
             &PredefinedMenuItem::separator(app)?,
             &quit,
@@ -118,6 +128,7 @@ pub(crate) fn build(app: &AppHandle, sidecar: Arc<Sidecar>) -> tauri::Result<Tra
         .on_menu_event(move |app, event| match event.id().as_ref() {
             OPEN => show_window(app),
             RESTART => sidecar.restart(),
+            UPDATE => updates.activate(),
             LOGIN => toggle_launch_at_login(app, &login),
             QUIT => app.exit(0),
             _ => {}
@@ -126,7 +137,7 @@ pub(crate) fn build(app: &AppHandle, sidecar: Arc<Sidecar>) -> tauri::Result<Tra
         builder = builder.icon(icon.clone());
     }
     let icon = builder.build(app)?;
-    Ok(Tray { icon, status })
+    Ok((Tray { icon, status }, update))
 }
 
 /// Show, restore and focus the dashboard window.

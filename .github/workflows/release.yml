@@ -500,6 +500,10 @@ jobs:
               exit 1
             }
           done
+          # Asset names carry no version. The app's update check reads this
+          # signed file to tie the bundles to this tag (desktop/README.md#auto-update).
+          printf '%s\n' "${GITHUB_REF_NAME#v}" > orbit-desktop-version.txt
+          expected_assets+=(orbit-desktop-version.txt)
           sha256sum "${expected_assets[@]}" | sort -k 2 > orbit-desktop-checksums.txt
           cat orbit-desktop-checksums.txt
 
