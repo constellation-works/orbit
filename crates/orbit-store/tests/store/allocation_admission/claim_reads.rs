@@ -110,8 +110,9 @@ fn targeted_claim_reads_ignore_unrelated_payloads_and_refuse_missing_claims() {
 
 #[test]
 fn inspection_joins_only_matching_states_and_preserves_legacy_defaults() {
-    if !allocation_admission_isolated("claim_reads::inspection_joins_only_matching_states_and_preserves_legacy_defaults")
-    {
+    if !allocation_admission_isolated(
+        "claim_reads::inspection_joins_only_matching_states_and_preserves_legacy_defaults",
+    ) {
         return;
     }
     let root = TempDir::new().unwrap();

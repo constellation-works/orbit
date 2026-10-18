@@ -263,15 +263,18 @@ fn a_forced_drain_cancel_keeps_a_landing_reviewers_repair_on_the_published_candi
         ("validate", json!({"decision": "passed"})),
         ("push", json!({"branch": branch, "local_sha": head})),
         ("pr_open", json!({"pr_number": "41"})),
-        (
-            "landing_review_gate_admit",
-            json!({
-                "applies": true,
-                "attempt_id": "landing-attempt-1",
-                "head_sha": head,
-                "reviewer": {"crew": "sol", "provider": "claude", "model": "claude-opus-4"},
-            }),
-        ),
+        ("landing_review_gate_admit", {
+            let mut admitted = crate::review_admission_shape::admitted_review(
+                "landing-attempt-1",
+                "lineage",
+                &head,
+            );
+            admitted["reviewer"] = json!({
+                "crew": "sol", "crew_source": "workspace", "provider": "claude",
+                "model": "claude-opus-4", "reasoning_effort": null,
+            });
+            admitted
+        }),
     ] {
         record_step(&pair, &leaf, step, &output);
     }

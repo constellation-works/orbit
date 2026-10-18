@@ -3,17 +3,16 @@ use std::path::Path;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::{TaskComment, TaskStatus};
-use orbit_types::workflow::{ReviewGateHistoryNote, ReviewGateRefusal};
+use orbit_types::workflow::{ReviewGateAdmissionOutput, ReviewGateHistoryNote, ReviewGateRefusal};
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
-use crate::executor::automation::input::input_string_field;
 
 use super::super::freshness::remote_branch_sha;
 use super::super::git::{git_output, git_output_raw};
 use super::super::push::push_batch_changes_inner;
 use super::super::review_gate::{PARTIAL_REPAIR_RUN_TRAILER, PARTIAL_REPAIR_SUBJECT};
-use super::conflict::pipeline_checkpoint_string;
+use super::conflict::{pipeline_checkpoint_string, pipeline_step};
 use super::preserve::recorded_spec_digest;
 use super::{REVIEW_GATE_EVENT, REVIEW_VALIDATION_STEP};
 
@@ -39,19 +38,16 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
     error_message: &str,
     workspace_path: &Path,
 ) -> Result<Value, OrbitError> {
-    let reviewer = input
-        .get("pipeline")
-        .and_then(|pipeline| pipeline.get("review_gate_admit"))
-        .and_then(|admit| admit.get("reviewer"));
-    let reviewer_model = reviewer.and_then(|reviewer| {
-        let provider = reviewer.get("provider")?.as_str()?.trim();
-        let model = reviewer.get("model")?.as_str()?.trim();
-        (!provider.is_empty() && !model.is_empty()).then(|| format!("{provider} / {model}"))
-    });
-    let attempt_id = input
-        .get("pipeline")
-        .and_then(|pipeline| pipeline.get("review_gate_admit"))
-        .and_then(|admit| input_string_field(admit, "attempt_id"));
+    let admission = pipeline_step(input, "review_gate_admit")
+        .ok()
+        .and_then(|output| ReviewGateAdmissionOutput::from_value(output).ok());
+    let admitted = admission
+        .as_ref()
+        .and_then(ReviewGateAdmissionOutput::admitted);
+    let reviewer_model = admitted.and_then(|admitted| admitted.reviewer.model_label());
+    let attempt_id = admitted
+        .map(|admitted| admitted.attempt_id.trim())
+        .filter(|attempt_id| !attempt_id.is_empty());
     let attempt_trailer = attempt_id
         .map(|id| format!("\nOrbit-Review-Attempt: {id}"))
         .unwrap_or_default();

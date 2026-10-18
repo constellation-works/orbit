@@ -74,7 +74,8 @@ fn unfit(receipt: &AdmissionReceipt) -> HashSet<String> {
 
 #[test]
 fn a_pull_is_granted_only_work_its_host_has_room_for() {
-    if !allocation_admission_isolated("work_fit::a_pull_is_granted_only_work_its_host_has_room_for") {
+    if !allocation_admission_isolated("work_fit::a_pull_is_granted_only_work_its_host_has_room_for")
+    {
         return;
     }
     let root = TempDir::new().unwrap();

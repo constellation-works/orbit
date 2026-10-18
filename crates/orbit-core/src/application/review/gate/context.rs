@@ -7,7 +7,7 @@ use orbit_automation::review::{combined_task_meaning_digest, task_meaning_digest
 use orbit_common::OrbitError;
 use orbit_engine::BaseSyncMode;
 use orbit_types::task::Task;
-use orbit_types::workflow::ReviewAdmission;
+use orbit_types::workflow::{ReviewAdmission, ReviewGateAdmissionOutput, ReviewGateNotApplicable};
 use serde_json::{Value, json};
 
 use super::super::admission::run_review_admission;
@@ -296,11 +296,9 @@ pub(super) fn admitted_run_id(input: &Value) -> Result<String, OrbitError> {
     Ok(injected.unwrap_or(job_run_id))
 }
 
-pub(super) fn not_applicable(reason: &str, admission: Option<&ReviewAdmission>) -> Value {
-    json!({
-        "applies": false,
-        "reason": reason,
-        "timing": admission.map(|admission| admission.timing.as_str()),
-        "timing_source": admission.map(|admission| admission.timing_source.clone()),
-    })
+pub(super) fn not_applicable(
+    reason: &str,
+    admission: Option<&ReviewAdmission>,
+) -> ReviewGateAdmissionOutput {
+    ReviewGateAdmissionOutput::NotApplicable(ReviewGateNotApplicable::new(reason, admission))
 }

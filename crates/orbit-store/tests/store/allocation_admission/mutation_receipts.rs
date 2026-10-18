@@ -71,7 +71,9 @@ fn comments(owner: &Coordinated, id: &str) -> Vec<TaskComment> {
 
 #[test]
 fn a_mutation_receipt_is_a_typed_field_and_replays_on_it() {
-    if !allocation_admission_isolated("mutation_receipts::a_mutation_receipt_is_a_typed_field_and_replays_on_it") {
+    if !allocation_admission_isolated(
+        "mutation_receipts::a_mutation_receipt_is_a_typed_field_and_replays_on_it",
+    ) {
         return;
     }
     let root = TempDir::new().unwrap();

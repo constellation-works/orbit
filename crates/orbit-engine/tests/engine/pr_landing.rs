@@ -61,7 +61,9 @@ use orbit_types::workflow::{
     DEFERRED_SANDBOX_ARTIFACT, DeferralProbe, EvidenceHostOs, JobRun, JobV2StepBody,
     KNOWN_RED_VALIDATION_EVENT, KnownRedValidation, NamespaceProbe, PR_AUTO_FIX_ADMITTED_EVENT,
     PR_AUTO_FIX_BUDGET, PR_AUTO_FIX_PUSHED_EVENT, PS_EXEC_PROBE, PipelineState, PrAutoFixAttempt,
-    PrAutoFixBlocker, PrAutoFixPush, ReviewGateRefusal, ReviewTiming, ReviewVerdict,
+    PrAutoFixBlocker, PrAutoFixPush, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT,
+    ReviewBudget, ReviewConsumption, ReviewGateAdmissionOutput, ReviewGateAdmitted,
+    ReviewGateDecision, ReviewGateRefusal, ReviewGateReviewer, ReviewTiming, ReviewVerdict,
     SEATBELT_APPLY_PROBE, is_baseline_red_failure, pr_auto_fix_attempts,
 };
 use serde_json::{Value, json};
@@ -6229,6 +6231,47 @@ fn claimed_handoff_without_logs_is_refused_when_commands_are_required() {
     );
 }
 
+/// A recorded admitted review gate's output for attempt `attempt_id` in
+/// lineage `lineage`, reviewed by `codex / review-model`.
+fn admitted_review(attempt_id: &str, lineage: &str) -> Value {
+    serde_json::to_value(ReviewGateAdmissionOutput::Admitted(Box::new(
+        ReviewGateAdmitted {
+            decision: ReviewGateDecision::Admitted,
+            held_attempt_id: None,
+            first_task_id: TASK_ID.into(),
+            attempt_id: attempt_id.into(),
+            attempt_index: 1,
+            lineage_key: lineage.into(),
+            timing: ReviewTiming::BeforePr,
+            timing_source: "workspace".into(),
+            reviewer: ReviewGateReviewer {
+                crew: "reviewers".into(),
+                crew_source: "workspace".into(),
+                provider: "codex".into(),
+                model: "review-model".into(),
+                reasoning_effort: None,
+            },
+            owed_evidence: Vec::new(),
+            owner_owed_evidence: Vec::new(),
+            host_validation: Vec::new(),
+            base_sha: "0".repeat(40),
+            base_tree: "0".repeat(40),
+            head_sha: "0".repeat(40),
+            head_tree: "0".repeat(40),
+            implementation_commit_count: 1,
+            task_meaning_digest: "digest".into(),
+            task_selectors: BTreeMap::new(),
+            evidence_carry: Value::Null,
+            manifest_artifact: REVIEW_MANIFEST_ARTIFACT.into(),
+            report_artifact: REVIEW_REPORT_ARTIFACT.into(),
+            budget: ReviewBudget::default(),
+            remaining: ReviewConsumption { seconds: 1800 },
+            started_at: Utc::now(),
+        },
+    )))
+    .unwrap()
+}
+
 /// A completion-stage failure — here the re-review of a rebased head — closes
 /// every review attempt the run admitted, so none stays open, and keeps the
 /// published PR and the task in review. A bundle's handoff, which refuses to
@@ -6240,13 +6283,8 @@ fn a_failure_handoff_releases_the_run_s_review_attempts_even_for_a_bundle() {
             let fx = Fixture::new(sandbox);
             let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
             host.publish_pr(TASK_ID);
-            let admission = |attempt: &str| {
-                json!({
-                    "applies": true,
-                    "lineage_key": "ws/T-LANDING/agent-main/jrun-landing",
-                    "attempt_id": attempt,
-                })
-            };
+            let admission =
+                |attempt: &str| admitted_review(attempt, "ws/T-LANDING/agent-main/jrun-landing");
 
             let handoff = action(
                 &host,
@@ -6368,12 +6406,10 @@ fn a_failed_review_revalidation_rejects_and_preserves_both_commits() {
                     "pipeline": {
                         "worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
                         "sync_base": {"head": BRANCH, "base": BASE, "base_ref": BASE},
-                        "review_gate_admit": {
-                            "applies": true,
-                            "lineage_key": "ws/T-LANDING/agent-main/jrun-landing",
-                            "attempt_id": "rvw-fixes-1",
-                            "reviewer": {"provider": "codex", "model": "review-model"},
-                        },
+                        "review_gate_admit": admitted_review(
+                            "rvw-fixes-1",
+                            "ws/T-LANDING/agent-main/jrun-landing",
+                        ),
                         "review_gate_settle": {
                             "gate": "passed",
                             "verdict": "accept_with_fixes",
@@ -6418,8 +6454,7 @@ fn a_reviewer_timeout_preserves_its_candidate_and_requeues_without_blocking() {
             "pipeline": {
                 "worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
                 "sync_base": {"head": BRANCH, "base": BASE, "base_ref": BASE},
-                "review_gate_admit": {"applies": true, "attempt_id": "rvw-partial", "lineage_key": "lineage",
-                    "reviewer": {"provider": "codex", "model": "review-model"}},
+                "review_gate_admit": admitted_review("rvw-partial", "lineage"),
             },
         })).unwrap();
             assert_eq!(handoff["decision"], "incomplete_review_timeout");

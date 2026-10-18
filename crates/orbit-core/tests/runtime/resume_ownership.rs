@@ -258,7 +258,7 @@ fn checkpoint_resume_preserves_the_later_interrupted_review_repair() {
         checkpoint.record_pipeline_output("worktree", worktree);
         checkpoint.record_pipeline_output(
             "review_gate_admit",
-            json!({"applies": true, "attempt_id": "first-attempt"}),
+            crate::review_admission_shape::admitted_review("first-attempt", "lineage", "HEAD"),
         );
         fx.jobs
             .write_run_state(&source.run_id, &checkpoint)
@@ -335,7 +335,11 @@ fn checkpoint_resume_preserves_the_later_interrupted_review_repair() {
                 &resumed.run_id,
                 1,
                 "review_gate_admit",
-                &json!({"applies": true, "attempt_id": "second-attempt"}),
+                &crate::review_admission_shape::admitted_review(
+                    "second-attempt",
+                    "lineage",
+                    "HEAD",
+                ),
                 &Default::default(),
             )
             .unwrap();

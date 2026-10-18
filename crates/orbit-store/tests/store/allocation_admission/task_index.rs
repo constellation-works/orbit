@@ -30,7 +30,9 @@ fn events(log: &Path) -> Vec<Value> {
 
 #[test]
 fn read_only_fallback_does_not_suppress_the_next_writer_repair() {
-    if !allocation_admission_isolated("task_index::read_only_fallback_does_not_suppress_the_next_writer_repair") {
+    if !allocation_admission_isolated(
+        "task_index::read_only_fallback_does_not_suppress_the_next_writer_repair",
+    ) {
         return;
     }
     let root = TempDir::new().unwrap();
@@ -118,7 +120,9 @@ impl<S: tracing::Subscriber> Layer<S> for WriteAtSnapshot {
 
 #[test]
 fn completed_write_during_freshness_probe_keeps_selection_indexed() {
-    if !allocation_admission_isolated("task_index::completed_write_during_freshness_probe_keeps_selection_indexed") {
+    if !allocation_admission_isolated(
+        "task_index::completed_write_during_freshness_probe_keeps_selection_indexed",
+    ) {
         return;
     }
     let root = TempDir::new().unwrap();
@@ -369,7 +373,9 @@ fn open_task_selection_reads_only_open_envelopes() {
 /// Both observation and repair must find it before narrowing by parent.
 #[test]
 fn parent_selection_detects_relation_only_envelope_changes() {
-    if !allocation_admission_isolated("task_index::parent_selection_detects_relation_only_envelope_changes") {
+    if !allocation_admission_isolated(
+        "task_index::parent_selection_detects_relation_only_envelope_changes",
+    ) {
         return;
     }
     let root = TempDir::new().unwrap();
@@ -457,7 +463,9 @@ fn parent_selection_detects_relation_only_envelope_changes() {
 /// even when the file and scalar index row have not changed.
 #[test]
 fn older_envelope_proofs_are_reparsed_before_parent_selection() {
-    if !allocation_admission_isolated("task_index::older_envelope_proofs_are_reparsed_before_parent_selection") {
+    if !allocation_admission_isolated(
+        "task_index::older_envelope_proofs_are_reparsed_before_parent_selection",
+    ) {
         return;
     }
     let root = TempDir::new().unwrap();

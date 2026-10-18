@@ -202,7 +202,10 @@ fn a_reviewing_leaf_lets_its_full_drain_admit_a_replacement() {
         .read_run_state(&leaf)
         .unwrap()
         .expect("leaf state");
-    state.record_pipeline_output("landing_review_gate_admit", json!({"applies": true}));
+    state.record_pipeline_output(
+        "landing_review_gate_admit",
+        crate::review_admission_shape::admitted_review("landing-attempt", "lineage", "HEAD"),
+    );
     pair.follower.write_run_state(&leaf, &state).unwrap();
     assert_eq!(stages(), vec![(leaf.clone(), ClaimedLeafStage::Reviewing)]);
 

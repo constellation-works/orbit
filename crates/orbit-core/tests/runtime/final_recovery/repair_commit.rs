@@ -143,7 +143,11 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
             "pin_review" => Ok(if self.repair == "settled-review" {
                 json!({"reviewed_head_sha": git(self.fixture, &["rev-parse", "HEAD"])})
             } else {
-                json!({"applies": true, "attempt_id": "admitted", "head_sha": git(self.fixture, &["rev-parse", "HEAD"])})
+                crate::review_admission_shape::admitted_review(
+                    "admitted",
+                    "lineage",
+                    &git(self.fixture, &["rev-parse", "HEAD"]),
+                )
             }),
             "review_report" => {
                 let admissions = self.admissions.lock().unwrap();

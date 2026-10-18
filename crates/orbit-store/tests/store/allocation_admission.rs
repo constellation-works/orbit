@@ -1,6 +1,6 @@
 //  Identity allocation and coordinated admission through the store's public
 //  composition.
-// 
+//
 //  - Task ids come from the host registry's allocator: monotonic, never
 //    wrapped past the ceiling, and exhausted cleanly, including when an import
 //    lands the maximum id.
@@ -19,10 +19,9 @@
 //    receipt written as text before that field still replays.
 //  - A pull naming the work its host has room for is granted only a task in
 //    that list.
-// 
+//
 //  Every test re-runs itself in a child of this binary with inherited Orbit
 //  authority cleared, a disposable `HOME`, and a bounded wait.
-
 
 #[path = "allocation_admission/claim_reads.rs"]
 mod claim_reads;
@@ -207,7 +206,8 @@ fn task_ids_are_monotonic_across_workspaces_and_batches() {
 /// that would cross the ceiling is refused whole and leaves the counter.
 #[test]
 fn task_id_allocation_exhausts_at_the_ceiling_without_wrapping() {
-    if !allocation_admission_isolated("task_id_allocation_exhausts_at_the_ceiling_without_wrapping") {
+    if !allocation_admission_isolated("task_id_allocation_exhausts_at_the_ceiling_without_wrapping")
+    {
         return;
     }
     let root = TempDir::new().unwrap();
@@ -252,7 +252,8 @@ fn task_id_allocation_exhausts_at_the_ceiling_without_wrapping() {
 /// exhausted, not wrapped to `ORB-00000`.
 #[test]
 fn importing_the_maximum_task_id_exhausts_the_target_allocator() {
-    if !allocation_admission_isolated("importing_the_maximum_task_id_exhausts_the_target_allocator") {
+    if !allocation_admission_isolated("importing_the_maximum_task_id_exhausts_the_target_allocator")
+    {
         return;
     }
     let source_root = TempDir::new().unwrap();
@@ -317,7 +318,9 @@ fn importing_the_maximum_task_id_exhausts_the_target_allocator() {
 /// tasks preserves the prior allocator and does not error.
 #[test]
 fn publication_restore_advances_allocator_only_for_local_task_numbers() {
-    if !allocation_admission_isolated("publication_restore_advances_allocator_only_for_local_task_numbers") {
+    if !allocation_admission_isolated(
+        "publication_restore_advances_allocator_only_for_local_task_numbers",
+    ) {
         return;
     }
     const FINGERPRINT: &str = "ssh://source.test/orbit.git";
@@ -807,7 +810,9 @@ fn pull_admission_is_bound_only_by_the_drains_live_limit() {
 /// leaf history releases its slot and does not affect the capacity reading.
 #[test]
 fn retrying_claimed_leaf_occupies_capacity_and_terminal_history_does_not() {
-    if !allocation_admission_isolated("retrying_claimed_leaf_occupies_capacity_and_terminal_history_does_not") {
+    if !allocation_admission_isolated(
+        "retrying_claimed_leaf_occupies_capacity_and_terminal_history_does_not",
+    ) {
         return;
     }
     const CEILING: usize = 1;
@@ -890,7 +895,7 @@ fn retrying_claimed_leaf_occupies_capacity_and_terminal_history_does_not() {
     );
 }
 
-/// Record whether a claimed PR leaf's before-landing review applies, as its
+/// Record a schema-valid before-landing admission result, as the leaf's
 /// `landing_review_gate_admit` checkpoint does.
 fn checkpoint_landing_review(jobs: &dyn JobRunStoreBackend, run_id: &str, applies: bool) {
     let mut state = PipelineState::new(
@@ -898,10 +903,55 @@ fn checkpoint_landing_review(jobs: &dyn JobRunStoreBackend, run_id: &str, applie
         "task_claimed_pr_pipeline".into(),
         serde_json::json!({}),
     );
-    state.record_pipeline_output(
-        "landing_review_gate_admit",
-        serde_json::json!({ "applies": applies }),
-    );
+    let output = if applies {
+        serde_json::to_value(orbit_types::workflow::ReviewGateAdmissionOutput::Admitted(
+            Box::new(orbit_types::workflow::ReviewGateAdmitted {
+                decision: orbit_types::workflow::ReviewGateDecision::Admitted,
+                held_attempt_id: None,
+                first_task_id: "ORB-REVIEW".into(),
+                attempt_id: "attempt".into(),
+                attempt_index: 1,
+                lineage_key: "lineage".into(),
+                timing: orbit_types::workflow::ReviewTiming::BeforeLanding,
+                timing_source: "workspace".into(),
+                reviewer: orbit_types::workflow::ReviewGateReviewer {
+                    crew: "reviewers".into(),
+                    crew_source: "workspace".into(),
+                    provider: "codex".into(),
+                    model: "review-model".into(),
+                    reasoning_effort: None,
+                },
+                owed_evidence: Vec::new(),
+                owner_owed_evidence: Vec::new(),
+                host_validation: Vec::new(),
+                base_sha: "0".repeat(40),
+                base_tree: "0".repeat(40),
+                head_sha: "1".repeat(40),
+                head_tree: "1".repeat(40),
+                implementation_commit_count: 1,
+                task_meaning_digest: "digest".into(),
+                task_selectors: BTreeMap::new(),
+                evidence_carry: serde_json::Value::Null,
+                manifest_artifact: "manifest.json".into(),
+                report_artifact: "report.md".into(),
+                budget: orbit_types::workflow::ReviewBudget::default(),
+                remaining: orbit_types::workflow::ReviewConsumption { seconds: 1800 },
+                started_at: Utc::now(),
+            }),
+        ))
+        .unwrap()
+    } else {
+        serde_json::to_value(
+            orbit_types::workflow::ReviewGateAdmissionOutput::NotApplicable(
+                orbit_types::workflow::ReviewGateNotApplicable::new(
+                    "review_before_landing_off",
+                    None,
+                ),
+            ),
+        )
+        .unwrap()
+    };
+    state.record_pipeline_output("landing_review_gate_admit", output);
     jobs.write_run_state(run_id, &state).unwrap();
 }
 
@@ -910,7 +960,9 @@ fn checkpoint_landing_review(jobs: &dyn JobRunStoreBackend, run_id: &str, applie
 /// the drain's ceiling of reviewing leaves do.
 #[test]
 fn reviewing_claimed_leaves_admit_replacements_up_to_the_ceiling() {
-    if !allocation_admission_isolated("reviewing_claimed_leaves_admit_replacements_up_to_the_ceiling") {
+    if !allocation_admission_isolated(
+        "reviewing_claimed_leaves_admit_replacements_up_to_the_ceiling",
+    ) {
         return;
     }
     const CEILING: usize = 2;
@@ -1281,7 +1333,8 @@ fn simultaneous_retries_of_one_request_create_one_claim() {
 /// most one claims, the other is deferred, and only one reservation exists.
 #[test]
 fn distinct_concurrent_requests_never_claim_overlapping_tasks() {
-    if !allocation_admission_isolated("distinct_concurrent_requests_never_claim_overlapping_tasks") {
+    if !allocation_admission_isolated("distinct_concurrent_requests_never_claim_overlapping_tasks")
+    {
         return;
     }
     let root = TempDir::new().unwrap();
@@ -1630,7 +1683,8 @@ fn handoff_with_logs(
 /// still granted by the owner when the handoff arrives and when it lands.
 #[test]
 fn handoff_authorization_follows_the_owner_policy_at_admission() {
-    if !allocation_admission_isolated("handoff_authorization_follows_the_owner_policy_at_admission") {
+    if !allocation_admission_isolated("handoff_authorization_follows_the_owner_policy_at_admission")
+    {
         return;
     }
     // A `done` contract admitted under the policy is authorized at acceptance
@@ -1689,7 +1743,9 @@ fn handoff_authorization_follows_the_owner_policy_at_admission() {
 /// owner that does require commands refuses the same log-free handoff.
 #[test]
 fn an_owner_requiring_no_commands_accepts_and_lands_a_handoff_without_logs() {
-    if !allocation_admission_isolated("an_owner_requiring_no_commands_accepts_and_lands_a_handoff_without_logs") {
+    if !allocation_admission_isolated(
+        "an_owner_requiring_no_commands_accepts_and_lands_a_handoff_without_logs",
+    ) {
         return;
     }
     let delivery = Delivery::admit_requiring(done_ship(), &["src/lib.rs"], &[]);
@@ -1893,7 +1949,9 @@ fn handoff_widening_accepts_any_safe_path_and_replays_once() {
 /// footprint locks are a scheduling hint, not a delivery gate.
 #[test]
 fn handoff_widening_accepts_locked_paths_and_refuses_observation_mismatch() {
-    if !allocation_admission_isolated("handoff_widening_accepts_locked_paths_and_refuses_observation_mismatch") {
+    if !allocation_admission_isolated(
+        "handoff_widening_accepts_locked_paths_and_refuses_observation_mismatch",
+    ) {
         return;
     }
     let path = "src/new/nested.rs";
@@ -2088,7 +2146,8 @@ fn certificate(handoff: &TaskHandoff, verdict: ReviewVerdict) -> ReviewCertifica
 /// terms is malformed. The executor's own switch never refuses [ORB-13908].
 #[test]
 fn a_before_pr_owner_captures_its_review_contract_on_the_claim() {
-    if !allocation_admission_isolated("a_before_pr_owner_captures_its_review_contract_on_the_claim") {
+    if !allocation_admission_isolated("a_before_pr_owner_captures_its_review_contract_on_the_claim")
+    {
         return;
     }
     let root = TempDir::new().unwrap();
@@ -2144,7 +2203,9 @@ fn a_before_pr_owner_captures_its_review_contract_on_the_claim() {
 /// never asked for.
 #[test]
 fn before_pr_handoffs_are_accepted_only_with_matching_passing_evidence() {
-    if !allocation_admission_isolated("before_pr_handoffs_are_accepted_only_with_matching_passing_evidence") {
+    if !allocation_admission_isolated(
+        "before_pr_handoffs_are_accepted_only_with_matching_passing_evidence",
+    ) {
         return;
     }
     let reviewed = |verdict: ReviewVerdict| {
@@ -2281,7 +2342,9 @@ fn text_artifact(path: &str, body: &str) -> TaskArtifact {
 #[cfg(unix)]
 #[test]
 fn validation_artifact_directories_are_private_under_shared_umask() {
-    if !allocation_admission_isolated("validation_artifact_directories_are_private_under_shared_umask") {
+    if !allocation_admission_isolated(
+        "validation_artifact_directories_are_private_under_shared_umask",
+    ) {
         return;
     }
     use std::os::unix::fs::PermissionsExt;
@@ -2571,7 +2634,9 @@ fn jsonl_rows<T: serde::de::DeserializeOwned>(path: &Path) -> Vec<T> {
 /// leaves a bundle that no longer reads.
 #[test]
 fn coordinated_commit_rolls_back_a_leftover_pending_write_first() {
-    if !allocation_admission_isolated("coordinated_commit_rolls_back_a_leftover_pending_write_first") {
+    if !allocation_admission_isolated(
+        "coordinated_commit_rolls_back_a_leftover_pending_write_first",
+    ) {
         return;
     }
     let root = TempDir::new().unwrap();

@@ -215,7 +215,9 @@ fn a_known_red_log_is_accepted_only_when_the_owners_base_run_fails_its_tests() {
 
 #[test]
 fn flaky_handoff_evidence_is_pinned_and_recorded_in_owner_history() {
-    if !allocation_admission_isolated("known_red::flaky_handoff_evidence_is_pinned_and_recorded_in_owner_history") {
+    if !allocation_admission_isolated(
+        "known_red::flaky_handoff_evidence_is_pinned_and_recorded_in_owner_history",
+    ) {
         return;
     }
     use orbit_types::workflow::{FLAKY_VALIDATION_EVENT, FlakyValidation};

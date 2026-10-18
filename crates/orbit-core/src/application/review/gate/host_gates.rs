@@ -30,7 +30,8 @@ use orbit_automation::review::same_host_command;
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
     HostGateResult, HostKnownRed, KnownRedValidation, REVIEW_GATE_ARTIFACT, ReviewBaselineClaim,
-    ReviewEvidenceKind, ReviewValidation, ReviewVerdict, ValidationOutcome, ValidationRole,
+    ReviewEvidenceKind, ReviewGateAdmitted, ReviewValidation, ReviewVerdict, ValidationOutcome,
+    ValidationRole,
 };
 use serde_json::Value;
 
@@ -125,25 +126,18 @@ fn host_gates_from_output(
         .collect()
 }
 
-/// The host results an admission output carries for `reviewed`, the
-/// candidate the attempt admitted.
+/// The host results an admission carries for `reviewed`, the candidate the
+/// attempt admitted.
 pub(super) fn admitted_host_gates(
-    admission_output: &Value,
+    admitted: &ReviewGateAdmitted,
     reviewed: &str,
-) -> Result<Vec<HostGateResult>, OrbitError> {
-    let Some(value) = admission_output
-        .get("host_validation")
-        .filter(|value| !value.is_null())
-    else {
-        return Ok(Vec::new());
-    };
-    let gates = serde_json::from_value::<Vec<HostGateResult>>(value.clone()).map_err(|error| {
-        OrbitError::InvalidInput(format!("admission.host_validation is unreadable: {error}"))
-    })?;
-    Ok(gates
-        .into_iter()
+) -> Vec<HostGateResult> {
+    admitted
+        .host_validation
+        .iter()
         .filter(|gate| gate.tested_head == reviewed)
-        .collect())
+        .cloned()
+        .collect()
 }
 
 impl Judgement {
