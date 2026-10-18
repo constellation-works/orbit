@@ -19,7 +19,7 @@ use orbit_types::task::{
 };
 
 use super::TaskCommitBoundary;
-use super::admission::{canonical_footprint, os_unavailable, overlaps};
+use super::admission::{browser_kit_unavailable, canonical_footprint, os_unavailable, overlaps};
 use super::lifecycle::DrainReleases;
 use crate::contracts::*;
 use crate::repository::task::v2::{TaskV2Store, task_history_from_events};
@@ -156,6 +156,14 @@ impl Screen<'_> {
         // tags are read at each admission, so a retag applies to the next.
         if let Some(reason) = os_unavailable(task, request, self.executor_host_os) {
             receipt.os_unavailable.push(diagnostic(reason, Vec::new()));
+            return None;
+        }
+        // Nor one tagged `ui` that the executor has no verified browser kit
+        // to render.
+        if let Some(reason) = browser_kit_unavailable(task, request) {
+            receipt
+                .browser_kit_unavailable
+                .push(diagnostic(reason, Vec::new()));
             return None;
         }
         // A task the executor cannot run stays for the owner or another

@@ -220,6 +220,7 @@ impl ReviewedHandoff {
             ship: ship.clone(),
             crews: None,
             os: None,
+            browser_kit: false,
             admissible: None,
         };
         let AdmissionLookup::Found { receipt, .. } = boundary

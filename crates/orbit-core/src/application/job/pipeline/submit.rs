@@ -276,6 +276,15 @@ impl OrbitRuntime {
                         .map_or(std::env::consts::OS, orbit_types::task::HostOs::as_str)
                 )));
             }
+            // Nor a `ui` task on a host whose browser kit is not verified: its
+            // worker could not render the change it must screenshot.
+            if orbit_types::task::requires_browser_kit(&task.tags) && !self.browser_kit_verified() {
+                return Err(OrbitError::PolicyDenied(format!(
+                    "explicit ship task '{task_id}' {}; this host has no verified kit (a pull-drain \
+                     follower with one claims it from the backlog)",
+                    orbit_types::task::browser_kit_wait()
+                )));
+            }
             if let Some(allowlist) = allowlist.as_ref() {
                 // [ORB-12606] Report against the crew admission will draw, not
                 // the default chain: a crew-less task whose complexity pool

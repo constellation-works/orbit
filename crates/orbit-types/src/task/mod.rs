@@ -12,6 +12,7 @@ mod plan;
 mod readiness;
 mod receipt;
 mod show_fields;
+mod ui_requirement;
 mod work_class;
 pub use error::TaskError;
 
@@ -77,5 +78,8 @@ pub use show_fields::{
     TASK_SHOW_PUBLIC_DTO_FIELDS, is_task_show_projection_field, refuses_implementer_writes,
     task_artifact_manifest_json, task_base_json, task_dependency_labels, task_os_requirement_json,
     task_show_record_field_json, task_show_reference_field_json, unknown_task_show_field_message,
+};
+pub use ui_requirement::{
+    BROWSER_KIT_INSTALL_COMMAND, UI_TAG, browser_kit_wait, requires_browser_kit,
 };
 pub use work_class::{CHANGE_WORK_CLASS, NO_DIFF_WORK_CLASS, auto_task_template, work_class};

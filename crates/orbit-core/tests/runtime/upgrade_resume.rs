@@ -262,6 +262,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
             },
             crews: None,
             os: None,
+            browser_kit: false,
             admissible: None,
         },
         receipt: None,

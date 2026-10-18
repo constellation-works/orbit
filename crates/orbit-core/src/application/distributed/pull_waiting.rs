@@ -12,11 +12,12 @@ use std::collections::BTreeMap;
 use orbit_store::contracts::{AdmissionDiagnostic, AdmissionReceipt};
 use orbit_types::workflow::DrainWaitingTask;
 
-/// Reason codes a pull drain records. The first, third and fourth are the
-/// codes a local drain's classifier uses for the same cause.
+/// Reason codes a pull drain records. The first, third, fourth and fifth are
+/// the codes a local drain's classifier uses for the same cause.
 pub(crate) const FOOTPRINT_HELD: &str = "context_lock_conflict";
 pub(crate) const DEPENDENCY_NOT_DONE: &str = "dependency_not_done";
 pub(crate) const HOST_OS_MISMATCH: &str = "host_os_mismatch";
+pub(crate) const BROWSER_KIT_MISSING: &str = "browser_kit_missing";
 pub(crate) const CREW_UNAVAILABLE: &str = "crew_unavailable";
 pub(crate) const CAPACITY_UNAVAILABLE: &str = "capacity_unavailable";
 pub(crate) const OWNER_HOLD: &str = "owner_hold";
@@ -59,8 +60,8 @@ impl PullWaiting {
     ///
     /// - `queued` is the owner's `queue_depth`: backlog tasks it could start.
     /// - `deferred` is the tasks the owner is holding back for a footprint, a
-    ///   hold or a rule it keeps; `excluded` is the dependency, OS, crew and
-    ///   capacity refusals, each with its reason and the tasks it waits on.
+    ///   hold or a rule it keeps; `excluded` is the dependency, OS, browser
+    ///   kit, crew and capacity refusals, each with its reason and the tasks it waits on.
     pub(crate) fn of(receipt: &AdmissionReceipt) -> Self {
         let mut by_reason = BTreeMap::new();
         let mut count = |reason: &str| *by_reason.entry(reason.to_string()).or_insert(0_u64) += 1;
@@ -93,6 +94,12 @@ impl PullWaiting {
                     .os_unavailable
                     .iter()
                     .map(|diagnostic| (diagnostic, HOST_OS_MISMATCH)),
+            )
+            .chain(
+                receipt
+                    .browser_kit_unavailable
+                    .iter()
+                    .map(|diagnostic| (diagnostic, BROWSER_KIT_MISSING)),
             )
             .chain(
                 receipt

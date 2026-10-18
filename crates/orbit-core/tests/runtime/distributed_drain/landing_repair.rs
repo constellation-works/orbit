@@ -297,6 +297,80 @@ fn an_owner_landing_refusal_shows_the_human_reason_not_the_diagnostic() {
     );
 }
 
+/// A repair claim is admitted only where the task could start: a `ui` task's
+/// pending repair waits, named, on a host whose kit is no longer verified and
+/// keeps its claim, and the next pass on a host with a verified kit takes it.
+fn a_ui_repair_waits_for_a_verified_browser_kit() {
+    let mut owner = OwnerLocal::new();
+    let task = owner.pair.tasks[0].clone();
+    owner
+        .pair
+        .wire
+        .owner
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": task, "tags": ["ui"], "model": "codex"}),
+        )
+        .expect("tag the task ui");
+    let host = |owner: &mut OwnerLocal, home: &Path| {
+        owner.pair.follower = owner.pair.follower.clone().with_browser_kit_home(home);
+    };
+    let verified = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    super::super::host_ui_routing::write_kit(verified.path(), true);
+    let unverified = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    super::super::host_ui_routing::write_kit(unverified.path(), false);
+
+    host(&mut owner, verified.path());
+    let first = owner.handed_off_leaf(|checkout, _| {
+        std::fs::write(checkout.join(FILE), FIRST).unwrap();
+        "Outcome: success\nImplemented the first change."
+    });
+    assert_eq!(owner.pair.claimed_task(&first), task);
+    let first_claim = owner.claim_of(&first);
+    owner.base_moves(MOVED);
+    owner
+        .land(&task)
+        .expect_err("main moved past the candidate");
+    assert_eq!(owner.claim_phase(&first_claim), "repair_pending");
+
+    host(&mut owner, unverified.path());
+    let idle = owner.pair.pass(&owner.drain);
+    assert_eq!(idle["admitted"], 0, "{idle}");
+    assert_eq!(owner.claim_phase(&first_claim), "repair_pending");
+    let receipt = owner
+        .pair
+        .follower_jobs
+        .local_pull_admissions()
+        .unwrap()
+        .into_iter()
+        .rev()
+        .filter(|record| record.phase == LocalPullPhase::Idle)
+        .find_map(|record| record.receipt)
+        .expect("the owner answered idle");
+    assert!(
+        receipt
+            .browser_kit_unavailable
+            .iter()
+            .any(|wait| wait.task_id == task
+                && wait
+                    .reason
+                    .starts_with(&orbit_types::task::browser_kit_wait())),
+        "{receipt:#?}"
+    );
+
+    host(&mut owner, verified.path());
+    let repair = owner.handed_off_leaf(|checkout, resumed| {
+        assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+        std::fs::write(checkout.join(FILE), REPAIRED).unwrap();
+        "Outcome: success\nRepaired a resumed candidate onto the moved base."
+    });
+    assert_eq!(owner.pair.claimed_task(&repair), task, "the same task");
+    assert_eq!(
+        owner.leaf_input(&repair)["claim_repair"]["repairs_claim_id"],
+        first_claim.as_str()
+    );
+}
+
 /// An owner draining its own backlog in local ship mode: the drain reaches the
 /// owner as its own local session, and its leaves run in worktrees of the
 /// owner's repository.
@@ -868,7 +942,8 @@ crate::scenario_table!(
     a_landing_stopped_on_its_base_is_repaired_and_lands_under_the_same_task_scenarios,
     a_landing_stopped_on_its_base_is_repaired_and_lands_under_the_same_task,
     a_second_base_stop_blocks_the_task_with_both_attempts_evidence,
-    an_owner_landing_refusal_shows_the_human_reason_not_the_diagnostic
+    an_owner_landing_refusal_shows_the_human_reason_not_the_diagnostic,
+    a_ui_repair_waits_for_a_verified_browser_kit
 );
 
 #[path = "landing_retry.rs"]

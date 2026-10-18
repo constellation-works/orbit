@@ -245,6 +245,7 @@ fn request(id: &str) -> AdmissionRequest {
         },
         crews: None,
         os: None,
+        browser_kit: false,
         admissible: None,
     }
 }
