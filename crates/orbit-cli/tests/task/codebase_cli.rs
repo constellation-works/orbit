@@ -14,6 +14,12 @@ use crate::isolated_cli_fixture::Fixture;
 /// show` follows a ranked path's rate to the tasks behind it.
 #[test]
 fn codebase_cli_ranks_paths_and_lists_the_tasks_behind_a_count() {
+    if crate::isolated_test::run_in_child(
+        "codebase_cli::codebase_cli_ranks_paths_and_lists_the_tasks_behind_a_count",
+    ) {
+        return;
+    }
+
     let fixture = Fixture::new();
     let shown = fixture.json(&["workspace", "show", "--format", "json"]);
     let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
