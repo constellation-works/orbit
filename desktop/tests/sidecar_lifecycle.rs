@@ -5,6 +5,9 @@
 //! server does after an update, replaying its arguments (so `--port 0`) in the
 //! same PID and announcing the new address. It has no libtest harness, so the
 //! supervisor's `web serve` arguments reach `main` intact.
+//!
+//! A second scenario quits the app while a server has started but is not yet
+//! tracked, holding the supervisor at that point through [`Shell::spawned`].
 
 #[cfg(unix)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,7 +15,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.starts_with(&["web".into(), "serve".into()]) {
         return fake::serve();
     }
-    handover::follows_a_new_address_in_the_same_process()
+    handover::follows_a_new_address_in_the_same_process()?;
+    starting::quitting_while_a_server_starts_stops_it()
 }
 
 #[cfg(not(unix))]
@@ -137,17 +141,123 @@ mod handover {
     }
 
     /// Whether `pid` names a process, including an unreaped one.
-    fn process_exists(pid: i32) -> bool {
+    pub(crate) fn process_exists(pid: i32) -> bool {
         // SAFETY: signal 0 only checks that the process exists.
         unsafe { libc::kill(pid, 0) == 0 }
     }
 
-    fn ensure(holds: bool, message: impl Into<String>) -> Result<(), Box<dyn Error>> {
+    pub(crate) fn ensure(holds: bool, message: impl Into<String>) -> Result<(), Box<dyn Error>> {
         if holds {
             Ok(())
         } else {
             Err(message.into().into())
         }
+    }
+}
+
+#[cfg(unix)]
+mod starting {
+    use std::error::Error;
+    use std::path::PathBuf;
+    use std::sync::mpsc::{self, Receiver, SyncSender};
+    use std::sync::{Arc, Mutex, PoisonError};
+    use std::thread::JoinHandle;
+    use std::time::Duration;
+
+    use orbit_desktop::sidecar::{self, Shell, Sidecar};
+    use url::Url;
+
+    use crate::handover::{ensure, process_exists};
+
+    /// How long the supervisor is held after the app starts quitting. A
+    /// shutdown that does not wait for the starting server returns well
+    /// within it, before the server is tracked.
+    const HOLD: Duration = Duration::from_millis(500);
+
+    /// The app quitting: the server's PID, and whether it was gone when
+    /// `shutdown` returned.
+    type Quit = (i32, JoinHandle<bool>);
+
+    /// A window that quits the app the moment a server has started, launching
+    /// this binary as `orbit`.
+    struct QuitOnSpawn {
+        sidecar: Arc<Sidecar>,
+        quits: Mutex<Option<SyncSender<Quit>>>,
+    }
+
+    impl Shell for QuitOnSpawn {
+        fn navigate(&self, _url: Url) {}
+
+        fn eval(&self, _script: &str) {}
+
+        fn log_path(&self) -> Option<PathBuf> {
+            None
+        }
+
+        fn orbit(&self) -> Result<PathBuf, String> {
+            std::env::current_exe().map_err(|error| error.to_string())
+        }
+
+        fn spawned(&self, pid: u32) {
+            let Some(quits) = self
+                .quits
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take()
+            else {
+                return;
+            };
+            let Ok(pid) = i32::try_from(pid) else {
+                return;
+            };
+            let (returned_tx, returned) = mpsc::sync_channel(1);
+            let sidecar = Arc::clone(&self.sidecar);
+            // Quit from another thread, as the app's exit handler does, and
+            // hold the supervisor here until that shutdown returns or `HOLD`
+            // passes.
+            let quit = std::thread::spawn(move || {
+                sidecar.shutdown();
+                let gone = !process_exists(pid);
+                let _ = returned_tx.send(());
+                gone
+            });
+            let _ = returned.recv_timeout(HOLD);
+            let _ = quits.send((pid, quit));
+        }
+    }
+
+    pub(crate) fn quitting_while_a_server_starts_stops_it() -> Result<(), Box<dyn Error>> {
+        let (sidecar, control) = Sidecar::new();
+        let (quits_tx, quits) = mpsc::sync_channel(1);
+        let supervisor = {
+            let shell = QuitOnSpawn {
+                sidecar: Arc::clone(&sidecar),
+                quits: Mutex::new(Some(quits_tx)),
+            };
+            let sidecar = Arc::clone(&sidecar);
+            std::thread::spawn(move || sidecar::supervise(shell, sidecar, control))
+        };
+        let outcome = check(&quits);
+        // Stops a server the checked shutdown left behind, so a failing run
+        // leaves no process.
+        sidecar.shutdown();
+        supervisor
+            .join()
+            .map_err(|_| "the supervisor thread panicked")?;
+        outcome
+    }
+
+    fn check(quits: &Receiver<Quit>) -> Result<(), Box<dyn Error>> {
+        let (pid, quit) = quits
+            .recv_timeout(Duration::from_secs(30))
+            .map_err(|_| "the supervisor never started a server")?;
+        let gone = quit.join().map_err(|_| "the quitting thread panicked")?;
+        ensure(
+            gone,
+            format!(
+                "quitting while the server started returned with process {pid} still running or unreaped"
+            ),
+        )
     }
 }
 

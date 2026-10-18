@@ -49,6 +49,10 @@ pub trait Shell: Send + 'static {
     fn orbit(&self) -> Result<PathBuf, String> {
         resolve_orbit()
     }
+    /// Called with the PID of a server that has just started, before the
+    /// supervisor tracks it. [`Sidecar::shutdown`] waits until this returns,
+    /// so it must not call `shutdown` itself.
+    fn spawned(&self, _pid: u32) {}
 }
 
 /// Requests from the window and the app lifecycle to the supervisor thread.
@@ -137,11 +141,15 @@ impl Sidecar {
         }
     }
 
-    /// Stop the server and wait for it, bounded by [`STOP_TIMEOUT`].
+    /// Stop the server and wait for it, bounded by [`STOP_TIMEOUT`]. A
+    /// server that is being started is waited for and stopped too.
     pub fn shutdown(&self) {
         self.shutting_down.store(true, Ordering::SeqCst);
+        // Take the server before telling the supervisor, so this call, not
+        // the supervisor's exit, stops it: the app may end once this returns.
+        let child = lock(&self.child).take();
         let _ = self.control.try_send(Control::Shutdown);
-        if let Some(mut child) = lock(&self.child).take() {
+        if let Some(mut child) = child {
             stop_child(&mut child);
         }
     }
@@ -160,7 +168,13 @@ enum Outcome {
 
 /// Run the dashboard server until the app exits, restarting it when it stops.
 pub fn supervise(shell: impl Shell, sidecar: Arc<Sidecar>, control: Receiver<Control>) {
-    let shell: &dyn Shell = &shell;
+    run_until_shutdown(&shell, &sidecar, &control);
+    // Normally `shutdown` has already stopped the server; stop any it did
+    // not reach rather than leave it running.
+    stop_server(&sidecar);
+}
+
+fn run_until_shutdown(shell: &dyn Shell, sidecar: &Arc<Sidecar>, control: &Receiver<Control>) {
     let mut failures = 0u32;
     loop {
         if sidecar.is_shutting_down() {
@@ -168,23 +182,23 @@ pub fn supervise(shell: impl Shell, sidecar: Arc<Sidecar>, control: Receiver<Con
         }
         set_status(
             shell,
-            &sidecar,
+            sidecar,
             status_value("starting", "Starting the Orbit dashboard…", None),
         );
         let wait = match shell.orbit() {
             Err(message) => {
                 set_status(
                     shell,
-                    &sidecar,
+                    sidecar,
                     status_value("error", "Orbit was not found", Some(message)),
                 );
                 None
             }
-            Ok(binary) => match run_server(shell, &sidecar, &control, &binary) {
+            Ok(binary) => match run_server(shell, sidecar, control, &binary) {
                 Outcome::Shutdown => return,
                 Outcome::Restart => {
                     failures = 0;
-                    show_home(shell, &sidecar);
+                    show_home(shell, sidecar);
                     continue;
                 }
                 Outcome::Stopped { ran_for, message } => {
@@ -194,10 +208,10 @@ pub fn supervise(shell: impl Shell, sidecar: Arc<Sidecar>, control: Receiver<Con
                         failures + 1
                     };
                     let delay = backoff(failures);
-                    show_home(shell, &sidecar);
+                    show_home(shell, sidecar);
                     set_status(
                         shell,
-                        &sidecar,
+                        sidecar,
                         status_value(
                             "error",
                             "The dashboard server stopped",
@@ -267,10 +281,17 @@ fn run_server(
         command.current_dir(home);
     }
     die_with_parent(&mut command);
+    // Hold the slot from the shutdown check until the server is recorded in
+    // it: a shutdown either prevents the start or waits and finds the server.
+    let mut slot = lock(&sidecar.child);
+    if sidecar.is_shutting_down() {
+        return Outcome::Shutdown;
+    }
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => return stopped(format!("Could not start {}: {error}.", binary.display())),
     };
+    shell.spawned(child.id());
 
     // Every image announces its address: a server that replaces itself
     // after an update keeps its PID and stdout, but replays `--port 0` and
@@ -289,7 +310,8 @@ fn run_server(
             }
         });
     }
-    *lock(&sidecar.child) = Some(child);
+    *slot = Some(child);
+    drop(slot);
 
     // Follow the server's address until it stops.
     let mut ready = false;
@@ -300,9 +322,7 @@ fn run_server(
                 show_dashboard(shell, sidecar, url);
             }
         } else if !ready && started.elapsed() > READY_TIMEOUT {
-            if let Some(mut child) = lock(&sidecar.child).take() {
-                stop_child(&mut child);
-            }
+            stop_server(sidecar);
             return stopped(format!(
                 "The server did not report its address within {} s.{log_hint}",
                 READY_TIMEOUT.as_secs()
@@ -314,9 +334,7 @@ fn run_server(
             }
             Ok(Control::Restart) => {
                 *lock(&sidecar.dashboard) = None;
-                if let Some(mut child) = lock(&sidecar.child).take() {
-                    stop_child(&mut child);
-                }
+                stop_server(sidecar);
                 return if sidecar.is_shutting_down() {
                     Outcome::Shutdown
                 } else {
@@ -400,6 +418,15 @@ fn is_status_page(url: &Url) -> bool {
 
 fn status_value(phase: &str, title: &str, detail: Option<String>) -> Value {
     json!({ "phase": phase, "title": title, "detail": detail })
+}
+
+/// Stop the tracked server, if any, and clear the slot. The slot stays held
+/// while the server stops, so a concurrent shutdown waits for it.
+fn stop_server(sidecar: &Sidecar) {
+    let mut slot = lock(&sidecar.child);
+    if let Some(mut child) = slot.take() {
+        stop_child(&mut child);
+    }
 }
 
 /// Ask the server to drain, then kill it if it outlives [`STOP_TIMEOUT`].

@@ -24,8 +24,8 @@ dashboard's own host switcher.
   It replays `--port 0`, so the new image can bind a different port; it prints its startup line
   again, and the window loads the new address and stops allowing the old one. If the handover fails
   and the server exits, the restart path above takes over.
-- **Quitting.** Quitting the app, or sending it SIGTERM, SIGINT or SIGHUP, stops the server. The
-  server gets up to 12 seconds to drain before it is killed. On Linux the kernel also stops the
+- **Quitting.** Quitting the app, or sending it SIGTERM, SIGINT or SIGHUP, stops the server, including
+  one that is still starting. The server gets up to 12 seconds to drain before it is killed. On Linux the kernel also stops the
   server if the app crashes. On macOS, a crash that skips Rust's panic hook (a SIGKILL, for example)
   can leave the server running until you stop it yourself.
 - **Menu bar and tray.** The icon's menu shows how many drains are running and how many runs
@@ -82,8 +82,10 @@ testing. Releases are built separately, as described in [Releases](#releases).
 The server supervisor lives in the `orbit_desktop` library (`src/sidecar.rs`), apart from the
 window, so `tests/sidecar_lifecycle.rs` can drive it without a webview. That test binary acts as
 its own fake `orbit`: it re-executes itself on a new port in the same process, and the test checks
-that the window follows and that quitting stops the server. Run it with `cargo test` from
-`desktop/`.
+that the window follows and that quitting stops the server. It also quits while a server has just
+started and is not yet tracked, and checks that shutdown returns only once that server is gone.
+Run it with `cargo test` from `desktop/`, or without the webview stack with
+`cargo test --locked --no-default-features --test sidecar_lifecycle`.
 
 Linux needs the WebKitGTK development packages:
 
