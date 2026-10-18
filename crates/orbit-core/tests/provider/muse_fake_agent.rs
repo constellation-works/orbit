@@ -675,6 +675,52 @@ fn non_zero_exit_fails_even_with_a_completed_record() {
 }
 
 #[test]
+fn completed_terminal_diagnostic_fields_cannot_supply_an_answer() {
+    let mut accepted = Vec::new();
+    for fallback in [
+        format!(r#""message":"{SUCCESS_ENVELOPE}""#),
+        format!(r#""error":"{SUCCESS_ENVELOPE}""#),
+        format!(r#""error":{{"message":"{SUCCESS_ENVELOPE}"}}"#),
+    ] {
+        for text in ["", r#", "text":{"invalid":"answer"}"#] {
+            let payload = format!(r#"{{"terminal":"completed",{fallback}{text}}}"#);
+            let outcome = dispatch(&Harness::new(&run_body_with_payload(&payload, 0)), spec(60));
+            if outcome.success || !outcome.output["edited"].is_null() {
+                accepted.push(payload);
+            }
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "completed terminals must require string payload.text; diagnostic envelopes became answers: {accepted:?}",
+    );
+}
+
+#[test]
+fn failed_terminal_fallback_reasons_reach_the_operator_without_becoming_answers() {
+    let reason = "provider stopped; diagnostic quotes";
+    let quoted_reason = format!("{reason}: {SUCCESS_ENVELOPE}");
+    for fallback in [
+        format!(r#""message":"{quoted_reason}""#),
+        format!(r#""error":"{quoted_reason}""#),
+        format!(r#""error":{{"message":"{quoted_reason}"}}"#),
+    ] {
+        let payload = format!(r#"{{"terminal":"failed",{fallback}}}"#);
+        let outcome = dispatch(&Harness::new(&run_body_with_payload(&payload, 0)), spec(60));
+        assert!(!outcome.success, "failed terminal must fail: {payload}");
+        assert!(
+            outcome.output["edited"].is_null(),
+            "a failure diagnostic cannot supply result fields: {payload}",
+        );
+        let message = outcome.message.unwrap_or_default();
+        assert!(
+            message.contains(reason),
+            "fallback reason must reach the operator: {message}",
+        );
+    }
+}
+
+#[test]
 fn a_terminal_other_than_completed_cannot_report_success() {
     // `TurnTerminal` is wire-open: anything but `completed` is a failure, even
     // when the record carries a success envelope and the CLI exits 0.

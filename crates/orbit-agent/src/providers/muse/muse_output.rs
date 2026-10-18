@@ -24,7 +24,8 @@
 //! `TurnTerminal` wire-open, so `failed`, `cancelled`, and any value Orbit
 //! does not know are all failures.
 //!
-//! A non-completed terminal's `payload.text` is provider-owned failure
+//! A non-completed terminal's `payload.text` (falling back to `payload.message`,
+//! `payload.error`, or `payload.error.message`) is provider-owned failure
 //! prose, not an answer: normalization retains it for invocation traces and
 //! operator diagnostics (see [`muse_terminal_failure_diagnostic`]), while
 //! the answer projection above still reduces it to empty, so it can never
@@ -99,18 +100,26 @@ fn terminal_info(payload: Option<&Value>) -> TerminalInfo {
             text: None,
         };
     };
-    TerminalInfo {
+    let info = TerminalInfo {
         terminal: payload
             .get("terminal")
             .and_then(Value::as_str)
             .map(str::to_string),
-        // `text` is the field Muse Code 1.4.10 was observed to carry; the
-        // `message`/`error` fallbacks read the same provider-owned payload
-        // only when `text` is absent.
         text: payload
             .get("text")
             .and_then(Value::as_str)
-            .map(str::to_string)
+            .map(str::to_string),
+    };
+    // A completed answer comes exclusively from string `payload.text`.
+    // Diagnostic fallbacks must never supply an answer when it is missing
+    // or malformed, even when they quote a valid Orbit response envelope.
+    if info.is_completed() {
+        return info;
+    }
+    TerminalInfo {
+        terminal: info.terminal,
+        text: info
+            .text
             .or_else(|| {
                 payload
                     .get("message")
@@ -128,11 +137,12 @@ fn terminal_info(payload: Option<&Value>) -> TerminalInfo {
     }
 }
 
-/// Return the terminal record's `payload.text` for tracing and diagnostics,
+/// Return the terminal record's text for tracing and diagnostics,
 /// or empty bytes when the stream is malformed or carries no terminal text.
 ///
 /// For a completed run this is the final answer. For a failed, cancelled or
-/// unknown terminal it is the provider's own failure reason, retained only
+/// unknown terminal it is the provider's own failure reason, including
+/// `message`/`error` fallbacks when `text` is absent or non-string, retained only
 /// so the operator diagnostic can carry it; the answer projection is
 /// [`project_muse_response`], which never exposes it as an answer.
 pub(crate) fn normalize_muse_stdout(stdout: &[u8]) -> Vec<u8> {
@@ -161,7 +171,8 @@ pub(crate) fn project_muse_response(stdout: &[u8]) -> Vec<u8> {
 
 /// Provider-gated diagnostic for a Muse run whose terminal is not
 /// `completed`: the provider's own failure reason from the terminal frame's
-/// `payload.text`, read from no other record, so prompt echoes, deltas and
+/// `payload.text` or its `message`/`error` fallbacks, read from no other record,
+/// so prompt echoes, deltas and
 /// child-task records never count as failure evidence. Completed terminals
 /// and malformed streams yield `None`. Unbounded in the prose it selects;
 /// the caller bounds and redacts it, and this helper bounds it again.
