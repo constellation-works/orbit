@@ -464,6 +464,7 @@ fn admission(
         },
         crews: None,
         os: None,
+        browser_kit: false,
         admissible: None,
     };
     let record = jobs
@@ -504,6 +505,7 @@ fn admission(
         deferred_conflicts: vec![],
         crew_unavailable: vec![],
         os_unavailable: vec![],
+        browser_kit_unavailable: vec![],
         queue_depth: 0,
         capacity_unavailable: Vec::new(),
     };

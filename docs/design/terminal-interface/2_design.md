@@ -2,7 +2,7 @@
 title: Terminal Interface — Design
 owner: claude
 last_updated: 2026-10-12
-last_validated: 2026-10-12
+last_validated: 2026-10-18
 status: Accepted
 feature: terminal-interface
 doc_role: design

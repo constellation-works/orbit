@@ -232,6 +232,35 @@ impl OrbitRuntime {
         })
     }
 
+    /// Each backlog task tagged `ui` that waits only for this host's browser
+    /// kit: this host satisfies its OS requirement, and its kit is not
+    /// verified. Empty once the kit is verified. `orbit doctor` warns with
+    /// these, so a host without a kit never leaves its UI work waiting
+    /// unexplained.
+    pub fn browser_kit_backlog_waits(&self) -> Result<Vec<String>, OrbitError> {
+        if self.browser_kit_verified() {
+            return Ok(Vec::new());
+        }
+        let candidates = self
+            .list_task_metadata()?
+            .into_iter()
+            .filter(|task| {
+                task.status == orbit_types::task::TaskStatus::Backlog
+                    && orbit_types::task::requires_browser_kit(&task.tags)
+            })
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+        let limits = self.executor_host_os_limits()?;
+        let pools = self.auto_crew_pools_for_input(&serde_json::Value::Null)?;
+        Ok(candidates
+            .into_iter()
+            .filter(|task| self.task_host_os_wait(task, &pools, &limits).is_none())
+            .map(|task| task.id)
+            .collect())
+    }
+
     /// Returns the coordination registry's global status projection for
     /// dependency readiness while leaving task listing workspace-scoped.
     pub fn task_status_index(

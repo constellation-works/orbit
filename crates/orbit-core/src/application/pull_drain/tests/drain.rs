@@ -112,6 +112,7 @@ impl PullPeer for Peer {
                 deferred_conflicts: vec![],
                 crew_unavailable: vec![],
                 os_unavailable: vec![],
+                browser_kit_unavailable: vec![],
                 queue_depth: 0,
                 capacity_unavailable: Vec::new(),
             })
@@ -382,6 +383,7 @@ fn request(jobs: &dyn JobRunStoreBackend) -> (PullDestination, AdmissionRequest)
             },
             crews: None,
             os: None,
+            browser_kit: false,
             admissible: None,
         },
     )

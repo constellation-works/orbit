@@ -305,6 +305,7 @@ impl crate::OrbitRuntime {
             ship: ship.clone(),
             crews: None,
             os: None,
+            browser_kit: false,
             admissible: None,
         };
         let identity = trusted_identity(&machine_id, session, None);
