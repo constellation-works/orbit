@@ -1232,6 +1232,26 @@ owner; a replica refuses it. The requeue returns the task to the backlog. Its
 next claim is a new owner admission with its own leaf run, worker binding and
 review budget, and it continues the candidate the failed claim kept. See
 [the review gate](./review-gate.md).
+
+The same requeue applies to any claimed leaf that failed or escalated with a
+committed candidate, such as a final recovery that escalated a review finding.
+The claim's settlement records that candidate on the owner's task as a
+`claim_candidate_kept` history event (`orbit task show <task>`). The event
+names the commit, its branch, its durable ref or pull request, the leaf run
+and its machine, and the step the leaf stopped at. A leaf that failed before
+it committed keeps nothing and records no event. Without
+`--discard-candidate`, the requeue reports the candidate it resumes:
+`Resumes ... at <head>.` in text, or `resumes` with `source: claim` in JSON.
+The task's next run then continues that candidate, whether it is a claim or
+an owner-local run, and its `resume_candidate` output names it as
+`source_sha`. When the kept candidate was never pushed (`host_local: true`),
+only a run on the machine that made it continues the candidate; a run on
+another host implements fresh. If the task's description or acceptance
+criteria changed since the candidate was kept, the requeue is refused and
+nothing changes, just as for a published owner candidate. Requeue with
+`--discard-candidate` instead to start over: it discards the candidate,
+closes the task's undelivered pull requests, and the next claim implements
+fresh.
 In-run step retries of the **same** bound run are different: they keep the
 claim. Crash recovery before launch may recover the same queued run; it must
 not restart a run whose execution became uncertain.

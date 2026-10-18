@@ -103,6 +103,53 @@ impl TaskCommitBoundary {
         }))
     }
 
+    /// The task history entry naming the candidate a claim's settlement
+    /// kept, so the owner's task shows what the next run continues; `None`
+    /// when the leaf ended without one. It is written with the settlement
+    /// that keeps the candidate and names exactly what that record holds.
+    pub(super) fn kept_candidate_entry(
+        claim: &ExecutionClaim,
+        kept: Option<&PreservedClaimCandidate>,
+    ) -> Option<orbit_types::task::TaskHistoryEntry> {
+        let candidate = &kept?.candidate;
+        let machine = &claim.executed_on.machine_id;
+        let mut note = format!(
+            "kept candidate {} on {}",
+            candidate.head_sha, candidate.branch
+        );
+        if let Some(reference) = &candidate.durable_ref {
+            note.push_str(&format!(", durable at {reference}"));
+        } else if !candidate.published {
+            note.push_str(&format!(", only on {machine}"));
+            if let Some(failure) = &candidate.carry_failure {
+                note.push_str(&format!(" (pushing it failed: {failure})"));
+            }
+        }
+        if let Some(pull_request) = &candidate.pull_request {
+            note.push_str(&format!(", pull request #{pull_request}"));
+        }
+        if let Some(run_id) = &candidate.source_run_id {
+            note.push_str(&format!("; run {run_id} on {machine}"));
+        }
+        if let Some(step) = &candidate.failed_step_id {
+            note.push_str(&format!(", stopped at {step}"));
+        }
+        note.push_str(
+            "; the task's next run continues it unless the task's spec changes or an operator \
+             discards it",
+        );
+        Some(orbit_types::task::TaskHistoryEntry {
+            at: Utc::now(),
+            by: machine.clone(),
+            event: orbit_types::task::CLAIM_CANDIDATE_KEPT_EVENT.into(),
+            note: Some(note),
+            from_status: None,
+            to_status: None,
+            operation_id: None,
+            decision: None,
+        })
+    }
+
     /// [ORB-15314] Copy the verdict and findings of the interrupted attempt's
     /// latest report, which the reviewer persisted on this task as it worked,
     /// onto the kept candidate, so the task's next run receives them. A

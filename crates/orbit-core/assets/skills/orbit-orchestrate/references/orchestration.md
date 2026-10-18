@@ -444,7 +444,11 @@ failure handoff may still be publishing. Add `--discard-candidate` to close the
 task's undelivered Orbit PRs and rerun fresh, which a changed task
 specification requires; `orbit task update <task-id> --status backlog
 --discard-candidate` is the same discard and closure without a recorded
-requeue decision.
+requeue decision. A claimed leaf that failed or escalated with a committed
+candidate publishes no `[BLOCKED]` PR; the owner keeps its candidate (the
+task's `claim_candidate_kept` history event), and the same requeue reports and
+resumes it (`resumes.source: claim`) under the same specification and discard
+rules.
 
 For blocks caused by a missing provider launcher or by transient
 infrastructure (a busy lock, a locked task store), `orbit task recheck-blocked`

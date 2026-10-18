@@ -1297,7 +1297,7 @@
   },
   {
     "name": "orbit_task_requeue",
-    "description": "Return a blocked task to the backlog so its next run resumes the candidate and pull request its stopped run published, re-authenticating that publication exactly as automatic adoption does. Requires trusted operator authority; unavailable to managed runs. A task whose run has not stopped is refused. A changed task specification is refused with the option to set discard_candidate, which closes the task's undelivered Orbit pull requests and lets the next run implement fresh.",
+    "description": "Return a blocked task to the backlog so its next run resumes the candidate and pull request its stopped run published, re-authenticating that publication exactly as automatic adoption does, or the candidate the owner kept from the claim whose leaf was that run. Requires trusted operator authority; unavailable to managed runs. A task whose run has not stopped, or whose claim is unsettled, is refused. A changed task specification is refused with the option to set discard_candidate, which closes the task's undelivered Orbit pull requests and lets the next run implement fresh.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1315,7 +1315,7 @@
         },
         "discard_candidate": {
           "type": "boolean",
-          "description": "Discard the published candidate, close the task's undelivered Orbit pull requests and let the next run implement fresh"
+          "description": "Discard the published or kept candidate, close the task's undelivered Orbit pull requests and let the next run implement fresh"
         }
       },
       "required": [

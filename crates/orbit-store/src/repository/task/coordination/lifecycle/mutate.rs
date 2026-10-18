@@ -577,6 +577,10 @@ impl TaskCommitBoundary {
                         ));
                         state.preserved_candidate =
                             self.preserve_candidate(&claim.task_id, value)?;
+                        params.append_history.extend(Self::kept_candidate_entry(
+                            &claim,
+                            state.preserved_candidate.as_ref(),
+                        ));
                     }
                 }
                 ClaimMutation::Release(value) => {
@@ -636,6 +640,10 @@ impl TaskCommitBoundary {
                         released_at.to_rfc3339(),
                     ));
                     state.preserved_candidate = self.preserve_candidate(&claim.task_id, value)?;
+                    params.append_history.extend(Self::kept_candidate_entry(
+                        &claim,
+                        state.preserved_candidate.as_ref(),
+                    ));
                     state.landing_invalidated = true;
                     release = true;
                     if let Some(budget_comment) = blocked {

@@ -807,8 +807,9 @@ fn a_red_base_hold_whose_push_is_refused_stays_host_local() {
 }
 
 /// [ORB-15308] The claim pushed its candidate, opened #41 and failed in its
-/// before-landing review: a candidate failure, so the owner blocks the task.
-/// On-call returns it to the backlog; the next claim on the same host is
+/// before-landing review: a candidate failure, so the owner blocks the task
+/// and records the candidate on it [ORB-16770]. On-call requeues it, which
+/// reports the candidate it resumes; the next claim on the same host is
 /// handed the kept candidate with its pull request, and its resume takes
 /// over the published branch from the earlier claim's retained checkout, so
 /// the leaf's push and `pr_open` go through #41 rather than a second PR.
@@ -862,12 +863,37 @@ fn a_requeued_claim_continues_its_published_branch_and_pull_request() {
         kept["failed_step_id"], "landing_review_gate_settle",
         "{kept}"
     );
-
-    returned_to_backlog(&pair, &task);
+    // [ORB-16770] The owner's task records the kept candidate, and the
+    // owner's requeue reports that its next run continues it.
+    let recorded = pair
+        .wire
+        .owner
+        .get_task_history(&task)
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.event == orbit_types::task::CLAIM_CANDIDATE_KEPT_EVENT)
+        .and_then(|entry| entry.note)
+        .expect("the settlement records the kept candidate on the task");
+    assert!(
+        recorded.contains(&head) && recorded.contains(&branch) && recorded.contains("#41"),
+        "the record names the commit, its branch and pull request: {recorded}"
+    );
+    let requeued = pair
+        .wire
+        .owner
+        .requeue_blocked_task(&task, "keep the reviewed candidate", false)
+        .expect("the owner requeues the blocked task");
+    let resumes = &requeued["resumes"];
+    assert_eq!(resumes["source"], "claim", "{requeued:#}");
+    assert_eq!(resumes["head_sha"], head.as_str(), "{requeued:#}");
+    assert_eq!(resumes["branch"], branch.as_str(), "{requeued:#}");
+    assert_eq!(resumes["pull_request"], "41", "{requeued:#}");
+    assert_eq!(resumes["host_local"], false, "{requeued:#}");
+    assert_eq!(pair.owner_status(&task), "backlog");
     let drain = pair.run_drain();
     let next = pair.running_leaf(&drain, 1);
     assert_eq!(pair.claimed_task(&next), task, "the task is pulled again");
-    let offered = claim_candidate(&pair, &next).expect("the backlog move keeps the candidate");
+    let offered = claim_candidate(&pair, &next).expect("the requeue keeps the candidate");
     assert_eq!(
         (offered.branch.as_str(), offered.head_sha.as_str()),
         (branch.as_str(), head.as_str())

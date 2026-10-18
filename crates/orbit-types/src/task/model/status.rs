@@ -20,6 +20,13 @@ pub const CANDIDATE_DISCARDED_EVENT: &str = "candidate_discarded";
 /// [ORB-14338].
 pub const CANDIDATE_RESUME_EVENT: &str = "candidate_resume";
 
+/// Task history event the owner records when a claim's failure or release
+/// keeps the leaf's committed candidate: its commit, the ref and pull request
+/// it is on, and the run and machine that made it. The claim settlement's own
+/// record stays the one admission and `orbit task requeue` read; this entry
+/// shows on the task what the next run continues.
+pub const CLAIM_CANDIDATE_KEPT_EVENT: &str = "claim_candidate_kept";
+
 /// Task history event recorded when Orbit, not the executing agent, wrote the
 /// task's execution summary. It is audit history and stays after the agent
 /// replaces the summary; [`DERIVED_EXECUTION_SUMMARY_PREFIX`] tells whether the

@@ -15,6 +15,13 @@
 //! the immutable source before adopting the branch. Everything after
 //! adoption — validation, review, landing — runs afresh.
 //!
+//! A claimed leaf publishes nothing through a failure handoff: its claim's
+//! settlement keeps its committed candidate on the owner, which records it on
+//! the task and hands it to the task's next run, claimed or owner-local.
+//! A requeue of a task whose stopped run is that leaf reports that candidate
+//! as what the next run continues, read from the same record admission reads,
+//! and refuses it, as a published one, once the task's specification changed.
+//!
 //! Two callers share [`OrbitRuntime::write_candidate_requeue`]: the operator
 //! command (`orbit task requeue`, `orbit.task.requeue`) and the cleared-infra
 //! requeue of a transient infrastructure block (`transient_infra`).
@@ -38,6 +45,7 @@
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
+use orbit_store::contracts::{CandidateFreshReason, KeptClaimCandidate};
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     CANDIDATE_DISCARDED_EVENT, FINAL_RECOVERY_DECIDED_EVENT, RecordedFinalRecovery, Task,
@@ -53,6 +61,10 @@ use orbit_types::workflow::SourceRepairBinding;
 
 /// Status event of an operator's requeue of a blocked task.
 pub(crate) const OPERATOR_REQUEUED_EVENT: &str = "operator_requeued";
+
+/// How a refused requeue offers to start over instead.
+const DISCARD_HINT: &str = "requeue with --discard-candidate (MCP: discard_candidate=true) to \
+                            close it and let the next run implement fresh";
 
 /// The publication a failure handoff recorded, read from its receipt without
 /// authenticating it. It names what a requeue would resume; the requeue
@@ -272,8 +284,9 @@ impl OrbitRuntime {
 
     /// Requeue blocked task `id` as an operator decision. Without `discard`,
     /// the next run resumes the candidate the task's stopped run published
-    /// through its failure handoff, or implements fresh when nothing was
-    /// published. With `discard`, the published candidate is discarded, the
+    /// through its failure handoff, or the one the owner kept from the claim
+    /// whose leaf that run was, or implements fresh when there is neither.
+    /// With `discard`, the published or kept candidate is discarded, the
     /// task's undelivered Orbit pull requests are closed, and the next run
     /// implements fresh.
     ///
@@ -301,6 +314,11 @@ impl OrbitRuntime {
             None
         } else {
             self.authenticate_operator_requeue(&task, receipt.as_ref())?
+        };
+        let kept = if discard || resume.is_some() {
+            None
+        } else {
+            self.kept_claim_requeue(&task)?
         };
         let mut answer = None;
         self.stores().tasks().with_task_write_lock(id, &mut || {
@@ -345,8 +363,8 @@ impl OrbitRuntime {
                     vec![discarded],
                 )
             } else {
-                match &resume {
-                    Some((_, binding)) => (
+                match (&resume, &kept) {
+                    (Some((_, binding)), _) => (
                         format!(
                             "requeued onto the published candidate (pull request #{}, head {}): \
                              {reason}",
@@ -355,7 +373,15 @@ impl OrbitRuntime {
                         resume.as_ref().and_then(|(entry, _)| entry.clone()),
                         Vec::new(),
                     ),
-                    None => (format!("requeued: {reason}"), None, Vec::new()),
+                    (None, Some(kept)) => (
+                        format!(
+                            "requeued onto the candidate its claim kept (head {} on {}): {reason}",
+                            kept.candidate.head_sha, kept.candidate.branch
+                        ),
+                        None,
+                        Vec::new(),
+                    ),
+                    (None, None) => (format!("requeued: {reason}"), None, Vec::new()),
                 }
             };
             let updated = self.write_candidate_requeue(
@@ -392,19 +418,43 @@ impl OrbitRuntime {
                 "incomplete"
             }
         });
-        let resumes = resume.as_ref().map(|(_, binding)| {
-            json!({
+        let resumes = match (&resume, &kept) {
+            (Some((_, binding)), _) => Some(json!({
+                "source": "failure_handoff",
                 "pull_request": binding.pull_request,
                 "branch": binding.branch,
                 "head_sha": binding.head_sha,
-            })
-        });
-        let next_step = if discard {
-            "The next run implements fresh."
-        } else if resumes.is_some() {
-            "The next run adopts this candidate and pull request without re-implementing, then validates, reviews and lands it afresh."
-        } else {
-            "The next run starts from the backlog; no published candidate was recorded."
+            })),
+            (None, Some(kept)) => Some(json!({
+                "source": "claim",
+                "pull_request": kept.candidate.pull_request,
+                "branch": kept.candidate.branch,
+                "head_sha": kept.candidate.head_sha,
+                "durable_ref": kept.candidate.durable_ref,
+                "machine_id": kept.machine_id,
+                "host_local": !kept.candidate.durable(),
+            })),
+            (None, None) => None,
+        };
+        let next_step = match (&resume, &kept) {
+            _ if discard => "The next run implements fresh.".to_string(),
+            (Some(_), _) => "The next run adopts this candidate and pull request without \
+                             re-implementing, then validates, reviews and lands it afresh."
+                .to_string(),
+            (None, Some(kept)) if !kept.candidate.durable() => format!(
+                "The candidate is only on {}: a run there continues it instead of implementing \
+                 fresh, and a run on another host implements fresh.",
+                kept.machine_id
+            ),
+            (None, Some(_)) => "The next run, claimed or local, continues this candidate \
+                                instead of implementing fresh, then validates, reviews and \
+                                lands it afresh."
+                .to_string(),
+            (None, None) => {
+                "The next run starts from the backlog; no published or kept candidate was \
+                 recorded."
+                    .to_string()
+            }
         };
         Ok(json!({
             "id": task.id,
@@ -436,6 +486,46 @@ impl OrbitRuntime {
         Ok(())
     }
 
+    /// The candidate the owner kept from the claim whose leaf was `task`'s
+    /// stopped run, as the task's next run receives it: admission offers a
+    /// claim the task's latest kept candidate, and an owner-local run
+    /// continues the one its prior run's claim kept, so both agree when that
+    /// run is the leaf that kept it. A candidate the task's specification has
+    /// outgrown is refused, as a published one is; one an operator already
+    /// discarded resumes nothing.
+    fn kept_claim_requeue(&self, task: &Task) -> Result<Option<KeptClaimCandidate>, OrbitError> {
+        let Some(run_id) = task.job_run_id.as_deref() else {
+            return Ok(None);
+        };
+        let Some(kept) = self.stores().tasks().kept_claim_candidate(
+            &task.id,
+            self.automation_machine_identity().unwrap_or_default(),
+        )?
+        else {
+            return Ok(None);
+        };
+        // Run ids are unique only per machine.
+        if kept.candidate.source_run_id.as_deref() != Some(run_id)
+            || task
+                .job_run_machine
+                .as_ref()
+                .is_some_and(|origin| origin.machine_id != kept.machine_id)
+        {
+            return Ok(None);
+        }
+        match kept.fresh.as_ref().map(|(reason, _)| *reason) {
+            // Durability decides only which host can continue it.
+            None | Some(CandidateFreshReason::NotDurable) => Ok(Some(kept)),
+            Some(CandidateFreshReason::Discarded) => Ok(None),
+            Some(CandidateFreshReason::SpecChanged) => Err(OrbitError::InvalidInput(format!(
+                "the task specification changed after its claim kept candidate {} on {}, so \
+                 that candidate no longer implements this task and cannot be resumed. Nothing \
+                 was changed. To {DISCARD_HINT}.",
+                kept.candidate.head_sha, kept.candidate.branch
+            ))),
+        }
+    }
+
     /// Authenticate what an operator requeue without a discard resumes: the
     /// failure handoff's publication when there is one, else nothing, refusing
     /// exactly what the next admission would refuse. The preservation record
@@ -445,8 +535,7 @@ impl OrbitRuntime {
         task: &Task,
         receipt: Option<&HandoffReceipt>,
     ) -> Result<Option<(Option<TaskHistoryEntry>, SourceRepairBinding)>, OrbitError> {
-        let discard_hint = "requeue with --discard-candidate (MCP: discard_candidate=true) to \
-                            close it and let the next run implement fresh";
+        let discard_hint = DISCARD_HINT;
         if let Some(receipt) = receipt {
             if !task.spec_digest_matches(&receipt.task_spec_digest) {
                 return Err(OrbitError::InvalidInput(format!(
