@@ -88,8 +88,9 @@
   color: var(--fg-dim); font-size: 11px; line-height: 18px; overflow-wrap: anywhere;
 }
 
-/* Admission forecast: a divider, then peaks as meters against their admit
-   thresholds, then who fit and who was held. */
+/* Admission forecast: a divider, then each resource's first hour as a
+   sparkline against its dashed admit threshold (or, for an older record, its
+   peak as a meter), then who fit and who was held. */
 .drain-forecast { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding-top: 14px; border-top: 1px solid var(--hair); }
 .drain-forecast:first-child { padding-top: 0; border-top: 0; }
 .drain-forecast-built, .drain-forecast-retained { display: flex; flex-direction: column; gap: 9px; min-width: 0; }
@@ -108,6 +109,24 @@
 .drain-forecast-figure { color: var(--fg); font-size: 11.5px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .drain-forecast-threshold { color: var(--fg-mute); }
 .drain-forecast-peak.over .drain-forecast-figure { color: var(--warn-fg); }
+.drain-forecast-spark { position: relative; display: block; padding-top: 13px; }
+.drain-forecast-spark-label { position: absolute; top: 0; transform: translateX(-50%); color: var(--fg-mute); font: 400 10.5px/12px var(--font-mono); white-space: nowrap; }
+.drain-forecast-spark-label.start { transform: none; }
+.drain-forecast-spark-label.end { transform: translateX(-100%); }
+.drain-forecast-spark-plot { position: relative; display: block; height: 26px; border-radius: 3px; background: var(--bg-well); box-shadow: inset 0 0 0 1px var(--hair); }
+.drain-forecast-spark-svg { position: absolute; inset: 0; display: block; width: 100%; height: 100%; overflow: visible; }
+.drain-forecast-spark-line { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+.drain-forecast-spark-limit { stroke: var(--fg-strong); stroke-width: 1; stroke-dasharray: 3 3; }
+.drain-forecast-spark-peak { position: absolute; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--bg-well); }
+/* A shadow forecast is what enforce would have done: hatched and dimmed,
+   like its shadow badge. */
+.drain-forecast-spark.hypothetical .drain-forecast-spark-plot { background-image: repeating-linear-gradient(135deg, transparent 0 4px, var(--hair) 4px 5px); }
+.drain-forecast-spark.hypothetical .drain-forecast-spark-line { stroke: var(--fg-dim); }
+.drain-forecast-spark.hypothetical .drain-forecast-spark-peak { background: var(--fg-dim); }
+/* Over its threshold reads as a warning in either mode. */
+.drain-forecast-peak.over .drain-forecast-spark-line { stroke: var(--warn-fg); }
+.drain-forecast-peak.over .drain-forecast-spark-peak { background: var(--warn-fg); }
+.drain-forecast-peak.over .drain-forecast-spark-label { color: var(--warn-fg); }
 .drain-forecast-tasks { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .drain-forecast-task { color: var(--fg-dim); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
 .drain-forecast-task.held { color: var(--warn-fg); }

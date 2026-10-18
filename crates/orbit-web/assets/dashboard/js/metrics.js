@@ -14,6 +14,7 @@ import {
   onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, formatClock,
   bindTaskLink, DASHBOARD_WINDOWS,
 } from './common.js';
+import { linePath, sparkline as lineSparkline, svg } from './sparkline.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -25,8 +26,6 @@ function el(tag, opts = {}, children = []) {
   }
   return node;
 }
-
-const SVG_NS = "http://www.w3.org/2000/svg";
 
 // A bucket or actor with fewer runs than this is drawn hollow or dimmed: its
 // average is one or two runs, not a trend.
@@ -271,30 +270,6 @@ function actorCell(actor) {
     el("span", { class: "mx-actor-model", text: who.model }),
     who.provider ? el("span", { class: "mx-actor-provider", text: who.provider }) : null,
   ]);
-}
-
-function svg(tag, attrs = {}) {
-  const node = document.createElementNS(SVG_NS, tag);
-  for (const [name, value] of Object.entries(attrs)) node.setAttribute(name, String(value));
-  return node;
-}
-
-/// An SVG path through `points` (0–100 space), broken at nulls. A lone point
-/// gets a zero-length segment so its round cap still shows.
-function linePath(points) {
-  let d = "";
-  let run = 0;
-  for (const point of points) {
-    if (!point) {
-      if (run === 1) d += "l0.01 0 ";
-      run = 0;
-      continue;
-    }
-    d += `${run ? "L" : "M"}${(point.x * 10).toFixed(1)} ${(point.y * 10).toFixed(1)} `;
-    run += 1;
-  }
-  if (run === 1) d += "l0.01 0";
-  return d.trim();
 }
 
 // ---- trend section --------------------------------------------------------
@@ -814,9 +789,7 @@ function emptyNote(text) {
 function sparkline(trend, max, label) {
   const values = trend || [];
   const points = values.map((v, i) => (v == null ? null : { x: (i + 0.5) / values.length * 100, y: 100 - v / (max * 1.05) * 100 }));
-  const node = svg("svg", { viewBox: "0 0 1000 1000", preserveAspectRatio: "none", class: "mx-spark", role: "img", "aria-label": label });
-  node.appendChild(svg("path", { d: linePath(points), class: "mx-spark-line", "vector-effect": "non-scaling-stroke" }));
-  return node;
+  return lineSparkline(points, { className: "mx-spark", lineClass: "mx-spark-line", label });
 }
 
 function actorsCard() {

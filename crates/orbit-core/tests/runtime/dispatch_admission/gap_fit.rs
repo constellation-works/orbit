@@ -248,11 +248,17 @@ fn build(
     mode: &str,
     extra: &str,
 ) -> OrbitRuntime {
+    // A horizon in `extra` replaces the fixtures' 10 minutes.
+    let horizon = if extra.contains("horizon_cap_minutes") {
+        ""
+    } else {
+        "horizon_cap_minutes = 10\n"
+    };
     std::fs::write(
         global.join("config.toml"),
         format!(
             "[machine.auto_concurrency]\nmode = \"{mode}\"\nmin_profile_deliveries = 1\n\
-             horizon_cap_minutes = 10\nadmit_cpu_percent = 80\nadmit_memory_percent = 75\n{extra}"
+             {horizon}admit_cpu_percent = 80\nadmit_memory_percent = 75\n{extra}"
         ),
     )
     .unwrap();
@@ -895,6 +901,76 @@ fn shadow_and_enforce_passes_record_their_forecast_and_off_records_none() {
     assert_eq!(unmeasured, vec![(5, 2), (10, 2), (20, 0), (30, 0)]);
 }
 
+/// Each `shadow` and `enforce` pass keeps its forecast's first hour as 13
+/// five-minute bucket maxima of its share of the host, on the record, the
+/// classifier's output and readiness alike. The running `hard` delivery is
+/// two minutes in, so its one-minute 7-core spike lands at +22m, inside the
+/// +25m bucket, whose point is the CPU peak; memory is flat at the 2 GiB in
+/// use plus its 1 GiB until it ends, so its peak is minute 0.
+fn a_pass_records_its_forecast_hour_as_bucket_maxima() {
+    let horizon = "horizon_cap_minutes = 60\n";
+    let fixture = Fixture::new("off", horizon);
+    let mut hard = vec![1.0; 40];
+    hard[24] = 7.0;
+    fixture.finished_delivery("hard", &hard);
+    fixture.finished_delivery("low", &[0.5, 0.5]);
+    fixture.running_hard_delivery();
+    let light = fixture.task("light", TaskPriority::Medium, TaskComplexity::Low);
+    let drain = fixture.drain();
+
+    // The delivery runs to +37m, inside the bucket ending at +40m.
+    let mut cpu = vec![10.0; 13];
+    cpu[5] = 70.0;
+    cpu[9..].fill(0.0);
+    let mut memory = vec![3.0 / 32.0 * 100.0; 13];
+    memory[9..].fill(2.0 / 32.0 * 100.0);
+    for mode in ["shadow", "enforce"] {
+        let runtime = fixture.with_mode(mode, horizon);
+        let pass = classify(&runtime, &drain, 4);
+        assert_eq!(admitted(&pass), vec![light.clone()], "{mode}: {pass:#}");
+        let record = recorded(&runtime, &drain, &pass);
+        assert_eq!(record.mode, mode);
+        let series = record
+            .series
+            .as_ref()
+            .expect("a measured host keeps the hour");
+        assert_eq!(series.bucket_minutes, 5);
+        for (resource, points, expected) in [
+            ("cpu", &series.cpu_percent, &cpu),
+            ("memory", &series.memory_percent, &memory),
+        ] {
+            assert_eq!(points.len(), 13, "{mode} {resource}: {series:#?}");
+            for (point, want) in points.iter().zip(expected.iter()) {
+                assert!(
+                    (point - want).abs() < 1e-9,
+                    "{mode} {resource}: {points:?} != {expected:?}"
+                );
+            }
+        }
+        for (peak, points) in [
+            (record.cpu_peak.as_ref().unwrap(), &series.cpu_percent),
+            (record.memory_peak.as_ref().unwrap(), &series.memory_percent),
+        ] {
+            assert!(peak.minute <= 60, "{record:#?}");
+            let highest = points.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            assert_eq!(Some(highest), peak.percent, "{record:#?}");
+            let bucket = peak.minute.div_ceil(5) as usize;
+            assert_eq!(points[bucket], highest, "{record:#?}");
+        }
+        assert_eq!(record.cpu_peak.as_ref().unwrap().minute, 22);
+        assert_eq!(record.memory_peak.as_ref().unwrap().minute, 0);
+
+        let readiness = runtime
+            .workspace_auto_readiness(&[], Some(4), 50, &[])
+            .unwrap();
+        assert_eq!(
+            readiness["capacity"]["admission_forecast"]["series"],
+            pass["admission_forecast"]["series"],
+            "{mode}: {readiness:#}"
+        );
+    }
+}
+
 /// A candidate that cannot fit under the thresholds beside running work is
 /// refused while that work runs, with the minute and resource, and admitted
 /// once the host holds no running delivery or reservation, with the miss it
@@ -1356,5 +1432,6 @@ crate::scenario_table!(
     a_starving_head_holds_backfill_until_it_fits_scenarios,
     a_starving_head_holds_backfill_until_it_fits,
     a_pass_gap_fit_refuses_entirely_polls,
-    shadow_and_enforce_passes_record_their_forecast_and_off_records_none
+    shadow_and_enforce_passes_record_their_forecast_and_off_records_none,
+    a_pass_records_its_forecast_hour_as_bucket_maxima
 );

@@ -6,6 +6,7 @@ import { renderAutomation } from './automation.js';
 import { FLEET_CACHE_MS, fetchFleetDrains, fleetDrainLabel, peekFleetDrains, renderFleetDrains } from './fleet-drains.js';
 import { cpuLoadMultiple } from './host-resources.js';
 import { DRAIN_LOCK_REASONS, drainCrewNote, drainReason, setDrainReadiness } from './drain-waits.js';
+import { sparkline, svg } from './sparkline.js';
 
 const $ = (id) => document.getElementById(id);
 const pendingOperations = new Set();
@@ -2511,11 +2512,58 @@ function forecastTime(at) {
   return node;
 }
 
-// Each peak as a meter against its admit threshold: the fill is the peak and
-// the tick the threshold, with both figures beside it. The amount, minute and
-// headroom (in percentage points) are in the row's tooltip and read aloud.
+// The minutes a forecast's recorded series spans.
+const FORECAST_SERIES_MINUTES = 60;
+
+// `resource`'s recorded first hour of percents, or null for a record written
+// before the series was kept or from an unmeasured host.
+function forecastSeries(forecast, resource) {
+  const series = asForecast(forecast.series);
+  const bucket = Number(series?.bucket_minutes);
+  const points = series?.[`${resource}_percent`];
+  if (!(bucket > 0) || !Array.isArray(points) || points.length < 2) return null;
+  const values = points.map(value => (value == null ? NaN : Number(value)));
+  return values.every(Number.isFinite) ? { bucket, values } : null;
+}
+
+// The series as a line over 0–60 minutes on a 0–100% scale (taller when a
+// point or the limit is above it), the admit threshold as a dashed line, and
+// a dot on the highest point labelled with the peak's minute. That point is
+// the peak's bucket whenever the peak falls within the hour; otherwise the
+// label names the bucket, and the row's text the peak.
+function forecastSpark(series, peak, admitNumber, label, hypothetical) {
+  const { bucket, values } = series;
+  const limited = Number.isFinite(admitNumber);
+  const top = Math.max(100, ...values, limited ? admitNumber : 0);
+  const x = index => Math.min(100, index * bucket / FORECAST_SERIES_MINUTES * 100);
+  const y = value => 100 - Math.max(0, value) / top * 100;
+  const highest = values.indexOf(Math.max(...values));
+  const peakMinute = Number(peak?.minute);
+  const inHour = Number.isFinite(peakMinute) && peakMinute <= FORECAST_SERIES_MINUTES && Math.ceil(peakMinute / bucket) === highest;
+  const minute = inHour ? peakMinute : highest * bucket;
+  const extra = limited
+    ? [svg("line", { x1: 0, x2: 1000, y1: (y(admitNumber) * 10).toFixed(1), y2: (y(admitNumber) * 10).toFixed(1), class: "drain-forecast-spark-limit", "vector-effect": "non-scaling-stroke" })]
+    : [];
+  const line = sparkline(values.map((value, index) => ({ x: x(index), y: y(value) })), { className: "drain-forecast-spark-svg", lineClass: "drain-forecast-spark-line", extra });
+  const left = x(highest);
+  const edge = left > 75 ? " end" : left < 25 ? " start" : "";
+  const marker = el("span", { class: "drain-forecast-spark-peak", style: { left: `${left}%`, top: `${y(values[highest])}%` } });
+  const chart = el("span", { class: `drain-forecast-spark${hypothetical ? " hypothetical" : ""}`, role: "img", "aria-label": label }, [
+    el("span", { class: `drain-forecast-spark-label${edge}`, text: `+${minute}m`, style: { left: `${left}%` }, "aria-hidden": "true" }),
+    el("span", { class: "drain-forecast-spark-plot", "aria-hidden": "true" }, [line, marker]),
+  ]);
+  chart.dataset.peakMinute = String(minute);
+  return chart;
+}
+
+// Each peak against its admit threshold, with both figures beside it: a
+// sparkline of the forecast's first hour when the record keeps one, or else
+// a meter whose fill is the peak and whose tick is the threshold. The amount,
+// minute and headroom (in percentage points) are in the row's tooltip and
+// read aloud. A shadow forecast's chart is marked hypothetical.
 function forecastPeaks(forecast) {
   const headroom = asForecast(forecast.headroom);
+  const hypothetical = forecast.mode === "shadow";
   const rows = ["cpu", "memory"].map((resource) => {
     const peak = asForecast(forecast[`${resource}_peak`]);
     if (!peak || (!Number.isFinite(Number(peak.value)) && !Number.isFinite(Number(peak.percent)))) return null;
@@ -2536,14 +2584,22 @@ function forecastPeaks(forecast) {
     const over = Number.isFinite(roomNumber) && roomNumber < 0;
     const name = resource === "cpu" ? "CPU" : "Memory";
     const detail = `${name} peak ${[`${figure}${amount ? ` (${amount})` : ""}`, when, admit, room].filter(Boolean).join(" · ")}`;
-    const clamp = value => `${Math.min(100, Math.max(0, value))}%`;
-    const meter = el("span", { class: "drain-forecast-meter", "aria-hidden": "true" }, [
-      known ? el("span", { class: "drain-forecast-fill", style: { width: clamp(percent) } }) : null,
-      Number.isFinite(admitNumber) ? el("span", { class: "drain-forecast-tick", style: { left: clamp(admitNumber) } }) : null,
-    ]);
+    const series = known ? forecastSeries(forecast, resource) : null;
+    let graphic;
+    if (series) {
+      const limit = Number.isFinite(admitNumber) ? `admit limit ${admitNumber}%` : "admit limit unknown";
+      const label = `${hypothetical ? "Hypothetical " : ""}${name} forecast over the next ${FORECAST_SERIES_MINUTES} minutes: peak ${figure} ${when}, ${limit}`;
+      graphic = forecastSpark(series, peak, admitNumber, label, hypothetical);
+    } else {
+      const clamp = value => `${Math.min(100, Math.max(0, value))}%`;
+      graphic = el("span", { class: "drain-forecast-meter", "aria-hidden": "true" }, [
+        known ? el("span", { class: "drain-forecast-fill", style: { width: clamp(percent) } }) : null,
+        Number.isFinite(admitNumber) ? el("span", { class: "drain-forecast-tick", style: { left: clamp(admitNumber) } }) : null,
+      ]);
+    }
     return el("div", { class: `drain-forecast-peak${over ? " over" : ""}`, title: detail }, [
       el("dt", { text: name }),
-      el("dd", { class: "drain-forecast-bar" }, [meter]),
+      el("dd", { class: "drain-forecast-bar" }, [graphic]),
       el("dd", { class: "drain-forecast-figure mono" }, [
         el("span", { "aria-hidden": "true" }, [
           known ? `${percent.toFixed(1)}%` : "unknown",
