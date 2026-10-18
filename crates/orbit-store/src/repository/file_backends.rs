@@ -313,6 +313,14 @@ impl TaskStoreBackend for TaskV2Store {
         self.with_task_lock(id, op)
     }
 
+    fn with_task_comment_write_lock(
+        &self,
+        id: &str,
+        op: &mut dyn FnMut() -> Result<(), OrbitError>,
+    ) -> Result<(), OrbitError> {
+        self.with_task_comment_lock(id, |_| op())
+    }
+
     fn with_task_read_lock(
         &self,
         id: &str,

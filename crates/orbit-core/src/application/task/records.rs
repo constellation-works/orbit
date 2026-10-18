@@ -151,6 +151,7 @@ impl TaskRecordService<'_> {
                     append_history: params.append_history.clone(),
                     append_comments: params.append_comments.clone(),
                     expected_status: params.expected_status.clone(),
+                    operator_comment: params.operator_comment,
                 },
             )?;
         }

@@ -426,7 +426,18 @@ impl TaskV2Store {
         }
 
         reject_forged_grant(&fields.append_history)?;
-        self.with_task_lock(id, || {
+        // [ORB-16723] An operator's comment is the one unscoped write an
+        // active execution claim admits: its only effect is appending one
+        // comment to the append-only log, where the claim's steering reads it.
+        // Any other effect keeps the ordinary fence and its refusal.
+        let comment_only = fields.operator_comment
+            && fields.append_comments.len() == 1
+            && fields.status.is_none()
+            && fields.status_event.is_none()
+            && fields.status_note.is_none()
+            && fields.append_history.is_empty()
+            && fields.expected_status.is_none();
+        let write = |claimed: bool| {
             let mut bundle = self.read_existing_bundle(id)?;
             let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
             let now = Utc::now();
@@ -522,15 +533,19 @@ impl TaskV2Store {
                 || fields.status_event.is_some()
                 || fields.status_note.is_some()
             {
-                let context_files = bundle.envelope.context_files.clone();
-                append_creation_grant(
-                    &self.bundle_store,
-                    &mut bundle,
-                    &context_files,
-                    &[],
-                    &fields.actor,
-                    now,
-                )?;
+                // A claimed task's creation grant is the claim's to keep: a
+                // comment admitted under it records no new grant.
+                if !claimed {
+                    let context_files = bundle.envelope.context_files.clone();
+                    append_creation_grant(
+                        &self.bundle_store,
+                        &mut bundle,
+                        &context_files,
+                        &[],
+                        &fields.actor,
+                        now,
+                    )?;
+                }
                 bundle.envelope.status = target_status;
                 bundle.envelope.updated_at = now;
                 self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
@@ -540,6 +555,11 @@ impl TaskV2Store {
                 pending.finish();
             }
             Ok(())
-        })
+        };
+        if comment_only {
+            self.with_task_comment_lock(id, write)
+        } else {
+            self.with_task_lock(id, || write(false))
+        }
     }
 }

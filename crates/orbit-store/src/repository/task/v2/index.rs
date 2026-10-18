@@ -543,6 +543,26 @@ impl TaskV2Store {
             self.bundle_store.with_bundle_write_lock(id, op)
         })
     }
+
+    /// [`Self::with_task_lock`] for an operator's comment-only write, the one
+    /// unscoped write an execution claim admits [ORB-16723]. The lock itself
+    /// does not refuse a protecting claim; `op` learns whether one protects
+    /// the task. Every write inside still takes [`Self::with_task_lock`] or
+    /// classifies itself as `update_task_history` does, so nothing but the
+    /// comment lands under the claim.
+    pub(crate) fn with_task_comment_lock<T, F>(&self, id: &str, op: F) -> Result<T, OrbitError>
+    where
+        F: FnOnce(bool) -> Result<T, OrbitError>,
+    {
+        // Same boundary-then-bundle order as `with_task_lock` (ORB-12528).
+        self.in_boundary(|| {
+            let claimed = match &self.coordination {
+                Some(boundary) => boundary.protecting_claim_for_task(id)?.is_some(),
+                None => false,
+            };
+            self.bundle_store.with_bundle_write_lock(id, || op(claimed))
+        })
+    }
 }
 
 /// One registered task as the freshness scan checks it.

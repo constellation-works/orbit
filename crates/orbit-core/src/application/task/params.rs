@@ -48,6 +48,10 @@ pub(crate) struct TaskRecordUpdateParams {
     /// persisted status. Setting it does not itself constitute a history
     /// change — it only constrains one.
     pub(crate) expected_status: Option<Vec<TaskStatus>>,
+    /// The update entry point authorized this write as a human operator's
+    /// comment-only update; the store admits it under an execution claim
+    /// only when its sole effect is one comment [ORB-16723].
+    pub(crate) operator_comment: bool,
 }
 
 impl TaskRecordUpdateParams {
@@ -195,6 +199,65 @@ pub struct TaskUpdateParams {
     pub discard_candidate: bool,
     /// Allow replacing tags when the replacement list drops a system identity tag (`ci-failure:*`).
     pub allow_drop_system_tags: bool,
+}
+
+impl TaskUpdateParams {
+    /// Whether the update's only requested effect is appending its comment:
+    /// the one shape an execution claim admits from an operator [ORB-16723].
+    pub(super) fn is_comment_only(&self) -> bool {
+        let Self {
+            // Transport context and flags that change nothing on their own.
+            trusted_artifact_origin: _,
+            context_creation: _,
+            allow_drop_system_tags: _,
+            title,
+            description,
+            acceptance_criteria,
+            dependencies,
+            relations,
+            tags,
+            plan,
+            execution_summary,
+            comment,
+            status,
+            priority,
+            complexity,
+            task_type,
+            source_task_id,
+            planned_by,
+            implemented_by,
+            pr_status,
+            job_run_id,
+            crew,
+            orchestrator,
+            context_files,
+            upsert_artifacts,
+            discard_candidate,
+        } = self;
+        comment.is_some()
+            && title.is_none()
+            && description.is_none()
+            && acceptance_criteria.is_none()
+            && dependencies.is_none()
+            && relations.is_none()
+            && tags.is_none()
+            && plan.is_none()
+            && execution_summary.is_none()
+            && status.is_none()
+            && priority.is_none()
+            && complexity.is_none()
+            && task_type.is_none()
+            && source_task_id.is_none()
+            && planned_by.is_none()
+            && implemented_by.is_none()
+            && pr_status.is_none()
+            && job_run_id.is_none()
+            && crew.is_none()
+            && orchestrator.is_none()
+            && context_files.is_none()
+            && upsert_artifacts.is_empty()
+            && !discard_candidate
+    }
 }
 
 impl From<TaskUpdateParams> for TaskRecordUpdateParams {

@@ -21,8 +21,8 @@ use super::claimed_review::ToOwner;
 
 const STEERING: &str = "\n[workflow.mid_run_steering]\nenabled = true\n";
 
-/// An operator's comment on the owner's task. The owner takes it only while
-/// no execution claim protects the task.
+/// An operator's comment on the owner's task, which the owner takes even
+/// while an execution claim protects the task [ORB-16723].
 fn operator_comment(owner: &OrbitRuntime, task: &str, message: &str) -> CommentLogMark {
     owner
         .update_task_as_human(
@@ -33,7 +33,7 @@ fn operator_comment(owner: &OrbitRuntime, task: &str, message: &str) -> CommentL
             },
             "human:operator".into(),
         )
-        .expect("an operator comments on the owner's unclaimed task");
+        .expect("an operator comments on the owner's task");
     let comments = owner.get_task_comments(task).unwrap();
     CommentLogMark {
         position: (comments.len() - 1) as u64,
@@ -240,7 +240,42 @@ fn a_claimed_leaf_records_steering_on_its_owner_and_settlement_keeps_it() {
     assert_eq!(outstanding(reading), vec![gap]);
 }
 
+/// [ORB-16723] The operator steers while the leaf holds its claim: the owner
+/// admits the comment, the leaf's gate finds it outstanding against the
+/// watermark the owner holds for the live claim, and the next prompt
+/// delivers it.
+fn an_operator_comment_under_a_live_claim_is_the_leafs_outstanding_steering() {
+    let pair = Pair::with_configs(STEERING, STEERING, &[None]);
+    let owner = pair.wire.owner.clone();
+    let leaf = BoundLeaf::launch(&pair);
+    let task = pair.claimed_task(&leaf.run);
+    assert!(leaf.prompt(&task).get("steering").is_none());
+    assert!(outstanding(leaf.gate(&task).unwrap()).is_empty());
+
+    let steer = operator_comment(&owner, &task, "STEER: keep the flag name stable.");
+    let found = outstanding(leaf.gate(&task).unwrap());
+    assert_eq!(
+        found,
+        vec![steer],
+        "the claimed leaf's outstanding steering"
+    );
+    RuntimeHost::admit_steering_round(&leaf.bound, &leaf.run, &task, &found, None).unwrap();
+    let block = leaf.prompt(&task)["steering"]["comments"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        block.contains("STEER: keep the flag name stable."),
+        "{block}"
+    );
+    let deliveries = owner_deliveries(&owner, &task);
+    assert_eq!(deliveries.len(), 1, "{deliveries:?}");
+    assert_eq!(deliveries[0]["claim_id"], leaf.claim_id);
+    assert!(outstanding(leaf.gate(&task).unwrap()).is_empty());
+}
+
 crate::scenario_table!(
     a_claimed_leaf_records_steering_on_its_owner_scenarios,
-    a_claimed_leaf_records_steering_on_its_owner_and_settlement_keeps_it
+    a_claimed_leaf_records_steering_on_its_owner_and_settlement_keeps_it,
+    an_operator_comment_under_a_live_claim_is_the_leafs_outstanding_steering
 );

@@ -110,6 +110,11 @@ pub struct TaskHistoryUpdateParams {
     /// go stale in the gap. `None` keeps the unconditional last-writer-wins
     /// behavior every other caller relies on.
     pub expected_status: Option<Vec<TaskStatus>>,
+    /// Set only by `orbit-core` for a write it authorized as a human
+    /// operator's. While an execution claim protects the task, the store
+    /// admits such a write only when its sole effect is appending exactly one
+    /// comment; every other unscoped write stays refused [ORB-16723].
+    pub operator_comment: bool,
 }
 
 /// One task-bundle mutation whose freshness guard, durable receipt, history

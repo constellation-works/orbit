@@ -316,15 +316,29 @@ impl OrbitRuntime {
             StatusAuthority::Lifecycle | StatusAuthority::Forced
         ) && !context.system_writer;
         let discarded = params.discard_candidate;
+        // [ORB-16723] An operator's comment-only update may land under an
+        // execution claim. Its lock admits the claim; the write itself is
+        // re-classified below and by the store, which refuses anything more.
+        let operator_comment = context.operator_decision_authority
+            && !context.system_writer
+            && context.agent.is_none()
+            && context.model.is_none()
+            && params.is_comment_only();
         let mut inputs = Some((params, context));
         let mut updated: Option<LockedTaskUpdate> = None;
-        self.stores().tasks().with_task_write_lock(id, &mut || {
+        let mut body = || {
             let (params, context) = inputs.take().ok_or_else(|| {
                 OrbitError::Execution("task update body was invoked more than once".to_string())
             })?;
             updated = Some(self.update_task_locked(id, params, context)?);
             Ok(())
-        })?;
+        };
+        let tasks = self.stores().tasks();
+        if operator_comment {
+            tasks.with_task_comment_write_lock(id, &mut body)?;
+        } else {
+            tasks.with_task_write_lock(id, &mut body)?;
+        }
         let LockedTaskUpdate {
             task: updated,
             previous_status,
@@ -373,6 +387,7 @@ impl OrbitRuntime {
             None => self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?,
         };
         let task = self.get_task(id)?;
+        let comment_only = params.is_comment_only();
         // Gate records are certificates and authority, not agent claims.
         // Only the trusted system entry point may write them; an actor label
         // or artifact/tool field cannot opt into that authority. Normalize
@@ -608,6 +623,7 @@ impl OrbitRuntime {
                     append_comments: append_comments.clone(),
                     append_history: append_history.clone(),
                     expected_status: expected_status.map(|status| vec![status]),
+                    operator_comment: comment_only && operator_write && !agent_context_declared(),
                     ..TaskRecordUpdateParams::from(params)
                 },
             )?;
