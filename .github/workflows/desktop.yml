@@ -98,6 +98,9 @@ jobs:
       - name: Format
         run: cargo fmt --check
 
+      - name: Watcher notifications
+        run: cargo test --locked --no-default-features --test watcher_notifications
+
       - name: Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
 

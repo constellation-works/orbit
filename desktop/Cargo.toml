@@ -11,23 +11,37 @@ license = "MIT"
 description = "Desktop window for the Orbit dashboard"
 publish = false
 
+# The polling library can run without native webview dependencies.
+[features]
+default = ["native"]
+native = [
+    "dep:tauri-build", "dep:notify-rust", "dep:tauri", "dep:tauri-plugin-autostart",
+    "dep:tauri-plugin-opener", "dep:tauri-plugin-window-state", "dep:ureq",
+    "dep:libc", "dep:signal-hook",
+]
+
+[[bin]]
+name = "orbit-desktop"
+path = "src/main.rs"
+required-features = ["native"]
+
 [build-dependencies]
-tauri-build = { version = "2.7", features = [] }
+tauri-build = { version = "2.7", features = [], optional = true }
 
 [dependencies]
-notify-rust = "4"
+notify-rust = { version = "4", optional = true }
 serde_json = "1"
-tauri = { version = "2.12", features = ["tray-icon"] }
-tauri-plugin-autostart = "2.5"
-tauri-plugin-opener = "2.7"
-tauri-plugin-window-state = "2"
+tauri = { version = "2.12", features = ["tray-icon"], optional = true }
+tauri-plugin-autostart = { version = "2.5", optional = true }
+tauri-plugin-opener = { version = "2.7", optional = true }
+tauri-plugin-window-state = { version = "2", optional = true }
 # Plain HTTP to the app's own loopback server only: no TLS stack.
-ureq = { version = "3.1", default-features = false }
+ureq = { version = "3.1", default-features = false, optional = true }
 url = "2"
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
-signal-hook = "0.4"
+libc = { version = "0.2", optional = true }
+signal-hook = { version = "0.4", optional = true }
 
 [lints.clippy]
 await_holding_lock = "deny"
