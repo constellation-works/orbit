@@ -207,12 +207,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "plugin.legacy_callback_identity": {
-      "scope": "built-in",
-      "state": "default",
-      "path": null,
-      "shadowed_by": []
-    },
     "pr.close_on_terminal": {
       "scope": "built-in",
       "state": "default",

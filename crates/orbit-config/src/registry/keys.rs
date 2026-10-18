@@ -28,6 +28,12 @@ pub fn describe(key: &str) -> Option<&'static ConfigKeyDescriptor> {
 /// load warning once the release window has passed.
 pub(crate) const REMOVED_CONFIG_KEYS: &[(&str, &str)] = &[
     (
+        "plugin.legacy_callback_identity",
+        "plugin callbacks require the host-issued session descriptor; the environment token and \
+         process ancestry no longer authorize callbacks. Delete this key and keep file descriptor \
+         3 open across backend wrappers, exec and setsid",
+    ),
+    (
         "workflow.pilot_max_complexity",
         "the task pilot applies its assessed complexity as-is; route a tier with \
      workflow.<tier>_complexity_crews or pin `crew` on the task instead",

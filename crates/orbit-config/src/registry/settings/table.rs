@@ -392,12 +392,6 @@ define_config_settings! {
         section: ConfigSection::Housekeeping, order: 90,
         resolve: |raw: Option<String>| resolve_choice(raw, "moderate", "security_alert_sweep.min_severity", SECURITY_ALERT_SEVERITIES),
     },
-    plugin_legacy_callback_identity: bool => bool {
-        key: "plugin.legacy_callback_identity", value_type: "bool",
-        description: "Deprecated: also accept the environment token and process ancestry as a plugin callback credential. Off by default; identity is the session record the host hands a backend on file descriptor 3. Removed in the next release.",
-        section: ConfigSection::Housekeeping, order: 80,
-        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
-    },
     pr_close_on_terminal: bool => bool {
         key: "pr.close_on_terminal", value_type: "bool",
         description: "Close a task's open Orbit-authored pull requests (delivery and preservation PRs for blocked tasks) when the task lands (done), is rejected or is archived, with a comment naming the landing or the decision. Branches are kept; a forge error is a warning, never a failure (default true).",

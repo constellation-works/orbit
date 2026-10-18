@@ -1,30 +1,14 @@
 use super::*;
 
-/// Identify a plugin callback from the inherited credential descriptor, or —
-/// while `legacy_identity` says so — from the host-issued token and process
-/// ancestry. `None` is an ordinary caller.
-///
-/// Every other outcome is [`OrbitError::PolicyDenied`], never an absent
-/// restriction: a token matching no session, a token belonging to another
-/// process, a retired credential presented after the legacy path was turned
-/// off, and a confined child carrying no credential at all. Ancestry still
-/// names the plugin, where it can, so the refusal can be audited.
-pub fn resolve_plugin_callback<F>(
+/// Identify a plugin callback from the inherited host-issued descriptor.
+/// `None` is an ordinary caller. Token-only callers, live backend descendants
+/// without the descriptor, and unidentified confined children are refused.
+pub fn resolve_plugin_callback(
     global_root: &Path,
-    legacy_identity: F,
-) -> Result<Option<PluginCallbackIdentity>, OrbitError>
-where
-    F: FnOnce() -> Result<bool, OrbitError>,
-{
-    match resolve_plugin_callback_session(global_root, legacy_identity)? {
+) -> Result<Option<PluginCallbackIdentity>, OrbitError> {
+    match resolve_plugin_callback_session(global_root)? {
         CallbackResolution::None => Ok(None),
         CallbackResolution::Identified(identity) => Ok(Some(identity)),
-        CallbackResolution::InvalidCredential(identity) => Err(invalid_callback_credential(
-            identity.as_ref().map(|id| id.provenance.name.as_str()),
-        )),
-        CallbackResolution::Mismatched { token, ancestry } => {
-            Err(mismatched_callback_credential(&token, ancestry.as_deref()))
-        }
         CallbackResolution::RetiredCredential(identity) => Err(retired_callback_credential(
             identity.as_ref().map(|id| id.provenance.name.as_str()),
         )),
@@ -32,98 +16,33 @@ where
     }
 }
 
-/// Full resolution used by dispatch so an invalid credential can still stamp
-/// plugin identity on the audit row.
-///
-/// `legacy_identity` is the host's answer to "is
-/// `plugin.legacy_callback_identity` still on". It is a callback rather than a
-/// value because reading it costs a configuration load, and the question only
-/// arises for a caller that presented legacy evidence — never on the ordinary
-/// path every `orbit` invocation takes.
-pub fn resolve_plugin_callback_session<F>(
+/// Full resolution used by dispatch so a missing descriptor can still stamp
+/// plugin identity on the audit row when live ancestry names the backend.
+pub fn resolve_plugin_callback_session(
     global_root: &Path,
-    legacy_identity: F,
-) -> Result<CallbackResolution, OrbitError>
-where
-    F: FnOnce() -> Result<bool, OrbitError>,
-{
+) -> Result<CallbackResolution, OrbitError> {
     let dir = callback_dir(global_root);
-    // The credential this host issues. Checked first and on its own: it
-    // survives `setsid` and a cleared environment, and it needs neither the
-    // session directory nor the process tree to be readable.
+    // Only the host-issued descriptor authorizes a callback. It survives
+    // `setsid` and a cleared environment without relying on process ancestry.
     if let Some(record) = credential_from_descriptor(&dir) {
         return Ok(CallbackResolution::Identified(identity_from(&record)));
     }
-    let token = std::env::var(ORBIT_PLUGIN_CALLBACK_ENV)
+    let has_retired_token = std::env::var(ORBIT_PLUGIN_CALLBACK_ENV)
         .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    let caller = CallerProcess::current();
-    let ancestry = scan_ancestry_session(global_root, &caller);
-    // Nothing legacy to weigh: the answer is the same either way, so the flag
-    // is never read. An unreadable session directory is still the sandbox
-    // answering — that gate is not part of the deprecation [ORB-12798].
-    if token.is_none() && ancestry.session().is_none() {
-        return Ok(match ancestry {
-            AncestryScan::Unreadable => CallbackResolution::UnidentifiedPluginChild,
-            AncestryScan::None | AncestryScan::Session(_) => CallbackResolution::None,
-        });
-    }
-    if !legacy_identity()? {
+        .is_some_and(|value| !value.trim().is_empty());
+    let ancestry = scan_ancestry_session(global_root, &CallerProcess::current());
+    // Retain the default refusal for a backend that shed its descriptor,
+    // including unsandboxed callers with a readable session directory.
+    // The retired environment token is only evidence to refuse, never a
+    // credential to load or authorize.
+    if has_retired_token || ancestry.session().is_some() {
         return Ok(CallbackResolution::RetiredCredential(
             ancestry.session().map(identity_from),
         ));
     }
-    tracing::warn!(
-        target: "orbit.tools.plugin",
-        "a plugin callback was identified by the deprecated environment token / process \
-         ancestry path; it is removed in the next release. Clear \
-         `plugin.legacy_callback_identity` and make sure the backend keeps file descriptor 3 \
-         open across `setsid`, `exec` and any wrapper script.",
-    );
-    let token_record = match token.as_deref() {
-        Some(value) => match load_token_session(&dir, value) {
-            Ok(record) => TokenLookup::Found(record),
-            Err(OrbitError::PolicyDenied(_)) => TokenLookup::Invalid,
-            Err(error) => return Err(error),
-        },
-        None => TokenLookup::Absent,
-    };
-    Ok(match (token_record, ancestry) {
-        // A record the presenting process is no part of is somebody else's
-        // credential, whether it was read out of the session directory, copied
-        // from another child's environment, or kept across a `setsid`.
-        (TokenLookup::Found(record), ancestry) if !caller.owns(&record) => {
-            CallbackResolution::Mismatched {
-                token: record.plugin,
-                ancestry: match ancestry {
-                    AncestryScan::Session(ancestry) => Some(ancestry.plugin),
-                    AncestryScan::None | AncestryScan::Unreadable => None,
-                },
-            }
-        }
-        (TokenLookup::Found(token), AncestryScan::Session(ancestry))
-            if token.plugin != ancestry.plugin =>
-        {
-            CallbackResolution::Mismatched {
-                token: token.plugin,
-                ancestry: Some(ancestry.plugin),
-            }
-        }
-        (TokenLookup::Found(record), _) => CallbackResolution::Identified(identity_from(&record)),
-        (TokenLookup::Invalid, ancestry) => {
-            CallbackResolution::InvalidCredential(ancestry.session().map(identity_from))
-        }
-        (TokenLookup::Absent, AncestryScan::Session(record)) => {
-            CallbackResolution::Identified(identity_from(&record))
-        }
-        // No credential, and the host-owned session directory is out of
-        // reach: only a sandboxed plugin child is refused that read, so this
-        // is a backend descendant that shed its identity, not a local caller.
-        (TokenLookup::Absent, AncestryScan::Unreadable) => {
-            CallbackResolution::UnidentifiedPluginChild
-        }
-        (TokenLookup::Absent, AncestryScan::None) => CallbackResolution::None,
+    Ok(match ancestry {
+        AncestryScan::Unreadable => CallbackResolution::UnidentifiedPluginChild,
+        AncestryScan::None | AncestryScan::Session(_) => CallbackResolution::None,
     })
 }
 
@@ -132,36 +51,15 @@ where
 pub enum CallbackResolution {
     /// Ordinary caller: no token, no ancestor session.
     None,
-    /// Host-launched backend, identified by token and/or ancestry.
+    /// Host-launched backend, identified by its host-issued descriptor.
     Identified(PluginCallbackIdentity),
-    /// A token was presented that matches no session. `Some` when ancestry
-    /// still names the backend so the refusal can be audited.
-    InvalidCredential(Option<PluginCallbackIdentity>),
-    /// The presented token is not this process's own: it names a plugin the
-    /// caller is no part of, or two different plugins at once. `ancestry` is
-    /// the plugin a live session still names for this process, when there is
-    /// one to name.
-    Mismatched {
-        token: String,
-        ancestry: Option<String>,
-    },
-    /// The caller presented only the retired credential — the environment
-    /// token, or an ancestry a live session still matches — while
-    /// `plugin.legacy_callback_identity` is off. It held a credential this
-    /// host no longer honours, which is a refusal and not an ordinary caller.
-    /// `Some` when ancestry still names the backend so the refusal can be
-    /// audited.
+    /// No valid descriptor, but a retired token or live ancestry marks the
+    /// caller as a backend. `Some` names the backend for refusal auditing.
     RetiredCredential(Option<PluginCallbackIdentity>),
     /// No credential, from a process that cannot read the host-owned session
     /// directory at all. Only a plugin sandbox denies that read, so identity
     /// is missing rather than irrelevant.
     UnidentifiedPluginChild,
-}
-
-enum TokenLookup {
-    Absent,
-    Found(SessionRecord),
-    Invalid,
 }
 
 /// What a scan of the session directory could see from the calling process.
@@ -203,21 +101,11 @@ impl CallerProcess {
         }
     }
 
-    /// Whether `record` was bound to this process, its parent, or its process
-    /// group. A record minted but not yet bound (`pid == 0`) exists only
-    /// between `mint` and `bind_pid`, before any child has run.
-    ///
-    /// The recorded start time is deliberately *not* consulted here. Reading
-    /// `/proc/<pid>` of another process is exactly what the sandbox refuses a
-    /// confined child, so a backend descendant cannot prove its own parent is
-    /// alive — asking would refuse every legitimate callback. It is not
-    /// needed either: this record was found through a 256-bit token the host
-    /// minted for it, not by scanning for a matching pid, and
-    /// [`scan_ancestry_session`] — which does scan — still checks liveness
-    /// before it trusts a pid.
+    /// Whether a live record matches this process, its parent, or its group.
+    /// The scan checks start time before using this match; ancestry can only
+    /// cause a refusal, never authorize a callback without its descriptor.
     fn owns(&self, record: &SessionRecord) -> bool {
-        record.pid == 0
-            || record.pid == self.self_pid
+        record.pid == self.self_pid
             || self.parent_pid == Some(record.pid)
             || self.pgid == Some(record.pid)
     }
@@ -360,54 +248,6 @@ pub(super) fn normalize_tools(tools: &[String]) -> Vec<String> {
     tools.sort();
     tools.dedup();
     tools
-}
-
-fn load_token_session(dir: &Path, token: &str) -> Result<SessionRecord, OrbitError> {
-    if !is_token_hex(token) {
-        return Err(invalid_callback_credential(None));
-    }
-    let path = dir.join(token);
-    match orbit_common::fs::io::open_read_only_no_follow(&path) {
-        Ok(file) => {
-            let metadata = file.metadata().map_err(|error| {
-                OrbitError::Io(format!(
-                    "read plugin callback session `{}`: {error}",
-                    path.display()
-                ))
-            })?;
-            if !metadata.is_file() {
-                return Err(invalid_callback_credential(None));
-            }
-            let mut bytes = Vec::new();
-            file.take(MAX_SESSION_BYTES as u64 + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|error| {
-                    OrbitError::Io(format!(
-                        "read plugin callback session `{}`: {error}",
-                        path.display()
-                    ))
-                })?;
-            if bytes.len() > MAX_SESSION_BYTES {
-                return Err(invalid_callback_credential(None));
-            }
-            parse_session(&bytes).ok_or_else(|| invalid_callback_credential(None))
-        }
-        // `NotFound` is a token that matches no session. `PermissionDenied`
-        // is a confined child reaching for a record the sandbox grants some
-        // other plugin: both are a credential this caller does not hold.
-        Err(error)
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
-            ) =>
-        {
-            Err(invalid_callback_credential(None))
-        }
-        Err(error) => Err(OrbitError::Io(format!(
-            "read plugin callback session `{}`: {error}",
-            path.display()
-        ))),
-    }
 }
 
 fn scan_ancestry_session(global_root: &Path, caller: &CallerProcess) -> AncestryScan {

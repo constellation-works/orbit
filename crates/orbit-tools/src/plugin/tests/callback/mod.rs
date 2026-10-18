@@ -5,15 +5,7 @@ use super::super::callback::{
     ORBIT_PLUGIN_CALLBACK_ENV, ORBIT_PLUGIN_CALLBACK_FD_ENV, PluginCallbackSession,
 };
 #[cfg(unix)]
-use orbit_common::OrbitError;
-#[cfg(unix)]
 use orbit_types::plugin::PluginProvenance;
-
-/// The default: the inherited descriptor is the only credential.
-#[cfg(unix)]
-fn legacy_off() -> Result<bool, OrbitError> {
-    Ok(false)
-}
 
 #[cfg(unix)]
 fn provenance(name: &str) -> PluginProvenance {

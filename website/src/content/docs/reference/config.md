@@ -384,7 +384,6 @@ warning. A `[crews.system]` table you define is an ordinary crew.
 | `execution.codex.approval_policy` | string · **Default:** Unset<br>Codex approval policy: `untrusted`, `on-request`, or `never`. |
 | `execution.proc_spawn_max_timeout_minutes` | integer · **Default:** `45`<br>Longest timeout one `proc.spawn` call may use inside a managed activity, also capped by the activity's remaining wall-clock budget (1–1440). Outside an activity the ceiling stays 60 seconds. |
 | `execution.agent_stall_minutes` | integer · **Default:** `30`<br>Minutes a provider process may produce no output and use no CPU before its step fails as stalled and is retried. `0` disables the check and leaves only the wall-clock timeout. At most 1440. |
-| `plugin.legacy_callback_identity` | bool · **Default:** `false`<br>Deprecated; removed in the next release. Also accept the environment token and process ancestry as a plugin callback credential. |
 | `runtime.log_max_file_mb` | integer · **Default:** `100`<br>Roll the operational `orbit.jsonl` past this size (MiB). At least 1 and at most `runtime.log_max_total_mb`. |
 | `runtime.log_max_total_mb` | integer · **Default:** `500`<br>Operational `orbit.jsonl` archive budget in MiB; the oldest are pruned first. |
 | `runtime.log_retention_days` | integer · **Default:** `7`<br>Delete archives in both operational and agent feeds older than this. |

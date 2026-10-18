@@ -308,9 +308,8 @@ per-call session record on file descriptor 3, inherited by descendants;
 gate. `orbit tool run` and MCP `tools/call` verify that descriptor against the
 host-owned session record and refuse anything outside its effective tool ceiling.
 Closing the descriptor is a refusal; changing environment variables or using
-`setsid` cannot expand access. The retired token/ancestry path is available only
-with the deprecated `plugin.legacy_callback_identity` setting, off by default;
-`orbit plugin doctor` reports it when enabled.
+`setsid` cannot expand access. The retired environment token and process
+ancestry never authorize callbacks; backends must preserve the descriptor.
 
 Who may *call* a plugin tool is decided by its `execution_kind`, not by the
 manifest: a `read_only` tool is callable by any caller Orbit can identify, and
