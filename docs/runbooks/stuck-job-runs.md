@@ -26,6 +26,12 @@ orbit run events <run_id>           # audit events for the run
 orbit run trace  <run_id>           # parent/child event tree
 ```
 
+When a provider exits unsuccessfully without a more specific diagnostic, the step
+error includes the last four non-empty stderr lines. This tail is redacted and
+capped at 1024 characters (plus a truncation indicator); it provides context
+without changing failure classification. Use `orbit run logs <run_id>` for the
+full captured output.
+
 Before changing run state, confirm the recorded owner PID and whether that exact process
 is still alive. A long-running run is not necessarily stuck.
 

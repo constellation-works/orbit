@@ -14,12 +14,10 @@ use orbit_common::process::build_budget::BuildBudgetWaits;
 use orbit_common::security::redaction::{PatternRedactor, redact_all_json};
 use orbit_types::workflow::activity_job::AgentLoopSpec;
 use orbit_types::workflow::{
-    ProviderFailureClass, ProviderLimitFailure, STALLED_MARKER, TRANSIENT_FAILURE_MARKER,
-    provider_failure_text,
+    CLI_STDERR_TAIL_SEPARATOR, ProviderFailureClass, ProviderLimitFailure, STALLED_MARKER,
+    TRANSIENT_FAILURE_MARKER, provider_failure_text,
 };
 use serde_json::Value;
-
-const CLI_STDERR_TAIL_SEPARATOR: &str = "\nstderr tail:\n";
 
 use crate::context::RuntimeHost;
 

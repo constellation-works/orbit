@@ -15,6 +15,19 @@ fn workspace() -> TestWorkspace {
     TestWorkspace::new("task-list-test", template)
 }
 
+#[test]
+fn fresh_root_task_list_has_no_startup_warnings() {
+    let workspace = workspace();
+    let output = workspace.run(&["task", "list", "--json"], "list tasks in a fresh root");
+    let tasks: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(tasks.as_array().unwrap().is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("WARN"),
+        "a fresh root must load shipped activities without operator warnings: {stderr}"
+    );
+}
+
 fn completed_add_and_update_leave_the_next_write_free_list_indexed() {
     let workspace = workspace();
     let added = workspace.add_task_cli_with_tags("Fresh index", &["initial"]);
