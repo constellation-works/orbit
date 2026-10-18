@@ -82,6 +82,8 @@ pub struct HostResourceMinute {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResourceMinuteLoad {
     pub minute_started_at: DateTime<Utc>,
+    /// Readings covering this minute, at the worker's sampling interval.
+    pub samples: u32,
     pub cpu_cores: f64,
     /// Counter provenance, unchanged from the stored raw minute.
     pub cpu_accounting: Option<String>,
@@ -138,6 +140,13 @@ pub struct AdmissionForecastRecord {
     /// be read.
     pub cpu_count: Option<u32>,
     pub memory_total_bytes: Option<u64>,
+    /// Baseline actually counted by this forecast (zero if unreadable).
+    /// Absent on historical rows.
+    pub baseline_cpu_cores: Option<f64>,
+    pub baseline_memory_bytes: Option<u64>,
+    /// Deliveries priced by the forecast, including reservations and this
+    /// pass's admissions. Absent on historical rows; empty is a known idle set.
+    pub covered_deliveries: Option<Vec<ForecastDelivery>>,
     /// The host's forecast load at each recorded offset, counting what the
     /// pass admitted.
     pub points: Vec<AdmissionForecastPoint>,
@@ -149,6 +158,19 @@ pub struct AdmissionForecastRecord {
     pub fit_skipped: Vec<String>,
     /// A pull request's decision; absent for local admission passes.
     pub pull: Option<PullForecastDecision>,
+}
+
+/// A delivery included in a forecast, scoped to its workspace and admission.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ForecastDelivery {
+    pub workspace_id: String,
+    pub task_id: String,
+    /// Admission time for a running delivery, or reservation time when its
+    /// runs do not yet exist. The latter resolves to the first measured
+    /// admission at or after this timestamp, never a subsequent re-admission.
+    pub admitted_at: DateTime<Utc>,
+    /// Live runs already known at forecast time. Empty for a reservation.
+    pub run_ids: Vec<String>,
 }
 
 /// The request decision made against a follower's forecast, including

@@ -292,6 +292,15 @@ fn an_enforcing_follower_requests_only_work_its_forecast_has_room_for() {
     let records = forecasts(&pair);
     assert_eq!(records.len(), 2);
     assert_eq!(records[1].admitted, pair.tasks);
+    assert_eq!(records[1].baseline_memory_bytes, Some(4 * GIB));
+    let covered = records[1].covered_deliveries.as_ref().unwrap();
+    for task in &pair.tasks {
+        assert!(
+            covered.iter().any(|delivery| delivery.task_id == *task
+                && delivery.workspace_id == records[1].workspace_id),
+            "returned claims are covered: {records:?}"
+        );
+    }
     let sent = records[1].pull.as_ref().unwrap();
     assert!(sent.sent && !sent.forecast_no_headroom);
     assert!(

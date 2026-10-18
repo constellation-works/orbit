@@ -227,10 +227,21 @@ impl OrbitRuntime {
             }
             None => (Vec::new(), Vec::new()),
         };
+        let covered_since = records
+            .iter()
+            .filter_map(|record| record.covered_deliveries.as_ref())
+            .flatten()
+            .map(|delivery| delivery.admitted_at)
+            .min();
+        let resources = covered_since
+            .map(|since| store.delivery_run_resources(since))
+            .transpose()?
+            .unwrap_or_default();
         Ok(forecast_accuracy(
             &records,
             &minutes,
             &deliveries,
+            &resources,
             selection,
             report_at,
         ))

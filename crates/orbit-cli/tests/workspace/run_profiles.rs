@@ -933,7 +933,12 @@ fn accuracy_splits_idle_minutes_from_sampling_gaps() {
         &ten_row[..7],
         ["+10m", "0 (1 unmeasured)", "0", "1", "0", "0", "1"]
     );
-    assert!(ten_row[7..].iter().all(|cell| cell == "-"), "{ten_row:?}");
+    assert!(ten_row[7..15].iter().all(|cell| cell == "-"), "{ten_row:?}");
+    assert_eq!(
+        ten_row[15], "0",
+        "no attributed pairs in an unmeasured minute"
+    );
+    assert!(ten_row[16..].iter().all(|cell| cell == "-"), "{ten_row:?}");
     let twenty_row = row("+20m\t");
     assert_eq!(
         &twenty_row[..7],
@@ -955,7 +960,7 @@ fn accuracy_splits_idle_minutes_from_sampling_gaps() {
         ["+5m", "1 (1 unmeasured)", "1", "0", "0", "0", "0"]
     );
     assert_eq!(five_row[7], "-2.0 cores");
-    assert_eq!(five_row[10], "+2.0 GiB");
+    assert_eq!(five_row[11], "+2.0 GiB");
 }
 
 /// Enforce cohorts report the distinct tasks local passes admitted, the
@@ -1141,4 +1146,159 @@ fn enforce_accuracy_reports_admitted_tasks_gap_holds_and_pull_holds() {
     assert_eq!(shadow_drains[0]["gap_held"], serde_json::json!([]));
     assert_eq!(shadow_drains[0]["pull_would_hold"], 0);
     assert_eq!(shadow_drains[0]["pull_held"], 0);
+}
+
+#[test]
+fn accuracy_attributes_only_covered_deliveries_and_keeps_legacy_raw_pairs() {
+    if crate::isolated_test::run_in_child(
+        "run_profiles::accuracy_attributes_only_covered_deliveries_and_keeps_legacy_raw_pairs",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let at = (Utc::now() - chrono::Duration::hours(2))
+        .duration_trunc(chrono::Duration::minutes(1))
+        .unwrap();
+    let stamp = |at: DateTime<Utc>| at.to_rfc3339_opts(SecondsFormat::Micros, true);
+    let before = at - chrono::Duration::minutes(10);
+    let admitted = at + chrono::Duration::seconds(10);
+    let later = at + chrono::Duration::minutes(2);
+    let points = [(5, 5.0, 8), (10, 5.0, 8), (20, 5.0, 8), (30, 5.0, 8)];
+    // A legacy writer can still write without any new metadata after migration.
+    for drain in ["jrun-attributed", "jrun-legacy"] {
+        fixture.forecast(drain, "enforce", at, &points, &[], &[], &[]);
+    }
+    let covered = serde_json::json!([
+        {"workspace_id":"ws_fixture", "task_id":"running", "admitted_at":(before + chrono::Duration::nanoseconds(123)).to_rfc3339(), "run_ids":["worker-running"]},
+        {"workspace_id":"ws_fixture", "task_id":"admitted", "admitted_at":stamp(at), "run_ids":[]}
+    ]);
+    fixture
+        .db()
+        .execute(
+            "UPDATE admission_forecasts SET baseline_cpu_cores = 1, baseline_memory_bytes = ?1, \
+         covered_deliveries_json = ?2 WHERE run_id = 'jrun-attributed'",
+            params![2 * GIB, covered.to_string()],
+        )
+        .unwrap();
+    for (offset, _, _) in points {
+        let target = at + chrono::Duration::minutes(i64::from(offset));
+        fixture.host_minute(target, 9.0, 11);
+        for (workspace, run, task, admission, cpu, memory) in [
+            (
+                "ws_fixture",
+                "worker-running",
+                "running",
+                before,
+                1.5,
+                2 * GIB,
+            ),
+            // A continuation shares the admission clock, whose recorded JSON
+            // has finer precision than the SQLite worker-minute timestamp.
+            (
+                "ws_fixture",
+                "worker-continuation",
+                "running",
+                before,
+                0.5,
+                GIB,
+            ),
+            (
+                "ws_fixture",
+                "worker-admitted",
+                "admitted",
+                admitted,
+                1.0,
+                GIB,
+            ),
+            ("ws_fixture", "worker-later", "later", later, 5.0, 5 * GIB),
+            // A later re-admission and another workspace must not leak in.
+            (
+                "ws_fixture",
+                "worker-retry",
+                "admitted",
+                later,
+                99.0,
+                20 * GIB,
+            ),
+            (
+                "ws_other",
+                "worker-other",
+                "running",
+                before,
+                99.0,
+                20 * GIB,
+            ),
+        ] {
+            // The running worker's clock straddles the host minute; its
+            // final half-minute has six samples. Both halves together must
+            // contribute exactly one host minute, not two worker peaks.
+            let spans = if run == "worker-running" {
+                vec![
+                    (target - chrono::Duration::seconds(30), 12),
+                    (target + chrono::Duration::seconds(30), 6),
+                ]
+            } else {
+                vec![(target, 12)]
+            };
+            for (index, (start, samples)) in spans.into_iter().enumerate() {
+                fixture.db().execute(
+                    "INSERT INTO run_resource_minutes (workspace_id, run_id, minute_index, \
+                     minute_started_at, task_id, work_class, delivery_admitted_at, \
+                     cpu_cores, memory_bytes, samples) VALUES (?1, ?2, ?3, ?4, ?5, 'change', ?6, ?7, ?8, ?9)",
+                    params![workspace, run, offset * 2 + index as u32, stamp(start), task,
+                            stamp(admission), cpu, memory, samples],
+                ).unwrap();
+            }
+        }
+    }
+    let before = fixture.measurements();
+    let args = ["run", "profiles", "--accuracy", "--json"];
+    let report: Value = serde_json::from_str(&fixture.stdout(&args)).unwrap();
+    assert_eq!(report["forecasts"], 2);
+    for offset in report["offsets"].as_array().unwrap() {
+        assert_eq!(offset["paired"], 2);
+        assert_eq!(offset["attributed_paired"], 1);
+        assert_eq!(offset["cpu"]["mean_error"], -4.0);
+        assert_eq!(offset["cpu"]["mean_absolute_error"], 4.0);
+        assert_eq!(offset["cpu"]["under_rate"], 1.0);
+        assert_eq!(offset["attributed_cpu"]["mean_error"], 1.0);
+        assert_eq!(offset["attributed_cpu"]["mean_absolute_error"], 1.0);
+        assert_eq!(offset["attributed_cpu"]["under_rate"], 0.0);
+        assert_eq!(offset["memory"]["mean_error"], -3.0 * GIB as f64);
+        assert_eq!(offset["attributed_memory"]["mean_error"], 2.0 * GIB as f64);
+        assert_eq!(
+            offset["attributed_memory"]["mean_absolute_error"],
+            2.0 * GIB as f64
+        );
+        assert_eq!(offset["attributed_memory"]["under_rate"], 0.0);
+    }
+    for pair in report["pairs"].as_array().unwrap() {
+        if pair["run_id"] == "jrun-legacy" {
+            assert!(pair["attributed_cpu_cores"].is_null());
+            assert!(pair["attributed_memory_bytes"].is_null());
+        } else {
+            assert_eq!(pair["attributed_cpu_cores"], 4.0);
+            assert_eq!(pair["attributed_memory_bytes"], 6.0 * GIB as f64);
+        }
+    }
+    let text = fixture.stdout(&["run", "profiles", "--accuracy", "--format", "table"]);
+    for column in [
+        "CPU_MAE",
+        "MEM_MAE",
+        "ATTR_PAIRS",
+        "ATTR_CPU_MEAN_ERR",
+        "ATTR_CPU_MAE",
+        "ATTR_CPU_UNDER",
+        "ATTR_MEM_MEAN_ERR",
+        "ATTR_MEM_MAE",
+        "ATTR_MEM_UNDER",
+    ] {
+        assert!(
+            text.contains(column),
+            "missing accuracy column {column}: {text}"
+        );
+    }
+    assert!(text.contains("+1.0 cores"), "{text}");
+    assert!(text.contains("+2.0 GiB"), "{text}");
+    assert_eq!(fixture.measurements(), before, "reporting is read-only");
 }

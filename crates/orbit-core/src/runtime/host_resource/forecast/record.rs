@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use orbit_store::contracts::AdmissionForecastPoint;
+use orbit_store::contracts::{AdmissionForecastPoint, ForecastDelivery};
 
 use super::{HostLoadForecast, MemoryTerms};
 use crate::runtime::host_resource::profile::{ProfileLookup, ProfileSet};
@@ -25,6 +25,9 @@ pub struct ForecastPoints {
     /// The host's size; `None` when it could not be read.
     pub cpu_count: Option<u32>,
     pub memory_total_bytes: Option<u64>,
+    pub baseline_cpu_cores: f64,
+    pub baseline_memory_bytes: u64,
+    pub covered_deliveries: Vec<ForecastDelivery>,
     /// `(offset, cores, memory)`.
     points: Vec<(u32, f64, MemoryTerms)>,
     profiles: Arc<ProfileSet>,
@@ -49,6 +52,28 @@ impl HostLoadForecast {
             at: self.at,
             cpu_count: self.host.map(|host| host.cpu_count),
             memory_total_bytes: self.host.map(|host| host.memory_total_bytes),
+            baseline_cpu_cores: self.cpu.baseline.unwrap_or(0.0),
+            baseline_memory_bytes: self.memory.baseline.unwrap_or(0.0).max(0.0).round() as u64,
+            covered_deliveries: self
+                .running
+                .iter()
+                .map(|delivery| ForecastDelivery {
+                    workspace_id: delivery.workspace_id.clone(),
+                    task_id: delivery.task_id.clone(),
+                    admitted_at: delivery.admitted_at,
+                    run_ids: delivery.run_ids.clone(),
+                })
+                .chain(
+                    self.reservations
+                        .iter()
+                        .map(|reservation| ForecastDelivery {
+                            workspace_id: reservation.workspace_id.clone(),
+                            task_id: reservation.task_id.clone(),
+                            admitted_at: reservation.reserved_at,
+                            run_ids: Vec::new(),
+                        }),
+                )
+                .collect(),
             points,
             profiles: Arc::clone(&self.profiles),
         }
@@ -58,7 +83,13 @@ impl HostLoadForecast {
 impl ForecastPoints {
     /// Count one admitted delivery, priced by the profile `lookup` finds. A
     /// delivery with no profile adds nothing, as in the forecast.
-    pub fn admit(&mut self, lookup: &ProfileLookup) {
+    pub fn admit(&mut self, task_id: &str, lookup: &ProfileLookup) {
+        self.covered_deliveries.push(ForecastDelivery {
+            workspace_id: lookup.workspace_id.clone(),
+            task_id: task_id.to_string(),
+            admitted_at: self.at,
+            run_ids: Vec::new(),
+        });
         let Some(profile) = self.profiles.lookup(lookup).profile else {
             return;
         };

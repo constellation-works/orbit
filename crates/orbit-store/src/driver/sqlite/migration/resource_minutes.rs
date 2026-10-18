@@ -103,3 +103,16 @@ pub(super) fn apply_pull_forecast_decisions(conn: &Connection) -> Result<(), Orb
 pub(super) fn apply_worker_cpu_accounting(conn: &Connection) -> Result<(), OrbitError> {
     super::introspect::add_column_if_missing(conn, "run_resource_minutes", "cpu_accounting", "TEXT")
 }
+
+/// v53: the forecast's own baseline and delivery cohort. Historical rows and
+/// older writers retain null attribution metadata; no backfill is inferred.
+pub(super) fn apply_forecast_attribution(conn: &Connection) -> Result<(), OrbitError> {
+    for (column, kind) in [
+        ("baseline_cpu_cores", "REAL"),
+        ("baseline_memory_bytes", "INTEGER"),
+        ("covered_deliveries_json", "TEXT"),
+    ] {
+        super::introspect::add_column_if_missing(conn, "admission_forecasts", column, kind)?;
+    }
+    Ok(())
+}

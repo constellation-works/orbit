@@ -931,7 +931,7 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
 `orbit run profiles --accuracy`:
 
 - **Record.** Every pass under `shadow` or `enforce` that built a forecast
-  writes one `admission_forecasts` row (store schema v48): the drain's
+  writes one `admission_forecasts` row (introduced in store schema v48): the drain's
   workspace and run, the forecast time, the mode, the host's cores and
   memory, and the forecast at +5, +10, +20 and +30 minutes for CPU and
   memory. An offset past `horizon_cap_minutes` is not recorded. The row also
@@ -939,7 +939,13 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   the tasks gap fit admitted and skipped; under `shadow` those differ. A
   pass that built no forecast, because no slot or candidate was free, and
   every pass with `mode = off`, records nothing. Recording is best effort,
-  like `drain_last_pass`.
+  like `drain_last_pass`. Store schema v53 adds nullable
+  `baseline_cpu_cores`, `baseline_memory_bytes` and `covered_deliveries_json`.
+  New rows save the baseline actually counted (zero when unreadable) and
+  workspace-scoped deliveries: running deliveries with their admission time
+  and live run ids, outstanding reservations, and tasks this pass actually
+  admitted, including a returned pull claim. Historical rows remain null;
+  attribution is never reconstructed from today's baseline or running set.
 - **What is forecast.** The recorded value is `F(t)` plus each task the
   pass actually admitted, counted as a reservation counts: the
   load the forecast expects given what admission did. Under `shadow` that is
@@ -974,8 +980,35 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   A completed minute with a row is usable regardless of sample count; this
   report does not certify sampling completeness.
 - **Errors**, per offset and for CPU (cores) and memory (bytes): the mean
-  and mean absolute error of forecast minus measured, the share of pairs
-  under-forecast, and the worst miss with its minute and drain.
+  and mean absolute error (MAE) of forecast minus measured, the share of pairs
+  under-forecast, and the worst miss with its minute and drain. Existing
+  `cpu` and `memory` JSON summaries and text columns remain raw comparisons
+  with the whole host, including load admitted after the forecast. Text
+  also shows raw `CPU_MAE` and `MEM_MAE`.
+- **Attributed errors** compare the same forecast with its saved baseline
+  plus only the covered deliveries' measured `run_resource_minutes` load.
+  Later admissions and changes to non-delivery host load are excluded.
+  JSON adds `attributed_cpu` and `attributed_memory`, with `mean_error`,
+  `mean_absolute_error`, `under_rate` and `worst_miss`; text adds
+  `ATTR_CPU_MEAN_ERR`, `ATTR_CPU_MAE`, `ATTR_CPU_UNDER`, `ATTR_CPU_WORST`
+  and the corresponding `ATTR_MEM_*` columns beside the raw columns.
+  `attributed_paired` / `ATTR_PAIRS` counts only mature host pairs whose
+  forecast has all three attribution fields; legacy rows still form raw
+  pairs but contribute no attributed errors. No attributed pairs means null
+  summaries (text `-`). JSON pairs also carry nullable
+  `attributed_cpu_cores` and `attributed_memory_bytes` for the comparator.
+  Worker minutes are aligned to UTC host minutes by elapsed overlap,
+  bounded by sample count at the worker sampling interval, the next worker
+  minute and any recorded run finish. Memory uses the same overlap-weighted
+  sum of measured peaks, not a synchronized instantaneous host peak.
+  Already running deliveries include known runs and continuations sharing
+  their admission timestamp. Reservations and this pass's admissions resolve
+  to the first measured admission at or after their recorded reservation
+  time, excluding later re-admissions of that task. Workspace/run identity
+  prevents collisions and double counting. Missing worker measurements add
+  no observed load, so attributed pairs certify metadata availability, not
+  sampling completeness; retain raw pairs and investigate sparse measurements
+  before tuning thresholds.
 - **Shadow decisions**, per drain, over its `shadow` passes: the distinct
   tasks it admitted, those gap fit would have held, and those gap fit would
   have admitted in a pass that did not. Those columns stay on shadow passes.

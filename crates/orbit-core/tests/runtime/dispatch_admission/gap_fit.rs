@@ -763,6 +763,21 @@ fn shadow_and_enforce_passes_record_their_forecast_and_off_records_none() {
         assert_eq!(record.cpu_count, Some(10));
         assert_eq!(record.memory_total_bytes, Some(32 * GIB));
         assert_eq!(record.points, expected, "{record:#?}");
+        assert_eq!(record.baseline_cpu_cores, Some(0.0));
+        assert_eq!(record.baseline_memory_bytes, Some(2 * GIB));
+        let covered = record.covered_deliveries.as_ref().unwrap();
+        for task in &record.admitted {
+            assert!(
+                covered.iter().any(|delivery| delivery.task_id == *task
+                    && delivery.workspace_id == record.workspace_id
+                    && delivery.run_ids.is_empty()),
+                "every admitted task is covered: {record:#?}"
+            );
+        }
+        assert!(
+            covered.iter().any(|delivery| !delivery.run_ids.is_empty()),
+            "running deliveries remain covered: {record:#?}"
+        );
         assert_eq!(record.fit_admitted, vec![light.clone()]);
         assert_eq!(record.fit_skipped, vec![heavy.clone()]);
     }

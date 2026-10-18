@@ -167,7 +167,7 @@ impl ResourceUsageStoreBackend for Store {
                 r#"
                 SELECT r.workspace_id, r.run_id, j.job_id, r.task_id, r.work_class,
                        r.complexity, r.resumed, r.delivery_admitted_at, j.finished_at,
-                       r.minute_started_at, r.cpu_cores, r.memory_bytes, r.cpu_accounting
+                       r.minute_started_at, r.cpu_cores, r.memory_bytes, r.cpu_accounting, r.samples
                 FROM run_resource_minutes r
                 LEFT JOIN job_runs j
                   ON j.workspace_id = r.workspace_id AND j.run_id = r.run_id
@@ -198,6 +198,7 @@ impl ResourceUsageStoreBackend for Store {
                     cpu_cores: row.get(10)?,
                     memory_bytes: unsigned(row.get(11)?),
                     cpu_accounting: row.get(12)?,
+                    samples: row.get(13)?,
                 };
                 Ok((run, minute))
             })
@@ -287,6 +288,7 @@ impl ResourceUsageStoreBackend for Store {
         let fit_admitted = encode(&record.fit_admitted)?;
         let fit_skipped = encode(&record.fit_skipped)?;
         let pull = record.pull.as_ref().map(encode).transpose()?;
+        let covered = record.covered_deliveries.as_ref().map(encode).transpose()?;
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             tx.connection()
                 .execute(
@@ -294,8 +296,9 @@ impl ResourceUsageStoreBackend for Store {
                     INSERT INTO admission_forecasts (
                         workspace_id, run_id, forecast_at, mode, cpu_count,
                         memory_total_bytes, points_json, admitted_json,
-                        fit_admitted_json, fit_skipped_json, pull_decision_json
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                        fit_admitted_json, fit_skipped_json, pull_decision_json,
+                        baseline_cpu_cores, baseline_memory_bytes, covered_deliveries_json
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
                     "#,
                     params![
                         record.workspace_id,
@@ -309,6 +312,9 @@ impl ResourceUsageStoreBackend for Store {
                         fit_admitted,
                         fit_skipped,
                         pull,
+                        record.baseline_cpu_cores,
+                        record.baseline_memory_bytes.map(bytes),
+                        covered,
                     ],
                 )
                 .map(|_| ())
@@ -326,7 +332,8 @@ impl ResourceUsageStoreBackend for Store {
                 r#"
                 SELECT workspace_id, run_id, forecast_at, mode, cpu_count,
                        memory_total_bytes, points_json, admitted_json,
-                       fit_admitted_json, fit_skipped_json, pull_decision_json
+                       fit_admitted_json, fit_skipped_json, pull_decision_json,
+                       baseline_cpu_cores, baseline_memory_bytes, covered_deliveries_json
                 FROM admission_forecasts
                 WHERE forecast_at >= ?1
                 ORDER BY forecast_at, rowid
@@ -342,6 +349,12 @@ impl ResourceUsageStoreBackend for Store {
                     mode: row.get(3)?,
                     cpu_count: row.get(4)?,
                     memory_total_bytes: row.get::<_, Option<i64>>(5)?.map(unsigned),
+                    baseline_cpu_cores: row.get(11)?,
+                    baseline_memory_bytes: row.get::<_, Option<i64>>(12)?.map(unsigned),
+                    covered_deliveries: row
+                        .get::<_, Option<String>>(13)?
+                        .map(|value| decode(13, &value))
+                        .transpose()?,
                     points: decode::<Vec<AdmissionForecastPoint>>(6, &row.get::<_, String>(6)?)?,
                     admitted: decode(7, &row.get::<_, String>(7)?)?,
                     fit_admitted: decode(8, &row.get::<_, String>(8)?)?,

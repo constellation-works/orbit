@@ -418,6 +418,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0052".to_string(),
                 "provider_crew_outages".to_string()
             ),
+            (
+                "migration.v0053".to_string(),
+                "forecast_attribution".to_string()
+            ),
         ]
     );
 }
