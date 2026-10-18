@@ -11,6 +11,7 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_config::TagInstructionSetting;
+use orbit_store::contracts::AdmissionShipContract;
 use orbit_types::workflow::{
     CapturedTagInstructions, TAG_INSTRUCTIONS_SCHEMA_VERSION, TagInstruction, TagInstructionError,
     TagInstructionRefusal, TagInstructionRole, TagInstructionSource, select_tag_instructions,
@@ -69,8 +70,12 @@ impl OrbitRuntime {
     }
 
     /// Every instruction this host applies, with workspace files read at the
-    /// tip of `base_branch`: what an owner captures in a claim's receipt.
-    pub(crate) fn captured_tag_instructions(&self, base_branch: &str) -> CapturedTagInstructions {
+    /// claim's authoritative base: the last-fetched origin ref for PR delivery,
+    /// or the local base for local delivery.
+    pub(crate) fn captured_tag_instructions(
+        &self,
+        ship: &AdmissionShipContract,
+    ) -> CapturedTagInstructions {
         let mut pairs = DEFAULT_TAG_INSTRUCTIONS
             .iter()
             .map(|(tag, role, _)| ((*tag).to_string(), *role))
@@ -83,7 +88,7 @@ impl OrbitRuntime {
         pairs.sort();
         pairs.dedup();
 
-        let mut revision = LazyRevision::new(|| self.branch_revision(base_branch));
+        let mut revision = LazyRevision::new(|| self.claim_base_revision(ship));
         let mut captured = CapturedTagInstructions {
             schema_version: TAG_INSTRUCTIONS_SCHEMA_VERSION,
             revision: None,
@@ -217,16 +222,21 @@ impl OrbitRuntime {
         }
     }
 
-    /// The tip of `branch`, locally or as last fetched, or else `HEAD`.
-    fn branch_revision(&self, branch: &str) -> Result<String, String> {
-        let root = &self.paths().repo_root;
-        [
-            format!("refs/heads/{branch}"),
-            format!("refs/remotes/origin/{branch}"),
-        ]
-        .iter()
-        .find_map(|reference| commit_at(root, reference).ok())
-        .map_or_else(|| commit_at(root, "HEAD"), Ok)
+    /// Match delivery worktree base spelling and mode without fetching during
+    /// admission. An unavailable authoritative ref is a refusal, never another
+    /// branch or this checkout's unrelated HEAD.
+    fn claim_base_revision(&self, ship: &AdmissionShipContract) -> Result<String, String> {
+        let base = ship.base_branch.trim();
+        let branch = base.strip_prefix("origin/").unwrap_or(base).trim();
+        if branch.is_empty() || branch.starts_with('-') {
+            return Err(format!("invalid claim base branch: {base}"));
+        }
+        let reference = match ship.mode.as_str() {
+            "pr" => format!("refs/remotes/origin/{branch}"),
+            "local" => branch.to_string(),
+            mode => return Err(format!("unsupported claim ship mode: {mode}")),
+        };
+        commit_at(&self.paths().repo_root, &reference)
     }
 }
 
