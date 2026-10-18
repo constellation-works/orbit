@@ -13,6 +13,7 @@ pub(crate) fn sample(
     HostResourceSample {
         sampled_at: Utc.timestamp_opt(1_700_000_000 + second, 0).unwrap(),
         cpu_percent: cpu,
+        cpu_utilization_percent: None,
         memory_percent: memory,
         io_full_percent: None,
         disks: vec![DiskSample {

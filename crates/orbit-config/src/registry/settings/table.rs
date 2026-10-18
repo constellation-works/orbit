@@ -648,6 +648,12 @@ define_config_settings! {
         section: ConfigSection::Delivery, order: 60,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
+    workflow_resource_throttle_cpu_source: String => String {
+        key: "workflow.resource_throttle.cpu_source", value_type: "string",
+        description: "CPU throttle signal: load (default, Linux one-minute load divided by online CPUs) or utilization (busy CPU tick share excluding idle and I/O wait). macOS uses Mach utilization for either source.",
+        section: ConfigSection::Delivery, order: 129,
+        resolve: |raw: Option<String>| resolve_choice(raw, "load", "workflow.resource_throttle.cpu_source", &["load", "utilization"]),
+    },
     workflow_resource_throttle_cpu_high_percent: u8 => u8 {
         key: "workflow.resource_throttle.cpu_high_percent", value_type: "integer",
         description: "Host cpu high-water percentage (1..=100, default 90).",

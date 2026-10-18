@@ -46,20 +46,30 @@ impl ResourcePressureEvaluator {
             // Schema-1 readers accept these string keys, but their unqualified resource
             // lookups start empty rather than mistaking this history for their own.
             // Put thresholds first so no new key can collide with a legacy disk path.
-            let state_key = format!("{high}/{resume}@{key}");
+            let utilization = cpu && settings.cpu_source == "utilization";
+            let state_key = if utilization {
+                format!("{high}/{resume}@cpu:utilization")
+            } else {
+                format!("{high}/{resume}@{key}")
+            };
             seen.push(state_key.clone());
             let unknown_reason = if stale {
                 Some("stale")
             } else {
                 match value {
                     None => Some("unavailable"),
-                    Some(v) if !v.is_finite() || v < 0.0 || (!cpu && v > 100.0) => Some("invalid"),
+                    Some(v)
+                        if !v.is_finite() || v < 0.0 || ((!cpu || utilization) && v > 100.0) =>
+                    {
+                        Some("invalid")
+                    }
                     _ => None,
                 }
             };
             // Carry matching legacy history forward once, preserving a sustain window
             // or hold across an upgrade on hosts with a single threshold set.
-            if !self.states.contains_key(&state_key)
+            if !utilization
+                && !self.states.contains_key(&state_key)
                 && self.states.get(&key).is_some_and(|state| {
                     state.high_percent == high && state.resume_percent == resume
                 })
@@ -131,7 +141,11 @@ impl ResourcePressureEvaluator {
         };
         let cpu = reading(
             "cpu".into(),
-            sample.cpu_percent,
+            if settings.cpu_source == "utilization" {
+                sample.cpu_utilization_percent
+            } else {
+                sample.cpu_percent
+            },
             settings.cpu_high_percent,
             settings.cpu_resume_percent,
             true,

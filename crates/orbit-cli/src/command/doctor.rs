@@ -99,7 +99,16 @@ impl Execute for DoctorCommand {
                     .to_string(),
             ));
         }
-        let mut results = Vec::new();
+        let mut results = vec![WorkspaceDoctorResult {
+            duration_ms: 0,
+            check_name: "resource-throttle".to_string(),
+            status: WorkspaceDoctorStatus::Info,
+            message: format!(
+                "CPU source: {}",
+                runtime.resource_throttle_settings().cpu_source
+            ),
+            remediation: None,
+        }];
         if self.fix_state_directory_permissions {
             let started = std::time::Instant::now();
             let repaired = runtime.repair_state_directory_permissions()?;

@@ -61,6 +61,7 @@ impl orbit_core::runtime::host_resource::HostResourceProbe for CalmHost {
         orbit_core::runtime::host_resource::HostResourceSample {
             sampled_at: chrono::Utc::now(),
             cpu_percent: Some(10.0),
+            cpu_utilization_percent: None,
             memory_percent: Some(10.0),
             io_full_percent: None,
             disks: disk_paths
@@ -2152,6 +2153,7 @@ fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
     let held = "Admissions throttled: memory 93% (throttled at \u{2265} 90% since 2026-10-04 08:41Z; resumes below 80%); cpu 89% (throttled at \u{2265} 90% since 2026-10-04 08:41Z; resumes below 75%)";
 
     let readiness = fixture.json(&["run", "readiness", "--json"]);
+    assert_eq!(readiness["capacity"]["resource_cpu_source"], "load");
     assert_eq!(readiness["capacity"]["free_slots"], 0, "{readiness:#}");
     assert_eq!(
         readiness["capacity"]["resource_throttle"]["resources"][0]["percent"],
@@ -2184,6 +2186,35 @@ fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
             .is_some_and(|error| error.contains("resource_throttled") && error.contains(held)),
         "{refused}"
     );
+    // The active source is observable even with the throttle disabled.
+    for (key, value) in [
+        ("workflow.resource_throttle.cpu_source", "utilization"),
+        ("workflow.resource_throttle.enabled", "false"),
+    ] {
+        fixture
+            .orbit()
+            .args(["config", "set", "--seed-from-global", key, value])
+            .assert()
+            .success();
+    }
+    let configured = fixture.json(&["run", "readiness", "--json"]);
+    assert_eq!(configured["capacity"]["resource_cpu_source"], "utilization");
+    let text = fixture.orbit().args(["run", "readiness"]).output().unwrap();
+    assert!(
+        String::from_utf8_lossy(&text.stdout)
+            .contains("Resource throttle CPU source: utilization.")
+    );
+    // Other host diagnostics may fail with the fixture's empty provider PATH;
+    // the informational policy row must still be present in doctor JSON.
+    let doctor = fixture.orbit().args(["doctor", "--json"]).output().unwrap();
+    let doctor: Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    let row = doctor
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["check"] == "resource-throttle")
+        .unwrap();
+    assert_eq!(row["message"], "CPU source: utilization");
 }
 
 /// A local admission pass counts deferred tasks inside `queued`; the CLI

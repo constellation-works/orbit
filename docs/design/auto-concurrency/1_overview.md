@@ -108,8 +108,9 @@ admission look ahead.
   stays under the admit thresholds for its whole horizon.
 - **Admit thresholds** — the CPU and memory levels a forecast must stay
   under. Configuration orders the memory threshold below the throttle's
-  memory high mark. Forecast CPU utilization and Linux throttle load are
-  different signals, so their percentages are not compared.
+  memory high mark. The throttle defaults to Linux load, a different signal
+  from forecast CPU utilization; `workflow.resource_throttle.cpu_source = "utilization"` opts
+  into busy tick accounting. CPU thresholds remain independently configured.
 - **Backstop** — the existing resource throttle. It still holds all
   admission when real pressure arrives.
 

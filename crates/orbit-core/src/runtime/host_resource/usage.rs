@@ -1,12 +1,9 @@
 //! Host CPU and memory in absolute units, for the per-minute resource history.
 //!
-//! The throttle reads CPU pressure from `/proc/loadavg` (`platform.rs`), which
-//! counts the run queue and runs far past 100%: dk-server-1 showed load 36 on
-//! 15 cores at about 95% utilization. The history needs utilization in cores,
-//! the unit worker scopes report, so Linux reads `/proc/stat` tick counters.
-//! macOS reads aggregate Mach CPU ticks and VM statistics. Memory uses the
-//! throttle's accounting on each platform, in bytes. Injected proc roots
-//! always read fixture files, including on macOS.
+//! Linux utilization is shared by the opt-in resource throttle and forecast:
+//! `/proc/stat` busy ticks exclude idle and I/O wait. macOS reads aggregate
+//! Mach CPU ticks and VM statistics. Memory uses the throttle's accounting
+//! on each platform, in bytes. Injected proc roots always read fixture files.
 
 use std::io::Read;
 use std::path::Path;
@@ -17,7 +14,7 @@ use std::time::Duration;
 pub(crate) const RESOURCE_SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// One reading of the host's cumulative CPU ticks and current memory use.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct HostUsageReading {
     pub(super) ticks: CpuTicks,
     /// Online host CPUs (the `cpuN` count for procfs).
@@ -26,7 +23,7 @@ pub(crate) struct HostUsageReading {
     pub(crate) memory_total_bytes: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(super) enum CpuTicks {
     Proc {
         busy: u64,
