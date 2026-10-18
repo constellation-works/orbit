@@ -8,6 +8,8 @@
 
 use orbit_config::{ConfigRoots, ResolvedConfig, canonical_crew_pool};
 use orbit_core::OrbitRuntime;
+use orbit_types::task::HostOs;
+use orbit_types::workflow::ExecutorDef;
 use serde_json::{Value, json};
 
 use super::git_protection::git_protection_row;
@@ -143,6 +145,15 @@ fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
         };
         let provider = &crew.assignment.provider;
         match runtime.get_executor_def(provider) {
+            // Unsupported here, not missing: the rule `orbit doctor providers`
+            // applies, so the operator is not told to install it on this host.
+            Ok(Some(def)) if unsupported_on_this_os(&def) => WorkspaceDoctorResult {
+                duration_ms: 0,
+                check_name,
+                status: WorkspaceDoctorStatus::Skipped,
+                message: format!("crew '{name}' uses provider '{provider}', which is unsupported on this OS"),
+                remediation: None,
+            },
             Ok(Some(def)) => match def.command.as_deref() {
                 Some(program) => match runtime.locate_provider_launcher(program) {
                     Some(path) => WorkspaceDoctorResult {
@@ -230,6 +241,14 @@ fn routing_selects_crew(config: &ResolvedConfig, name: &str) -> bool {
         Some(crew) => crew.enabled,
         None => true,
     }
+}
+
+/// Whether a declared `host_os` excludes this host. An omitted declaration
+/// runs everywhere, and an unknown host OS is outside every declared set.
+fn unsupported_on_this_os(def: &ExecutorDef) -> bool {
+    def.host_os
+        .as_ref()
+        .is_some_and(|hosts| !HostOs::current().is_some_and(|host| hosts.contains(&host)))
 }
 
 /// One warning per provider an active drain excludes for failed authentication.
