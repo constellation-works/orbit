@@ -24,6 +24,7 @@ related_artifacts: []
 
 **Recorded:** 2026-08-02 02:33:46.102495Z · [T20260411-0335], [ORB-10228], [ORB-10356]
 **Paths:** `crates/orbit-cli/src/output/`, `crates/orbit-cli/src/command/`
+**Status:** Partly implemented by [ORB-10586], which made commands return payloads that `output::render` projects. The Context and the Cost lines describe the state when this was recorded.
 
 ### Context
 
@@ -55,9 +56,9 @@ Rejected alternative: make `--format json` the default and have humans opt into 
 - A piped or redirected `orbit` command is parseable by `cut`/`awk` without flags, which is the property that currently fails.
 - New commands get structured output for free, so the 64-command gap closes as a consequence of the refactor rather than as 64 separate changes.
 - The JSON and human views cannot disagree about a field's value, because one is derived from the other.
-- Cost: every command that prints must be refactored to return a payload instead of writing to stdout, and `Execute::execute` returning `Result<(), OrbitError>` no longer expresses that — the trait signature changes, touching all 154 `impl Execute` blocks.
+- Cost: every command that prints must be refactored to return a payload instead of writing to stdout, and `Execute::execute` returning `Result<(), OrbitError>` could not express that. [ORB-10586] changed the trait to return `CommandOut` (`Result<CommandOutput, OrbitError>`) and converted every `impl Execute` body.
 - Cost: output becomes environment-dependent. A command run in CI (no TTY) prints differently than the same command run in a terminal, so any test or runbook that asserts on stdout must pin `--format` explicitly or it will pass locally and fail in CI.
-- Cost: moving the JSON error payload from stdout to stderr is a breaking change for any existing script that parses errors off stdout, and there is no output snapshot suite that would catch the regression — `crates/orbit-cli/src/snapshots/` holds one file, covering audit event JSON shape only.
+- Cost: moving the JSON error payload from stdout to stderr is a breaking change for any existing script that parses errors off stdout, and the output goldens under `crates/orbit-cli/tests/output_goldens/` catch that regression only for the commands they pin.
 
 ## Borderless Tables With Truncate-to-Width Rows
 

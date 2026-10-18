@@ -2,7 +2,7 @@
 title: Task Migration — Decisions
 owner: claude
 last_updated: 2026-10-04
-last_validated: 2026-10-10
+last_validated: 2026-10-18
 status: Draft
 feature: task-migration
 doc_role: decisions
@@ -112,7 +112,7 @@ Give each machine a forward-only allocator floor (`--task-id-start` /
 ## Task References
 
 - [ORB-00034] — task migration tooling and the `id_start` allocator floor.
-- [ORB-10721] — per-host `task_prefix` in `host.toml`, projected into the allocator.
+- [ORB-10721] — per-host `task_prefix` in `host.toml` (since folded into `[machine]` by ORB-12725), projected into the allocator.
 - [ORB-12126] — owner-wins cross-host sync policy.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

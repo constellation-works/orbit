@@ -4,7 +4,7 @@ type: design
 title: "User Interface — Decisions"
 owner: gemini
 last_updated: 2026-10-10
-last_validated: 2026-10-10
+last_validated: 2026-10-18
 status: Draft
 feature: user-interface
 doc_role: decisions
@@ -202,7 +202,7 @@ Ship is one click with no configuration UI: the dashboard posts only the task id
 
 **Decision.** Compute both rates entirely from persisted `job_runs` and `invocations` rows via count-only store queries that reference no token or cost column, and discover activity roles from the job catalog at query time.
 
-`RunOutcome` partitions the observed `job_runs.state` values. `success` is succeeded. `failed`, `timeout`, and `interrupted` are failures — all three are runs the pipeline intended to finish and did not. `cancelled` (a deliberate operator action) and `skipped` (never ran) are terminal but sit outside the rate. `pending`, `running`, and `retrying` are in flight. Anything unparseable lands in an explicit `unknown` bucket rather than being folded into an outcome. The failure rate divides by settled deliveries only. [ORB-16400] folds wrapper echoes out of that fraction before the division; the paragraph below is the current rule. The payload carries the total, the cascaded echoes, and each excluded bucket so the UI cannot imply that ok + failed is the population.
+`RunOutcome` partitions the observed `job_runs.state` values. `success` is succeeded. `failed`, `timeout`, and `interrupted` are failures — all three are runs the pipeline intended to finish and did not. `cancelled` (a deliberate operator action), `skipped` (never ran), and `held` (parked awaiting external review evidence, terminal, and never a recovery trigger) are terminal but sit outside the rate. `pending`, `running`, and `retrying` are in flight. Anything unparseable lands in an explicit `unknown` bucket rather than being folded into an outcome. The failure rate divides by settled deliveries only. [ORB-16400] folds wrapper echoes out of that fraction before the division; the paragraph below is the current rule. The payload carries the total, the cascaded echoes, and each excluded bucket so the UI cannot imply that ok + failed is the population.
 
 A failed, timed-out, or interrupted run whose pipeline state records a `root_cause` failed only because that leaf failed (`pipeline_success_guard`). The numerator counts distinct leaves: a run with no `root_cause` is its own leaf, and a leaf absent from the window still counts once, so a claimed leaf that settled on another host is not dropped. The other echo rows are `cascaded`. They sit outside both the numerator and the denominator. Settled is succeeded plus that folded failure count, so the rate's two sides use the same rule, and `total = settled + excluded + cascaded`. The same fold applies to the by-job rows, the over-time series, and the fleet totals, which sum the already-folded workspace counts. The denominator label and the card's denominator note state the rule. The recovery rates are unchanged. The raw `observed_states` counts stay unfolded, so the store's rows remain visible beside the delivery count.
 
