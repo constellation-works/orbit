@@ -1,7 +1,7 @@
 ---
 title: Review Gate — Overview
 owner: codex
-last_updated: 2026-10-12
+last_updated: 2026-10-18
 last_validated: 2026-10-18
 status: Accepted
 feature: review-gate
@@ -23,9 +23,12 @@ what it finds as one second commit (`review: <summary>`) under its own
 identity, and comments every finding with what changed for it [ORB-13989].
 The verdict is `accept` (no fixes), `accept_with_fixes` (owner validation
 reruns on the reviewer commit before the PR opens, and the PR body gains a
-"Review fixes" section), or `reject` (the task blocks with both commits
-preserved; there is no second review round). Passed certificates exclude exactly reproduced
-landings from redundant after-landing review while QA stays independent.
+"Review fixes" section), `reject` (the task blocks with both commits
+preserved; there is no second review round), or `incomplete` (the review
+could not finish or required evidence is unavailable). An evidence-only gap
+can hold the candidate for the owner to supply the named checks. Passed
+certificates exclude exactly reproduced landings from redundant after-landing
+review while QA stays independent.
 Neither review timing nor a reviewer verdict grants merge permission.
 
 Review runs at three timings [ORB-13992] [ORB-14849]: `review.before_pr` in
