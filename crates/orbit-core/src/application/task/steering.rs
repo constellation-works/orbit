@@ -17,6 +17,8 @@
 //! is outstanding. Each refusal spends one steering round, recorded on the
 //! run before its agent step is dispatched again.
 
+use std::collections::BTreeSet;
+
 use chrono::SecondsFormat;
 use orbit_common::OrbitError;
 use orbit_common::text::{ceil_char_boundary, floor_char_boundary};
@@ -39,9 +41,9 @@ pub(crate) const STEERING_DELIVERED_EVENT: &str = "steering_delivered";
 /// and tail around a marker, as recovery diagnostics do [ORB-12467].
 const MAX_STEERING_BLOCK_BYTES: usize = 32 * 1024;
 
-/// Resume-lineage ancestors the gate walks for a watermark before it falls
-/// back to the oldest one's start; past this the lineage is judged from that
-/// start, which only counts more comments as outstanding.
+/// Resume-lineage ancestors the gate walks for a watermark. If the bound
+/// leaves older ancestors unresolved, the gate cannot safely establish a
+/// baseline and fails closed.
 const MAX_LINEAGE_HOPS: usize = 32;
 
 const STEERING_LABEL: &str = "Operator guidance received after this run was dispatched, oldest \
@@ -59,8 +61,10 @@ impl OrbitRuntime {
     /// `step_id` builds for `task` from `comments`, and return the steering
     /// block that prompt carries ahead of the task, if any.
     ///
-    /// Without a watermark this is the run's snapshot: the newest comment is
-    /// recorded and no block is built. With one, operator comments past it
+    /// Without a watermark this is the run's snapshot, unless the promotion
+    /// gate admitted a steering round: that first prompt delivers from the
+    /// inherited baseline instead of covering comments its bounded task
+    /// context may omit. With a watermark, operator comments past it
     /// that no earlier block carried in full are delivered. A safe point with
     /// none builds the prompt as the snapshot does. A task that refuses
     /// implementer writes is not steered, since its step is stopping, and
@@ -72,15 +76,38 @@ impl OrbitRuntime {
         task: &Task,
         comments: &[TaskComment],
     ) -> Result<Option<Value>, OrbitError> {
-        let watermark = self
-            .stores()
-            .jobs()
-            .read_run_state(run_id)?
-            .and_then(|mut state| state.steering_watermarks.remove(&task.id));
-        let pending = watermark
+        let state = self.stores().jobs().read_run_state(run_id)?;
+        let mut watermark = state
             .as_ref()
-            .map(|watermark| pending_operator_comments(watermark, comments))
-            .unwrap_or_default();
+            .and_then(|state| state.steering_watermarks.get(&task.id))
+            .cloned();
+        let pending = if let Some(watermark) = &watermark {
+            pending_operator_comments(watermark, comments)
+        } else if state.as_ref().is_some_and(|state| {
+            state
+                .steering_rounds
+                .get(&task.id)
+                .is_some_and(|rounds| !rounds.is_empty())
+        }) {
+            // A carried candidate or checkpointed resume can first build a
+            // prompt in a steering round. Its ordinary task context is
+            // bounded, so taking a fresh snapshot here could cover comments
+            // that context omitted. Deliver from the gate's inherited
+            // baseline instead, including comments since the gate read.
+            let outstanding: BTreeSet<_> = self
+                .inherited_outstanding(run_id, &task.id, comments)?
+                .into_iter()
+                .collect();
+            let baseline = SteeringWatermark::default();
+            let pending = pending_operator_comments(&baseline, comments)
+                .into_iter()
+                .filter(|comment| outstanding.contains(&comment.mark))
+                .collect();
+            watermark = Some(baseline);
+            pending
+        } else {
+            Vec::new()
+        };
         let Some(watermark) = watermark.filter(|_| !pending.is_empty()) else {
             let newest = newest_mark(comments);
             self.update_steering_watermark(run_id, |state| {
@@ -228,6 +255,13 @@ impl OrbitRuntime {
                     .collect());
             }
             run = record(&source)?;
+        }
+        if run.retry_source_run_id.is_some() {
+            return Err(OrbitError::Execution(format!(
+                "run {run_id}'s steering baseline for task {task_id} remains unresolved after \
+                 {MAX_LINEAGE_HOPS} resume-lineage ancestors; refusing to certify a newer \
+                 dispatch timestamp that could omit undelivered comments"
+            )));
         }
         let started = run.started_at.unwrap_or(run.created_at);
         Ok(comments

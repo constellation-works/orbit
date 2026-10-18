@@ -10,7 +10,7 @@
 //! the runtime's own records.
 
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use orbit_common::OrbitError;
 use orbit_core::TaskStatus;
@@ -20,7 +20,9 @@ use orbit_engine::{
     DispatchError, JobOutcome, RuntimeHost, SteeringGateReading, SteeringRoundAdmission,
     TaskAutomationUpdate, V2AuditWriter, execute_job_with_resume,
 };
-use orbit_tools::ToolContext;
+use orbit_tools::{OwnerCoordinator, ToolContext};
+use orbit_types::task::ExecutionLocation;
+use orbit_types::tool::{ToolSessionContext, WorkerInvocation};
 use orbit_types::workflow::activity_job::JobV2;
 use orbit_types::workflow::{CommentLogMark, JobRunState, PipelineState};
 use serde_json::{Value, json};
@@ -52,7 +54,9 @@ fn pipeline_head(pipeline: &str) -> JobV2 {
         },
     });
     let job = load_job_asset(&head.to_string()).unwrap().spec;
-    assert!(job.steering_gate.is_some(), "{pipeline} declares the gate");
+    if PIPELINES.contains(&pipeline) {
+        assert!(job.steering_gate.is_some(), "{pipeline} declares the gate");
+    }
     job
 }
 
@@ -97,6 +101,8 @@ struct Pipeline<'a> {
     on_implement: OnImplement,
     /// The gate reads a task that does not exist, so every read fails.
     unreadable: bool,
+    /// The gate has a claimed worker binding and no authoritative owner read.
+    claimed: bool,
     /// The implement prompt of a steering round fails to read the task.
     round_read_fails: bool,
     /// An operator comment lands right after the gate's next read.
@@ -113,6 +119,7 @@ impl<'a> Pipeline<'a> {
             implement: true,
             on_implement: Box::new(|_, _| {}),
             unreadable: false,
+            claimed: false,
             round_read_fails: false,
             comment_after_gate_read: Mutex::new(false),
             calls: Mutex::new(Vec::new()),
@@ -167,6 +174,21 @@ impl<'a> Pipeline<'a> {
 
     fn execute(&self, job: &JobV2, resume: Option<&PipelineState>) -> JobOutcome {
         self.try_execute(job, resume).unwrap()
+    }
+}
+
+struct UnreachableOwner;
+
+impl OwnerCoordinator for UnreachableOwner {
+    fn call(
+        &self,
+        _name: &str,
+        _input: Value,
+        _session: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        Err(OrbitError::Execution(
+            "steering fixture owner is unreachable".into(),
+        ))
     }
 }
 
@@ -230,7 +252,26 @@ impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
         } else {
             task_id
         };
-        let reading = RuntimeHost::steering_gate(&self.fx.runtime, run_id, task);
+        let runtime = if self.claimed {
+            self.fx.runtime.clone().with_worker_invocation(
+                WorkerInvocation {
+                    owner_machine_id: "hm_owner".into(),
+                    owner_workspace_id: "ws_owner".into(),
+                    owner_destination: "owner".into(),
+                    task_id: task_id.into(),
+                    claim_id: "claim-steering".into(),
+                    execution: ExecutionLocation {
+                        machine_id: "hm_follower".into(),
+                        machine_name: None,
+                    },
+                    bound_run_id: run_id.into(),
+                },
+                Arc::new(UnreachableOwner),
+            )?
+        } else {
+            self.fx.runtime.clone()
+        };
+        let reading = RuntimeHost::steering_gate(&runtime, run_id, task);
         if std::mem::take(&mut *self.comment_after_gate_read.lock().unwrap()) {
             self.fx
                 .operator_comment("STEER-LATE: written while the gate's verdict stands.");
@@ -440,6 +481,128 @@ fn a_refusal_spends_one_round_whose_prompt_delivers_and_then_commits() {
     assert!(outcome.success, "{outcome:?}");
     assert_eq!(host.labels(), ["implement_one", "commit"]);
     assert_eq!(rounds(&fx, &run), 1);
+    assert!(
+        host.prompts.lock().unwrap()[0]["steering"]["comments"]
+            .as_str()
+            .is_some_and(|block| block.contains("STEER: arrived while the run was down"))
+    );
+    assert_eq!(fx.deliveries().len(), 1);
+}
+
+// A carried candidate builds its first prompt in the admitted steering round.
+// Ordinary task context keeps only the newest twenty comments, so it cannot
+// substitute for delivering the comments the gate found outstanding.
+fn a_first_prompt_steering_round_delivers_comments_omitted_from_task_context() {
+    for pipeline in PIPELINES {
+        let fx = admitted(ENABLED);
+        let run = fx.run(None);
+        fx.operator_comment("STEER-OLDEST: cover the public failure path.");
+        for _ in 0..20 {
+            fx.comment("AGENT: progress update.");
+        }
+        let mut host = Pipeline::new(&fx, &run);
+        host.implement = false;
+        let outcome = host.execute(&pipeline_head(pipeline), None);
+        assert!(outcome.success, "{pipeline}: {outcome:?}");
+        let prompts = host.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1, "{pipeline}");
+        assert_eq!(prompts[0]["comments_omitted_count"], 1);
+        assert!(
+            prompts[0]["steering"]["comments"]
+                .as_str()
+                .is_some_and(|block| block.contains("STEER-OLDEST")),
+            "{pipeline}: the gate's oldest outstanding comment must reach the first round's prompt"
+        );
+        assert_eq!(fx.deliveries().len(), 1, "{pipeline}");
+        assert_eq!(rounds(&fx, &run), 1, "{pipeline}");
+    }
+}
+
+fn a_first_prompt_steering_round_keeps_truncated_guidance_outstanding() {
+    for pipeline in PIPELINES {
+        let fx = admitted(ENABLED);
+        let run = fx.run(None);
+        fx.operator_comment(&format!("STEER-HUGE {}", "x".repeat(40 * 1024)));
+        let mut host = Pipeline::new(&fx, &run);
+        host.implement = false;
+        let outcome = host.execute(&pipeline_head(pipeline), None);
+        assert!(
+            !outcome.success,
+            "{pipeline}: a truncated first prompt cannot clear the gate"
+        );
+        assert!(
+            !host.labels().iter().any(|label| label == "commit"),
+            "{pipeline}"
+        );
+        assert_eq!(rounds(&fx, &run), 1, "{pipeline}");
+        assert_eq!(
+            outcome.pipeline["commit"]["decision"],
+            "steering_unconsumed"
+        );
+        assert_eq!(fx.deliveries()[0]["delivered"], json!([]));
+    }
+}
+
+fn claimed_pipelines_fail_closed_when_the_gate_cannot_certify_the_task() {
+    for pipeline in ["task_claimed_local_pipeline", "task_claimed_pr_pipeline"] {
+        for config in ["", ENABLED] {
+            let fx = admitted(config);
+            let run = fx.run(None);
+            let mut host = Pipeline::new(&fx, &run);
+            host.claimed = true;
+            host.on_implement = Box::new(|fx, _| {
+                fx.operator_comment("STEER: the replica cannot certify delivery.");
+            });
+            let outcome = host.execute(&pipeline_head(pipeline), None);
+            if config.is_empty() {
+                assert!(outcome.success, "{pipeline}: steering off remains inert");
+                assert!(host.labels().iter().any(|label| label == "commit"));
+            } else {
+                assert!(
+                    !outcome.success,
+                    "{pipeline}: an uncertifiable comment log cannot commit"
+                );
+                assert!(
+                    !host.labels().iter().any(|label| label == "commit"),
+                    "{pipeline}"
+                );
+                assert_eq!(outcome.pipeline["commit"]["decision"], "unreadable");
+                assert!(
+                    outcome
+                        .message
+                        .unwrap()
+                        .contains("replica is never certified")
+                );
+            }
+            assert_eq!(rounds(&fx, &run), 0, "{pipeline}");
+        }
+    }
+}
+
+// A bounded ancestry walk cannot certify a baseline it never reached.
+fn an_unresolved_resume_lineage_fails_closed_instead_of_forgetting_steering() {
+    let fx = admitted(ENABLED);
+    let mut run = fx.run(None);
+    fx.prompt(&run, "implement_one");
+    fx.operator_comment("STEER-ANCESTOR: this candidate still needs the correction.");
+    for _ in 0..33 {
+        run = fx.run(Some(&run));
+    }
+    for pipeline in PIPELINES {
+        let mut host = Pipeline::new(&fx, &run);
+        host.implement = false;
+        let outcome = host.execute(&pipeline_head(pipeline), None);
+        assert!(
+            !outcome.success,
+            "{pipeline}: an unresolved baseline cannot permit commit"
+        );
+        assert!(
+            !host.labels().iter().any(|label| label == "commit"),
+            "{pipeline}"
+        );
+        assert_eq!(outcome.pipeline["commit"]["decision"], "unreadable");
+        assert_eq!(rounds(&fx, &run), 0, "{pipeline}");
+    }
 }
 
 fn exhausted_or_unobservable_rounds_block_the_task_as_steering_unconsumed() {
@@ -630,6 +793,10 @@ crate::scenario_table!(
     mid_run_steering_gate_scenarios,
     steering_off_and_nothing_outstanding_leave_both_pipelines_as_they_are,
     a_refusal_spends_one_round_whose_prompt_delivers_and_then_commits,
+    a_first_prompt_steering_round_delivers_comments_omitted_from_task_context,
+    a_first_prompt_steering_round_keeps_truncated_guidance_outstanding,
+    claimed_pipelines_fail_closed_when_the_gate_cannot_certify_the_task,
+    an_unresolved_resume_lineage_fails_closed_instead_of_forgetting_steering,
     exhausted_or_unobservable_rounds_block_the_task_as_steering_unconsumed,
     a_round_that_cannot_read_the_task_is_spent_and_keeps_its_own_failure,
     an_unreadable_gate_fails_closed_and_a_later_comment_waits_for_the_next_gate,
