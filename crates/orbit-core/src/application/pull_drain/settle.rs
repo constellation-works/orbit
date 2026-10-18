@@ -53,8 +53,8 @@ use std::time::Duration;
 
 use super::candidate::stopping_candidate;
 use super::drain::{
-    PullDrain, RefusedDelivery, SettleScope, leaf_failure_settlement, operator_cancel_release,
-    recorded_base_no_longer_red,
+    PullDrain, RefusedDelivery, SettleScope, attach_claimed_review, leaf_failure_settlement,
+    operator_cancel_release, recorded_base_no_longer_red,
 };
 use crate::OrbitRuntime;
 use crate::application::distributed::{
@@ -119,6 +119,7 @@ impl OrbitRuntime {
             leaf_failure_settlement(&record, &run, diagnostic, state.as_ref(), &|hold| {
                 recorded_base_no_longer_red(self, repo, hold)
             });
+        let settlement = attach_claimed_review(settlement, self.claimed_review_carry(run_id));
         match jobs.mutate_local_pull(
             &record.destination,
             &record.request.request_id,
@@ -481,11 +482,13 @@ impl OrbitRuntime {
         };
         let peer = self.routed_pull_peer(transport);
         let launcher = self.leaf_pull_launcher();
+        let claimed_review = |run_id: &str| self.claimed_review_carry(run_id);
         let drain = PullDrain {
             jobs: self.stores().jobs(),
             peer: peer.as_ref(),
             launcher: launcher.as_ref(),
             refused_delivery,
+            claimed_review: &claimed_review,
         };
         // One unreachable owner costs one delivery timeout per pass, not one
         // per admission. Only a transport failure says the owner is

@@ -6,7 +6,7 @@ use std::path::Path;
 use orbit_common::text::floor_char_boundary;
 use orbit_store::contracts::{
     ClaimCandidateRef, ClaimEvidence, ClaimFailure, ClaimFinalRecovery, ClaimMutation,
-    ClaimPullRequest, LocalPullAdmission, LocalPullPhase, ProviderUnavailable,
+    ClaimPullRequest, ClaimedReviewCarry, LocalPullAdmission, LocalPullPhase, ProviderUnavailable,
 };
 use orbit_types::workflow::{
     BASELINE_RED_MARKER, BaselineRedHold, ClaimFailureClass, FORGE_UNAVAILABLE_MARKER,
@@ -58,6 +58,28 @@ const MAX_FAILURE_EXCERPT_BYTES: usize = 8 * 1024;
 /// because the forge kept refusing its push past the push's retry window is
 /// a `transient` release that carries the forge hold
 /// ([`forge_hold_release`]), which excludes neither the crew nor the host.
+/// Copy `carry` onto a failure or release that does not already name one.
+/// Other mutations, and a carry with no ledgers, are unchanged. The first
+/// recorded settlement is the one the owner receives, so both writers stamp
+/// before that write.
+pub(crate) fn attach_claimed_review(
+    mut settlement: ClaimMutation,
+    carry: Option<ClaimedReviewCarry>,
+) -> ClaimMutation {
+    let Some(carry) = carry.filter(|carry| !carry.ledgers.is_empty()) else {
+        return settlement;
+    };
+    match &mut settlement {
+        ClaimMutation::Fail(evidence) | ClaimMutation::Release(evidence)
+            if evidence.claimed_review.is_none() =>
+        {
+            evidence.claimed_review = Some(carry);
+        }
+        _ => {}
+    }
+    settlement
+}
+
 pub(crate) fn leaf_failure_settlement(
     record: &LocalPullAdmission,
     run: &orbit_types::workflow::JobRun,
