@@ -182,7 +182,10 @@ manual Mac.
 After the candidate lands, an operator must select the successful hosted
 `macOS Platform` run for the landed commit, download its evidence artifact
 through the authenticated GitHub Actions interface, and run from a clean
-checkout of that same commit:
+checkout of that same commit. A newer `agent-main` push can replace a landed
+commit's waiting run before it starts, so that commit may have no
+`macOS Platform` run and the sweep cannot import hosted evidence for it. The
+newest landed commit always has one:
 
 ```bash
 ./scripts/qa-full-sweep.sh --build-candidate --run-commands \
