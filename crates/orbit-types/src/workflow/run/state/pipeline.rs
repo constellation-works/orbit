@@ -11,9 +11,9 @@ use crate::workflow::JobRunTrigger;
 use crate::workflow::child_dispatch::{ChildCancellation, ChildDispatch, ChildDispatchPhase};
 
 use super::{
-    ActivityCrewDraw, DrainAdmissionsStop, DrainCancelRequest, DrainWindowExtension,
-    DrainWorkerLimit, FailureActivityCheckpoint, FinalRecoveryCheckpoint, PullDrainState,
-    TaskCancellationPolicy,
+    ActivityCrewDraw, CommentLogMark, DrainAdmissionsStop, DrainCancelRequest,
+    DrainWindowExtension, DrainWorkerLimit, FailureActivityCheckpoint, FinalRecoveryCheckpoint,
+    PullDrainState, SteeringWatermark, TaskCancellationPolicy,
 };
 
 /// The PR leaf step that admits the before-landing review of its open pull
@@ -145,6 +145,13 @@ pub struct PipelineState {
     /// failed on its own, and on runs recorded before this existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_cause: Option<crate::workflow::RunRootCause>,
+    /// Mid-run steering's snapshot watermarks, keyed by task id: the newest
+    /// comment of each task that this run's task-context prompts included.
+    /// Only the host writes them, when it builds such a prompt with
+    /// `workflow.mid_run_steering.enabled`; absent otherwise and on runs
+    /// recorded before steering existed.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub steering_watermarks: BTreeMap<String, SteeringWatermark>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -177,8 +184,27 @@ impl PipelineState {
             trigger: None,
             env_pass_unset: Vec::new(),
             root_cause: None,
+            steering_watermarks: BTreeMap::new(),
             updated_at: Utc::now(),
         }
+    }
+
+    /// Record that `step_id` of this run built a task-context prompt for
+    /// `task_id` whose newest comment is `newest`. The task's watermark and
+    /// the step's snapshot only advance: an older or missing `newest` leaves
+    /// each recorded mark in place.
+    pub fn record_steering_snapshot(
+        &mut self,
+        task_id: &str,
+        step_id: &str,
+        newest: Option<CommentLogMark>,
+    ) {
+        let now = Utc::now();
+        self.steering_watermarks
+            .entry(task_id.to_string())
+            .or_default()
+            .record(step_id, newest, now);
+        self.updated_at = now;
     }
 
     /// The compare-and-set handle for [`PullDrainState::drain_worker_limit`]. Zero means

@@ -18,10 +18,10 @@ use super::resolve::{
     default_log_rotation, default_pass_list, normalize_logins, normalize_pass_list, read_optional,
     resolve_bounded_minutes, resolve_build_output_env, resolve_choice, resolve_cpu_light_leaves,
     resolve_distributed_completion, resolve_host_shutdown_hold_minutes, resolve_machine_id,
-    resolve_machine_name, resolve_material_fields, resolve_memory_limit, resolve_non_empty,
-    resolve_optional_choice, resolve_optional_non_empty, resolve_percent, resolve_reclaim,
-    resolve_retention_days, resolve_task_prefix, resolve_validation_path_mode,
-    resolve_worker_tasks_max,
+    resolve_machine_name, resolve_material_fields, resolve_memory_limit,
+    resolve_mid_run_steering_max_rounds, resolve_non_empty, resolve_optional_choice,
+    resolve_optional_non_empty, resolve_percent, resolve_reclaim, resolve_retention_days,
+    resolve_task_prefix, resolve_validation_path_mode, resolve_worker_tasks_max,
 };
 use crate::memory_limit::MemoryLimit;
 use crate::operation;
@@ -563,6 +563,18 @@ define_config_settings! {
         description: "Weighted crew pool for unassigned medium-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.",
         section: ConfigSection::Delivery, order: 80,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
+    },
+    workflow_mid_run_steering_enabled: bool => bool {
+        key: "workflow.mid_run_steering.enabled", value_type: "bool",
+        description: "Record which task comments each agent prompt embedding task context included, as the run's steering watermark (default false). Delivery and the promotion gate are not implemented yet.",
+        section: ConfigSection::Delivery, order: 140,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
+    },
+    workflow_mid_run_steering_max_rounds: u8 => u8 {
+        key: "workflow.mid_run_steering.max_rounds", value_type: "integer",
+        description: "Steering rounds a run may consume at the promotion gate before it holds as `steering_unconsumed` (1..=10, default 2). Reserved: no gate reads it yet.",
+        section: ConfigSection::Delivery, order: 141,
+        resolve: |raw: Option<u8>| resolve_mid_run_steering_max_rounds(raw),
     },
     workflow_provider_limit_budgets: Vec<String> => Vec<String> {
         key: "workflow.provider_limit_budgets", value_type: "array<string>",

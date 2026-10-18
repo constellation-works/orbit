@@ -3,6 +3,7 @@ use std::path::Path;
 use orbit_common::text::floor_char_boundary;
 use orbit_engine::{DispatchError, WORKFLOW_RUN_FAILED_EVENT};
 use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, refuses_implementer_writes};
+use orbit_types::workflow::CommentLogMark;
 use serde_json::Value;
 
 use orbit_common::fs::selector::canonical_selector_in_workspace;
@@ -67,6 +68,8 @@ pub(crate) fn associated_task_ids(input: &Value) -> Vec<String> {
 
 pub(crate) fn task_context_for_agent_input(
     runtime: &OrbitRuntime,
+    run_id: &str,
+    step_id: &str,
     input: &Value,
 ) -> Result<Option<Value>, DispatchError> {
     let Some(task_id) = singular_task_id_from_input(input) else {
@@ -100,7 +103,44 @@ pub(crate) fn task_context_for_agent_input(
     {
         map.insert("final_validation_commands".to_string(), commands.into());
     }
+    if runtime.mid_run_steering().enabled {
+        record_steering_snapshot(runtime, run_id, step_id, task_id, &comments)?;
+    }
     Ok(Some(context))
+}
+
+/// Record, as `run_id`'s steering watermark for `step_id`, the newest comment
+/// a prompt built from `comments` carries. The projection drops the oldest
+/// comments first, so whenever the log holds any, the prompt carries its last
+/// entry, possibly cut down.
+///
+/// The prompt never carries the watermark, and agent output never reaches
+/// it. A dispatch outside a persisted run has no record to hold one.
+fn record_steering_snapshot(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    step_id: &str,
+    task_id: &str,
+    comments: &[TaskComment],
+) -> Result<(), DispatchError> {
+    let newest = comments.last().map(|comment| CommentLogMark {
+        position: u64::try_from(comments.len() - 1).unwrap_or(u64::MAX),
+        at: comment.at,
+    });
+    runtime
+        .stores()
+        .jobs()
+        .update_run_state(run_id, &mut |_, state| {
+            state.record_steering_snapshot(task_id, step_id, newest);
+            Ok(())
+        })
+        .map(|_| ())
+        .map_err(|error| {
+            DispatchError::CliInvocationFailed(format!(
+                "record steering watermark for task `{task_id}` (run {run_id}, step `{step_id}`): \
+                 {error}"
+            ))
+        })
 }
 
 /// The required commands this invocation's pipeline runs itself on the final

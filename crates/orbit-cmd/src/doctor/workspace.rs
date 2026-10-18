@@ -165,6 +165,27 @@ pub(super) fn doctor_check_tracked_orbit_files(runtime: &OrbitRuntime) -> Worksp
     }
 }
 
+/// The resolved `workflow.mid_run_steering.*` settings, reported whatever
+/// their value so an operator can see whether runs record steering
+/// watermarks here.
+pub(super) fn doctor_check_mid_run_steering(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    let steering = runtime.mid_run_steering();
+    check(
+        "mid-run-steering",
+        WorkspaceDoctorStatus::Ok,
+        format!(
+            "workflow.mid_run_steering.enabled = {}, max_rounds = {}; {}",
+            steering.enabled,
+            steering.max_rounds,
+            if steering.enabled {
+                "agent prompts record each run's steering watermark"
+            } else {
+                "agent prompts record no steering watermark"
+            }
+        ),
+    )
+}
+
 /// Parse + validate the effective (workspace-over-global) `config.toml`.
 pub(super) fn doctor_check_config(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
     let path = match runtime.config_path() {

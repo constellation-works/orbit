@@ -832,8 +832,13 @@ impl RuntimeHost for OrbitRuntime {
         )
     }
 
-    fn task_context_for_agent_input(&self, input: &Value) -> Result<Option<Value>, DispatchError> {
-        task_context::task_context_for_agent_input(self, input)
+    fn task_context_for_agent_input(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        input: &Value,
+    ) -> Result<Option<Value>, DispatchError> {
+        task_context::task_context_for_agent_input(self, run_id, step_id, input)
     }
 
     fn run_deferral_probe(

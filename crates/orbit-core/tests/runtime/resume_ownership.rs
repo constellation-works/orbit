@@ -530,6 +530,14 @@ fn resume_of_a_lineage_binding_keeps_the_checkpoint_batch_id() {
     });
     source_state.record_step(0, JobRunState::Success, Some(worktree.clone()), None);
     source_state.record_pipeline_output("worktree", worktree);
+    source_state.record_steering_snapshot(
+        &source_task,
+        "implement",
+        Some(orbit_types::workflow::CommentLogMark {
+            position: 0,
+            at: Utc::now(),
+        }),
+    );
     fx.jobs.write_run_state(&source, &source_state).unwrap();
     fx.bind(&source_task, &source);
     let admitted = fx
@@ -540,6 +548,10 @@ fn resume_of_a_lineage_binding_keeps_the_checkpoint_batch_id() {
     assert_eq!(
         seeded.run_id, admitted.run_id,
         "the document id is re-keyed"
+    );
+    assert!(
+        seeded.steering_watermarks.is_empty(),
+        "a steering watermark names what one run's prompts carried; the resume starts its own"
     );
     assert_eq!(
         seeded.step_output(0).unwrap()["job_run_id"],

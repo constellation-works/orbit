@@ -437,6 +437,9 @@ pub(crate) struct OrbitRuntimeSettings {
     worktree_reclaim: Vec<String>,
     worktree_reclaim_below_free_mib: Option<u64>,
     worktree_parked_reclaim_after_hours: u64,
+    /// `[workflow.mid_run_steering]`: whether task-context prompts record
+    /// the run's steering watermark (default off).
+    mid_run_steering: orbit_config::MidRunSteeringSettings,
 }
 
 impl OrbitRuntimeSettings {
@@ -469,6 +472,7 @@ impl OrbitRuntimeSettings {
         worktree_reclaim: Vec<String>,
         worktree_reclaim_below_free_mib: Option<u64>,
         worktree_parked_reclaim_after_hours: u64,
+        mid_run_steering: orbit_config::MidRunSteeringSettings,
     ) -> Self {
         Self {
             persistence,
@@ -498,7 +502,12 @@ impl OrbitRuntimeSettings {
             worktree_reclaim,
             worktree_reclaim_below_free_mib,
             worktree_parked_reclaim_after_hours,
+            mid_run_steering,
         }
+    }
+
+    pub(crate) fn mid_run_steering(&self) -> orbit_config::MidRunSteeringSettings {
+        self.mid_run_steering
     }
 
     pub(crate) fn set_host_shutdown_hold_minutes(&mut self, minutes: u32) {

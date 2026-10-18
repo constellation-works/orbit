@@ -933,6 +933,35 @@ fn doctor_reports_the_worker_cpu_quota() {
     );
 }
 
+/// `orbit doctor` reports mid-run steering's resolved settings, read through
+/// both config layers, so an operator can tell whether this workspace
+/// records steering watermarks.
+#[test]
+fn doctor_reports_the_resolved_mid_run_steering_settings() {
+    let fixture = WorkCheckout::new();
+    let global = fixture.home.join(".orbit");
+    fs::create_dir_all(&global).expect("global root");
+    fs::write(
+        global.join("config.toml"),
+        "[workflow.mid_run_steering]\nmax_rounds = 3\n",
+    )
+    .expect("global config");
+    fs::write(
+        fixture.work.join(".orbit/config.toml"),
+        "[workflow.mid_run_steering]\nenabled = true\n",
+    )
+    .expect("workspace config");
+    let rows = rows(&doctor(&fixture, &[]));
+    let steering = row(&rows, "mid-run-steering");
+    assert_eq!(steering["status"], "ok", "{steering}");
+    assert!(
+        steering["message"].as_str().is_some_and(|message| {
+            message.contains("enabled = true") && message.contains("max_rounds = 3")
+        }),
+        "the workspace's enable and the global round budget both resolve: {steering}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn doctor_reports_git_protection_refusals_with_their_fix() {

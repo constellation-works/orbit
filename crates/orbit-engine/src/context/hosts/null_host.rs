@@ -625,7 +625,12 @@ pub trait NullRuntimeHost: Send + Sync {
         }
     }
 
-    fn task_context_for_agent_input(&self, _input: &Value) -> Result<Option<Value>, DispatchError> {
+    fn task_context_for_agent_input(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+        _input: &Value,
+    ) -> Result<Option<Value>, DispatchError> {
         Ok(None)
     }
 
@@ -1269,8 +1274,13 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> NamespaceProbe {
         NullRuntimeHost::run_deferral_probe(self, probe, provider, fs_profile, cwd)
     }
-    fn task_context_for_agent_input(&self, input: &Value) -> Result<Option<Value>, DispatchError> {
-        NullRuntimeHost::task_context_for_agent_input(self, input)
+    fn task_context_for_agent_input(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        input: &Value,
+    ) -> Result<Option<Value>, DispatchError> {
+        NullRuntimeHost::task_context_for_agent_input(self, run_id, step_id, input)
     }
     fn resolve_activity_tool_denials(
         &self,
