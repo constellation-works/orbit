@@ -83,6 +83,7 @@
               <button class="subtab" data-subtab="metrics" type="button">Metrics</button>
               <button class="subtab" data-subtab="reliability" type="button">Reliability</button>
               <button class="subtab" data-subtab="codebase" type="button">Codebase</button>
+              <button class="subtab" data-subtab="resources" type="button">Resources</button>
               <button class="subtab" data-subtab="cost" type="button">Cost</button>
             </nav>
           </div>
@@ -503,6 +504,17 @@
               <div class="skeleton skeleton-row" style="width: 80%"></div>
             </div>
           </div>
+        </section>
+      </main>
+      <!-- Analytics › Resources: this host's delivery resource profiles, the
+           per-minute curves admission forecasts with, for the selected workspace. -->
+      <main id="analytics-resources-main" style="grid-template-columns: 1fr; display: none;">
+        <section class="panel" id="resources-panel">
+          <header>
+            <span>Resource profiles</span>
+            <span class="count" id="resources-count">-</span>
+          </header>
+          <div class="body resources-body" id="resources-body" tabindex="0" role="region" aria-label="Resource profiles"></div>
         </section>
       </main>
       <!-- Analytics › Cost: managed-execution cost and token usage. -->

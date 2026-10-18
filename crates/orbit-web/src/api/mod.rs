@@ -26,6 +26,7 @@ mod origin;
 mod pagination;
 mod plugins;
 mod reliability;
+mod resource_profiles;
 mod routes;
 pub(crate) mod routines;
 mod run_failure;

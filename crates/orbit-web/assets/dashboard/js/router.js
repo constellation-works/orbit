@@ -51,7 +51,7 @@ const TABS = ["tasks", "jobs", "diagnostics", "analytics", "operations", "knowle
 const DIAG_SUBTABS = ["incidents", "doctor"];
 // Health › Incidents views: `#diagnostics/incidents[/events|/errors]`.
 const INCIDENTS_VIEWS = ["incidents", "events", "errors"];
-const ANALYTICS_SUBTABS = ["metrics", "reliability", "codebase", "cost"];
+const ANALYTICS_SUBTABS = ["metrics", "reliability", "codebase", "resources", "cost"];
 // Analytics › Reliability views: `#analytics/reliability[/tools]`.
 const RELIABILITY_VIEWS = ["pipeline", "tools"];
 const OPERATIONS_SUBTABS = ["routines", "auto-tasks"];
@@ -67,6 +67,7 @@ const ANALYTICS_MAINS = {
   pipeline: "analytics-reliability-main",
   tools: "analytics-tools-main",
   codebase: "analytics-codebase-main",
+  resources: "analytics-resources-main",
   cost: "analytics-cost-main",
 };
 const RUN_DETAIL_SUBTABS = ["steps", "events"];
@@ -266,9 +267,10 @@ function setAnalyticsSubtabImpl(ctx, name, view = ctx.getReliabilityView()) {
   // Pipeline aggregates across workspaces server-side, so it stays live in the
   // aggregate view; Cost is per-workspace and does not.
   if (name === "cost" && isAggregateView()) renderPanelPlaceholder("scoreboard-orchestration");
-  // Metrics and Pipeline read as soon as they open, not on the next tick.
+  // Metrics, Pipeline and Resources read as soon as they open, not on the next tick.
   if (shown === "metrics" && ctx.fetchMetrics) ctx.fetchMetrics();
   if (shown === "pipeline" && ctx.fetchReliability) ctx.fetchReliability();
+  if (shown === "resources" && ctx.fetchResources) ctx.fetchResources();
 }
 
 function setOperationsSubtabImpl(ctx, name) {

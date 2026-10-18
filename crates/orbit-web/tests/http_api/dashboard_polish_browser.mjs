@@ -148,10 +148,11 @@ try {
   assert.deepEqual(await page.locator('.rail-group').filter({ hasText: 'Observe' }).locator('.tab, .subtab').evaluateAll(nodes =>
     nodes.map(node => node.dataset.tab || `${node.closest('nav').id}:${node.dataset.subtab}`)),
   ['diagnostics', 'diag-subtabs:incidents', 'diag-subtabs:doctor', 'analytics',
-    'analytics-subtabs:metrics', 'analytics-subtabs:reliability', 'analytics-subtabs:codebase', 'analytics-subtabs:cost'],
-  'Observe holds Health (Incidents, Doctor) and Analytics (Metrics, Reliability, Codebase, Cost)');
+    'analytics-subtabs:metrics', 'analytics-subtabs:reliability', 'analytics-subtabs:codebase', 'analytics-subtabs:resources',
+    'analytics-subtabs:cost'],
+  'Observe holds Health (Incidents, Doctor) and Analytics (Metrics, Reliability, Codebase, Resources, Cost)');
   const mains = ['diagnostics-main', 'diagnostics-events-main', 'diagnostics-doctor-main', 'analytics-metrics-main',
-    'analytics-reliability-main', 'analytics-tools-main', 'analytics-codebase-main', 'analytics-cost-main'];
+    'analytics-reliability-main', 'analytics-tools-main', 'analytics-codebase-main', 'analytics-resources-main', 'analytics-cost-main'];
   const walk = [
     { click: '.rail .tab[data-tab="diagnostics"]', tab: 'diagnostics', subtab: 'incidents', views: 'incidents-views', view: 'incidents', main: 'diagnostics-main', hash: /^#diagnostics\/incidents\?window=24h$/ },
     { click: '#incidents-views [data-view="events"]', tab: 'diagnostics', subtab: 'incidents', views: 'incidents-views', view: 'events', main: 'diagnostics-events-main', hash: /^#diagnostics\/incidents\/events\?since=24h&status=non_success$/ },
@@ -164,6 +165,7 @@ try {
     { click: '#analytics-subtabs [data-subtab="reliability"]', tab: 'analytics', subtab: 'reliability', views: 'reliability-views', view: 'pipeline', main: 'analytics-reliability-main', hash: /^#analytics\/reliability\?window=24h$/ },
     { click: '#reliability-views [data-view="tools"]', tab: 'analytics', subtab: 'reliability', views: 'reliability-views', view: 'tools', main: 'analytics-tools-main', hash: /^#analytics\/reliability\/tools\?window=24h$/ },
     { click: '#analytics-subtabs [data-subtab="codebase"]', tab: 'analytics', subtab: 'codebase', main: 'analytics-codebase-main', hash: /^#analytics\/codebase$/ },
+    { click: '#analytics-subtabs [data-subtab="resources"]', tab: 'analytics', subtab: 'resources', main: 'analytics-resources-main', hash: /^#analytics\/resources\?window=24h$/ },
     { click: '#analytics-subtabs [data-subtab="cost"]', tab: 'analytics', subtab: 'cost', main: 'analytics-cost-main', hash: /^#analytics\/cost\?window=24h$/ },
     { click: '#analytics-subtabs [data-subtab="reliability"]', tab: 'analytics', subtab: 'reliability', views: 'reliability-views', view: 'tools', main: 'analytics-tools-main', hash: /^#analytics\/reliability\/tools\?/, note: 'Reliability reopens on Tools' },
     { click: '#reliability-views [data-view="pipeline"]', tab: 'analytics', subtab: 'reliability', views: 'reliability-views', view: 'pipeline', main: 'analytics-reliability-main', hash: /^#analytics\/reliability\?window=24h$/ },

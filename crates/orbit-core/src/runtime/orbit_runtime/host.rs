@@ -17,8 +17,8 @@ use crate::runtime::host_resource::accuracy::{
 };
 use crate::runtime::host_resource::delivery::delivery_jobs;
 use crate::runtime::host_resource::forecast::{
-    AdmissionReservationRequest, BASELINE_HISTORY_MINUTES, ForecastDecision, HostLoadForecast,
-    HostLoadProbe, RESERVATION_TTL_MINUTES, build_forecast,
+    AdmissionReservationRequest, BASELINE_HISTORY_MINUTES, ForecastDecision, HostCapacity,
+    HostLoadForecast, HostLoadProbe, RESERVATION_TTL_MINUTES, build_forecast,
 };
 use crate::runtime::host_resource::profile::{
     ProfileBounds, ProfileLookup, ProfileMatch, ProfileSet,
@@ -134,6 +134,19 @@ impl OrbitRuntime {
             ProfileBounds::from(self.context.settings().auto_concurrency()),
             Utc::now(),
         )
+    }
+
+    /// The host's core count and memory, as admission's forecast reads them:
+    /// what `admit_cpu_percent` and `admit_memory_percent` are shares of.
+    /// `None` when the host cannot be read.
+    pub fn host_capacity(&self) -> Option<HostCapacity> {
+        self.host_load.capacity()
+    }
+
+    /// The `[machine.auto_concurrency]` settings admission runs with: its
+    /// thresholds and the bounds profiles are built under.
+    pub fn auto_concurrency_settings(&self) -> &orbit_config::AutoConcurrencySettings {
+        self.context.settings().auto_concurrency()
     }
 
     /// The profile describing one delivery, and the fallback step that found

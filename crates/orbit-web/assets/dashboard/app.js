@@ -12,6 +12,7 @@ import { openDoctor, peekDoctor, wireDoctorPanel } from './js/doctor.js';
 import { initLogTail, fitLogPanelToViewport, setDockMode } from './js/log-tail.js';
 import { renderDiagnostics } from './js/diagnostics.js';
 import { fetchAndRenderMetrics, placeholdMetricsAggregate } from './js/metrics.js';
+import { fetchAndRenderResources, placeholdResourcesAggregate } from './js/resources.js';
 import { getIncidentClass, getIncidentWindow } from './js/incidents.js';
 import { renderMarkdown } from './js/markdown.js';
 import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, scopeRouteHash, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
@@ -258,6 +259,7 @@ function routerContext() {
     // per-workspace views need).
     fetchReliability: () => fetchAndRenderReliability().catch((e) => console.error("Failed to fetch reliability metrics", e)),
     fetchMetrics: () => fetchAndRenderMetrics().catch((e) => console.error("Failed to fetch metrics", e)),
+    fetchResources: () => fetchAndRenderResources().catch((e) => console.error("Failed to fetch resource profiles", e)),
     // ORB-14830: Doctor reads its report when the view opens, never per tick.
     openDoctor: () => openDoctor().catch((e) => console.error("Failed to run doctor", e)),
     fitLogPanelToViewport,
@@ -1418,6 +1420,12 @@ function activeRefreshJobs() {
     if (aggregate) {
       placeholdScoreboardAggregate();
       placeholdMetricsAggregate();
+      placeholdResourcesAggregate();
+      return jobs;
+    }
+    if (activeAnalyticsSubtab === "resources") {
+      // This host's delivery resource profiles for the selected workspace.
+      add("Analytics › Resources", fetchAndRenderResources());
       return jobs;
     }
     if (activeAnalyticsSubtab === "cost") {
