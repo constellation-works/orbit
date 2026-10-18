@@ -8,7 +8,7 @@
 //! lacks) are downloaded and unpacked into `root/`; anywhere else the
 //! libraries and the command that provides them are reported.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
@@ -204,23 +204,20 @@ fn unpack(
         create_private_dir_all(dir)
             .map_err(|error| OrbitError::Io(format!("create {}: {error}", dir.display())))?;
     }
+    // apt writes `<package>_<version>_<architecture>.deb` (an epoch colon is
+    // `%3a` in that name). Extract only the archive `download --print-uris`
+    // names for each selected package, including when that exact file is
+    // already cached. An older or other-architecture leftover shares the
+    // package name and must not be unpacked over the current payload, or
+    // abort the install when the leftover itself is corrupt.
+    let selected = candidate_archives(&packages)?;
     if !packages.is_empty() {
         download(&packages, &debs, progress)?;
     }
     let mut unpacked = Vec::new();
-    for deb in deb_files(&debs)? {
-        // apt names archives <package>_<version>_<architecture>.deb. Retry
-        // selected cached archives too: a previous download may have completed
-        // before extraction failed or was interrupted. Leave unrelated cache
-        // entries alone; an already-resolved kit never reaches this step.
-        let Some((package, _)) = deb
-            .file_name()
-            .and_then(|name| name.to_str())
-            .and_then(|name| name.split_once('_'))
-        else {
-            continue;
-        };
-        if !packages.iter().any(|wanted| wanted == package) {
+    for archive in selected {
+        let deb = debs.join(&archive.file_name);
+        if !deb.is_file() {
             continue;
         }
         let mut command = Command::new("dpkg-deb");
@@ -233,7 +230,7 @@ fn unpack(
                 String::from_utf8_lossy(&output.stderr).trim()
             )));
         }
-        unpacked.push(package.to_string());
+        unpacked.push(archive.package);
     }
     if fonts_needed {
         write_fonts_conf(layout)?;
@@ -412,16 +409,117 @@ fn download(
     Ok(())
 }
 
-fn deb_files(dir: &Path) -> Result<Vec<PathBuf>, OrbitError> {
-    let entries = std::fs::read_dir(dir)
-        .map_err(|error| OrbitError::Io(format!("read {}: {error}", dir.display())))?;
-    let mut debs: Vec<PathBuf> = entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "deb"))
+/// One archive `apt-get download` would write for a selected package.
+struct SelectedArchive {
+    package: String,
+    /// File name only, as apt prints it: `<package>_<version>_<architecture>.deb`.
+    file_name: String,
+}
+
+/// The current archive for each package apt can resolve. A name it cannot
+/// resolve is omitted so a stale cache entry is not unpacked in its place.
+fn candidate_archives(packages: &[String]) -> Result<Vec<SelectedArchive>, OrbitError> {
+    if packages.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut selected = archives_named_in(&print_uris(packages)?, packages);
+    if selected.len() == packages.len() {
+        return Ok(selected);
+    }
+    let resolved: Vec<String> = selected
+        .iter()
+        .map(|archive| archive.package.clone())
         .collect();
-    debs.sort();
-    Ok(debs)
+    for package in packages {
+        if resolved.iter().any(|name| name == package) {
+            continue;
+        }
+        if let Some(archive) = archives_named_in(
+            &print_uris(std::slice::from_ref(package))?,
+            std::slice::from_ref(package),
+        )
+        .into_iter()
+        .next()
+        {
+            selected.push(archive);
+        }
+    }
+    selected.sort_by(|left, right| left.package.cmp(&right.package));
+    Ok(selected)
+}
+
+/// Stdout of `apt-get download --print-uris`. A non-zero status still returns
+/// the lines apt printed: one unknown name fails the batch after listing the
+/// archives it would write for the rest.
+fn print_uris(packages: &[String]) -> Result<String, OrbitError> {
+    let mut command = Command::new("apt-get");
+    command.arg("download").arg("--print-uris").args(packages);
+    let output = run_probe(&mut command, PROBE_DEADLINE)?;
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn archives_named_in(stdout: &str, packages: &[String]) -> Vec<SelectedArchive> {
+    let mut selected = Vec::new();
+    for package in packages {
+        let Some(file_name) = stdout
+            .lines()
+            .find_map(|line| filename_for_package(line, package))
+        else {
+            continue;
+        };
+        selected.push(SelectedArchive {
+            package: package.clone(),
+            file_name,
+        });
+    }
+    selected
+}
+
+/// `apt-get download --print-uris` prints `'<uri>' <dest> <size> <hash>`.
+/// `<dest>` is the file name `apt-get download` writes, not a path.
+fn filename_for_package(line: &str, package: &str) -> Option<String> {
+    let mut parts = line.split_whitespace();
+    let uri = parts.next()?;
+    if !(uri.starts_with('\'')
+        || uri.starts_with('"')
+        || uri.starts_with("http://")
+        || uri.starts_with("https://"))
+    {
+        return None;
+    }
+    let file_name = parts.next()?.trim_matches(['\'', '"']);
+    if archive_matches_package(file_name, package) {
+        Some(file_name.to_string())
+    } else {
+        None
+    }
+}
+
+/// `<package>_<version>_<architecture>.deb`, with `package` matched whole.
+/// Debian package names contain no `_`; the version and architecture are the
+/// two remaining fields. The name is one path component, so it cannot escape
+/// the cache directory.
+fn archive_matches_package(file_name: &str, package: &str) -> bool {
+    if !is_package_name(package) {
+        return false;
+    }
+    let Some(rest) = file_name
+        .strip_prefix(package)
+        .and_then(|rest| rest.strip_prefix('_'))
+        .and_then(|rest| rest.strip_suffix(".deb"))
+    else {
+        return false;
+    };
+    let Some((version, arch)) = rest.rsplit_once('_') else {
+        return false;
+    };
+    !version.is_empty()
+        && !arch.is_empty()
+        && !file_name.contains('/')
+        && !file_name.contains('\\')
+        && Path::new(file_name)
+            .file_name()
+            .is_some_and(|name| name == file_name)
 }
 
 /// The font configuration `env.sh` points `FONTCONFIG_FILE` at.

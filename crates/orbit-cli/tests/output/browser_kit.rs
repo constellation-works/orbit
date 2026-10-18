@@ -529,6 +529,11 @@ esac"#,
                 &bin,
                 "apt-get",
                 r#"
+if [ "$1" = download ] && [ "${2:-}" = --print-uris ]; then
+  [ "${3:-}" = libneeded ]
+  printf '%s\n' "'http://fixture.invalid/libneeded_1_amd64.deb' libneeded_1_amd64.deb 1 MD5Sum:00"
+  exit 0
+fi
 [ "$1" = download ] && [ "$2" = libneeded ]
 echo download >> "$KIT_TEST_ROOT/calls"
 [ "$KIT_TEST_CASE" != unavailable ] || exit 1
@@ -627,6 +632,174 @@ echo 'libneeded.so => not found'"#,
             assert_eq!(
                 fs::read_to_string(root.join("env.sh")).unwrap(),
                 "# written by the operator\n"
+            );
+        }
+    }
+
+    /// A stale cached archive shares the selected package name. Install must
+    /// unpack apt's current version only: a valid leftover must not replace
+    /// that payload, and a corrupt leftover must not abort it.
+    #[test]
+    fn install_unpacks_the_selected_archive_not_a_stale_cached_version() {
+        if crate::isolated_test::run_in_child(
+            "browser_kit::library_recovery::install_unpacks_the_selected_archive_not_a_stale_cached_version",
+        ) {
+            return;
+        }
+        let release = fs::read_to_string("/etc/os-release").unwrap_or_default();
+        if !release.lines().any(|line| {
+            line.split_once('=').is_some_and(|(key, value)| {
+                matches!(key, "ID" | "ID_LIKE")
+                    && value
+                        .trim_matches(['\"', '\''])
+                        .split_whitespace()
+                        .any(|id| matches!(id, "debian" | "ubuntu"))
+            })
+        }) {
+            #[allow(
+                clippy::print_stderr,
+                reason = "the test gate must see when this host lacks the Debian/Ubuntu install path"
+            )]
+            {
+                eprintln!("SKIP: no-root browser-kit package recovery requires Debian or Ubuntu");
+            }
+            return;
+        }
+
+        for case in ["stale-valid", "corrupt-stale"] {
+            let fixture = WorkCheckout::new();
+            fs::create_dir_all(&fixture.work).unwrap();
+            let root = write_kit(
+                &fixture.home,
+                &FixtureKit {
+                    version: PLAYWRIGHT_VERSION,
+                    browser_installed: true,
+                    verified_version: None,
+                },
+            );
+            let layout = KitLayout::for_home(&fixture.home);
+            let shell = layout.browsers().join(format!(
+                "chromium_headless_shell-{REVISION}/chrome-headless-shell-linux64"
+            ));
+            fs::create_dir_all(&shell).unwrap();
+            fs::write(shell.join("chrome-headless-shell"), "fixture").unwrap();
+            fs::create_dir_all(layout.debs()).unwrap();
+            let stale = layout.debs().join("libneeded_1.9_amd64.deb");
+            let stale_bytes = if case == "corrupt-stale" {
+                "not a deb\n"
+            } else {
+                "stale 1.9\n"
+            };
+            fs::write(&stale, stale_bytes).unwrap();
+            let selected = layout.debs().join("libneeded_1.10_amd64.deb");
+            let unrelated = layout.debs().join("libunrelated_1_amd64.deb");
+            fs::write(&unrelated, "unrelated cache\n").unwrap();
+            let bin = fixture.work.join("bin");
+            fs::create_dir(&bin).unwrap();
+            executable(
+                &bin,
+                "node",
+                r#"
+case "$2" in
+  install-deps) printf 'Missing system dependencies (1):\n  libneeded\n' ;;
+  -e) : > "$ORBIT_BROWSER_KIT_SCREENSHOT"
+      printf '{"text":"kit ok","version":"fixture"}\n' ;;
+  *) exit 90 ;;
+esac"#,
+            );
+            executable(
+                &bin,
+                "apt-get",
+                r#"
+if [ "$1" = download ] && [ "${2:-}" = --print-uris ]; then
+  [ "${3:-}" = libneeded ]
+  printf '%s\n' "'http://fixture.invalid/libneeded_1.10_amd64.deb' libneeded_1.10_amd64.deb 1 MD5Sum:00"
+  exit 0
+fi
+[ "$1" = download ] && [ "$2" = libneeded ]
+echo download >> "$KIT_TEST_ROOT/calls"
+[ -f libneeded_1.10_amd64.deb ] || printf 'selected 1.10\n' > libneeded_1.10_amd64.deb"#,
+            );
+            executable(
+                &bin,
+                "dpkg-deb",
+                r#"
+[ "$1" = -x ]
+base=$(basename "$2")
+echo "extract $base" >> "$KIT_TEST_ROOT/calls"
+case "$base" in
+  libneeded_1.10_amd64.deb)
+    mkdir -p "$3/usr/lib/x86_64-linux-gnu"
+    printf '1.10\n' > "$3/usr/lib/x86_64-linux-gnu/libneeded.so"
+    ;;
+  libneeded_1.9_amd64.deb)
+    if [ "$KIT_TEST_CASE" = corrupt-stale ]; then
+      echo 'corrupt stale archive' >&2
+      exit 1
+    fi
+    mkdir -p "$3/usr/lib/x86_64-linux-gnu"
+    printf '1.9\n' > "$3/usr/lib/x86_64-linux-gnu/libneeded.so"
+    ;;
+  *) echo "unexpected archive $base" >&2; exit 91 ;;
+esac"#,
+            );
+            executable(
+                &bin,
+                "ldd",
+                r#"
+case ":${LD_LIBRARY_PATH:-}:" in
+  *":$KIT_TEST_ROOT/root/usr/lib/x86_64-linux-gnu:"*)
+    [ ! -f "$KIT_TEST_ROOT/root/usr/lib/x86_64-linux-gnu/libneeded.so" ] || exit 0 ;;
+esac
+echo 'libneeded.so => not found'"#,
+            );
+            executable(&bin, "fc-list", "echo fixture-font");
+            executable(&bin, "dpkg-query", "exit 1");
+            for name in ["npm", "sudo", "apt-cache"] {
+                executable(
+                    &bin,
+                    name,
+                    "echo unexpected >> \"$KIT_TEST_ROOT/calls\"; exit 92",
+                );
+            }
+            let output = orbit(&fixture)
+                .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+                .env("KIT_TEST_ROOT", &root)
+                .env("KIT_TEST_CASE", case)
+                .args(["browser-kit", "install", "--json"])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{case}: stale archive aborted or the install failed: {output:?}"
+            );
+            let report = json_stdout(&output);
+            assert_eq!(
+                report["libraries"]["unpacked_packages"],
+                json!(["libneeded"]),
+                "{case}"
+            );
+            assert_eq!(report["libraries"]["unresolved"], json!([]), "{case}");
+            assert_eq!(report["status"]["verified"], true, "{case}: {report}");
+            let payload = layout
+                .unpacked_root()
+                .join("usr/lib/x86_64-linux-gnu/libneeded.so");
+            assert_eq!(fs::read_to_string(&payload).unwrap(), "1.10\n", "{case}");
+            assert_eq!(
+                fs::read_to_string(root.join("calls")).unwrap(),
+                "download\nextract libneeded_1.10_amd64.deb\n",
+                "{case}"
+            );
+            assert_eq!(fs::read_to_string(&stale).unwrap(), stale_bytes, "{case}");
+            assert_eq!(
+                fs::read_to_string(&selected).unwrap(),
+                "selected 1.10\n",
+                "{case}"
+            );
+            assert_eq!(fs::read_to_string(&unrelated).unwrap(), "unrelated cache\n");
+            assert!(
+                !String::from_utf8_lossy(&output.stderr).contains("corrupt stale archive"),
+                "{case}: {output:?}"
             );
         }
     }
