@@ -90,7 +90,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
     log.write(json.dumps(sys.argv[1:]) + "\\n")
 env_log = os.environ.get("GUARD_TEST_ENV_LOG")
 if env_log:
-    # Linux moves background work to the idle class; elsewhere it gets nice 19.
+    # Linux uses the idle class; elsewhere nice -n 19 lowers inherited priority.
     idle = getattr(os, "SCHED_IDLE", None)
     with open(env_log, "a") as log:
         log.write(json.dumps({"argv": sys.argv[1:],
@@ -808,6 +808,25 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                             for row in observed if row["argv"][:1] == ["metadata"]))
         self.assertIn(["fixture-test-bin", "--list", "fixture_test"], calls)
         self.assertNotIn("-p", [argument for call in calls for argument in call])
+
+    def test_check_commands_lower_themselves_when_parent_renice_is_denied(self):
+        # Reproduce the macOS worker restriction without depending on the
+        # host sandbox: no idle scheduler and no priority changes to parents.
+        self.prepare_ci()
+        for command in ("chrt", "renice"):
+            self.write_executable(self.bin / command, "#!/bin/sh\nexit 1\n")
+        env_log = self.root / "cargo-env.log"
+        self.env["GUARD_TEST_ENV_LOG"] = str(env_log)
+        result = self.run_guard("ci-guardrails.sh", "--checks")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        observed = [json.loads(line) for line in env_log.read_text().splitlines()]
+        foreground = next(row for row in observed if row["argv"][0] == "fmt")
+        self.assertEqual(foreground["nice"], os.getpriority(os.PRIO_PROCESS, 0))
+        background = [row for row in observed
+                      if row["argv"][0] in ("check", "test", "doc")]
+        self.assertEqual(len(background), 3, observed)
+        for row in background:
+            self.assertGreater(row["nice"], foreground["nice"], (row, foreground))
 
     def test_split_ci_modes_together_run_the_full_ci_work(self):
         """The hosted test-build and Check jobs split the full run between them."""
