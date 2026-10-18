@@ -105,11 +105,17 @@ fn verifier_resolved_tools_preserve_its_read_only_boundary() {
     }
     for tool in ["orbit.task.add", "orbit.task.artifact.put"] {
         assert!(
-            !resolved.requested_tools.iter().any(|requested| requested == tool),
+            !resolved
+                .requested_tools
+                .iter()
+                .any(|requested| requested == tool),
             "the verifier omits covered requirement {tool} from requested tools"
         );
         assert!(
-            !resolved.effective_tools.iter().any(|effective| effective == tool),
+            !resolved
+                .effective_tools
+                .iter()
+                .any(|effective| effective == tool),
             "the verifier never receives covered requirement {tool}"
         );
         assert!(
