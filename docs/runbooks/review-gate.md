@@ -32,8 +32,8 @@ readiness holds that backlog as `local_route_before_pr` or
 One fresh reviewer, from `operation.review_crew`, examines the implementation
 commit, fixes what it finds, and returns a verdict. There is no findings-driven
 rework loop. If PR completion rebases a conflicting reviewed head, the pipeline
-may admit one fresh re-review in the same lineage; a second conflict leaves the
-task in review as `review_gate_stale`.
+may admit up to two fresh re-reviews in the same lineage; a conflict after the
+last of them leaves the task in review as `review_gate_stale`.
 
 The gate parses the job input's `base_sync` into `BaseSyncMode` before reading
 its base: `local` uses the local branch; `remote` uses `origin/<base>`.
@@ -79,7 +79,9 @@ review certificate to another head.
 | Reviewer wall-clock timeout | the implementation and any partial reviewer repairs are pushed; the partial report is retained | the first timeout on a task's implementation tree requeues it to `backlog` with `review_timeout_incomplete`; another timeout on that tree blocks it with `review_timeout_requeue_exhausted`; no PR opens |
 | Known red: every failed required check carries a `baseline` claim settlement confirms, each failing only tests the pinned base fails too, and nothing else is open | the reviewed candidate | settles `accept` (`accept_with_fixes` over a repair) and delivery proceeds; the records stay `failed` and the certificate's `known_red` names the command, base, final candidate, run and tests |
 | Red base: every failed required check carries a `baseline` claim settlement confirms, and nothing else is open | the reviewed candidate is kept unpublished | the step fails typed `[baseline_red]` and the run ends `held`; the task goes to `backlog` under `baseline_red_hold` until the base passes, and the next run resumes the candidate for a fresh review |
-| Evidence-only `incomplete` (or legacy `changes_required`) | the reviewed candidate is kept; a claimed leaf pushes it to `orbit-evidence/<branch>` on `origin`, falling back to `refs/orbit/candidates/<task>/<run>` if that push fails. If both pushes fail, the hold names the local tip and carry diagnostic for resume on its source host | the run ends `held`, with no retry, step recovery, final recovery, or failure handoff; the task stays `in-progress` with `review_awaiting_evidence` (for a claimed leaf, its settlement releases the claim with the hold) |
+| Evidence-only `incomplete` | the reviewed candidate is kept; a claimed leaf pushes it to `orbit-evidence/<branch>` on `origin`, falling back to `refs/orbit/candidates/<task>/<run>` if that push fails. If both pushes fail, the hold names the local tip and carry diagnostic for resume on its source host | the run ends `held`, with no retry, step recovery, final recovery, or failure handoff; the task stays `in-progress` with `review_awaiting_evidence` (for a claimed leaf, its settlement releases the claim with the hold) |
+
+A legacy `changes_required` verdict is read as `reject`, not as an evidence hold.
 
 The implementation commit is never amended. A failed revalidation of the
 reviewer commit is reported as `reject` too, even though the certificate

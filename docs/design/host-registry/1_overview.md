@@ -4,7 +4,7 @@ type: design
 title: "Host Registry — Overview"
 owner: codex
 last_updated: 2026-10-12
-last_validated: 2026-10-12
+last_validated: 2026-10-17
 status: Accepted
 feature: host-registry
 doc_role: overview
@@ -38,7 +38,7 @@ orbit-types does not read machine files. orbit-registry does not dispatch Core t
 - `~/.orbit/config.toml` stores the `[machine]` identity: a generated stable
   `id`, a renameable operator-chosen `name`, and an immutable `task_prefix`.
   `orbit init` creates it. A legacy `~/.orbit/host.toml` is migrated into
-  `[machine]` and removed on first identity load.
+  `[machine]` on first identity load and removed once that write succeeds.
 - ~/.orbit/workspaces.json is schema v1. It separates logical workspace records from this machine's checkout paths and owner or replica role.
 - `~/.orbit/hosts.toml` lists operator-registered remote hosts by name, SSH target, `machine_id` and `task_prefix`. It replaces the hand-edited `~/.orbit/mcp-destinations.toml`, which is still read for one release while it is the only file ([specs/host-commands.md](./specs/host-commands.md)).
 - A workspace runtime is opened only from a local checkout binding. A checkoutless logical catalog entry can be listed but cannot execute.
