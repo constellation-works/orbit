@@ -5,7 +5,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{Ipv4Addr, TcpListener};
+use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
@@ -338,17 +338,33 @@ fn gzip_forward_negotiates_upstream_and_preserves_encoding_and_vary() {
             // One route is pre-encoded; the other models an older dashboard.
             thread::spawn(move || {
                 for stream in listener.incoming() {
-                    let mut stream = stream.unwrap();
-                    stream
+                    // A tunnel readiness probe can connect and close without
+                    // sending a request. That connection must not kill the
+                    // only serving thread: every later forwarded request
+                    // would then be refused. Serve each connection
+                    // best-effort and keep accepting.
+                    let Ok(mut stream) = stream else { continue };
+                    if stream
                         .set_read_timeout(Some(Duration::from_secs(10)))
-                        .unwrap();
-                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                        .is_err()
+                    {
+                        continue;
+                    }
+                    let Ok(clone) = stream.try_clone() else {
+                        continue;
+                    };
+                    let mut reader = BufReader::new(clone);
                     let mut first = String::new();
-                    reader.read_line(&mut first).unwrap();
+                    if !matches!(reader.read_line(&mut first), Ok(1..)) {
+                        continue;
+                    }
                     let mut encoding = String::new();
                     loop {
                         let mut line = String::new();
-                        reader.read_line(&mut line).unwrap();
+                        match reader.read_line(&mut line) {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => {}
+                        }
                         if line == "\r\n" || line.is_empty() {
                             break;
                         }
@@ -382,10 +398,21 @@ fn gzip_forward_negotiates_upstream_and_preserves_encoding_and_vary() {
                             json
                         }
                     };
-                    write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\n{extra_headers}Content-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
-                    stream.write_all(&body).unwrap();
+                    // The peer may have closed after the headers (a probe
+                    // that only needs the status line). A broken pipe on
+                    // one connection is not a fixture failure.
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\n{extra_headers}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(&body);
                 }
             });
+            // A readiness probe that connects and closes without a request
+            // must not take the remote stub down before the real requests.
+            drop(TcpStream::connect((Ipv4Addr::LOCALHOST, remote_port)).unwrap());
+            drop(TcpStream::connect((Ipv4Addr::LOCALHOST, remote_port)).unwrap());
             let a = Fixture::new();
             write_hosts(&a, &[("hostb", &b.machine_id(), "hostb-ssh", "HB")]);
             let stub = StubSsh::new(json!({"hostb-ssh": {"attach": remote_port, "spawn": null}}));
