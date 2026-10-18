@@ -175,21 +175,7 @@ pub fn decide_pr_auto_fix(
 /// failure text counts: a generic CLI exit's stderr tail is provider output
 /// and may quote the marker without the watcher having admitted anything.
 pub fn is_pr_auto_fix_check_repair(message: &str) -> bool {
-    // Generic CLI failures append provider stderr after this separator. That
-    // tail is diagnostic context and must not turn a provider quote into an
-    // admitted watcher handoff. Preserve provider-specific diagnostics, whose
-    // text remains authoritative under their existing contract.
-    let authoritative = message
-        .split_once("\nstderr tail:\n")
-        .filter(|(failure, _)| {
-            failure
-                .rsplit_once("cli subprocess exited with code ")
-                .is_some_and(|(_, code)| code.parse::<i32>().is_ok())
-                || failure.ends_with(
-                    "cli subprocess was terminated by a signal and reported no exit code",
-                )
-        })
-        .map_or(message, |(failure, _)| failure);
+    let authoritative = super::failure_classification_text(message);
     authoritative
         .match_indices(PR_AUTO_FIX_CHECK_REPAIR_MARKER)
         .any(|(at, marker)| authoritative[at + marker.len()..].starts_with(": pull request #"))
