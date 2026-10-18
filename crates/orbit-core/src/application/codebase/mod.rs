@@ -12,6 +12,7 @@
 
 mod detail;
 mod facts;
+mod lock_waits;
 mod sections;
 
 use std::time::Duration;

@@ -400,6 +400,49 @@ assert.ok(part('list').querySelector('div.codebase-empty-state.good'), 'no refus
 assert.equal(rows().length, 0);
 assert.match(part('list').textContent, /2,557 file reservations/);
 
+// Lock contention from a server that records no waits renders as it always
+// did: rate rows with their reservation and denial counts, no sort, and the
+// note that waits are not recorded.
+const lockRow = (path, numerator, denominator, extra) => ({ path, ...rate(numerator, denominator), contending_tasks: numerator, reservations: 9, denials: 40, ...extra });
+const legacyLock = JSON.parse(JSON.stringify(full));
+legacyLock.lock_contention = { below_support: 0, reservations: 30, denials: 80, wait_time_recorded: false, rows: [
+  lockRow('src/hot.rs', 3, 4, { wait_ms: null }), lockRow('src/slow.rs', 1, 5, { wait_ms: null }),
+] };
+await serve(legacyLock);
+assert.deepEqual(rowPaths(), ['src/hot.rs', 'src/slow.rs']);
+assert.match(rows()[0].textContent, /9 reservations · 40 denials/);
+assert.equal(part('list').querySelectorAll('span.codebase-wait').length, 0, 'a payload without waits shows none');
+assert.equal(button(part('list'), 'Sort by total wait'), undefined, 'nothing to sort by without waits');
+assert.match(part('list').querySelector('div.codebase-list-foot').textContent, /^Lock wait time is not recorded, so waits cannot be shown\.$/);
+
+// With waits, each row gives its median and longest wait and total wait
+// minutes, and a row still waiting says so. A row whose denials named no task
+// has no wait. Sorting by total wait reads the rows the server ranked by it.
+const waited = JSON.parse(JSON.stringify(full));
+const hot = lockRow('src/hot.rs', 3, 4, { wait: { episodes: 3, waiting: 0, median_ms: 120000, max_ms: 600000, total_ms: 840000 } });
+const slow = lockRow('src/slow.rs', 1, 5, { wait: { episodes: 1, waiting: 1, median_ms: 9000000, max_ms: 9000000, total_ms: 9000000 } });
+const runOnly = lockRow('src/run.rs', 1, 6, { wait: null });
+waited.lock_contention = { below_support: 0, reservations: 30, denials: 80, wait_time_recorded: true, rows: [hot, slow, runOnly], rows_by_wait: [slow, hot] };
+await serve(waited);
+const waitText = () => rows().map(row => row.querySelector('span.codebase-wait')?.textContent ?? null);
+const ranks = () => rows().map(row => row.querySelector('span.codebase-rank').textContent);
+assert.deepEqual(rowPaths(), ['src/hot.rs', 'src/slow.rs', 'src/run.rs'], 'rows keep the rate order by default');
+assert.deepEqual(waitText(), ['wait median 2 min · max 10 min · 14 min total', 'wait median 2 h 30 min · max 2 h 30 min · 150 min total', null]);
+assert.match(rows()[1].textContent, /1 still waiting/);
+assert.doesNotMatch(rows()[0].textContent, /still waiting/);
+assert.doesNotMatch(part('list').textContent, /not recorded/, 'recorded waits drop the note');
+assert.match(part('list').querySelector('div.codebase-list-foot').textContent, /first denial to its admission or its leaving the backlog/);
+const sortByWait = () => button(part('list'), 'Sort by total wait');
+assert.equal(sortByWait().getAttribute('aria-pressed'), 'false');
+click(sortByWait());
+assert.deepEqual(rowPaths(), ['src/slow.rs', 'src/hot.rs'], 'longest total wait first');
+assert.deepEqual(ranks(), ['1', '2']);
+assert.equal(sortByWait().getAttribute('aria-pressed'), 'true');
+await serve(waited);
+assert.deepEqual(rowPaths(), ['src/slow.rs', 'src/hot.rs'], 'a poll keeps the chosen sort');
+click(sortByWait());
+assert.deepEqual(rowPaths(), ['src/hot.rs', 'src/slow.rs', 'src/run.rs'], 'the toggle restores the rate order');
+
 // The window and group-by segments and the stepper rewrite the selection and
 // ask for a new hash; an unchanged one asks for nothing.
 let changes = 0;
