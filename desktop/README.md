@@ -84,6 +84,8 @@ window, so `tests/sidecar_lifecycle.rs` can drive it without a webview. That tes
 its own fake `orbit`: it re-executes itself on a new port in the same process, and the test checks
 that the window follows and that quitting stops the server. It also quits while a server has just
 started and is not yet tracked, and checks that shutdown returns only once that server is gone.
+Held drains check that overlapping shutdown callers both wait for the server to be reaped,
+and that a server that never finishes draining is killed within the shutdown deadline.
 Run it with `cargo test` from `desktop/`, or without the webview stack with
 `cargo test --locked --no-default-features --test sidecar_lifecycle`.
 
