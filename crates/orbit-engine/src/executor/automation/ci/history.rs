@@ -21,11 +21,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use serde::de::IgnoredAny;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 /// Consecutive sweeps after which a run-scoped retryable error stops failing
 /// the sweep.
 pub(super) const PERSISTENT_AFTER_SWEEPS: u64 = 3;
+
+/// Written on every save. Load does not check it: a different number, or a
+/// value that is not a number, still restores the streaks.
+const HISTORY_SCHEMA_VERSION: u64 = 2;
 
 /// Consecutive-sighting counts keyed by `run_id/job_id/operation`, and
 /// unfileable landing-failure streaks keyed by failure identity.
@@ -35,10 +41,27 @@ pub(super) struct RetryableHistory {
     landing_gaps: BTreeMap<String, SweepCount>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct SweepCount {
     consecutive_sweeps: u64,
     last_sweep_id: String,
+}
+
+/// Persisted `retryable_history.json`. Parsed once in [`load`] and written
+/// whole in [`save`]. Map values that are not one [`SweepCount`] are dropped
+/// on their own; the rest of the file still loads.
+#[derive(Debug, Serialize, Deserialize)]
+struct RetryableHistoryFile {
+    #[serde(skip_deserializing, default = "history_schema_version")]
+    schema_version: u64,
+    #[serde(default, deserialize_with = "lenient_counts")]
+    counts: BTreeMap<String, SweepCount>,
+    #[serde(default, deserialize_with = "lenient_counts")]
+    landing_gaps: BTreeMap<String, SweepCount>,
+}
+
+fn history_schema_version() -> u64 {
+    HISTORY_SCHEMA_VERSION
 }
 
 /// One collection's errors after [`RetryableHistory::observe`].
@@ -109,20 +132,24 @@ impl RetryableHistory {
             })
             .collect()
     }
+}
 
-    fn from_json(value: &Value) -> Self {
+impl From<RetryableHistoryFile> for RetryableHistory {
+    fn from(file: RetryableHistoryFile) -> Self {
         Self {
-            counts: counts_from_json(value.get("counts")),
-            landing_gaps: counts_from_json(value.get("landing_gaps")),
+            counts: file.counts,
+            landing_gaps: file.landing_gaps,
         }
     }
+}
 
-    fn to_json(&self) -> Value {
-        json!({
-            "schema_version": 2,
-            "counts": counts_to_json(&self.counts),
-            "landing_gaps": counts_to_json(&self.landing_gaps),
-        })
+impl From<&RetryableHistory> for RetryableHistoryFile {
+    fn from(history: &RetryableHistory) -> Self {
+        Self {
+            schema_version: HISTORY_SCHEMA_VERSION,
+            counts: history.counts.clone(),
+            landing_gaps: history.landing_gaps.clone(),
+        }
     }
 }
 
@@ -135,54 +162,110 @@ fn next_count(prior: Option<&SweepCount>, sweep_id: &str) -> u64 {
     }
 }
 
-fn counts_from_json(counts: Option<&Value>) -> BTreeMap<String, SweepCount> {
-    counts
-        .and_then(Value::as_object)
-        .map(|counts| {
-            counts
-                .iter()
-                .filter_map(|(key, count)| {
-                    Some((
-                        key.clone(),
-                        SweepCount {
-                            consecutive_sweeps: count.get("consecutive_sweeps")?.as_u64()?,
-                            last_sweep_id: count.get("last_sweep_id")?.as_str()?.to_string(),
-                        },
-                    ))
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+/// A count map, or anything else (which loads as no counts). One entry that
+/// is not a [`SweepCount`] is skipped; its neighbours stay.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum LenientCounts {
+    Map(BTreeMap<String, MaybeSweepCount>),
+    Other(IgnoredAny),
 }
 
-fn counts_to_json(counts: &BTreeMap<String, SweepCount>) -> BTreeMap<String, Value> {
-    counts
-        .iter()
-        .map(|(key, count)| {
-            (
-                key.clone(),
-                json!({
-                    "consecutive_sweeps": count.consecutive_sweeps,
-                    "last_sweep_id": count.last_sweep_id,
-                }),
-            )
-        })
-        .collect()
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum MaybeSweepCount {
+    Count(SweepCount),
+    Skip(IgnoredAny),
+}
+
+fn lenient_counts<'de, D>(deserializer: D) -> Result<BTreeMap<String, SweepCount>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(match LenientCounts::deserialize(deserializer)? {
+        LenientCounts::Map(entries) => entries
+            .into_iter()
+            .filter_map(|(key, entry)| match entry {
+                MaybeSweepCount::Count(count) => Some((key, count)),
+                MaybeSweepCount::Skip(_) => None,
+            })
+            .collect(),
+        LenientCounts::Other(_) => BTreeMap::new(),
+    })
+}
+
+/// Object or any other JSON. A non-object document is an empty history, the
+/// same as a file that simply has no counts.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ParsedHistoryFile {
+    File(RetryableHistoryFile),
+    Other(IgnoredAny),
+}
+
+/// Fields [`error_key`] reads. `run_id` and `job_id` stay in JSON display
+/// form so a string id remains quoted and a number stays bare.
+#[derive(Deserialize)]
+struct ErrorKeyFields {
+    #[serde(default)]
+    run_id: Option<JsonRendered>,
+    #[serde(default)]
+    job_id: Option<JsonRendered>,
+    #[serde(default)]
+    operation: LenientText,
+}
+
+/// `Value`'s display text. Existing streak keys were built from that display.
+struct JsonRendered(String);
+
+impl JsonRendered {
+    fn raw(text: &str) -> Self {
+        Self(text.to_string())
+    }
+
+    fn text(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for JsonRendered {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        Ok(Self(value.to_string()))
+    }
+}
+
+/// A string operation, or any other JSON value, which counts as no operation.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum LenientText {
+    Text(String),
+    Other(IgnoredAny),
+}
+
+impl Default for LenientText {
+    fn default() -> Self {
+        Self::Text(String::new())
+    }
 }
 
 /// The run, job and operation an error is about, or `None` for one that
 /// names no run.
 fn error_key(error: &Value) -> Option<String> {
-    let run_id = error.get("run_id").filter(|value| !value.is_null())?;
-    let job_id = error
-        .get("job_id")
-        .filter(|value| !value.is_null())
-        .map_or_else(|| "-".to_string(), Value::to_string);
-    let operation = error
-        .get("operation")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    Some(format!("{run_id}/{job_id}/{operation}"))
+    let fields = ErrorKeyFields::deserialize(error).ok()?;
+    let run_id = fields.run_id?;
+    let job_id = match fields.job_id {
+        Some(job_id) => job_id,
+        None => JsonRendered::raw("-"),
+    };
+    let operation = match fields.operation {
+        LenientText::Text(text) => text,
+        LenientText::Other(_) => String::new(),
+    };
+    Some(format!("{}/{}/{}", run_id.text(), job_id.text(), operation))
 }
 
 /// Where the counts persist, or `None` when the host has no data root.
@@ -199,8 +282,9 @@ pub(super) fn history_path(data_root: &Path) -> Option<PathBuf> {
 /// a persistent error fails a few more sweeps before it degrades again.
 pub(super) fn load(path: &Path) -> RetryableHistory {
     match std::fs::read_to_string(path) {
-        Ok(text) => match serde_json::from_str::<Value>(&text) {
-            Ok(value) => RetryableHistory::from_json(&value),
+        Ok(text) => match serde_json::from_str::<ParsedHistoryFile>(&text) {
+            Ok(ParsedHistoryFile::File(file)) => RetryableHistory::from(file),
+            Ok(ParsedHistoryFile::Other(_)) => RetryableHistory::default(),
             Err(error) => {
                 tracing::warn!(path = %path.display(), %error, "ignoring unreadable CI sweep retryable history");
                 RetryableHistory::default()
@@ -218,5 +302,7 @@ pub(super) fn save(path: &Path, history: &RetryableHistory) -> std::io::Result<(
     if let Some(parent) = path.parent() {
         orbit_common::fs::io::create_private_dir_all(parent)?;
     }
-    orbit_common::fs::io::atomic_write_text(path, &history.to_json().to_string())
+    let text = serde_json::to_string(&RetryableHistoryFile::from(history))
+        .map_err(std::io::Error::other)?;
+    orbit_common::fs::io::atomic_write_text(path, &text)
 }
