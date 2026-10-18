@@ -106,7 +106,7 @@ impl OrbitRuntime {
 
     /// Trusted approval. Drain promotion calls this while its own run still
     /// lists the task, so this path does not apply the operator ownership
-    /// guard. Operator surfaces use [`Self::approve_task_guarding_run_ownership`].
+    /// guard. Operator surfaces use the guarded approval path.
     pub fn approve_task(
         &self,
         id: &str,
