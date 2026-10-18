@@ -1078,6 +1078,189 @@ enabled = false
     );
 }
 
+/// The repair preserves translated review values in their original layer,
+/// including explicit modern overrides, and keeps the first backup on retry.
+#[test]
+#[allow(clippy::print_stderr)] // Name each scenario and its elapsed time in isolated child failure output.
+fn doctor_retired_review_repair_preserves_effective_policy() {
+    if crate::isolated_test::run_in_child(
+        "doctor::doctor_retired_review_repair_preserves_effective_policy",
+    ) {
+        return;
+    }
+    for (global, workspace, before_pr, minutes) in [
+        (
+            "",
+            "[operation]\nreview_policy = 'before-pr'\nreview_minutes = 7\n",
+            true,
+            7,
+        ),
+        (
+            "[operation]\nreview_policy = 'before-pr'\nreview_minutes = 11\n",
+            "",
+            true,
+            11,
+        ),
+        (
+            "[review]\nbefore_pr = true\nminutes = 11\n",
+            "[operation]\nreview_policy = 'none'\nreview_minutes = 7\n",
+            false,
+            7,
+        ),
+        (
+            "[operation]\nreview_policy = 'before-pr'\nreview_minutes = 11\n",
+            "[review]\nbefore_pr = false\nminutes = 9\n",
+            false,
+            9,
+        ),
+        (
+            "",
+            "[operation]\nreview_policy = 'before-pr'\nreview_minutes = 7\n[review]\nbefore_pr = false\nminutes = 9\n",
+            false,
+            9,
+        ),
+    ] {
+        let started = Instant::now();
+        eprintln!("scenario: global={global:?}, workspace={workspace:?}");
+        let fixture = WorkCheckout::new();
+        let global_dir = fixture.home.join(".orbit");
+        fs::create_dir_all(&global_dir).unwrap();
+        let global_path = global_dir.join("config.toml");
+        let workspace_path = fixture.work.join(".orbit/config.toml");
+        fs::write(&global_path, global).unwrap();
+        fs::write(&workspace_path, workspace).unwrap();
+        let expected = (Value::Bool(before_pr), Value::from(minutes));
+        assert_eq!(effective_review(&fixture), expected, "before repair");
+        let fixed = rows(&doctor(&fixture, &["--fix-retired-config-keys"]));
+        assert_eq!(
+            row(&fixed, "fix-retired-config-keys")["status"],
+            "ok",
+            "{fixed:?}"
+        );
+        assert_eq!(effective_review(&fixture), expected, "after repair");
+        for (path, original) in [(&global_path, global), (&workspace_path, workspace)] {
+            let updated = fs::read_to_string(path).unwrap();
+            let document: toml::Value = toml::from_str(&updated).unwrap();
+            assert!(
+                document
+                    .get("operation")
+                    .and_then(|v| v.get("review_policy"))
+                    .is_none()
+            );
+            assert!(
+                document
+                    .get("operation")
+                    .and_then(|v| v.get("review_minutes"))
+                    .is_none()
+            );
+            if original.contains("[operation]") {
+                assert_eq!(
+                    fs::read_to_string(path.with_extension("toml.bak")).unwrap(),
+                    original
+                );
+            } else {
+                assert_eq!(updated, original, "unaffected layer stays byte-identical");
+            }
+        }
+        let settled = (
+            fs::read(&global_path).unwrap(),
+            fs::read(&workspace_path).unwrap(),
+        );
+        let backups = (
+            backup_names(&global_dir),
+            backup_names(&fixture.work.join(".orbit")),
+        );
+        let again = rows(&doctor(&fixture, &["--fix-retired-config-keys"]));
+        assert_eq!(row(&again, "fix-retired-config-keys")["status"], "ok");
+        assert_eq!(effective_review(&fixture), expected, "after repeat repair");
+        assert_eq!(
+            (
+                fs::read(&global_path).unwrap(),
+                fs::read(&workspace_path).unwrap()
+            ),
+            settled
+        );
+        assert_eq!(
+            (
+                backup_names(&global_dir),
+                backup_names(&fixture.work.join(".orbit"))
+            ),
+            backups
+        );
+        for (path, original) in [(&global_path, global), (&workspace_path, workspace)] {
+            if original.contains("[operation]") {
+                assert_eq!(
+                    fs::read_to_string(path.with_extension("toml.bak")).unwrap(),
+                    original
+                );
+            }
+        }
+        eprintln!("scenario elapsed: {:?}", started.elapsed());
+    }
+}
+
+/// An after-landing policy, even when masked by another layer, requires an
+/// operator migration. Refusal must precede every config write and backup.
+#[test]
+#[allow(clippy::print_stderr)] // Name each scenario and its elapsed time in isolated child failure output.
+fn doctor_retired_review_repair_refuses_after_landing_before_any_write() {
+    if crate::isolated_test::run_in_child(
+        "doctor::doctor_retired_review_repair_refuses_after_landing_before_any_write",
+    ) {
+        return;
+    }
+    for (global, workspace) in [
+        (
+            "[workflow]\nsystem_crew = 'sol'\n",
+            "[operation]\nreview_policy = 'after-landing'\nreview_minutes = 7\n",
+        ),
+        (
+            "[operation]\nreview_policy = 'after-landing'\n",
+            "[operation]\nreview_policy = 'none'\n",
+        ),
+        (
+            "[operation]\nreview_policy = 'after-landing'\n",
+            "[review]\nbefore_pr = false\n",
+        ),
+    ] {
+        let started = Instant::now();
+        eprintln!("scenario: global={global:?}, workspace={workspace:?}");
+        let fixture = WorkCheckout::new();
+        let global_dir = fixture.home.join(".orbit");
+        fs::create_dir_all(&global_dir).unwrap();
+        let global_path = global_dir.join("config.toml");
+        let workspace_path = fixture.work.join(".orbit/config.toml");
+        fs::write(&global_path, global).unwrap();
+        fs::write(&workspace_path, workspace).unwrap();
+        let before = effective_review(&fixture);
+        let output = doctor(&fixture, &["--fix-retired-config-keys"]);
+        assert!(!output.status.success(), "repair must refuse: {output:?}");
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            error.contains("orbit auto-task toggle delivery-code-review"),
+            "{error}"
+        );
+        assert_eq!(fs::read_to_string(&global_path).unwrap(), global);
+        assert_eq!(fs::read_to_string(&workspace_path).unwrap(), workspace);
+        assert!(backup_names(&global_dir).is_empty());
+        assert!(backup_names(&fixture.work.join(".orbit")).is_empty());
+        assert_eq!(effective_review(&fixture), before);
+        eprintln!("scenario elapsed: {:?}", started.elapsed());
+    }
+}
+
+fn effective_review(fixture: &WorkCheckout) -> (Value, Value) {
+    let get = |key: &str| {
+        let output = command(fixture)
+            .args(["config", "get", key, "--json"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "config get {key}: {output:?}");
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()["value"].clone()
+    };
+    (get("review.before_pr"), get("review.minutes"))
+}
+
 fn mentions_key_and_file(row: &Value, key: &str, file: &std::path::Path) -> bool {
     row["message"].as_str().is_some_and(|message| {
         message.contains(key) && message.contains(&file.display().to_string())

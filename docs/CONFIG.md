@@ -1510,7 +1510,7 @@ Config is parsed at startup, and invalid entries fail loud. Common errors:
 | `[operation] has unknown key '<x>'`, `[review] has unknown key '<x>'`, `operation.review_policy has invalid value '<x>'` | The review keys are a closed set. |
 | `[task] artifact_store is no longer supported` | Remove the key. |
 
-**Retired keys warn and are ignored.** Delete them; `orbit config get`/`set` reject them with migration notes. `orbit doctor` lists each one with the file that still sets it, and `orbit doctor --fix-retired-config-keys` backs up that file and removes only those keys.
+**Retired keys warn and are ignored.** Delete them; `orbit config get`/`set` reject them with migration notes. `orbit doctor` lists each one with the file that still sets it, and `orbit doctor --fix-retired-config-keys` backs up that file and removes those keys, preserving translated review settings as described below.
 
 | Retired | Note |
 |---|---|
@@ -1524,7 +1524,9 @@ Config is parsed at startup, and invalid entries fail loud. Common errors:
 | `knowledge.task_id_pattern` | Deprecated. |
 | `execution.env.inherit` | Inheritance is fixed off. |
 
-**Deprecated keys warn and are translated or ignored.** Still loaded, warned on every load, and refused by `orbit config get`/`set`; a later release makes them errors. `orbit doctor --fix-retired-config-keys` removes them the same way it removes retired keys.
+**Deprecated keys warn and are translated or ignored.** Still loaded, warned on every load, and refused by `orbit config get`/`set`; a later release makes them errors. `orbit doctor --fix-retired-config-keys` removes ignored keys directly. It migrates `operation.review_policy` (`before-pr` or `none`) and `operation.review_minutes` to `review.before_pr` and `review.minutes` in the same file before removing the old keys. Explicit modern values in that file win, preserving global/workspace precedence. Each edited file keeps an original backup; a second successful run writes nothing.
+
+If **either file** contains `review_policy = "after-landing"`, even if another layer masks it, the repair refuses before changing or backing up either config. First choose the intended consumer state with `orbit auto-task toggle delivery-code-review on` or `off`. Set `review.before_pr` and `review.minutes` explicitly as needed, then remove the legacy policy manually and rerun the repair. Toggling the consumer alone does not make the legacy key safe for automatic removal.
 
 | Deprecated | Translation |
 |---|---|

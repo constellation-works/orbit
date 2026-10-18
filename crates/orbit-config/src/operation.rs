@@ -156,7 +156,11 @@ impl LegacyReviewPolicy {
 /// spelling, in place, before anything reads it [ORB-13992]. A key the
 /// document already states under `[review]` is left as written. The legacy
 /// keys stay in the document so the load warns about them by name.
-pub(crate) fn translate_legacy_review_keys(
+///
+/// This projects only the modern review fields. It does not migrate the
+/// legacy after-landing auto-task enablement; callers removing legacy keys
+/// must preserve that consumer separately or refuse the removal.
+pub fn translate_legacy_review_keys(
     document: &mut toml::Value,
     config_path: &Path,
 ) -> Result<(), OrbitError> {

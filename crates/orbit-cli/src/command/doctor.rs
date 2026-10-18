@@ -61,7 +61,7 @@ pub struct DoctorCommand {
     #[arg(long)]
     pub fix_automation_pins: bool,
 
-    /// Back up each config.toml that still sets a retired or deprecated key, then remove only those keys.
+    /// Back up config.toml and remove retired or deprecated keys, preserving translated review settings. Refuses legacy after-landing policies until manually migrated.
     #[arg(long)]
     pub fix_retired_config_keys: bool,
 

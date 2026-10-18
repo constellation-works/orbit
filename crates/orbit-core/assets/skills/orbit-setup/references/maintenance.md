@@ -156,11 +156,17 @@ inexplicably. It has targeted repairs, each narrow on purpose:
 | `--fix-stale-task-locks` | Task reservations whose owner and task state are conclusively inactive. |
 | `--fix-stale-artifacts` | Retires deprecated skills, jobs, activities, auto-tasks, and routines that Orbit itself wrote. Locally modified ones are preserved, not deleted. |
 | `--fix-retired-activity-backends` | Removes known retired `spec.backend` values from agent-loop activities. |
-| `--fix-retired-config-keys` | Backs up each `config.toml` that still sets a retired or deprecated key, then removes only those keys. A second run writes nothing. |
+| `--fix-retired-config-keys` | Backs up each edited `config.toml` and removes retired or deprecated keys, migrating translated review values in the same layer while preserving explicit modern values. A second successful run writes nothing. Any legacy after-landing policy refuses before either config is changed or backed up; migrate it manually first. |
 | `--fix-automation-pins` | Deletes this Orbit root and workspace's own state-routine attempt pins that no consumer or live run still names. Legacy shared `refs/orbit/automation/<attempt>` pins and other roots' or workspaces' pins are retained and reported. Refuses while a routine sweep runs. |
 | `--fix-state-directory-permissions` | Restricts writable Orbit state directories to owner-only access, excluding run worktrees, Cargo target trees, and child symlinks (Unix only). |
 | `--fix-orphan-task-stores` | Deletes empty unclaimed task-store partitions, and populated partitions whose bound checkout is confirmed absent, including their task bundles. Unowned or unreachable populated partitions are left alone. Requires `--confirm`. |
 | `--remove-graph` | Removes retired graph state from this worktree and the shared workspace. |
+
+For a retired-key repair refused on `operation.review_policy = "after-landing"`,
+choose the intended consumer state with `orbit auto-task toggle delivery-code-review on`
+or `off`. Set `review.before_pr` and `review.minutes` explicitly as needed, remove
+the legacy policy manually, then rerun the repair. This includes policies masked
+by another layer; toggling the consumer alone does not permit automatic removal.
 
 `--fix-stale-artifacts` is how a workspace catches up after an Orbit upgrade
 drops a shipped definition. It works by content provenance — changes to
