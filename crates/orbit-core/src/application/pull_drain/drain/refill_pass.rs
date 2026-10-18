@@ -46,6 +46,7 @@ impl PullDrain<'_> {
             error: None,
             answer: None,
             ceiling_full: ceiling == 0,
+            hold: None,
         };
         pass.error = self
             .refill_into(
@@ -104,7 +105,10 @@ impl PullDrain<'_> {
     ) -> Result<(), OrbitError> {
         match self.reconcile_pending_answer(destination)? {
             Reconciled::Open => {}
-            Reconciled::Held => return Ok(()),
+            Reconciled::Held(reason) => {
+                pass.hold = Some(reason);
+                return Ok(());
+            }
             Reconciled::Idle(receipt) => {
                 pass.answer = Some(receipt);
                 return Ok(());
@@ -165,7 +169,10 @@ impl PullDrain<'_> {
             observed?;
             match reconciled {
                 Reconciled::Open => pass.admitted += 1,
-                Reconciled::Held => break,
+                Reconciled::Held(reason) => {
+                    pass.hold = Some(reason);
+                    break;
+                }
                 Reconciled::Idle(receipt) => {
                     pass.answer = Some(receipt);
                     break;

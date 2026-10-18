@@ -329,10 +329,13 @@ impl DrainOwnerTransport for Wire {
                 "ssh: connect to host owner port 22: Connection timed out".into(),
             ));
         }
-        if name == "orbit.drain.claim.settle"
-            && let Some(operator) = self.before_settle.lock().unwrap().take()
-        {
-            operator();
+        if name == "orbit.drain.claim.settle" {
+            // Operator stop/cancel may itself settle; release the hook lock
+            // before letting the callback re-enter the transport.
+            let operator = self.before_settle.lock().unwrap().take();
+            if let Some(operator) = operator {
+                operator();
+            }
         }
         if name == "orbit.drain.claim.settle"
             && let Some(message) = self.refuse_settle.lock().unwrap().clone()

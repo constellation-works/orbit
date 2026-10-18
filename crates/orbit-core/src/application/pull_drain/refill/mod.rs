@@ -278,6 +278,8 @@ pub(crate) fn pull_refill(
     let mut idle_receipt = None;
     // Whether the refill stopped on a full ceiling.
     let mut ceiling_full = false;
+    let mut reconciliation_hold = None;
+    let admissions_stopped = Cell::new(false);
     // What this window can run: its preflight, minus every crew a leaf has
     // since found unusable [ORB-13941]. Read by the refill after it has
     // reconciled, so a leaf this pass settles already counts.
@@ -416,6 +418,7 @@ pub(crate) fn pull_refill(
                             || state.pull_drain.drain_cancel.is_some()
                     });
                     if stopped {
+                        admissions_stopped.set(true);
                         return Ok(false);
                     }
                     let streak = drain.consecutive_failed_settlements(&destination, &run_id)?;
@@ -465,6 +468,7 @@ pub(crate) fn pull_refill(
                 admitted = pass.admitted;
                 idle_receipt = pass.answer;
                 ceiling_full = pass.ceiling_full;
+                reconciliation_hold = pass.hold;
                 if let Some(failure) = pass.error {
                     if let OrbitError::ProtocolSkew(message) = failure {
                         return Err(protocol_skew_failure(
@@ -570,11 +574,14 @@ pub(crate) fn pull_refill(
     {
         error.get_or_insert(failure.to_string());
     }
+    let capacity_held =
+        reconciliation_hold == Some(super::drain::ReconciliationHold::ForecastCapacity);
     let no_headroom = admitted == 0
-        && work_fit
-            .as_ref()
-            .and_then(Option::as_ref)
-            .is_some_and(|fit| !fit.requests());
+        && (capacity_held
+            || work_fit
+                .as_ref()
+                .and_then(Option::as_ref)
+                .is_some_and(|fit| !fit.requests()));
     // As this pass left them: one it just delivered no longer holds requests.
     let refused = refused_settlements(&drain, &destination).unwrap_or_else(|failure| {
         error.get_or_insert(failure.to_string());
@@ -698,6 +705,12 @@ pub(crate) fn pull_refill(
         .or_else(|| runs_nothing.then_some(no_runnable_crew))
         .or_else(|| {
             no_headroom.then(|| {
+                if capacity_held {
+                    return "forecast_no_headroom: a carried pull admission cannot reacquire \
+                            this host's forecast capacity; it remains unsent or unlaunched \
+                            until the requested work fits"
+                        .to_string();
+                }
                 "forecast_no_headroom: this host's load forecast has room for no work the owner \
                  could grant under `machine.auto_concurrency` enforce; see the drain's \
                  `pull_admission_fit`, which names the minute and resource each kind of work \
@@ -720,6 +733,7 @@ pub(crate) fn pull_refill(
             throttle: resource.throttle.as_ref(),
             ceiling_full,
             owner_idle: idle_receipt.is_some(),
+            admissions_stopped: admissions_stopped.get(),
         }
         .observe()
     });

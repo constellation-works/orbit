@@ -55,6 +55,8 @@ pub(super) struct PullPass<'a> {
     pub(super) ceiling_full: bool,
     /// The owner answered the pass's last request idle.
     pub(super) owner_idle: bool,
+    /// A stop or cancel was observed by the refill's admission gate.
+    pub(super) admissions_stopped: bool,
 }
 
 /// The refusal code of a pass the load forecast held.
@@ -90,10 +92,12 @@ impl PullPass<'_> {
             DrainPassOutcome::CeilingFull
         } else if self.owner_idle {
             DrainPassOutcome::NoCandidate
-        } else {
-            // Nothing else ends a refill early: an operator stop or cancel
-            // recorded while the pass was requesting did.
+        } else if self.admissions_stopped {
             observation.held_reason = Some("admissions_stopped".to_string());
+            DrainPassOutcome::Held
+        } else {
+            // An unadvanced admission is not evidence of an operator stop.
+            observation.held_reason = Some("reconciliation_held".to_string());
             DrainPassOutcome::Held
         };
         observation

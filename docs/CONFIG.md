@@ -235,8 +235,11 @@ Each drain also counts why its admission passes admitted nothing, in
 `pipeline_state.drain_pass_counters`: every pass is one of `admitted`,
 `failed`, `held`, `throttle`, `no_candidate`, `ceiling_full`, `gap_fit_held`
 or `deferred`, with held passes split by reason, throttled passes by
-resource, and the reasons tasks waited. `orbit run show <drain>` prints them
-as an `Admission passes:` line, and `orbit run profiles --accuracy` gives each
+resource, and the reasons tasks waited. A carried pull request or claim
+waiting to reacquire forecast capacity counts as `gap_fit_held`, including
+a request whose reservation expired; `admissions_stopped` requires an
+observed operator stop or cancel during the pass. `orbit run show <drain>`
+prints them as an `Admission passes:` line, and `orbit run profiles --accuracy` gives each
 drain's limiter shares (`limiters` in `--json`). The counters survive resume
 ([auto-concurrency §7](design/auto-concurrency/2_design.md#7-surfaces-and-configuration)).
 
