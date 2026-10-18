@@ -41,13 +41,19 @@ fn failure_text(observed: &Observed) -> String {
 fn a_validate_repair_is_committed_by_the_host_and_retried_on_that_head() {
     let fixture = fixture();
     // A claimed leaf's `validate` has step recovery too, and the same commit.
-    for (name, claimed) in [("owner_repair", false), ("claimed_repair", true)] {
+    for (name, claimed, recovery_model) in [
+        ("owner_repair", false, Some(RECOVERY_MODEL)),
+        ("claimed_repair", true, Some(RECOVERY_MODEL)),
+        ("owner_unknown_model", false, None),
+        ("claimed_unknown_model", true, None),
+    ] {
         let observed = run(
             &fixture,
             &Case {
                 name,
                 producer: REPAIR,
                 claimed,
+                recovery_model,
                 prepare: commit_candidate,
                 before: vec![committed()],
                 ..Case::default()
@@ -85,15 +91,18 @@ fn a_validate_repair_is_committed_by_the_host_and_retried_on_that_head() {
             "fixed"
         );
         // Orbit's process identity commits; the author names the recovery
-        // activity's resolved model, and the trailers record the recovery
-        // that made the change [ORB-16768].
+        // activity's resolved model (or its historical fallback), and the
+        // trailers record the recovery that made the change [ORB-16768].
         assert_eq!(
             git_stdout(
                 worktree,
                 &["show", "-s", "--format=%an <%ae>|%cn <%ce>", retried]
             ),
             format!(
-                "orbit[{RECOVERY_MODEL}] <orbit-recovery@orbit.local>|orbit <orbit@orbit.local>"
+                "{} <orbit-recovery@orbit.local>|orbit <orbit@orbit.local>",
+                recovery_model
+                    .map(|model| format!("orbit[{model}]"))
+                    .unwrap_or_else(|| "orbit-recovery".to_string())
             ),
             "{name}"
         );

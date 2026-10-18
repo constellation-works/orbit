@@ -402,8 +402,6 @@
         "executor/automation/ci/tests/pending.rs::red_run_that_failed_the_same_step_for_another_cause_stays_held",
         "executor/automation/ci/tests/pending.rs::red_run_that_reproduced_on_the_previous_completed_run_is_not_held",
         "executor/automation/vcs/claim/tests/validation.rs::claimed_base_ref_preserves_valid_refs_and_propagates_invalid_modes",
-        "executor/automation/vcs/commit/author.rs::recovery_author_names_the_model_and_falls_back_without_one",
-        "executor/automation/vcs/commit/author.rs::reviewer_author_names_the_model_and_falls_back_without_one",
         "executor/automation/vcs/commit/tests/message.rs::delivery_markers_survive_a_title_truncated_inside_brackets",
         "executor/automation/vcs/tests/base_claim.rs::a_base_replay_cut_by_a_shortened_deadline_is_inconclusive_and_not_cached",
         "executor/automation/vcs/tests/base_claim.rs::a_candidate_only_failure_yields_base_passes_and_completed_result_is_cached",
