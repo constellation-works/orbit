@@ -9,7 +9,7 @@
 
 use orbit_common::OrbitError;
 use orbit_config::canonical_crew_pool;
-use orbit_types::task::TaskComplexity;
+use orbit_types::task::{Task, TaskComplexity};
 use orbit_types::workflow::{CREW_PURPOSE_TAG_PREFIX, CrewPurpose};
 
 use crate::OrbitRuntime;
@@ -24,6 +24,13 @@ use super::types::CrewCandidate;
 /// Prefix of the provenance a task records when its crew was drawn from its
 /// purpose's pool, as `purpose:<purpose>`.
 pub(crate) const PURPOSE_SOURCE_PREFIX: &str = "purpose:";
+
+/// Whether `source` is a system assignment — a purpose pool, a complexity
+/// pool, or the default — rather than an explicit pin or a legacy crew with
+/// no assignment evidence.
+pub(crate) fn automatic_crew_source(source: &str) -> bool {
+    source == "default" || source.starts_with("pool:") || source.starts_with(PURPOSE_SOURCE_PREFIX)
+}
 
 /// The purpose `tags` name for a task's crew: an explicit
 /// `crew-purpose:<purpose>` tag naming a `workflow.purpose_crews` purpose,
@@ -123,5 +130,27 @@ impl OrbitRuntime {
             format!("{key}; native inspection, skipped: {skipped}")
         };
         Ok(Some((capable, source)))
+    }
+
+    /// The enabled members of the purpose pool `task` was assigned from, when
+    /// that assignment is automatic (`purpose:<purpose>`).
+    ///
+    /// `None` when the crew is an explicit pin, a complexity-pool or default
+    /// assignment, or the purpose pool is unset, empty or wholly disabled.
+    /// A hold or a usage limit retries this pool, weights included, before the
+    /// complexity-pool fallback. An explicit crew never reaches it.
+    pub(crate) fn purpose_assignment_candidates(
+        &self,
+        task: &Task,
+    ) -> Result<Option<(Vec<CrewCandidate>, String)>, OrbitError> {
+        let Some(purpose) = self
+            .task_crew_source(task)?
+            .as_deref()
+            .and_then(|source| source.strip_prefix(PURPOSE_SOURCE_PREFIX))
+            .and_then(CrewPurpose::parse)
+        else {
+            return Ok(None);
+        };
+        self.purpose_pool_candidates(purpose, false)
     }
 }

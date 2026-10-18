@@ -14,10 +14,12 @@
 //! the next admission pass after that simply draws the crew again.
 //!
 //! Limited crews are removed from a task's draw before it is made. A task
-//! drawn from a pool or the default falls back to the unlimited members of
-//! its complexity pool, never to the workspace default. A task whose own
-//! crew is its explicit choice waits under `wait`, and under `pool` is drawn
-//! from that pool too. When nothing unlimited is left the task waits, and the
+//! drawn from a purpose pool falls back to the unlimited members of that
+//! pool first, keeping their weights. A task drawn from a pool, a purpose or
+//! the default then falls back to the unlimited members of its complexity
+//! pool, never to the workspace default. A task whose own crew is its
+//! explicit choice waits under `wait`, and under `pool` is drawn from that
+//! complexity pool too. When nothing unlimited is left the task waits, and the
 //! local drain's backlog snapshot reports it as `provider_limit`. Only
 //! delivery admission is gated; an explicit run-input crew is the operator's
 //! call and records the limit it ran against instead.
@@ -34,7 +36,9 @@ use orbit_types::workflow::{ProviderFailureClass, ProviderFailureHold};
 
 use super::ledger::PARTIAL_NOTE;
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::{CapturedCrewPools, CrewCandidate};
+use crate::application::job::crew_pools::{
+    CapturedCrewPools, CrewCandidate, PURPOSE_SOURCE_PREFIX, automatic_crew_source,
+};
 use crate::runtime::run_input::non_empty;
 use crate::runtime::task::provider_hold::{base_backoff, same_provider};
 
@@ -238,13 +242,11 @@ impl OrbitRuntime {
     }
 
     /// Whether `task`'s crew is its own choice — an explicit assignment or a
-    /// legacy pin — rather than a pool's or the default's.
+    /// legacy pin — rather than a purpose pool's, a complexity pool's, or the
+    /// default's.
     pub(crate) fn explicit_task_crew(&self, task: &Task) -> Result<bool, OrbitError> {
         let source = self.task_crew_source(task)?;
-        if source
-            .as_deref()
-            .is_some_and(|source| source == "default" || source.starts_with("pool:"))
-        {
+        if source.as_deref().is_some_and(automatic_crew_source) {
             return Ok(false);
         }
         Ok(self
@@ -291,6 +293,34 @@ impl OrbitRuntime {
                 unlimited,
                 format!("{source}; provider limit: {}", gate.skipped(&skipped)),
             ));
+        }
+        // A collapsed `purpose:` assignment names only the chosen member.
+        // Retry that pool's other enabled members, weights included, before
+        // the complexity pool. A draw that already lists the pool is left
+        // alone. The run allowlist is applied by the caller.
+        if source.starts_with(PURPOSE_SOURCE_PREFIX)
+            && let Some((pool, pool_source)) = self.purpose_assignment_candidates(task)?
+        {
+            let permitted = pool
+                .into_iter()
+                .filter(|candidate| drawable(candidate))
+                .collect::<Vec<_>>();
+            skipped.extend(
+                permitted
+                    .iter()
+                    .filter(|candidate| limited(candidate))
+                    .map(|candidate| candidate.crew.clone()),
+            );
+            let unlimited = permitted
+                .into_iter()
+                .filter(|candidate| !limited(candidate))
+                .collect::<Vec<_>>();
+            if !unlimited.is_empty() {
+                return Ok(LimitedDraw::Narrowed(
+                    unlimited,
+                    format!("{pool_source}; provider limit: {}", gate.skipped(&skipped)),
+                ));
+            }
         }
         // No default fallback: the default is usually the most expensive
         // crew and often shares a provider with the pool.

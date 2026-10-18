@@ -76,6 +76,7 @@ fn fail_with_limit(fx: &Fixture, task: &str, crew: &str, limit: &ProviderLimitFa
 fn crew_provider(crew: &str) -> &'static str {
     match crew {
         "sol" | "luna" => "codex",
+        "opus" => "claude",
         _ => "antigravity",
     }
 }
@@ -283,11 +284,99 @@ fn an_off_override_still_records_a_usage_limit_hold() {
     assert_eq!(fx.status(&task), TaskStatus::Backlog);
 }
 
+/// Purpose pool of a Claude crew and a Codex crew. The complexity pool and
+/// the default are a third provider, so a fallback there is visible.
+const PURPOSE_HOLD: &str = r#"[workflow]
+default_crew = "flash"
+medium_complexity_crews = ["flash"]
+
+[workflow.purpose_crews]
+baseline_red_repair = ["opus:1", "sol:3"]
+
+[crews.opus]
+provider = "claude"
+model = "opus-model"
+
+[crews.sol]
+provider = "codex"
+model = "sol-model"
+
+[crews.flash]
+provider = "antigravity"
+model = "flash-model"
+"#;
+
+/// A quota hold on the crew a purpose pool assigned leaves the task on the
+/// other purpose member. The complexity pool is not that member. Once every
+/// purpose member and that fallback are held, the task waits with
+/// `provider_backoff`.
+fn a_quota_hold_on_a_purpose_assignment_draws_another_purpose_member() {
+    let fx = fixture(PURPOSE_HOLD);
+    let created = fx.tagged_task(&["baseline-red-repair"], None);
+    assert_eq!(
+        created.crew_source.as_deref(),
+        Some("purpose:baseline_red_repair"),
+        "{created:?}"
+    );
+    let selected = created
+        .crew
+        .clone()
+        .expect("the purpose pool assigned a crew");
+    let other = match selected.as_str() {
+        "opus" => "sol",
+        "sol" => "opus",
+        crew => panic!("the purpose pool assigned {crew}"),
+    };
+    let task = created.id;
+    fail_with_limit(
+        &fx,
+        &task,
+        &selected,
+        &resetting_at(Utc::now() + Duration::hours(2)),
+    );
+
+    assert!(
+        fx.admitted(&task, &[]),
+        "the other purpose member is not held"
+    );
+    assert!(fx.admitted(&task, &[other]), "{other}");
+    assert!(
+        !fx.admitted(&task, &["flash"]),
+        "the complexity pool does not take a purpose task that still has a member"
+    );
+    let excluded = fx.exclusion(&task, &["flash"]);
+    assert_eq!(excluded["reason"], "crew_not_allowed", "{excluded}");
+    assert_eq!(excluded["crew"], other, "{excluded}");
+
+    fail_with_limit(
+        &fx,
+        &task,
+        other,
+        &resetting_at(Utc::now() + Duration::hours(2)),
+    );
+    assert!(
+        fx.admitted(&task, &["flash"]),
+        "with both purpose members held, the complexity pool is the fallback"
+    );
+    assert_eq!(fx.exclusion(&task, &[other])["crew"], "flash");
+
+    fail_with_limit(
+        &fx,
+        &task,
+        "flash",
+        &resetting_at(Utc::now() + Duration::hours(2)),
+    );
+    assert!(!fx.admitted(&task, &[]));
+    let deferred = fx.exclusion(&task, &[]);
+    assert_eq!(deferred["reason"], "provider_backoff", "{deferred}");
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_limit_without_a_reported_reset_backs_off_from_thirty_minutes_to_six_hours_scenarios,
     a_limit_without_a_reported_reset_backs_off_from_thirty_minutes_to_six_hours,
     a_reported_reset_is_clamped_to_five_minutes_through_seven_days,
     a_model_scoped_limit_excludes_only_the_crews_on_that_model,
-    an_off_override_still_records_a_usage_limit_hold
+    an_off_override_still_records_a_usage_limit_hold,
+    a_quota_hold_on_a_purpose_assignment_draws_another_purpose_member
 );
