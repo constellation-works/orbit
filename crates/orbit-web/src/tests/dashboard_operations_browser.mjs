@@ -11,11 +11,35 @@ fs.mkdirSync(evidence, { recursive: true });
 const test = fileURLToPath(new URL('./dashboard_operations.mjs', import.meta.url));
 const cronZoneTest = fileURLToPath(new URL('./dashboard_operations_cron_zone.mjs', import.meta.url));
 const routineTriggersTest = fileURLToPath(new URL('./dashboard_operations_routine_triggers.mjs', import.meta.url));
+const feedbackHarness = `
+globalThis.review = {
+  mint: async (failsReadback = false) => {
+    readbackError = failsReadback;
+    button('auto-tasks-body', 'Mint now').click();
+    for (let i = 0; i < 60; i++) await Promise.resolve();
+  },
+  refresh: async () => {
+    readbackError = false;
+    await fetchAndRenderOperations();
+  },
+  switchWorkspace: async (id) => {
+    readbackError = false;
+    setWorkspace(id);
+    await fetchAndRenderOperations();
+  },
+  failMint: async () => {
+    responseError = 'mutation refused';
+    button('auto-tasks-body', 'Mint now').click();
+    for (let i = 0; i < 60; i++) await Promise.resolve();
+    responseError = null;
+  },
+};`;
 const server = http.createServer((req, res) => {
   const name = new URL(req.url, 'http://fixture').pathname;
   const served = name === '/test.mjs' ? { data: fs.readFileSync(test), type: 'text/javascript' }
     : name === '/cron-zone.mjs' ? { data: fs.readFileSync(cronZoneTest), type: 'text/javascript' }
     : name === '/routine-triggers.mjs' ? { data: fs.readFileSync(routineTriggersTest), type: 'text/javascript' }
+    : name === '/feedback-timer.mjs' ? { data: fs.readFileSync(test) + '\n' + feedbackHarness, type: 'text/javascript' }
     : dashboardFile(name);
   if (!served) { res.writeHead(404); res.end(); return; }
   let data = served.data;
@@ -1102,8 +1126,68 @@ try {
   await triggerPage.addScriptTag({ type: 'module', url: '/routine-triggers.mjs' });
   await triggerPage.waitForFunction(() => globalThis.routineTriggerTestsPassed, undefined, { timeout: 15000 });
   await triggerPage.screenshot({ path: path.join(evidence, 'routine-triggers-browser.png') });
+
+  // Operation mutation success expiry retains readback failure diagnostics.
+  const feedbackPage = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'America/Los_Angeles' });
+  feedbackPage.on('pageerror', error => { pageErrors.push(String(error)); console.error(error); });
+  await feedbackPage.clock.install();
+  await feedbackPage.goto(`http://127.0.0.1:${server.address().port}/#operations/routines`);
+  await feedbackPage.addScriptTag({ type: 'module', url: '/feedback-timer.mjs' });
+  await feedbackPage.waitForFunction(() => globalThis.review, undefined, { timeout: 20000 });
+  await feedbackPage.clock.pauseAt(await feedbackPage.evaluate(() => Date.now() + 1000));
+
+  const feedbackText = () => feedbackPage.locator('#auto-task-operation-feedback').textContent();
+
+  // 1. Successful mint with failed readback retains the diagnostic after 60s
+  await feedbackPage.evaluate(() => review.mint(true));
+  const beforeExpiry = await feedbackText();
+  if (!beforeExpiry.includes('Refresh failed:') || !beforeExpiry.includes('The action succeeded') || !beforeExpiry.includes('Task created')) {
+    throw new Error(`initial mint with failed readback missing feedback: ${beforeExpiry}`);
+  }
+  await feedbackPage.clock.runFor(60001);
+  const afterExpiry = await feedbackText();
+  if (!afterExpiry.includes('Refresh failed:') || !afterExpiry.includes('The action succeeded')) {
+    throw new Error(`readback failure warning erased after expiry: ${afterExpiry}`);
+  }
+  if (afterExpiry.includes('Task created')) {
+    throw new Error(`success confirmation did not expire independently: ${afterExpiry}`);
+  }
+  await feedbackPage.screenshot({ path: path.join(evidence, 'operations-readback-warning-retained.png') });
+
+  // 2. Normal success clears completely after 60s
+  await feedbackPage.evaluate(() => review.refresh());
+  await feedbackPage.evaluate(() => review.mint(false));
+  const plainSuccess = await feedbackText();
+  if (!plainSuccess.includes('Task created')) throw new Error(`plain mint did not report success: ${plainSuccess}`);
+  await feedbackPage.clock.runFor(59999);
+  const justBefore = await feedbackText();
+  if (!justBefore.includes('Task created')) throw new Error(`plain success cleared before deadline: ${justBefore}`);
+  await feedbackPage.clock.runFor(2);
+  const plainExpired = await feedbackText();
+  if (plainExpired !== '') throw new Error(`plain success did not clear after 60s: ${plainExpired}`);
+
+  // 3. Newer error feedback is protected from expiry
+  await feedbackPage.evaluate(() => review.mint(false));
+  await feedbackPage.clock.runFor(30000);
+  await feedbackPage.evaluate(() => review.failMint());
+  const failureText = await feedbackText();
+  if (!failureText.includes('mutation refused')) throw new Error(`failure feedback missing: ${failureText}`);
+  await feedbackPage.clock.runFor(60001);
+  const retainedFailure = await feedbackText();
+  if (failureText !== retainedFailure) throw new Error(`error feedback replaced or cleared: ${retainedFailure}`);
+
+  // 4. Workspace change clears feedback
+  await feedbackPage.evaluate(() => review.mint(true));
+  await feedbackPage.clock.runFor(60001);
+  if (!await feedbackText().then(t => t.includes('Refresh failed:'))) throw new Error('warning missing before switch');
+  await feedbackPage.evaluate(() => review.switchWorkspace('two'));
+  const afterSwitch = await feedbackText();
+  if (afterSwitch !== '') throw new Error(`workspace switch did not clear feedback: ${afterSwitch}`);
+
+  await feedbackPage.close();
+
   if (pageErrors.length) throw new Error(`page errors during the scenario: ${pageErrors.join(' | ')}`);
-  console.log(`PASS: Chromium Operations fixture; 1440/672/390/375; phone shell, subtabs, Drain dock card at 336/900/375, Log toolbar at dock 280/336 following and paused, Running now task-grouped job id wrapping at 280px, reload, history. Screenshots: ${evidence}`);
+  console.log(`PASS: Chromium Operations fixture; 1440/672/390/375; phone shell, subtabs, Drain dock card at 336/900/375, Log toolbar at dock 280/336 following and paused, Running now task-grouped job id wrapping at 280px, reload, history, feedback timer expiry. Screenshots: ${evidence}`);
 } finally {
   await browser?.close(); server.close();
 }
