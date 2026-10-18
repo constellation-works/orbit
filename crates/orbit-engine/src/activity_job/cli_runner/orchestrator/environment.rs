@@ -10,6 +10,24 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// Credential variables that keep `claude` off the Desktop app's shared login.
 const CLAUDE_WORKER_CREDENTIAL_ENV: [&str; 2] = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
 
+/// How to supply a worker credential, the remediation a refused Claude activity
+/// and a drain's submission both name [ORB-16663].
+pub const CLAUDE_WORKER_CREDENTIAL_REMEDY: &str = "Create a worker token with `claude \
+     setup-token`, export CLAUDE_CODE_OAUTH_TOKEN in ~/.zprofile and list it in \
+     `[execution.env] pass` (global or workspace config.toml). For runs started by the \
+     clock, also put it in ~/.orbit/clock.env (mode 600). `orbit doctor` checks each of \
+     these.";
+
+/// Whether a child environment holds one of the credentials that keep `claude`
+/// off the Desktop login. Only the names are inspected, never the values.
+pub fn claude_worker_credential_held(child_env: &[(String, String)]) -> bool {
+    CLAUDE_WORKER_CREDENTIAL_ENV.iter().any(|name| {
+        child_env
+            .iter()
+            .any(|(key, value)| key == name && !value.is_empty())
+    })
+}
+
 /// The provider's wall-clock deadline, as the `ORBIT_ACTIVITY_DEADLINE_UNIX_MS`
 /// envelope entry. A deadline that cannot be represented as a `SystemTime` has
 /// no entry: stamping a past value would read as an exhausted budget downstream.
@@ -47,27 +65,18 @@ pub(super) fn require_claude_worker_credential(
     provider: &str,
     child_env: &[(String, String)],
 ) -> Result<(), DispatchError> {
-    if provider != "claude" || !host.requires_claude_worker_credential() {
+    if provider != "claude"
+        || !host.requires_claude_worker_credential()
+        || claude_worker_credential_held(child_env)
+    {
         return Ok(());
     }
-    let held = CLAUDE_WORKER_CREDENTIAL_ENV.iter().any(|name| {
-        child_env
-            .iter()
-            .any(|(key, value)| key == name && !value.is_empty())
-    });
-    if held {
-        return Ok(());
-    }
-    Err(DispatchError::CliInvocationPermanent(
+    Err(DispatchError::CliInvocationPermanent(format!(
         "claude activity refused: neither CLAUDE_CODE_OAUTH_TOKEN nor ANTHROPIC_API_KEY \
          reached the provider environment, so `claude` would fall back to the Claude \
-         Desktop login, which the Desktop revokes mid-run (HTTP 401). Create a worker \
-         token with `claude setup-token`, export CLAUDE_CODE_OAUTH_TOKEN in ~/.zprofile \
-         and list it in `[execution.env] pass` (global or workspace config.toml). For \
-         runs started by the clock, also put it in ~/.orbit/clock.env (mode 600). \
-         `orbit doctor` checks each of these."
-            .to_string(),
-    ))
+         Desktop login, which the Desktop revokes mid-run (HTTP 401). \
+         {CLAUDE_WORKER_CREDENTIAL_REMEDY}"
+    )))
 }
 
 /// Compose the provider environment while admitting Codex's two documented

@@ -12,7 +12,11 @@ with `claude provider authentication failure (HTTP 401): OAuth token revoked`
 and the task goes `blocked`. Unattended runs use a dedicated worker token
 instead. Orbit enforces this: on macOS a Claude activity whose provider
 environment holds neither variable is refused at invocation, before `claude`
-starts, with an error naming the variable.
+starts, with an error naming the variable. A drain started without the token
+claims no Claude work: its crew window excludes the Claude crews, and the
+submission says so. An explicit `--allow-crew` that names only Claude crews is
+refused. Such a drain usually means a shell that skipped `~/.zprofile`; start
+it from a login shell.
 
 ## Set it up
 

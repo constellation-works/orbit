@@ -44,6 +44,8 @@ mod baseline_hold_tick;
 mod baseline_red_repair;
 mod cascade_outcomes;
 mod child_wait_audit;
+#[cfg(target_os = "macos")]
+mod claude_worker_credential;
 mod config_settings;
 mod dispatch_admission;
 mod distributed_drain;

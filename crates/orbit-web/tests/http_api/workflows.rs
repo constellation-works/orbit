@@ -1521,10 +1521,19 @@ fn notice_fixture(extra: &str) -> Fixture {
     fixture.job("task_auto_pipeline");
     std::fs::write(
         fixture.global.join("config.toml"),
-        format!("[execution.env]\npass = [\"HOME\", \"PATH\", \"{UNSET_PASS}\"]\n\n{extra}"),
+        format!(
+            "[execution.env]\npass = [\"HOME\", \"PATH\", \"CLAUDE_CODE_OAUTH_TOKEN\", \"{UNSET_PASS}\"]\n\n{extra}"
+        ),
     )
     .unwrap();
     fixture
+}
+
+/// The notice fixtures pass `CLAUDE_CODE_OAUTH_TOKEN` and hold it, so the
+/// Claude credential warning a macOS host without one gets [ORB-16663] stays
+/// out of their receipts.
+fn held_worker_credential() -> orbit_common::test_env::ScopedEnv {
+    orbit_common::test_env::scoped([("CLAUDE_CODE_OAUTH_TOKEN", Some("fixture-worker-token"))])
 }
 
 fn backlog_task(fixture: &Fixture, title: &str, tags: &[&str]) -> Task {
@@ -1558,6 +1567,7 @@ fn auto_start_and_ship_report_the_submission_notices() {
     isolated(
         "workflows::auto_start_and_ship_report_the_submission_notices",
         || {
+            let _credential = held_worker_credential();
             let fixture = notice_fixture("");
             // A live pull drain recorded a throttle on its latest pass; every
             // admission in this workspace reports it.
@@ -1648,6 +1658,7 @@ fn auto_start_and_ship_report_the_validation_environment() {
     isolated(
         "workflows::auto_start_and_ship_report_the_validation_environment",
         || {
+            let _credential = held_worker_credential();
             let fixture = notice_fixture(
                 "[workflow]\nrequired_validation_commands = [\"make ci-fast\"]\n\n\
                  [workflow.validation_env]\nlogin_shell = false\n",
@@ -1703,6 +1714,7 @@ fn auto_start_and_ship_accept_a_strengthen_only_review_option() {
     isolated(
         "workflows::auto_start_and_ship_accept_a_strengthen_only_review_option",
         || {
+            let _credential = held_worker_credential();
             let fixture = notice_fixture(REVIEW_CREW);
             let explicit = backlog_task(&fixture, "explicit", &[]);
             let server = fixture.server(false);

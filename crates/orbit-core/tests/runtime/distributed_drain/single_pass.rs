@@ -235,7 +235,9 @@ fn a_windowless_pull_drain_over_an_empty_backlog_asks_once_and_ends() {
 /// Explicit zero is the same bounded single-pass contract as an omitted
 /// duration: it admits once, fills only the requested slot, then settles.
 fn an_explicit_zero_duration_pull_drain_admits_one_bounded_pass() {
-    let pair = Pair::new(2);
+    // Non-Claude crews: a macOS host without a worker credential narrows its
+    // drains away from Claude crews [ORB-16663], which this test is not about.
+    let pair = Pair::with_crews(&[Some("sol"), Some("sol")]);
 
     let drain = run_explicit_zero_duration_drain(&pair, 1);
 
