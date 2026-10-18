@@ -41,8 +41,11 @@ dashboard's own host switcher.
   at once arrive as one summary. Review reads follow every cursor page before comparing tasks,
   so older tasks entering review are covered even with a large backlog. A failed page leaves the
   previous complete review baseline intact until a successful read. The first read after launch
-  only records what is already there, and a workspace that comes back after being unavailable doesn't re-announce its old failures.
-  Other hosts' runs aren't watched; switch to them in the dashboard. A development build (`cargo
+  only records what is already there. A workspace that comes back after being unavailable does not
+  re-announce its old failures, and a task that stayed in review is not announced again either. A
+  task that enters review there after recovery still is. A review response that drops a task
+  without naming its workspace unavailable is treated as the task leaving review, so its return is
+  announced. Other hosts' runs aren't watched; switch to them in the dashboard. A development build (`cargo
   run`) posts notifications as Terminal on macOS, because it has no app bundle of its own.
 - **Launch at login.** The menu's checkbox adds or removes a login item: a LaunchAgent on macOS and
   an autostart `.desktop` entry on Linux. It opens the app normally, window included.

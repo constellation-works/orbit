@@ -5,7 +5,10 @@
 //! [`Sidecar`] runs: the fleet drain rows, the failed runs of the last day and
 //! the tasks in review, all across this host's workspaces. The first answer
 //! of each only records what is there; later ones notify for failed runs and
-//! review tasks that were not in the previous answer.
+//! review tasks that were not in the previous answer. Review tasks of a
+//! workspace the server marks unavailable stay remembered, so recovery does
+//! not announce them again; a task that newly appears in review there still
+//! does.
 //!
 //! Notification text names what the dashboard's lists show for the item (a
 //! task title, else the job name) and its workspace, never a run or task id.
