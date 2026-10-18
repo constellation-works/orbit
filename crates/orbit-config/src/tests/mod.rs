@@ -1,4 +1,3 @@
-mod agent_stall;
 mod crew_pools;
 mod machine;
 mod seed;

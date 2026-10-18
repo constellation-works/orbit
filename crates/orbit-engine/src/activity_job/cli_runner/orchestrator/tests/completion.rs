@@ -87,28 +87,28 @@ fn project(stalled: bool, timed_out: bool) -> crate::DispatchOutcome {
 
 #[test]
 fn a_stalled_provider_fails_transient_without_a_wall_clock_timeout() {
-    let outcome = project(true, false);
-    assert!(!outcome.success);
-    assert_eq!(outcome.output["stalled"], json!(true));
-    assert_eq!(outcome.output["timed_out"], json!(false));
-    let message = outcome.message.expect("stall message");
-    assert!(message.contains(STALLED_MARKER), "{message}");
-    assert!(message.contains(TRANSIENT_FAILURE_MARKER), "{message}");
-    assert!(message.contains("30s"), "{message}");
-    assert!(!message.contains("wall-clock timeout"), "{message}");
-    assert_eq!(
-        ClaimFailureClass::of_step_failure(Some(STALLED_ERROR_CODE), Some(&message)),
-        Some(ClaimFailureClass::Transient)
-    );
-    let error = DispatchError::JobExecution(message);
-    assert_eq!(error.failure_code(), STALLED_ERROR_CODE);
-    assert!(!error.is_non_retryable());
+    for (stalled, timed_out, expected_marker, absent_marker) in [
+        (true, false, STALLED_MARKER, "wall-clock timeout"),
+        (false, true, "wall-clock timeout", STALLED_MARKER),
+    ] {
+        let outcome = project(stalled, timed_out);
+        assert!(!outcome.success);
+        assert_eq!(outcome.output["stalled"], json!(stalled));
+        assert_eq!(outcome.output["timed_out"], json!(timed_out));
+        let message = outcome.message.expect("provider failure message");
+        assert!(message.contains(expected_marker), "{message}");
+        assert!(!message.contains(absent_marker), "{message}");
 
-    let timed_out = project(false, true);
-    assert!(!timed_out.success);
-    assert_eq!(timed_out.output["stalled"], json!(false));
-    assert_eq!(timed_out.output["timed_out"], json!(true));
-    let message = timed_out.message.expect("timeout message");
-    assert!(message.contains("wall-clock timeout"), "{message}");
-    assert!(!message.contains(STALLED_MARKER), "{message}");
+        if stalled {
+            assert!(message.contains(TRANSIENT_FAILURE_MARKER), "{message}");
+            assert!(message.contains("30s"), "{message}");
+            assert_eq!(
+                ClaimFailureClass::of_step_failure(Some(STALLED_ERROR_CODE), Some(&message)),
+                Some(ClaimFailureClass::Transient)
+            );
+            let error = DispatchError::JobExecution(message);
+            assert_eq!(error.failure_code(), STALLED_ERROR_CODE);
+            assert!(!error.is_non_retryable());
+        }
+    }
 }

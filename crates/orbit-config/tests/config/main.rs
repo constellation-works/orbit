@@ -47,6 +47,7 @@ use std::sync::Mutex;
 use std::sync::mpsc;
 use tracing_subscriber::fmt::MakeWriter;
 
+include!("agent_stall.rs");
 include!("config_paths.rs");
 include!("config_store.rs");
 include!("default_crew.rs");
