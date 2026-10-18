@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use super::helpers::SYSTEM_ACTOR_LABEL;
 use super::legacy_decisions;
-use super::lifecycle::ensure_completion_run_stopped;
+use super::lifecycle::{ensure_completion_run_stopped, ensure_post_deploy_criteria_met};
 use super::resolves::pending_resolves_history;
 use crate::OrbitRuntime;
 
@@ -395,6 +395,7 @@ impl OrbitRuntime {
                 };
                 if plan.status == TaskStatus::Done {
                     self.ensure_resolves_are_workspace_local(&task)?;
+                    ensure_post_deploy_criteria_met(self, &task)?;
                     ensure_completion_run_stopped(self, &task, None, Some(&request.run_id))?;
                 }
                 self.write_plan(&task, request, &decision, &plan)?;

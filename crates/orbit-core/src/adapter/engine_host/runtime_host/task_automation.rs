@@ -89,6 +89,7 @@ fn apply_task_automation_update_under_lock(
         )?;
     }
     if update.status == Some(TaskStatus::Done) && existing_task.status != TaskStatus::Done {
+        crate::application::task::ensure_post_deploy_criteria_met(runtime, &existing_task)?;
         runtime.ensure_resolves_are_workspace_local(&existing_task)?;
     }
     let (agent, model) =

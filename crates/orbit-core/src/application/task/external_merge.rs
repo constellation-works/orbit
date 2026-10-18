@@ -407,17 +407,10 @@ impl OrbitRuntime {
     /// Why a delivered task that still owes criteria after deploy stays in
     /// review, or `None` when it owes none. An unreadable history holds it.
     fn owed_settlement_hold(&self, task_id: &str) -> Option<String> {
-        match self.outstanding_owed_criteria(task_id, None) {
-            Ok(owed) if owed.is_empty() => None,
-            Ok(owed) => Some(format!(
-                "it owes criteria {} after deploy; record each met before it settles",
-                owed.iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )),
-            Err(error) => Some(format!("its owed criteria could not be read: {error}")),
-        }
+        self.get_task(task_id)
+            .and_then(|task| super::lifecycle::ensure_post_deploy_criteria_met(self, &task))
+            .err()
+            .map(|error| error.to_string())
     }
 }
 

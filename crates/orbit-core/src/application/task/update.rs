@@ -22,7 +22,8 @@ use super::helpers::{
     describe_optional_field_value,
 };
 use super::lifecycle::{
-    FORCED_STATUS_EVENT, ensure_completion_run_stopped, ensure_status_change_allowed,
+    FORCED_STATUS_EVENT, ensure_completion_run_stopped, ensure_post_deploy_criteria_met,
+    ensure_status_change_allowed,
 };
 use super::params::TaskUpdateParams;
 use super::paths::{
@@ -401,6 +402,14 @@ impl OrbitRuntime {
                 params.job_run_id.as_ref().and_then(|id| id.as_deref()),
                 calling_run_id.as_deref(),
             )?;
+            let human_force = status_authority == StatusAuthority::Forced
+                && operator_decision_authority
+                && canonical_agent.is_none()
+                && canonical_model.is_none()
+                && !agent_context_declared();
+            if !human_force {
+                ensure_post_deploy_criteria_met(self, &task)?;
+            }
         }
         let status_note = status_note
             .as_deref()
