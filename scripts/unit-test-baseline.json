@@ -380,6 +380,7 @@
         "executor/automation/ci/tests/collect.rs::run_bound_above_the_page_limit_reports_the_applied_limit_and_its_cap",
         "executor/automation/ci/tests/collect.rs::unavailable_collection_breaks_a_consecutive_error_streak",
         "executor/automation/ci/tests/collect.rs::zero_listing_bounds_are_raised_to_one_so_the_sweep_can_complete",
+        "executor/automation/ci/tests/history.rs::old_shape_history_keeps_streaks_and_keys_and_round_trips",
         "executor/automation/ci/tests/history.rs::persisted_retryable_errors_degrade_only_after_three_distinct_sweeps",
         "executor/automation/ci/tests/investigate.rs::nextest_regions_bind_only_complete_evidence_to_the_known_failed_step",
         "executor/automation/ci/tests/partition.rs::closed_pull_request_does_not_retire_a_branch_with_a_newer_open_pull_request",
