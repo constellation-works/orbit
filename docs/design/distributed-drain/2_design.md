@@ -7,7 +7,7 @@ status: Draft
 feature: distributed-drain
 doc_role: design
 type: design
-summary: "One owner, multiple execution hosts: idempotent claims, routed authority, manual recovery, explicit landing, retained ship sweep, none-only review, and non-pruning context footprints."
+summary: "One owner, multiple execution hosts: idempotent claims, routed authority, manual recovery, explicit landing, retained ship sweep, owner-captured review timing, and non-pruning context footprints."
 tags: [distributed-drain, multi-host, pull, federated-mcp]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-core/src/runtime/task/locks/", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, activity-job, policy-sandbox]
@@ -1038,7 +1038,7 @@ diagnostic and sleeps. Probes reduce failures but guarantee nothing after pull.
 | Required crews and providers available and authenticated | The window's crew preflight (section 2, *Eligibility*); the first typed `provider_unavailable` authentication leaf excludes every crew of that provider |
 | Binary version and type-derived pull request fingerprint match the owner | Owner read-only capability/version response; pull enforces parity again |
 | Workspace identity, SSH owner access, and session capability match | Federated discovery and the read-only probe below; never call pull as a health check |
-| Owner's before-PR policy and executor gate capability | The owner captures the review contract at admission; when before-PR is on, only a PR-mode executor that declares `review_gate` is admitted |
+| Owner's review timing and executor gate capability | The owner captures the review contract at admission; when before-PR or before-landing review applies, only a PR-mode executor that declares `review_gate` is admitted |
 | Sandbox and required OS/toolchain capabilities available | Existing doctor checks plus workspace execution prerequisites |
 | Repository readable and credentials configured for push and PR operations | Git transport checks and provider authentication; `gh auth status` alone does not prove Git push permission |
 
@@ -1051,11 +1051,12 @@ what it can run and the owner admits only that. Policy and toolchain must still 
 
 The owner serves a read-only probe ([ORB-12495]). Input: the host-qualified workspace selector.
 Response: owner/workspace, binary version, type-derived request fingerprint, legacy protocol revision, effective
-session capabilities, diagnostic caller machine, resolved ship mode and `review`: both review
-switches with their sources (before-PR on/off and minutes; after-landing enabled and its next batch
-due). It creates no receipts, reservations, claims or tasks. A caller may declare its version,
-protocol schema and `caller_before_pr`, and the probe reports the first refusal admission would raise by running the same
-ordered ladder (`orbit_store::admission_refusal`).
+session capabilities, diagnostic caller machine, resolved ship mode and `review`: all three review
+switches with their sources (before-PR on/off, minutes and crews; before-landing on/off and its
+host list; after-landing enabled and its next batch due). It creates no receipts, reservations,
+claims or tasks. A caller may declare its version, protocol schema and `caller_before_pr`, and
+the probe reports the first refusal admission would raise by running the same ordered ladder
+(`orbit_store::admission_refusal`).
 
 - Protocol revision `2` introduced executor crew capabilities. Request field compatibility,
   including optional fields and nested types, now uses the derived schema fingerprint. The follower
@@ -1098,7 +1099,7 @@ mutation has an idempotency or reconciliation contract before step recovery retr
 | Tasks, dependencies, comments, history, coordination artifacts, claim state | Owner for reads and writes; no replica-local fallback |
 | Ready ordering, lock admission, claim settlement, handoff acceptance | Owner transactions |
 | Worktree, Git operations, agent execution, build/test, local run/step state and logs | Executing host |
-| Review policy | The owner captures the before-PR contract; a declared claimed-leaf gate runs on the executor, and typed review evidence or a not-required disposition is verified and retained by the owner |
+| Review policy | The owner captures the before-PR or before-landing contract; a declared claimed-leaf gate runs on the executor at that timing, and typed review evidence or a not-required disposition is verified and retained by the owner |
 | Completion authority, landing intent, merge verification, task completion | Owner |
 
 **Worker invocation.** `WorkerInvocation` carries owner destination/workspace, task, claim,
@@ -1238,9 +1239,10 @@ reports:
   mutations of it.
 
 It also reports the owner's review switches and the verdict of `orbit_store::admission_refusal`,
-without raising it: when the captured owner contract has `review.before_pr` on, only a PR-mode
-claim whose executor declares `review_gate` is admitted; local ship mode is refused because it
-cannot run the claimed-leaf gate. After-landing review does not change the verdict.
+without raising it: when the captured owner contract has `review.before_pr` or
+`review.before_landing` on, only a PR-mode claim whose executor declares `review_gate` is admitted;
+local ship mode is refused because it cannot run the claimed-leaf gate. After-landing review does
+not change the verdict.
 
 ### 7.4 Host shutdown hold
 
