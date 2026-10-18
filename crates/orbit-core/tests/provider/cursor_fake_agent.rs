@@ -112,6 +112,7 @@ fn spec(timeout_seconds: u64) -> AgentLoopSpec {
     AgentLoopSpec {
         tool_disallow_list: None,
         instruction: "Return the requested Orbit response envelope.".to_string(),
+        steering_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: Some("gpt-5".to_string()),

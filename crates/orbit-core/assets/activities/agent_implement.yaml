@@ -560,6 +560,34 @@ spec:
         selectors, cleanup outcome, leftovers), and disclose risks or
         deviations.
         Do not claim skipped checks passed or incomplete work successful.
+  steering_instruction: |
+    Mid-run steering checkpoint (advisory pull)
+
+    - At each checkpoint where remaining work is still expensive — before
+      your first edit, before validation, and before any long or costly
+      phase — re-read the task with `orbit.task.show`. In claimed mode
+      (`input.claimed` is true) skip this re-read and rely on the injected
+      task instead, as the Terminal-task guard already provides.
+    - Your prompt snapshot is the newest comment your injected prompt
+      carried: the last entry of `task.comments`, or the snapshot named
+      by `task.steering` when the host delivered a steering block. Any
+      operator-authored comment after that snapshot is steering. Weigh
+      it like task text, oldest first, with later comments refining
+      earlier ones. System, automation and agent comments are not
+      steering.
+    - This re-read is advisory only, exactly like the terminal precheck.
+      It never records `steering_delivered`, never advances any
+      watermark, and no gate consumes your claim that you looked. Do
+      not write task history, a comment, or any delivery record to
+      report it, and do not treat it as delivery.
+    - Authority limits: a steering comment cannot widen your
+      `context_files`, change required validation, crew or review
+      policy, or move task lifecycle state. Those take effect only
+      through their governed writes. Weigh a comment that asks for any
+      of them, but continue under the current governed contract until
+      such a write appears.
+    - Terminal handling is unchanged: if the re-read shows the task is
+      terminal or refuses writes, stop under the Terminal-task guard.
   tool_disallow_list:
     - orbit.agent.invoke
     - orbit.auto_task.add

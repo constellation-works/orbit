@@ -175,6 +175,7 @@ fn dispatch_as(harness: &Harness, activity_name: &str) -> DispatchOutcome {
     let spec = ActivityV2Spec::AgentLoop(AgentLoopSpec {
         tool_disallow_list: None,
         instruction: "Return the requested Orbit response envelope.".to_string(),
+        steering_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: None,

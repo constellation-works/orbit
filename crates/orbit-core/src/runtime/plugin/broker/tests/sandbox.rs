@@ -259,6 +259,7 @@ impl BrokerHost {
         let spec = AgentLoopSpec {
             tool_disallow_list: None,
             instruction: String::new(),
+            steering_instruction: None,
             tools: Vec::new(),
             on_denial: OnDenial::Terminate,
             model: None,

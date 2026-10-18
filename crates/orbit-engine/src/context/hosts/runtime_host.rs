@@ -664,6 +664,13 @@ pub trait RuntimeHost: Send + Sync {
         input: &Value,
     ) -> Result<Option<Value>, DispatchError>;
 
+    /// Whether `workflow.mid_run_steering.enabled` is on for this dispatch.
+    /// When false (the default), an activity's `steering_instruction` is
+    /// never appended, so rendered prompts stay byte-identical.
+    fn mid_run_steering_enabled(&self) -> bool {
+        false
+    }
+
     /// Resolve a deny-mode activity's callable tools for one agent launch.
     ///
     /// `effective_tools` is every registered agent-facing tool the disallow

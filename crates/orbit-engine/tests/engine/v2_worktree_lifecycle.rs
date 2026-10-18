@@ -3863,6 +3863,7 @@ fn recover(
     let spec = ActivityV2Spec::AgentLoop(AgentLoopSpec {
         tool_disallow_list: None,
         instruction: "Resolve the stopped rebase.".to_string(),
+        steering_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: None,
@@ -3928,6 +3929,7 @@ fn dispatch_audited_linked_activity(
     let spec = ActivityV2Spec::AgentLoop(AgentLoopSpec {
         tool_disallow_list: None,
         instruction: "Edit the assigned checkout.".to_string(),
+        steering_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: None,

@@ -36,6 +36,7 @@ fn agent_loop_activity(
         fs_profile: None,
         spec: ActivityV2Spec::AgentLoop(AgentLoopSpec {
             instruction: "test".to_string(),
+            steering_instruction: None,
             tools,
             on_denial: OnDenial::Terminate,
             model: None,

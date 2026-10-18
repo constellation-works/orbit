@@ -763,6 +763,7 @@ pub(super) fn implementation_job(provider: Provider) -> JobV2 {
     let spec = AgentLoopSpec {
         tool_disallow_list: None,
         instruction: "implement the task".to_string(),
+        steering_instruction: None,
         tools: vec![],
         on_denial: OnDenial::Terminate,
         model: None,

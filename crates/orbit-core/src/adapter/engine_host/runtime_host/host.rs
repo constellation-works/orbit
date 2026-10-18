@@ -841,6 +841,10 @@ impl RuntimeHost for OrbitRuntime {
         task_context::task_context_for_agent_input(self, run_id, step_id, input)
     }
 
+    fn mid_run_steering_enabled(&self) -> bool {
+        self.mid_run_steering().enabled
+    }
+
     fn run_deferral_probe(
         &self,
         probe: &DeferralProbe,

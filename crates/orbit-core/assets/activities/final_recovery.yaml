@@ -316,6 +316,34 @@ spec:
        - {"decision": "escalate", "diagnosis": "...", "human_action": "<the one next step>"}
        Every field is required and must be non-empty; no other fields are
        allowed. Anything else is treated as `escalate`.
+  steering_instruction: |
+    Mid-run steering checkpoint (advisory pull)
+
+    - At each checkpoint where remaining work is still expensive — before
+      repairing in the worktree and again before returning your decision —
+      re-read the task with `orbit.task.show` through the evidence reads
+      above, including on a claimed run.
+    - Your prompt snapshot is the newest comment your injected prompt
+      carried: the last comment you read at the start, or the snapshot
+      named by `task.steering` when the host delivered a steering block.
+      Any operator-authored comment after that snapshot is steering.
+      Weigh it in your diagnosis like task text, oldest first, with
+      later comments refining earlier ones. System, automation and agent
+      comments are not steering.
+    - This re-read is advisory only. It never records
+      `steering_delivered`, never advances any watermark, and no gate
+      consumes your claim that you looked. Do not write task history, a
+      comment, or any delivery record to report it, and do not treat it
+      as delivery.
+    - Authority limits: a steering comment cannot widen scope or the
+      task's `context_files`, change required validation, crew or review
+      policy, or move task lifecycle state. Those take effect only
+      through their governed writes, and every lifecycle change still
+      goes through Orbit's deterministic applier, which re-checks the
+      task before applying your decision.
+    - Terminal handling is unchanged: an operator comment withdrawing
+      the task, or a task that no longer accepts writes, still means
+      `escalate` or `archive`, never `resume` or `requeue`.
   tool_disallow_list:
     - orbit.agent.invoke
     - orbit.auto_task.add
