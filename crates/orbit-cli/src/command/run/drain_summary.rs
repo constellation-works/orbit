@@ -18,7 +18,7 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use super::format::summarize_error_message;
+use super::format::{WaitingTaskFormatter, summarize_error_message, waiting_reason};
 
 /// The coordinator job whose leaves this summarizes.
 const DRAIN_JOB: &str = "workspace_auto_pipeline";
@@ -154,7 +154,11 @@ impl DrainLeafSummary {
     }
 
     /// The `Leaves:` line, then a warning per failed or starved outcome.
-    pub(super) fn lines(&self, drain_state: JobRunState) -> Vec<String> {
+    pub(super) fn lines(
+        &self,
+        drain_state: JobRunState,
+        formatter: &WaitingTaskFormatter,
+    ) -> Vec<String> {
         use crate::output::color::bold;
         let mut lines = vec![format!(
             "{} admitted={} succeeded={} failed={} running={} cancelled={}{}",
@@ -219,9 +223,9 @@ impl DrainLeafSummary {
             lines.push(throttle_line(throttle, self.waiting.recorded_at));
         }
         if let Some(approvals) = &self.approvals {
-            lines.extend(approval_lines(approvals));
+            lines.extend(approval_lines(approvals, formatter));
         }
-        lines.extend(self.waiting.lines());
+        lines.extend(self.waiting.lines(formatter));
         lines
     }
 }
@@ -252,7 +256,7 @@ impl WaitingBacklog {
 
     /// The `Still waiting:` block, and for a pull drain that has found nothing
     /// claimable here several passes running, the `idle:` line that says why.
-    fn lines(&self) -> Vec<String> {
+    fn lines(&self, formatter: &WaitingTaskFormatter) -> Vec<String> {
         use crate::output::color::bold;
         if !self.has_starved_tasks() {
             return Vec::new();
@@ -279,7 +283,10 @@ impl WaitingBacklog {
             self.excluded_total,
         )];
         for task in &self.deferred {
-            lines.push(format!("  {}", waiting_line(task, "lock conflict")));
+            lines.push(format!(
+                "  {}",
+                waiting_line(task, "context_lock_conflict", formatter)
+            ));
         }
         let deferred_listed = self.deferred.len() as u64;
         if self.deferred_count() > deferred_listed {
@@ -289,7 +296,7 @@ impl WaitingBacklog {
             ));
         }
         for task in &self.excluded {
-            lines.push(format!("  {}", waiting_line(task, "excluded")));
+            lines.push(format!("  {}", waiting_line(task, "excluded", formatter)));
         }
         let listed = self.excluded.len() as u64;
         if self.excluded_total > listed {
@@ -327,7 +334,7 @@ impl WaitingBacklog {
 fn kept_off_cause(reason: &str) -> &str {
     match reason {
         "context_lock_conflict" => "footprint holds",
-        "dependency_not_done" => "unmet dependencies",
+        "dependency_not_done" | "unmet_dependency" => "unmet dependencies",
         "host_os_mismatch" => "for another OS",
         "native_os_required" => "needing native evidence from another OS",
         "unverified_review_finding" => "review findings awaiting verification",
@@ -340,7 +347,7 @@ fn kept_off_cause(reason: &str) -> &str {
 
 /// The `Approved:` line for an `--approve-proposed` drain, then each held
 /// proposed task with the reason it stayed proposed.
-fn approval_lines(report: &DrainApprovalReport) -> Vec<String> {
+fn approval_lines(report: &DrainApprovalReport, formatter: &WaitingTaskFormatter) -> Vec<String> {
     let closed = if report.closed_total > 0 {
         format!(
             "; {} closed as already fixed ({})",
@@ -376,7 +383,7 @@ fn approval_lines(report: &DrainApprovalReport) -> Vec<String> {
             blocked_by: task.blocked_by.clone(),
             detail: task.detail.clone(),
         };
-        lines.push(format!("  {}", waiting_line(&task, "held")));
+        lines.push(format!("  {}", waiting_line(&task, "held", formatter)));
     }
     let listed = report.held.len() as u64;
     if report.held_total > listed {
@@ -427,19 +434,21 @@ pub(super) fn pass_refusal_line(pass: &DrainAdmissionPass) -> Option<String> {
 /// The `Still waiting:` lines for a pull drain, which has no leaf summary of
 /// its own: they come from the owner's last answer, as the drain recorded it
 /// [ORB-14475].
-pub(super) fn pass_waiting_lines(pass: &DrainAdmissionPass) -> Vec<String> {
-    waiting_backlog(pass, false).lines()
+pub(super) fn pass_waiting_lines(
+    pass: &DrainAdmissionPass,
+    formatter: &WaitingTaskFormatter,
+) -> Vec<String> {
+    waiting_backlog(pass, false).lines(formatter)
 }
 
-fn waiting_line(task: &WaitingTask, default_reason: &str) -> String {
-    let mut line = format!(
-        "Task {}: {}",
-        task.task_id,
-        task.reason.as_deref().unwrap_or(default_reason)
-    );
-    if !task.blocked_by.is_empty() {
-        line.push_str(&format!(" blocked-by={}", task.blocked_by.join(",")));
-    }
+fn waiting_line(
+    task: &WaitingTask,
+    default_reason: &str,
+    formatter: &WaitingTaskFormatter,
+) -> String {
+    let reason = waiting_reason(task.reason.as_deref().unwrap_or(default_reason));
+    let mut line = format!("Task {}: {}", task.task_id, reason);
+    line.push_str(&formatter.blockers(&json!({"reason": reason, "blocked_by": task.blocked_by})));
     // A host-OS wait names the host it waits for, and a native-OS
     // requirement the tag to add. A local-route review hold names the
     // remedy. A verified-no-diff hold names the pilot's evidence and the

@@ -221,7 +221,14 @@ blocked them. `--json` carries the same in `drain_summary` (null for a run that 
 A run parked on task locks shows `Waiting on locks: file:src/lib.rs (held by ORB-1)`. The run
 persists only the selectors; `orbit run show` resolves the holder from the live lock projection
 when it renders (`--json`: `waiting_on_lock_holders`), so a holder that has since released drops
-off the line. `orbit run readiness` reports the same holders as `blocked-by=`.
+off the line. `orbit run readiness` names each conflicting holder as
+`blocked-by=<task> (<status>) on <first file> +N more`, with additional files counted
+per holder. Unfinished dependencies read `waits-on <task> (<status>)`. The drain's
+`Still waiting:` block uses the same blocker wording and the `unmet_dependency`
+text reason; its last-pass records carry blocker IDs but no filenames. Holder and
+recorded-blocker statuses come from the current task-status projection; if a task
+is unavailable, its ID still appears. JSON retains its existing payload and reason
+codes, including `dependency_not_done` in drain records.
 
 A failed, timed-out, or interrupted run ordinarily leaves its task `blocked`, which automation
 skips. Typed holds use their own task states: a baseline-red or provider-failure hold returns the

@@ -45,6 +45,7 @@ mod provider_limits;
 mod run_history;
 mod run_show_display;
 mod wait;
+mod waiting_blockers;
 
 const STALE_RUNNING: &str = "jrun-20260920-0100";
 const STALE_PENDING: &str = "jrun-20260920-0200";
@@ -2425,7 +2426,7 @@ fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
         "Still waiting: 9 admissible, 2 deferred and 4 excluded backlog task(s) were never started at the last pass (the owner answered 2026-10-07 06:44:53Z)",
         "Task ORB-101: context_lock_conflict blocked-by=ORB-900",
         "Task ORB-102: owner_hold (held for a red base: make ci-lint)",
-        "Task ORB-103: dependency_not_done blocked-by=ORB-901",
+        "Task ORB-103: unmet_dependency waits-on ORB-901",
         "Task ORB-104: host_os_mismatch (waits for a linux host (os:linux); the executor runs macos)",
         "Task ORB-105: crew_unavailable (crew antigravity cannot run on this host)",
         "Task ORB-106: native_os_required (Native OS requirement: criterion 2 needs native macos evidence, and the task's tags lack `os:macos`)",
