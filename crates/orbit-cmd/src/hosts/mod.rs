@@ -55,6 +55,10 @@ pub struct HostRow {
     pub error: Option<HostProbeError>,
     pub binary_version: Option<String>,
     pub protocol_fingerprint: Option<String>,
+    /// The host's operating system: this machine's own, a registered entry's
+    /// recorded OS, or what a live probe reported. Unknown for an entry
+    /// registered before discovery reported it and not yet probed.
+    pub host_os: Option<String>,
     /// Set when the host's version or protocol differs from this machine's.
     pub skew: bool,
     /// Which of `binary_version` and `protocol_fingerprint` differ.

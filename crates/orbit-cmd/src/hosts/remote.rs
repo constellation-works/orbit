@@ -73,6 +73,10 @@ pub(super) fn remote_row(
         error: None,
         binary_version: None,
         protocol_fingerprint: None,
+        host_os: match target {
+            RemoteTarget::Entry(entry) => entry.host_os.map(|os| os.as_str().to_string()),
+            RemoteTarget::Legacy(_) => None,
+        },
         skew: false,
         skew_fields: Vec::new(),
         workspaces: Vec::new(),
@@ -92,6 +96,9 @@ pub(super) fn remote_row(
             row.skew = !row.skew_fields.is_empty();
             row.binary_version = live.facts.binary_version;
             row.protocol_fingerprint = live.facts.protocol_fingerprint;
+            if let Some(os) = live.facts.host_os {
+                row.host_os = Some(os.as_str().to_string());
+            }
             row.workspaces = live
                 .workspaces
                 .iter()

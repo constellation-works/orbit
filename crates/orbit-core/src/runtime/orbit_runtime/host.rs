@@ -29,6 +29,11 @@ use crate::runtime::host_resource::{
 use crate::runtime::host_signal::{HostSignalProbe, ScheduledShutdown};
 use crate::runtime::task_pr_forge::TaskPrForge;
 
+/// Days an execution claim in this workspace counts as evidence that the
+/// claiming host serves it for creation-time crew draws. Fixed, not a
+/// config key: a follower that stops pulling ages out after the window.
+const SERVING_CLAIM_EVIDENCE_DAYS: i64 = 7;
+
 impl OrbitRuntime {
     /// Admit tasks as a host running `os` would (`None`: an OS outside the
     /// `os:` namespace, which runs only untagged tasks). A fixture composes
@@ -43,6 +48,59 @@ impl OrbitRuntime {
     /// declares to its owner.
     pub fn host_os(&self) -> Option<orbit_types::task::HostOs> {
         self.host_os
+    }
+
+    /// Declare the registered remote hosts, by machine id, with the
+    /// operating system recorded for each at registration. The composition
+    /// layer reads them from the host registry; a fixture composes a fleet
+    /// the same way it composes [`Self::with_host_os`]. Registration is not
+    /// service: [`Self::serving_host_oses`] counts a listed host only when
+    /// this workspace's claim records show it pulled here recently. This
+    /// host's own OS always counts as serving and need not be listed.
+    pub fn with_registered_host_oses(
+        mut self,
+        hosts: impl IntoIterator<Item = (String, orbit_types::task::HostOs)>,
+    ) -> Self {
+        self.registered_host_oses = hosts.into_iter().collect();
+        self
+    }
+
+    /// The operating systems that count as serving this workspace for
+    /// creation-time draws: this host's, when known, plus the recorded OS
+    /// of each registered host with durable evidence, scoped to this
+    /// workspace, that it pulled here recently — an execution claim in
+    /// this workspace's own claim records within the last seven days.
+    /// A registered host with no
+    /// such claim (it serves only other workspaces, or none) never
+    /// counts, and a follower that stops pulling ages out when its last
+    /// claim leaves the window. Unreadable claim records leave only this
+    /// host's OS, which is exactly the single-host draw behaviour.
+    pub fn serving_host_oses(&self) -> std::collections::BTreeSet<orbit_types::task::HostOs> {
+        let mut oses = std::collections::BTreeSet::new();
+        oses.extend(self.host_os);
+        if self.registered_host_oses.is_empty() {
+            return oses;
+        }
+        let cutoff = Utc::now() - Duration::days(SERVING_CLAIM_EVIDENCE_DAYS);
+        let Ok(claims) = self.inspect_execution_claims() else {
+            return oses;
+        };
+        let recent: std::collections::BTreeSet<&str> = claims
+            .iter()
+            .filter(|claim| {
+                [&claim.updated_at, &claim.created_at]
+                    .into_iter()
+                    .filter_map(|stamp| DateTime::parse_from_rfc3339(stamp).ok())
+                    .any(|stamp| stamp.with_timezone(&Utc) >= cutoff)
+            })
+            .map(|claim| claim.claim.executed_on.machine_id.as_str())
+            .collect();
+        for (machine_id, os) in &self.registered_host_oses {
+            if recent.contains(machine_id.as_str()) {
+                oses.insert(*os);
+            }
+        }
+        oses
     }
 
     /// Read the browser kit admission checks `ui` tasks against from `home`
