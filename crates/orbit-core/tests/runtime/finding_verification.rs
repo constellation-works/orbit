@@ -28,6 +28,135 @@ use tempfile::TempDir;
 
 const JOB: &str = "finding_verification_pipeline";
 
+#[test]
+fn shipped_activities_have_unambiguous_tool_policies() {
+    let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/activities");
+    for entry in std::fs::read_dir(assets).unwrap() {
+        let path = entry.unwrap().path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "yaml")
+        {
+            let asset = load_activity_asset(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert!(
+                orbit_types::workflow::activity_tool_policy_deprecation(&asset.spec).is_none(),
+                "{} must load without a tool policy deprecation warning",
+                asset.name
+            );
+        }
+    }
+}
+
+fn verifier_resolved_tools_preserve_its_read_only_boundary() {
+    let fixture = Fixture::new();
+    let finding = fixture.finding_requiring_tools(
+        "Required tools stay outside verifier grant",
+        &[
+            "orbit.task.add",
+            "orbit.task.artifact.put",
+            "orbit.task.show",
+        ],
+    );
+    let task_ids = vec![finding.id.to_string()];
+    let asset = load_activity_asset(
+        &std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/activities/verify_finding.yaml"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let ActivityV2Spec::AgentLoop(spec) = asset.spec.spec else {
+        panic!("finding verification must run an agent");
+    };
+    let denied = spec.tool_disallow_list.unwrap();
+    let resolved = fixture
+        .runtime
+        .resolve_activity_tool_denials(&task_ids, &asset.name, &denied)
+        .unwrap();
+    assert!(
+        resolved
+            .effective_tools
+            .iter()
+            .any(|tool| tool == "orbit.task.show")
+    );
+    for tool in [
+        "orbit.agent.invoke",
+        "orbit.auto_task.add",
+        "orbit.auto_task.mint",
+        "orbit.auto_task.update",
+        "orbit.command.exec",
+        "orbit.pipeline.invoke",
+        "orbit.workflow.run.resume",
+        "orbit.workflow.ship",
+        "orbit.task.add",
+        "orbit.task.update",
+        "orbit.task.artifact.put",
+        "orbit.task.reconcile_review",
+        "orbit.friction.add",
+        "orbit.friction.update",
+    ] {
+        assert!(
+            !resolved
+                .effective_tools
+                .iter()
+                .any(|allowed| allowed == tool),
+            "finding verification must withhold mutation and dispatch tool {tool}"
+        );
+    }
+    for tool in ["orbit.task.add", "orbit.task.artifact.put"] {
+        assert!(
+            !resolved.requested_tools.iter().any(|requested| requested == tool),
+            "the verifier omits covered requirement {tool} from requested tools"
+        );
+        assert!(
+            !resolved.effective_tools.iter().any(|effective| effective == tool),
+            "the verifier never receives covered requirement {tool}"
+        );
+        assert!(
+            resolved.omitted_requirement_notes.iter().any(|note| {
+                note.contains(&finding.id.to_string())
+                    && note.contains(tool)
+                    && note.contains("verify_finding")
+            }),
+            "the verifier records why required tool {tool} was omitted: {:?}",
+            resolved.omitted_requirement_notes
+        );
+    }
+    assert!(
+        resolved
+            .requested_tools
+            .iter()
+            .any(|tool| tool == "orbit.task.show"),
+        "permitted required tools remain requested"
+    );
+    assert!(
+        resolved
+            .effective_tools
+            .iter()
+            .any(|tool| tool == "orbit.task.show"),
+        "permitted required tools remain available"
+    );
+
+    let implementing_denial = vec!["orbit.task.add".to_string()];
+    let refused = fixture
+        .runtime
+        .resolve_activity_tool_denials(&task_ids, "agent_implement", &implementing_denial)
+        .expect_err("implementing activities remain fail-closed for covered requirements");
+    assert!(
+        matches!(
+            &refused,
+            DispatchError::RequiredToolAdmission { task_id, tool_name, .. }
+                if task_id.as_str() == finding.id.as_str() && tool_name == "orbit.task.add"
+        ),
+        "a covering implementer deny list still refuses its required tool: {refused}"
+    );
+}
+
+crate::scenario_table!(
+    verifier_tool_policy_scenarios,
+    verifier_resolved_tools_preserve_its_read_only_boundary
+);
+
 struct Fixture {
     _root: TempDir,
     runtime: OrbitRuntime,
@@ -112,6 +241,21 @@ impl Fixture {
     /// A task a review would file: a proposed `bug` tagged `code-review`.
     fn finding(&self, title: &str, complexity: TaskComplexity) -> Task {
         self.task(title, complexity, TaskType::Bug, &["code-review"], None)
+    }
+
+    fn finding_requiring_tools(&self, title: &str, tools: &[&str]) -> Task {
+        self.runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                description: format!("{title} at src/lib.rs."),
+                acceptance_criteria: vec!["The reported defect no longer occurs.".into()],
+                tags: vec!["code-review".into()],
+                complexity: TaskComplexity::Low,
+                task_type: Some(TaskType::Bug),
+                required_tools: tools.iter().map(|tool| (*tool).to_string()).collect(),
+                ..Default::default()
+            })
+            .unwrap()
     }
 
     fn task(
