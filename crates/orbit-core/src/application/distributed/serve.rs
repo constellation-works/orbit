@@ -245,29 +245,35 @@ impl crate::OrbitRuntime {
         );
         match settlement {
             ClaimMutation::Fail(evidence) => {
+                self.validate_claimed_review_carry(&claim, evidence.claimed_review.as_ref())?;
                 let evidence = self.prepare_claimed_review_settlement(&claim, evidence);
                 let final_recovery = evidence.final_recovery.clone();
+                let carry = evidence.claimed_review.clone();
                 let result = self.mutate_execution_claim(
                     Some(&context),
                     &fail_mutation_id(&claim.claim_id),
                     &ClaimMutation::Fail(evidence),
                 )?;
+                self.import_claimed_review_ledgers(carry.as_ref());
                 if let Some(final_recovery) = final_recovery {
                     self.apply_settled_final_recovery(&claim, run_id, &result, &final_recovery);
                 }
                 Ok(result)
             }
             ClaimMutation::Release(evidence) => {
-                self.import_claimed_review_ledgers(evidence.claimed_review.as_ref());
+                self.validate_claimed_review_carry(&claim, evidence.claimed_review.as_ref())?;
+                let carry = evidence.claimed_review.clone();
                 let context = match self.refused_release_hold(&claim, run_id, &evidence) {
                     Some(hold) => context.with_provider_hold(hold),
                     None => context,
                 };
-                self.mutate_execution_claim(
+                let result = self.mutate_execution_claim(
                     Some(&context),
                     &release_mutation_id(&claim.claim_id),
                     &ClaimMutation::Release(evidence),
-                )
+                )?;
+                self.import_claimed_review_ledgers(carry.as_ref());
+                Ok(result)
             }
             ClaimMutation::AcceptHandoff(handoff) => {
                 let deadline = std::time::Instant::now() + self.claim_known_red_budget;

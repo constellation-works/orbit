@@ -585,6 +585,15 @@ evidence. A non-passing verdict fails the leaf before push, and the failure sett
 task. A follower that cannot run the captured reviewer crew requests no claim
 (`before_pr_reviewer_unavailable`).
 
+Failure and release settlements may carry the follower's review ledgers. The owner
+rejects the entire carry if its executor differs from the admitted machine or any
+ledger belongs to another task or claim. It imports ledgers only after the claim
+journal accepts the settlement's machine, bound run and current authority, or
+recognizes its exact recorded replay. Refused settlements cannot create ledgers or
+replace reset history. Import failures are logged without undoing the settlement;
+an exact retry can complete the import, preserving an operator reset already held
+by the owner.
+
 When the captured contract is before-landing instead [ORB-14849], the PR leaf publishes first,
 then runs `landing_review_gate_admit` → `landing_review` → `landing_review_gate_settle` before
 pinning validation. A reviewer fix is validated on its new head and pushed under a lease on the

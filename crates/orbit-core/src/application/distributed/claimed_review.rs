@@ -10,6 +10,7 @@
 
 use std::path::Path;
 
+use orbit_common::OrbitError;
 use orbit_store::contracts::{
     ClaimEvidence, ClaimedReviewCarry, ExecutionClaim, LocalPullAdmission,
 };
@@ -111,8 +112,32 @@ impl OrbitRuntime {
         }
     }
 
-    /// Import ledgers a settlement carried. A failure is logged; the
-    /// settlement itself still stands.
+    /// Validate the whole carry before committing either settlement or ledger
+    /// writes. A mixed carry must not partially import its matching ledgers.
+    pub(super) fn validate_claimed_review_carry(
+        &self,
+        claim: &ExecutionClaim,
+        carry: Option<&ClaimedReviewCarry>,
+    ) -> Result<(), OrbitError> {
+        let Some(carry) = carry else {
+            return Ok(());
+        };
+        if carry.executor_machine_id != claim.executed_on.machine_id
+            || carry.ledgers.iter().any(|ledger| {
+                !ledger_matches(ledger, &claim.task_id, &claim.claim_id)
+                    || ledger.task_ids.iter().any(|id| id != &claim.task_id)
+            })
+        {
+            return Err(OrbitError::InvalidInput(
+                "claimed review carry differs from the admitted task, claim or executor".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Import a validated carry only after the journal accepts the settlement
+    /// or its exact replay. A failure is logged; the settlement still stands.
+    /// Replaying can finish an interrupted import without undoing owner resets.
     pub(super) fn import_claimed_review_ledgers(&self, carry: Option<&ClaimedReviewCarry>) {
         let Some(carry) = carry else {
             return;
@@ -143,14 +168,13 @@ impl OrbitRuntime {
         }
     }
 
-    /// Import carried ledgers and, for an exhausted claimed-leaf escalation,
-    /// replace the human action with the owner reset and follower resume.
+    /// For an exhausted claimed-leaf escalation, replace the human action with
+    /// the owner reset and follower resume. This preparation has no store writes.
     pub(super) fn prepare_claimed_review_settlement(
         &self,
         claim: &ExecutionClaim,
         mut evidence: ClaimEvidence,
     ) -> ClaimEvidence {
-        self.import_claimed_review_ledgers(evidence.claimed_review.as_ref());
         if let Some(action) = self.claimed_review_reset_action(claim, &evidence)
             && let Some(recovery) = evidence.final_recovery.as_mut()
             && let FinalRecoveryDecision::Escalate { human_action, .. } = &mut recovery.decision
