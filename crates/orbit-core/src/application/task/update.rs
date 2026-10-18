@@ -23,7 +23,7 @@ use super::helpers::{
 };
 use super::lifecycle::{
     FORCED_STATUS_EVENT, ensure_completion_run_stopped, ensure_post_deploy_criteria_met,
-    ensure_status_change_allowed,
+    ensure_status_change_allowed, ensure_status_change_not_run_owned,
 };
 use super::params::TaskUpdateParams;
 use super::paths::{
@@ -67,9 +67,9 @@ enum StatusAuthority {
     Internal,
     /// Attributed operator and agent surfaces — the CLI `task update`, the
     /// dashboard, and the registered `orbit.task.update` tool. The lifecycle
-    /// table decides.
+    /// table and local run ownership decide.
     Lifecycle,
-    /// A human overriding the table from the bare CLI or the dashboard,
+    /// A human overriding the table or local run ownership from the bare CLI or the dashboard,
     /// recorded in task history as [`FORCED_STATUS_EVENT`].
     Forced,
 }
@@ -174,8 +174,8 @@ impl OrbitRuntime {
     }
 
     /// The human escape hatch behind `orbit task update --force`: apply the
-    /// update even when the lifecycle table refuses the status change, and
-    /// record the override in task history.
+    /// update even when the lifecycle table or local run ownership refuses
+    /// the status change, and record the override in task history.
     ///
     /// Only the two human surfaces reach this — the bare CLI and the
     /// dashboard's `PATCH /api/tasks/:id` with `force: true` (ORB-12445). The
@@ -393,6 +393,12 @@ impl OrbitRuntime {
             )));
         }
         let requested_status = params.status.filter(|status| *status != task.status);
+        if requested_status.is_some()
+            && status_authority == StatusAuthority::Lifecycle
+            && !system_writer
+        {
+            ensure_status_change_not_run_owned(self, id)?;
+        }
         if requested_status == Some(TaskStatus::Done)
             && status_authority != StatusAuthority::Lifecycle
         {

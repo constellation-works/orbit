@@ -13,7 +13,10 @@ use super::helpers::{
     SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution, build_task_comments,
     crew_assigned_history, effective_actor_label, implementation_label,
 };
-use super::lifecycle::{ensure_task_has_execution_plan, in_progress_transition_requires_plan};
+use super::lifecycle::{
+    ensure_status_change_not_run_owned, ensure_task_has_execution_plan,
+    in_progress_transition_requires_plan,
+};
 use super::params::TaskUpdateParams;
 use super::update::admit_agent_artifact;
 
@@ -63,6 +66,9 @@ impl OrbitRuntime {
         let mut result = None;
         self.stores().tasks().with_task_write_lock(id, &mut || {
             let task = self.get_task(id)?;
+            if task.status == TaskStatus::Proposed {
+                ensure_status_change_not_run_owned(self, id)?;
+            }
             result = Some(if task.status == TaskStatus::Proposed {
                 self.approve_task_with_identity(
                     id,
@@ -323,6 +329,9 @@ impl OrbitRuntime {
         let mut started = None;
         self.stores().tasks().with_task_write_lock(id, &mut || {
             let task = self.get_task(id)?;
+            if actor_label_override.is_none() && task.status != TaskStatus::InProgress {
+                ensure_status_change_not_run_owned(self, id)?;
+            }
             #[cfg(test)]
             self.apply_transition_read_hook(id)?;
             // Validate status before crew resolution so a misleading

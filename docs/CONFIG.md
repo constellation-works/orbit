@@ -1410,6 +1410,15 @@ At claim admission the owner captures `review.before_pr` and `review.before_land
 
 A task keeps one open delivery PR. When a run's `pr_open` (or a failure handoff) creates a PR, it closes the task's other open PRs that pass the same three tests, commenting `Superseded by #N` with the new PR. Reusing an existing PR closes nothing more. Without `pr.delivery_authors`, the author test uses the author of the PR the run just created. If the run stops between creating its PR and closing the others, the others stay open until the task's next created PR, an attributed requeue or a terminal decision closes them; close them by hand meanwhile. One listing reads at most 500 open PRs, so in a repository with more, an earlier PR beyond that page stays open; the same cap applies to the terminal and requeue closures below. This is how a re-admitted task's earlier `[BLOCKED]` PR closes: the failure handoff keeps it open while the task is blocked and until the next attempt publishes. The step's `closed_stale_pull_requests` output lists each close; a failed close is listed there and the step still succeeds.
 
+An ordinary status change (`orbit task update --status`, the dashboard,
+`orbit.task.update`) is refused while a non-terminal local job run lists the
+task in its submitted `task_ids`. The refusal names the run, even when the task
+has no `job_run_id` or distributed execution claim. Stop the run before moving
+the task, or deliberately override with the human CLI's `--force` (dashboard
+`force: true`); the override records a `forced` status event. The tool has no
+force override. Same-status writes, field edits and pipeline-internal
+transitions remain available.
+
 An operator's or agent's move from active work back to `backlog` or `someday` (`orbit task update --status`, the dashboard, `orbit.task.update`) also closes the task's open Orbit-authored PRs, with a comment naming the move and its note. It keeps every PR a later run may still continue:
 
 - all of them while a run of the task is live or a claim on it is unsettled, or when that cannot be read, since a leaf may still be landing one. A resumed or adopted `task_pr_pipeline` retry counts while it is live, even when the task's recorded run is still the finished source that retry continues. A move made then closes nothing, and only a later move from `backlog` to `someday` (or a terminal decision, or the task's next created PR) closes them;

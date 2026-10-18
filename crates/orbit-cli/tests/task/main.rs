@@ -31,6 +31,7 @@ mod crew_effort_admission;
 mod delivery_remote_source;
 mod friction_lifecycle_cli;
 mod local_read_projections_cli;
+mod live_run_status;
 mod pilot_comments;
 mod reconcile_review;
 mod rescue_close_cli;
