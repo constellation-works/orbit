@@ -423,12 +423,13 @@ def validate_cargo_target(command, packages):
         raise ValueError("Cargo scenario must select an existing package with -p") from error
 
 
-def cargo_inventory_errors(repo, inventory, *, list_cases=False):
+def cargo_inventory_errors(repo, inventory, *, list_cases=False, offline=False):
     scenarios = [item for item in inventory["scenarios"] if is_cargo_test(item.get("command", []))]
     errors = []
     with tempfile.TemporaryDirectory(prefix="orbit-qa-cargo-inventory-") as tmp:
         env = isolated_environment(Path(tmp))
-        metadata = run(["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"],
+        metadata = run(["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked",
+                        *(["--offline"] if offline else [])],
                        cwd=repo, env=env)
         try:
             if metadata.get("output_truncated"):
@@ -2299,6 +2300,8 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--run-commands", action="store_true")
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--static", action="store_true",
+                        help="with --check, validate inventory using offline metadata only; no fixture self-tests")
     parser.add_argument("--check-cargo-selections", action="store_true",
                         help="with --check, compile and list each exact Cargo selection without executing it")
     parser.add_argument("--playwright-module", type=Path)
@@ -2324,6 +2327,9 @@ def main():
             parser.error("--record-native-command requires a command")
     else:
         args = parser.parse_args(argv)
+    if args.static and (not args.check or args.check_cargo_selections or args.run_commands
+                        or args.self_test or args.list_cli_paths or args.record_native_command):
+        parser.error("--static requires --check without execution or case listing")
     repo = args.repo_root.resolve()
     if args.record_native_command:
         raise SystemExit(record_native_execution(args.record_native_command, repo, args.native_execution_dir))
@@ -2346,12 +2352,15 @@ def main():
         return
     if args.check_cargo_selections and not args.check:
         parser.error("--check-cargo-selections requires --check")
-    errors.extend(cargo_inventory_errors(repo, inventory, list_cases=args.check_cargo_selections or args.run_commands))
+    errors.extend(cargo_inventory_errors(repo, inventory,
+                                         list_cases=args.check_cargo_selections or args.run_commands,
+                                         offline=args.static))
     if args.check:
         if errors:
             print("\n".join(errors))
             raise SystemExit(1)
-        self_test()
+        if not args.static:
+            self_test()
         print("qa-full-sweep inventory: ok")
         return
     output = (args.output or repo / "qa-full-sweep-report.json").resolve()

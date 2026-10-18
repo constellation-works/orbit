@@ -5,11 +5,13 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
 fast=false
+static=false
 case "${1:-}" in
   "") ;;
   --fast) fast=true ;;
+  --static) fast=true; static=true ;;
   *)
-    echo "usage: ci-guardrails.sh [--fast]" >&2
+    echo "usage: ci-guardrails.sh [--fast|--static]" >&2
     exit 2
     ;;
 esac
@@ -97,8 +99,15 @@ run_phase() {
 
 export GIT_OPTIONAL_LOCKS=0
 
+# Metadata-only guards must never fetch registries in the static lane.
+if [[ "$static" == true ]]; then
+  export CARGO_NET_OFFLINE=true
+fi
+
 run_self_tests=true
-if [[ "$fast" == true ]]; then
+if [[ "$static" == true ]]; then
+  run_self_tests=false
+elif [[ "$fast" == true ]]; then
   # Match ci-test-affected's delivery-base override and merge-base fallback.
   base=""
   if [[ -n "${CI_TEST_BASE:-}" ]]; then
@@ -133,13 +142,15 @@ fi
 
 # Selection must precede Cargo and repository guards: these mandatory fixtures
 # import yaml even though the standalone local workflow linter can warn/skip.
-if [[ "$run_self_tests" == true ]]; then
+if [[ "$run_self_tests" == true || "$static" == true ]]; then
   "$repo_root/scripts/require-python.sh" --yaml
 fi
 
 # --fast runs formatting and script guardrails, never the Rust test suite.
 # `make ci-test-affected` supplies the separate pre-handoff test gate.
-run_phase fmt cargo fmt --all -- --check
+if [[ "$static" == false ]]; then
+  run_phase fmt cargo fmt --all -- --check
+fi
 
 # Repository guards and self-tests share one sliding-window pool. Its width is
 # the build budget's cargo job count, the same number Cargo receives, so guard
@@ -235,8 +246,19 @@ reap_waiting_guard() {
 # unlike fixture-only self-tests.
 skipped() {
   local name="${1##*/}"
+  if [[ "$static" == true ]]; then
+    case "$name" in
+      check-workflow-action-pins.sh | check-desktop-ui.sh | smoke-plugin-install.sh)
+        # Network validation, Node behavior tests and scratch installations
+        # remain in --fast/full mode, outside the file/metadata-only lane.
+        return 0
+        ;;
+    esac
+  fi
   if [[ "$name" == test-* && "$name" != test-qa-full-sweep.py && "$run_self_tests" == false ]]; then
-    echo "ci-guardrails: SKIPPED $name (self-test inputs unchanged)"
+    if [[ "$static" == false ]]; then
+      echo "ci-guardrails: SKIPPED $name (self-test inputs unchanged)"
+    fi
     return 0
   fi
   return 1
@@ -319,7 +341,11 @@ guard_phase_started=$SECONDS
   # Start the longer repository scans first; the pool keeps pool_width running.
   run_guard "$repo_root/scripts/check-orphan-modules.sh"
   run_guard "$repo_root/scripts/check-workflow-action-pins.sh"
-  run_guard "$repo_root/scripts/test-qa-full-sweep.py" --check
+  if [[ "$static" == true ]]; then
+    run_guard "$repo_root/scripts/test-qa-full-sweep.py" --check --static
+  else
+    run_guard "$repo_root/scripts/test-qa-full-sweep.py" --check
+  fi
   run_guard "$repo_root/scripts/check-error-translation.sh"
   run_guard "$repo_root/scripts/check-unused-dependencies.py"
   run_guard "$repo_root/scripts/check-doc-links.py"
@@ -433,6 +459,11 @@ fi
 
 # Fast mode joins here; full mode already joined before its tests.
 join_guard_pool
+
+if [[ "$static" == true ]]; then
+  phase_records+=("repository-guards wall_seconds=$guard_pool_seconds exit=$failed")
+  exit "$failed"
+fi
 
 # Exclusive self-tests run one at a time with nothing else on the host. Each one
 # asserts elapsed time or timeouts, measures build-budget admission, or drives a

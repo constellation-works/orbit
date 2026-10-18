@@ -331,6 +331,20 @@ spec:
        base sync, push, PR open/reuse, and PR promotion steps. The pipeline,
        not you, moves the task to review in this path.
 
+       For a candidate diff, when the workspace provides `make ci-guards`,
+       run it before handoff and fix every reported static guard violation, even
+       when `make ci-fast` is listed for pipeline final validation. In Rust
+       workspaces providing `ci-lint` and `scripts/build-budget.py`, mirror
+       these checks for each changed crate (`<crate>` is its package name):
+       - `scripts/build-budget.py -- cargo clippy -p <crate> --lib --bins -- -D warnings -D clippy::disallowed_methods`
+       - `scripts/build-budget.py -- cargo clippy -p <crate> --all-targets -- -D warnings -A clippy::disallowed_methods`
+       - `RUSTDOCFLAGS="-D warnings" scripts/build-budget.py -- cargo doc --no-deps -p <crate>`
+       The production pass retains the channel restriction; the all-targets
+       pass covers test targets, and rustdoc rejects broken/private links.
+       These focused checks do not replace final validation: leave whole
+       `task.final_validation_commands` entries to the pipeline, which
+       remains authoritative. Record commands and outcomes in the handoff.
+
        Unresolved merge or rebase conflicts in the assigned worktree are a
        repair you make, not a reason to stop: resolve every unmerged path,
        preserving both the candidate intent and the base changes, against the
@@ -354,7 +368,9 @@ spec:
        the artifacts, not the error message.
        Follow the workspace's own AGENTS.md for validation guidance.
        Repair the candidate so the command passes (for example apply the
-       formatter it names) and run the command yourself to confirm. Leave the
+       formatter it names). Confirm with the early static guards and scoped
+       checks above; run the failing command yourself only when it is not
+       reserved in `task.final_validation_commands`. Leave the
        repair uncommitted in the worktree: your sandbox mounts Git metadata
        read-only, so do not run `git add` or `git commit`. Once you write
        `retry`, Orbit commits the repair as a new commit on the task branch
