@@ -6,16 +6,16 @@
 //! [`trust`] before it says anything. A verified update raises one
 //! notification, and the tray's update item becomes "Install Orbit X.Y.Z…".
 //! Choosing it asks for confirmation, then downloads, verifies and installs
-//! the bundle as [`install`] describes. Nothing is ever installed without
+//! the bundle as the installer describes. Nothing is ever installed without
 //! that confirmation.
 //!
 //! An unreachable GitHub is silent unless the user asked for the check. A
 //! manifest that fails verification always notifies, because it means the
 //! release's desktop assets can't be trusted.
 
-mod install;
 mod release;
 mod trust;
+mod verified;
 
 #[cfg(test)]
 mod tests;
@@ -28,8 +28,8 @@ use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
 
-use self::install::{Install, Outcome};
 use self::release::{CheckError, Releases, Verified, Version};
+use self::verified::{Install, Outcome};
 use crate::watch::notify;
 
 /// The first check waits this long, so it doesn't compete with the
@@ -191,11 +191,14 @@ impl Updater {
             .or_else(|_| self.app.path().home_dir())
             .unwrap_or_else(|_| std::env::temp_dir());
         let identifier = self.app.config().identifier.clone();
-        match self
-            .install
-            .install(&self.releases, update, &identifier, &downloads)
-        {
-            Ok(Outcome::Restart(command)) => match install::relaunch_after_exit(&command) {
+        match verified::install(
+            &self.install,
+            &self.releases,
+            update,
+            &identifier,
+            &downloads,
+        ) {
+            Ok(Outcome::Restart(command)) => match verified::relaunch_after_exit(&command) {
                 Ok(()) => self.app.exit(0),
                 Err(error) => notify(
                     &format!("Orbit {} is installed", update.version),
