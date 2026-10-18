@@ -44,6 +44,14 @@ orbit task update "$TASK_ID" --approve --note "Scope reviewed."
 you can't combine `--approve` with field edits or `--status`. The note is
 recorded in the task's status history.
 
+While a non-terminal local run lists the task in its submitted `task_ids`,
+`--approve` on the CLI and **Approve** on the dashboard both refuse. The
+error names that run, and the task, its comments, and its history stay as
+they were. Stop the run, then approve. Forcing a status with `--force` is a
+separate override and still applies. A drain authorized with
+`--approve-proposed` approves through its own path and is not refused
+because its run lists the task.
+
 The two gates are independent:
 
 - **Entering the backlog takes an explicit approval.** You give it in the

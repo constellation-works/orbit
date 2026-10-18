@@ -219,6 +219,10 @@ impl OrbitRuntime {
 
     /// Take a task's next approval step for an operator surface, warning
     /// with the blockers its latest task-pilot assessment recorded.
+    ///
+    /// Refuses, without writing the task, while a non-terminal local run
+    /// lists it in `input.task_ids`. Drain promotion uses
+    /// [`Self::approve_task`] and is not covered by this guard.
     pub fn approve_task_screened(
         &self,
         id: &str,
@@ -228,7 +232,7 @@ impl OrbitRuntime {
         model: Option<String>,
     ) -> Result<ScreenedTaskWrite, OrbitError> {
         let warnings = self.approval_blocker_warnings(id)?;
-        let task = self.approve_task_with_identity(id, note, comment, agent, model)?;
+        let task = self.approve_task_guarding_run_ownership(id, note, comment, agent, model)?;
         Ok(Self::approval_write(task, warnings))
     }
 
