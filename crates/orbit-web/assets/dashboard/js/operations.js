@@ -2458,11 +2458,12 @@ function forecastTaskRef(forecast, taskId) {
   return el("span", { class: "drain-forecast-task-name" }, [link, " ", String(title)]);
 }
 
+// Tasks a pass admitted are not listed: the run list and the window's
+// figures already show them. Only the candidates it held explain a wait.
 function forecastHasDecisions(forecast) {
   if (!forecast) return false;
-  const admitted = Array.isArray(forecast.admitted) && forecast.admitted.some(task => task?.task_id);
   const skipped = Array.isArray(forecast.skipped) && forecast.skipped.some(task => task?.task_id);
-  return admitted || skipped || Boolean(forecast.head?.task_id && (forecast.head.protected === true || forecast.head.stall?.stuck === true));
+  return skipped || Boolean(forecast.head?.task_id && (forecast.head.protected === true || forecast.head.stall?.stuck === true));
 }
 
 function forecastTime(at) {
@@ -2521,21 +2522,7 @@ function forecastPeaks(forecast) {
 
 function forecastDecisions(forecast, hypothetical) {
   const items = [];
-  const admitVerb = hypothetical ? "Would admit " : "Admitted ";
   const holdVerb = hypothetical ? "Would hold " : "Held ";
-  for (const task of Array.isArray(forecast.admitted) ? forecast.admitted : []) {
-    if (!task?.task_id) continue;
-    const notes = [`profile ${task.profile_source || "unknown"}`];
-    if (task.idle_host) notes.push(String(task.idle_host));
-    // An admitted task stays on one line; its full text is the tooltip.
-    const item = el("li", { class: "drain-forecast-task admitted" }, [
-      admitVerb,
-      forecastTaskRef(forecast, task.task_id),
-      ` · ${notes.join(" · ")}`,
-    ]);
-    item.title = item.textContent;
-    items.push(item);
-  }
   for (const task of Array.isArray(forecast.skipped) ? forecast.skipped : []) {
     if (!task?.task_id) continue;
     items.push(el("li", { class: "drain-forecast-task held" }, [

@@ -1281,8 +1281,8 @@ assert(forecast.querySelector('time')?.dateTime === forecastAt && forecastText.i
 assert(forecastText.includes('90.0%') && forecastText.includes('7.2 cores') && forecastText.includes('at +6m') && forecastText.includes('admit 89%') && forecastText.includes('headroom -1.0'), `cpu peak, threshold and headroom: ${forecastText}`);
 assert(forecast.querySelector('.drain-forecast-peak.over')?.textContent.includes('CPU peak'), 'a peak over its admit threshold is marked');
 assert(forecastText.includes('40.0%') && forecastText.includes('1.0 KiB') && forecastText.includes('at +2m') && forecastText.includes('admit 74%') && forecastText.includes('headroom 34.0'), `memory peak, threshold and headroom: ${forecastText}`);
-assert(forecastText.includes('Admitted') && forecastText.includes('Fitting candidate') && forecastText.includes('profile without_complexity') && forecastText.includes('admitted on an idle host'), `admitted task and profile: ${forecastText}`);
-assert(forecast.querySelector('a[href*="ORB-FIT"]') && forecast.querySelector('a[href*="ORB-HELD"]'), `admitted and held tasks link: ${forecastText}`);
+assert(!forecastText.includes('Admitted') && !forecastText.includes('Fitting candidate') && !forecast.querySelector('a[href*="ORB-FIT"]'), `admitted tasks are not listed: ${forecastText}`);
+assert(forecast.querySelector('a[href*="ORB-HELD"]'), `held tasks link: ${forecastText}`);
 assert(forecastText.includes('Held') && forecastText.includes('Heavy candidate') && forecastText.includes('cpu 94% at +6m') && forecastText.includes('profile exact'), `held candidate shows the hold: ${forecastText}`);
 assert(forecastText.includes('Small candidate') && forecastText.includes('waiting for the protected queue head to fit') && forecastText.includes('profile heaviest_on_host'), `a starvation hold names the guard, not a stored sentence: ${forecastText}`);
 assert(forecastText.includes('Starvation guard protects') && forecastText.includes('Stuck head') && forecastText.includes('change/medium via exact') && forecastText.includes('3 protected passes'), `protected and stuck head: ${forecastText}`);
@@ -1291,7 +1291,7 @@ drainCapacityOverride = { admission_forecast: { ...enforceForecast, mode: 'shado
 await fetchAndRenderAutoDrainPane();
 forecast = forecastCard();
 forecastText = forecast?.textContent || '';
-assert(forecastText.includes('shadow · hypothetical') && forecastText.includes('Would admit') && forecastText.includes('Would hold') && forecastText.includes('Starvation guard would protect') && !forecastText.includes('Held'), `shadow decisions stay hypothetical: ${forecastText}`);
+assert(forecastText.includes('shadow · hypothetical') && !forecastText.includes('Would admit') && forecastText.includes('Would hold') && forecastText.includes('Starvation guard would protect') && !forecastText.includes('Held'), `shadow decisions stay hypothetical: ${forecastText}`);
 drainCapacityOverride = {
   admission_forecast: {
     mode: 'enforce',
@@ -1316,7 +1316,7 @@ assert(forecast?.dataset.forecastState === 'retained' && forecast.querySelector(
 assert(forecastText.includes('Starvation guard protects') && forecastText.includes('Heavy candidate'), `this pass still shows a protected head: ${forecastText}`);
 const retained = forecast.querySelector('.drain-forecast-retained');
 const retainedText = retained?.textContent || '';
-assert(retainedText.includes('Last forecast') && retainedText.includes('2026-10-16 22:00') && retainedText.includes('50.0%') && retainedText.includes('admit 89%') && retainedText.includes('headroom 39.0') && retainedText.includes('Fitting candidate') && retainedText.includes('profile exact'), `retained forecast: ${retainedText}`);
+assert(retainedText.includes('Last forecast') && retainedText.includes('2026-10-16 22:00') && retainedText.includes('50.0%') && retainedText.includes('admit 89%') && retainedText.includes('headroom 39.0') && !retainedText.includes('Fitting candidate'), `retained forecast: ${retainedText}`);
 drainCapacityOverride = {};
 await fetchAndRenderAutoDrainPane();
 assert(forecastCard()?.querySelector('.drain-forecast-state')?.textContent === 'no forecast this pass', 'clearing the forecast returns the empty state');

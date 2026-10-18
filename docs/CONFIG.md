@@ -187,7 +187,7 @@ shows its historical decisions without changing current eligibility. A shadow sk
 eligibility. These are recorded observations, not a fresh fit or a reservation:
 `forecast_at` dates them, and the next pass or changed configuration can change
 the answer. Without a recorded forecast, the readiness response is unchanged.
-The dashboard Drain card shows the same snapshot: forecast time, CPU and memory peaks against the admit thresholds, headroom, each admitted task with its profile source, and a candidate enforce held. A pass with no forecast says `no forecast this pass` and shows `capacity.last_admission_forecast` when one was retained. Shadow decisions are labelled hypothetical.
+The dashboard Drain card shows the same snapshot: forecast time, CPU and memory peaks against the admit thresholds, headroom, and each candidate enforce held. It does not list the tasks a pass admitted. A pass with no forecast says `no forecast this pass` and shows `capacity.last_admission_forecast` when one was retained. Shadow decisions are labelled hypothetical.
 
 `orbit run profiles --accuracy` checks the forecast itself. Each local drain
 pass under `shadow` or `enforce` that built a forecast records it at +5, +10,
