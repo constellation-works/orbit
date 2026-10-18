@@ -98,6 +98,7 @@ mod provider_limit;
 mod rebased_landing;
 mod recovery;
 mod regression_attribution;
+mod requeue;
 mod settlement;
 mod settlement_review;
 mod single_pass;

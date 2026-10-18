@@ -540,8 +540,18 @@ The requeue waits for the task's run to stop. Final recovery blocks the task
 before the run's failure handoff publishes, so while the run is live the
 requeue is refused and nothing changes; requeue once it has stopped. A claimed
 task's run is a follower's leaf that the owner cannot probe, so while its
-execution claim is unsettled the requeue is refused the same way. It then
-authenticates the handoff receipt, before taking the task's write lock: the
+execution claim is unsettled the requeue is refused. The refusal identifies
+the live linked run, live PR pipeline run, or unsettled execution claim and
+its run ID. Run IDs are unique only within a machine's store: the task's
+`job_run_machine` qualifies its `job_run_id`. When that binding names another
+machine, the owner uses the claim's settlement and never a same-ID local
+run, failure-handoff receipt, or publication checkpoint. Inspect the leaf on
+its recorded execution host; a bare `orbit run show <run-id>` reads the
+selected host's store. A settled claim fences the follower leaf, so an
+unrelated same-ID owner run does not prevent requeue.
+
+For an owner-local publication, requeue authenticates the handoff receipt
+before taking the task's write lock: the
 stopped run is this machine's own single-task delivery, conclusively stopped
 and still the task's newest execution, its candidate was not discarded, and
 the task specification is unchanged. Under the lock it re-checks that the task

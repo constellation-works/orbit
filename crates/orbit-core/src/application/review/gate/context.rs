@@ -130,8 +130,10 @@ impl GateContext {
             // claim, checked above, is what ties that task to this run.
             let task = runtime.get_task(task_id)?;
             if claim_id.is_none()
-                && task.job_run_id.as_deref() != Some(run_id.as_str())
-                && (resumed_owner.is_none() || task.job_run_id.as_deref() != resumed_owner)
+                && (!runtime.task_run_is_local(&task)
+                    || (task.job_run_id.as_deref() != Some(run_id.as_str())
+                        && (resumed_owner.is_none()
+                            || task.job_run_id.as_deref() != resumed_owner)))
             {
                 return Err(OrbitError::Execution(format!(
                     "review gate: task '{task_id}' no longer belongs to run '{run_id}'"

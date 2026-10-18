@@ -264,7 +264,9 @@ impl OrbitRuntime {
     /// `job_run_id` only onto the checkpoint batch id, which already matches
     /// the terminal source, so the retry stays invisible to that binding.
     pub(super) fn live_task_delivery(&self, task: &Task) -> Option<String> {
-        if let Some(run_id) = task.job_run_id.as_deref() {
+        if self.task_run_is_local(task)
+            && let Some(run_id) = task.job_run_id.as_deref()
+        {
             match self.stores().jobs().get_job_run(run_id) {
                 Ok(Some(run)) if !run.state.is_terminal() => {
                     return Some(format!("its run {run_id} is still {}", run.state));
@@ -302,10 +304,13 @@ impl OrbitRuntime {
                 .iter()
                 .find(|claim| claim.claim.task_id == task.id && claim.claim.phase.is_unsettled())
                 .map(|claim| {
-                    format!(
-                        "its execution claim for run {} is unsettled",
-                        claim.claim.run_context.run_id
-                    )
+                    let run_id = claim
+                        .bound_run
+                        .as_ref()
+                        .map_or(claim.claim.run_context.run_id.as_str(), |run| {
+                            run.run_id.as_str()
+                        });
+                    format!("its execution claim for run {run_id} is unsettled")
                 }),
             Err(_) => Some("its execution claims cannot be read".to_string()),
         }

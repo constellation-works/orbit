@@ -385,7 +385,8 @@ pub(crate) fn hold_is_current(
     task: &Task,
     hold: &ReviewEvidenceHold,
 ) -> Result<bool, OrbitError> {
-    if task.status != TaskStatus::InProgress
+    if !runtime.task_run_is_local(task)
+        || task.status != TaskStatus::InProgress
         || hold.schema_version != 1
         || combined_task_meaning_digest(&[(
             task.id.to_string(),

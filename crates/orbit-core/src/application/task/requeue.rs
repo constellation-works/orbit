@@ -127,6 +127,9 @@ impl OrbitRuntime {
         &self,
         task: &Task,
     ) -> Result<Option<HandoffReceipt>, OrbitError> {
+        if !self.task_run_is_local(task) {
+            return Ok(None);
+        }
         let Some(run_id) = task.job_run_id.as_deref() else {
             return Ok(None);
         };
@@ -168,9 +171,15 @@ impl OrbitRuntime {
         }))
     }
 
-    /// Whether `run_id` pushed or opened a pull request through its own
-    /// pipeline steps (as opposed to its failure handoff).
-    pub(crate) fn run_published_through_pipeline(&self, run_id: &str) -> Result<bool, OrbitError> {
+    /// Whether the task's local run pushed or opened a pull request through
+    /// its own pipeline steps (as opposed to its failure handoff).
+    pub(crate) fn run_published_through_pipeline(&self, task: &Task) -> Result<bool, OrbitError> {
+        if !self.task_run_is_local(task) {
+            return Ok(false);
+        }
+        let Some(run_id) = task.job_run_id.as_deref() else {
+            return Ok(false);
+        };
         Ok(self.read_run_state(run_id)?.is_some_and(|state| {
             ["push", "pr_open"].iter().any(|key| {
                 state
@@ -250,15 +259,18 @@ impl OrbitRuntime {
     /// A claimed task's run is a follower's leaf, which this store may never
     /// see and whose process no local probe can reach: an unsettled execution
     /// claim (or one that cannot be read) counts as live, exactly as the PR
-    /// closure counts it. Once the claim is settled its leaf is fenced, so a
-    /// run on another machine is then judged by its recorded state alone.
+    /// closure counts it. Once the claim is settled its leaf is fenced;
+    /// a foreign binding never reads a same-ID run from this store.
     pub(crate) fn unsettled_run(&self, task: &Task) -> Result<Option<String>, OrbitError> {
-        if self.live_task_delivery(task).is_some() {
-            return Ok(Some(
-                "a run or an unsettled execution claim of the task may still be delivering it, \
-                 so a failure handoff may still publish a candidate"
-                    .into(),
-            ));
+        if let Some(reason) = self.live_task_delivery(task) {
+            return Ok(Some(format!(
+                "{reason}, so a failure handoff may still publish a candidate"
+            )));
+        }
+        // A settled claim fences a follower's leaf. A same-ID local run
+        // cannot supply liveness or publication evidence for that leaf.
+        if !self.task_run_is_local(task) {
+            return Ok(None);
         }
         let Some(run_id) = task.job_run_id.as_deref() else {
             return Ok(None);
@@ -653,9 +665,7 @@ impl OrbitRuntime {
                 error => error,
             });
         }
-        if let Some(run_id) = task.job_run_id.as_deref()
-            && self.run_published_through_pipeline(run_id)?
-        {
+        if self.run_published_through_pipeline(task)? {
             return Err(OrbitError::InvalidInput(format!(
                 "the task's stopped run published through its own pipeline steps with no \
                  failure-handoff receipt to authenticate, so a requeue cannot resume it. \
