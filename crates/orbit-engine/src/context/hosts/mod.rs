@@ -7,6 +7,7 @@ mod config;
 mod null_host;
 mod plugin_broker;
 mod recovery;
+mod revalidation;
 mod review;
 mod runtime_host;
 mod scratch_gc;
@@ -27,6 +28,7 @@ pub use recovery::{
     STEP_RECOVERY_DECISION_SCHEMA_VERSION, StepRecoveryAdmission, StepRecoveryDecisionRead,
     StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, StepRecoveryVerdict,
 };
+pub use revalidation::{GeneratedPath, UnlockedPathValidation, ValidatedTree};
 pub use review::{
     ReviewLandingRequest, ReviewReleaseRequest, ReviewReportCorrectionRequest,
     ReviewerInvocationRequest,

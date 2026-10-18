@@ -39,6 +39,9 @@ use crate::runtime::recovery_authority::RecoveryAuthority;
 use super::task_automation::apply_locked_task_automation_update;
 use super::{activity_tools, checkpoints, crew, invocation};
 
+/// Runs whose last validated tree one process keeps [ORB-16784].
+const MAX_VALIDATED_TREE_RUNS: usize = 256;
+
 impl RuntimeHost for OrbitRuntime {
     fn start_plugin_broker(
         &self,
@@ -592,6 +595,58 @@ impl RuntimeHost for OrbitRuntime {
 
     fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates {
         self.host_validation_gates()
+    }
+
+    fn unlocked_path_validation(&self) -> orbit_engine::UnlockedPathValidation {
+        let settings = self.context.settings();
+        orbit_engine::UnlockedPathValidation {
+            paths: settings.unlocked_context_paths().patterns().to_vec(),
+            commands: settings.unlocked_path_validation_commands().to_vec(),
+        }
+    }
+
+    fn generated_paths(&self) -> Vec<orbit_engine::GeneratedPath> {
+        self.context
+            .settings()
+            .generated_paths()
+            .iter()
+            .map(|(path, command)| orbit_engine::GeneratedPath {
+                path: path.clone(),
+                command: command.clone(),
+            })
+            .collect()
+    }
+
+    fn record_validated_tree(&self, tree: &orbit_engine::ValidatedTree) -> Result<(), OrbitError> {
+        // A claimed leaf's validation is its owner's evidence, not this host's.
+        if self.worker_invocation().is_some() {
+            return Ok(());
+        }
+        let mut trees = self
+            .validated_trees
+            .lock()
+            .map_err(|_| OrbitError::Execution("validated tree record is poisoned".into()))?;
+        trees.insert(tree.run_id.clone(), tree.clone());
+        // A long-lived host serves many runs; run IDs sort by start time.
+        while trees.len() > MAX_VALIDATED_TREE_RUNS {
+            trees.pop_first();
+        }
+        Ok(())
+    }
+
+    fn validated_tree(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<orbit_engine::ValidatedTree>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return Ok(None);
+        }
+        Ok(self
+            .validated_trees
+            .lock()
+            .map_err(|_| OrbitError::Execution("validated tree record is poisoned".into()))?
+            .get(run_id)
+            .cloned())
     }
 
     fn host_os(&self) -> Option<orbit_types::workflow::EvidenceHostOs> {

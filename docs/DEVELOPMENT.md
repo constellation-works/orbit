@@ -202,13 +202,19 @@ The owner workspace lists the four [gates](../AGENTS.md#gates) in [`workflow.req
 ```toml
 [workflow]
 required_validation_commands = ["make ci-fast", "make ci-lint", "make goldens", "make ci-test-affected"]
+unlocked_path_validation_commands = ["make ci-fast"]
+
+[workflow.generated_paths]
+"docs/INDEX.md" = "make docs-index"
 
 [workflow.validation_env]
 build_output_env = ["CARGO_TARGET_DIR"]
 ```
 
+A repair that changed only Markdown since the run's last full pass reruns only `make ci-fast` ([revalidating an unlocked-path repair](CONFIG.md#revalidating-an-unlocked-path-repair)), and a conflict on `docs/INDEX.md` is resolved by regenerating it ([generated paths](CONFIG.md#generated-paths-are-regenerated-not-merged)).
+
 The reviewable [workspace configuration example](../config/orbit-workspace.toml) includes
-both settings. Merge it into the owner configuration during operator rollout. Cargo
+these settings. Merge it into the owner configuration during operator rollout. Cargo
 output selection is this repository's policy; the generic runtime has no build-tool
 default ([build output contract](CONFIG.md#workspace-build-output)).
 

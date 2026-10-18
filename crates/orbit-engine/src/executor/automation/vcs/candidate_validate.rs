@@ -38,6 +38,11 @@
 //! here after the required commands, outside any agent sandbox: it is judged
 //! like them, a pass that still defers is the validation environment's
 //! failure, and one that reports no executed tests is refused.
+//!
+//! [ORB-16784] A candidate whose tree differs from the last tree this run
+//! passed the full list on only in `workflow.unlocked_context_paths` runs
+//! `workflow.unlocked_path_validation_commands` instead, when that is set
+//! (see [`super::validation_scope`]); every output and log names the scope.
 
 use std::collections::BTreeSet;
 use std::time::Instant;
@@ -52,7 +57,7 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use crate::context::{RuntimeHost, TaskAutomationUpdate, ValidatedTree};
 use crate::executor::automation::input::{input_string_field, required_job_run_id};
 
 use super::baseline::{
@@ -67,6 +72,7 @@ use super::deferred_sandbox::{deferred_replays, with_replays};
 use super::flaky::rerun_failed_tests;
 use super::git::{git_command_success, git_output};
 use super::handoff::completed_task_ids_from_input;
+use super::validation_scope::validation_scope;
 
 /// Run the workspace's required commands on the owner's committed candidate
 /// and attach one captured log per command to every task the run delivers.
@@ -150,6 +156,12 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
         )));
     }
     require_clean_checkout(&workspace_path, &branch, &candidate, "the candidate")?;
+    let tree = git_output(
+        &workspace_path,
+        &["rev-parse", "--verify", &format!("{candidate}^{{tree}}")],
+    )?;
+    let scope = validation_scope(host, &workspace_path, &run_id, &task_ids, commands, &tree);
+    let commands = &scope.commands;
 
     // Capturing optional reuse evidence must not change ordinary validation.
     let completion_policy = host
@@ -289,6 +301,7 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
             "baseline": baseline
                 .as_ref()
                 .map(|check| check.record(baseline_path.as_deref())),
+            "validation_scope": scope.record,
         }))
         .map_err(|error| OrbitError::Execution(format!("encode validation log: {error}")))?;
         logs.push((log_path.clone(), content));
@@ -360,6 +373,26 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
             == Some(before)
     });
     let references = attach_logs(host, &task_ids, &run_id, &logs)?;
+    if scope.full {
+        // Optional evidence: a host that cannot keep it validates later
+        // candidates of this run in full.
+        if let Err(error) = host.record_validated_tree(&ValidatedTree {
+            run_id: run_id.clone(),
+            task_ids: task_ids.clone(),
+            workspace_path: workspace_path.to_string_lossy().into_owned(),
+            head: candidate.clone(),
+            tree: tree.clone(),
+            base_sha: base_sha.clone(),
+            commands: commands.clone(),
+        }) {
+            tracing::warn!(
+                target: "orbit.engine.validation",
+                run_id = %run_id,
+                %error,
+                "could not record the validated tree; later candidates of this run validate in full"
+            );
+        }
+    }
     let mut output = json!({
         "phase": "validate",
         "base_sha": base_sha,
@@ -370,9 +403,11 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
         "flaky": flaky,
         "branch": branch,
         "tested_head": candidate,
+        "tested_tree": tree,
         "validation": serde_json::to_value(&references)
             .map_err(|error| OrbitError::Execution(error.to_string()))?,
         "validation_env": validation_env,
+        "validation_scope": scope.record,
     });
     if let Some(owned_paths) = owned_paths {
         output["owned_paths"] = json!(owned_paths);

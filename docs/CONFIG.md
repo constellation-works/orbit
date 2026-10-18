@@ -305,12 +305,41 @@ provider_limit_explicit_crews = "wait"
 | `workflow.required_validation_commands` | `[]` | Commands every delivered candidate must pass before push or merge. Empty runs no required check. See [required validation](#required-validation). |
 | `workflow.distributed_completion` | `review` | How far this owner takes an accepted distributed-drain handoff: `review` waits for an operator's **Approve handoff**; `done` authorizes it on acceptance and lands it through `task_landing_pipeline`, rechecking this key before the merge. |
 | `workflow.unlocked_context_paths` | `["**/*.md"]` | Path globs whose `context_files` entries take no context lock. See [unlocked context paths](#unlocked-context-paths). |
+| `workflow.unlocked_path_validation_commands` | `[]` | Commands a repaired candidate runs instead of the full required list when its tree differs from the run's last fully validated tree only in `workflow.unlocked_context_paths`. Empty always runs the full list. See [revalidating an unlocked-path repair](#revalidating-an-unlocked-path-repair). |
+| `workflow.generated_paths` | `{}` | Generated files, as path glob = regenerate command. Conflict recovery regenerates a conflicting match instead of merging it. See [generated paths](#generated-paths-are-regenerated-not-merged). |
 
 ### Unlocked context paths
 
 `workflow.unlocked_context_paths` lists workspace-relative globs: `*` matches within one path component and `**` spans components, so `**/*.md` is every Markdown file and `docs/**` is everything under `docs/`. A `context_files` entry whose path matches stays in the task's context, and the agent still receives it, but takes no context lock. Local drain waves, readiness, backlog admission, `orbit task eligible`, lock contention and lock reservations skip it, so two tasks that share only a design doc beside their own code run together and landing reconciles the text by merge and conflict recovery.
 
 A task whose every entry matches, such as a rewrite of one document, still locks them all, because two rewrites of one file are where a merge can silently produce contradictory text. A mixed task touching that file is not held back by the rewrite, since it does not request the file. Leave build and CI definitions (`Makefile`, `.github/workflows/*.yml`) and code out of the list: they define the gates, so a bad merge there breaks every delivery. `[]` locks every entry, as before the setting existed. Owner pull admission still checks a remote claim's full declared footprint. The value is read when an Orbit process opens the workspace.
+
+### Revalidating an unlocked-path repair
+
+A conflict recovery, step recovery or final recovery that only reconciled prose need not rerun the whole required list. Set `workflow.unlocked_path_validation_commands` to the commands such a candidate needs instead, for example the docs and formatting gates:
+
+```toml
+[workflow]
+unlocked_path_validation_commands = ["make ci-fast"]
+```
+
+When required validation runs on a candidate, Orbit compares the candidate's tree with the last tree this run passed the full `workflow.required_validation_commands` list on. If every changed path matches `workflow.unlocked_context_paths`, only these commands run. Any other change runs the full list, for example a rebase onto a base that brought a code change, because that combination has never been validated. The decision rests on the tree diff alone, never on what an agent reports it changed.
+
+- Only a full pass becomes the comparison point. A narrowed pass does not, so successive prose repairs are always compared with code that passed the full list.
+- The comparison point lives in the memory of the Orbit process that ran the validation, where an agent cannot write it. A run resumed by another process, a claimed leaf, a changed required list and the first validation of a run all run the full list.
+- Each validation log and the step's output record `validation_scope`. It holds `kind` (`full` or `narrowed`), `reason`, the `tested_tree`, and, when trees were compared, the `validated_tree` and `validated_head` with the changed paths. A narrowed record also lists the `required_commands` it stood in for, so review and landing can audit the substitution. Completion evidence that requires the full list does not accept a narrowed pass.
+- Unset or `[]`, every candidate runs the full list, as before the setting existed.
+
+### Generated paths are regenerated, not merged
+
+`workflow.generated_paths` maps a generated file's path glob to the command that rebuilds it:
+
+```toml
+[workflow.generated_paths]
+"docs/INDEX.md" = "make docs-index"
+```
+
+When a stopped rebase conflicts on a matching path, the conflict recovery agent is told not to hand-merge it (its input lists it under `regenerated_paths`). After the agent has resolved the other files and exits, the host continuation takes the upstream side of the file, or the replayed side when upstream deleted it. It then runs each distinct command once in the checkout with the validation environment, for at most ten minutes, and stages the output with the rest of the resolution. A command that exits non-zero, times out, leaves conflict markers in the file, or changes HEAD, the branch or the index fails the repair. The stopped rebase then goes to the failure handoff as any refused continuation does. Other files the command rewrites join the continued commit. The certified continuation lists the regenerated paths. Default empty: every conflict is resolved by the agent.
 
 ### What `orbit init` seeds
 
@@ -582,7 +611,9 @@ Codex runs each tool command through the user's shell as a login shell (`zsh -lc
   if the base absorbs the candidate, `git_rebase` runs and attaches those
   commands before no-diff settlement instead. Standalone and later completion
   recovery keep their advisory validation. A new head invalidates old evidence
-  normally; this handoff adds no validation cache.
+  normally; this handoff adds no validation cache. A repair that changed
+  only unlocked paths may run a narrower list instead
+  ([revalidating an unlocked-path repair](#revalidating-an-unlocked-path-repair)).
 - A failure goes to step recovery, except a [missing tool](#missing-tools-block-the-task) or a failure the base shares ([held](#a-red-base-is-held-not-blocked) until the command passes on a new base tip). [Network-inconclusive](#network-flakes-are-rerun) failures are rerun first.
 - Distributed handoffs must carry exact-candidate validation matching the owner's list. A before-PR claim also freezes the list in the owner's review contract at admission; a later owner change refuses the handoff rather than replacing the snapshot.
 - A `no-diff-expected` task with a clean tree runs none of these commands, as the owner's pipelines skip `validate` for the tag. A claimed one hands off a `NoDiff` skip with no validation logs; the owner accepts it only while its own copy of the task keeps the tag. A clean tree that proves itself with `no-diff.json` or `already-landed.json`, and a tagged task that produces a diff, still validate.

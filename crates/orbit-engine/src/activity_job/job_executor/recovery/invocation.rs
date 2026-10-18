@@ -2,6 +2,7 @@
 use super::input::{bind_recovery_context, validate_bound_recovery_context};
 use super::observation::{RecoveryObservation, recovery_base_ref};
 use super::*;
+use crate::activity_job::workspace::generated_paths::conflicted_generated_paths;
 use crate::context::{
     STEP_RECOVERY_DECISION_SCHEMA_VERSION, StepRecoveryDecisionRequest, StepRecoveryDecisionSlot,
 };
@@ -115,6 +116,22 @@ pub(super) fn dispatch_recovery(
             serde_json::json!(conflicting_files),
         );
         object.insert("diagnostic".to_string(), Value::String(diagnostic.clone()));
+        // The host regenerates these after the leaf returns; the leaf leaves
+        // them alone [ORB-16784].
+        if recovery.name == PR_CONFLICT_RECOVERY_ACTIVITY {
+            object.insert(
+                "regenerated_paths".to_string(),
+                serde_json::json!(
+                    conflicted_generated_paths(ctx.host, conflicting_paths)
+                        .into_iter()
+                        .map(|generated| serde_json::json!({
+                            "path": generated.path,
+                            "command": generated.command,
+                        }))
+                        .collect::<Vec<_>>()
+                ),
+            );
+        }
     }
     if matches!(
         recovery.name.as_str(),

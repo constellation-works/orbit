@@ -32,6 +32,8 @@ pub(crate) type RuntimeConfigLoader =
 /// One-shot callback for the next orphaned-leaf reconciliation on a runtime.
 type OrphanReconcileCallback = Box<dyn FnOnce() + Send>;
 type OrphanReconcileHook = Arc<Mutex<Option<OrphanReconcileCallback>>>;
+pub(crate) type ValidatedTrees =
+    Arc<Mutex<std::collections::BTreeMap<String, orbit_engine::ValidatedTree>>>;
 
 #[derive(Clone)]
 pub struct OrbitRuntime {
@@ -105,6 +107,11 @@ pub struct OrbitRuntime {
     /// The pull-refill boundary test persists a graceful cancel there. Empty
     /// in production. Instance-scoped so concurrent tests cannot collide.
     orphan_reconcile_hook: OrphanReconcileHook,
+    /// The last tree each run passed full required validation on
+    /// [ORB-16784]. Held in this process only, where no agent can write it:
+    /// a run resumed by another process validates its next candidate in
+    /// full. Shared by clones.
+    pub(crate) validated_trees: ValidatedTrees,
     /// Test-only seam for approve/start/reject: after the locked `get_task`,
     /// mutate the named task so compare-and-set can observe a lost race.
     /// Instance-scoped so concurrent `cargo test` threads cannot collide on

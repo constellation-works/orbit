@@ -17,15 +17,15 @@ pub(crate) use env::{ProvenanceEnv, provenance_env};
 pub use hosts::NullRuntimeHost;
 pub use hosts::{
     ClaimExecutionContext, CrewConfig, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
-    FinalRecoveryApplication, FinalRecoveryApplied, HandoffLandingContext, HandoffLandingStep,
-    HandoffLandingUpdate, PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun,
-    PrAutoFixAdmission, PrAutoFixRequest, PrConfig, RebaseRecoveryAttemptScope,
+    FinalRecoveryApplication, FinalRecoveryApplied, GeneratedPath, HandoffLandingContext,
+    HandoffLandingStep, HandoffLandingUpdate, PLUGIN_BROKER_ENV, PluginBrokerHandle,
+    PluginBrokerRun, PrAutoFixAdmission, PrAutoFixRequest, PrConfig, RebaseRecoveryAttemptScope,
     ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
     ReviewReportCorrectionRequest, ReviewerInvocationRequest, RuntimeHost,
     STEP_RECOVERY_DECISION_SCHEMA_VERSION, ScratchGcEntry, ScratchGcReport, SteeringGateReading,
     SteeringRoundAdmission, StepRecoveryAdmission, StepRecoveryDecisionRead,
     StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, StepRecoveryVerdict, TaskActivityUpdate,
-    TaskAutomationUpdate, WorktreeGcTaskLookup,
+    TaskAutomationUpdate, UnlockedPathValidation, ValidatedTree, WorktreeGcTaskLookup,
 };
 pub use outcome::{
     WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT, baseline_red_hold_update,

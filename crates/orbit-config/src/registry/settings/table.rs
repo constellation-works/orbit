@@ -17,11 +17,12 @@ use super::resolve::{
     DEFAULT_STORE_WARN_BYTES, DEFAULT_WORKER_MEMORY_HIGH, DEFAULT_WORKER_MEMORY_MAX,
     default_log_rotation, default_pass_list, normalize_logins, normalize_pass_list, read_optional,
     resolve_agent_stall_minutes, resolve_bounded_minutes, resolve_build_output_env, resolve_choice,
-    resolve_cpu_light_leaves, resolve_distributed_completion, resolve_host_shutdown_hold_minutes,
-    resolve_machine_id, resolve_machine_name, resolve_material_fields, resolve_memory_limit,
-    resolve_mid_run_steering_max_rounds, resolve_non_empty, resolve_optional_choice,
-    resolve_optional_non_empty, resolve_percent, resolve_reclaim, resolve_retention_days,
-    resolve_task_prefix, resolve_unlocked_context_paths, resolve_validation_path_mode,
+    resolve_cpu_light_leaves, resolve_distributed_completion, resolve_generated_paths,
+    resolve_host_shutdown_hold_minutes, resolve_machine_id, resolve_machine_name,
+    resolve_material_fields, resolve_memory_limit, resolve_mid_run_steering_max_rounds,
+    resolve_non_empty, resolve_optional_choice, resolve_optional_non_empty, resolve_percent,
+    resolve_reclaim, resolve_retention_days, resolve_task_prefix, resolve_unlocked_context_paths,
+    resolve_unlocked_path_validation_commands, resolve_validation_path_mode,
     resolve_worker_tasks_max,
 };
 use crate::memory_limit::MemoryLimit;
@@ -497,7 +498,7 @@ define_config_settings! {
         key: "review.baseline_commands", value_type: "array<string>",
         description: "Commands before-PR review settlement may rerun on the host to confirm a reviewer's claim that a failed required check fails the same way on the pinned base; `workflow.required_validation_commands` always count. A confirmed claim holds the task in the backlog until the base passes instead of blocking it. When the host refutes the claim, its own run on the final candidate decides: a pass with no open finding counts the check as passed and the certificate records the override, and a failure while the base passes rejects the review. A claim about any other command cannot be confirmed and settles the review incomplete. A listed command's failure cannot be recorded as a diagnostic: it needs a passing record or a confirmed claim. Captured when a delivery or claim is admitted. With the required commands, these are also the gates an implementer may hand off when its sandbox deferred only Bubblewrap tests; validation then runs such a gate outside the agent sandbox before delivery. Default empty.",
         section: ConfigSection::Review, order: 30,
-        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default().into_iter().map(|command| command.trim().to_string()).filter(|command| !command.is_empty()).collect::<Vec<_>>()),
+        resolve: resolve_unlocked_path_validation_commands,
     },
     runtime_log_max_file_mb: u64 => u64 {
         key: "runtime.log_max_file_mb", value_type: "integer",
@@ -552,6 +553,12 @@ define_config_settings! {
         description: "Weighted crew pool the final-recovery activity draws once per run after step recovery is exhausted; entries are `name` or `name:weight` (all bare or all weighted). Unset defaults to [\"sol:100\", \"opus:20\"], keeping only the members the crew registry defines; [] disables final recovery.",
         section: ConfigSection::Delivery, order: 105,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw),
+    },
+    workflow_generated_paths: BTreeMap<String, String> => BTreeMap<String, String> {
+        key: "workflow.generated_paths", value_type: "table<string,string>",
+        description: "Generated files and the command that regenerates each, keyed by relative path glob (for example `\"docs/INDEX.md\" = \"make docs-index\"`). Conflict recovery never hand-merges a conflicting path that matches: the host takes one side, runs its command in the checkout and stages the output; a command that fails or leaves conflict markers fails the repair. Default empty.",
+        section: ConfigSection::Delivery, order: 69,
+        resolve: resolve_generated_paths,
     },
     workflow_hard_complexity_crews: Vec<String> => Vec<String> {
         key: "workflow.hard_complexity_crews", value_type: "array<string>",
@@ -738,6 +745,12 @@ define_config_settings! {
         description: "Relative path globs (`*` within a component, `**` across components) whose `context_files` entries take no context lock: the task still receives them as context, but admission, readiness and lock reservations skip them. A task whose every entry matches still locks them all. Default [\"**/*.md\"]; [] locks every entry.",
         section: ConfigSection::Delivery, order: 67,
         resolve: resolve_unlocked_context_paths,
+    },
+    workflow_unlocked_path_validation_commands: Vec<String> => Vec<String> {
+        key: "workflow.unlocked_path_validation_commands", value_type: "array<string>",
+        description: "Commands that replace `workflow.required_validation_commands` for a candidate whose tree differs from the last tree this run passed full required validation on only in paths matching `workflow.unlocked_context_paths` (a conflict or recovery repair that touched only prose, on an unchanged code base). Any other difference, including a rebase onto a base that changed code, runs the full list. Empty (default) always runs the full list.",
+        section: ConfigSection::Delivery, order: 68,
+        resolve: resolve_unlocked_path_validation_commands,
     },
     workflow_validation_env_login_shell: bool => bool {
         key: "workflow.validation_env.login_shell", value_type: "bool",

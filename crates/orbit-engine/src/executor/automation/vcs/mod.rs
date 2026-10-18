@@ -34,6 +34,7 @@ mod required_evidence;
 mod resume;
 pub mod review_gate;
 mod scratch_target;
+mod validation_scope;
 mod worktree;
 
 #[cfg(test)]
