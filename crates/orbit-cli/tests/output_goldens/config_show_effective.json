@@ -539,6 +539,12 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.unlocked_context_paths": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.validation_env.build_output_env": {
       "scope": "built-in",
       "state": "default",

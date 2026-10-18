@@ -31,6 +31,20 @@ pub(super) fn resolve_reclaim(raw: Option<Vec<String>>) -> Result<Vec<String>, O
     Ok(patterns)
 }
 
+/// `workflow.unlocked_context_paths`: unset is Markdown anywhere in the
+/// workspace; `[]` locks every declared entry.
+pub(super) fn resolve_unlocked_context_paths(
+    raw: Option<Vec<String>>,
+) -> Result<Vec<String>, OrbitError> {
+    let patterns = raw.unwrap_or_else(|| vec!["**/*.md".to_string()]);
+    for pattern in &patterns {
+        orbit_common::fs::path_glob::RelativePathGlob::new(pattern).map_err(|error| {
+            OrbitError::InvalidInput(format!("workflow.unlocked_context_paths: {error}"))
+        })?;
+    }
+    Ok(patterns)
+}
+
 /// Built-in `workflow.final_recovery_crews`: the strongest reasoning crews, so
 /// the last automated look at a failed task is the most capable one.
 pub(crate) const DEFAULT_FINAL_RECOVERY_CREWS: &[&str] = &["sol:100", "opus:20"];

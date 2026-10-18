@@ -62,6 +62,7 @@ mod replay_crew;
 mod reservation_grants;
 mod submission_notices;
 mod unknown_footprint;
+mod unlocked_context;
 
 /// Run `test` alone in a child of this binary with inherited Orbit authority
 /// cleared and a disposable `HOME`; `true` inside that child. The parent

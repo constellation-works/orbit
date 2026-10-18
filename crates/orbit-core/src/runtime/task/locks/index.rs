@@ -13,6 +13,7 @@ use orbit_types::task::{
 };
 use serde::Serialize;
 
+use super::unlocked::UnlockedContextPaths;
 use crate::OrbitRuntime;
 use crate::runtime::task::{DeclaredContextFiles, declared_context_files};
 
@@ -31,14 +32,21 @@ pub(super) fn context_lock_exempt(tags: &[String]) -> bool {
 /// Every task — leaf, child, or `epic`-tagged root — reserves exactly what it
 /// declares. Hierarchy is metadata: a parent never inherits a child's
 /// footprint, so conflict admission excludes only the work that genuinely
-/// overlaps [ORB-12491].
-pub(crate) fn lock_context_files_for_task(task: &Task, workspace_root: &Path) -> Vec<String> {
-    declared_context_files(&task.context_files, workspace_root)
-        .retained
-        .into_iter()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
+/// overlaps [ORB-12491]. Declarations `unlocked` matches are left out unless
+/// the task declares nothing else ([`UnlockedContextPaths::lock_surface`]).
+pub(crate) fn lock_context_files_for_task(
+    task: &Task,
+    workspace_root: &Path,
+    unlocked: &UnlockedContextPaths,
+) -> Vec<String> {
+    unlocked.lock_surface(
+        declared_context_files(&task.context_files, workspace_root)
+            .retained
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+    )
 }
 
 /// One requested selector of a candidate that overlaps a selector an
@@ -62,11 +70,12 @@ pub(crate) struct TaskLockOverlap {
 pub(crate) fn active_task_lock_holders<'a>(
     tasks: impl IntoIterator<Item = &'a Task>,
     workspace_root: &Path,
+    unlocked: &UnlockedContextPaths,
 ) -> BTreeMap<String, Vec<String>> {
     let mut holders: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for task in tasks {
         if holds_context_lock(task.status, &task.tags) {
-            for file in lock_context_files_for_task(task, workspace_root) {
+            for file in lock_context_files_for_task(task, workspace_root, unlocked) {
                 holders.entry(file).or_default().push(task.id.clone());
             }
         }
@@ -97,9 +106,10 @@ pub(crate) fn task_lock_overlaps(
     task: &Task,
     holders: &OverlapIndex<&[String]>,
     workspace_root: &Path,
+    unlocked: &UnlockedContextPaths,
 ) -> Vec<TaskLockOverlap> {
     let mut conflicts = Vec::new();
-    for requested_file in lock_context_files_for_task(task, workspace_root) {
+    for requested_file in lock_context_files_for_task(task, workspace_root, unlocked) {
         for (_, locking_task_ids) in holders.overlapping(&requested_file) {
             for locking_task_id in locking_task_ids.iter() {
                 conflicts.push(TaskLockOverlap {
@@ -126,6 +136,8 @@ pub(crate) struct TaskLockIndex {
     /// see a root's *descendants* — so the rule is answered once at load rather
     /// than re-read per reservation.
     inherited_only_epic_root_ids: BTreeSet<String>,
+    /// `workflow.unlocked_context_paths` as the runtime admitted it.
+    unlocked: UnlockedContextPaths,
 }
 
 impl TaskLockIndex {
@@ -136,10 +148,18 @@ impl TaskLockIndex {
         let envelopes = runtime
             .task_candidates(&Default::default(), usize::MAX)?
             .items;
-        Ok(Self::from_envelopes(envelopes, requested_task_ids))
+        Ok(Self::from_envelopes(
+            envelopes,
+            requested_task_ids,
+            runtime.unlocked_context_paths().clone(),
+        ))
     }
 
-    fn from_envelopes(envelopes: Vec<TaskEnvelopeV2>, requested_task_ids: &[String]) -> Self {
+    fn from_envelopes(
+        envelopes: Vec<TaskEnvelopeV2>,
+        requested_task_ids: &[String],
+        unlocked: UnlockedContextPaths,
+    ) -> Self {
         let all_tasks = envelopes
             .into_iter()
             .map(|task| (task.id.clone(), task))
@@ -180,6 +200,7 @@ impl TaskLockIndex {
         Self {
             tasks,
             inherited_only_epic_root_ids,
+            unlocked,
         }
     }
 
@@ -232,8 +253,9 @@ impl TaskLockIndex {
         self.declared_lock_surface(task, workspace_root).retained
     }
 
-    /// The canonical lock surface for `task` plus the declarations that could
-    /// not be canonicalized at all.
+    /// The canonical lock surface for `task`, less what
+    /// `workflow.unlocked_context_paths` leaves unlocked, plus the
+    /// declarations that could not be canonicalized at all.
     ///
     /// Invalid entries are the only ones a lock surface loses, and they are
     /// reported rather than dropped in silence: a task whose every declaration
@@ -244,12 +266,14 @@ impl TaskLockIndex {
         workspace_root: &Path,
     ) -> DeclaredContextFiles {
         let mut declared = declared_context_files(&task.context_files, workspace_root);
-        declared.retained = declared
-            .retained
-            .into_iter()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
+        declared.retained = self.unlocked.lock_surface(
+            declared
+                .retained
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+        );
         declared.invalid = declared
             .invalid
             .into_iter()

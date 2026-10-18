@@ -37,7 +37,7 @@ use serde_json::{Value, json};
 use super::claim_holders::claim_detail;
 use super::gap_fit::GapFit;
 use super::unknown_footprint::{FootprintGuard, FootprintWave};
-use crate::runtime::task::locks::lock_context_files_for_task;
+use crate::runtime::task::locks::{UnlockedContextPaths, lock_context_files_for_task};
 
 /// Where a blocking footprint came from, so a deferral says whether the lock is
 /// genuinely held or merely planned.
@@ -191,9 +191,10 @@ impl AdmissionSelection {
         task: &Task,
         claim: &ExecutionClaim,
         workspace_root: &Path,
+        unlocked: &UnlockedContextPaths,
     ) {
         self.selected.retain(|selected| *selected != task.id);
-        let mut conflicts = lock_context_files_for_task(task, workspace_root)
+        let mut conflicts = lock_context_files_for_task(task, workspace_root, unlocked)
             .into_iter()
             .flat_map(|requested_selector| {
                 claim
@@ -243,6 +244,7 @@ impl AdmissionHolders {
         live_claims: &BTreeSet<String>,
         task_lookup: &BTreeMap<String, Task>,
         workspace_root: &Path,
+        unlocked: &UnlockedContextPaths,
     ) -> Self {
         let mut claimed: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for task_id in live_claims {
@@ -252,7 +254,7 @@ impl AdmissionHolders {
             if matches!(task.status, TaskStatus::InProgress | TaskStatus::Review) {
                 continue;
             }
-            for selector in lock_context_files_for_task(task, workspace_root) {
+            for selector in lock_context_files_for_task(task, workspace_root, unlocked) {
                 claimed.entry(selector).or_default().push(task.id.clone());
             }
         }
@@ -314,10 +316,12 @@ fn index_holders(holders: &BTreeMap<String, Vec<String>>) -> OverlapIndex<Vec<St
 /// With `gap_fit`, a candidate that passed every other check must also fit
 /// under the host load forecast; one that does not is left out of the wave
 /// and recorded by the gap fit, not in [`AdmissionSelection::deferred`].
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn select_admissions(
     ordered_candidates: &[String],
     task_lookup: &BTreeMap<String, Task>,
     workspace_root: &Path,
+    unlocked: &UnlockedContextPaths,
     holders: &AdmissionHolders,
     free_slots: usize,
     footprint: FootprintGuard<'_>,
@@ -347,7 +351,7 @@ pub(crate) fn select_admissions(
             continue;
         };
 
-        let selectors = lock_context_files_for_task(task, workspace_root);
+        let selectors = lock_context_files_for_task(task, workspace_root, unlocked);
         let edits = !selectors.is_empty();
         if let Some(deferred) = footprint.check(task, edits) {
             selection.deferred.push(deferred);

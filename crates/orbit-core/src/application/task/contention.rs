@@ -89,12 +89,13 @@ impl OrbitRuntime {
             .map(|task| (task.id.clone(), task))
             .collect();
         let repo_root = self.paths().repo_root.as_path();
+        let unlocked = self.unlocked_context_paths();
         let surfaces: Vec<LockSurface> = lookup
             .values()
             .filter(|task| statuses.contains(&task.status))
             .map(|task| LockSurface {
                 task_id: task.id.clone(),
-                selectors: lock_context_files_for_task(task, repo_root),
+                selectors: lock_context_files_for_task(task, repo_root, unlocked),
             })
             .collect();
         Ok(compute_contention(&surfaces))

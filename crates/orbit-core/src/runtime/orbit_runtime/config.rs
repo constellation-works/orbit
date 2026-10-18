@@ -164,6 +164,14 @@ impl OrbitRuntime {
         self.current_mid_run_steering()
     }
 
+    /// `workflow.unlocked_context_paths` as admitted: the declared context
+    /// a task's lock surface leaves out.
+    pub(crate) fn unlocked_context_paths(
+        &self,
+    ) -> &crate::runtime::task::locks::UnlockedContextPaths {
+        self.context.settings().unlocked_context_paths()
+    }
+
     /// `[workflow.tag_instructions]` as admitted.
     pub(crate) fn tag_instruction_settings(&self) -> &orbit_config::TagInstructionSettings {
         self.context.settings().tag_instructions()

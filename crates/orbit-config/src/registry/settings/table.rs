@@ -21,7 +21,8 @@ use super::resolve::{
     resolve_machine_id, resolve_machine_name, resolve_material_fields, resolve_memory_limit,
     resolve_mid_run_steering_max_rounds, resolve_non_empty, resolve_optional_choice,
     resolve_optional_non_empty, resolve_percent, resolve_reclaim, resolve_retention_days,
-    resolve_task_prefix, resolve_validation_path_mode, resolve_worker_tasks_max,
+    resolve_task_prefix, resolve_unlocked_context_paths, resolve_validation_path_mode,
+    resolve_worker_tasks_max,
 };
 use crate::memory_limit::MemoryLimit;
 use crate::operation;
@@ -731,6 +732,12 @@ define_config_settings! {
         description: "Whether a branch-head move makes an accepted task-pilot assessment stale: ignore (default), context_files (only when the head changed a path the task's selectors name) or any. A routine's trigger.state.freshness overrides it.",
         section: ConfigSection::Delivery, order: 120,
         resolve: |raw: Option<SourceSensitivity>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
+    },
+    workflow_unlocked_context_paths: Vec<String> => Vec<String> {
+        key: "workflow.unlocked_context_paths", value_type: "array<string>",
+        description: "Relative path globs (`*` within a component, `**` across components) whose `context_files` entries take no context lock: the task still receives them as context, but admission, readiness and lock reservations skip them. A task whose every entry matches still locks them all. Default [\"**/*.md\"]; [] locks every entry.",
+        section: ConfigSection::Delivery, order: 67,
+        resolve: resolve_unlocked_context_paths,
     },
     workflow_validation_env_login_shell: bool => bool {
         key: "workflow.validation_env.login_shell", value_type: "bool",

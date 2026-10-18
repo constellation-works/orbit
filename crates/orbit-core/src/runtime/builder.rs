@@ -355,6 +355,9 @@ pub(crate) fn build_context_from_roots(
             runtime_config.snapshot.worktree_parked_reclaim_after_hours,
             runtime_config.snapshot.mid_run_steering(),
             runtime_config.tag_instructions.clone(),
+            crate::runtime::task::locks::UnlockedContextPaths::new(
+                &runtime_config.snapshot.workflow_unlocked_context_paths,
+            )?,
         ),
     ))
 }

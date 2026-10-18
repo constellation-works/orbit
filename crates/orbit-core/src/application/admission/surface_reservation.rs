@@ -30,7 +30,7 @@ use super::backlog_exclusion::{
     BacklogTaskConflict, BacklogTaskExclusion, BacklogTaskExclusionReason,
 };
 use crate::runtime::task::locks::{
-    lock_context_files_for_task, lock_holder_index, task_lock_overlaps,
+    UnlockedContextPaths, lock_context_files_for_task, lock_holder_index, task_lock_overlaps,
 };
 
 /// How many lock-blocked tasks may reserve their surface in one pass. The
@@ -63,6 +63,7 @@ pub(super) fn withhold_reserved_surfaces<'a>(
     reserving: &[&Task],
     expiring_batches: &BTreeMap<String, DateTime<Utc>>,
     workspace_root: &Path,
+    unlocked: &UnlockedContextPaths,
     excluded: &mut Vec<BacklogTaskExclusion>,
 ) -> Vec<&'a Task> {
     if reserving.is_empty() {
@@ -70,7 +71,7 @@ pub(super) fn withhold_reserved_surfaces<'a>(
     }
     let mut reserved: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for task in reserving {
-        for selector in lock_context_files_for_task(task, workspace_root) {
+        for selector in lock_context_files_for_task(task, workspace_root, unlocked) {
             reserved.entry(selector).or_default().push(task.id.clone());
         }
     }
@@ -83,7 +84,7 @@ pub(super) fn withhold_reserved_surfaces<'a>(
     let mut kept = Vec::with_capacity(backlog.len());
     for task in backlog {
         let conflicts: Vec<BacklogTaskConflict> =
-            task_lock_overlaps(task, &reserved_index, workspace_root)
+            task_lock_overlaps(task, &reserved_index, workspace_root, unlocked)
                 .into_iter()
                 .filter(|overlap| {
                     reserving_by_id

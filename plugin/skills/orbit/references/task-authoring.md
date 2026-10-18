@@ -200,9 +200,11 @@ received.
 modification and deletion targets that are a substantive part of the change
 inside this workspace using `file:`, `dir:` or `symbol:path#name:kind`. Omit
 read-only files, tests and fixtures only consulted, and shared reference docs
-that at most need an incidental line update. Do not list `docs/CONFIG.md`;
-the implementer must still update affected docs in the same PR, and auto-fix
-resolves textual merges of incidental edits. Put supporting evidence paths
+that at most need an incidental line update. An entry matching
+`workflow.unlocked_context_paths` (default every Markdown file) stays in the
+task's context but takes no lock, unless every entry matches; the implementer
+must still update affected docs in the same PR, and auto-fix resolves textual
+merges of incidental edits. Put supporting evidence paths
 in the description instead of reserving locks for them. Prefer
 precise verified files/symbols; a directory is appropriate for a genuinely owned
 area, not a shortcut for all possibly relevant code.

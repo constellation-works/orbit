@@ -131,8 +131,12 @@ pub(crate) fn list_backlog_tasks(
             let Some(task) = snapshot.task_lookup.get(task_id) else {
                 continue;
             };
-            let edits =
-                !lock_context_files_for_task(task, runtime.paths().repo_root.as_path()).is_empty();
+            let edits = !lock_context_files_for_task(
+                task,
+                runtime.paths().repo_root.as_path(),
+                runtime.unlocked_context_paths(),
+            )
+            .is_empty();
             match wave.awaiting(task).or_else(|| wave.check(task, edits)) {
                 Some(deferred) => snapshot.excluded.push(footprint_exclusion(deferred)),
                 None => {

@@ -95,8 +95,11 @@ pub(super) fn backlog_snapshot_in_mode(
     // directly, rather than through the backlog, consult it themselves.
     // [ORB-14247] `no-diff-expected` is omitted from this map. The claim
     // journal still fences that task's own writes; it just does not exclude
-    // overlapping backlog work.
-    let lock_holders = active_task_lock_holders(task_lookup.values(), workspace_root);
+    // overlapping backlog work. Entries `workflow.unlocked_context_paths`
+    // leaves unlocked are left out here as for any holder, though the claim
+    // froze them.
+    let unlocked = runtime.unlocked_context_paths();
+    let lock_holders = active_task_lock_holders(task_lookup.values(), workspace_root, unlocked);
     // `task_lookup` iterates in task-ID order rather than the store's
     // created-at order; `sort_tasks_for_automatic_dispatch` is a total order
     // ending in the task ID, so the dispatch sequence is unchanged.
@@ -380,7 +383,7 @@ pub(super) fn backlog_snapshot_in_mode(
         let direct_conflicts: BTreeMap<String, Vec<BacklogTaskConflict>> = backlog
             .iter()
             .filter_map(|task| {
-                let conflicts = task_lock_overlaps(task, &holder_index, workspace_root);
+                let conflicts = task_lock_overlaps(task, &holder_index, workspace_root, unlocked);
                 (!conflicts.is_empty()).then(|| (task.id.clone(), conflicts))
             })
             .collect();
@@ -433,6 +436,7 @@ pub(super) fn backlog_snapshot_in_mode(
                 &reserving,
                 &expiring_batches,
                 workspace_root,
+                unlocked,
                 &mut excluded,
             );
         }

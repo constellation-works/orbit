@@ -265,6 +265,7 @@ pub fn explain_workspace_auto_readiness(
         &claimed,
         &snapshot.task_lookup,
         workspace_root,
+        runtime.unlocked_context_paths(),
     );
     let footprint = FootprintGuard {
         enabled: max_active_leaf_runs > 1,
@@ -276,6 +277,7 @@ pub fn explain_workspace_auto_readiness(
         examined,
         &snapshot.task_lookup,
         workspace_root,
+        runtime.unlocked_context_paths(),
         &holders,
         free_slots,
         footprint,
