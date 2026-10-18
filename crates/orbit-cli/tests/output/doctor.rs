@@ -1290,8 +1290,38 @@ fn doctor_skips_a_crew_whose_executor_host_os_excludes_this_host() {
     );
 }
 
+/// Point `provider`'s seeded executor at a launcher that cannot exist: an
+/// absolute path under the disposable fixture root. An absolute command is
+/// looked up only at that path, never on `PATH` or in the system prefixes, so
+/// no installed CLI can satisfy it. Every other seeded field, including
+/// `host_os`, stays as shipped. Returns the configured command.
+fn pin_missing_launcher(fixture: &WorkCheckout, provider: &str) -> String {
+    let launcher = fixture
+        .temp
+        .path()
+        .join("absent-launchers")
+        .join(provider)
+        .display()
+        .to_string();
+    let path = fixture
+        .home
+        .join(".orbit/resources/executors")
+        .join(format!("{provider}.yaml"));
+    let mut executor: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&path).expect("seeded executor"))
+            .expect("seeded executor YAML");
+    executor["spec"]["command"] = serde_yaml::Value::String(launcher.clone());
+    fs::write(
+        &path,
+        serde_yaml::to_string(&executor).expect("pinned executor YAML"),
+    )
+    .expect("pinned executor");
+    launcher
+}
+
 /// The complement: on macOS, where Muse runs, a missing CLI is still an error
-/// with install advice. PATH omits the CLI so the check cannot find it.
+/// with install advice. Its launcher is pinned to an absent path under the
+/// fixture root, so an installed Muse in a system prefix cannot satisfy it.
 #[cfg(target_os = "macos")]
 #[test]
 fn doctor_keeps_a_missing_cli_an_error_on_a_host_the_executor_supports() {
@@ -1301,6 +1331,7 @@ fn doctor_keeps_a_missing_cli_an_error_on_a_host_the_executor_supports() {
         return;
     }
     let fixture = routed_crew_fixture("muse-wonder", "muse");
+    let launcher = pin_missing_launcher(&fixture, "muse");
     let output = command(&fixture)
         .env("PATH", fixture.temp.path())
         .args(["doctor", "--json"])
@@ -1312,19 +1343,20 @@ fn doctor_keeps_a_missing_cli_an_error_on_a_host_the_executor_supports() {
     assert!(
         crew["message"]
             .as_str()
-            .is_some_and(|message| message.contains("was not found")),
+            .is_some_and(|message| message.contains(&format!("CLI '{launcher}' was not found"))),
         "{crew}"
     );
     assert!(
-        crew["remediation"]
-            .as_str()
-            .is_some_and(|remediation| remediation.contains("Install the 'muse' CLI")),
+        crew["remediation"].as_str().is_some_and(
+            |remediation| remediation.contains(&format!("Install the '{launcher}' CLI"))
+        ),
         "{crew}"
     );
 }
 
 /// An unrestricted executor (no `host_os`) keeps its missing-CLI error on every
-/// host. PATH omits the CLI so the check cannot find it.
+/// host. Its launcher is pinned to an absent path under the fixture root, so no
+/// installed CLI or `PATH` entry can satisfy it.
 #[test]
 fn doctor_keeps_a_missing_cli_an_error_for_an_unrestricted_executor() {
     if crate::isolated_test::run_in_child(
@@ -1333,6 +1365,7 @@ fn doctor_keeps_a_missing_cli_an_error_for_an_unrestricted_executor() {
         return;
     }
     let fixture = routed_crew_fixture("codex-wonder", "codex");
+    let launcher = pin_missing_launcher(&fixture, "codex");
     let output = command(&fixture)
         .env("PATH", fixture.temp.path())
         .args(["doctor", "--json"])
@@ -1344,13 +1377,13 @@ fn doctor_keeps_a_missing_cli_an_error_for_an_unrestricted_executor() {
     assert!(
         crew["message"]
             .as_str()
-            .is_some_and(|message| message.contains("was not found")),
+            .is_some_and(|message| message.contains(&format!("CLI '{launcher}' was not found"))),
         "{crew}"
     );
     assert!(
-        crew["remediation"]
-            .as_str()
-            .is_some_and(|remediation| remediation.contains("Install the 'codex' CLI")),
+        crew["remediation"].as_str().is_some_and(
+            |remediation| remediation.contains(&format!("Install the '{launcher}' CLI"))
+        ),
         "{crew}"
     );
 }
