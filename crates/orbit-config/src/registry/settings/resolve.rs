@@ -190,6 +190,26 @@ pub(super) fn resolve_host_shutdown_hold_minutes(raw: Option<u32>) -> Result<u32
     }
 }
 
+/// Default `workflow.mid_run_steering.max_rounds`.
+const DEFAULT_MID_RUN_STEERING_MAX_ROUNDS: u8 = 2;
+
+/// Each steering round re-dispatches an agent step, so a run may spend at
+/// most this many before it holds instead.
+const MAX_MID_RUN_STEERING_ROUNDS: u8 = 10;
+
+pub(super) fn resolve_mid_run_steering_max_rounds(raw: Option<u8>) -> Result<u8, OrbitError> {
+    match raw {
+        Some(value) if value == 0 || value > MAX_MID_RUN_STEERING_ROUNDS => {
+            Err(OrbitError::InvalidInput(format!(
+                "workflow.mid_run_steering.max_rounds has invalid value {value}; expected \
+                 1..={MAX_MID_RUN_STEERING_ROUNDS}"
+            )))
+        }
+        Some(value) => Ok(value),
+        None => Ok(DEFAULT_MID_RUN_STEERING_MAX_ROUNDS),
+    }
+}
+
 pub(super) fn resolve_machine_id(raw: Option<String>) -> Result<Option<String>, OrbitError> {
     let Some(value) = resolve_optional_non_empty(raw, "machine.id")? else {
         return Ok(None);

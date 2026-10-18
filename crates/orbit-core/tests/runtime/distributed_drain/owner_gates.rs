@@ -41,7 +41,7 @@ fn replica_gates() -> ValidationGates {
 /// validation, with or without the pipeline's `final_validation` input.
 fn final_validation_commands(host: &OrbitRuntime, task: &str, final_validation: bool) -> Value {
     let input = json!({"task_id": task, "final_validation": final_validation});
-    RuntimeHost::task_context_for_agent_input(host, &input)
+    RuntimeHost::task_context_for_agent_input(host, "jrun-envelope", "implement", &input)
         .expect("the envelope builds")
         .expect("a task envelope")["final_validation_commands"]
         .clone()

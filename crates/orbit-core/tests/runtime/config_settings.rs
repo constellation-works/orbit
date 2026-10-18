@@ -75,6 +75,62 @@ fn reclaim_config_defaults_replaces_layers_and_refuses_unconfined_patterns() {
     assert!(load().is_err());
 }
 
+/// Mid-run steering is off with two rounds unless a layer says otherwise; each
+/// key resolves through the layers on its own, and a value outside its range
+/// or of the wrong type fails the load naming the key.
+fn mid_run_steering_defaults_off_layers_per_key_and_refuses_invalid_values() {
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let roots = orbit_config::ConfigRoots::new(&global, &workspace);
+    let load = || orbit_config::ResolvedConfig::load(&roots);
+    let steering = |config: orbit_config::ResolvedConfig| config.snapshot.mid_run_steering();
+    assert_eq!(
+        steering(load().unwrap()),
+        orbit_config::MidRunSteeringSettings {
+            enabled: false,
+            max_rounds: 2
+        }
+    );
+    std::fs::write(
+        global.join("config.toml"),
+        "[workflow.mid_run_steering]\nenabled = true\nmax_rounds = 4\n",
+    )
+    .unwrap();
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[workflow.mid_run_steering]\nmax_rounds = 1\n",
+    )
+    .unwrap();
+    assert_eq!(
+        steering(load().unwrap()),
+        orbit_config::MidRunSteeringSettings {
+            enabled: true,
+            max_rounds: 1
+        },
+        "the workspace's round budget wins; the global enable still applies"
+    );
+    for (body, key) in [
+        ("max_rounds = 0", "workflow.mid_run_steering.max_rounds"),
+        ("max_rounds = 11", "workflow.mid_run_steering.max_rounds"),
+        (
+            "max_rounds = \"two\"",
+            "workflow.mid_run_steering.max_rounds",
+        ),
+        ("enabled = \"yes\"", "workflow.mid_run_steering.enabled"),
+    ] {
+        std::fs::write(
+            workspace.join("config.toml"),
+            format!("[workflow.mid_run_steering]\n{body}\n"),
+        )
+        .unwrap();
+        let error = load().unwrap_err().to_string();
+        assert!(error.contains(key), "{body}: {error}");
+    }
+}
+
 fn settings_and_crew_writes_survive_a_fully_malformed_auto_task_listing() {
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
@@ -645,6 +701,7 @@ fn fields(value: Value) -> Map<String, Value> {
 crate::scenario_table!(
     reclaim_config_defaults_replaces_layers_and_refuses_unconfined_patterns_scenarios,
     reclaim_config_defaults_replaces_layers_and_refuses_unconfined_patterns,
+    mid_run_steering_defaults_off_layers_per_key_and_refuses_invalid_values,
     settings_and_crew_writes_survive_a_fully_malformed_auto_task_listing,
     global_writes_that_break_the_workspace_layered_load_are_refused_unchanged,
     settings_rows_report_built_in_fallback_equality_and_global_reach,

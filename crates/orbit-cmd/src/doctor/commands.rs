@@ -218,6 +218,9 @@ pub(crate) const WORKSPACE_PROBES: &[DoctorProbe] = &[
     DoctorProbe::one("validation-env", |runtime, _| {
         doctor_check_validation_env(runtime)
     }),
+    DoctorProbe::one("mid-run-steering", |runtime, _| {
+        doctor_check_mid_run_steering(runtime)
+    }),
     DoctorProbe::one("orphan-task-stores", |runtime, _| {
         doctor_check_orphan_task_stores(runtime)
     }),

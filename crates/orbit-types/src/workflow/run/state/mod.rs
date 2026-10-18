@@ -6,6 +6,7 @@ mod failure;
 mod pipeline;
 mod pipeline_serialization;
 mod recovery;
+mod steering;
 
 pub use drain::{
     CrewExclusion, CrewExclusionSource, DrainAdmissionForecast, DrainAdmissionPass,
@@ -31,3 +32,4 @@ pub use recovery::{
     ActivityCrewDraw, ActivityCrewPoolMember, FailureActivityCheckpoint, FinalRecoveryCheckpoint,
     FinalRecoveryKey, FinalRecoveryObservedTask, FinalRecoveryRepairCommit, FinalRecoveryResume,
 };
+pub use steering::{CommentLogMark, SteeringWatermark, StepSteeringSnapshot};

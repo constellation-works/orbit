@@ -16,7 +16,7 @@ related_artifacts: [ORB-16577, ORB-10499, ORB-12467, ORB-16572]
 
 # Mid-Run Operator Steering — Design
 
-This doc describes the proposed design; the feature is not implemented. It covers the watermark, delivery at safe points, the promotion gate, configuration and authority. It deliberately leaves provider-native mid-session injection, urgency classes that interrupt a running step, and dashboard treatment to [3_vision.md](./3_vision.md). Executor and pipeline vocabulary follows [activity-job](../activity-job/); compatibility obligations follow [state-compatibility](../state-compatibility/).
+This doc describes the proposed design. Only the configuration keys (section 5) and the snapshot watermark (section 1) are implemented; delivery at safe points and the promotion gate are not. It covers the watermark, delivery at safe points, the promotion gate, configuration and authority. It deliberately leaves provider-native mid-session injection, urgency classes that interrupt a running step, and dashboard treatment to [3_vision.md](./3_vision.md). Executor and pipeline vocabulary follows [activity-job](../activity-job/); compatibility obligations follow [state-compatibility](../state-compatibility/).
 
 Steering is additive and default off. With `workflow.mid_run_steering.enabled = false` (the built-in default), prompt construction, task records and every pipeline checkpoint behave exactly as today. No existing lane, crew, default or task record changes shape.
 
@@ -59,7 +59,7 @@ A comment that *asks* for any of those things is legitimate steering text for th
 
 ## 5. Configuration
 
-Two additive keys in the existing `workflow.*` namespace, documented in [CONFIG.md](../../CONFIG.md) when implemented:
+Two additive keys in the existing `workflow.*` namespace, documented in [CONFIG.md](../../CONFIG.md#workflowmid_run_steering--operator-comments-after-dispatch):
 
 | Key | Built-in default | Meaning |
 |-----|------------------|---------|

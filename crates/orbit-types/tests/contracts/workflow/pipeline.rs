@@ -85,6 +85,10 @@ fn pre_grouping_state_files_keep_their_exact_bytes() {
         ),
     ] {
         let state: PipelineState = serde_json::from_str(bytes).unwrap();
+        assert!(
+            state.steering_watermarks.is_empty(),
+            "{name}: a state written before mid-run steering holds no watermark"
+        );
         if name == "sparse" {
             assert_eq!(state.pull_drain, PullDrainState::default());
         } else {

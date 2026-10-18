@@ -13,6 +13,16 @@ use super::machine::{
 use super::resolve::{DEFAULT_FINAL_RECOVERY_CREWS, resolve_default_crew};
 use super::table::ConfigSnapshot;
 
+/// Admitted `workflow.mid_run_steering.*`: whether this workspace records
+/// steering watermarks, and the promotion gate's round budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MidRunSteeringSettings {
+    /// `workflow.mid_run_steering.enabled` (default `false`).
+    pub enabled: bool,
+    /// `workflow.mid_run_steering.max_rounds` (default 2).
+    pub max_rounds: u8,
+}
+
 impl ConfigSnapshot {
     pub(super) fn finish_admission(
         &mut self,
@@ -292,6 +302,14 @@ impl ConfigSnapshot {
     /// Admitted `machine.host_shutdown_hold_minutes`.
     pub fn host_shutdown_hold_minutes(&self) -> u32 {
         self.machine_host_shutdown_hold_minutes
+    }
+
+    /// The admitted `workflow.mid_run_steering.*` settings.
+    pub fn mid_run_steering(&self) -> MidRunSteeringSettings {
+        MidRunSteeringSettings {
+            enabled: self.workflow_mid_run_steering_enabled,
+            max_rounds: self.workflow_mid_run_steering_max_rounds,
+        }
     }
 
     /// Admitted host resource thresholds, shared by dashboard and admission consumers.

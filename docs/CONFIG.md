@@ -372,6 +372,21 @@ A routine's `eligibility` block still decides which tasks are piloted: a newly e
 
 An `--approve-proposed` drain checks freshness under the approval lock against the exact material certified by the pilot's atomic write. The pilot's OS routing tag, selectors, complexity and automatic crew redraw therefore permit approval; later tag, crew, assignment provenance, relation or configured material edits withhold it. The `no-auto-approve` opt-out always wins. Replayed writes use their recorded audit rather than the task's current values; a pending approval from an older audit without that record needs a new assessment. Approval preserves routing and native-host admission holds.
 
+### `[workflow.mid_run_steering]` — operator comments after dispatch
+
+```toml
+[workflow.mid_run_steering]
+enabled = false
+max_rounds = 2
+```
+
+| Key | Default | What it does |
+|---|---|---|
+| `workflow.mid_run_steering.enabled` | `false` | Record, in the run's durable state, the newest task comment each agent prompt that embeds task context included: the run's *steering watermark*. `orbit init` does not enable it. |
+| `workflow.mid_run_steering.max_rounds` | `2` | Steering rounds a run may consume at the promotion gate before it holds as `steering_unconsumed` (`1`–`10`). Reserved: nothing reads it yet. |
+
+The watermark is stored per task under `steering_watermarks` in the run's pipeline state, for the run as a whole and for each step. It names a comment by its position in the task's append-only comment log plus the comment's recorded timestamp, never by a clock reading, so a comment written in the same instant as the prompt still orders by position. It only advances. It belongs to the run: a resumed run starts without one, and two runs of a task never share it. Agent output cannot write it, and the prompt does not carry it. With `enabled = false`, prompts, task records and run state are exactly what they are without the feature; turning it off later leaves recorded watermarks in place, unused. Delivering comments written after dispatch and the promotion gate are later work ([design](design/mid-run-steering/2_design.md)). `orbit doctor`'s `mid-run-steering` row shows the resolved values.
+
 ### `[workflow.validation_env]` — the toolchain required validation runs with
 
 ```toml

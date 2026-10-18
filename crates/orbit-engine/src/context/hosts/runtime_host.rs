@@ -646,11 +646,21 @@ pub trait RuntimeHost: Send + Sync {
         cwd: &Path,
     ) -> NamespaceProbe;
 
-    /// Optional task snapshot to embed in a CLI agent envelope.
+    /// Optional task snapshot to embed in the CLI agent envelope `step_id` of
+    /// `run_id` dispatches.
     ///
     /// The engine keeps this as untyped JSON so orbit-core can source task data
-    /// without leaking store or task-query details into orbit-engine.
-    fn task_context_for_agent_input(&self, input: &Value) -> Result<Option<Value>, DispatchError>;
+    /// without leaking store or task-query details into orbit-engine. A host
+    /// with run storage and `workflow.mid_run_steering.enabled` records, while
+    /// building the snapshot, the newest task comment it carries as the run's
+    /// steering watermark for that step; the snapshot itself is the same
+    /// either way.
+    fn task_context_for_agent_input(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        input: &Value,
+    ) -> Result<Option<Value>, DispatchError>;
 
     /// Resolve a deny-mode activity's callable tools for one agent launch.
     ///

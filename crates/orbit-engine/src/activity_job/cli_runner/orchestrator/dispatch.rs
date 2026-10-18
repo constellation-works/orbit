@@ -111,7 +111,7 @@ pub(crate) fn run_cli_backend_for_step(
         omitted_requirement_notes: activity_tools.omitted_requirement_notes.clone(),
     });
 
-    let task_ctx = host.task_context_for_agent_input(input)?;
+    let task_ctx = host.task_context_for_agent_input(run_id, step_id, input)?;
     let tool_ctx = activity_tool_context(host, spec, run_id, fs_profile, &provider);
     // A shipment pipeline renders the assigned checkout twice: once as the
     // child cwd and once inside the agent contract. Validate that pair against

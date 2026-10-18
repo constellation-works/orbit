@@ -371,6 +371,18 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.mid_run_steering.enabled": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.mid_run_steering.max_rounds": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.provider_limit_budgets": {
       "scope": "built-in",
       "state": "default",

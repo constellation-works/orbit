@@ -876,6 +876,9 @@ pub(super) fn seeded_resume_state(source_state: &PipelineState, run: &JobRun) ->
     seeded.pull_drain.forge_hold_expired_at = None;
     // The resumed run's own outcome decides whether it echoes a child.
     seeded.root_cause = None;
+    // A steering watermark names what this run's own prompts carried; the
+    // resumed run's agents have seen nothing yet.
+    seeded.steering_watermarks.clear();
     if let Some(pipeline) = seeded.pipeline.as_object_mut() {
         pipeline.remove(orbit_engine::review_gate::INTERRUPTED_REVIEW_KEY);
     }

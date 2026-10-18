@@ -162,5 +162,5 @@ pub(crate) use settings::read_optional;
 pub(crate) use settings::resolve_percent;
 pub use settings::{
     AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigSnapshot, MachineSettings,
-    ResourceThrottleSettings, WorkerContainmentSettings,
+    MidRunSteeringSettings, ResourceThrottleSettings, WorkerContainmentSettings,
 };

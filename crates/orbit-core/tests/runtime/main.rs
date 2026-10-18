@@ -92,6 +92,7 @@ mod implement_blocker;
 mod invocation_metrics;
 mod job_finalization;
 mod local_route_before_pr;
+mod mid_run_steering;
 mod orphan_adoption;
 mod plugin_inspection;
 mod pr_forge_admission;
