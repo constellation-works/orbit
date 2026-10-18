@@ -36,7 +36,7 @@ pub fn implementer_regression_from(output: &Value) -> Result<Vec<String>, String
         let target = entry.as_str().map(str::trim).unwrap_or_default();
         if !is_valid_orb_task_id(target) {
             return Err(format!(
-                "`{REGRESSION_FROM_FIELD}[{index}]` must be a task ID such as `ORB-123`"
+                "`{REGRESSION_FROM_FIELD}[{index}]` must be a task ID such as `ORB-<number>`"
             ));
         }
         if !targets.iter().any(|known| known == target) {
