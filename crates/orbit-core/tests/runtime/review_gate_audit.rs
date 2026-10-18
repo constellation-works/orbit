@@ -216,7 +216,7 @@ impl Fixture {
             .unwrap();
     }
 
-    fn report(&self, verdict: &str) {
+    pub(super) fn report(&self, verdict: &str) {
         self.put_report(&json!({
             "schema_version": REVIEW_CONTRACT_VERSION,
             "attempt_id": self.input["admission"]["attempt_id"],

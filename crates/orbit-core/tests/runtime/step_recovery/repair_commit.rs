@@ -117,7 +117,11 @@ fn a_validate_repair_is_committed_by_the_host_and_retried_on_that_head() {
                 committed(),
                 (
                     "review_gate_admit",
-                    json!({"applies": true, "attempt_id": "attempt-0", "head_sha": "0".repeat(40)}),
+                    crate::review_admission_shape::admitted_review(
+                        "attempt-0",
+                        "lineage",
+                        &"0".repeat(40),
+                    ),
                 ),
             ],
             ..Case::default()
@@ -172,7 +176,7 @@ fn a_repair_the_host_must_not_commit_is_refused_by_name_and_nothing_is_committed
     let fixture = fixture();
     let admitted_review = (
         "review_gate_admit",
-        json!({"applies": true, "attempt_id": "attempt-1", "head_sha": "HEAD"}),
+        crate::review_admission_shape::admitted_review("attempt-1", "lineage", "HEAD"),
     );
     let settled_review = ("review_gate_settle", json!({"reviewed_head_sha": "HEAD"}));
     let mut no_diff = committed();

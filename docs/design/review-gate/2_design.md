@@ -1,7 +1,7 @@
 ---
 title: Review Gate — Design
 owner: codex
-last_updated: 2026-10-10
+last_updated: 2026-10-18
 last_validated: 2026-10-15
 status: Accepted
 feature: review-gate
@@ -139,6 +139,13 @@ before push/PR creation, as four top-level steps: `review_gate_admit`,
 fixes what it finds; there is no second review round [ORB-13989]. With
 before-PR review off at capture, or a checked no-diff exemption, the gate reports
 `applies: false` and publication proceeds unchanged with no certificate.
+Every admission step's output is the `orbit-types` `ReviewGateAdmissionOutput`:
+an admitted attempt, a passed budget preflight, or not applicable with its
+reason and captured timing. Run state checkpoints it and job templates read
+its fields, so its serde shape is a persisted contract. Settlement, the
+failure handoff, recovery and interrupted-review preservation parse it once
+rather than reading fields by name. Fields added after the gate first shipped
+default when absent, so run state recorded before them still settles.
 
 Admission pins the candidate (base and head commits and trees, every
 implementation commit with the attribution Git recorded), digests each task's

@@ -19,10 +19,10 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_types::workflow::ReviewGateAdmissionOutput;
 use serde_json::Value;
 
 use crate::context::RuntimeHost;
-use crate::executor::automation::input::input_string_field;
 
 use super::claim::push_candidate_ref;
 use super::commit::commit_worktree_detached;
@@ -85,27 +85,16 @@ pub fn review_in_flight(pipeline: &Value) -> Option<ReviewInFlight> {
         .iter()
         .rev()
         .find_map(|(admit, review, settle)| {
-            let admitted = step(admit)?;
-            if admitted.get("applies").and_then(Value::as_bool) != Some(true)
-                || step(settle).is_some()
-            {
+            if step(settle).is_some() {
                 return None;
             }
-            let attempt_id = input_string_field(admitted, "attempt_id")?;
-            let reviewer = admitted.get("reviewer");
-            let field = |name: &str| {
-                reviewer
-                    .and_then(|reviewer| input_string_field(reviewer, name))
-                    .map(|value| value.trim().to_string())
-                    .filter(|value| !value.is_empty())
-            };
-            let reviewer_model = field("provider")
-                .zip(field("model"))
-                .map(|(provider, model)| format!("{provider} / {model}"));
-            Some(ReviewInFlight {
+            let output = ReviewGateAdmissionOutput::from_value(step(admit)?).ok()?;
+            let admitted = output.admitted()?;
+            let attempt_id = admitted.attempt_id.trim();
+            (!attempt_id.is_empty()).then(|| ReviewInFlight {
                 step_id: (*review).to_string(),
-                attempt_id,
-                reviewer_model,
+                attempt_id: attempt_id.to_string(),
+                reviewer_model: admitted.reviewer.model_label(),
             })
         })
 }

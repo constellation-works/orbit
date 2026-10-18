@@ -7,6 +7,8 @@
 //! Orbit commits the repair itself, as the `commit` step does for the
 //! implementer, and the retry runs on that head as its evidence.
 
+use orbit_types::workflow::ReviewGateAdmissionOutput;
+
 use crate::executor::automation::vcs::{
     RecoveryCommit, RecoveryCommitRefusal, RecoveryCommitRequest, commit_recovery_repair,
 };
@@ -67,20 +69,25 @@ pub(in crate::activity_job::job_executor) fn commit_recovery_repair_after_commit
     let reviewed_heads = outputs
         .iter()
         .flat_map(|output| {
-            let admitted = output.get("applies").and_then(Value::as_bool) == Some(true)
-                && output
-                    .get("attempt_id")
-                    .and_then(Value::as_str)
-                    .is_some_and(|id| !id.is_empty());
+            let admitted_head =
+                ReviewGateAdmissionOutput::from_value(output)
+                    .ok()
+                    .and_then(|admission| {
+                        admission
+                            .admitted()
+                            .filter(|admitted| !admitted.attempt_id.is_empty())
+                            .map(|admitted| admitted.head_sha.clone())
+                    });
             [
-                admitted.then(|| output.get("head_sha")).flatten(),
-                output.get("reviewed_head_sha"),
+                admitted_head,
+                output
+                    .get("reviewed_head_sha")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
             ]
         })
         .flatten()
-        .filter_map(Value::as_str)
         .filter(|head| !head.is_empty() && !review_follows)
-        .map(str::to_string)
         .collect::<Vec<_>>();
     let task_ids = match (bound.get("task_id"), bound.get("task_ids")) {
         (Some(Value::String(id)), _) => vec![id.clone()],

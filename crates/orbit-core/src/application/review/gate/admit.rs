@@ -11,7 +11,8 @@ use orbit_types::identity::Crew;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
     REVIEW_CONTRACT_VERSION, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewAdmission,
-    ReviewGateRefusal, ReviewManifest, ReviewReservation, ReviewerIdentity,
+    ReviewGateAdmissionOutput, ReviewGateAdmitted, ReviewGateDecision, ReviewGateRefusal,
+    ReviewGateReviewer, ReviewManifest, ReviewReservation, ReviewerIdentity,
 };
 use serde_json::{Value, json};
 
@@ -29,23 +30,31 @@ use crate::runtime::engine::crew::enforce_crew_allowlist;
 use super::context::{GateContext, admitted_run_id, not_applicable};
 use super::host_gates::{HOST_VALIDATION_STEP_INPUT, recorded_host_gates};
 use super::judgement::write_artifact;
-use super::owed::{
-    EVIDENCE_RECEIVED_DECISION, defers_linux_codeql, owed_evidence, owed_hold_received,
-    split_owner_owed,
-};
+use super::owed::{defers_linux_codeql, owed_evidence, owed_hold_received, split_owner_owed};
 use super::release::release_abandoned;
 
 /// Admit a reviewer for the committed, base-synchronized candidate.
 ///
-/// Output always carries `applies`; when the gate does not apply the pipeline
-/// continues to publish without a review. When it applies, the output pins
-/// the candidate, names the reviewer, and records the attempt the settle
-/// step must close.
+/// Output is a [`ReviewGateAdmissionOutput`], which always carries
+/// `applies`; when the gate does not apply the pipeline continues to publish
+/// without a review. When it applies, the output pins the candidate, names
+/// the reviewer, and records the attempt the settle step must close.
 pub(crate) fn review_gate_admit(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,
 ) -> Result<Value, DispatchError> {
+    let output = admission_output(runtime, action, input)?;
+    serde_json::to_value(&output).map_err(|error| {
+        DispatchError::action_failed(action, format!("serialize review admission: {error}"))
+    })
+}
+
+fn admission_output(
+    runtime: &OrbitRuntime,
+    action: &str,
+    input: &Value,
+) -> Result<ReviewGateAdmissionOutput, DispatchError> {
     let refused = |message: String| DispatchError::DeterministicActionRefused {
         action: action.to_string(),
         message,
@@ -179,7 +188,7 @@ pub(crate) fn review_gate_admit(
         "run_id": context.run_id,
         "task_ids": context.task_ids,
         "reviewer_crew": admission.crew,
-        "outcome": outcome.as_ref().map(|value| value["decision"].clone()).unwrap_or(json!("refused")),
+        "outcome": outcome.as_ref().map_or(json!("refused"), |output| json!(output.decision())),
         "recorded_at": Utc::now().to_rfc3339(),
     });
     runtime
@@ -293,7 +302,7 @@ fn admit(
     admission: &ReviewAdmission,
     rebase: Option<&CompletionRebase>,
     host_step: Option<&str>,
-) -> Result<Value, OrbitError> {
+) -> Result<ReviewGateAdmissionOutput, OrbitError> {
     let required_validation_commands = admission
         .required_validation_commands
         .as_ref()
@@ -325,11 +334,11 @@ fn admit(
         Some(_) => None,
     };
     let reviewer = match &received {
-        Some((_, certificate)) => held_reviewer_json(&certificate.reviewer),
+        Some((_, certificate)) => held_reviewer(&certificate.reviewer),
         None => {
             let (crew, source) =
                 resolve_reviewer_crew(runtime, admission, context, &candidate.head.commit)?;
-            reviewer_json(&crew, &source)
+            admitted_reviewer(&crew, source)
         }
     };
     // [ORB-15630] Linux CodeQL a macOS host cannot run, whose rule names the
@@ -433,7 +442,7 @@ fn admit(
         candidate: candidate.head.clone(),
         implementation_commits: candidate.commits.clone(),
         implementer_summaries: context.implementer_summaries(runtime)?,
-        reviewer_crew: reviewer["crew"].as_str().unwrap_or_default().to_string(),
+        reviewer_crew: reviewer.crew.clone(),
         contract_version: REVIEW_CONTRACT_VERSION,
         policy_version: admission.policy_version,
         budget: ledger.budget,
@@ -458,38 +467,39 @@ fn admit(
     }
 
     let decision = match (&received, resumed) {
-        (Some(_), _) => EVIDENCE_RECEIVED_DECISION,
-        (None, true) => "resumed",
-        (None, false) => "admitted",
+        (Some(_), _) => ReviewGateDecision::EvidenceReceived,
+        (None, true) => ReviewGateDecision::Resumed,
+        (None, false) => ReviewGateDecision::Admitted,
     };
-    Ok(json!({
-        "applies": true,
-        "decision": decision,
-        "held_attempt_id": received.as_ref().map(|(hold, _)| hold.attempt_id.clone()),
-        "first_task_id": context.task_ids[0],
-        "attempt_id": attempt.attempt_id,
-        "attempt_index": attempt.index,
-        "lineage_key": lineage_key,
-        "timing": admission.timing.as_str(),
-        "timing_source": admission.timing_source,
-        "reviewer": reviewer,
-        "owed_evidence": manifest.owed_external_evidence,
-        "owner_owed_evidence": manifest.owner_owed_evidence,
-        "host_validation": manifest.host_validation,
-        "base_sha": candidate.base.commit,
-        "base_tree": candidate.base.tree,
-        "head_sha": candidate.head.commit,
-        "head_tree": candidate.head.tree,
-        "implementation_commit_count": candidate.commits.len(),
-        "task_meaning_digest": manifest.task_meaning_digest,
-        "task_selectors": selectors,
-        "evidence_carry": carry.to_json(),
-        "manifest_artifact": REVIEW_MANIFEST_ARTIFACT,
-        "report_artifact": REVIEW_REPORT_ARTIFACT,
-        "budget": ledger.budget,
-        "remaining": manifest.remaining,
-        "started_at": attempt.started_at.to_rfc3339(),
-    }))
+    Ok(ReviewGateAdmissionOutput::Admitted(Box::new(
+        ReviewGateAdmitted {
+            decision,
+            held_attempt_id: received.map(|(hold, _)| hold.attempt_id),
+            first_task_id: context.task_ids[0].clone(),
+            attempt_id: attempt.attempt_id,
+            attempt_index: attempt.index,
+            lineage_key,
+            timing: admission.timing,
+            timing_source: admission.timing_source.clone(),
+            reviewer,
+            owed_evidence: manifest.owed_external_evidence,
+            owner_owed_evidence: manifest.owner_owed_evidence,
+            host_validation: manifest.host_validation,
+            base_sha: candidate.base.commit,
+            base_tree: candidate.base.tree,
+            head_sha: candidate.head.commit,
+            head_tree: candidate.head.tree,
+            implementation_commit_count: candidate.commits.len(),
+            task_meaning_digest: manifest.task_meaning_digest,
+            task_selectors: selectors,
+            evidence_carry: carry.to_json(),
+            manifest_artifact: REVIEW_MANIFEST_ARTIFACT.to_string(),
+            report_artifact: REVIEW_REPORT_ARTIFACT.to_string(),
+            budget: ledger.budget,
+            remaining: manifest.remaining,
+            started_at: attempt.started_at,
+        },
+    )))
 }
 
 /// The reviewer crew must be explicitly configured, resolvable on this host,
@@ -585,62 +595,43 @@ fn resolve_reviewer_crew(
     Ok((crew, admission.crew_source.clone()))
 }
 
-fn reviewer_json(crew: &Crew, source: &str) -> Value {
-    json!({
-        "crew": crew.name,
-        "crew_source": source,
-        "provider": crew.assignment.provider,
-        "model": crew.assignment.model,
-        "reasoning_effort": crew.assignment.effort,
-    })
+fn admitted_reviewer(crew: &Crew, source: String) -> ReviewGateReviewer {
+    ReviewGateReviewer {
+        crew: crew.name.clone(),
+        crew_source: source,
+        provider: crew.assignment.provider.clone(),
+        model: crew.assignment.model.clone(),
+        reasoning_effort: crew.assignment.effort.map(|effort| effort.to_string()),
+    }
 }
 
 /// The reviewer a held review settles under: the one that reviewed it.
-fn held_reviewer_json(reviewer: &ReviewerIdentity) -> Value {
-    json!({
-        "crew": reviewer.crew,
-        "crew_source": "held_review",
-        "provider": reviewer.provider,
-        "model": reviewer.model,
-        "reasoning_effort": reviewer.reasoning_effort,
-    })
+fn held_reviewer(reviewer: &ReviewerIdentity) -> ReviewGateReviewer {
+    ReviewGateReviewer {
+        crew: reviewer.crew.clone(),
+        crew_source: "held_review".to_string(),
+        provider: reviewer.provider.clone(),
+        model: reviewer.model.clone(),
+        reasoning_effort: reviewer.reasoning_effort.clone(),
+    }
 }
 
 pub(super) fn reviewer_identity(
     runtime: &OrbitRuntime,
     context: &GateContext,
-    admission_output: &Value,
+    reviewer: &ReviewGateReviewer,
 ) -> Result<ReviewerIdentity, OrbitError> {
-    let reviewer = admission_output
-        .get("reviewer")
-        .cloned()
-        .unwrap_or(Value::Null);
-    let field = |key: &str| {
-        reviewer
-            .get(key)
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-            .ok_or_else(|| {
-                OrbitError::InvalidInput(format!(
-                    "review_gate_settle requires admission.reviewer.{key}"
-                ))
-            })
-    };
     let implementer_model = runtime
         .get_job_run_backend(&context.run_id)?
         .and_then(|run| run.crew_model)
         .map(|model| model.trim().to_string())
         .filter(|model| !model.is_empty());
-    let model = field("model")?;
     Ok(ReviewerIdentity {
-        crew: field("crew")?,
-        provider: field("provider")?,
-        same_model_as_implementer: implementer_model.as_deref() == Some(model.as_str()),
-        model,
-        reasoning_effort: reviewer
-            .get("reasoning_effort")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
+        crew: reviewer.crew.clone(),
+        provider: reviewer.provider.clone(),
+        same_model_as_implementer: implementer_model.as_deref() == Some(reviewer.model.as_str()),
+        model: reviewer.model.clone(),
+        reasoning_effort: reviewer.reasoning_effort.clone(),
         implementer_model,
     })
 }
@@ -650,7 +641,10 @@ pub(super) fn reviewer_identity(
 /// only to be refused at admission. A settled review never blocks here — the
 /// next candidate is a new review. This does not reserve an attempt, load Git
 /// objects or write a manifest.
-fn preflight_budget(runtime: &OrbitRuntime, context: &GateContext) -> Result<Value, OrbitError> {
+fn preflight_budget(
+    runtime: &OrbitRuntime,
+    context: &GateContext,
+) -> Result<ReviewGateAdmissionOutput, OrbitError> {
     let lineage = context.lineage_key();
     if let Some(ledger) = runtime
         .review_store()?
@@ -664,7 +658,9 @@ fn preflight_budget(runtime: &OrbitRuntime, context: &GateContext) -> Result<Val
             budget_recovery(context, &lineage)
         )));
     }
-    Ok(json!({"applies": true, "decision": "preflight_passed", "lineage_key": lineage}))
+    Ok(ReviewGateAdmissionOutput::PreflightPassed {
+        lineage_key: lineage,
+    })
 }
 
 /// The operator's way past an exhausted budget. A claim is one attempt that

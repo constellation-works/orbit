@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use crate::workflow::JobRunState;
 use crate::workflow::JobRunTrigger;
+use crate::workflow::ReviewGateAdmissionOutput;
 use crate::workflow::child_dispatch::{ChildCancellation, ChildDispatch, ChildDispatchPhase};
 
 use super::{
@@ -441,9 +442,8 @@ impl PipelineState {
     /// that follow, so a reader pairs it with a live run state.
     pub fn in_landing_review(&self) -> bool {
         self.pipeline_step_output(LANDING_REVIEW_ADMIT_STEP)
-            .and_then(|output| output.get("applies"))
-            .and_then(Value::as_bool)
-            == Some(true)
+            .and_then(|output| ReviewGateAdmissionOutput::from_value(output).ok())
+            .is_some_and(|admission| admission.applies())
     }
 
     /// Every recorded step output in step order, compacted or not.
