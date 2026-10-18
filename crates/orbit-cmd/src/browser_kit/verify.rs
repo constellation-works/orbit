@@ -62,6 +62,18 @@ pub struct VerifyReport {
 
 pub fn verify(layout: &KitLayout) -> Result<VerifyReport, OrbitError> {
     require_host_operator()?;
+    // Revoke the previous pass before any fallible work: preparation errors,
+    // probe spawn failures and timeouts must all leave the kit unverified.
+    match std::fs::remove_file(layout.verification_file()) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "remove {}: {error}",
+                layout.verification_file().display()
+            )));
+        }
+    }
     let kit = KitInspection::inspect(layout);
     if !kit.present {
         return Err(OrbitError::InvalidInput(format!(
@@ -147,15 +159,6 @@ pub fn verify(layout: &KitLayout) -> Result<VerifyReport, OrbitError> {
         });
     }
 
-    // A kit that fails now must not stay advertised to workers.
-    if layout.verification_file().exists() {
-        std::fs::remove_file(layout.verification_file()).map_err(|error| {
-            OrbitError::Io(format!(
-                "remove {}: {error}",
-                layout.verification_file().display()
-            ))
-        })?;
-    }
     let combined = format!("{stdout}{}", String::from_utf8_lossy(&output.stderr));
     Ok(VerifyReport {
         passed,
