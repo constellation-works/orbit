@@ -213,12 +213,10 @@ pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
     // Preserve ship attribution per task across the Review -> Done transition.
     // The source of truth is task.implemented_by -> task.created_by -> system
     // fallback (see `ship_done_attribution`).
-    // A task this run still owes a post-deploy criterion stays in review.
+    // Unresolved post-deploy criteria survive candidate reuse by a fresh run.
     for task in &batch_tasks {
         let completes = task.status == TaskStatus::Review
-            && host
-                .outstanding_owed_criteria(&task.id, Some(batch_id))?
-                .is_empty();
+            && host.outstanding_owed_criteria(&task.id, None)?.is_empty();
         host.apply_task_automation_update(
             &task.id,
             TaskAutomationUpdate {

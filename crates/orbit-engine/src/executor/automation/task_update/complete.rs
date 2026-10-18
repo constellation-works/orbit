@@ -59,12 +59,10 @@ pub(in crate::executor::automation) fn complete_tasks<H: RuntimeHost + ?Sized>(
                 )));
             }
         }
-        // A criterion this run owes after deploy is not met yet, so the
-        // delivered task waits in review for its measurement.
-        if !host
-            .outstanding_owed_criteria(task_id, Some(run_id))?
-            .is_empty()
-        {
+        // The latest delivery's unresolved criteria survive candidate reuse
+        // by a fresh run, which may skip implementation and create no new
+        // owed record. Keep the task in review until they are recorded met.
+        if !host.outstanding_owed_criteria(task_id, None)?.is_empty() {
             owed_task_ids.push(task_id.clone());
             continue;
         }

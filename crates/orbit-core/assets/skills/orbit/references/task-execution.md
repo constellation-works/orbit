@@ -194,7 +194,9 @@ Every other unmet criterion fails as before. An owner run records the admitted
 entries as a `post_deploy_owed` history event; a claimed leaf carries them in
 its typed handoff, which the owner checks again before it accepts it. The
 delivery proceeds through PR, review and landing, then settles in `review`
-instead of `done`. `orbit task show` and the dashboard task detail list each
+instead of `done`. Reusing that candidate in a fresh delivery run preserves
+its unresolved owed criteria even when implementation is skipped.
+`orbit task show` and the dashboard task detail list each
 owed criterion with its host, command, target and state; external-merge
 settlement leaves the task in `review` too.
 

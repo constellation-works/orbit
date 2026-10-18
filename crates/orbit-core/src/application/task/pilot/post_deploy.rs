@@ -50,6 +50,27 @@ impl PostDeployFinding {
     }
 }
 
+/// Current requirements from the latest pilot audit. Admission and handoff
+/// must use the same criteria digest when interpreting this finding.
+pub(super) fn requirements_from_audit(
+    task: &Task,
+    audit: &Value,
+) -> Result<Vec<PostDeployRequirement>, OrbitError> {
+    let Some(finding) = audit
+        .get(POST_DEPLOY_AUDIT_FIELD)
+        .filter(|value| !value.is_null())
+    else {
+        return Ok(Vec::new());
+    };
+    let finding: PostDeployFinding = serde_json::from_value(finding.clone())
+        .map_err(|error| OrbitError::Execution(format!("decode post-deploy finding: {error}")))?;
+    Ok(if finding.criteria == criteria_digest(task) {
+        finding.requirements
+    } else {
+        Vec::new()
+    })
+}
+
 /// Validate the assessment's `post_deploy` entries: each names a 1-based
 /// criterion, the host and the measurement command, and why only the
 /// deployed build there can evidence it. A criterion the assessment also
@@ -139,20 +160,6 @@ impl OrbitRuntime {
         };
         let audit: Value = serde_json::from_str(receipt.body)
             .map_err(|error| OrbitError::Execution(format!("decode pilot assessment: {error}")))?;
-        let Some(finding) = audit
-            .get(POST_DEPLOY_AUDIT_FIELD)
-            .filter(|value| !value.is_null())
-        else {
-            return Ok(Vec::new());
-        };
-        let finding: PostDeployFinding =
-            serde_json::from_value(finding.clone()).map_err(|error| {
-                OrbitError::Execution(format!("decode post-deploy finding: {error}"))
-            })?;
-        Ok(if finding.criteria == criteria_digest(task) {
-            finding.requirements
-        } else {
-            Vec::new()
-        })
+        requirements_from_audit(task, &audit)
     }
 }

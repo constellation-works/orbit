@@ -235,9 +235,127 @@ fn an_owed_post_deploy_criterion_settles_in_review_until_an_operator_records_it(
     assert_eq!(show(&workspace, &task)["status"], "done");
 }
 
+fn a_reused_candidate_keeps_its_previous_runs_post_deploy_obligation() {
+    let workspace = Workspace::new();
+    let task = backlog_task(&workspace);
+    let applied = apply(&workspace, &task, latency_after_deploy());
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    in_review(&workspace, &task);
+    RuntimeHost::admit_owed_criteria(
+        &workspace.runtime,
+        &task.id,
+        "jrun-previous-delivery",
+        &[owed(2, HOST)],
+    )
+    .unwrap();
+
+    // candidate_resume may reuse the previous candidate without running an
+    // implementer, so the fresh run has no owed event of its own.
+    let completion = complete(&workspace, &task);
+    assert_eq!(
+        completion["owed_task_ids"],
+        json!([task.id]),
+        "completion must retain the reused candidate's unresolved obligation: {completion}"
+    );
+    assert_eq!(show(&workspace, &task)["status"], "review");
+
+    record(&workspace, &task, "post-deploy: failed 2\np95 was 180 ms.").unwrap();
+    assert_eq!(
+        show(&workspace, &task)["owed_criteria"][0]["state"],
+        "failed"
+    );
+    assert_eq!(
+        complete(&workspace, &task)["owed_task_ids"],
+        json!([task.id])
+    );
+
+    record(
+        &workspace,
+        &task,
+        "post-deploy: met 2\np95 was 121 ms after repair.",
+    )
+    .unwrap();
+    assert_eq!(
+        complete(&workspace, &task)["completed_task_ids"],
+        json!([task.id])
+    );
+}
+
+fn post_deploy_operator_measurements_do_not_hold_candidate_admission() {
+    let workspace = Workspace::new();
+    let task = backlog_task(&workspace);
+    let post_deploy = "After deploy, run the live evaluation with `orbit.pipeline.invoke`.";
+    let task = workspace
+        .runtime
+        .update_task_as_human(
+            &task.id,
+            TaskUpdateParams {
+                acceptance_criteria: Some(vec![
+                    "The readiness handler issues one store read.".into(),
+                    post_deploy.into(),
+                ]),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+    let applied = apply(&workspace, &task, latency_after_deploy());
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    RuntimeHost::admit_task_for_workflow(&workspace.runtime, &task.id, "worktree_setup")
+        .expect("an operator measurement owed after deploy must not hold candidate admission");
+    let backlog = workspace.action("list_backlog_tasks", json!({"task_ids": [task.id]}));
+    assert!(
+        backlog["task_ids"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(task.id)),
+        "{backlog}"
+    );
+
+    // The same operator tool in an ordinary criterion must still hold the
+    // candidate: typing criterion 2 never exempts criterion 1. Successful
+    // admission moved this task in progress; return it for reassessment.
+    let task = workspace
+        .runtime
+        .update_task_as_human(
+            &task.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                acceptance_criteria: Some(vec![
+                    "Run the live evaluation with `orbit.pipeline.invoke`.".into(),
+                    post_deploy.into(),
+                ]),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+    let applied = apply(&workspace, &task, latency_after_deploy());
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    let error =
+        RuntimeHost::admit_task_for_workflow(&workspace.runtime, &task.id, "worktree_setup")
+            .expect_err("an ordinary operator requirement must still hold candidate admission");
+    assert!(
+        error
+            .to_string()
+            .contains("criterion 1 requires `orbit.pipeline.invoke`"),
+        "{error}"
+    );
+    let backlog = workspace.action("list_backlog_tasks", json!({"task_ids": [task.id]}));
+    assert!(
+        !backlog["task_ids"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(task.id)),
+        "{backlog}"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_post_deploy_finding_is_recorded_without_holding_admission_scenarios,
     a_post_deploy_finding_is_recorded_without_holding_admission,
-    an_owed_post_deploy_criterion_settles_in_review_until_an_operator_records_it
+    an_owed_post_deploy_criterion_settles_in_review_until_an_operator_records_it,
+    a_reused_candidate_keeps_its_previous_runs_post_deploy_obligation,
+    post_deploy_operator_measurements_do_not_hold_candidate_admission
 );
