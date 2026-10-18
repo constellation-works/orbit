@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use orbit_common::OrbitError;
 use orbit_types::workflow::ShipMode;
 
-use super::{HostLifetime, OrbitRuntime, RuntimeConfigLoader};
+use super::{HostLifetime, OrbitRuntime, OrbitRuntimeRoots, RuntimeConfigLoader};
 use crate::runtime::host_resource::{HostResourceMonitor, default_host_resource_probe};
 use crate::runtime::host_signal::{FixedHostSignals, default_host_signal_probe};
 use crate::runtime::task_pr_forge::{NoTaskPrForge, default_task_pr_forge};
@@ -47,11 +47,8 @@ impl OrbitRuntime {
             })
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn build_from_resolved_config(
-        global_root: &Path,
-        shared_root: &Path,
-        local_root: &Path,
+        roots: &OrbitRuntimeRoots,
         binding: Option<WorkspaceRuntimeBinding>,
         runtime_config: &orbit_config::ResolvedConfig,
         layout_report: orbit_store::workflow::layout::LayoutUpgradeReport,
@@ -66,25 +63,23 @@ impl OrbitRuntime {
         };
         Self::finish_from_context(
             builder::build_context_from_roots(
-                global_root,
-                shared_root,
-                local_root,
+                &roots.global_root,
+                &roots.shared_root,
+                &roots.local_root,
                 binding.as_ref(),
                 runtime_config,
                 host_lifetime,
                 access,
             )?,
             binding,
-            global_root,
+            &roots.global_root,
             layout_report,
             config_loader,
         )
     }
 
     pub(crate) fn build_from_resolved_config_write_free(
-        global_root: &Path,
-        shared_root: &Path,
-        local_root: &Path,
+        roots: &OrbitRuntimeRoots,
         binding: Option<WorkspaceRuntimeBinding>,
         runtime_config: &orbit_config::ResolvedConfig,
         layout_report: orbit_store::workflow::layout::LayoutUpgradeReport,
@@ -93,16 +88,16 @@ impl OrbitRuntime {
     ) -> Result<Self, OrbitError> {
         let mut runtime = Self::finish_from_context(
             builder::build_context_from_roots(
-                global_root,
-                shared_root,
-                local_root,
+                &roots.global_root,
+                &roots.shared_root,
+                &roots.local_root,
                 binding.as_ref(),
                 runtime_config,
                 host_lifetime,
                 builder::StateAccess::WriteFree,
             )?,
             binding,
-            global_root,
+            &roots.global_root,
             layout_report,
             config_loader,
         )?;

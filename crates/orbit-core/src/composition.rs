@@ -233,9 +233,11 @@ impl OrbitRuntime {
         let layout_report = observe_or_upgrade_layout(shared_root, true)?;
         let config = ResolvedConfig::load(&ConfigRoots::new(global_root, shared_root))?;
         Self::build_from_resolved_config_write_free(
-            global_root,
-            shared_root,
-            shared_root,
+            &OrbitRuntimeRoots {
+                global_root: global_root.to_path_buf(),
+                shared_root: shared_root.to_path_buf(),
+                local_root: shared_root.to_path_buf(),
+            },
             Some(binding),
             &config,
             layout_report,
@@ -341,11 +343,14 @@ fn build_runtime(
             }
         }
     }
+    let roots = OrbitRuntimeRoots {
+        global_root: global_root.to_path_buf(),
+        shared_root: shared_root.to_path_buf(),
+        local_root: local_root.to_path_buf(),
+    };
     let runtime = if write_free {
         OrbitRuntime::build_from_resolved_config_write_free(
-            global_root,
-            shared_root,
-            local_root,
+            &roots,
             binding,
             &runtime_config,
             layout_report,
@@ -354,9 +359,7 @@ fn build_runtime(
         )?
     } else {
         OrbitRuntime::build_from_resolved_config(
-            global_root,
-            shared_root,
-            local_root,
+            &roots,
             binding,
             &runtime_config,
             layout_report,
