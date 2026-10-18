@@ -759,6 +759,9 @@ impl TaskCommitBoundary {
                         &state,
                         handoff_id,
                         proof,
+                        &crate::repository::task::v2::task_history_from_events(
+                            bundle.events.clone(),
+                        ),
                         &mut params,
                         &mut handoff_effects,
                     )?;

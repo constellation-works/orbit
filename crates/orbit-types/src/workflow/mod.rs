@@ -187,8 +187,8 @@ pub use source_repair::{
 mod post_deploy;
 pub use post_deploy::{
     OWED_CRITERIA_FIELD, OwedCriterion, POST_DEPLOY_HEADER, POST_DEPLOY_OWED_EVENT,
-    POST_DEPLOY_RECORDED_EVENT, PostDeployOutcome, PostDeployOwed, PostDeployResult,
-    post_deploy_header,
+    POST_DEPLOY_RECORDED_EVENT, PostDeployOutcome, PostDeployOwed, PostDeployRecord,
+    PostDeployResult, RecordedPostDeploy, post_deploy_header,
 };
 
 mod pr_base_update;

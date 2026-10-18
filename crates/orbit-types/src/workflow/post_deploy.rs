@@ -7,6 +7,9 @@
 //! delivery then settles in `review`, and an operator records each owed
 //! criterion met or failed once the deployed build is measured.
 
+use crate::identity::is_automation_actor;
+use crate::task::TaskHistoryEntry;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -152,4 +155,80 @@ pub fn post_deploy_header(line: &str) -> Option<Result<(PostDeployOutcome, usize
              `{POST_DEPLOY_HEADER} failed <N>`, where N is the owed criterion"
         )),
     })
+}
+
+/// An operator's recorded result for one owed criterion.
+pub struct RecordedPostDeploy {
+    /// The operator's measurement.
+    pub result: PostDeployResult,
+    /// Persisted operator attribution.
+    pub by: String,
+    /// When the measurement was recorded.
+    pub at: DateTime<Utc>,
+}
+
+/// The task's current owed record: the newest [`POST_DEPLOY_OWED_EVENT`],
+/// with the latest operator result after it for each criterion.
+pub struct PostDeployRecord {
+    /// The latest accepted owed declaration.
+    pub owed: PostDeployOwed,
+    /// Latest operator results, aligned with the owed criteria.
+    pub recorded: Vec<Option<RecordedPostDeploy>>,
+}
+
+impl PostDeployRecord {
+    /// Read the current declaration and subsequent operator measurements.
+    pub fn read(history: &[TaskHistoryEntry]) -> Option<Self> {
+        let (start, owed) = history
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, entry)| {
+                (entry.event == POST_DEPLOY_OWED_EVENT)
+                    .then(|| serde_json::from_str::<PostDeployOwed>(entry.note.as_deref()?).ok())
+                    .flatten()
+                    .map(|owed| (index, owed))
+            })?;
+        let mut recorded: Vec<Option<RecordedPostDeploy>> =
+            owed.criteria.iter().map(|_| None).collect();
+        for entry in &history[start + 1..] {
+            if entry.event != POST_DEPLOY_RECORDED_EVENT || is_automation_actor(&entry.by) {
+                continue;
+            }
+            let Some(result) = entry
+                .note
+                .as_deref()
+                .and_then(|note| serde_json::from_str::<PostDeployResult>(note).ok())
+            else {
+                continue;
+            };
+            if let Some(slot) = owed
+                .criteria
+                .iter()
+                .position(|owed| owed.criterion == result.criterion)
+            {
+                recorded[slot] = Some(RecordedPostDeploy {
+                    result,
+                    by: entry.by.clone(),
+                    at: entry.at,
+                });
+            }
+        }
+        Some(Self { owed, recorded })
+    }
+
+    /// Criteria no operator has recorded met.
+    pub fn outstanding(&self) -> Vec<usize> {
+        self.owed
+            .criteria
+            .iter()
+            .zip(&self.recorded)
+            .filter(|(_, recorded)| {
+                !recorded
+                    .as_ref()
+                    .is_some_and(|recorded| recorded.result.outcome == PostDeployOutcome::Met)
+            })
+            .map(|(owed, _)| owed.criterion)
+            .collect()
+    }
 }

@@ -2,6 +2,7 @@ use std::fmt::{Display, Formatter};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::identity::MACHINE_ID_PREFIX;
 use crate::identity::agent_pair::{agent_family_from_cli, all_agent_families};
 
 /// Typed identity for attribution across all Orbit artifacts.
@@ -295,4 +296,17 @@ impl<'de> Deserialize<'de> for ActorIdentity {
 
         deserializer.deserialize_any(ActorVisitor)
     }
+}
+
+/// Whether a persisted writer label belongs to Orbit automation rather than
+/// an operator. Other labels include `human:<user>`, `operator`, an
+/// `ORBIT_ACTOR` or dashboard author. Shared by recovery and pilot admission.
+pub fn is_automation_actor(label: &str) -> bool {
+    let label = label.trim();
+    label == "system"
+        || label == "task-pilot"
+        || label == "finding-verification"
+        || label.starts_with(MACHINE_ID_PREFIX)
+        || all_agent_families().contains(&label)
+        || agent_from_model(label).is_some()
 }
