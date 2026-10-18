@@ -248,7 +248,11 @@ start_guard() {
     # errexit only around `time` and return the command status unchanged.
     TIMEFORMAT="ci-guardrails: $name %3R s"
     set +e
-    time { "$@"; }
+    if [[ "$slot_prefix" == exclusive- ]]; then
+      time { "$@"; }
+    else
+      time { run_lowered "$@"; }
+    fi
     status=$?
     exit "$status"
   ) >"$guard_logs/$slot.out" 2>"$guard_logs/$slot.err" &
@@ -336,31 +340,29 @@ with_production_lint() {
 # artifacts.
 run_check_chain() {
   local status=0 next=0
-  run_phase clippy-production with_production_lint cargo check --workspace --lib --bins || status=$?
-  run_phase doctests "$lint" cargo test --no-fail-fast --workspace --doc || next=$?
+  run_phase clippy-production with_production_lint run_lowered cargo check --workspace --lib --bins || status=$?
+  run_phase doctests run_lowered "$lint" cargo test --no-fail-fast --workspace --doc || next=$?
   if [[ "$status" -eq 0 ]]; then status="$next"; fi
   next=0
-  RUSTDOCFLAGS="-D warnings" run_phase documentation with_production_lint cargo doc --no-deps --workspace || next=$?
+  RUSTDOCFLAGS="-D warnings" run_phase documentation with_production_lint run_lowered cargo doc --no-deps --workspace || next=$?
   if [[ "$status" -eq 0 ]]; then status="$next"; fi
   return "$status"
 }
 
-# Moves the calling subshell, and every process it starts, to Linux's idle
-# scheduling class, or else to the lowest nice priority. Such work runs only
-# on CPU time the foreground leaves idle. A direct child's PPID is the
-# subshell itself; bash 3.2 has no BASHPID.
-lower_priority() {
-  sh -c 'chrt --idle -p 0 "$PPID"' >/dev/null 2>&1 ||
-    sh -c 'renice -n 19 -p "$PPID"' >/dev/null 2>&1 ||
-    echo "ci-guardrails: cannot lower background priority; continuing at normal priority" >&2
-}
+# Lower priority at command launch, never by changing a parent process:
+# macOS workers can lower their own priority but cannot renice their parent
+# inside Seatbelt. Probe idle scheduling without executing the real command,
+# so a command failure is never retried under the fallback scheduler. nice -n
+# is an increment on both platforms and preserves an already-niced worker.
+lowered_command=(nice -n 19)
+if chrt --idle 0 true >/dev/null 2>&1; then
+  lowered_command=(chrt --idle 0)
+fi
 
-# Runs one command at lowered priority (see lower_priority).
+# Runs an external command and its descendants at lowered priority. Keep nice
+# errors visible if the environment also denies changing one's own priority.
 run_lowered() {
-  (
-    lower_priority
-    exec "$@"
-  )
+  "${lowered_command[@]}" "$@"
 }
 
 # Runs the clippy/doctest/documentation chain in the background while nextest
@@ -371,7 +373,6 @@ start_check_chain() {
   (
     # The report trap belongs to the parent shell, not to the chain.
     trap - EXIT
-    lower_priority
     phase_records=()
     status=0
     run_check_chain || status=$?
@@ -385,8 +386,8 @@ start_check_chain() {
 # starts after formatting. Each one asserts elapsed time or timeouts, measures
 # build-budget admission, or drives a real Cargo target; the rendezvous and
 # deadline checks in ci-fast-guards count too. Everything beside them, the guard
-# pool and in full mode the workflow test build, runs at lowered priority, so it
-# takes only CPU time the suites leave idle. The lane joins after the pool and
+# pool and in full mode the workflow test build, starts at lowered priority to
+# reduce CPU contention with the suites. The lane joins after the pool and
 # before the workspace tests start. Each suite is mostly one process, so the
 # lane leaves most of the host to that lowered work.
 guard_phase_started=$SECONDS
@@ -408,9 +409,7 @@ exclusive_lane_pid=$!
 (
   # The report trap belongs to the parent shell, not to the pool.
   trap - EXIT
-  # Beside the exclusive lane, the pool and every guard it starts run at
-  # lowered priority.
-  lower_priority
+  # Beside the exclusive lane, each pool command starts at lowered priority.
   # About 6 s of CPU time across about 63 s of wall time, nearly all of it
   # fixed slow-child and hang delays. The helper's deadlines run on an
   # injected clock, and a fixture step fails only after 120 s without output,
