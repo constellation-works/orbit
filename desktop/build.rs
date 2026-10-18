@@ -1,3 +1,4 @@
+#[cfg(feature = "native")]
 fn main() {
     // Declaring the app's commands puts them under the ACL, so only windows a
     // capability names can call them. The dashboard page is a remote origin
@@ -9,3 +10,6 @@ fn main() {
         panic!("tauri build: {error:#}");
     }
 }
+
+#[cfg(not(feature = "native"))]
+fn main() {}

@@ -462,7 +462,7 @@ jobs:
     # Attaches the desktop bundles to the release publish-release created,
     # with their own signed checksum manifest, so a desktop failure never
     # holds back the CLI assets. Re-running it after a fix adds the missing
-    # assets; `gh release upload` without --clobber never overwrites one.
+    # assets, retaining published bytes when a retry rebuilds different bundles.
     name: Attach desktop bundles
     needs: [publish-release, build-desktop]
     if: ${{ vars.ORBIT_DESKTOP_RELEASE == 'true' }}
@@ -482,64 +482,91 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Generate desktop checksums
+      - name: Publish desktop assets
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORBIT_RELEASE_SIGNING_KEY_PEM: ${{ secrets.ORBIT_RELEASE_SIGNING_KEY_PEM }}
         run: |
           set -euo pipefail
-          cd dist
           expected_assets=(
             orbit-desktop-universal-apple-darwin.dmg
             orbit-desktop-x86_64-unknown-linux-gnu.deb
             orbit-desktop-x86_64-unknown-linux-gnu.AppImage
             orbit-desktop-aarch64-unknown-linux-gnu.deb
             orbit-desktop-aarch64-unknown-linux-gnu.AppImage
+            orbit-desktop-version.txt
           )
+          manifest=orbit-desktop-checksums.txt
+          signature="$manifest.sig"
+          published_assets="$(mktemp)"
+          candidate_manifest="$(mktemp)"
+          signing_key="$(mktemp)"
+          trap 'rm -f "$published_assets" "$candidate_manifest" "$signing_key"' EXIT
+
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets[].name' > "$published_assets"
+          has_asset() { grep -Fxq -- "$1" "$published_assets"; }
+
+          # Published bytes are authoritative. Replace only LOCAL copies before
+          # hashing, including metadata left by an interrupted upload. Never
+          # clobber a release asset, even if this run rebuilt different bytes.
+          for asset in "${expected_assets[@]}" "$manifest" "$signature"; do
+            if has_asset "$asset"; then
+              gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+                --pattern "$asset" --dir dist --clobber
+            fi
+          done
+          if ! has_asset orbit-desktop-version.txt; then
+            # The update check uses this signed file to tie bundles to the tag.
+            printf '%s\n' "${GITHUB_REF_NAME#v}" > dist/orbit-desktop-version.txt
+          fi
+          [ "$(cat dist/orbit-desktop-version.txt)" = "${GITHUB_REF_NAME#v}" ] || {
+            echo "published desktop version does not match the release tag" >&2
+            exit 1
+          }
           for asset in "${expected_assets[@]}"; do
-            [ -f "$asset" ] || {
+            [ -f "dist/$asset" ] || {
               echo "missing desktop asset: $asset" >&2
               exit 1
             }
           done
-          # Asset names carry no version. The app's update check reads this
-          # signed file to tie the bundles to this tag (desktop/README.md#auto-update).
-          printf '%s\n' "${GITHUB_REF_NAME#v}" > orbit-desktop-version.txt
-          expected_assets+=(orbit-desktop-version.txt)
-          sha256sum "${expected_assets[@]}" | sort -k 2 > orbit-desktop-checksums.txt
-          cat orbit-desktop-checksums.txt
-
-      - name: Sign desktop checksums
-        shell: bash
-        env:
-          ORBIT_RELEASE_SIGNING_KEY_PEM: ${{ secrets.ORBIT_RELEASE_SIGNING_KEY_PEM }}
-        run: |
-          set -euo pipefail
-          if [ -z "${ORBIT_RELEASE_SIGNING_KEY_PEM:-}" ]; then
-            echo "ORBIT_RELEASE_SIGNING_KEY_PEM must contain the private key matching npm/release-signing.pub" >&2
-            exit 1
+          (cd dist && sha256sum "${expected_assets[@]}" | sort -k 2) > "$candidate_manifest"
+          if has_asset "$manifest"; then
+            # Older partial uploads may already have a manifest. Preserve it
+            # only if it describes exactly the bytes we can publish now.
+            cmp "$candidate_manifest" "dist/$manifest" || {
+              echo "published desktop checksums conflict with available bundles; fix forward in a new release" >&2
+              exit 1
+            }
+          else
+            cp "$candidate_manifest" "dist/$manifest"
           fi
+          cat "dist/$manifest"
 
-          signing_key="$(mktemp)"
-          trap 'rm -f "$signing_key"' EXIT
-          printf '%s\n' "$ORBIT_RELEASE_SIGNING_KEY_PEM" > "$signing_key"
-          chmod 600 "$signing_key"
-
-          openssl dgst -sha256 \
-            -sign "$signing_key" \
-            -out dist/orbit-desktop-checksums.txt.sig \
-            dist/orbit-desktop-checksums.txt
+          if ! has_asset "$signature"; then
+            if [ -z "${ORBIT_RELEASE_SIGNING_KEY_PEM:-}" ]; then
+              echo "ORBIT_RELEASE_SIGNING_KEY_PEM must contain the private key matching npm/release-signing.pub" >&2
+              exit 1
+            fi
+            printf '%s\n' "$ORBIT_RELEASE_SIGNING_KEY_PEM" > "$signing_key"
+            chmod 600 "$signing_key"
+            openssl dgst -sha256 -sign "$signing_key" \
+              -out "dist/$signature" "dist/$manifest"
+          fi
+          # Also verify an existing signature before any uploads. A retry may
+          # have inherited an orphan signature from the old publication order.
           openssl dgst -sha256 \
             -verify npm/release-signing.pub \
-            -signature dist/orbit-desktop-checksums.txt.sig \
-            dist/orbit-desktop-checksums.txt
+            -signature "dist/$signature" "dist/$manifest"
 
-      - name: Attach to the GitHub Release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            dist/orbit-desktop-*
+          # Metadata goes last: a new manifest never precedes missing bundles,
+          # and a manifest uploaded without its signature is safe to resume.
+          for asset in "${expected_assets[@]}" "$manifest" "$signature"; do
+            if ! has_asset "$asset"; then
+              gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" "dist/$asset"
+            fi
+          done
 
   bump-homebrew-tap:
     name: Update Homebrew tap

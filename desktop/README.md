@@ -38,8 +38,10 @@ dashboard's own host switcher.
   `/api/job-runs/all?state=failed&since=24h` and `/api/tasks/all?status=review`, which cover every
   workspace on this host. A run that newly appears as failed, or a task that newly appears in review,
   raises a native notification naming the task title (or the job) and its workspace. More than three
-  at once arrive as one summary. The first read after launch only records what is already there,
-  and a workspace that comes back after being unavailable doesn't re-announce its old failures.
+  at once arrive as one summary. Review reads follow every cursor page before comparing tasks,
+  so older tasks entering review are covered even with a large backlog. A failed page leaves the
+  previous complete review baseline intact until a successful read. The first read after launch
+  only records what is already there, and a workspace that comes back after being unavailable doesn't re-announce its old failures.
   Other hosts' runs aren't watched; switch to them in the dashboard. A development build (`cargo
   run`) posts notifications as Terminal on macOS, because it has no app bundle of its own.
 - **Launch at login.** The menu's checkbox adds or removes a login item: a LaunchAgent on macOS and
@@ -73,9 +75,9 @@ window navigates only to the status page and the running dashboard. Every other 
 
 The shell is its own Cargo workspace (its `Cargo.toml` has its own `[workspace]` table), not a member of the root one, so `make ci` and the main CI
 jobs never build it. [`.github/workflows/desktop.yml`](../.github/workflows/desktop.yml) runs
-format, Clippy and test checks on macOS and Linux whenever `desktop/` changes. A manual run of that
-workflow also uploads unsigned bundles for testing. Releases are built separately, as
-described in [Releases](#releases).
+format, watcher regression tests without the webview stack, Clippy and test checks on macOS and
+Linux whenever `desktop/` changes. A manual run of that workflow also uploads unsigned bundles for
+testing. Releases are built separately, as described in [Releases](#releases).
 
 The server supervisor lives in the `orbit_desktop` library (`src/sidecar.rs`), apart from the
 window, so `tests/sidecar_lifecycle.rs` can drive it without a webview. That test binary acts as
@@ -88,6 +90,17 @@ Linux needs the WebKitGTK development packages:
 ```bash
 sudo apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libxdo-dev libssl-dev patchelf
 ```
+
+The same library holds the dashboard polling (`src/watcher.rs`) and builds without the native
+webview stack. From `desktop/`, run the
+notification regressions against paginated API-shaped responses with:
+
+```bash
+cargo test --locked --no-default-features --test watcher_notifications
+```
+
+These tests exercise the same polling and notification decisions as the app, with in-memory
+request and notification adapters; they do not display native notifications.
 
 Run it in development (from `desktop/`):
 
@@ -127,6 +140,13 @@ failure never holds back a release. Re-run the failed job from Actions once it's
 `publish-desktop` then adds the missing assets. It never overwrites an asset that's already
 attached. `desktop/Cargo.toml`'s version must match the tag, and the build fails otherwise.
 [RELEASING.md](../RELEASING.md#4-bump-versions) bumps it with the others.
+
+On retry, publication downloads existing assets and hashes those published bytes alongside any
+missing local bundles, so a rebuild cannot change what the signed checksums authenticate. The
+manifest and signature upload after all bundles and the version file. An interrupted manifest
+upload can resume without replacing it; a complete release is verified without uploading again.
+If older partial metadata conflicts with the available bundles, publication stops before adding
+assets. Fix forward in a new release rather than replacing published files.
 
 To check a download, verify the manifest against the release key, then the files against the
 manifest:
