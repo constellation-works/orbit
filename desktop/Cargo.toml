@@ -15,14 +15,20 @@ publish = false
 tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
+# Update checks compare a key's not_after and revoked_at with today's date.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 notify-rust = "4"
+# Release manifest verification, as in orbit-common::security::release.
+rsa = { version = "0.10.0-rc.18", features = ["sha2"] }
 serde_json = "1"
+sha2 = "0.11"
 tauri = { version = "2.12", features = ["tray-icon"] }
 tauri-plugin-autostart = "2.5"
+tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2.7"
 tauri-plugin-window-state = "2"
-# Plain HTTP to the app's own loopback server only: no TLS stack.
-ureq = { version = "3.1", default-features = false }
+# Loopback HTTP to the app's own server, and HTTPS to GitHub for update checks.
+ureq = { version = "3.1", default-features = false, features = ["rustls"] }
 url = "2"
 
 [target.'cfg(unix)'.dependencies]
