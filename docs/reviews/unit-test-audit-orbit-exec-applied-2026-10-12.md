@@ -98,7 +98,7 @@ The detailed machine-readable evidence is the task artifact
 | `supervision/tests/wait.rs::stdin_broken_pipe_reports_exit_status_and_stderr` | already relocated | `orbit-common/src/process/supervisor/tests/wait.rs::stdin_broken_pipe_reports_exit_status_and_stderr` |
 | `supervision/tests/wait.rs::timeout_returns_within_drain_budget_while_escaped_helper_holds_output` | already relocated | `orbit-common/src/process/supervisor/tests/wait.rs::timeout_returns_within_drain_budget_while_escaped_helper_holds_output` |
 | `tests/path_identity.rs::a_granted_write_root_standing_as_a_dangling_symlink_is_refused` | relocated | `tests/sandbox/path_identity.rs::a_granted_write_root_standing_as_a_dangling_symlink_is_refused` |
-| `tests/validation_env.rs::an_interactive_probe_exiting_42_falls_back_with_its_status_as_the_reason` | relocated | `tests/validation_env.rs::an_interactive_probe_exiting_42_falls_back_with_its_status_as_the_reason` |
+| `tests/validation_env.rs::an_interactive_probe_exiting_42_falls_back_with_its_status_as_the_reason` | relocated | `tests/sandbox/validation_env.rs::an_interactive_probe_exiting_42_falls_back_with_its_status_as_the_reason` |
 
 Linux gates exercise the exported helper and Linux cases. The moved native
 macOS cases compile only on macOS and require that CI leg's
