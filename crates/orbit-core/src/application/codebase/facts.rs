@@ -13,14 +13,14 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::fs::selector::Selector;
 use orbit_store::contracts::{
-    AuditEventFilter, ClaimFailedNote, ClaimSettlementEvidence, ExecutionClaimPhase,
+    ClaimFailedNote, ClaimSettlementEvidence, ExecutionClaimPhase, StoreRetentionBackend,
+    TaskLockDenialRecord,
 };
 use orbit_types::identity::all_agent_families;
 use orbit_types::task::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, TaskHistoryEntry, TaskRelationType,
     TaskStatus,
 };
-use orbit_types::telemetry::{AuditEvent, AuditEventStatus};
 use orbit_types::workflow::{
     BUBBLEWRAP_NAMESPACE_REFUSALS, ClaimFailureClass, FORGE_UNAVAILABLE_EXPIRED_EVENT,
     ProviderFailureClass,
@@ -28,11 +28,6 @@ use orbit_types::workflow::{
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-
-/// Lock-conflict denials read per scan. Audit rows are pruned by retention,
-/// so this bounds a pathological retry storm rather than normal history.
-const LOCK_DENIAL_SCAN_LIMIT: usize = 50_000;
-const TASK_LOCK_RESERVE_TOOL: &str = "orbit.task.locks.reserve";
 
 /// Status events that put a task in `blocked` because a run judged the work:
 /// the failure is attributed to the task's footprint unless its text names an
@@ -309,17 +304,11 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<CodebaseFacts, OrbitError> 
         })
         .collect();
 
-    // Filter in the store before applying the limit, so other workspaces
-    // cannot crowd out local evidence. Legacy unscoped denials cannot be
-    // safely attributed from task IDs or shared relative paths; exclude them.
+    // Legacy unscoped denials cannot be attributed safely. The durable
+    // workspace-scoped facts survive command-audit retention.
     let lock_denials = runtime
-        .list_audit_events_filtered(&AuditEventFilter {
-            workspace_id: Some(runtime.workspace_id()?),
-            tool_name: Some(TASK_LOCK_RESERVE_TOOL.to_string()),
-            status: Some(AuditEventStatus::Denied),
-            limit: LOCK_DENIAL_SCAN_LIMIT,
-            ..Default::default()
-        })?
+        .sqlite_store()?
+        .list_task_lock_denials(&runtime.workspace_id()?)?
         .iter()
         .filter_map(lock_denial)
         .collect();
@@ -444,11 +433,8 @@ fn actor_kind(by: &str) -> &'static str {
 
 /// A lock-conflict denial from `orbit.task.locks.reserve`. Capability
 /// refusals and denials without a conflict are not contention.
-fn lock_denial(event: &AuditEvent) -> Option<LockDenial> {
-    if event.command == "authorization" {
-        return None;
-    }
-    let arguments: Value = serde_json::from_str(event.arguments_json.as_deref()?).ok()?;
+fn lock_denial(event: &TaskLockDenialRecord) -> Option<LockDenial> {
+    let arguments: Value = serde_json::from_str(&event.arguments_json).ok()?;
     let strings = |key: &str| -> Vec<String> {
         arguments
             .get(key)

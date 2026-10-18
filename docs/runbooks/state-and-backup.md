@@ -73,9 +73,11 @@ presence. Path fields live on `WorkspacePaths` in
 
 Store retention can remove old history from this database. `retention.audit_days` and
 `retention.runs_days` default to 60 days; they define eligibility but do not delete data
-by themselves. On a large store, set `retention.runs_days` to 14: that window reclaims
-much more terminal run state than 60 days (about 1.8 GiB versus about 0.4 GiB on a store
-of about 6 GiB). Audit retention can stay at 60. `orbit gc audit --apply` prunes old
+by themselves. On a large store, `retention.runs_days = 30` can reclaim more terminal
+run state than the default. Values below 30, including the `--older-than-days` override,
+are refused: Reliability > Pipeline echo dedupe and forecast-accuracy per-drain limiter
+shares still read 30 days of run state. Audit retention can stay at 60.
+`orbit gc audit --apply` prunes old
 command-audit rows, this workspace's run-audit rows, run-audit rows whose workspace id is
 no longer registered, and audit blobs no remaining row or pending write references.
 Another registered workspace keeps its own window. `orbit gc runs --apply` drops pipeline
@@ -93,6 +95,28 @@ so cleanup happens only after an operator applies a GC command or enables that r
 `orbit doctor` warns when the store file exceeds `retention.store_warn_bytes` (default
 1 GiB) and that routine is not enabled. Freed pages stay in the file until `VACUUM`.
 See [runtime configuration](../CONFIG.md) for the retention settings.
+
+The cost of each retention setting:
+
+- `retention.audit_days`: Health > Events, Incidents, Denials, `orbit audit` and the
+  diagnostics friction view lose raw history older than the cutoff. There are no
+  rollups for those views. Lock contention keeps durable requester/path/time denial
+  facts alongside reservation history. Upgrade backfills the denials still present;
+  audit history deleted before the upgrade cannot be recovered.
+- `retention.runs_days`: archived runs lose raw pipeline checkpoints. Run rows, steps,
+  summaries and commit outcomes stay, so implement_one duration with outcome=succeeded
+  still includes committed candidates and excludes runs that did not commit. Upgrade
+  backfills outcomes from existing state before pruning. Already-pruned state cannot
+  supply an unknown outcome. Resource minutes and admission forecasts have a separate
+  fixed 30-day window, so older raw samples disappear; auto-concurrency profiles and
+  forecast accuracy keep working within that supported window.
+- `retention.journal_days`: older applied transition diagnostics disappear, while
+  published task history and recovery inputs stay.
+- `retention.store_warn_bytes`: only controls a doctor warning; it prunes nothing.
+
+Across these settings, Cost, the task-store Codebase rankings, `orbit task flow` and
+friction stats keep working. These read retained invocation, task, reservation and
+friction records rather than the deleted audit payloads or checkpoints.
 
 Policy definitions under global or workspace `resources/policies/` may use
 `.yaml` or `.yml`. Named lookup, listing, and updates use the same file for a

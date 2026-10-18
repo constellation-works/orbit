@@ -449,7 +449,7 @@ define_config_settings! {
     },
     retention_runs_days: u32 => u32 {
         key: "retention.runs_days", value_type: "integer",
-        description: "Days after a terminal job run finishes before `orbit gc runs` may drop its pipeline state; the run row and its steps stay (1..=36500; default 60). On a large store, 14 reclaims much more run state than 60.",
+        description: "Days after a terminal job run finishes before `orbit gc runs` may drop its pipeline state; the run row, steps and commit outcome stay (30..=36500; default 60). The minimum preserves Reliability Pipeline echo dedupe and forecast-accuracy limiter shares.",
         section: ConfigSection::Housekeeping, order: 110,
         resolve: |raw: Option<u32>| resolve_retention_days(raw, "retention.runs_days", DEFAULT_RETENTION_DAYS),
     },

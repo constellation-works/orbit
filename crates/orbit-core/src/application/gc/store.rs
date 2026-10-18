@@ -285,8 +285,10 @@ impl OrbitRuntime {
     /// of this workspace's terminal runs, and of unregistered workspace ids,
     /// that finished before the cutoff, and stamp their `archived_at`.
     /// Another registered workspace keeps its own window. Run rows and steps
-    /// stay, so `run show` and run history keep working. `retention_days`
-    /// overrides `retention.runs_days`. The host's per-minute resource
+    /// stay with the durable commit outcome, so run history and succeeded
+    /// candidate durations keep working. `retention_days` overrides
+    /// `retention.runs_days`; both require at least 30 days for reliability
+    /// dedupe and forecast-accuracy limiter shares. The host's per-minute resource
     /// history and admission forecasts older than
     /// [`RESOURCE_MINUTES_RETENTION_DAYS`] go in the same pass.
     pub fn gc_runs(
@@ -295,6 +297,11 @@ impl OrbitRuntime {
         retention_days: Option<u32>,
     ) -> Result<RunGcReport, OrbitError> {
         let days = resolve_override(retention_days, self.retention_days()?.runs)?;
+        if days < 30 {
+            return Err(OrbitError::InvalidInput(
+                "run retention must be at least 30 days: Reliability Pipeline echo dedupe and forecast-accuracy per-drain limiter shares require 30 days of run state".to_string(),
+            ));
+        }
         let cutoff = cutoff_for(days)?;
         let store = self.sqlite_store()?;
         let pass = self.retention_pass(RetentionIdSource::JobRuns)?;

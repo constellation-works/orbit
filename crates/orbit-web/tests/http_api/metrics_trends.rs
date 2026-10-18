@@ -183,6 +183,11 @@ fn implement_one_outcome_filters_every_aggregation_and_retry_attempt() {
             Ok(())
         }).unwrap();
 
+            fixture.runtime.sqlite_store().unwrap().with_transaction(|tx| {
+                tx.connection().execute("UPDATE job_runs SET commit_decision = NULL, commit_committed = NULL WHERE workspace_id = 'ws_http_fixture' AND run_id = 'unknown'", [])
+                    .map_err(|e| orbit_core::OrbitError::Store(e.to_string()))?;
+                Ok(())
+            }).unwrap();
             let server = fixture.server(false);
             let path = format!("/api/diagnostics/implement_one?since=24h&{WS}");
             let default = json_ok(server.get(&path));
@@ -561,6 +566,91 @@ fn defect_trend_classifies_bugs_by_lineage_and_origin_after_backfill() {
                 .map(|bucket| bucket["total"].as_u64().unwrap())
                 .sum();
             assert_eq!(summed, 3, "buckets add up to the window total");
+        },
+    );
+}
+
+#[test]
+fn succeeded_durations_survive_run_gc_and_upgrade_backfill() {
+    isolated(
+        "metrics_trends::succeeded_durations_survive_run_gc_and_upgrade_backfill",
+        || {
+            let fixture = Fixture::new();
+            let at = Utc::now() - Duration::days(75);
+            super::support::rewind_retention_analytics(&fixture);
+            for (name, decision) in [
+                ("committed", "performed"),
+                ("no-diff", "verified_no_diff"),
+                ("not-committed", "performed"),
+            ] {
+                record_run(&fixture, name, None, 20, at, None);
+                outcome(&fixture, name, at, JobRunState::Success, decision);
+                if name == "not-committed" {
+                    let store = fixture.runtime.sqlite_store().unwrap();
+                    let workspace = fixture.runtime.workspace_id().unwrap();
+                    let mut state = store
+                        .read_job_run_state_for_workspace(&workspace, name)
+                        .unwrap()
+                        .unwrap();
+                    state.pipeline["commit"]["committed"] = json!(false);
+                    store
+                        .write_job_run_state_for_workspace(&workspace, name, &state)
+                        .unwrap();
+                }
+            }
+            fixture
+                .runtime
+                .sqlite_store()
+                .unwrap()
+                .with_transaction(|tx| {
+                    tx.connection()
+                        .execute(
+                            "UPDATE job_runs SET created_at = ?1, finished_at = ?1",
+                            [at.to_rfc3339()],
+                        )
+                        .map_err(|e| orbit_core::OrbitError::Store(e.to_string()))?;
+                    Ok(())
+                })
+                .unwrap();
+            super::support::upgrade_retention_analytics(&fixture);
+            // A new run after upgrade must persist its outcome on every checkpoint.
+            record_run(&fixture, "new-committed", None, 30, at, None);
+            fixture
+                .runtime
+                .sqlite_store()
+                .unwrap()
+                .with_transaction(|tx| {
+                    tx.connection()
+                        .execute("UPDATE job_runs SET finished_at = ?1", [at.to_rfc3339()])
+                        .map_err(|e| orbit_core::OrbitError::Store(e.to_string()))?;
+                    Ok(())
+                })
+                .unwrap();
+            let read = || {
+                json_ok(
+                    fixture
+                        .server(false)
+                        .get(&format!("/api/diagnostics/implement_one?{WS}&since=all")),
+                )
+            };
+            let before = read();
+            assert_eq!(before["current"]["all"]["n"], 2);
+            assert_eq!(before["slowest"].as_array().unwrap().len(), 2);
+            let gc = fixture.runtime.gc_runs(true, Some(60)).unwrap();
+            assert_eq!(gc.runs_archived, 4);
+            // Reopening must not erase outcomes for already-archived runs.
+            super::support::upgrade_retention_analytics(&fixture);
+            let after = read();
+            for key in ["current", "actors", "slowest"] {
+                assert_eq!(after[key], before[key], "{key} survives run-state archival");
+            }
+            let all = json_ok(fixture.server(false).get(&format!(
+                "/api/diagnostics/implement_one?{WS}&since=all&outcome=all"
+            )));
+            assert_eq!(
+                all["current"]["all"]["n"], 4,
+                "the non-committing run stays excluded only by succeeded"
+            );
         },
     );
 }

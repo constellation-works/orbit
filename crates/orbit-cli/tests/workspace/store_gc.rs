@@ -890,3 +890,38 @@ fn store_retention_contracts() {
         orbit_common::test_env::record_scenario_pass(name);
     }
 }
+
+#[test]
+fn run_retention_refuses_windows_shorter_than_analytics_history() {
+    const TEST: &str = "store_gc::run_retention_refuses_windows_shorter_than_analytics_history";
+    if !in_child(TEST) {
+        return;
+    }
+    let fixture = Fixture::new();
+    fs::write(fixture.work.join(".orbit/config.toml"), "").unwrap();
+    for value in ["0", "14", "29"] {
+        fixture
+            .orbit()
+            .env("ORBIT_OPERATOR", "1")
+            .args(["config", "set", "retention.runs_days", value])
+            .assert()
+            .failure()
+            .stderr(predicates::str::contains("require 30 days"));
+        fixture
+            .orbit()
+            .env("ORBIT_OPERATOR", "1")
+            .args(["gc", "runs", "--older-than-days", value, "--apply"])
+            .assert()
+            .failure();
+    }
+    fixture
+        .orbit()
+        .env("ORBIT_OPERATOR", "1")
+        .args(["config", "set", "retention.runs_days", "30"])
+        .assert()
+        .success();
+    assert_eq!(
+        fixture.json(&["gc", "runs", "--json"])["retention_days"],
+        30
+    );
+}
