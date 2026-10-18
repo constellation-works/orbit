@@ -551,6 +551,13 @@ jobs:
     # a macOS leg the preflight left out does not. Re-running it after a fix
     # adds the missing assets, retaining published bytes when a retry
     # rebuilds different bundles.
+    #
+    # Tag pushes, manual backfills and reruns for one release share the group
+    # below, keyed by the tag desktop-preflight validated. The publisher
+    # already uploading finishes, and later attempts wait, so a full plan sees
+    # a finished Linux-only manifest and stops before uploading the disk
+    # image. Another tag has its own group. The key is the preflight tag, so a
+    # backfill dispatched from a branch shares the tag push's queue.
     name: Attach desktop bundles
     needs: [desktop-preflight, publish-release, build-desktop]
     if: >-
@@ -558,6 +565,10 @@ jobs:
         && needs.desktop-preflight.outputs.enabled == 'true'
         && needs.build-desktop.result == 'success'
         && (needs.publish-release.result == 'success' || github.event_name == 'workflow_dispatch') }}
+    concurrency:
+      group: ${{ github.workflow }}-publish-desktop-${{ needs.desktop-preflight.outputs.tag }}
+      cancel-in-progress: false
+      queue: max
     runs-on: ubuntu-latest
     permissions:
       contents: write

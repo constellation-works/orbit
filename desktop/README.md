@@ -171,6 +171,11 @@ assets. Fix forward in a new release rather than replacing published files. That
 that shipped Linux-only: its signed manifest can't gain a macOS bundle later, so macOS arrives in
 the next release.
 
+Tag pushes, manual backfills, and reruns that publish the same tag attach assets one at a time.
+The publisher already uploading finishes; later attempts wait and then follow the same rules. A
+full plan that follows a Linux-only manifest stops before uploading the macOS disk image, so the
+release keeps no bundle the signed manifest omits. A different tag publishes on its own.
+
 A release that shipped without desktop bundles, such as v0.29.0, can get the missing ones from the
 workflow's manual run with the existing tag. It builds the tag's source and attaches under the same
 rules. See the [release runbook](../docs/runbooks/release.md#desktop-backfill).
