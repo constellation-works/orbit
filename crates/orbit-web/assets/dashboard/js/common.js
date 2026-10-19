@@ -1142,7 +1142,7 @@ export function syncNodes(container, newNodesArr) {
     if (key && oldMap.has(key)) {
       const oldNode = oldMap.get(key);
       if (oldNode.dataset.hash === newNode.dataset.hash) {
-        nodeToPlace = oldNode;
+        if (readsOnThisClock(oldNode, newNode)) nodeToPlace = oldNode;
       } else {
         nodeToPlace.classList.add("data-changed");
       }
@@ -1153,6 +1153,7 @@ export function syncNodes(container, newNodesArr) {
     if (newNode !== nodeToPlace) {
       teardownOnce(newNode);
     }
+    if (key) nodeToPlace.dataset.clockZone = clockZone;
 
     if (container.children[i] !== nodeToPlace) {
       if (container.children[i]) {
@@ -1179,6 +1180,22 @@ export function syncNodes(container, newNodesArr) {
   if (state) panelMessage(container.id, state);
   syncRovingRows(container);
   restoreFocus();
+}
+
+// A row hash covers the data, not the clock it is read on, so a UTC/Local
+// switch leaves it alone. A node placed before the switch is kept only while
+// it reads the same as its rebuild: one showing a time gives way, one without
+// keeps its input and state.
+function readsOnThisClock(oldNode, newNode) {
+  const placed = oldNode.dataset.clockZone;
+  if (!placed || placed === clockZone || oldNode === newNode) return true;
+  return clockReading(oldNode) === clockReading(newNode);
+}
+
+function clockReading(node) {
+  if (typeof node.querySelectorAll !== "function") return null;
+  const titles = Array.from(node.querySelectorAll("[title]"), (titled) => titled.getAttribute("title"));
+  return JSON.stringify([node.textContent, node.getAttribute("title"), titles]);
 }
 
 // One entry per admission a follower's settle-only pass carried (`orbit run
@@ -1265,7 +1282,9 @@ export function elapsedDurationInfo(record, durationMs = record?.duration_ms, no
 // chosen Local. An absolute instant renders as 24-hour time with its zone
 // abbreviation, a relative age carries that absolute instant in its title,
 // and values defined in UTC (cron schedules, the Reliability window) stay
-// on formatUtcDateTime / formatUtcRange, always labelled UTC.
+// on formatUtcDateTime / formatUtcRange, always labelled UTC. Choosing the
+// other zone repaints what `clockStamp` marked in place and rebuilds any
+// keyed node whose reading changed (`syncNodes`).
 
 function toDate(value) {
   if (value == null || value === "") return null;
@@ -1331,6 +1350,7 @@ export function setClockZone(zone) {
   } catch (_) {
     // The choice still applies to this page when storage is refused.
   }
+  repaintClockStamps();
   for (const listener of clockZoneListeners) {
     try {
       listener(zone);
@@ -1344,6 +1364,27 @@ export function setClockZone(zone) {
 export function onClockZoneChange(listener) {
   clockZoneListeners.add(listener);
   return () => clockZoneListeners.delete(listener);
+}
+
+/// Marks `node` as showing `value` through `formatDateTime`, in its text or
+/// with `title: true` its title, so a UTC/Local switch repaints it in place.
+/// A view that keeps a node across renders (an unchanged task detail, one
+/// holding a draft) then reads the new zone without a rebuild that would drop
+/// its drafts, focus and disclosures. Returns `node`.
+export function clockStamp(node, value, { title = false } = {}) {
+  if (!node || !toDate(value)) return node;
+  node.dataset.clockAt = String(value);
+  if (title) node.dataset.clockIn = "title";
+  return node;
+}
+
+function repaintClockStamps() {
+  if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") return;
+  for (const node of document.querySelectorAll("[data-clock-at]")) {
+    const text = formatDateTime(node.dataset.clockAt);
+    if (node.dataset.clockIn === "title") node.title = text;
+    else node.textContent = text;
+  }
 }
 
 function clockIsUtc() {

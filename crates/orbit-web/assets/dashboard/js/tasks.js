@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, infoHint, fetchJson, patchJson, postJson, syncNodes, teardownNode, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref, bindTaskLink, submissionNoticeLines, stateCell, fmtDuration, elapsedDurationInfo } from './common.js';
+import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, infoHint, fetchJson, patchJson, postJson, syncNodes, teardownNode, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref, bindTaskLink, clockStamp, submissionNoticeLines, stateCell, fmtDuration, elapsedDurationInfo } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { DRAIN_POOLS, backlogReadiness, drainReadinessEntry, drainReadinessFor, drainReadinessView, drainWaitSignature } from './drain-waits.js';
@@ -228,6 +228,12 @@ function fmtAbsTimeValue(context, value) {
   return context && typeof context.fmtAbsTime === "function"
     ? context.fmtAbsTime(value)
     : (value || "-");
+}
+
+// An absolute time in a task detail. The detail is kept while its task is
+// unchanged, so the time is stamped for a UTC/Local switch to repaint.
+function absTimeNode(context, value, attrs = {}) {
+  return clockStamp(el("span", { ...attrs, text: fmtAbsTimeValue(context, value) }), value);
 }
 
 function refreshTasks(context) {
@@ -2276,8 +2282,12 @@ function buildCommentCard(task, comment, index, context) {
       text: writer,
     }),
     isAgentComment(writer, task) ? el("span", { class: "comment-agent-pill", text: "agent" }) : null,
-    el("span", { class: "comment-at", text: fmtAbsTimeValue(context, comment && comment.at) }),
-    el("span", { class: "comment-age", text: commentAge(comment && comment.at), title: fmtAbsTimeValue(context, comment && comment.at) }),
+    absTimeNode(context, comment && comment.at, { class: "comment-at" }),
+    clockStamp(
+      el("span", { class: "comment-age", text: commentAge(comment && comment.at), title: fmtAbsTimeValue(context, comment && comment.at) }),
+      comment && comment.at,
+      { title: true },
+    ),
     size,
     actions,
   ]);
@@ -2826,8 +2836,8 @@ function buildTaskMeta(task, context, { addField, editor, showsEditor }) {
     if (task.pr_status) value.appendChild(el("span", { class: "fact-note", text: ` · ${task.pr_status}` }));
     facts.appendChild(fact("Pull request", value));
   }
-  if (task.created_at) facts.appendChild(fact("Created", fmtAbsTimeValue(context, task.created_at)));
-  if (task.updated_at) facts.appendChild(fact("Updated", fmtAbsTimeValue(context, task.updated_at)));
+  if (task.created_at) facts.appendChild(fact("Created", absTimeNode(context, task.created_at, { class: "value" })));
+  if (task.updated_at) facts.appendChild(fact("Updated", absTimeNode(context, task.updated_at, { class: "value" })));
   // ORB-00037: in the aggregate ("All workspaces") view each task carries its
   // owning workspace's filesystem location (home-abbreviated to ~ server-side);
   // show it in full here since the row only has room for the short name badge.
@@ -2912,7 +2922,9 @@ function buildTaskHistory(task, context) {
   for (const h of meaningful.slice().reverse()) {
     const note = h.note ? ` (${h.note})` : "";
     wrap.appendChild(el("div", { class: "history-line" }, [
-      document.createTextNode(`[${fmtAbsTimeValue(context, h.at)}] `),
+      document.createTextNode("["),
+      absTimeNode(context, h.at),
+      document.createTextNode("] "),
       el("span", { class: "actor", text: h.by || "?" }),
       document.createTextNode(`: ${taskHistoryEventLabel(h)}${note}`),
     ]));
@@ -3093,7 +3105,7 @@ function buildTaskRun(run, task, context) {
     el("div", { class: "task-run-head" }, [link, stateCell(run.state || "unknown")]),
     el("div", { class: "task-run-meta" }, [
       run.job_id ? el("span", { class: "task-run-job", text: run.job_id }) : null,
-      when ? el("span", { text: fmtAbsTimeValue(context, when) }) : null,
+      when ? absTimeNode(context, when) : null,
       durationMs != null ? el("span", { text: fmtDuration(durationMs) }) : null,
     ]),
     run.error_message ? el("div", { class: "task-run-error", text: run.error_message }) : null,
