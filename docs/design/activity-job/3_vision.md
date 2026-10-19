@@ -4,7 +4,7 @@ type: design
 title: "Activity / Job — Vision"
 owner: codex
 last_updated: 2026-10-14
-last_validated: 2026-10-14
+last_validated: 2026-10-18
 status: Draft
 feature: activity-job
 doc_role: vision
