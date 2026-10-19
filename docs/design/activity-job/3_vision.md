@@ -21,7 +21,7 @@ This document pressure-tests where the Activity / Job substrate may go next. It 
 
 ### 1.1 How much of Activity / Job should remain public?
 
-README frames tasks, jobs, and activities as substrate. Should Orbit keep this layer mostly internal, with goals/sessions/locks as the API, or does a durable local system still need human-editable workflows?
+README describes Orbit through its task queue, delivery pipeline and audit log, and does not name jobs or activities. Should Orbit keep this layer mostly internal, with goals/sessions/locks as the API, or does a durable local system still need human-editable workflows?
 
 ### 1.2 Should `target:` grow beyond `activity:<name>`?
 

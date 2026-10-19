@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit Positioning"
-last_validated: 2026-10-14
+last_validated: 2026-10-18
 ---
 
 # Orbit Positioning

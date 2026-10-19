@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Optimistic Merging: Orbit's preferred delivery mode. Merge fast, review after landing, keep the queue draining"
-last_validated: 2026-10-14
+last_validated: 2026-10-18
 tags: [delivery, review, throughput, scheduling, philosophy]
 related_features: [review-gate, auto-tasks, routines, activity-job, distributed-drain]
 ---
@@ -10,7 +10,7 @@ related_features: [review-gate, auto-tasks, routines, activity-job, distributed-
 
 Orbit's preferred delivery mode. Code moves forward in one direction, without blocking, and problems are fixed after the fact. Work lands quickly on the integration branch; engineering discipline comes from tasks, audit records and review that runs after landing, not from merge gates.
 
-Public write-up: [Delivery philosophy: optimistic merging](https://danieljhk.com/blog/orbit#delivery-philosophy-optimistic-merging).
+Public write-up: [Delivery philosophy: optimistic merging](https://danieljhk.com/blog/orbit-optimistic-merging#delivery-philosophy-optimistic-merging).
 
 ## Why: throughput
 
