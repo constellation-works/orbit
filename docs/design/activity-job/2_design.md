@@ -1587,7 +1587,7 @@ That seeded corpus is Activity / Job's executable reference documentation.
 
 ### 11.1 Provider typing is broader than provider wiring
 
-The `Provider` enum names `claude`, `codex`, `gemini`, `grok`, `ollama`, and `openai_compat`, but `openai_compat` has no CLI runtime and therefore cannot be executed. The schema is broader than the runtime.
+The `Provider` enum names `claude`, `codex`, `gemini`, `grok`, `copilot`, `ollama`, `openai_compat`, `cursor`, `pi`, `antigravity`, `opencode`, and `muse`, but `openai_compat` has no CLI runtime and therefore cannot be executed. The CLI entry point refuses it as HTTP-only. The schema is broader than the runtime.
 
 ### 11.2 Tool policy is advisory at dispatch
 
@@ -1610,7 +1610,7 @@ Some bad shapes fail at load time, some at job preflight, and some during dispat
 
 ### 11.5 The audit story is powerful but split
 
-The v2 envelope tree lives in `.orbit/state/audit/v2_loop/` and payload blobs live in `.orbit/state/audit/blobs/`, apart from the SQLite command-audit database. Reviewers still need to know the split layout [T20260426-0519].
+The v2 envelope and loop-event rows live in the `v2_audit_events` table of the host-global SQLite store, beside the command-audit `audit_events` table. Payload blobs live in `.orbit/state/audit/blobs/`. `.orbit/state/audit/v2_loop/` is no longer written; the one-shot legacy import is its only reader. Reviewers still need to know the split between table rows and blob files [T20260426-0519].
 
 ### 11.6 The substrate still leaks into the public product story
 
