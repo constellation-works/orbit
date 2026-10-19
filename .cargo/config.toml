@@ -16,3 +16,7 @@ ORBIT_SKIP_HOST_PREREQUISITES = "1"
 # value already in the environment wins, so `=0` restores real syncs.
 # See docs/DEVELOPMENT.md#fixtures-on-a-loaded-host.
 ORBIT_TEST_RELAXED_DURABILITY = "1"
+# Test processes share the digest of their debug executable instead of each
+# hashing its roughly 200 MB again against a fresh generation root. Only debug
+# builds honor it. See docs/DEVELOPMENT.md#fixtures-on-a-loaded-host.
+ORBIT_TEST_SHARED_IMAGE_DIGESTS = { value = "target/test-image-digests", relative = true }
