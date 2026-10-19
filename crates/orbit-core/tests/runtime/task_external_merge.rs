@@ -447,7 +447,9 @@ fn released_claim_pull_requests_require_a_merge_naming_the_task_into_the_capture
                     .forge
                     .merge_recent(103, "OTHER-1", BOT, "captured-landing"),
                 "other-claim" => {
-                    // The merge names this task, but only another task's claim records it.
+                    // The merge names an unrelated task, on the captured branch.
+                    // Only this task's released claim records the PR, so the
+                    // named task must not settle from another task's claim.
                     let unrelated = fx.add_task("Unrelated", TaskStatus::Blocked, &[]);
                     fx.forge
                         .merge_recent(103, &unrelated, BOT, "captured-landing");

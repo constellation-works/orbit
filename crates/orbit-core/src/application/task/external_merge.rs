@@ -293,15 +293,16 @@ impl OrbitRuntime {
     }
 
     /// The delivery identities, or none when they cannot be read: only
-    /// recorded claim PRs then prove themselves Orbit's.
+    /// recorded claim and accepted handoff pull requests then prove
+    /// themselves Orbit's.
     fn settlement_authors(&self, repo_root: &std::path::Path) -> Vec<String> {
         self.delivery_authors(self.task_pr_forge(), repo_root)
             .unwrap_or_else(|error| {
                 tracing::warn!(
                     target: "orbit.core.external_merge",
                     error = %error,
-                    "could not read the delivery identity; only recorded claim pull \
-                     requests can settle a task"
+                    "could not read the delivery identity; only recorded claim and \
+                     accepted handoff pull requests can settle a task"
                 );
                 Vec::new()
             })
