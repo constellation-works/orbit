@@ -3,7 +3,7 @@ type: runbook
 summary: Reclaim declared rebuildable outputs from kept terminal run worktrees and their host validation output.
 tags: [disk, worktree, gc]
 paths: ["crates/orbit-engine/src/executor/automation/vcs/worktree/", "crates/orbit-core/src/application/gc/"]
-last_validated: 2026-10-14
+last_validated: 2026-10-19
 ---
 
 # Reclaim kept worktree output
