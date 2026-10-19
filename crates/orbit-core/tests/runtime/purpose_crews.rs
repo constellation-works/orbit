@@ -307,9 +307,9 @@ fn an_unset_purpose_resolves_as_it_did_before_purposes() {
     };
     assert_eq!(
         row("final_recovery")["key"],
-        "workflow.final_recovery_crews"
+        "workflow.purpose_crews.final_recovery"
     );
-    assert_eq!(row("review")["key"], "operation.review_crew");
+    assert_eq!(row("review")["key"], "workflow.purpose_crews.review");
     assert_eq!(row("task_pilot")["configured"], false);
     assert_eq!(row("task_pilot")["resolved_from"], LOW);
     assert_eq!(row("task_pilot")["pool"], json!(["low_lane"]));

@@ -59,9 +59,9 @@ pub enum ConfigSection {
     Crews,
     /// `execution.*` — how agent subprocesses run.
     Execution,
-    /// `review.*` and `operation.review_crew` — before-PR review and the
-    /// automatic-review crew. After-landing review is an auto-task flag, not
-    /// a key.
+    /// `review.*` and `workflow.purpose_crews.review` — review before
+    /// landing and the automatic-review crew. After-landing review is an
+    /// auto-task flag, not a key.
     Review,
     /// Everything else: `automation.*`, `runtime.*`, `tasks.*`,
     /// `pr.*`, `plugin.*`.
@@ -86,7 +86,7 @@ impl ConfigSection {
             Self::Delivery => "Delivery (workflow.*)",
             Self::Crews => "Crews (crews.*)",
             Self::Execution => "Execution (execution.*)",
-            Self::Review => "Review (review.*, operation.review_crew)",
+            Self::Review => "Review (review.*, workflow.purpose_crews.review)",
             Self::Housekeeping => "Housekeeping",
         }
     }
@@ -98,7 +98,7 @@ impl ConfigSection {
             Self::Delivery => "how tasks are shipped",
             Self::Crews => "named provider/model assignments",
             Self::Execution => "how agent subprocesses run",
-            Self::Review => "before-PR review and the automatic-review crew",
+            Self::Review => "review before landing and the automatic-review crew",
             Self::Housekeeping => "logs, ids, plugins, and PR links",
         }
     }
@@ -173,8 +173,8 @@ mod keys;
 mod settings;
 
 pub(crate) use keys::{
-    DEPRECATED_CONFIG_KEYS, REMOVED_CONFIG_KEYS, is_compatibility_config_key,
-    is_machine_identity_key, parse_crew_field_key,
+    DEPRECATED_CONFIG_KEYS, DEPRECATED_VALUE_FORMS, REMOVED_CONFIG_KEYS,
+    is_compatibility_config_key, is_machine_identity_key, parse_crew_field_key,
 };
 pub use keys::{
     GLOBAL_ONLY_KEY_PREFIX, admit_config_key, admit_settable_config_key, config_key_options,

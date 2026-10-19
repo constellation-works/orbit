@@ -1,5 +1,5 @@
-//! `review.before_pr` (and `review.before_landing`) on a local-only route is
-//! held before dispatch [ORB-14168] [ORB-14849].
+//! `review.timing = before_pr` (and `before_landing`) on a local-only route
+//! is held before dispatch [ORB-14168] [ORB-14849].
 //!
 //! Readiness, the drain's wave and `orbit doctor`'s review switches share the
 //! ship mode automatic delivery uses. Submitting `task_local_pipeline` still
@@ -134,9 +134,10 @@ fn running_drain(runtime: &OrbitRuntime) -> String {
 /// The detail readiness and the drain's last pass show for this layer.
 fn conflict(source: &str) -> String {
     format!(
-        "review.before_pr ({source}) holds PR creation for a reviewer and has no meaning on the \
-         local-only delivery route; ship through the PR route or turn review.before_pr off for \
-         local delivery (after-landing review is the delivery-code-review auto-task)"
+        "review.timing = before_pr ({source}) holds PR creation for a reviewer and has no \
+         meaning on the local-only delivery route; ship through the PR route or set \
+         review.timing = off for local delivery (after-landing review is the \
+         delivery-code-review auto-task)"
     )
 }
 
@@ -233,13 +234,13 @@ fn local_pipeline_error(runtime: &OrbitRuntime, task: &str) -> OrbitError {
         .expect_err("this fixture does not complete a local delivery")
 }
 
-/// A local workspace holds backlog work while effective `review.before_pr` is
-/// on, whether that value is inherited from global config or set on the
-/// workspace. A workspace `false` overrides a global `true`. A PR workspace
+/// A local workspace holds backlog work while effective `review.timing` is
+/// `before_pr`, whether that value is inherited from global config or set on
+/// the workspace. A workspace `off` overrides a global `before_pr`. A PR workspace
 /// stays eligible. `task_local_pipeline` still refuses the combination on
 /// both routes.
 fn local_route_holds_before_pr_and_the_pr_route_stays_eligible() {
-    let (_root, local_global) = open(ShipMode::Local, "[review]\nbefore_pr = true\n", "");
+    let (_root, local_global) = open(ShipMode::Local, "[review]\ntiming = \"before_pr\"\n", "");
     let inherited = seed(&local_global, "inherited");
     assert_eq!(
         local_global
@@ -255,17 +256,17 @@ fn local_route_holds_before_pr_and_the_pr_route_stays_eligible() {
         panic!("local-route admission must refuse before the job loads, got {refused}");
     };
     assert!(message.contains(REFUSAL_MARK), "{message}");
-    assert!(message.contains("turn review.before_pr off"), "{message}");
+    assert!(message.contains("set review.timing = off"), "{message}");
 
     let (_root, overridden) = open(
         ShipMode::Local,
-        "[review]\nbefore_pr = true\n",
-        "[review]\nbefore_pr = false\n",
+        "[review]\ntiming = \"before_pr\"\n",
+        "[review]\ntiming = \"off\"\n",
     );
     let cleared = seed(&overridden, "workspace off");
     assert!(
         !overridden.operation_policy().review_before_pr.value,
-        "workspace false overrides global true"
+        "workspace off overrides global before_pr"
     );
     assert_ready(&overridden, &cleared);
     let cleared_submit = local_pipeline_error(&overridden, &cleared);
@@ -274,7 +275,7 @@ fn local_route_holds_before_pr_and_the_pr_route_stays_eligible() {
         "turning the switch off must leave the local-route guard idle, got {cleared_submit}"
     );
 
-    let (_root, local_workspace) = open(ShipMode::Local, "", "[review]\nbefore_pr = true\n");
+    let (_root, local_workspace) = open(ShipMode::Local, "", "[review]\ntiming = \"before_pr\"\n");
     let workspace_set = seed(&local_workspace, "workspace on");
     assert_eq!(
         local_workspace
@@ -291,7 +292,7 @@ fn local_route_holds_before_pr_and_the_pr_route_stays_eligible() {
         "{workspace_refused}"
     );
 
-    let (_root, pr) = open(ShipMode::Pr, "", "[review]\nbefore_pr = true\n");
+    let (_root, pr) = open(ShipMode::Pr, "", "[review]\ntiming = \"before_pr\"\n");
     let pr_task = seed(&pr, "pr route");
     assert_ready(&pr, &pr_task);
     // The job-name guard does not follow the workspace ship mode: a local
@@ -309,11 +310,15 @@ fn local_route_holds_before_pr_and_the_pr_route_stays_eligible() {
     );
 }
 
-/// [ORB-14849] `review.before_landing` on a local-only route opens no pull
-/// request to review, so it is held before dispatch and refused at
-/// submission exactly like `review.before_pr`, under a code of its own.
+/// [ORB-14849] `review.timing = before_landing` on a local-only route opens
+/// no pull request to review, so it is held before dispatch and refused at
+/// submission exactly like `before_pr`, under a code of its own.
 fn local_route_holds_before_landing_under_its_own_code() {
-    let (_root, local) = open(ShipMode::Local, "", "[review]\nbefore_landing = true\n");
+    let (_root, local) = open(
+        ShipMode::Local,
+        "",
+        "[review]\ntiming = \"before_landing\"\n",
+    );
     let task = seed(&local, "before landing");
 
     let discovered = backlog(&local, json!({}));
@@ -325,8 +330,8 @@ fn local_route_holds_before_landing_under_its_own_code() {
     );
     let detail = skipped["detail"].as_str().unwrap().to_string();
     assert!(
-        detail.starts_with("review.before_landing (workspace) ")
-            && detail.contains("turn review.before_landing off"),
+        detail.starts_with("review.timing = before_landing (workspace) ")
+            && detail.contains("set review.timing = off"),
         "{detail}"
     );
 
@@ -349,10 +354,7 @@ fn local_route_holds_before_landing_under_its_own_code() {
     let OrbitError::InvalidInput(message) = &refused else {
         panic!("local-route admission must refuse before the job loads, got {refused}");
     };
-    assert!(
-        message.contains("turn review.before_landing off"),
-        "{message}"
-    );
+    assert!(message.contains("set review.timing = off"), "{message}");
 }
 
 // Related boundary scenarios share the isolated table fixture.

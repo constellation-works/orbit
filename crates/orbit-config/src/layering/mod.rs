@@ -24,8 +24,9 @@
 //!
 //! The review keys are resolved per layer by [`crate::operation`] rather than
 //! from the merged document, so their provenance is exact. Each document's
-//! deprecated review keys are translated to their `[review]` spelling as it
-//! is parsed, so the merge, the snapshot and `orbit config get` all see the
+//! deprecated spellings are translated to their replacement keys before the
+//! merge ([`crate::aliases`]), the workspace file against the global file
+//! beneath it, so the merge, the snapshot and `orbit config get` all see the
 //! translated value.
 
 // `load` admits documents, `document` owns TOML helpers, `provenance` attributes

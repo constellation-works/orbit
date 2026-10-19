@@ -23,7 +23,7 @@ fn configure_crews(fixture: &Fixture) {
         config["crews"][name]["model"] = value(model);
         config["crews"][name]["backend"] = value("cli");
     }
-    config["operation"]["review_crew"] = value("opus");
+    config["workflow"]["purpose_crews"]["review"] = value("opus");
     fs::write(&path, config.to_string()).unwrap();
 }
 
@@ -245,7 +245,7 @@ fn every_surface_reads_the_seeded_provider_limit_store() {
         silent["message"],
         "gemini: no usage signal; Orbit learns limits from failures"
     );
-    let lane = "operation.review_crew";
+    let lane = "workflow.purpose_crews.review";
     let row = doctor_row(&rows, &format!("provider-limits:{lane}"));
     assert_eq!(row["status"], "warning", "{row}");
     let message = row["message"].as_str().unwrap();
@@ -279,7 +279,7 @@ fn every_surface_reads_the_seeded_provider_limit_store() {
         .collect::<Vec<_>>();
     assert!(
         checks.contains(&("provider-limits:claude", "warning"))
-            && checks.contains(&("provider-limits:operation.review_crew", "warning")),
+            && checks.contains(&("provider-limits:workflow.purpose_crews.review", "warning")),
         "{claude}"
     );
     assert_eq!(

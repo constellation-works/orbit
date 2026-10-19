@@ -99,7 +99,7 @@ next: false
   </div>
   <div class="orbit-guarantee">
     <div class="orbit-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M6 8.5v7"/><path d="M8.5 6H12a3.5 3.5 0 0 1 3.5 3.5"/></svg></div>
-    <div><h2>Code lands fast, with optional review</h2><p>Changes land on <code>agent-main</code> without a review gate. CI is a signal, not a blocker. Enable <code>delivery-code-review</code> to review batches after landing and file findings as tasks; it is off by default. Review before landing is optional: turn on <code>review.before_pr</code> or <code>review.before_landing</code> if you want a gate. Protected branches still enforce their required checks and approvals.</p></div>
+    <div><h2>Code lands fast, with optional review</h2><p>Changes land on <code>agent-main</code> without a review gate. CI is a signal, not a blocker. Enable <code>delivery-code-review</code> to review batches after landing and file findings as tasks; it is off by default. Review before landing is optional: set <code>review.timing</code> to <code>before_pr</code> or <code>before_landing</code> if you want a gate. Protected branches still enforce their required checks and approvals.</p></div>
   </div>
   <div class="orbit-guarantee">
     <div class="orbit-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h11"/><path d="M4 12h11"/><path d="M4 19h7"/><path d="m16 18 2 2 4-4"/></svg></div>
@@ -147,7 +147,7 @@ next: false
     </a>
   </div>
 
-  <p class="orbit-walk-next">Choose a second-agent review point: before PR with <code>review.before_pr</code>, before landing with <code>review.before_landing</code>, or after landing with <code>orbit auto-task toggle delivery-code-review on</code>. See <a href="concepts/tasks/#review-layers">Review layers</a> for when each runs and what it blocks. To merge yourself, leave off <code>--complete</code>: every run then stops at <code>review</code> with the pull request open. Or <a href="getting-started/first-task/">ship your first task by hand</a>.</p>
+  <p class="orbit-walk-next">Choose a second-agent review point: before PR with <code>review.timing = "before_pr"</code>, before landing with <code>review.timing = "before_landing"</code>, or after landing with <code>orbit auto-task toggle delivery-code-review on</code>. See <a href="concepts/tasks/#review-layers">Review layers</a> for when each runs and what it blocks. To merge yourself, leave off <code>--complete</code>: every run then stops at <code>review</code> with the pull request open. Or <a href="getting-started/first-task/">ship your first task by hand</a>.</p>
 </section>
 
 <section class="orbit-section">

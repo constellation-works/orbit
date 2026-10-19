@@ -53,9 +53,10 @@
 //! - `memory_limit` — the typed worker memory limit ([`MemoryLimit`]) and
 //!   its one parser [ORB-12913].
 //! - `operation` — typed review preferences (`[review]` and
-//!   `operation.review_crew`, one crew or a pool), their layered resolution
-//!   and the translation of deprecated review keys [ORB-11333] [ORB-13992]
-//!   [ORB-15195].
+//!   `workflow.purpose_crews.review`, one crew or a pool) and their layered
+//!   resolution [ORB-11333] [ORB-13992] [ORB-15195].
+//! - `aliases` — read-time translation of deprecated spellings into their
+//!   replacement keys [ORB-16775].
 //! - `resolved` — the consumer-facing [`ResolvedConfig`] views, assembled in
 //!   `resolved/config.rs` with crew admission, compatibility checks and environment
 //!   projection in sibling named modules.
@@ -66,6 +67,7 @@
 //!   refuses to replace a file changed since the store read it.
 //! - `seed` — rendering and writing a fresh default `config.toml`.
 
+mod aliases;
 mod crew_pools;
 mod layering;
 mod memory_limit;
@@ -93,6 +95,9 @@ use orbit_common::OrbitError;
 use orbit_common::fs::open_read_only_no_follow;
 use orbit_common::security::redaction::redact_home_dir;
 
+pub use aliases::{
+    ShellProbeMode, WorkerContainmentMode, deprecated_key_rewrites, translate_deprecated_keys,
+};
 pub use crew_pools::{
     ComplexityCrewPools, CrewPoolEntry, PurposeCrewPools, canonical_crew_pool,
     canonical_crew_pool_entries,
@@ -104,8 +109,7 @@ pub use layering::{
 pub use memory_limit::{MemoryLimit, MemoryUnit};
 pub use operation::{
     OPERATION_POLICY_VERSION, OperationField, OperationLayerSource, OperationPolicy,
-    REVIEW_BEFORE_PR_KEY, REVIEW_CREW_KEY, REVIEW_MINUTES_KEY, ReviewCrewSetting,
-    translate_legacy_review_keys,
+    REVIEW_CREW_KEY, REVIEW_MINUTES_KEY, REVIEW_TIMING_KEY, ReviewCrewSetting, ReviewTimingSetting,
 };
 pub use persistence::PersistenceConfig;
 pub use plugin_enablement::{

@@ -44,15 +44,15 @@ From [Orbit Positioning](POSITIONING.md):
 
 ## Other review modes
 
-Optimistic merging is the preferred default, not the only option. Operators who want a gate can enable one review layer before landing (only one may be on at a time; see [CONFIG.md](CONFIG.md)):
+Optimistic merging is the preferred default, not the only option. Operators who want a gate can enable one review layer before landing (`review.timing` selects one; see [CONFIG.md](CONFIG.md)):
 
 | Mode | Config | Behaviour |
 | --- | --- | --- |
 | After landing (preferred) | `delivery-code-review` auto-task enabled | Batches review of landed changes; confirmed findings become follow-up bug tasks. |
-| Before PR | `review.before_pr = true` | A fresh reviewer fixes findings before the PR is opened. |
-| Before landing | `review.before_landing = true` | The PR opens first; only the head the review settled is merged. |
+| Before PR | `review.timing = "before_pr"` | A fresh reviewer fixes findings before the PR is opened. |
+| Before landing | `review.timing = "before_landing"` | The PR opens first; only the head the review settled is merged. |
 
-The legacy `operation.review_policy` values (`after-landing`, `before-pr`, `none`) are still accepted with a deprecation warning. New configuration uses `review.before_pr`, `review.before_landing`, and the `delivery-code-review` auto-task flag. Before-PR and before-landing review hold a task's declared footprint for the length of the review, which is the throughput cost described above.
+The legacy `operation.review_policy` values (`after-landing`, `before-pr`, `none`) and the `review.before_pr` and `review.before_landing` booleans are still accepted with a deprecation warning. New configuration uses `review.timing` and the `delivery-code-review` auto-task flag. Before-PR and before-landing review hold a task's declared footprint for the length of the review, which is the throughput cost described above.
 
 ## Decision lens
 

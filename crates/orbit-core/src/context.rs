@@ -422,7 +422,7 @@ pub(crate) struct OrbitRuntimeSettings {
     crews: std::collections::BTreeMap<String, Crew>,
     default_crew: Option<String>,
     complexity_crews: orbit_config::ComplexityCrewPools,
-    /// Admitted `workflow.final_recovery_crews`; empty disables final recovery.
+    /// Admitted `workflow.purpose_crews.final_recovery`; empty disables final recovery.
     final_recovery_crews: Vec<String>,
     /// Admitted `workflow.purpose_crews.<purpose>` pools; empty is unset.
     purpose_crews: orbit_config::PurposeCrewPools,

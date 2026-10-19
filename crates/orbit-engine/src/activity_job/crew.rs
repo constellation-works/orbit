@@ -28,7 +28,7 @@ pub struct ResolvedAgentSettings {
 const ALLOWED_CREWS_KEY: &str = "allowed_crews";
 /// Activity input naming the configuration the host resolves the crew from
 /// (a `workflow.purpose_crews.<purpose>` or `workflow.<tier>_complexity_crews`
-/// pool, `workflow.final_recovery_crews`).
+/// pool, or the final-recovery binding `workflow.final_recovery_crews`).
 const CREW_CONFIG_KEY: &str = "crew_config_key";
 
 /// Resolve one crew assignment for an activity. Explicit activity input wins —

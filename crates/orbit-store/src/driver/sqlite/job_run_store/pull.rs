@@ -562,7 +562,7 @@ pub(super) fn allocate(
         && !(request.review_gate && request.ship.mode == "pr")
     {
         return Err(invalid(
-            "an owner with review.before_pr or review.before_landing on admits only a PR leaf \
+            "an owner with review.timing = before_pr or before_landing admits only a PR leaf \
              that runs the review gate",
         ));
     }

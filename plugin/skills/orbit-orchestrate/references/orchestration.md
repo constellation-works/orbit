@@ -611,8 +611,8 @@ and never changes configuration:
 - If workspace policy already applies the same layer, the option is accepted
   unchanged. If policy applies the other layer, it is refused, naming the key
   and its source.
-- It is refused before anything is submitted when `operation.review_crew` is
-  unset, on local-only delivery (`--mode local`, or a local ship mode for a
+- It is refused before anything is submitted when
+  `workflow.purpose_crews.review` is unset, on local-only delivery (`--mode local`, or a local ship mode for a
   drain), and with `--pull`, where the owner decides review for its claims.
 - A drain with the option holds tasks routed to local-only delivery in the
   backlog instead of starting them. Child runs inherit the layer, and a resume

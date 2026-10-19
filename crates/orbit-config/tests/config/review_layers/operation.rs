@@ -23,7 +23,7 @@ fn load_workspace(workspace_body: &str) -> (ResolvedConfig, String) {
     (config.expect("workspace config loads"), logs)
 }
 
-fn capture_logs<T>(f: impl FnOnce() -> T) -> (T, String) {
+pub(super) fn capture_logs<T>(f: impl FnOnce() -> T) -> (T, String) {
     use std::io::{self, Write};
     use tracing_subscriber::fmt::MakeWriter;
 
@@ -60,7 +60,7 @@ fn capture_logs<T>(f: impl FnOnce() -> T) -> (T, String) {
     (result, logs)
 }
 
-fn warned_deprecated(logs: &str, key: &str) -> bool {
+pub(super) fn warned_deprecated(logs: &str, key: &str) -> bool {
     logs.lines()
         .any(|line| line.contains(key) && line.contains("config key is deprecated"))
 }
@@ -71,8 +71,8 @@ fn warned_removed(logs: &str, key: &str) -> bool {
 }
 
 #[test]
-fn review_table_sets_before_pr_and_minutes_with_their_layer() {
-    let (config, logs) = load_workspace("[review]\nbefore_pr = true\nminutes = 45\n");
+fn review_table_sets_timing_and_minutes_with_their_layer() {
+    let (config, logs) = load_workspace("[review]\ntiming = \"before_pr\"\nminutes = 45\n");
 
     let review = &config.operation;
     assert!(review.review_before_pr.value);
@@ -99,7 +99,10 @@ fn legacy_before_pr_policy_turns_before_pr_on_with_a_deprecation_warning() {
         OperationLayerSource::Workspace
     );
     // The snapshot `orbit config get` reads sees the translation too.
-    assert!(config.snapshot.review_before_pr);
+    assert_eq!(
+        config.snapshot.review_timing(),
+        orbit_config::ReviewTimingSetting::BeforePr
+    );
     assert_eq!(config.operation.legacy_after_landing, None);
     assert!(
         warned_deprecated(&logs, "operation.review_policy"),
@@ -177,7 +180,11 @@ review_minutes = 120
     assert_eq!(review.review_crew.value, vec!["grok".to_string()]);
     assert_eq!(review.legacy_after_landing, None);
     assert_eq!(config.snapshot.review_minutes, 120);
-    for key in ["operation.review_policy", "operation.review_minutes"] {
+    for key in [
+        "operation.review_policy",
+        "operation.review_minutes",
+        "operation.review_crew",
+    ] {
         assert!(warned_deprecated(&logs, key), "{key} warned: {logs}");
     }
     for key in [
@@ -214,14 +221,20 @@ fn retired_review_keys_are_not_settable() {
         "operation.review_minutes",
         "operation.review_reviewer_starts",
         "operation.review_repair_cycles",
+        "operation.review_crew",
+        "review.before_pr",
+        "review.before_landing",
     ] {
         let error = admit_settable_config_key(key).expect_err("retired key refused");
         assert!(
-            error.to_string().contains("review.") || error.to_string().contains("[review]"),
+            error.to_string().contains("review.")
+                || error.to_string().contains("[review]")
+                || error.to_string().contains("workflow.purpose_crews.review"),
             "{key} names its replacement: {error}"
         );
     }
-    admit_settable_config_key("review.before_pr").expect("live key");
+    admit_settable_config_key("review.timing").expect("live key");
+    admit_settable_config_key("workflow.purpose_crews.review").expect("live key");
     admit_settable_config_key("review.minutes").expect("live key");
 }
 

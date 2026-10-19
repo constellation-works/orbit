@@ -264,7 +264,7 @@ Orbit's own work draws its crew from the complexity pools, like a task with no
 crew, until you give a purpose a pool of its own (see
 [purpose pools](#purpose-pools)). Shipped auto-task templates name no crew, so
 each minted task draws from the pool for its complexity; a `template.crew`
-setting, an explicit template crew, and `operation.review_crew` for
+setting, an explicit template crew, and `workflow.purpose_crews.review` for
 `delivery-code-review` still win. While their purpose pools are unset, the
 task pilot draws from `low`, step-failure and PR conflict recovery from
 `medium`, and repairs authorized by `orbit run auto --auto-fix`, conflict
@@ -288,10 +288,12 @@ baseline_red_repair = ["opus"]
 ```
 
 The purposes are `task_pilot`, `failure_recovery`, `auto_fix`,
-`baseline_red_repair`, `ci_failure_sweep`, `merged_head_repair` and
-`dependabot`. Final recovery and automatic review keep their existing keys,
-`workflow.final_recovery_crews` and `operation.review_crew`. A crew is chosen
-in this order:
+`baseline_red_repair` and `sweep_tasks` (every task the CI failure,
+Dependabot, code-scanning and merged-head repair sweeps file), plus
+`final_recovery` and `review`, which keep their own rules: final recovery
+draws only from its pool, and `[]` turns it off; automatic review needs its
+pool set and avoids the crew that implemented the reviewed work. For the
+first five, a crew is chosen in this order:
 
 1. An explicit crew on the task, auto-task template or activity input, used as
    it is.
@@ -327,13 +329,12 @@ warning. A `[crews.system]` table you define is an ordinary crew.
 | `workflow.medium_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for medium-complexity tasks with no crew, and for step-failure and PR conflict recovery while their purpose pool is unset. |
 | `workflow.hard_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for hard-complexity tasks with no crew. |
 | `workflow.xhard_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for xhard-complexity tasks with no crew. |
-| `workflow.final_recovery_crews` | array&lt;string&gt; · **Default:** `["sol:100", "opus:20"]`<br>Crew pool for final recovery, drawn once per run after step recovery is exhausted. The default keeps only members you define; `[]` disables final recovery. |
 | `workflow.purpose_crews.auto_fix` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for repairs authorized by `orbit run auto --auto-fix`. Unset or `[]`, they draw from `workflow.low_complexity_crews`. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
 | `workflow.purpose_crews.baseline_red_repair` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for the tasks the red-base re-check files. Unset or `[]`, they draw from their complexity pool. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
-| `workflow.purpose_crews.ci_failure_sweep` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for the tasks the CI failure sweep files. Unset or `[]`, they draw from their complexity pool. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
-| `workflow.purpose_crews.dependabot` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for the tasks the Dependabot and code-scanning sweeps file. Unset or `[]`, they draw from their complexity pool. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
 | `workflow.purpose_crews.failure_recovery` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for step-failure and PR conflict recovery. Unset or `[]`, they draw from `workflow.medium_complexity_crews`. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
-| `workflow.purpose_crews.merged_head_repair` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for the merged-head repairs a review reconciliation files. Unset or `[]`, they draw from their complexity pool. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
+| `workflow.purpose_crews.final_recovery` | array&lt;string&gt; · **Default:** `["sol:100", "opus:20"]`<br>Crew pool for final recovery, drawn once per run after step recovery is exhausted. The default keeps only members you define; `[]` disables final recovery. Replaces the deprecated `workflow.final_recovery_crews`. |
+| `workflow.purpose_crews.review` | string or array · **Default:** Unset<br>Crew for automatic review: the reviewer `review.timing` runs and every review task the after-landing auto-task mints. Unset, after-landing review uses that auto-task's template crew. An array is a pool written like the complexity pools (`["sol", "grok"]` or `["sol:3", "grok:1"]`, all bare or all weighted): each review draws one crew by weight, skipping crews that are disabled or at a provider usage limit and then preferring one that did not implement the reviewed work, each step falling back to the pool when it would leave none. A distributed owner resolves its pool to one crew per claim. `[]` unsets it; a crew the registry does not define fails the load. Replaces the deprecated `operation.review_crew`. |
+| `workflow.purpose_crews.sweep_tasks` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for every task a sweep files: the CI failure sweep, the Dependabot and code-scanning sweeps, and the merged-head repairs a review reconciliation files. Unset or `[]`, they draw from their complexity pool. Replaces the deprecated `ci_failure_sweep`, `dependabot` and `merged_head_repair` pools, which still load into it; a file whose old pools differ fails to load until you merge them here. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
 | `workflow.purpose_crews.task_pilot` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for the task pilot. Unset or `[]`, it draws from `workflow.low_complexity_crews`. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
 | `workflow.provider_limit_max_used_pct` | **Advanced.** integer · **Default:** `90`<br>Delivery admission skips a crew while a live usage window of its provider, or of its model, is exhausted or used at or above this percent. `100` skips only on exhaustion. |
 | `workflow.provider_limit_overrides` | array&lt;string&gt; · **Default:** `[]`<br>Per-provider thresholds replacing `workflow.provider_limit_max_used_pct`, each `provider:percent` or `provider:off` (record readings without gating admission), such as `["claude:80", "grok:100", "codex:off"]`. |
@@ -360,8 +361,7 @@ warning. A `[crews.system]` table you define is an ordinary crew.
 | `workflow.resource_throttle.disk_resume_percent` | integer · **Default:** `85`<br>Resume below this disk percentage. |
 | `workflow.resource_throttle.io_full_high_percent` | **Advanced.** integer · **Default:** `20`<br>Linux only. High-water mark for disk I/O stall: `full avg60` in `/proc/pressure/io`, the share of the last minute in which every runnable task was stalled on I/O. `full`, not `some`, because `some` fires whenever any one process waits on disk, which is normal on a busy build host. Hosts without pressure stall information are not gated. |
 | `workflow.resource_throttle.io_full_resume_percent` | integer · **Default:** `10`<br>Resume below this `full avg60` percentage. |
-| `workflow.validation_env.login_shell` | bool · **Default:** `true`<br>Resolve the `PATH` (and allowlisted toolchain locators such as `CARGO_HOME`) that required validation and `local_shell` steps see from the owner's shell, using `-i -l -c` and falling back to `-l -c`. `false` never probes the shell. Each probe is bounded to 10 seconds and its outcome is cached for two minutes. |
-| `workflow.validation_env.interactive` | bool · **Default:** `true`<br>Try an interactive login shell (`-i -l -c`) so toolchains exported in rc files are found; on startup failure, nonzero exit, timeout, or a missing marker it falls back to `-l -c`. `false` probes only `-l -c`. Ignored when `login_shell` is `false`. |
+| `workflow.validation_env.shell_probe` | string · **Default:** `interactive`<br>How the `PATH` (and allowlisted toolchain locators such as `CARGO_HOME`) that required validation and `local_shell` steps see is resolved from the owner's shell: `interactive` tries an interactive login shell (`-i -l -c`) so toolchains exported in rc files are found, falling back to `-l -c` on startup failure, nonzero exit, timeout, or a missing marker; `login` probes only `-l -c`; `off` never probes the shell. Each probe is bounded to 10 seconds and its outcome is cached for two minutes. Replaces the deprecated `login_shell` (`false` is `off`) and `interactive` (`false` is `login`) booleans. |
 | `workflow.validation_env.path` | array&lt;string&gt; · **Default:** `[]`<br>`PATH` entries for required validation and `local_shell` steps, combined with the resolved `PATH` per `path_mode`. A leading `~/` expands to `HOME`. Empty adds nothing. |
 | `workflow.validation_env.path_mode` | **Advanced.** string · **Default:** `prepend`<br>How `workflow.validation_env.path` combines with the resolved `PATH`: `prepend` puts it first, `replace` makes it the whole `PATH`. |
 | `workflow.validation_env.build_output_env` | array&lt;string&gt; · **Default:** `[]`<br>Environment variable names bound to managed host output for required validation and host evidence. Configured bindings replace inherited values; commands must honor them. Empty allocates nothing. See [Workspace build output](#workspace-build-output). |
@@ -370,8 +370,7 @@ warning. A `[crews.system]` table you define is an ordinary crew.
 | `machine.id` | string · **Default:** Set by `orbit init`<br>Global only, read-only. This machine's stable generated identity (`hm_…`), written once by `orbit init` and never reused. `orbit config set` refuses it. |
 | `machine.task_prefix` | string · **Default:** Set by `orbit init`<br>Global only, read-only. The task-ID namespace for IDs minted on this machine (2–5 uppercase ASCII letters), chosen once by `orbit init`. `orbit config set` refuses it. |
 | `machine.host_shutdown_hold_minutes` | **Advanced.** integer · **Default:** `180`<br>Global only. Hold new unattended admissions only when a scheduled host shutdown or reboot is this many minutes away or sooner (`>= 1`). A later schedule is still reported and admission continues. |
-| `machine.worker_containment` | bool · **Default:** `true`<br>Global only. Run each detached pipeline worker in its own systemd user scope, bounded by the `machine.worker_*` limits. Needs Linux with a user manager; otherwise workers run uncontained. |
-| `machine.worker_containment_strict` | bool · **Default:** `false`<br>Global only. Refuse to launch a detached worker when no systemd user scope is available. Requires `machine.worker_containment = true`. |
+| `machine.worker_containment` | string · **Default:** `warn`<br>Global only. How detached pipeline workers are bounded: `warn` runs each in its own systemd user scope, bounded by the `machine.worker_*` limits, and runs it uncontained with a warning where no user manager is reachable; `strict` refuses that launch instead; `off` never uses a scope. Needs Linux with a user manager for a scope. A boolean still loads with a warning (`true` is `warn`, `false` is `off`), as does the deprecated `machine.worker_containment_strict` (`true` is `strict`). |
 | `machine.worker_memory_high` | **Advanced.** string · **Default:** `40%`<br>Global only. Worker scope `MemoryHigh=` (throttle point): a size such as `6G`, a percentage of RAM, or `infinity`. |
 | `machine.worker_memory_max` | **Advanced.** string · **Default:** `50%`<br>Global only. Worker scope `MemoryMax=` (OOM point), same format. |
 | `machine.worker_tasks_max` | **Advanced.** integer · **Default:** `4096`<br>Global only. Worker scope `TasksMax=`. |
@@ -406,13 +405,11 @@ warning. A `[crews.system]` table you define is an ordinary crew.
 | `worktree.reclaim_below_free_mib` | **Advanced.** integer · **Default:** Unset<br>Reclaim during admission when free MiB under the state directory falls below this threshold, oldest terminal worktrees first. Active runs and live or undecidable workers stay protected. |
 | `worktree.parked_reclaim_after_hours` | **Advanced.** integer · **Default:** `336`<br>Hours a task must stay parked in `someday`, counted from that status change, before worktree GC removes a terminal run's worktree serving it (0–876000). A live worker, an unsettled claim or a Git worktree lock keeps it. A clean worktree whose run branch holds commits no other ref reaches and `origin` lacks stays, branch included, as `skipped:unpublished_commits`. |
 | `security_alert_sweep.min_severity` | **Advanced.** string · **Default:** `moderate`<br>Lowest severity the security alert sweep files for Dependabot and code-scanning alerts: `low`, `moderate`, `high`, or `critical`. Run input overrides the workspace value, which overrides the global one. Secret-scanning alerts are always filed. |
-| `review.before_pr` | bool · **Default:** `false`<br>Before-PR review: hold PR creation for a fresh reviewer that fixes what it finds. Refused for local-only delivery. A run keeps the value it was submitted with. |
-| `review.before_landing` | bool · **Default:** `false`<br>Before-landing review: open the PR first, review it while hosted CI runs, and merge only the head the review settled. Any outcome but an approve leaves the PR open with the task in `review`. Refused for local-only delivery. Orbit fails to load config while this and `review.before_pr` are both on: there is one review layer before landing. |
-| `review.before_landing_hosts` | array&lt;string&gt; · **Default:** `[]`<br>Owner policy for the distributed drain: machine ids (`hm_…`) whose claimed leaves run before-landing review while this owner's own deliveries keep `review.before_landing` off. The owner resolves it for the caller's machine when a follower probes or pulls, and the claim captures the result. Orbit fails to load config while `review.before_pr` is on and the list is non-empty. The machine label is chosen by the caller, so this is policy, not a security boundary. |
+| `review.timing` | string · **Default:** `off`<br>When automatic review runs before landing, by a fresh reviewer that fixes what it finds: `off`; `before_pr` holds PR creation for the review; `before_landing` opens the PR first, reviews it while hosted CI runs, and merges only the head the review settled, leaving the PR open with the task in `review` on any outcome but an approve. Refused for local-only delivery. A run keeps the value it was submitted with. Replaces the deprecated `review.before_pr` and `review.before_landing` booleans, which still load (both `true` fails the load: there is one review layer before landing). |
+| `review.before_landing_hosts` | array&lt;string&gt; · **Default:** `[]`<br>Owner policy for the distributed drain: machine ids (`hm_…`) whose claimed leaves run before-landing review while this owner's own deliveries do not. The owner resolves it for the caller's machine when a follower probes or pulls, and the claim captures the result. Orbit fails to load config while `review.timing` is `before_pr` and the list is non-empty. The machine label is chosen by the caller, so this is policy, not a security boundary. |
 | `review.minutes` | integer · **Default:** `30`<br>Time limit for one candidate's before-PR or before-landing review (1–1440). Each candidate gets one review; a changed candidate is a new one. |
 | `review.baseline_commands` | array&lt;string&gt; · **Default:** `[]`<br>Commands before-PR review may rerun on the host to confirm that a failed required check fails the same way on the pinned base. `workflow.required_validation_commands` always count. A confirmed claim holds the task in the backlog until the base passes; a claim about any other command settles the review incomplete. A listed command's failure cannot be recorded as a diagnostic: it needs a passing record or a confirmed claim. The list is captured when a delivery or claim is admitted. |
 | `review.verify_findings` | **Advanced.** bool · **Default:** `false`<br>Review findings must be verified before approval. When on, a review-filed bug (tagged `code-review`, `delivery-code-review`, `security-review` or `qa-sweep`) is refused at approval and promotion and kept out of drains until `finding_verification_pipeline` confirms it. When off, verification state is ignored. Read each time the gate is checked; toggle it with `orbit config set` or the dashboard's Settings › Effective switch. Turning it on does not enable the `finding_verification` routine. |
-| `operation.review_crew` | string or array · **Default:** Unset<br>Crew for automatic review: the before-PR or before-landing reviewer and every review task the after-landing auto-task mints. Unset, after-landing review uses that auto-task's template crew. An array is a pool written like the complexity pools (`["sol", "grok"]` or `["sol:3", "grok:1"]`, all bare or all weighted): each review draws one crew by weight, skipping crews that are disabled or at a provider usage limit and then preferring one that did not implement the reviewed work, each step falling back to the pool when it would leave none. A distributed owner resolves its pool to one crew per claim. `[]` unsets it; a crew the registry does not define fails the load. |
 
 Agent stdout/stderr relay uses `~/.orbit/state/logs/orbit-agent.jsonl` with a separate 200 MiB archive budget and 50 MiB file limit. Its output cannot evict operational events from `orbit.jsonl`. The dashboard log dock, `/api/log`, `/api/log/stream`, and `orbit log tail` merge the two active feeds; per-run captures remain available separately. `runtime.log_retention_days` applies to both feeds. Size limits still take precedence over age when either feed's own budget is exhausted; seven days of operational history requires its non-relay volume to fit the operational budget.
 
@@ -426,7 +423,7 @@ Notes:
   lower than its high-water mark.
 - `orbit run ship --strict-worker-containment` and
   `orbit run auto --strict-worker-containment` turn on strict containment for
-  one run, whatever `machine.worker_containment_strict` says.
+  one run, whatever `machine.worker_containment` says.
 - After-landing review is not a config key. Turn it on with
   `orbit auto-task toggle delivery-code-review on`; it reviews landed
   deliveries in batches, observing `origin/<branch>` when that remote exists.
@@ -434,12 +431,21 @@ Notes:
   doctor is not ok while the observed commit trails the remote-tracking head
   past the batch's maximum wait.
 - `operation.review_policy` and `operation.review_minutes` are deprecated and
-  still load with a warning: `before-pr` becomes `review.before_pr = true`,
+  still load with a warning: `before-pr` becomes `review.timing = "before_pr"`,
   `after-landing` turns on the `delivery-code-review` auto-task until you
   toggle it yourself, and `none` turns neither on. A later release rejects
   them.
 - `operation.review_reviewer_starts` and `operation.review_repair_cycles` are
   retired and ignored with a warning.
+- The keys these consolidate still load with a deprecation warning:
+  `operation.review_crew`, `workflow.final_recovery_crews`, the
+  `ci_failure_sweep`, `dependabot` and `merged_head_repair` purpose pools,
+  `review.before_pr`, `review.before_landing`, a boolean
+  `machine.worker_containment`, `machine.worker_containment_strict`, and
+  `workflow.validation_env.login_shell` and `interactive`. A file that also
+  sets the replacement keeps the replacement's value. `orbit doctor
+  --fix-retired-config-keys` writes each value under its replacement and then
+  deletes the old key. A later release rejects them.
 
 Crew fields are settable as `crews.<name>.<field>`, where the field is
 `model`, `provider`, `enabled`, `effort`, `description`, or `tags`; for

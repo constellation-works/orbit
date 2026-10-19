@@ -353,8 +353,8 @@ function listText(items) {
 
 // ---------------------------------------------------------- review strip
 
-// Before-PR review is `review.before_pr`, before-landing review is
-// `review.before_landing` (or the hosts `review.before_landing_hosts` lists),
+// Before-PR review is `review.timing = before_pr`, before-landing review is
+// `review.timing = before_landing` (or the hosts `review.before_landing_hosts` lists),
 // and after-landing review is the delivery-code-review auto-task's own flag.
 function reviewStrip(review) {
   if (!review) return null;
@@ -370,15 +370,16 @@ function reviewStrip(review) {
   const after = review.after_landing || {};
   const crews = Array.isArray(before.crews) && before.crews.length ? before.crews.join(" ") : null;
   const hosts = Array.isArray(landing.hosts) ? landing.hosts : [];
+  const timing = before.enabled === true ? "before_pr" : landing.enabled === true ? "before_landing" : "off";
   const steps = [
     {
       id: "before-pr", label: "Before PR", on: before.enabled === true,
-      source: `review.before_pr = ${before.enabled === true}${before.source ? ` (${before.source})` : ""}`,
+      source: `review.timing = ${timing}${before.source ? ` (${before.source})` : ""}`,
       problems: before.problems, warnings: [],
     },
     {
       id: "before-landing", label: "Before landing", on: landing.enabled === true,
-      source: `review.before_landing = ${landing.enabled === true}${landing.source ? ` (${landing.source})` : ""}${
+      source: `review.timing = ${timing}${landing.source ? ` (${landing.source})` : ""}${
         landing.enabled === true ? "" : hosts.length ? ` · on for claims from ${hosts.join(", ")}` : " · no hosts listed"}`,
       problems: landing.problems, warnings: landing.warnings,
     },

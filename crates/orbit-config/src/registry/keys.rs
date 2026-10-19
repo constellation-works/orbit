@@ -11,6 +11,9 @@ pub fn config_key_options(key: &str) -> Vec<&'static str> {
         "execution.codex.sandbox" => CODEX_PROVIDER_SANDBOX_MODES.to_vec(),
         "execution.codex.approval_policy" => CODEX_APPROVAL_POLICIES.to_vec(),
         "security_alert_sweep.min_severity" => SECURITY_ALERT_SEVERITIES.to_vec(),
+        "review.timing" => crate::operation::ReviewTimingSetting::CHOICES.to_vec(),
+        "machine.worker_containment" => crate::aliases::WorkerContainmentMode::CHOICES.to_vec(),
+        "workflow.validation_env.shell_probe" => crate::aliases::ShellProbeMode::CHOICES.to_vec(),
         _ => Vec::new(),
     }
 }
@@ -47,7 +50,7 @@ pub(crate) const REMOVED_CONFIG_KEYS: &[(&str, &str)] = &[
         "search uses SQLite FTS5 and no longer selects a model; delete this key",
     ),
     // Operation mode was removed on 2026-09-21; the `[operation]` table keeps
-    // only `review_crew`. See docs/design/orbit-core/4_decisions.md.
+    // only the deprecated `review_crew`. See docs/design/orbit-core/4_decisions.md.
     ("operation.preset", OPERATION_MODE_REMOVED_NOTE),
     ("operation.completion", OPERATION_MODE_REMOVED_NOTE),
     ("operation.preparation", OPERATION_MODE_REMOVED_NOTE),
@@ -92,10 +95,10 @@ pub(crate) const REMOVED_CONFIG_KEYS: &[(&str, &str)] = &[
 ];
 
 const OPERATION_MODE_REMOVED_NOTE: &str = "operation mode was removed; review settings live in \
-     [review] (before_pr, before_landing, minutes) and operation.review_crew";
+     [review] (timing, minutes) and workflow.purpose_crews.review";
 
 /// Keys retired from the registry that still load: loading translates each
-/// into its replacement ([`crate::operation`]) or, where its note says so,
+/// into its replacement ([`crate::aliases`]) or, where its note says so,
 /// ignores it, and warns that it is deprecated
 /// (`resolved::warn_compatibility_keys`), and
 /// `orbit config get`/`set` refuse it with this note. A later release makes
@@ -108,11 +111,33 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
     ),
     (
         "operation.review_policy",
-        "translated: before-pr sets review.before_pr = true; after-landing enables the \
+        "translated: before-pr sets review.timing = \"before_pr\"; after-landing enables the \
      delivery-code-review auto-task until its own enabled flag is set (`orbit auto-task \
-     toggle delivery-code-review on|off`); none turns neither on. Set [review] before_pr \
+     toggle delivery-code-review on|off`); none turns neither on. Set review.timing \
      and the auto-task flag instead",
     ),
+    // [ORB-16775] Consolidated key families. Each loads through its
+    // replacement and `orbit doctor --fix-retired-config-keys` rewrites it.
+    (
+        "operation.review_crew",
+        "translated to workflow.purpose_crews.review, the same crew or pool; move the value there",
+    ),
+    (
+        "workflow.final_recovery_crews",
+        "translated to workflow.purpose_crews.final_recovery, the same pool; move the value there",
+    ),
+    ("workflow.purpose_crews.ci_failure_sweep", SWEEP_POOL_NOTE),
+    ("workflow.purpose_crews.dependabot", SWEEP_POOL_NOTE),
+    ("workflow.purpose_crews.merged_head_repair", SWEEP_POOL_NOTE),
+    ("review.before_pr", REVIEW_TIMING_NOTE),
+    ("review.before_landing", REVIEW_TIMING_NOTE),
+    (
+        "machine.worker_containment_strict",
+        "translated: true sets machine.worker_containment = \"strict\"; false keeps the \
+     boolean's mode. Set machine.worker_containment to off, warn or strict instead",
+    ),
+    ("workflow.validation_env.login_shell", SHELL_PROBE_NOTE),
+    ("workflow.validation_env.interactive", SHELL_PROBE_NOTE),
     // [ORB-15663] System work names no lane of its own: auto-task templates,
     // the task pilot and step-failure / PR conflict recovery draw from the
     // complexity pools. The key loads and warns, but no longer routes.
@@ -123,6 +148,26 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
      complexity. Delete the key and set those pools instead",
     ),
 ];
+
+const SWEEP_POOL_NOTE: &str = "translated to workflow.purpose_crews.sweep_tasks, the one pool \
+     every sweep-filed task (CI failure, Dependabot and code scanning, merged-head repair) draws \
+     from; move the value there";
+
+const REVIEW_TIMING_NOTE: &str = "translated to review.timing: before_pr = true is \"before_pr\", \
+     before_landing = true is \"before_landing\", both off is \"off\"; set review.timing instead";
+
+const SHELL_PROBE_NOTE: &str = "translated to workflow.validation_env.shell_probe: login_shell = \
+     false is \"off\", interactive = false is \"login\", otherwise \"interactive\"; set \
+     shell_probe instead";
+
+/// A registry key whose deprecated value form still loads: the row's own
+/// resolver reads it, load warns, and `orbit doctor --fix-retired-config-keys`
+/// rewrites the value. The key itself stays settable in its current form.
+pub(crate) const DEPRECATED_VALUE_FORMS: &[(&str, &str)] = &[(
+    "machine.worker_containment",
+    "a boolean is deprecated: true reads as \"warn\" and false as \"off\"; set off, warn or \
+     strict instead",
+)];
 
 /// The deprecation note for a translated key, or `None` for any other key.
 pub(crate) fn deprecated_key_note(key: &str) -> Option<&'static str> {

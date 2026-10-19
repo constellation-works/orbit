@@ -67,7 +67,7 @@ pub(super) fn agent_crew_config_for_input(
             .final_recovery_crew(input, &mut random_crew_ticket)
             .map_err(|error| {
                 DispatchError::JobValidation(format!(
-                    "activity crew drawn from `workflow.final_recovery_crews` cannot be resolved \
+                    "activity crew drawn from `workflow.purpose_crews.final_recovery` cannot be resolved \
                      or used: {error}"
                 ))
             })?,

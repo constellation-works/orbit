@@ -7,6 +7,7 @@ use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
 
 use crate::ConfigRoots;
+use crate::aliases::translate_deprecated_keys;
 use crate::crew_pools::reject_unpoolable_crew_names_in_document;
 use crate::operation::{OperationLayer, OperationLayerSource, OperationPolicy};
 use crate::persistence::PersistenceConfig;
@@ -100,9 +101,10 @@ pub(crate) fn resolve_workspace_file_document(
     workspace_path: &Path,
     raw: &str,
 ) -> Result<ResolvedConfig, OrbitError> {
-    let workspace = parse_config_document(workspace_path, raw)?;
+    let mut workspace = parse_config_document(workspace_path, raw)?;
     reject_workspace_machine_table(&workspace.value, workspace_path)?;
-    let global = parse_config_document(global_path, global_raw)?;
+    let mut global = parse_config_document(global_path, global_raw)?;
+    translate_layers(Some(&mut global), Some(&mut workspace))?;
     for document in [&global, &workspace] {
         reject_unpoolable_crew_names_in_document(&document.value, &document.path)?;
     }
@@ -165,6 +167,8 @@ fn load_layered_resolved_with_staged(
         }
     }
     let persistence = PersistenceConfig::default_for_roots(roots.global(), roots.workspace());
+    let mut global = global;
+    translate_layers(global.as_mut(), workspace.as_mut())?;
 
     let global_memory_high_percent = match global.as_ref() {
         Some(document) => resolve_percent(
@@ -241,7 +245,7 @@ fn load_layered_resolved_with_staged(
     // admitted against the crew registry; keep its canonical entries.
     resolved.operation.review_crew.value = resolved
         .snapshot
-        .operation_review_crew
+        .workflow_purpose_crews_review
         .clone()
         .unwrap_or_default();
     resolved.plugin_enablement = plugin_enablement;
@@ -250,6 +254,26 @@ fn load_layered_resolved_with_staged(
         global,
         workspace,
     })
+}
+
+/// Translate each layer's deprecated spellings ([`crate::aliases`]). The
+/// workspace file goes first, against the global file as written, so a
+/// deprecated switch it states alone keeps the half it inherited.
+fn translate_layers(
+    global: Option<&mut ConfigDocument>,
+    workspace: Option<&mut ConfigDocument>,
+) -> Result<(), OrbitError> {
+    if let Some(workspace) = workspace {
+        translate_deprecated_keys(
+            &mut workspace.value,
+            global.as_deref().map(|global| &global.value),
+            &workspace.path,
+        )?;
+    }
+    if let Some(global) = global {
+        translate_deprecated_keys(&mut global.value, None, &global.path)?;
+    }
+    Ok(())
 }
 
 /// Resolve the review preferences from the exact layers rather than the

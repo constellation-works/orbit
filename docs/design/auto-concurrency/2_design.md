@@ -91,7 +91,7 @@ consulted, and stops 300 s after the last consult.
 **Per-task resource accounting.** On Linux, each detached worker runs in its
 own systemd user scope, `orbit-worker-<run_id>-<nonce>.scope`
 (`application/job/pipeline/worker/scope.rs`). `machine.worker_containment`
-defaults to true. Orbit reads the scope's `memory.events` and `pids.events`
+defaults to `warn`. Orbit reads the scope's `memory.events` and `pids.events`
 to tell a limit breach from other failures. A worker locates its own scope
 (`WorkerScopeCgroup::of_current_process`) and records its CPU and memory per
 minute (§2). Admission reads none of it yet. macOS has no scopes, so its
@@ -1292,7 +1292,7 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   of its class, until it has 10 deliveries.
 - **Linux scopes, macOS process tree.** macOS has no worker scopes and
   samples the worker's process tree instead. A tree the sandbox will not
-  let the worker read adds no sample. Without `machine.worker_containment`,
+  let the worker read adds no sample. With `machine.worker_containment = "off"`,
   Linux records nothing either.
 - **Throughput is not measured.** The design fills headroom under the
   thresholds. It does not check that more concurrency lands more work. When

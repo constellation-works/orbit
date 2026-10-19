@@ -66,8 +66,8 @@ pub use executor_def::{
     StdoutFormat, deserialize_executor_host_os,
 };
 pub use final_recovery::{
-    FINAL_RECOVERY_ACTIVITY, FINAL_RECOVERY_CREWS_KEY, FinalRecoveryDecision,
-    MAX_DECISION_TEXT_CHARS,
+    FINAL_RECOVERY_ACTIVITY, FINAL_RECOVERY_CREWS_CONFIG_KEY, FINAL_RECOVERY_CREWS_KEY,
+    FinalRecoveryDecision, MAX_DECISION_TEXT_CHARS,
 };
 pub use host_evidence::{
     BUBBLEWRAP_DEFERRAL_PREFIX, BUBBLEWRAP_NAMESPACE_REFUSAL, BUBBLEWRAP_NAMESPACE_REFUSALS,

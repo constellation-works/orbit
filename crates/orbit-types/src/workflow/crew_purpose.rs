@@ -5,10 +5,15 @@
 //! resolves exactly as it did before purposes existed: [`CrewPurpose::fallback`]
 //! names that route.
 //!
-//! Final recovery and automatic review already had a pool of their own, so
-//! their purpose pool is that existing key (`workflow.final_recovery_crews`,
-//! `operation.review_crew`). Every other purpose reads
-//! `workflow.purpose_crews.<purpose>`.
+//! Every purpose reads `workflow.purpose_crews.<purpose>`. Final recovery and
+//! automatic review had pools of their own before purposes existed, and they
+//! keep those pools' meaning under their purpose key: no fallback route, and
+//! review's draw avoids the implementer's crew.
+//!
+//! The CI failure, Dependabot and code-scanning sweeps and merged-head repairs
+//! share one purpose, [`CrewPurpose::SweepTasks`]. Tasks recorded their
+//! purpose by name, so [`CrewPurpose::parse`] still reads the names those
+//! purposes had on their own [ORB-16775].
 
 /// Prefix of every `workflow.purpose_crews.<purpose>` configuration key.
 pub const PURPOSE_CREWS_KEY_PREFIX: &str = "workflow.purpose_crews.";
@@ -25,34 +30,34 @@ pub enum CrewPurpose {
     TaskPilot,
     /// Step-failure and PR conflict recovery.
     FailureRecovery,
-    /// Blocked-task final recovery (`workflow.final_recovery_crews`).
+    /// Blocked-task final recovery.
     FinalRecovery,
     /// `orbit run auto --auto-fix` pull-request repairs.
     AutoFix,
-    /// Automatic review (`operation.review_crew`).
+    /// Automatic review.
     Review,
     /// Tasks the red-base re-check files (`baseline-red-repair`).
     BaselineRedRepair,
-    /// Tasks the CI failure sweep files (`ci-failure-sweep`).
-    CiFailureSweep,
-    /// Merged-head repairs a review reconciliation files.
-    MergedHeadRepair,
-    /// Dependabot and code-scanning sweep tasks.
-    Dependabot,
+    /// Tasks the CI failure, Dependabot and code-scanning sweeps file, and
+    /// merged-head repairs a review reconciliation files.
+    SweepTasks,
 }
+
+/// Names [`CrewPurpose::SweepTasks`] had as three purposes, which tasks
+/// filed before they merged still record.
+const LEGACY_SWEEP_PURPOSE_NAMES: &[&str] =
+    &["ci_failure_sweep", "merged_head_repair", "dependabot"];
 
 impl CrewPurpose {
     /// Every purpose, in the order `orbit config show` lists them.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 7] = [
         Self::TaskPilot,
         Self::FailureRecovery,
         Self::FinalRecovery,
         Self::AutoFix,
         Self::Review,
         Self::BaselineRedRepair,
-        Self::CiFailureSweep,
-        Self::MergedHeadRepair,
-        Self::Dependabot,
+        Self::SweepTasks,
     ];
 
     /// The purpose's stable name, as `workflow.purpose_crews.<name>` and the
@@ -65,17 +70,19 @@ impl CrewPurpose {
             Self::AutoFix => "auto_fix",
             Self::Review => "review",
             Self::BaselineRedRepair => "baseline_red_repair",
-            Self::CiFailureSweep => "ci_failure_sweep",
-            Self::MergedHeadRepair => "merged_head_repair",
-            Self::Dependabot => "dependabot",
+            Self::SweepTasks => "sweep_tasks",
         }
     }
 
-    /// The purpose named `name`.
+    /// The purpose named `name`, including a sweep purpose's former name.
     pub fn parse(name: &str) -> Option<Self> {
+        let name = name.trim();
+        if LEGACY_SWEEP_PURPOSE_NAMES.contains(&name) {
+            return Some(Self::SweepTasks);
+        }
         Self::ALL
             .into_iter()
-            .find(|purpose| purpose.as_str() == name.trim())
+            .find(|purpose| purpose.as_str() == name)
     }
 
     /// The configuration key holding this purpose's pool.
@@ -83,20 +90,19 @@ impl CrewPurpose {
         match self {
             Self::TaskPilot => "workflow.purpose_crews.task_pilot",
             Self::FailureRecovery => "workflow.purpose_crews.failure_recovery",
-            Self::FinalRecovery => super::FINAL_RECOVERY_CREWS_KEY,
+            Self::FinalRecovery => super::FINAL_RECOVERY_CREWS_CONFIG_KEY,
             Self::AutoFix => "workflow.purpose_crews.auto_fix",
-            Self::Review => "operation.review_crew",
+            Self::Review => "workflow.purpose_crews.review",
             Self::BaselineRedRepair => "workflow.purpose_crews.baseline_red_repair",
-            Self::CiFailureSweep => "workflow.purpose_crews.ci_failure_sweep",
-            Self::MergedHeadRepair => "workflow.purpose_crews.merged_head_repair",
-            Self::Dependabot => "workflow.purpose_crews.dependabot",
+            Self::SweepTasks => "workflow.purpose_crews.sweep_tasks",
         }
     }
 
-    /// Whether the pool is a `workflow.purpose_crews.<purpose>` key, rather
-    /// than a key that predates purposes.
+    /// Whether the purpose draws through the shared purpose-pool route, with
+    /// a fallback while its pool is unset. Final recovery and review keep the
+    /// draws their pools had before purposes existed.
     pub fn has_purpose_key(self) -> bool {
-        self.config_key().starts_with(PURPOSE_CREWS_KEY_PREFIX)
+        !matches!(self, Self::FinalRecovery | Self::Review)
     }
 
     /// The purpose whose `workflow.purpose_crews.<purpose>` key is `key`.
@@ -109,13 +115,7 @@ impl CrewPurpose {
     /// Whether this purpose chooses the crew of a task, rather than of an
     /// activity a run dispatches.
     pub fn is_task_purpose(self) -> bool {
-        matches!(
-            self,
-            Self::BaselineRedRepair
-                | Self::CiFailureSweep
-                | Self::MergedHeadRepair
-                | Self::Dependabot
-        )
+        matches!(self, Self::BaselineRedRepair | Self::SweepTasks)
     }
 
     /// How the crew is chosen while the purpose's pool is unset: the route
@@ -126,10 +126,9 @@ impl CrewPurpose {
             Self::TaskPilot | Self::AutoFix => Some("workflow.low_complexity_crews"),
             Self::FailureRecovery => Some("workflow.medium_complexity_crews"),
             Self::FinalRecovery | Self::Review => None,
-            Self::BaselineRedRepair
-            | Self::CiFailureSweep
-            | Self::MergedHeadRepair
-            | Self::Dependabot => Some("the task's complexity pool, then workflow.default_crew"),
+            Self::BaselineRedRepair | Self::SweepTasks => {
+                Some("the task's complexity pool, then workflow.default_crew")
+            }
         }
     }
 }

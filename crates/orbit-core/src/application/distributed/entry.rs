@@ -135,7 +135,7 @@ pub struct DrainEntryAdmission {
     /// The single capacity reading legacy dispatch and pull both allocate
     /// against.
     pub occupancy: orbit_store::contracts::DrainLeafOccupancy,
-    /// The owner's `review.before_pr`. With it on, every claimed PR leaf runs
+    /// Whether the owner's `review.timing` is `before_pr`. With it on, every claimed PR leaf runs
     /// the before-PR review its claim captures [ORB-13908], which is why it
     /// is reported on every decision rather than left for each surface to
     /// look up. After-landing review never affects admission.
@@ -351,7 +351,7 @@ impl crate::OrbitRuntime {
 
     /// Whether the claim contract would admit this workspace, by the spec's
     /// own ordered ladder. Reported rather than raised: a workspace the claim
-    /// contract refuses — `review.before_pr` on a local ship mode, say —
+    /// contract refuses — `review.timing = before_pr` on a local ship mode, say —
     /// still ships through its legacy leaf, and saying so is what keeps the
     /// two facts from being confused.
     fn claim_contract_refusal(&self, ship: &AdmissionShipContract) -> Option<String> {

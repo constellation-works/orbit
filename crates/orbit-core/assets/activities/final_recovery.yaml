@@ -12,7 +12,7 @@ spec:
   require_response_envelope: true
   description: >
     Last automated look at a task whose run failed after step recovery was
-    exhausted. A crew drawn from workflow.final_recovery_crews diagnoses the
+    exhausted. A crew drawn from workflow.purpose_crews.final_recovery diagnoses the
     failure, may repair the assigned worktree and run repository validation,
     and returns exactly one typed decision. It has no Git-write, task-lifecycle,
     or dispatch grant: Orbit's deterministic applier, not the agent, moves the
@@ -100,8 +100,10 @@ spec:
       # already held: `reason` (a stable code) and `detail`. Evidence only.
       absorbed_refusal:
         type: object
-      # Selects the crew from workflow.final_recovery_crews; the host draws it
-      # once per run and reuses the draw on every later dispatch and resume.
+      # Selects the crew from workflow.purpose_crews.final_recovery; the host draws it
+      # once per run and reuses the draw on every later dispatch and resume. The
+      # binding keeps the pool's former key name, which earlier runs froze their
+      # draws under.
       crew_config_key:
         const: workflow.final_recovery_crews
   # Mirrors orbit_types::workflow::FinalRecoveryDecision. Orbit parses the

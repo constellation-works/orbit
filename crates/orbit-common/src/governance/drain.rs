@@ -48,7 +48,7 @@ const PROBE: OperationSpec<DrainVerb> = OperationSpec {
     verb: DrainVerb::Probe,
     cli_path: &[],
     tool_name: "orbit.drain.probe",
-    tool_description: "Read-only preflight for the distributed drain, served by the workspace owner. Reports the owner machine, binary version, distributed-drain protocol schema, the capabilities this session holds, the diagnostic caller machine, the owner-resolved ship configuration, and both review switches (`review.before_pr` and the after-landing auto-task). Declaring `caller_version`, `caller_schema`, or `caller_before_pr` also reports the first refusal an admission would raise, in the order admission applies it. It creates no request receipt, reservation, claim, or task transition, and it is never a health check for admission itself.",
+    tool_description: "Read-only preflight for the distributed drain, served by the workspace owner. Reports the owner machine, binary version, distributed-drain protocol schema, the capabilities this session holds, the diagnostic caller machine, the owner-resolved ship configuration, and both review switches (`review.timing` and the after-landing auto-task). Declaring `caller_version`, `caller_schema`, or `caller_before_pr` also reports the first refusal an admission would raise, in the order admission applies it. It creates no request receipt, reservation, claim, or task transition, and it is never a health check for admission itself.",
     cli_about: "",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
@@ -75,7 +75,7 @@ const PROBE: OperationSpec<DrainVerb> = OperationSpec {
             "caller_before_pr",
             ParamType::Boolean,
             false,
-            "Optional. The executor's `review.before_pr`. Diagnostic only: a claimed leaf runs the before-PR review the owner's ship contract captures, never the executor's own. After-landing review never affects admission.",
+            "Optional. Whether the executor's `review.timing` is `before_pr`. Diagnostic only: a claimed leaf runs the before-PR review the owner's ship contract captures, never the executor's own. After-landing review never affects admission.",
         ),
         // Revision-4 followers still send this ignored legacy field.
         ParamSpec {
@@ -161,7 +161,7 @@ const PULL: OperationSpec<DrainVerb> = OperationSpec {
             "caller_before_pr",
             ParamType::Boolean,
             true,
-            "The `review.before_pr` the executor's drain captured at submission. Diagnostic only: a claimed leaf runs the before-PR review the owner's `ship` contract captures, never the executor's own. After-landing review never affects admission.",
+            "Whether the executor's drain captured `review.timing = before_pr` at submission. Diagnostic only: a claimed leaf runs the before-PR review the owner's `ship` contract captures, never the executor's own. After-landing review never affects admission.",
         ),
         param(
             "caller_fingerprint",
@@ -173,7 +173,7 @@ const PULL: OperationSpec<DrainVerb> = OperationSpec {
             "review_gate",
             ParamType::Boolean,
             false,
-            "Whether the executor's claimed PR leaf runs the before-PR review the `ship` contract captures. An owner with `review.before_pr` on refuses an executor that does not declare it as `before_pr_unsupported`. Omitted: `false`.",
+            "Whether the executor's claimed PR leaf runs the before-PR review the `ship` contract captures. An owner with `review.timing = before_pr` refuses an executor that does not declare it as `before_pr_unsupported`. Omitted: `false`.",
         ),
         param(
             "caller_review_policy",

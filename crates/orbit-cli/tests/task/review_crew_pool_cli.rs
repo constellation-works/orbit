@@ -34,7 +34,7 @@ fn minted_review(
     enable_review_crew(&fixture);
     set_policy(&fixture, "crews.sol.enabled", "true");
     set_policy(&fixture, "crews.grok.enabled", "true");
-    set_policy(&fixture, "operation.review_crew", pool);
+    set_policy(&fixture, "workflow.purpose_crews.review", pool);
     git(&fixture, &["checkout", "-b", "fixture-delivery"]);
     commit(&fixture, "baseline\n");
     retarget(&fixture, &trigger());
@@ -94,7 +94,10 @@ fn each_batch_is_reviewed_by_a_pool_crew_that_did_not_implement_it() {
             task["crew"], reviewer,
             "work {implementer} implemented is reviewed by {reviewer}: {task}"
         );
-        assert_eq!(task["crew_source"], "operation.review_crew", "{task}");
+        assert_eq!(
+            task["crew_source"], "workflow.purpose_crews.review",
+            "{task}"
+        );
     }
 
     // The independent crew's provider is at its limit, so the pool falls
@@ -138,7 +141,10 @@ fn a_single_weighted_pool_member_is_the_review_crew_by_name() {
         task["crew"], "sol",
         "the weight is not the crew name: {task}"
     );
-    assert_eq!(task["crew_source"], "operation.review_crew", "{task}");
+    assert_eq!(
+        task["crew_source"], "workflow.purpose_crews.review",
+        "{task}"
+    );
 
     let config = fixture.json(&["config", "show", "--json"]);
     let health = &config["review"]["after_landing"]["health"];

@@ -36,8 +36,8 @@
 //! died — is settled on a later tick as an escalation, so every dispatched
 //! episode ends with one recorded decision.
 //!
-//! Enabled when `workflow.final_recovery_crews` is non-empty and this runtime
-//! owns the workspace's task records; `final_recovery_crews = []` turns it off.
+//! Enabled when `workflow.purpose_crews.final_recovery` is non-empty and this runtime
+//! owns the workspace's task records; `workflow.purpose_crews.final_recovery = []` turns it off.
 
 use std::path::{Path, PathBuf};
 
@@ -496,7 +496,7 @@ impl OrbitRuntime {
             ));
         }
         if self.context.settings().final_recovery_crews().is_empty() {
-            return Some("`workflow.final_recovery_crews` is empty".to_string());
+            return Some("`workflow.purpose_crews.final_recovery` is empty".to_string());
         }
         None
     }

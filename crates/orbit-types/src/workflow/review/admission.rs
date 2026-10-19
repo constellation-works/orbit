@@ -61,9 +61,9 @@ pub fn is_reserved_review_artifact(path: &str) -> bool {
 pub const DEFAULT_REVIEW_MINUTES: u32 = 30;
 
 /// When a managed delivery's reviewer runs. A run captures `before-pr`
-/// exactly when `review.before_pr` was on at submission, `before-landing`
-/// exactly when `review.before_landing` was [ORB-14849], and `none`
-/// otherwise [ORB-13992]. Configuration never turns both on.
+/// exactly when `review.timing` was `before_pr` at submission,
+/// `before-landing` exactly when it was `before_landing` [ORB-14849], and
+/// `none` otherwise [ORB-13992].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewTiming {
@@ -100,9 +100,10 @@ impl ReviewTiming {
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewLayer {
-    /// Hold PR creation for a reviewer, as `review.before_pr` does.
+    /// Hold PR creation for a reviewer, as `review.timing = before_pr` does.
     BeforePr,
-    /// Review the open PR before it lands, as `review.before_landing` does.
+    /// Review the open PR before it lands, as `review.timing = before_landing`
+    /// does.
     BeforeLanding,
 }
 
@@ -129,11 +130,11 @@ impl ReviewLayer {
         }
     }
 
-    /// The workspace configuration key that applies this layer.
-    pub fn config_key(self) -> &'static str {
+    /// The workspace setting that applies this layer, as `key = value`.
+    pub fn config_setting(self) -> &'static str {
         match self {
-            ReviewLayer::BeforePr => "review.before_pr",
-            ReviewLayer::BeforeLanding => "review.before_landing",
+            ReviewLayer::BeforePr => "review.timing = before_pr",
+            ReviewLayer::BeforeLanding => "review.timing = before_landing",
         }
     }
 
@@ -212,7 +213,7 @@ pub struct ReviewAdmission {
     pub crew: Option<String>,
     /// Which layer decided the crew.
     pub crew_source: String,
-    /// The configured reviewer pool when `operation.review_crew` names more
+    /// The configured reviewer pool when `workflow.purpose_crews.review` names more
     /// than one crew [ORB-15195]; `crew` is then unset and each review
     /// chooses one member when it is admitted. Empty for a single crew, so
     /// such an admission is captured exactly as before pools existed.

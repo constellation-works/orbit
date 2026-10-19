@@ -206,7 +206,7 @@ initial setup succeeded:
    `orbit workspace sync` to refresh managed defaults. → [maintenance.md](maintenance.md)
 6. **A replica execution host** — collapse to one owner, match binaries and
    protocol, make sure the follower can run the owner's before-PR reviewer
-   crew when the owner's `review.before_pr` is on, then probe. Installation is
+   crew when the owner's `review.timing` is `before_pr`, then probe. Installation is
    not pull enablement.
    → [distributed-drain.md](../../orbit/references/setup/distributed-drain.md)
 

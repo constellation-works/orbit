@@ -29,19 +29,17 @@ pub(super) const CREW_REFERENCE_KEYS: &[&str] = &["workflow.default_crew"];
 
 /// Weighted or bare crew lists whose membership the settings view reports.
 pub(super) const CREW_POOL_KEYS: &[&str] = &[
-    "operation.review_crew",
-    "workflow.final_recovery_crews",
     "workflow.low_complexity_crews",
     "workflow.medium_complexity_crews",
     "workflow.hard_complexity_crews",
     "workflow.xhard_complexity_crews",
     "workflow.purpose_crews.task_pilot",
     "workflow.purpose_crews.failure_recovery",
+    "workflow.purpose_crews.final_recovery",
     "workflow.purpose_crews.auto_fix",
+    "workflow.purpose_crews.review",
     "workflow.purpose_crews.baseline_red_repair",
-    "workflow.purpose_crews.ci_failure_sweep",
-    "workflow.purpose_crews.merged_head_repair",
-    "workflow.purpose_crews.dependabot",
+    "workflow.purpose_crews.sweep_tasks",
 ];
 
 /// Keys whose global value the workspace file did not inherit, so the caller

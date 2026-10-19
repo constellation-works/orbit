@@ -1,9 +1,11 @@
 //! Retired, deprecated and unknown `config.toml` settings.
 //!
 //! Diagnosis lists each key with the file that still sets it. The repair
-//! migrates translated review settings within each file before removing the
-//! compatibility keys. Legacy after-landing policies require operator migration;
-//! both layers are preflighted under their write locks before any backup or save.
+//! writes each deprecated key's replacement into the file that set it, as
+//! load translates it (a workspace file against the global file beneath it),
+//! before removing the compatibility keys. Legacy after-landing policies
+//! require operator migration; both layers are preflighted under their write
+//! locks before any backup or save.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,9 +13,9 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_config::{
-    CompatibilityConfigKeyDisposition, ConfigScope, ConfigStore, REVIEW_BEFORE_PR_KEY,
-    REVIEW_MINUTES_KEY, compatibility_config_keys_at, compatibility_config_keys_present,
-    translate_legacy_review_keys, unknown_config_keys_at, unknown_config_keys_present,
+    CompatibilityConfigKeyDisposition, ConfigScope, ConfigStore, compatibility_config_keys_at,
+    compatibility_config_keys_present, deprecated_key_rewrites, unknown_config_keys_at,
+    unknown_config_keys_present,
 };
 use orbit_core::OrbitRuntime;
 
@@ -38,14 +40,25 @@ pub struct RemovedRetiredConfigKey {
     pub backup_path: PathBuf,
 }
 
+/// One replacement key the repair wrote in place of a deprecated spelling.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WrittenReplacementConfigKey {
+    /// Replacement config key that was written.
+    pub key: String,
+    /// Config file it was written to.
+    pub config_path: PathBuf,
+}
+
 /// Outcome of `--fix-retired-config-keys`.
 ///
-/// An empty `removed` list means both config files were already free of
-/// retired, deprecated and unknown keys, and nothing was written.
+/// Empty `removed` and `written` lists mean both config files were already
+/// free of retired, deprecated and unknown keys, and nothing was written.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RetiredConfigKeyRepair {
     /// Keys removed, in file order: compatibility keys, then unknown paths.
     pub removed: Vec<RemovedRetiredConfigKey>,
+    /// Replacement keys written, in file order, before the removal.
+    pub written: Vec<WrittenReplacementConfigKey>,
 }
 
 pub(super) fn doctor_check_retired_config_keys(
@@ -120,12 +133,16 @@ pub(super) fn remove_retired_config_keys(
         // Plan every layer before writing either one. In particular, a workspace
         // refusal must not leave a global policy half-migrated.
         let mut planned = Vec::new();
+        let mut lower = None;
         for layer in &layers {
-            if let Some(repair) = prepare_layer(runtime, layer)? {
+            let document = read_document(&layer.path)?;
+            if let Some(repair) = prepare_layer(runtime, layer, document.clone(), lower.as_ref())? {
                 planned.push(repair);
             }
+            lower = document;
         }
         let mut removed = Vec::new();
+        let mut written = Vec::new();
         for mut repair in planned {
             let backup_path = allocate_backup(&repair.layer.path)?;
             fs::copy(&repair.layer.path, &backup_path).map_err(|error| {
@@ -136,6 +153,12 @@ pub(super) fn remove_retired_config_keys(
                 ))
             })?;
             repair.store.save()?;
+            written.extend(repair.written_keys.into_iter().map(|key| {
+                WrittenReplacementConfigKey {
+                    key,
+                    config_path: repair.layer.path.clone(),
+                }
+            }));
             removed.extend(
                 repair
                     .removed_keys
@@ -147,7 +170,7 @@ pub(super) fn remove_retired_config_keys(
                     }),
             );
         }
-        Ok(RetiredConfigKeyRepair { removed })
+        Ok(RetiredConfigKeyRepair { removed, written })
     })
 }
 
@@ -169,29 +192,45 @@ struct PlannedRepair<'a> {
     layer: &'a ConfigLayer,
     store: ConfigStore,
     removed_keys: Vec<String>,
+    written_keys: Vec<String>,
 }
 
+/// The file at `path` as written, or `None` when it does not exist.
+fn read_document(path: &Path) -> Result<Option<toml::Value>, OrbitError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let original = fs::read_to_string(path).map_err(|error| {
+        OrbitError::Io(format!(
+            "failed to read config '{}': {error}",
+            redact_home_dir(&path.display().to_string())
+        ))
+    })?;
+    toml::from_str(&original).map(Some).map_err(|error| {
+        OrbitError::InvalidInput(format!(
+            "invalid runtime config '{}': {error}",
+            redact_home_dir(&path.display().to_string())
+        ))
+    })
+}
+
+/// Plan one file's repair. `lower` is the global file as written when
+/// `layer` is the workspace file, so a deprecated switch the workspace states
+/// alone is rewritten with the half it inherits there.
 fn prepare_layer<'a>(
     runtime: &OrbitRuntime,
     layer: &'a ConfigLayer,
+    document: Option<toml::Value>,
+    lower: Option<&toml::Value>,
 ) -> Result<Option<PlannedRepair<'a>>, OrbitError> {
     if compatibility_config_keys_at(&layer.path)?.is_empty()
         && unknown_config_keys_at(&layer.path)?.is_empty()
     {
         return Ok(None);
     }
-    let original = fs::read_to_string(&layer.path).map_err(|error| {
-        OrbitError::Io(format!(
-            "failed to read config '{}': {error}",
-            redact_home_dir(&layer.path.display().to_string())
-        ))
-    })?;
-    let mut document: toml::Value = toml::from_str(&original).map_err(|error| {
-        OrbitError::InvalidInput(format!(
-            "invalid runtime config '{}': {error}",
-            redact_home_dir(&layer.path.display().to_string())
-        ))
-    })?;
+    let Some(document) = document else {
+        return Ok(None);
+    };
     let keys = compatibility_config_keys_present(&document);
     let unknown = unknown_config_keys_present(&document);
     // Even a masked after-landing value requires an explicit operator choice:
@@ -205,26 +244,25 @@ fn prepare_layer<'a>(
         return Err(OrbitError::InvalidInput(format!(
             "cannot automatically remove operation.review_policy = \"after-landing\" from {}: \
              run `orbit auto-task toggle delivery-code-review on` (or `off` if review should \
-             stay disabled), set review.before_pr and review.minutes explicitly as needed, \
+             stay disabled), set review.timing and review.minutes explicitly as needed, \
              then delete operation.review_policy manually and rerun the repair; \
              no config files were changed",
             redact_home_dir(&layer.path.display().to_string())
         )));
     }
-    translate_legacy_review_keys(&mut document, &layer.path)?;
+    let rewrites = deprecated_key_rewrites(&document, lower, &layer.path)?;
     let mut store = ConfigStore::open(layer.scope, &layer.path)?;
-    for (key, field) in [
-        (REVIEW_BEFORE_PR_KEY, "before_pr"),
-        (REVIEW_MINUTES_KEY, "minutes"),
-    ] {
-        if !store.is_key_set(key)
-            && let Some(value) = document.get("review").and_then(|review| review.get(field))
-        {
-            store.set_value(key, &value.to_string())?;
-        }
+    let mut written_keys = Vec::new();
+    for (key, value) in rewrites {
+        store.set_value(key, &value.to_string())?;
+        written_keys.push(key.to_string());
     }
     let mut removed_keys = Vec::new();
     for key in keys {
+        // A deprecated value form was rewritten in place; its key stays.
+        if key.disposition == CompatibilityConfigKeyDisposition::DeprecatedValue {
+            continue;
+        }
         if store.unset_value(key.key)? {
             removed_keys.push(key.key.to_string());
         }
@@ -239,6 +277,7 @@ fn prepare_layer<'a>(
         layer,
         store,
         removed_keys,
+        written_keys,
     }))
 }
 
@@ -276,6 +315,7 @@ fn disposition_label(disposition: CompatibilityConfigKeyDisposition) -> &'static
     match disposition {
         CompatibilityConfigKeyDisposition::Removed => "removed and ignored",
         CompatibilityConfigKeyDisposition::Deprecated => "deprecated",
+        CompatibilityConfigKeyDisposition::DeprecatedValue => "deprecated value form",
     }
 }
 

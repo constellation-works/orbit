@@ -1,7 +1,7 @@
 use super::default_crew_write_config;
 use orbit_config::ConfigRoots;
 
-/// `workflow.final_recovery_crews` as one load admits it from `config.toml`.
+/// `workflow.purpose_crews.final_recovery` as one load admits it from `config.toml`.
 fn final_recovery_pool(body: &str) -> Result<Vec<String>, String> {
     let global = tempfile::tempdir().expect("global tempdir");
     let workspace = tempfile::tempdir().expect("workspace tempdir");
@@ -15,7 +15,7 @@ fn final_recovery_pool(body: &str) -> Result<Vec<String>, String> {
 fn final_recovery_pool_admits_weighted_pools_and_empty_disables_it() {
     let body = |pool: &str| {
         format!(
-            "[workflow]\ndefault_crew = \"sol\"\nfinal_recovery_crews = {pool}\n\n\
+            "[workflow]\ndefault_crew = \"sol\"\n\n[workflow.purpose_crews]\nfinal_recovery = {pool}\n\n\
              [crews.sol]\nmodel = \"m\"\nprovider = \"codex\"\n\n\
              [crews.grok]\nmodel = \"m\"\nprovider = \"grok\"\n"
         )
@@ -33,13 +33,25 @@ fn final_recovery_pool_admits_weighted_pools_and_empty_disables_it() {
             .expect("empty pool")
             .is_empty()
     );
+    // The deprecated key loads into the same pool.
+    assert_eq!(
+        final_recovery_pool(
+            "[workflow]\ndefault_crew = \"sol\"\nfinal_recovery_crews = [\"sol\"]\n\n\
+             [crews.sol]\nmodel = \"m\"\nprovider = \"codex\"\n"
+        )
+        .expect("deprecated key"),
+        ["sol"]
+    );
     for (pool, expected) in [
         (r#"["sol:3", "grok"]"#, "all bare crew names"),
         (r#"["opus:20"]"#, "is not defined in [crews.*]"),
         (r#"["sol:0"]"#, "weight above 0"),
     ] {
         let error = final_recovery_pool(&body(pool)).expect_err(pool);
-        assert!(error.contains("workflow.final_recovery_crews"), "{error}");
+        assert!(
+            error.contains("workflow.purpose_crews.final_recovery"),
+            "{error}"
+        );
         assert!(error.contains(expected), "{error}");
     }
 }

@@ -184,7 +184,7 @@ pub struct CrewProviderLimit {
 /// A lane admission does not gate whose crew's provider is at its limit.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct UngatedLaneLimit {
-    /// The setting naming the lane's crew: `operation.review_crew`.
+    /// The setting naming the lane's crew: `workflow.purpose_crews.review`.
     pub setting: &'static str,
     pub crew: String,
     pub provider: String,
@@ -325,7 +325,7 @@ impl ProviderLimitsView {
                 let name = entry
                     .split_once(':')
                     .map_or(entry.as_str(), |(name, _)| name);
-                lane_limit("operation.review_crew", name)
+                lane_limit("workflow.purpose_crews.review", name)
             })
             .collect();
         let ungated_lanes = if !review_pool.is_empty() && review_limits.len() == review_pool.len() {

@@ -1,7 +1,7 @@
 //! After-landing review: the `delivery-code-review` delivery consumer
 //! [ORB-13896] [ORB-13992].
 //!
-//! The auto-task's own `enabled` flag is the switch. `operation.review_crew`,
+//! The auto-task's own `enabled` flag is the switch. `workflow.purpose_crews.review`,
 //! when set, is the crew of every review task it mints; a pool draws one
 //! crew per batch [ORB-15195]. Nothing else performs
 //! after-landing review, so [`after_landing_health`] states in one line
@@ -68,7 +68,7 @@ impl OrbitRuntime {
 }
 
 /// The crews a review task minted for `definition` is drawn from instead of
-/// the template's crew: `operation.review_crew`, when this is the
+/// the template's crew: `workflow.purpose_crews.review`, when this is the
 /// after-landing consumer and the crew is set. Empty otherwise.
 fn review_crew_pool(runtime: &OrbitRuntime, definition: &AutoTaskDefinition) -> Vec<String> {
     if definition.name != AFTER_LANDING_CONSUMER {
@@ -77,7 +77,7 @@ fn review_crew_pool(runtime: &OrbitRuntime, definition: &AutoTaskDefinition) -> 
     runtime.operation_policy().review_crew.value.clone()
 }
 
-/// The crew a one-member `operation.review_crew` names, parsed from its
+/// The crew a one-member `workflow.purpose_crews.review` names, parsed from its
 /// `name[:weight]` entry the way a pool's members are, so `sol:3` is `sol`.
 fn singleton_review_crew(
     runtime: &OrbitRuntime,
@@ -90,7 +90,7 @@ fn singleton_review_crew(
 }
 
 /// The crew the review task minted for `attempt` carries, or `None` to keep
-/// the template's. A single `operation.review_crew` member is carried by its
+/// the template's. A single `workflow.purpose_crews.review` member is carried by its
 /// parsed name; a pool draws one member, preferring one that implemented none
 /// of the batch's deliveries [ORB-15195]. The draw is seeded by the attempt's
 /// action key, so a retried mint carries the same crew.
@@ -205,7 +205,7 @@ pub struct AfterLandingHealth {
     pub state: Option<String>,
     /// The crew its review tasks are minted with, when it is one crew.
     pub crew: Option<String>,
-    /// The `operation.review_crew` pool each batch's review task draws its
+    /// The `workflow.purpose_crews.review` pool each batch's review task draws its
     /// crew from, when it names more than one [ORB-15195].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub crew_pool: Vec<String>,

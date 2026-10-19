@@ -50,9 +50,9 @@ planes over one repository, which the federated-mcp spec names an operator misco
 
 Existing roles, capability routing, reservations, and PR checks were the foundations. V1 added
 atomic admission, durable request/claim identity, routed task reads and writes, settlement, and an
-owner landing consumer. With the owner's before-PR review (`review.before_pr`) on, each claimed PR
-leaf runs the reviewer the claim captured before it opens its pull request [ORB-13908];
-after-landing review never affects admission. Implementation validation still
+owner landing consumer. With the owner's before-PR review (`review.timing = "before_pr"`) on,
+each claimed PR leaf runs the reviewer the claim captured before it opens its pull request
+[ORB-13908]; after-landing review never affects admission. Implementation validation still
 runs, and declared context selectors remain protected even when their files do not exist. These
 were substantive integration changes. Throughput depends on file conflicts, provider limits, shared CI,
 and landing capacity as well as local build slots.
@@ -106,7 +106,7 @@ every entry point uses the same claim admission. No schedule is enabled by this 
 | Durable handoff and authorized landing consumer | [crates/orbit-core/src/application/landing/mod.rs](../../../crates/orbit-core/src/application/landing/mod.rs), [task_landing_pipeline.yaml](../../../crates/orbit-core/assets/jobs/task_landing_pipeline.yaml); [2_design.md §3.2](./2_design.md#32-durable-review-and-landing-handoff) | — | live |
 | Review-only handoff approval and revocation | dashboard `handoff.approve` / `handoff.revoke`; [2_design.md §3.2](./2_design.md#32-durable-review-and-landing-handoff) | [ORB-12516] | done |
 | Non-pruning selector storage/projection and frozen footprints | `declared_context_files` in [crates/orbit-core/src/runtime/task/mod.rs](../../../crates/orbit-core/src/runtime/task/mod.rs); [2_design.md §2](./2_design.md#2-the-ready-queue-and-orbittaskpull) | [ORB-12490] | done |
-| Refuse pulls from callers that cannot run the before-PR gate the owner captured (`review.before_pr`, `review.before_landing`), and typed handoff evidence | `admission_refusal` in [admission.rs](../../../crates/orbit-store/src/repository/task/coordination/admission.rs); [2_design.md §3.2](./2_design.md#32-durable-review-and-landing-handoff) | — | done |
+| Refuse pulls from callers that cannot run the before-PR gate the owner captured (`review.timing`), and typed handoff evidence | `admission_refusal` in [admission.rs](../../../crates/orbit-store/src/repository/task/coordination/admission.rs); [2_design.md §3.2](./2_design.md#32-durable-review-and-landing-handoff) | — | done |
 | Claim-aware capacity accounting and interrupted-run recovery | [leaf_occupancy.rs](../../../crates/orbit-core/src/application/admission/leaf_occupancy.rs); [2_design.md §3](./2_design.md#3-pull-mode-drain-and-the-pulled-leaf-pipeline) | [ORB-12617] | done |
 | Failure and concurrency acceptance coverage | [2_design.md §8](./2_design.md#8-required-validation-scenarios) | [ORB-12617] | partial |
 | Execution provenance on runs, tasks, artifacts | [2_design.md §6](./2_design.md#6-execution-provenance) | [ORB-13649] | done |

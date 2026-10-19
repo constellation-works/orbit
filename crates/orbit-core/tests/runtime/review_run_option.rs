@@ -21,7 +21,7 @@ use orbit_types::workflow::{JobRunTrigger, PipelineState, ReviewLayer};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-const CREW: &str = "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"reviewers\"\n[operation]\nreview_crew = \"reviewers\"\n";
+const CREW: &str = "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"reviewers\"\n[workflow.purpose_crews]\nreview = \"reviewers\"\n";
 
 fn git(cwd: &Path, args: &[&str]) {
     let output = crate::git_test_support::command()
@@ -316,7 +316,7 @@ fn a_run_option_adds_review_that_children_and_resumes_keep() {
     ] {
         let (_root, applied) = open(
             ShipMode::Pr,
-            &format!("{CREW}[review]\n{policy} = true\n"),
+            &format!("{CREW}[review]\ntiming = \"{policy}\"\n"),
             true,
         );
         ship(&applied, ShipMode::Pr, Some(review)).expect_err("the worker never starts");
@@ -336,8 +336,8 @@ fn a_run_option_adds_review_that_children_and_resumes_keep() {
 /// auto, before either path persists a run.
 fn same_layer_requests_require_a_reviewer_before_any_run() {
     let crewless = CREW.replace(
-        "[operation]\nreview_crew = \"reviewers\"",
-        "[operation]\nreview_crew = []",
+        "[workflow.purpose_crews]\nreview = \"reviewers\"",
+        "[workflow.purpose_crews]\nreview = []",
     );
     assert_ne!(crewless, CREW, "the fixture removes only the reviewer crew");
 
@@ -345,16 +345,16 @@ fn same_layer_requests_require_a_reviewer_before_any_run() {
         ("before_pr", ReviewLayer::BeforePr),
         ("before_landing", ReviewLayer::BeforeLanding),
     ] {
-        let config = format!("{crewless}[review]\n{policy} = true\n");
+        let config = format!("{crewless}[review]\ntiming = \"{policy}\"\n");
         let (_root, runtime) = open(ShipMode::Pr, &config, true);
         for refused in [
             refusal(ship(&runtime, ShipMode::Pr, Some(review))),
             refusal(drain(&runtime, Some(review))),
         ] {
             assert!(
-                refused.contains("operation.review_crew is unset")
-                    && refused.contains("configure operation.review_crew")
-                    && refused.contains(&format!("review.{policy} (workspace)")),
+                refused.contains("workflow.purpose_crews.review is unset")
+                    && refused.contains("configure workflow.purpose_crews.review")
+                    && refused.contains(&format!("review.timing = {policy} (workspace)")),
                 "{refused}"
             );
             assert_eq!(runs(&runtime), 0, "a refusal persists no run");
@@ -367,7 +367,7 @@ fn same_layer_requests_require_a_reviewer_before_any_run() {
 fn conflicting_or_unrunnable_requests_are_refused_before_any_run() {
     let (_root, before_pr) = open(
         ShipMode::Pr,
-        &format!("{CREW}[review]\nbefore_pr = true\n"),
+        &format!("{CREW}[review]\ntiming = \"before_pr\"\n"),
         false,
     );
     for refused in [
@@ -379,8 +379,9 @@ fn conflicting_or_unrunnable_requests_are_refused_before_any_run() {
         refusal(drain(&before_pr, Some(ReviewLayer::BeforeLanding))),
     ] {
         assert!(
-            refused.contains("--review before-landing conflicts with review.before_pr (workspace)")
-                && refused.contains("one review layer before landing"),
+            refused.contains(
+                "--review before-landing conflicts with review.timing = before_pr (workspace)",
+            ) && refused.contains("one review layer before landing"),
             "{refused}"
         );
     }
@@ -391,7 +392,7 @@ fn conflicting_or_unrunnable_requests_are_refused_before_any_run() {
         refusal(drain(&crewless, Some(ReviewLayer::BeforeLanding))),
     ] {
         assert!(
-            refused.contains("operation.review_crew is unset"),
+            refused.contains("workflow.purpose_crews.review is unset"),
             "{refused}"
         );
     }

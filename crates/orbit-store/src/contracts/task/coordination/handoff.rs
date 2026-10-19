@@ -91,7 +91,7 @@ pub struct HandoffReviewObservation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HandoffReviewRefusal {
-    /// The claim captured `review.before_pr` or `review.before_landing` and
+    /// The claim captured a `review.timing` of `before_pr` or `before_landing` and
     /// the handoff carries no review evidence for that timing.
     ReviewEvidenceMissing,
     /// The claim captured no review and the handoff claims one.

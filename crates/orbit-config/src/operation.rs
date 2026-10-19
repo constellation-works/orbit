@@ -1,18 +1,17 @@
 //! Typed review preferences [ORB-11333] [ORB-13992].
 //!
-//! Each review mechanism has one switch. Before-PR review is
-//! `review.before_pr` (default off); before-landing review, which reviews the
-//! open pull request while hosted CI runs on it, is `review.before_landing`
-//! (default off) [ORB-14849]. Both are bounded by `review.minutes` per
-//! candidate, and `operation.review_crew` names the crew of automatic review:
-//! one crew, or a pool written like the complexity pools that each review
-//! draws one crew from [ORB-15195].
-//! There is one review layer before landing, so a resolution with both
-//! switches on fails to load and names both keys.
+//! Review timing is one key, `review.timing`: `off` (default), `before_pr`
+//! (hold PR creation for a reviewer) or `before_landing` (review the open
+//! pull request while hosted CI runs on it) [ORB-14849]. There is one review
+//! layer before landing, so the two timings are values of one key rather than
+//! two switches. Both are bounded by `review.minutes` per candidate, and
+//! `workflow.purpose_crews.review` names the crew of automatic review: one
+//! crew, or a pool written like the complexity pools that each review draws
+//! one crew from [ORB-15195].
 //! `review.before_landing_hosts` lets an owner whose own deliveries do not
 //! review before landing still capture before-landing review for the claims
 //! of the machines it lists [ORB-15192]; it is refused beside
-//! `review.before_pr` for the same reason. After-landing review has
+//! `review.timing = "before_pr"` for the same reason. After-landing review has
 //! no key here at all: its only switch is the `delivery-code-review`
 //! auto-task's own `enabled` flag, which Core reads.
 //!
@@ -23,13 +22,16 @@
 //! for the paths its candidate changed ([`HostEvidenceRule`]); a layer that
 //! states the list replaces every rule an earlier layer stated.
 //!
-//! The retired `operation.review_policy` enum and `operation.review_minutes`
-//! are translated when a document is parsed ([`translate_legacy_review_keys`])
-//! and warned as deprecated (`registry::DEPRECATED_CONFIG_KEYS`): a legacy
-//! policy states `review.before_pr` for its layer, `after-landing` also
-//! enables the auto-task until its flag is set explicitly, and the legacy
-//! minutes become `review.minutes`. A key the same document states in
-//! `[review]` wins over its legacy spelling. The retired budget keys
+//! Deprecated spellings are translated when a document is read
+//! ([`crate::aliases`]) and warned as deprecated
+//! (`registry::DEPRECATED_CONFIG_KEYS`): the `review.before_pr` and
+//! `review.before_landing` booleans and the retired `operation.review_policy`
+//! enum become `review.timing`, `operation.review_minutes` becomes
+//! `review.minutes`, and `operation.review_crew` becomes
+//! `workflow.purpose_crews.review`. A legacy `after-landing` policy also
+//! enables the auto-task until its flag is set explicitly. The resolved
+//! [`OperationPolicy`] keeps its two timing booleans, which run records and
+//! claim contracts capture. The retired budget keys
 //! (`operation.review_reviewer_starts`, `operation.review_repair_cycles`) are
 //! warned and ignored (`registry::REMOVED_CONFIG_KEYS`).
 
@@ -67,10 +69,13 @@ pub const OPERATION_POLICY_VERSION: u32 = 5;
 
 const MAX_REVIEW_MINUTES: u32 = 1_440;
 
-/// The before-PR switch.
-pub const REVIEW_BEFORE_PR_KEY: &str = "review.before_pr";
-/// The before-landing switch: review the open pull request before it lands.
-pub const REVIEW_BEFORE_LANDING_KEY: &str = "review.before_landing";
+/// When automatic review runs before landing: `off`, `before_pr` or
+/// `before_landing`.
+pub const REVIEW_TIMING_KEY: &str = "review.timing";
+/// The deprecated before-PR switch, translated to [`REVIEW_TIMING_KEY`].
+pub const LEGACY_REVIEW_BEFORE_PR_KEY: &str = "review.before_pr";
+/// The deprecated before-landing switch, translated to [`REVIEW_TIMING_KEY`].
+pub const LEGACY_REVIEW_BEFORE_LANDING_KEY: &str = "review.before_landing";
 /// Machines whose claimed leaves review before landing even while the
 /// owner's own `review.before_landing` is off.
 pub const REVIEW_BEFORE_LANDING_HOSTS_KEY: &str = "review.before_landing_hosts";
@@ -85,17 +90,73 @@ pub const LEGACY_REVIEW_MINUTES_KEY: &str = "operation.review_minutes";
 pub const REVIEW_HOST_EVIDENCE_KEY: &str = "review.host_evidence";
 
 /// The crew, or crew pool, of automatic review.
-pub const REVIEW_CREW_KEY: &str = "operation.review_crew";
+pub const REVIEW_CREW_KEY: &str = "workflow.purpose_crews.review";
+/// The deprecated spelling of [`REVIEW_CREW_KEY`].
+pub const LEGACY_REVIEW_CREW_KEY: &str = "operation.review_crew";
 
-/// `operation.review_crew` as written: one crew name, or a pool of
+/// `workflow.purpose_crews.review` as written: one crew name, or a pool of
 /// `name[:weight]` entries [ORB-15195]. A single name is a one-member pool.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(untagged)]
 pub enum ReviewCrewSetting {
-    /// `review_crew = "sol"`.
+    /// `review = "sol"`.
     One(String),
-    /// `review_crew = ["sol", "grok"]`.
+    /// `review = ["sol", "grok"]`.
     Pool(Vec<String>),
+}
+
+/// `review.timing`: which review layer, if any, runs before landing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewTimingSetting {
+    /// No review before landing (the default).
+    Off,
+    /// Hold PR creation for a reviewer that fixes what it finds.
+    BeforePr,
+    /// Review the open pull request before it lands.
+    BeforeLanding,
+}
+
+impl ReviewTimingSetting {
+    /// Every value `review.timing` admits, in the order help lists them.
+    pub const CHOICES: &'static [&'static str] = &["off", "before_pr", "before_landing"];
+
+    /// The configured spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::BeforePr => "before_pr",
+            Self::BeforeLanding => "before_landing",
+        }
+    }
+
+    /// The timing a configured spelling names.
+    pub fn parse(raw: &str) -> Result<Self, OrbitError> {
+        match raw.trim() {
+            "off" => Ok(Self::Off),
+            "before_pr" => Ok(Self::BeforePr),
+            "before_landing" => Ok(Self::BeforeLanding),
+            other => Err(OrbitError::InvalidInput(format!(
+                "{REVIEW_TIMING_KEY} has invalid value '{other}'; expected one of: {}",
+                Self::CHOICES.join(", ")
+            ))),
+        }
+    }
+
+    /// The timing two before-landing switches select. Both on is refused:
+    /// there is one review layer before landing.
+    pub(crate) fn from_switches(before_pr: bool, before_landing: bool) -> Option<Self> {
+        match (before_pr, before_landing) {
+            (true, true) => None,
+            (true, false) => Some(Self::BeforePr),
+            (false, true) => Some(Self::BeforeLanding),
+            (false, false) => Some(Self::Off),
+        }
+    }
+
+    /// The `(before_pr, before_landing)` switches this timing turns on.
+    pub fn switches(self) -> (bool, bool) {
+        (self == Self::BeforePr, self == Self::BeforeLanding)
+    }
 }
 
 /// A retired `operation.review_policy` value, read only to translate it.
@@ -129,27 +190,25 @@ impl LegacyReviewPolicy {
     }
 }
 
-/// Translate one document's deprecated review keys into their `[review]`
-/// spelling, in place, before anything reads it [ORB-13992]. A key the
-/// document already states under `[review]` is left as written. The legacy
-/// keys stay in the document so the load warns about them by name.
-///
-/// This projects only the modern review fields. It does not migrate the
-/// legacy after-landing auto-task enablement; callers removing legacy keys
-/// must preserve that consumer separately or refuse the removal.
-pub fn translate_legacy_review_keys(
+/// What a retired `operation.review_policy` says about before-PR review, or
+/// `None` when the document does not state it. [`crate::aliases`] folds it
+/// into `review.timing` with the document's other before-landing statements.
+pub(crate) fn legacy_policy_before_pr(
+    document: &toml::Value,
+    config_path: &Path,
+) -> Result<Option<bool>, OrbitError> {
+    Ok(LegacyReviewPolicy::read(document, config_path)?
+        .map(|policy| policy == LegacyReviewPolicy::BeforePr))
+}
+
+/// Translate one document's deprecated `operation.review_minutes` into
+/// `review.minutes`, in place, unless the document already states it
+/// [ORB-13992]. The legacy key stays in the document so the load warns about
+/// it by name.
+pub(crate) fn translate_legacy_review_minutes(
     document: &mut toml::Value,
     config_path: &Path,
 ) -> Result<(), OrbitError> {
-    if let Some(policy) = LegacyReviewPolicy::read(document, config_path)?
-        && value_at_path(document, REVIEW_BEFORE_PR_KEY).is_none()
-    {
-        set_value_at_path(
-            document,
-            REVIEW_BEFORE_PR_KEY,
-            toml::Value::Boolean(policy == LegacyReviewPolicy::BeforePr),
-        );
-    }
     let minutes = bounded(
         read_optional::<u32>(document, LEGACY_REVIEW_MINUTES_KEY, config_path)?,
         LEGACY_REVIEW_MINUTES_KEY,
@@ -220,9 +279,10 @@ impl<T: Clone> OperationField<T> {
 /// an omitted field inherits.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OperationLayer {
-    /// Explicit `review.before_pr`, or its translation from a legacy policy.
+    /// The before-PR half of an explicit `review.timing`, or of its
+    /// translation from the deprecated switches or a legacy policy.
     pub review_before_pr: Option<bool>,
-    /// Explicit `review.before_landing`.
+    /// The before-landing half of an explicit `review.timing`.
     pub review_before_landing: Option<bool>,
     /// Explicit `review.before_landing_hosts`; an empty list clears the
     /// machines an earlier layer listed.
@@ -254,9 +314,15 @@ impl OperationLayer {
             }
         }
 
+        // The document is translated before it is read, so a deprecated
+        // switch already reached `review.timing`; one key states both halves.
+        let timing = read_optional::<String>(document, REVIEW_TIMING_KEY, config_path)?
+            .map(|raw| ReviewTimingSetting::parse(&raw))
+            .transpose()?
+            .map(ReviewTimingSetting::switches);
         Ok(Self {
-            review_before_pr: read_optional(document, REVIEW_BEFORE_PR_KEY, config_path)?,
-            review_before_landing: read_optional(document, REVIEW_BEFORE_LANDING_KEY, config_path)?,
+            review_before_pr: timing.map(|(before_pr, _)| before_pr),
+            review_before_landing: timing.map(|(_, before_landing)| before_landing),
             review_before_landing_hosts: before_landing_hosts(read_optional(
                 document,
                 REVIEW_BEFORE_LANDING_HOSTS_KEY,
@@ -351,24 +417,34 @@ impl OperationPolicy {
         policy
     }
 
+    /// The `review.timing` this resolution selects. Both switches on cannot
+    /// come from one key; [`Self::ensure_one_review_layer`] refuses it.
+    pub fn review_timing(&self) -> ReviewTimingSetting {
+        ReviewTimingSetting::from_switches(
+            self.review_before_pr.value,
+            self.review_before_landing.value,
+        )
+        .unwrap_or(ReviewTimingSetting::BeforePr)
+    }
+
     /// Refuse a resolution that turns on both review layers before landing,
-    /// naming both keys and the layer that set each [ORB-14849]. Listing
-    /// before-landing hosts beside `review.before_pr` is the same conflict
-    /// for those hosts' claims [ORB-15192].
+    /// naming the layer that set each [ORB-14849]. Listing before-landing
+    /// hosts beside before-PR review is the same conflict for those hosts'
+    /// claims [ORB-15192].
     pub fn ensure_one_review_layer(&self) -> Result<(), OrbitError> {
         if self.review_before_pr.value && self.review_before_landing.value {
             return Err(OrbitError::InvalidInput(format!(
-                "{REVIEW_BEFORE_PR_KEY} ({}) and {REVIEW_BEFORE_LANDING_KEY} ({}) are both on; \
-                 there is one review layer before landing, so turn one of them off",
+                "before-PR review ({}) and before-landing review ({}) are both on; there is \
+                 one review layer before landing, so set {REVIEW_TIMING_KEY} to one of them",
                 self.review_before_pr.source.label(),
                 self.review_before_landing.source.label(),
             )));
         }
         if self.review_before_pr.value && !self.review_before_landing_hosts.value.is_empty() {
             return Err(OrbitError::InvalidInput(format!(
-                "{REVIEW_BEFORE_PR_KEY} ({}) is on and {REVIEW_BEFORE_LANDING_HOSTS_KEY} ({}) \
-                 lists machines; there is one review layer before landing, so turn \
-                 {REVIEW_BEFORE_PR_KEY} off or empty the list",
+                "{REVIEW_TIMING_KEY} is before_pr ({}) and {REVIEW_BEFORE_LANDING_HOSTS_KEY} ({}) \
+                 lists machines; there is one review layer before landing, so set \
+                 {REVIEW_TIMING_KEY} to off or before_landing, or empty the list",
                 self.review_before_pr.source.label(),
                 self.review_before_landing_hosts.source.label(),
             )));
@@ -377,8 +453,8 @@ impl OperationPolicy {
     }
 
     /// Whether a delivery executed on `executor` reviews its open pull
-    /// request before it lands: always with `review.before_landing` on, and
-    /// for a listed machine while `review.before_pr` is off. `None` is the
+    /// request before it lands: always with `review.timing = before_landing`,
+    /// and for a listed machine while the timing is not `before_pr`. `None` is the
     /// owner's own delivery, which the host list never reaches.
     pub fn reviews_before_landing_for(&self, executor: Option<&str>) -> bool {
         self.review_before_landing.value
@@ -532,7 +608,7 @@ fn host_evidence_rules(rules: Vec<HostEvidenceRule>) -> Result<Vec<HostEvidenceR
         .collect()
 }
 
-/// The pool one layer's `operation.review_crew` states. An empty name is
+/// The pool one layer's `workflow.purpose_crews.review` states. An empty name is
 /// refused as before; an empty array states no crew. Entry grammar and crew
 /// names are admitted against the registry with the rest of the snapshot.
 pub(crate) fn review_crew(

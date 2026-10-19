@@ -26,8 +26,8 @@ task that fails.
 - **Matching machines.** Every replica runs the same Orbit version and
   distributed-drain protocol revision as the owner and declares the same
   `workflow.required_validation_commands`. If the owner turns on before-PR
-  review (`review.before_pr = true`), every replica must be able to run the
-  owner's `operation.review_crew`: each pulled task is then reviewed, and the
+  review (`review.timing = "before_pr"`), every replica must be able to run
+  the owner's `workflow.purpose_crews.review`: each pulled task is then reviewed, and the
   reviewer's fixes committed, on the replica before its pull request opens.
   Crews may differ: a replica only receives tasks whose crew it can run. Operating systems may differ too: a
   task tagged `os:macos` (or `os:linux`, `os:windows`) only goes to a machine
@@ -63,10 +63,10 @@ Check that the two machines match. On each one:
 
 ```bash
 orbit --version
-# The owner's value decides. With it on, the replica must
-# be able to run this crew.
-orbit config get review.before_pr
-orbit config get operation.review_crew
+# The owner's value decides. With review.timing at before_pr,
+# the replica must be able to run this crew.
+orbit config get review.timing
+orbit config get workflow.purpose_crews.review
 orbit doctor
 ```
 
@@ -76,7 +76,8 @@ installed binary instead of copying a revision from this page. Use that value
 for `caller_schema` only after confirming the replica runs the matching
 build; it is the distributed-drain revision, not the MCP protocol revision.
 Replace `<replica-version>` with the replica's `orbit --version` value and
-set `caller_before_pr` to its `review.before_pr` value:
+set `caller_before_pr` to `true` when its `review.timing` is `before_pr`, else
+`false`:
 
 ```bash
 DRAIN_SCHEMA=$(

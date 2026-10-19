@@ -196,13 +196,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "machine.worker_containment_strict": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
     "machine.worker_cpu_quota": {
       "scope": "built-in",
       "state": "default",
@@ -228,13 +221,6 @@
       "scope": "built-in",
       "state": "default",
       "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "operation.review_crew": {
-      "scope": "built-in",
-      "state": "unset",
-      "tier": "standard",
       "path": null,
       "shadowed_by": []
     },
@@ -294,13 +280,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "review.before_landing": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
     "review.before_landing_hosts": {
       "scope": "built-in",
       "state": "default",
@@ -308,14 +287,14 @@
       "path": null,
       "shadowed_by": []
     },
-    "review.before_pr": {
+    "review.minutes": {
       "scope": "built-in",
       "state": "default",
       "tier": "standard",
       "path": null,
       "shadowed_by": []
     },
-    "review.minutes": {
+    "review.timing": {
       "scope": "built-in",
       "state": "default",
       "tier": "standard",
@@ -394,13 +373,6 @@
       "shadowed_by": []
     },
     "workflow.distributed_completion": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "workflow.final_recovery_crews": {
       "scope": "built-in",
       "state": "default",
       "tier": "standard",
@@ -498,20 +470,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "workflow.purpose_crews.ci_failure_sweep": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "workflow.purpose_crews.dependabot": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
     "workflow.purpose_crews.failure_recovery": {
       "scope": "built-in",
       "state": "default",
@@ -519,7 +477,21 @@
       "path": null,
       "shadowed_by": []
     },
-    "workflow.purpose_crews.merged_head_repair": {
+    "workflow.purpose_crews.final_recovery": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.purpose_crews.review": {
+      "scope": "built-in",
+      "state": "unset",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.purpose_crews.sweep_tasks": {
       "scope": "built-in",
       "state": "default",
       "tier": "standard",
@@ -659,20 +631,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "workflow.validation_env.interactive": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "workflow.validation_env.login_shell": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
     "workflow.validation_env.path": {
       "scope": "built-in",
       "state": "default",
@@ -684,6 +642,13 @@
       "scope": "built-in",
       "state": "default",
       "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.validation_env.shell_probe": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
       "path": null,
       "shadowed_by": []
     },

@@ -51,14 +51,14 @@ pub struct HandoffCandidate {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HandoffReviewDisposition {
-    /// The claim's contract captured `review.before_pr = false`: no reviewed
+    /// The claim's contract captured no review before landing: no reviewed
     /// SHA, verdict or reviewer artifact exists, and none is invented.
     NotRequired,
     /// The leaf ran the before-PR gate the claim's contract captured
     /// [ORB-13895].
     BeforePr(Box<HandoffReviewEvidence>),
     /// The leaf reviewed its open pull request before handing it off, as
-    /// the claim's contract captured `review.before_landing` [ORB-14849].
+    /// the claim's contract captured `review.timing = before_landing` [ORB-14849].
     BeforeLanding(Box<HandoffReviewEvidence>),
 }
 
@@ -103,7 +103,7 @@ pub struct HandoffReview {
 }
 
 impl HandoffReview {
-    /// The disposition of a claim admitted with `review.before_pr = false`.
+    /// The disposition of a claim admitted with no review before landing.
     pub fn not_required() -> Self {
         Self {
             policy: ReviewTiming::None,

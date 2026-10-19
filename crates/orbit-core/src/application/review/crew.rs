@@ -1,4 +1,4 @@
-//! The reviewer crew `operation.review_crew` names [ORB-15195].
+//! The reviewer crew `workflow.purpose_crews.review` names [ORB-15195].
 //!
 //! The setting is one crew or a pool written like the complexity pools
 //! (`name` or `name:weight`). Each review chooses one member:
@@ -40,7 +40,7 @@ pub(crate) fn pool_source(layer: &str) -> String {
 }
 
 impl OrbitRuntime {
-    /// `operation.review_crew` as canonical pool members, in the shape a
+    /// `workflow.purpose_crews.review` as canonical pool members, in the shape a
     /// review admission captures; empty when unset.
     pub(crate) fn review_crew_pool_members(&self) -> Result<Vec<ReviewCrewPoolMember>, OrbitError> {
         configured_pool_members(self, &self.operation_policy().review_crew.value)
@@ -93,7 +93,7 @@ impl OrbitRuntime {
     }
 
     /// One reviewer from the configured pool for work `implementers` did,
-    /// or `None` when `operation.review_crew` is unset.
+    /// or `None` when `workflow.purpose_crews.review` is unset.
     pub(crate) fn select_review_crew(
         &self,
         implementers: &BTreeSet<String>,
@@ -109,7 +109,7 @@ impl OrbitRuntime {
     }
 }
 
-/// `operation.review_crew` entries as canonical, weighed members. The value
+/// `workflow.purpose_crews.review` entries as canonical, weighed members. The value
 /// was admitted at load, so this re-reads a pool, never a new grammar.
 pub(crate) fn configured_pool_members(
     runtime: &OrbitRuntime,

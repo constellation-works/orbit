@@ -70,7 +70,7 @@ spec:
     names the remotes, `orbit workspace ship-mode local`, and the
     `delivery:task_local_pipeline` tag. A task carrying that tag is
     delivered locally even in a PR-mode drain.
-    When `mode` is `local` and effective `review.before_pr` is on, a task
+    When `mode` is `local` and effective `review.timing` is `before_pr`, a task
     that cleared the per-task gates is withheld as `local_route_before_pr`,
     with the deciding config layer and the remedy in `detail`. A PR-mode
     delivery does not take that hold, except a task its

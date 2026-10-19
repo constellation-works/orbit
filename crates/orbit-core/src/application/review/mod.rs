@@ -70,7 +70,7 @@ pub use switches::{
 pub(crate) const REVIEW_AUDIT: &str = "review.gate";
 
 /// The jobs whose submission captures a review admission: the delivery
-/// family, so a leaf PR pipeline can inherit the `review.before_pr` its
+/// family, so a leaf PR pipeline can inherit the `review.timing` its
 /// coordinator captured, and the follower's pull drain, which declares its
 /// captured value on every pull [ORB-13992].
 ///
@@ -87,7 +87,7 @@ pub(crate) const REVIEW_ADMITTED_JOBS: &[&str] = &[
     "task_local_pipeline",
 ];
 
-/// The job that delivers locally and therefore cannot honour `review.before_pr`
+/// The job that delivers locally and therefore cannot honour `review.timing`
 /// as a final route.
 pub(crate) const LOCAL_ROUTE_JOB: &str = "task_local_pipeline";
 

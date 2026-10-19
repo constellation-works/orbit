@@ -145,7 +145,7 @@ impl crate::OrbitRuntime {
             if request.ship != owner {
                 return Err(OrbitError::InvalidInput(format!(
                     "ship_contract_mismatch: this owner now resolves mode '{}', base '{}', landing \
-                     '{}', review.before_pr {}, review.before_landing {}, completion '{}' for this \
+                     '{}', before-PR review {}, before-landing review {}, completion '{}' for this \
                      machine; re-read the probe before sending a new request",
                     owner.mode,
                     owner.base_branch,

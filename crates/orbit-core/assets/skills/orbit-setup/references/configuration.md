@@ -51,17 +51,16 @@ assuming a value.
 | `workflow.base_branch` | Config fallback for ship/auto/pilot base branch. A registered workspace `base_branch` takes precedence. |
 | `workflow.default_crew` | Crew for any task that doesn't declare one. |
 | `workflow.<tier>_complexity_crews` | Automatic crew pool per task complexity (`low`, `medium`, `hard`, `xhard`); entries `name` or `name:weight`. Empty (`[]`) routes that tier to `default_crew`. Orbit's own work draws from them too while its purpose pool is unset: auto-task templates by complexity, the task pilot and PR auto-fix from `low`, failure and PR conflict recovery from `medium`. The retired system-crew key loads with a deprecation warning and is ignored. |
-| `workflow.purpose_crews.<purpose>` | Weighted pool for one purpose of work, written like the complexity pools: `task_pilot`, `failure_recovery`, `auto_fix`, `baseline_red_repair`, `ci_failure_sweep`, `merged_head_repair`, `dependabot`. An explicit task, template or activity crew wins; otherwise the purpose pool is drawn, narrowed by `--allow-crew`; unset or `[]` keeps the earlier route. A provider limit or failure hold on the assigned member redraws from the pool's other enabled members before the complexity pool. Final recovery and automatic review keep `workflow.final_recovery_crews` and `operation.review_crew`. `orbit config show` lists each purpose's resolved pool and its source. |
+| `workflow.purpose_crews.<purpose>` | Weighted pool for one purpose of work, written like the complexity pools: `task_pilot`, `failure_recovery`, `final_recovery`, `auto_fix`, `review`, `baseline_red_repair`, `sweep_tasks` (every task the CI failure, Dependabot and code-scanning sweeps file, and merged-head repairs a review reconciliation files). An explicit task, template or activity crew wins; otherwise the purpose pool is drawn, narrowed by `--allow-crew`; unset or `[]` keeps the earlier route. A provider limit or failure hold on the assigned member redraws from the pool's other enabled members before the complexity pool. `final_recovery` and `review` have no earlier route: `final_recovery = []` disables final recovery, and `review` is described below. `orbit config show` lists each purpose's resolved pool and its source. |
 | `workflow.auto_ship` | Opt-in for `orbit run ship-sweep` unattended ship dispatch. The seeded `ship-sweep` routine does not read it. |
 | `workflow.provider_limit_max_used_pct` | Skip a crew while a live usage window of its provider or model is exhausted or used at or above this percent (1..=100, default 90; 100 skips only on exhaustion). |
 | `workflow.provider_limit_overrides` | Per-provider replacement for that percent: `provider:percent` (1..=100) or `provider:off` (record readings without gating). Each provider once. |
 | `workflow.provider_limit_explicit_crews` | When an explicit crew is at its provider's limit: `wait` (default) leaves the task in the backlog until the limit lifts; `pool` draws from unlimited members of its complexity pool. A purpose-sourced crew is not an explicit pin; it redraws within its purpose pool first. |
 | `workflow.provider_limit_budgets` | Rolling budgets for providers that report no usage, each `provider:<amount><usd|tokens>/<n><h|d>` (for example `grok:30usd/5h`), one per provider. Spend is this host's invocation ledger. None by default. |
-| `review.before_pr` | Before-PR review: hold PR creation for a fresh reviewer that fixes what it finds (default `false`). A run captures it at submission. After-landing review is not a key: toggle the `delivery-code-review` auto-task (`orbit auto-task toggle delivery-code-review on`). |
-| `review.before_landing` | Before-landing review: open the PR first and review it while hosted CI runs; it merges only at the reviewed head, and any other outcome leaves the PR open with the task in `review` (default `false`). PR route only. Config load fails while it and `review.before_pr` are both on: one review layer before landing. |
-| `review.before_landing_hosts` | Machine ids (`hm_...`) whose claimed leaves review their open PR before it lands, while this owner's own deliveries keep `review.before_landing` off. Probe and pull admission resolve the caller's label and the claim captures it. Ignored when `review.before_landing` is already on for that machine. Loading fails while `review.before_pr` is on and the list is non-empty. The label is caller-chosen, so this is policy, not a security boundary. Default empty. |
+| `review.timing` | Review before landing, one layer at most (default `off`). `before_pr` holds PR creation for a fresh reviewer that fixes what it finds. `before_landing` opens the PR first and reviews it while hosted CI runs; it merges only at the reviewed head, and any other outcome leaves the PR open with the task in `review` (PR route only). A run captures it at submission. After-landing review is not a key: toggle the `delivery-code-review` auto-task (`orbit auto-task toggle delivery-code-review on`). |
+| `review.before_landing_hosts` | Machine ids (`hm_...`) whose claimed leaves review their open PR before it lands, while this owner's own deliveries keep `review.timing` off. Probe and pull admission resolve the caller's label and the claim captures it. Ignored when `review.timing` is already `before_landing`. Loading fails while `review.timing` is `before_pr` and the list is non-empty. The label is caller-chosen, so this is policy, not a security boundary. Default empty. |
 | `review.minutes` | Wall-clock limit for one candidate's before-PR or before-landing review (1..=1440, default 30). Each candidate gets one review; a changed candidate, such as a completion rebase, is a new one. |
-| `operation.review_crew` | Crew for automatic review: the before-PR or before-landing reviewer and, when set, every review task the after-landing auto-task mints. A pool such as `["sol", "grok"]` (or weighted `["sol:3", "grok:1"]`) draws one crew per review, skipping disabled or provider-limited crews and preferring one that did not implement the work. |
+| `workflow.purpose_crews.review` | Crew for automatic review: the before-PR or before-landing reviewer and, when set, every review task the after-landing auto-task mints. A pool such as `["sol", "grok"]` (or weighted `["sol:3", "grok:1"]`) draws one crew per review, skipping disabled or provider-limited crews and preferring one that did not implement the work. |
 | `tasks.id_start` | Floor for this machine's task-id allocator; forward-only. → [multi-host.md](multi-host.md) |
 | `execution.env.pass` | Environment variable names allow-listed into agent subprocesses. |
 | `execution.codex.sandbox` | `read-only`, `workspace-write`, or `danger-full-access`. |
@@ -101,12 +100,13 @@ operator settings unless an authorized change is requested. See
 [operational-logs.md](operational-logs.md#delivery-profiles-and-admission-diagnostics).
 
 `operation.review_policy` and `operation.review_minutes` are deprecated: they
-still load, translated with a warning (`before-pr` → `review.before_pr = true`;
+still load, translated with a warning (`before-pr` → `review.timing = "before_pr"`;
 `after-landing` enables `delivery-code-review` until an operator toggles it;
-`none` turns neither on), and a later release makes them errors. Move them to
-`[review]` and the auto-task flag. `operation.review_reviewer_starts` and
+`none` → `review.timing = "off"`), and a later release makes them errors. Move
+them to `[review]` and the auto-task flag. `operation.review_reviewer_starts` and
 `operation.review_repair_cycles` are ignored with a warning; delete them.
-`orbit config show` reports both review switches with their sources.
+`orbit config show` reports the review timing and the after-landing switch with
+their sources.
 
 Use `orbit config keys` to distinguish fixed registry keys from settings
 authored as TOML. Read-only identity keys are listed and refused by

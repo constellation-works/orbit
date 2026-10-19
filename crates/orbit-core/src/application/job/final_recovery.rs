@@ -35,7 +35,7 @@ use crate::application::task::{
 impl OrbitRuntime {
     /// Admit a failed run's final recovery, recording it in the run's state so
     /// it never runs again for this run or any run resumed from it. Skips when
-    /// `workflow.final_recovery_crews` is empty, the run already spent it, or
+    /// `workflow.purpose_crews.final_recovery` is empty, the run already spent it, or
     /// the run is no longer running.
     pub(crate) fn admit_run_final_recovery(
         &self,
@@ -64,7 +64,7 @@ fn admit(
 ) -> Result<FinalRecoveryAdmission, OrbitError> {
     if runtime.context.settings().final_recovery_crews().is_empty() {
         return Ok(skipped(
-            "final recovery is disabled: `workflow.final_recovery_crews` is []",
+            "final recovery is disabled: `workflow.purpose_crews.final_recovery` is []",
         ));
     }
     // A claimed leaf's task belongs to its owner; the owner re-reads it when

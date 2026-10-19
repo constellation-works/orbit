@@ -25,11 +25,11 @@ routing is in [tool-surface.md](../tool-surface.md).
 ## What v1 does not do
 
 - No heartbeat, automatic reclamation, fleet registry, or follower merge.
-- No review on the follower's own terms. With the owner's `review.before_pr`
-  on, every claimed PR leaf runs the before-PR reviewer the claim captured
-  (the owner's `operation.review_crew`, which each follower must be able to
-  run); the follower's own `review.before_pr` is ignored. With the owner's
-  `review.before_landing` on instead, the leaf opens its PR first and that
+- No review on the follower's own terms. With the owner's `review.timing` at
+  `before_pr`, every claimed PR leaf runs the before-PR reviewer the claim
+  captured (the owner's `workflow.purpose_crews.review`, which each follower
+  must be able to run); the follower's own `review.timing` is ignored. With the
+  owner's `review.timing` at `before_landing` instead, the leaf opens its PR first and that
   reviewer reviews the open PR before the leaf hands off; the owner accepts
   only the head the review settled. After-landing review
   (the owner's `delivery-code-review` auto-task) never affects admission.
@@ -60,21 +60,20 @@ orbit --version
 orbit config get machine.id
 orbit workspace show
 orbit doctor
-orbit config get review.before_pr        # decisive on the owner only
-orbit config get review.before_landing   # decisive on the owner only
-orbit config get operation.review_crew   # the owner's reviewer crew
+orbit config get review.timing                  # decisive on the owner only
+orbit config get workflow.purpose_crews.review  # the owner's reviewer crew
 ```
 
 Require one owner per repository, matching binaries, matching distributed-drain
 protocol schema `10`, and equivalent crew and toolchain resolution. Review policy
-is the owner's: admission captures the owner's `review.before_pr` and
-`review.before_landing` and, when either is on, its `operation.review_crew`, review budget, and
+is the owner's: admission captures the owner's `review.timing` and, when it is
+not `off`, its `workflow.purpose_crews.review`, review budget, and
 `workflow.required_validation_commands` into the claim. With either
-on, the owner must ship through PRs (review runs only on that route;
-admission refuses otherwise) and set `operation.review_crew`, and every
+timing, the owner must ship through PRs (review runs only on that route;
+admission refuses otherwise) and set `workflow.purpose_crews.review`, and every
 follower must resolve that crew; `orbit run auto --pull` refuses before
 claiming with `before_pr_reviewer_unavailable` otherwise. The follower's own
-`review.before_pr` is reported to the owner but never gates admission or the
+`review.timing` is reported to the owner but never gates admission or the
 leaf, so a follower need not change it. Hosts may run different operating systems:
 each follower declares its OS, and a task tagged `os:linux`, `os:macos` or
 `os:windows` is claimed only by a host of a named OS; it waits in the backlog,
@@ -448,8 +447,8 @@ re-backlog. See [automation.md](../../../orbit-setup/references/automation.md#bu
 ## Verify
 
 A probe with `admits: true`, matching versions and protocol, a replica role
-and, when the owner's `review.before_pr` is on, a follower that resolves the
-owner's `operation.review_crew` mean the hosts are **installed**. Start a drain
+and, when the owner's `review.timing` is `before_pr`, a follower that resolves
+the owner's `workflow.purpose_crews.review` mean the hosts are **installed**. Start a drain
 only when the user asked for one, and leave schedules untouched. After the
 first claim, confirm on the owner that `orbit.drain.claims` shows it on the
 follower's machine, and that after handoff the task is in `review` with its PR

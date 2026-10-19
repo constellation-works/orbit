@@ -46,9 +46,8 @@ pub(crate) fn task_crew_purpose(tags: &[String]) -> Option<CrewPurpose> {
 fn system_tag_purpose(tag: &str) -> Option<CrewPurpose> {
     match tag {
         BASELINE_RED_REPAIR_TAG => Some(CrewPurpose::BaselineRedRepair),
-        CI_FAILURE_TAG => Some(CrewPurpose::CiFailureSweep),
-        DEPENDABOT_TAG | CODE_TAG => Some(CrewPurpose::Dependabot),
-        _ if tag.starts_with(FOLLOW_UP_TAG_PREFIX) => Some(CrewPurpose::MergedHeadRepair),
+        CI_FAILURE_TAG | DEPENDABOT_TAG | CODE_TAG => Some(CrewPurpose::SweepTasks),
+        _ if tag.starts_with(FOLLOW_UP_TAG_PREFIX) => Some(CrewPurpose::SweepTasks),
         _ => None,
     }
 }

@@ -41,7 +41,7 @@ base_branch = "main"
 # recovery, using one crew drawn per run from this weighted pool (`name` or
 # `name:weight`, all bare or all weighted). Unset, the pool below applies and
 # keeps only the crews your registry defines; `[]` turns final recovery off.
-# final_recovery_crews = ["sol:100", "opus:20"]
+# purpose_crews.final_recovery = ["sol:100", "opus:20"]
 
 # [workflow.task_pilot_freshness]
 # Which changes make an accepted task-pilot assessment stale, so the task is
@@ -88,21 +88,22 @@ io_full_resume_percent = 10
 # log_max_file_mb    = 100  # roll the active log once it exceeds N MiB (>= 1, <= log_max_total_mb)
 
 # [review]
-# Before-PR review: hold PR creation for a fresh reviewer from
-# operation.review_crew on the PR route. The reviewer fixes what it finds in
-# its own commit on the candidate; findings it cannot fix block the task. A
-# drain or ship captures before_pr at submission, so a run in flight keeps it.
-# Each candidate gets one review, bounded by `minutes` (its fix commit and
-# final validation included).
-# before_pr = false
+# timing = "off" | "before_pr" | "before_landing" (default "off"); one review
+# layer before landing, drawn from workflow.purpose_crews.review.
 #
-# Before-landing review: open the PR first, then have the same kind of
-# reviewer review the open PR while hosted CI runs on it. A reviewer fix is
-# validated and pushed to the PR; the PR lands only at the head the review
-# settled, and any other outcome leaves it open with the task in review.
-# Loading fails while before_pr and before_landing are both on: there is one
-# review layer before landing.
-# before_landing = false
+# before_pr holds PR creation for a fresh reviewer on the PR route. The
+# reviewer fixes what it finds in its own commit on the candidate; findings it
+# cannot fix block the task.
+#
+# before_landing opens the PR first, then has the same kind of reviewer review
+# the open PR while hosted CI runs on it. A reviewer fix is validated and
+# pushed to the PR; the PR lands only at the head the review settled, and any
+# other outcome leaves it open with the task in review.
+#
+# A drain or ship captures the timing at submission, so a run in flight keeps
+# it. Each candidate gets one review, bounded by `minutes` (its fix commit and
+# final validation included).
+# timing = "off"
 # minutes = 30
 #
 # After-landing review has no key here: it is the `delivery-code-review`
@@ -111,9 +112,9 @@ io_full_resume_percent = 10
 # batch on the machine that owns the workspace; `orbit doctor` fails while it
 # is enabled but cannot run.
 
-# [operation]
-# review_crew = "sol"          # crew for before-PR, before-landing and after-landing review
-# review_crew = ["sol", "grok"] # or a pool (`name` or `name:weight`, like the complexity
-#                               # pools): each review draws one crew by weight, preferring one
-#                               # that did not implement the reviewed work and skipping
-#                               # disabled or provider-limited crews; [] unsets it
+# [workflow.purpose_crews]
+# review = "sol"          # crew for before-PR, before-landing and after-landing review
+# review = ["sol", "grok"] # or a pool (`name` or `name:weight`, like the complexity
+#                          # pools): each review draws one crew by weight, preferring one
+#                          # that did not implement the reviewed work and skipping
+#                          # disabled or provider-limited crews; [] unsets it

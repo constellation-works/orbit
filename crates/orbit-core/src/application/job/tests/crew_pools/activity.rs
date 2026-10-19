@@ -1,4 +1,4 @@
-//! The `workflow.final_recovery_crews` draw: once per run, frozen in run
+//! The `workflow.purpose_crews.final_recovery` draw: once per run, frozen in run
 //! state, and never outside the run's crew allowlist.
 
 use std::cell::Cell;
@@ -28,7 +28,9 @@ fn runtime_with_pool(pool: &str) -> (TempDir, OrbitRuntime) {
         format!(
             r#"[workflow]
 default_crew = "sol"
-final_recovery_crews = {pool}
+
+[workflow.purpose_crews]
+final_recovery = {pool}
 
 [crews.sol]
 provider = "codex"

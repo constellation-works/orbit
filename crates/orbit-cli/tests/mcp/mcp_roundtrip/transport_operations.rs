@@ -730,7 +730,7 @@ fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
         (readiness["validation_env_warning"].clone(), row)
     };
 
-    configure("workflow.validation_env.login_shell", "false");
+    configure("workflow.validation_env.shell_probe", "off");
     let (warning, row) = observe();
     assert_eq!(
         warning,
@@ -746,7 +746,7 @@ fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
     let (warning, row) = observe();
     let warning = warning.as_str().expect("the drain status warns");
     assert!(
-        warning.contains("`workflow.validation_env.login_shell = false`")
+        warning.contains("`workflow.validation_env.shell_probe = off`")
             && warning.contains("source: launcher_fallback")
             && warning.contains("PATH="),
         "the warning names the disabled resolution, the fallback and its PATH: {warning}"
@@ -802,8 +802,7 @@ fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
         );
     }
 
-    configure("workflow.validation_env.login_shell", "true");
-    configure("workflow.validation_env.interactive", "false");
+    configure("workflow.validation_env.shell_probe", "login");
     let (_, row) = observe();
     assert!(
         row["message"]
@@ -812,7 +811,7 @@ fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
             .contains("probe mode: login;"),
         "the setting reaches the runtime resolver: {row}"
     );
-    configure("workflow.validation_env.interactive", "true");
+    configure("workflow.validation_env.shell_probe", "interactive");
     let (_, row) = observe();
     let message = row["message"].as_str().unwrap();
     // With no rc files the interactive probe succeeds unless a saturated host

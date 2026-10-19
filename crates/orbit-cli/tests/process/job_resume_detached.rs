@@ -369,7 +369,7 @@ mod unix {
                 "workflow.required_validation_commands",
                 r#"["make ci-fast"]"#,
             ),
-            ("workflow.validation_env.login_shell", "false"),
+            ("workflow.validation_env.shell_probe", "off"),
         ] {
             fixture
                 .command()
@@ -382,7 +382,7 @@ mod unix {
 
         let warning = submitted["warning"].as_str().unwrap_or_default();
         assert!(
-            warning.contains("`workflow.validation_env.login_shell = false`")
+            warning.contains("`workflow.validation_env.shell_probe = off`")
                 && warning.contains("source: launcher_fallback"),
             "the submission names the disabled resolution and its fallback: {submitted}"
         );

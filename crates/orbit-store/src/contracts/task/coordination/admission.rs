@@ -73,12 +73,12 @@ pub struct AdmissionShipContract {
     pub mode: String,
     pub base_branch: String,
     pub landing_branch: String,
-    /// The owner's `review.before_pr` when it resolved this contract
+    /// Whether the owner's `review.timing` was `before_pr` when it resolved this contract
     /// [ORB-13992]. Contracts recorded before revision 5 carried a
     /// `review_policy` admitted only as `none`, which reads as `false`.
     #[serde(default)]
     pub before_pr: bool,
-    /// The owner's `review.before_landing` when it resolved this contract
+    /// Whether the owner's `review.timing` was `before_landing` when it resolved this contract
     /// [ORB-14849]: the claimed leaf reviews its open pull request before
     /// handing it off. Never on together with `before_pr`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -103,7 +103,7 @@ pub struct AdmissionReviewContract {
     /// (`REVIEW_CONTRACT_VERSION`). A certificate under another version is
     /// refused rather than reinterpreted.
     pub contract_version: u32,
-    /// The owner's `operation.review_crew`, when one is set. A handoff's
+    /// The owner's `workflow.purpose_crews.review`, when one is set. A handoff's
     /// reviewer must be this crew.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew: Option<String>,
@@ -171,7 +171,7 @@ impl AdmissionShipContract {
 /// so an additive field needs no manual bump to detect skew. Revision 2 adds executor crew capabilities;
 /// revision 3 adds handoff footprint widening; revision 4 adds the executor's
 /// host OS; revision 5 replaces both endpoints' review-policy labels with
-/// their captured `review.before_pr` switch [ORB-13992]; revision 6 adds the
+/// their captured before-PR review switch [ORB-13992]; revision 6 adds the
 /// ship contract's captured `review`, the executor's `review_gate` and the
 /// handoff's before-PR review evidence [ORB-13895]; revision 7 sends
 /// `review_gate` on `orbit.task.pull`, which revision 6 owners reject
@@ -240,7 +240,7 @@ pub enum AdmissionRefusal {
     ProtocolMismatch,
     VersionMismatch,
     ShipModeUnsupported,
-    /// The owner captured `review.before_pr` or `review.before_landing` on
+    /// The owner captured a `review.timing` of `before_pr` or `before_landing`
     /// and the executor's leaf does not declare that it runs the review
     /// gate, or the ship mode is not the PR route the gate runs on
     /// [ORB-13908] [ORB-14849]. The executor's own switch never refuses.
@@ -435,7 +435,7 @@ pub struct AdmissionRequest {
     /// requests from before fingerprint negotiation; new followers declare it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caller_fingerprint: Option<String>,
-    /// The executor's captured `review.before_pr` [ORB-13992]. Diagnostic
+    /// Whether the executor's captured `review.timing` is `before_pr` [ORB-13992]. Diagnostic
     /// only: a claimed leaf runs the review the ship contract captured, never
     /// the executor's own [ORB-13908]. Requests recorded before revision 5
     /// carried a `caller_review_policy`, which reads as `false`.
@@ -443,7 +443,7 @@ pub struct AdmissionRequest {
     pub caller_before_pr: bool,
     /// Whether the executor's claimed leaf runs the before-PR gate the ship
     /// contract's `review` captures [ORB-13895]. An owner with
-    /// `review.before_pr` on admits only an executor that declares it.
+    /// `review.timing = before_pr` admits only an executor that declares it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub review_gate: bool,
     pub run_context: AdmissionRunContext,
