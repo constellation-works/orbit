@@ -148,9 +148,22 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
     }
     let forecast = &capacity["admission_forecast"];
     let last_forecast = &capacity["last_admission_forecast"];
+    // Both views carry the drain that recorded them; a finished drain's
+    // forecast is labelled as history.
+    let origin = super::admission_forecast::ForecastOrigin {
+        run_id: forecast["drain_run_id"]
+            .as_str()
+            .or_else(|| last_forecast["drain_run_id"].as_str()),
+        ended: forecast["drain_live"]
+            .as_bool()
+            .or_else(|| last_forecast["drain_live"].as_bool())
+            == Some(false),
+        none_live: capacity["drain_run_id"].is_null() && capacity["pull_drain_run_id"].is_null(),
+    };
     lines.extend(super::admission_forecast::admission_lines(
         forecast,
         last_forecast,
+        &origin,
         |id| {
             forecast["task_titles"][id]
                 .as_str()
@@ -203,6 +216,15 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
             .flatten()
             .map(|detail| format!(": {detail}"))
             .unwrap_or_default();
+            // A host-OS wait also names the registered hosts of that OS and
+            // whether each is pulling, and one hidden behind an unmet
+            // dependency is named beside it.
+            let host = match (task["host_os_wait"].as_str(), task["host_fleet"].as_str()) {
+                (Some(wait), Some(fleet)) => format!("{host}; then {wait}; {fleet}"),
+                (Some(wait), None) => format!("{host}; then {wait}"),
+                (None, Some(fleet)) => format!("{host}; {fleet}"),
+                (None, None) => host,
+            };
             // [ORB-14624] Which tasks a CPU-only throttle still admits, and
             // which jump the queue before their frozen batch expires.
             let light = if task["cpu_light"].as_bool() == Some(true) {

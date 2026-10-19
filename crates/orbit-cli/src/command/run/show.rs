@@ -347,7 +347,8 @@ pub(crate) fn run_show_payload(
         header.push_str(&exclusion_lines.join("\n"));
     }
     if let Some(summary) = &drain_summary {
-        let waiting_formatter = WaitingTaskFormatter::new(runtime);
+        let waiting_formatter = WaitingTaskFormatter::new(runtime)
+            .with_host_fleet(runtime, summary.host_os_waiting_task_ids());
         header.push('\n');
         header.push_str(&summary.lines(run.state, &waiting_formatter).join("\n"));
     } else if let Some(pass) = state
@@ -374,9 +375,16 @@ pub(crate) fn run_show_payload(
                 .and_then(|pass| pass.admission_forecast.as_ref())
         );
         let last_forecast = json!(state.pull_drain.drain_last_forecast);
-        for line in super::admission_forecast::admission_lines(&forecast, &last_forecast, |id| {
-            runtime.get_task(id).ok().map(|task| task.title)
-        }) {
+        let origin = super::admission_forecast::ForecastOrigin {
+            run_id: Some(&run.run_id),
+            ended: run.state.is_terminal(),
+            none_live: false,
+        };
+        for line in
+            super::admission_forecast::admission_lines(&forecast, &last_forecast, &origin, |id| {
+                runtime.get_task(id).ok().map(|task| task.title)
+            })
+        {
             header.push('\n');
             header.push_str(&line);
         }

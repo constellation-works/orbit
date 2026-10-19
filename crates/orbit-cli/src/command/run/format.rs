@@ -17,6 +17,10 @@ pub(crate) fn waiting_reason(reason: &str) -> &str {
 /// checkpoints and unavailable tasks still render the IDs they recorded.
 pub(crate) struct WaitingTaskFormatter {
     statuses: std::collections::BTreeMap<String, orbit_types::task::TaskStatus>,
+    /// Registered hosts of the OS each host-OS wait needs, and whether each
+    /// is pulling, by task ID. Only a local drain's waits are this
+    /// workspace's own to look up.
+    host_fleet: std::collections::BTreeMap<String, String>,
 }
 
 impl WaitingTaskFormatter {
@@ -26,7 +30,30 @@ impl WaitingTaskFormatter {
                 tracing::warn!(%error, "waiting task statuses unavailable");
                 Default::default()
             }),
+            host_fleet: Default::default(),
         }
+    }
+
+    /// Name the matching hosts beside each of `task_ids`' host-OS waits.
+    pub(crate) fn with_host_fleet<'a>(
+        mut self,
+        runtime: &orbit_core::OrbitRuntime,
+        task_ids: impl IntoIterator<Item = &'a str>,
+    ) -> Self {
+        for id in task_ids {
+            let note = runtime
+                .get_task(id)
+                .ok()
+                .and_then(|task| runtime.task_host_fleet_note(&task));
+            if let Some(note) = note {
+                self.host_fleet.insert(id.to_string(), note);
+            }
+        }
+        self
+    }
+
+    pub(crate) fn host_fleet(&self, task_id: &str) -> Option<&str> {
+        self.host_fleet.get(task_id).map(String::as_str)
     }
 
     fn task_label(&self, id: &str, status: Option<&str>) -> String {

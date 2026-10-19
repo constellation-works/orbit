@@ -134,6 +134,21 @@ impl OrbitRuntime {
         }
     }
 
+    /// Which registered hosts run an OS `task`'s `os:` tags and assigned
+    /// crew admit, and whether each is pulling here, for a read surface that
+    /// names a host-OS wait (see `host_os_fleet_note`). `None` when that
+    /// requirement names no OS, as for a wait only the default crew's
+    /// executor imposes, or when it cannot be resolved.
+    pub fn task_host_fleet_note(&self, task: &Task) -> Option<String> {
+        let limits = self.executor_host_os_limits().ok()?;
+        let requirement =
+            TaskOsRequirement::for_crew(&task.tags, task.crew.as_deref(), &limits).ok()?;
+        if !requirement.invalid.is_empty() {
+            return None;
+        }
+        self.host_os_fleet_note(&requirement.any_of)
+    }
+
     /// Refuse a crew assignment whose executor `host_os` shares no host with
     /// the task's `os:` tags. The task is not written.
     pub(crate) fn refuse_unsatisfiable_os_crew(

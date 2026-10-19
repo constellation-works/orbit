@@ -214,7 +214,13 @@ current host can run stays in the backlog, never claimed, with the wait named
 (`waits for a macos host (os:macos)`) in the owner's readiness, `orbit run
 show`, the Drain card, and the follower's idle receipt (`os_unavailable`). So
 an `os:macos` repair filed on a Linux owner waits for a macOS follower instead
-of blocking the owner's worker. Retag with `orbit.task.update` to reroute a
+of blocking the owner's worker. The owner's readiness (`tasks[].host_fleet`)
+and the `orbit run show` waiting line of its local drain also name each
+registered host of that OS and whether it is pulling, meaning it holds a claim
+in this workspace from the last seven days (`registered macos host(s): mac-mini
+pulling (claimed here within 7 days)`), or say `no registered host runs macos`.
+A task whose dependency is still open also shows that OS wait in readiness
+(`tasks[].host_os_wait`), after its dependency. Retag with `orbit.task.update` to reroute a
 backlog task; running or claimed work is not moved.
 
 A task tagged `ui` needs a host whose headless browser kit is verified

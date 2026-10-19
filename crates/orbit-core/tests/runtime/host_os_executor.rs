@@ -977,6 +977,59 @@ fn a_linux_owner_with_a_macos_follower_draws_the_macos_only_crew() {
         Some("sol"),
         "without a macOS follower the re-rate falls back as before"
     );
+
+    // Readiness names the registered macOS hosts and whether each pulls
+    // here, and shows the OS wait a dependency would otherwise hide.
+    let blocker = add(&owner, "unfinished-blocker", Some("sol"), &[]).unwrap();
+    let dependent = owner
+        .add_task(TaskAddParams {
+            title: "macos-dependent".to_string(),
+            description: "Fixture task: macos-dependent".to_string(),
+            acceptance_criteria: vec!["Fixture task is observable.".to_string()],
+            plan: "Fixture plan.".to_string(),
+            tags: vec!["os:macos".to_string()],
+            complexity: TaskComplexity::Medium,
+            status: Some(TaskStatus::Backlog),
+            crew: Some("sol".to_string()),
+            dependencies: vec![blocker.id.clone()],
+            ..Default::default()
+        })
+        .unwrap();
+    let fleet_owner = linux.clone().with_registered_host_oses([
+        (MAC.to_string(), HostOs::Macos),
+        (STALE.to_string(), HostOs::Macos),
+    ]);
+    let readiness = fleet_owner
+        .workspace_auto_readiness(&[drawn.id.clone(), dependent.id.clone()], None, 50, &[])
+        .unwrap();
+    let entry = |id: &str| {
+        readiness["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["task_id"] == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("{id} missing: {readiness}"))
+    };
+    let fleet = "registered macos host(s): hm_fixture_mac pulling (claimed here within 7 days), \
+                 hm_fixture_stale not pulling (no claim here within 7 days)";
+    let waiting = entry(&drawn.id);
+    assert_eq!(waiting["reason"], "host_os_mismatch", "{waiting}");
+    assert_eq!(waiting["host_fleet"], fleet, "{waiting}");
+    let dependent = entry(&dependent.id);
+    assert_eq!(dependent["reason"], "unmet_dependency", "{dependent}");
+    assert_eq!(
+        dependent["host_os_wait"], "waits for a macos host (os:macos)",
+        "{dependent}"
+    );
+    assert_eq!(dependent["host_fleet"], fleet, "{dependent}");
+    let unregistered = linux
+        .workspace_auto_readiness(std::slice::from_ref(&drawn.id), None, 50, &[])
+        .unwrap();
+    assert_eq!(
+        unregistered["tasks"][0]["host_fleet"], "no registered host runs macos",
+        "{unregistered}"
+    );
 }
 
 /// Automatic assignment filters by the effective tags before drawing, so a

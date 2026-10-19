@@ -81,26 +81,81 @@ impl OrbitRuntime {
         if self.registered_host_oses.is_empty() {
             return oses;
         }
-        let cutoff = Utc::now() - Duration::days(SERVING_CLAIM_EVIDENCE_DAYS);
-        let Ok(claims) = self.inspect_execution_claims() else {
-            return oses;
-        };
-        let recent: std::collections::BTreeSet<&str> = claims
-            .iter()
-            .filter(|claim| {
-                [&claim.updated_at, &claim.created_at]
-                    .into_iter()
-                    .filter_map(|stamp| DateTime::parse_from_rfc3339(stamp).ok())
-                    .any(|stamp| stamp.with_timezone(&Utc) >= cutoff)
-            })
-            .map(|claim| claim.claim.executed_on.machine_id.as_str())
-            .collect();
+        let recent = self.recently_claiming_machines();
         for (machine_id, os) in &self.registered_host_oses {
-            if recent.contains(machine_id.as_str()) {
+            if recent.contains_key(machine_id) {
                 oses.insert(*os);
             }
         }
         oses
+    }
+
+    /// Which registered hosts run one of `wanted`, and whether each is
+    /// pulling here: `no registered host runs macos`, or `registered macos
+    /// host(s): mac-mini pulling (claimed here within 7 days), mbp not
+    /// pulling (no claim here within 7 days)`. Pulling is the same claim
+    /// evidence [`Self::serving_host_oses`] counts, not a live heartbeat.
+    /// `None` when `wanted` is empty.
+    pub(crate) fn host_os_fleet_note(
+        &self,
+        wanted: &std::collections::BTreeSet<orbit_types::task::HostOs>,
+    ) -> Option<String> {
+        if wanted.is_empty() {
+            return None;
+        }
+        let names = wanted
+            .iter()
+            .map(|os| os.as_str())
+            .collect::<Vec<_>>()
+            .join(" or ");
+        let matching = self
+            .registered_host_oses
+            .iter()
+            .filter(|(_, os)| wanted.contains(os))
+            .collect::<Vec<_>>();
+        if matching.is_empty() {
+            return Some(format!("no registered host runs {names}"));
+        }
+        let recent = self.recently_claiming_machines();
+        let days = SERVING_CLAIM_EVIDENCE_DAYS;
+        let hosts = matching
+            .into_iter()
+            .map(|(machine_id, _)| match recent.get(machine_id) {
+                Some(name) => format!(
+                    "{} pulling (claimed here within {days} days)",
+                    name.as_deref().unwrap_or(machine_id)
+                ),
+                None => format!("{machine_id} not pulling (no claim here within {days} days)"),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        Some(format!("registered {names} host(s): {hosts}"))
+    }
+
+    /// Machines with an execution claim in this workspace created or
+    /// updated within [`SERVING_CLAIM_EVIDENCE_DAYS`], by machine id, with
+    /// the name the claim recorded. Unreadable claim records yield none.
+    fn recently_claiming_machines(&self) -> std::collections::BTreeMap<String, Option<String>> {
+        let cutoff = Utc::now() - Duration::days(SERVING_CLAIM_EVIDENCE_DAYS);
+        let Ok(claims) = self.inspect_execution_claims() else {
+            return std::collections::BTreeMap::new();
+        };
+        let mut recent = std::collections::BTreeMap::new();
+        for claim in claims.iter().filter(|claim| {
+            [&claim.updated_at, &claim.created_at]
+                .into_iter()
+                .filter_map(|stamp| DateTime::parse_from_rfc3339(stamp).ok())
+                .any(|stamp| stamp.with_timezone(&Utc) >= cutoff)
+        }) {
+            let location = &claim.claim.executed_on;
+            let name = recent
+                .entry(location.machine_id.clone())
+                .or_insert_with(|| None);
+            if name.is_none() {
+                name.clone_from(&location.machine_name);
+            }
+        }
+        recent
     }
 
     /// Read the browser kit admission checks `ui` tasks against from `home`

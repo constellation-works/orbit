@@ -28,27 +28,40 @@ fn readiness_and_run_show_name_lock_holders_and_unfinished_dependencies() {
     let runtime =
         OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
             .unwrap();
-    for file in ["first.rs", "second.rs", "third.rs", "dependency.rs"] {
+    for file in [
+        "first.rs",
+        "second.rs",
+        "third.rs",
+        "dependency.rs",
+        "windows.rs",
+    ] {
         fs::write(fixture.work.join(file), "fixture\n").unwrap();
     }
-    let add =
-        |title: &str, status, files: &[&str], dependencies: Vec<orbit_types::identity::OrbitId>| {
-            runtime
-                .add_task(TaskAddParams {
-                    title: title.into(),
-                    description: "Waiting task observation fixture".into(),
-                    acceptance_criteria: vec!["Blocker is observable".into()],
-                    plan: "Fixture plan".into(),
-                    status: Some(status),
-                    task_type: Some(TaskType::Feature),
-                    complexity: TaskComplexity::Medium,
-                    context_files: files.iter().map(|file| format!("file:{file}")).collect(),
-                    dependencies,
-                    ..Default::default()
-                })
-                .unwrap()
-                .id
-        };
+    let add_tagged = |title: &str,
+                      status,
+                      files: &[&str],
+                      dependencies: Vec<orbit_types::identity::OrbitId>,
+                      tags: &[&str]| {
+        runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                description: "Waiting task observation fixture".into(),
+                acceptance_criteria: vec!["Blocker is observable".into()],
+                plan: "Fixture plan".into(),
+                status: Some(status),
+                task_type: Some(TaskType::Feature),
+                complexity: TaskComplexity::Medium,
+                context_files: files.iter().map(|file| format!("file:{file}")).collect(),
+                dependencies,
+                tags: tags.iter().map(ToString::to_string).collect(),
+                ..Default::default()
+            })
+            .unwrap()
+            .id
+    };
+    let add = |title: &str, status, files: &[&str], dependencies| {
+        add_tagged(title, status, files, dependencies, &[])
+    };
     let holder = add(
         "holder",
         TaskStatus::InProgress,
@@ -79,6 +92,17 @@ fn readiness_and_run_show_name_lock_holders_and_unfinished_dependencies() {
         &["dependency.rs"],
         vec![dependency.clone()],
     );
+    // No Orbit host runs Windows natively, so this waits on every CI host;
+    // the fixture registers no host of that OS.
+    let windows = add_tagged(
+        "windows only",
+        TaskStatus::Backlog,
+        &["windows.rs"],
+        vec![],
+        &["os:windows"],
+    );
+    let windows_wait = "waits for a windows host (os:windows)";
+    let no_host = "no registered host runs windows";
     let before = fixture.json(&["run", "readiness", "--json"]);
     let task = |id: &str| {
         before["tasks"]
@@ -125,6 +149,12 @@ fn readiness_and_run_show_name_lock_holders_and_unfinished_dependencies() {
         ready.contains(&dependency_detail),
         "missing dependency/status: {ready}"
     );
+    assert!(
+        ready.contains(&format!(
+            "{windows}: waiting (host_os_mismatch): {windows_wait}; {no_host}"
+        )),
+        "host-OS wait must name the matching hosts: {ready}"
+    );
     let after = fixture.json(&["run", "readiness", "--json"]);
     assert_eq!(
         after["tasks"], before["tasks"],
@@ -143,8 +173,11 @@ fn readiness_and_run_show_name_lock_holders_and_unfinished_dependencies() {
         let pass = json!({
             "recorded_at": now, "queued": 1,
             "deferred": [{"task_id": locked, "reason": "context_lock_conflict", "blocked_by": [holder, other_holder]}],
-            "excluded": [{"task_id": dependent, "reason": "dependency_not_done", "blocked_by": [dependency]}],
-            "excluded_total": 1
+            "excluded": [
+                {"task_id": dependent, "reason": "dependency_not_done", "blocked_by": [dependency]},
+                {"task_id": windows, "reason": "host_os_mismatch", "detail": windows_wait},
+            ],
+            "excluded_total": 2
         });
         let mut state = PipelineState::new(id.clone(), job.into(), json!({}));
         state.pull_drain.drain_last_pass =
@@ -159,6 +192,14 @@ fn readiness_and_run_show_name_lock_holders_and_unfinished_dependencies() {
             )),
             "{shown}"
         );
+        // Only a local drain's waits are this workspace's own tasks; a pull
+        // drain's come from its owner, whose hosts this one does not know.
+        let host_line = if job == "workspace_auto_pipeline" {
+            format!("Task {windows}: host_os_mismatch ({windows_wait}; {no_host})")
+        } else {
+            format!("Task {windows}: host_os_mismatch ({windows_wait})\n")
+        };
+        assert!(shown.contains(&host_line), "{host_line}: {shown}");
         let after = fixture.json(&["run", "show", &id, "--no-reconcile", "--json"]);
         assert_eq!(after["drain_summary"], before["drain_summary"]);
         assert_eq!(after["pipeline_state"], before["pipeline_state"]);

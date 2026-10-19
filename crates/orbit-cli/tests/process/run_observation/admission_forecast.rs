@@ -88,7 +88,7 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
         let block = json!({
             "mode": mode, "forecast_at": now,
             "cpu_peak": {"minute": 6, "value": 7.2, "percent": 90.0},
-            "memory_peak": {"minute": 2, "value": 1024.0, "percent": 40.0},
+            "memory_peak": {"minute": 2, "value": 8.0 * 1024.0 * 1024.0 * 1024.0, "percent": 40.0},
             "admitted": [{"task_id": ids[2], "profile_source": "without_complexity"}],
             "skipped": [
                 {"task_id": ids[0], "profile_source": "exact", "resource": "cpu", "minute": 6, "percent": 94.0, "detail": "cpu 94% at +6m"},
@@ -124,18 +124,16 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
             .lines()
             .find(|line| line.starts_with("Admission:"))
             .unwrap();
-        assert!(
-            line.contains("heavy candidate") && line.contains("cpu 94% at +6m"),
-            "{line}"
-        );
-        assert!(
-            line.contains("starvation guard protects heavy candidate"),
-            "{line}"
-        );
-        assert_eq!(line.contains("shadow"), mode == "shadow", "{line}");
-        for task_id in &ids {
-            assert!(!line.contains(task_id), "internal ID leaked: {line}");
+        // Each decision names its task by ID and quoted title, so one title
+        // does not run on into the next clause.
+        for named in [
+            format!("admitted {} \"fitting candidate\"", ids[2]),
+            format!("skipped {} \"heavy candidate\" (cpu 94% at +6m)", ids[0]),
+            format!("starvation guard protects {} \"heavy candidate\"", ids[0]),
+        ] {
+            assert!(line.contains(&named), "{named}: {line}");
         }
+        assert_eq!(line.contains("shadow"), mode == "shadow", "{line}");
         let ready_text = text(&fixture, &["run", "readiness"]);
         for rendered in [&show_text, &ready_text] {
             let stuck = rendered
@@ -143,7 +141,7 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
                 .find(|line| line.starts_with("Stuck head"))
                 .unwrap_or_else(|| panic!("stuck head not shown: {rendered}"));
             for named in [
-                "heavy candidate",
+                format!("{} \"heavy candidate\"", ids[0]).as_str(),
                 "cpu 94% at +6m",
                 "change/medium via exact",
                 "cpu baseline 12%",
@@ -152,9 +150,6 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
                 assert!(stuck.contains(named), "{named}: {stuck}");
             }
             assert_eq!(stuck.contains("shadow"), mode == "shadow", "{stuck}");
-            for task_id in &ids {
-                assert!(!stuck.contains(task_id), "internal ID leaked: {stuck}");
-            }
         }
 
         let readiness = fixture.json(&["run", "readiness", "--json"]);
@@ -200,9 +195,10 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
             "{ready_text}"
         );
         assert!(
-            ready_text.contains("memory 1024.0 bytes (40.0%) at +2m; headroom: 34.0"),
+            ready_text.contains("Forecast peak: memory 8.0 GiB (40.0%) at +2m; headroom: 34.0"),
             "{ready_text}"
         );
+        assert!(!ready_text.contains("Last forecast"), "{ready_text}");
         assert!(
             ready_text.contains("profile-source=heaviest_on_host"),
             "{ready_text}"
@@ -269,6 +265,8 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
         ] {
             assert_eq!(last[key], json!(retained)[key], "{key}");
         }
+        assert_eq!(last["drain_run_id"], id);
+        assert_eq!(last["drain_live"], true);
         assert!(readiness["capacity"]["admission_forecast"]["forecast_at"].is_null());
         for task in readiness["tasks"].as_array().unwrap() {
             assert_eq!(
@@ -286,41 +284,32 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
                 rendered.contains("no forecast built this pass"),
                 "{rendered}"
             );
-            assert!(
-                rendered.contains(last["forecast_at"].as_str().unwrap()),
-                "{rendered}"
-            );
-            assert!(
-                rendered.contains("admitted fitting candidate"),
-                "{rendered}"
-            );
-            assert!(
-                rendered.contains("skipped heavy candidate (cpu 94% at +6m)"),
-                "{rendered}"
-            );
-            assert!(
-                rendered.contains("cpu 7.2 cores (90.0%) at +6m"),
-                "{rendered}"
-            );
-            assert!(
-                rendered.contains("memory 1024.0 bytes (40.0%) at +2m"),
-                "{rendered}"
-            );
-            let forecast_lines = rendered
+            // The retained forecast names its time, age and drain, and its
+            // peaks are not presented as this pass's.
+            let at = last["forecast_at"].as_str().unwrap();
+            let retained_line = rendered
                 .lines()
-                .filter(|line| {
-                    line.starts_with("Admission:")
-                        || line.starts_with("Last forecast ")
-                        || line.starts_with("Forecast peak:")
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            for task_id in &ids {
-                assert!(
-                    !forecast_lines.contains(task_id),
-                    "internal ID leaked in forecast: {forecast_lines}"
-                );
+                .find(|line| line.starts_with(&format!("Last forecast {at} (")))
+                .unwrap_or_else(|| panic!("retained forecast unlabelled: {rendered}"));
+            assert!(
+                retained_line.contains(&format!(" ago, from drain {id}): ")),
+                "{retained_line}"
+            );
+            for named in [
+                format!("admitted {} \"fitting candidate\"", ids[2]),
+                format!("skipped {} \"heavy candidate\" (cpu 94% at +6m)", ids[0]),
+            ] {
+                assert!(retained_line.contains(&named), "{named}: {retained_line}");
             }
+            assert!(
+                rendered.contains("Last forecast peak: cpu 7.2 cores (90.0%) at +6m"),
+                "{rendered}"
+            );
+            assert!(
+                rendered.contains("Last forecast peak: memory 8.0 GiB (40.0%) at +2m"),
+                "{rendered}"
+            );
+            assert!(!rendered.contains("Forecast peak:"), "{rendered}");
         }
         assert_eq!(json!(runtime.read_run_state(id).unwrap()), before_state);
         assert_eq!(fixture.snapshot(), snapshot);
@@ -343,17 +332,18 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
     forecast.skipped.clear();
     runtime.write_run_state(id, &state).unwrap();
     let shown = text(&fixture, &["run", "show", id, "--no-reconcile"]);
+    let head = format!("{} \"heavy candidate\"", ids[0]);
     assert!(
-        shown.contains("starvation guard protects heavy candidate"),
+        shown.contains(&format!("starvation guard protects {head}")),
         "{shown}"
     );
-    assert!(shown.contains("Stuck head: heavy candidate"), "{shown}");
+    assert!(shown.contains(&format!("Stuck head: {head}")), "{shown}");
     let ready = text(&fixture, &["run", "readiness"]);
     assert!(
-        ready.contains("starvation guard protects heavy candidate"),
+        ready.contains(&format!("starvation guard protects {head}")),
         "{ready}"
     );
-    assert!(ready.contains("Stuck head: heavy candidate"), "{ready}");
+    assert!(ready.contains(&format!("Stuck head: {head}")), "{ready}");
     assert!(!ready.contains("Forecast peak"), "{ready}");
 
     // Unknown host size must not be formatted as zero headroom.
@@ -402,7 +392,7 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
     fixture
         .db()
         .execute(
-            "UPDATE job_runs SET state = 'success' WHERE run_id = ?1",
+            "UPDATE job_runs SET state = 'success', finished_at = started_at, duration_ms = 0 WHERE run_id = ?1",
             [id],
         )
         .unwrap();
@@ -417,10 +407,40 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
         history["capacity"]["admission_forecast"]["skipped"][0]["percent"],
         94.0
     );
+    assert_eq!(
+        history["capacity"]["admission_forecast"]["drain_run_id"],
+        id
+    );
+    assert_eq!(
+        history["capacity"]["admission_forecast"]["drain_live"],
+        false
+    );
+    // A finished drain's last pass is history: never an unlabelled current
+    // peak on an idle host.
+    for (args, idle) in [
+        (vec!["run", "readiness"], "; no drain is live): "),
+        (vec!["run", "show", id, "--no-reconcile"], "): "),
+    ] {
+        let rendered = text(&fixture, &args);
+        let line = rendered
+            .lines()
+            .find(|line| line.starts_with("Last forecast "))
+            .unwrap_or_else(|| panic!("finished drain's forecast unlabelled: {rendered}"));
+        assert!(
+            line.contains(&format!(" ago, from drain {id}, which has ended{idle}")),
+            "{line}"
+        );
+        assert!(!rendered.contains("Admission: forecast"), "{rendered}");
+        assert!(
+            rendered.contains("Last forecast peak: cpu 1.5 cores (host capacity unknown)"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("Forecast peak:"), "{rendered}");
+    }
     fixture
         .db()
         .execute(
-            "UPDATE job_runs SET state = 'running' WHERE run_id = ?1",
+            "UPDATE job_runs SET state = 'running', finished_at = NULL, duration_ms = NULL WHERE run_id = ?1",
             [id],
         )
         .unwrap();
