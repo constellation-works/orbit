@@ -141,7 +141,7 @@ Patterns to copy:
 
 ## Reference: `FileLockGuard` — resource held until `Drop`
 
-From `crates/orbit-common/src/fs/file_lock.rs`:
+From `crates/orbit-common/src/fs/file_lock/acquisition.rs`:
 
 ```rust
 #[must_use = "the advisory lock is released as soon as the guard is dropped"]
