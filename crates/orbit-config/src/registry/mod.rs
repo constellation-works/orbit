@@ -59,9 +59,10 @@ pub enum ConfigSection {
     Crews,
     /// `execution.*` — how agent subprocesses run.
     Execution,
-    /// `review.*` and `workflow.purpose_crews.review` — review before
-    /// landing and the automatic-review crew. After-landing review is an
-    /// auto-task flag, not a key.
+    /// `review.*`, `workflow.purpose_crews.review` and
+    /// `workflow.purpose_crews.pre_landing_review` — review before landing
+    /// and the automatic-review crews. After-landing review is an auto-task
+    /// flag, not a key.
     Review,
     /// Everything else: `automation.*`, `runtime.*`, `tasks.*`,
     /// `pr.*`, `plugin.*`.

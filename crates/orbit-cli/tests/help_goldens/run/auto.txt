@@ -30,7 +30,7 @@ Options:
           Repair the pull requests this drain opens when a required check fails on their head or their branch conflicts with its base: the run's repair pipeline fixes, validates and pushes the repair, then watches the new head. Repair crews come from `workflow.purpose_crews.auto_fix`, else `workflow.low_complexity_crews`. This never merges; `--complete` still decides that. Off by default
 
       --review <LAYER>
-          Add this review layer before landing to the window when workspace policy applies none; every task it admits inherits it. `before-pr` holds PR creation for a reviewer, `before-landing` reviews the open PR before it lands. The layer workspace policy already applies is accepted unchanged; the other one is refused, as are an unset `workflow.purpose_crews.review`, local delivery and `--pull` (the owner decides the review of its claims). Omitted, workspace policy decides
+          Add this review layer before landing to the window when workspace policy applies none; every task it admits inherits it. `before-pr` holds PR creation for a reviewer, `before-landing` reviews the open PR before it lands. The layer workspace policy already applies is accepted unchanged; the other one is refused, as are a workspace that sets neither `workflow.purpose_crews.pre_landing_review` nor `workflow.purpose_crews.review`, local delivery and `--pull` (the owner decides the review of its claims). Omitted, workspace policy decides
 
           Possible values:
           - before-pr:      Hold PR creation for a reviewer, as `review.timing = before_pr` does
@@ -150,9 +150,10 @@ Approval does not bypass `--allow-crew` or the complexity pools.
 `--review` adds a second-agent review before landing to every task this
 window admits, when workspace policy applies none. It can only add review:
 the layer `review.timing` already applies is accepted unchanged, and the
-other layer, an unset `workflow.purpose_crews.review`, a workspace that
-delivers locally and `--pull` are refused before the drain starts. With
-it, a backlog task routed to local delivery is held, not started.
+other layer, a workspace that sets neither
+`workflow.purpose_crews.pre_landing_review` nor `workflow.purpose_crews.review`,
+a workspace that delivers locally and `--pull` are refused before the drain
+starts. With it, a backlog task routed to local delivery is held, not started.
 
 Complexity pools select only for tasks without an explicit crew.
 The tiers are low, medium, hard and xhard; xhard is the reserved top tier.

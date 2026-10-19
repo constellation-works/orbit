@@ -34,6 +34,7 @@ recorded. Unknown keys and out-of-range values fail config load.
 | `review.before_landing_hosts` | machine ids (`[]` by default; entries are `hm_…`; owner policy for claimed leaves) |
 | `review.minutes` | 1..=1440 (30): wall-clock limit for one candidate's review |
 | `workflow.purpose_crews.review` | crew name or weighted pool |
+| `workflow.purpose_crews.pre_landing_review` | crew name or weighted pool for before-PR and before-landing review; unset falls back to `workflow.purpose_crews.review` |
 
 `review.timing = "before_pr"` holds PR creation for a fresh reviewer (§3).
 `before_landing` opens the PR first and reviews it while hosted CI
@@ -108,7 +109,8 @@ submission in the delivery family (`workspace_auto_pipeline`,
 `task_auto_pipeline`, `task_gate_pipeline`, `task_pr_pipeline`,
 `task_local_pipeline`) carries a versioned `review`
 snapshot in its immutable input: timing and its source, the reviewer crew
-selected from `workflow.purpose_crews.review` and its source, the lineage budget,
+selected from `workflow.purpose_crews.pre_landing_review` (else
+`workflow.purpose_crews.review`) and its source, the lineage budget,
 the policy version, the owner's `workflow.required_validation_commands`
 list, and its `review.baseline_commands` list (§4). A
 parent-authorized child inherits its parent's snapshot exactly; any other submission resolves from the

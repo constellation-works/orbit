@@ -184,7 +184,8 @@ pub struct CrewProviderLimit {
 /// A lane admission does not gate whose crew's provider is at its limit.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct UngatedLaneLimit {
-    /// The setting naming the lane's crew: `workflow.purpose_crews.review`.
+    /// The setting naming the lane's crew: `workflow.purpose_crews.review`
+    /// or `workflow.purpose_crews.pre_landing_review`.
     pub setting: &'static str,
     pub crew: String,
     pub provider: String,
@@ -317,22 +318,36 @@ impl ProviderLimitsView {
             })
         };
         // A review pool skips its limited members, so it is held only when
-        // every member is [ORB-15195].
-        let review_pool = &runtime.operation_policy().review_crew.value;
-        let review_limits: Vec<UngatedLaneLimit> = review_pool
-            .iter()
-            .filter_map(|entry| {
-                let name = entry
-                    .split_once(':')
-                    .map_or(entry.as_str(), |(name, _)| name);
-                lane_limit("workflow.purpose_crews.review", name)
+        // every member is [ORB-15195]. The pre-landing pool is a lane of its
+        // own only while it is set; unset, the review pool is that lane too.
+        let policy = runtime.operation_policy();
+        let mut review_pools = vec![(
+            orbit_config::REVIEW_CREW_KEY,
+            policy.review_crew.value.as_slice(),
+        )];
+        let pre_landing = policy.pre_landing_review_pool();
+        if !pre_landing.is_fallback() {
+            review_pools.push((pre_landing.key, pre_landing.entries));
+        }
+        let ungated_lanes = review_pools
+            .into_iter()
+            .flat_map(|(setting, pool)| {
+                let limits: Vec<UngatedLaneLimit> = pool
+                    .iter()
+                    .filter_map(|entry| {
+                        let name = entry
+                            .split_once(':')
+                            .map_or(entry.as_str(), |(name, _)| name);
+                        lane_limit(setting, name)
+                    })
+                    .collect();
+                if !pool.is_empty() && limits.len() == pool.len() {
+                    limits
+                } else {
+                    Vec::new()
+                }
             })
             .collect();
-        let ungated_lanes = if !review_pool.is_empty() && review_limits.len() == review_pool.len() {
-            review_limits
-        } else {
-            Vec::new()
-        };
 
         Self {
             as_of: now,

@@ -22,11 +22,13 @@ const POOL: &str = r#"["sol", "grok"]"#;
 /// A single weighted member: a pool of one crew with a positive weight.
 const WEIGHTED_SINGLETON: &str = r#"["sol:3"]"#;
 
-/// A fresh workspace reviewing after landing through `pool`, with a
+/// A fresh workspace reviewing after landing through `pool`, with
+/// `pre_landing` as its pre-landing reviewer pool when one is named and a
 /// usage-limit reading on `limited_provider` when one is named; the review
 /// task minted for a delivery `implementer` landed.
 fn minted_review(
     pool: &str,
+    pre_landing: Option<&str>,
     implementer: &str,
     limited_provider: Option<&str>,
 ) -> (Fixture, Value) {
@@ -35,6 +37,14 @@ fn minted_review(
     set_policy(&fixture, "crews.sol.enabled", "true");
     set_policy(&fixture, "crews.grok.enabled", "true");
     set_policy(&fixture, "workflow.purpose_crews.review", pool);
+    if let Some(pre_landing) = pre_landing {
+        set_policy(&fixture, "crews.haiku.enabled", "true");
+        set_policy(
+            &fixture,
+            "workflow.purpose_crews.pre_landing_review",
+            pre_landing,
+        );
+    }
     git(&fixture, &["checkout", "-b", "fixture-delivery"]);
     commit(&fixture, "baseline\n");
     retarget(&fixture, &trigger());
@@ -89,7 +99,7 @@ fn each_batch_is_reviewed_by_a_pool_crew_that_did_not_implement_it() {
     }
 
     for (implementer, reviewer) in [("sol", "grok"), ("grok", "sol")] {
-        let (_, task) = minted_review(POOL, implementer, None);
+        let (_, task) = minted_review(POOL, None, implementer, None);
         assert_eq!(
             task["crew"], reviewer,
             "work {implementer} implemented is reviewed by {reviewer}: {task}"
@@ -102,7 +112,7 @@ fn each_batch_is_reviewed_by_a_pool_crew_that_did_not_implement_it() {
 
     // The independent crew's provider is at its limit, so the pool falls
     // back to the other member rather than holding the review.
-    let (fixture, task) = minted_review(POOL, "sol", Some("grok"));
+    let (fixture, task) = minted_review(POOL, None, "sol", Some("grok"));
     assert_eq!(task["crew"], "sol", "a limited crew is skipped: {task}");
 
     let config = fixture.json(&["config", "show", "--json"]);
@@ -120,6 +130,10 @@ fn each_batch_is_reviewed_by_a_pool_crew_that_did_not_implement_it() {
         "{config}"
     );
     assert!(before_pr["crew_selection"].is_string(), "{config}");
+    assert_eq!(
+        before_pr["crew_key"], "workflow.purpose_crews.review",
+        "an unset pre-landing pool falls back to the review pool: {config}"
+    );
     let (row, _) = doctor_row(&fixture);
     assert_eq!(row["status"], "ok", "{row}");
     let message = row["message"].as_str().unwrap();
@@ -136,7 +150,7 @@ fn a_single_weighted_pool_member_is_the_review_crew_by_name() {
 
     // The weight is pool bookkeeping, not part of the crew's name: the batch
     // is minted with crew `sol`, and it is not a crew named `sol:3`.
-    let (fixture, task) = minted_review(WEIGHTED_SINGLETON, "sol", None);
+    let (fixture, task) = minted_review(WEIGHTED_SINGLETON, None, "sol", None);
     assert_eq!(
         task["crew"], "sol",
         "the weight is not the crew name: {task}"
@@ -152,4 +166,42 @@ fn a_single_weighted_pool_member_is_the_review_crew_by_name() {
     assert!(health["crew_error"].is_null(), "{config}");
     let (row, _) = doctor_row(&fixture);
     assert_eq!(row["status"], "ok", "{row}");
+}
+
+#[test]
+fn a_pre_landing_pool_leaves_after_landing_review_on_the_review_pool() {
+    const TEST: &str =
+        "review_crew_pool_cli::a_pre_landing_pool_leaves_after_landing_review_on_the_review_pool";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+
+    let (fixture, task) = minted_review(POOL, Some("haiku"), "sol", None);
+    assert_eq!(
+        task["crew"], "grok",
+        "after-landing review draws from workflow.purpose_crews.review: {task}"
+    );
+    assert_eq!(
+        task["crew_source"], "workflow.purpose_crews.review",
+        "{task}"
+    );
+
+    let config = fixture.json(&["config", "show", "--json"]);
+    let review = &config["review"];
+    assert_eq!(review["before_pr"]["crews"], serde_json::json!(["haiku"]));
+    assert_eq!(
+        review["before_pr"]["crew_key"], "workflow.purpose_crews.pre_landing_review",
+        "{config}"
+    );
+    assert_eq!(review["before_pr"]["crew_source"], "global", "{config}");
+    assert_eq!(
+        review["after_landing"]["crews"],
+        serde_json::json!(["grok", "sol"]),
+        "{config}"
+    );
+    let line = review["before_landing"]["line"].as_str().unwrap();
+    assert!(
+        line.contains("crew `haiku` (workflow.purpose_crews.pre_landing_review, global)"),
+        "the before-landing line names the effective pre-landing pool: {line}"
+    );
 }

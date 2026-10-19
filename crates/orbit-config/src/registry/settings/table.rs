@@ -643,9 +643,15 @@ define_config_settings! {
         section: ConfigSection::Delivery, order: 105,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw),
     },
+    workflow_purpose_crews_pre_landing_review: Option<Vec<String>> => operation::ReviewCrewSetting {
+        key: "workflow.purpose_crews.pre_landing_review", value_type: "array<string>",
+        description: "Crew or pool for before-PR and before-landing review; unset uses review.",
+        section: ConfigSection::Review, order: 31,
+        resolve: operation::pre_landing_review_crew,
+    },
     workflow_purpose_crews_review: Option<Vec<String>> => operation::ReviewCrewSetting {
         key: "workflow.purpose_crews.review", value_type: "array<string>",
-        description: "Crew or pool for automatic review before and after landing.",
+        description: "Crew or pool for after-landing review, and before landing by default.",
         section: ConfigSection::Review, order: 30,
         resolve: operation::review_crew,
     },

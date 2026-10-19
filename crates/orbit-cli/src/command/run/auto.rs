@@ -69,9 +69,10 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
                   `--review` adds a second-agent review before landing to every task this\n\
                   window admits, when workspace policy applies none. It can only add review:\n\
                   the layer `review.timing` already applies is accepted unchanged, and the\n\
-                  other layer, an unset `workflow.purpose_crews.review`, a workspace that\n\
-                  delivers locally and `--pull` are refused before the drain starts. With\n\
-                  it, a backlog task routed to local delivery is held, not started.\n\n\
+                  other layer, a workspace that sets neither\n\
+                  `workflow.purpose_crews.pre_landing_review` nor `workflow.purpose_crews.review`,\n\
+                  a workspace that delivers locally and `--pull` are refused before the drain\n\
+                  starts. With it, a backlog task routed to local delivery is held, not started.\n\n\
                   Complexity pools select only for tasks without an explicit crew.\n\
                   The tiers are low, medium, hard and xhard; xhard is the reserved top tier.\n\
                   Each CLI pool replaces its matching workflow pool for this drain.\n\
@@ -158,7 +159,8 @@ pub struct AutoCommand {
     /// policy applies none; every task it admits inherits it. `before-pr`
     /// holds PR creation for a reviewer, `before-landing` reviews the open PR
     /// before it lands. The layer workspace policy already applies is
-    /// accepted unchanged; the other one is refused, as are an unset
+    /// accepted unchanged; the other one is refused, as are a workspace that
+    /// sets neither `workflow.purpose_crews.pre_landing_review` nor
     /// `workflow.purpose_crews.review`, local delivery and `--pull` (the owner
     /// decides the review of its claims). Omitted, workspace policy decides.
     #[arg(long, value_enum, value_name = "LAYER")]

@@ -103,16 +103,20 @@ Confirm:
   those files **grant nothing** (delete them; deny access by removing the
   caller's key from `~/.ssh/authorized_keys`);
 - when before-PR or before-landing review is on at the owner
-  (`review.timing` is `before_pr` or `before_landing`), the owner sets `workflow.purpose_crews.review`, the workspace ships through the PR route,
-  and every follower can run that crew. When `workflow.purpose_crews.review` is a pool
-  (`["sol", "grok"]`), the owner resolves it to one member each time it offers
+  (`review.timing` is `before_pr` or `before_landing`), the owner sets a
+  reviewer pool, the workspace ships through the PR route, and every follower
+  can run that crew. Claims draw from `workflow.purpose_crews.pre_landing_review`,
+  or from `workflow.purpose_crews.review` while it is unset, which keeps
+  serving the owner's after-landing review tasks either way. When that pool
+  is a pool (`["sol", "grok"]`), the owner resolves it to one member each time it offers
   a claim, and that crew is what the claim captures, so every follower must
   be able to run each member it may be offered.
 
 ```bash
 orbit config get review.timing
+orbit config get workflow.purpose_crews.pre_landing_review
 orbit config get workflow.purpose_crews.review
-orbit config show --all # the Review lines report the timing and its source
+orbit config show --all # the Review lines report the timing, the reviewer pool and their sources
 ```
 
 The owner's `review.timing` is captured on each claim with its review crew,

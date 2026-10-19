@@ -14,6 +14,7 @@ use orbit_types::tool::{McpTransport, ToolSessionContext};
 use orbit_types::workflow::REVIEW_CONTRACT_VERSION;
 
 use crate::application::job::crew_pools::random_crew_ticket;
+use crate::application::review::crew::pre_landing_review_crew_unset;
 
 /// Whether the mutating distributed entry points are reachable from any public
 /// surface.
@@ -78,8 +79,9 @@ impl crate::OrbitRuntime {
         };
         let Some(crew) = review.crew.as_deref() else {
             return Some(format!(
-                "before_pr_reviewer_unavailable: the owner has {key} but no \
-                 workflow.purpose_crews.review; a claimed leaf never reviews with its implementer's crew"
+                "before_pr_reviewer_unavailable: the owner has {key} but \
+                 {}; a claimed leaf never reviews with its implementer's crew",
+                pre_landing_review_crew_unset()
             ));
         };
         self.resolve_crew_for_task(Some(crew), None)
@@ -183,12 +185,15 @@ impl crate::OrbitRuntime {
 
     /// The one reviewer crew a claim's review contract carries
     /// [ORB-15195]: the configured crew, or a member drawn from the
-    /// configured pool, so the wire contract still names one crew. The
+    /// configured pool, so the wire contract still names one crew. The pool
+    /// is the pre-landing reviewer's:
+    /// `workflow.purpose_crews.pre_landing_review`, else
+    /// `workflow.purpose_crews.review`. The
     /// follower implements the claim, so the draw has no implementer to
     /// avoid. Each probe draws afresh; [`Self::adopt_requested_review_crew`]
     /// lets the pull that echoes it be admitted.
     fn claim_review_crew(&self) -> Option<String> {
-        let pool = self.review_crew_pool_members().ok()?;
+        let pool = self.pre_landing_review_crew_pool_members().ok()?;
         let first = pool.first().map(|member| member.name.clone());
         if pool.len() < 2 {
             return first;
@@ -224,7 +229,7 @@ impl crate::OrbitRuntime {
             return;
         };
         let drawable = self
-            .review_crew_pool_members()
+            .pre_landing_review_crew_pool_members()
             .and_then(|pool| self.review_crew_candidates(&pool))
             .is_ok_and(|candidates| {
                 candidates

@@ -39,7 +39,8 @@ hosted CI runs, landing only the head that review settled; and the
 deliveries in batches. Both config timings share `review.minutes`, the limit
 for one candidate's review, and there is one review layer before landing:
 `review.timing` names at most one. The reviewer is drawn from the single crew
-or weighted pool in `workflow.purpose_crews.review`; the `[operation]` table
+or weighted pool in `workflow.purpose_crews.pre_landing_review`, or in
+`workflow.purpose_crews.review` while that is unset; the `[operation]` table
 once also carried operation-mode presets and grants, removed on 2026-09-21
 (see [orbit-core decisions](../orbit-core/4_decisions.md)).
 
@@ -71,7 +72,8 @@ anything else stays an ordinary review obligation.
 - **After-landing switch:** the `delivery-code-review` auto-task's `enabled`
   flag; it never affects delivery admission.
 - **Reviewer:** a fresh invocation with its own instruction, tool allowlist
-  and wall clock, resolved from `workflow.purpose_crews.review`. It never
+  and wall clock, resolved from `workflow.purpose_crews.pre_landing_review`
+  (else `workflow.purpose_crews.review`). It never
   becomes the implementer and never merges.
 - **One review per candidate:** each candidate in a delivery run lineage
   (workspace, task set, base branch, and the run with its resumes) gets one

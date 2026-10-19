@@ -216,7 +216,8 @@ pub(super) fn contract(
         );
     }
     let crew = &runtime.operation_policy().review_crew;
-    let pool = configured_pool_members(runtime, &crew.value).map_err(|error| error.to_string())?;
+    let pool = configured_pool_members(runtime, &crew.value, orbit_config::REVIEW_CREW_KEY)
+        .map_err(|error| error.to_string())?;
     let (review_crew, review_crew_source) = match pool.as_slice() {
         [] => {
             return Err(

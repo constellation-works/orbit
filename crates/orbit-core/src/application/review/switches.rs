@@ -2,21 +2,25 @@
 //!
 //! Before-PR review is `review.timing = before_pr` and before-landing review
 //! is `review.timing = before_landing` [ORB-14849], both with `review.minutes`
-//! and `workflow.purpose_crews.review`; an owner may also turn before-landing
+//! and the pre-landing reviewer pool (`workflow.purpose_crews.pre_landing_review`,
+//! else `workflow.purpose_crews.review`); an owner may also turn before-landing
 //! review on only for the claims of the machines `review.before_landing_hosts`
 //! lists [ORB-15192]. After-landing review is the `delivery-code-review`
-//! auto-task's `enabled` flag. `orbit config show`,
+//! auto-task's `enabled` flag, and its review tasks draw from
+//! `workflow.purpose_crews.review`. `orbit config show`,
 //! `orbit doctor`, the dashboard and the drain probe all render this view, so
 //! they report the switches together and with the same provenance.
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_config::OperationPolicy;
+use orbit_config::{OperationPolicy, PRE_LANDING_REVIEW_CREW_KEY};
 use orbit_types::workflow::ShipMode;
 use serde::Serialize;
 use serde_json::{Value as JsonValue, json};
 
-use super::crew::{REVIEW_CREW_SELECTION_RULE, configured_pool_members};
+use super::crew::{
+    REVIEW_CREW_SELECTION_RULE, configured_pool_members, pre_landing_review_crew_unset,
+};
 use super::{local_route_before_landing_conflict, local_route_before_pr_conflict};
 use crate::OrbitRuntime;
 use crate::application::automation::{
@@ -40,10 +44,14 @@ pub struct BeforePrSwitch {
     /// `review.minutes`: the wall-clock limit for one candidate's review.
     pub minutes: u32,
     pub minutes_source: String,
-    /// `workflow.purpose_crews.review`, the reviewer crew or pool as canonical
-    /// `name[:weight]` entries; empty when unset.
+    /// The reviewer crew or pool before-PR and before-landing review draw
+    /// from, as canonical `name[:weight]` entries; empty when unset.
     pub crews: Vec<String>,
+    /// Config layer that set `crew_key`.
     pub crew_source: String,
+    /// The key `crews` came from: `workflow.purpose_crews.pre_landing_review`,
+    /// or `workflow.purpose_crews.review` while that is unset.
+    pub crew_key: &'static str,
     /// How each review chooses from `crews` when it names more than one
     /// [ORB-15195].
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -60,7 +68,7 @@ pub struct BeforePrSwitch {
 }
 
 /// `review.timing = before_landing`: review the open PR before it lands. It shares
-/// `review.minutes` and `workflow.purpose_crews.review` with [`BeforePrSwitch`].
+/// `review.minutes` and the reviewer pool with [`BeforePrSwitch`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BeforeLandingSwitch {
     pub enabled: bool,
@@ -91,6 +99,11 @@ pub struct AfterLandingSwitch {
     pub enabled: bool,
     /// What decided `enabled`: the auto-task flag, or the deprecated policy.
     pub source: String,
+    /// `workflow.purpose_crews.review`, the pool the minted review tasks draw
+    /// from as canonical `name[:weight]` entries; empty when unset.
+    pub crews: Vec<String>,
+    /// Config layer that set `crews`.
+    pub crew_source: String,
     /// When the next batch is due, when the consumer has state here.
     pub next_batch_due: Option<String>,
     /// The consumer's health on this host, when after-landing review is on.
@@ -106,22 +119,37 @@ impl ReviewSwitches {
         } else {
             format!("unhealthy: {}; ", before_pr.problems.join("; "))
         };
+        format!(
+            "{problems}{} (review.timing, {}); {} min per candidate (review.minutes, {}); {}",
+            if before_pr.enabled { "on" } else { "off" },
+            before_pr.source,
+            before_pr.minutes,
+            before_pr.minutes_source,
+            self.pre_landing_crew_phrase(),
+        )
+    }
+
+    /// The reviewer pool before-PR and before-landing review share, with the
+    /// key and layer it came from and, for a fallback, that the pre-landing
+    /// key is unset.
+    fn pre_landing_crew_phrase(&self) -> String {
+        let before_pr = &self.before_pr;
         let crew = match before_pr.crews.as_slice() {
             [] => "crew `-`".to_string(),
             [only] => format!("crew `{only}`"),
             crews => format!("crews [{}]", crews.join(", ")),
         };
+        let fallback = if before_pr.crew_key == PRE_LANDING_REVIEW_CREW_KEY {
+            String::new()
+        } else {
+            format!("; {PRE_LANDING_REVIEW_CREW_KEY} is unset")
+        };
         let selection = before_pr
             .crew_selection
             .map_or_else(String::new, |rule| format!("; {rule}"));
         format!(
-            "{problems}{} (review.timing, {}); {} min per candidate (review.minutes, {}); \
-             {crew} (workflow.purpose_crews.review, {}{selection})",
-            if before_pr.enabled { "on" } else { "off" },
-            before_pr.source,
-            before_pr.minutes,
-            before_pr.minutes_source,
-            before_pr.crew_source,
+            "{crew} ({}, {}{fallback}{selection})",
+            before_pr.crew_key, before_pr.crew_source,
         )
     }
 
@@ -143,10 +171,11 @@ impl ReviewSwitches {
             )
         };
         format!(
-            "{problems}{} (review.timing, {}){hosts}; shares review.minutes and \
-             workflow.purpose_crews.review with before-PR review",
+            "{problems}{} (review.timing, {}){hosts}; shares review.minutes and its reviewer \
+             with before-PR review: {}",
             if before_landing.enabled { "on" } else { "off" },
             before_landing.source,
+            self.pre_landing_crew_phrase(),
         )
     }
 
@@ -276,11 +305,11 @@ fn review_switches_under(
                 hosts.source.label(),
             ));
         }
-        if policy.review_crew.value.is_empty() {
-            before_landing_problems.push(
-                "workflow.purpose_crews.review is unset, so every claim from a listed host is refused"
-                    .to_string(),
-            );
+        if policy.pre_landing_review_pool().entries.is_empty() {
+            before_landing_problems.push(format!(
+                "{}, so every claim from a listed host is refused",
+                pre_landing_review_crew_unset()
+            ));
         }
     }
     if let Some(owner) = runtime.distributed_owner_machine_id()
@@ -295,16 +324,17 @@ fn review_switches_under(
     }
     let (enabled, source) = after_landing_switch(runtime)?;
     let health = after_landing_health(runtime, now)?;
+    let crew = policy.pre_landing_review_pool();
     Ok(ReviewSwitches {
         before_pr: BeforePrSwitch {
             enabled: before_pr_on,
             source: policy.review_before_pr.source.label().to_string(),
             minutes: policy.review_minutes.value,
             minutes_source: policy.review_minutes.source.label().to_string(),
-            crews: policy.review_crew.value.clone(),
-            crew_source: policy.review_crew.source.label().to_string(),
-            crew_selection: (policy.review_crew.value.len() > 1)
-                .then_some(REVIEW_CREW_SELECTION_RULE),
+            crews: crew.entries.to_vec(),
+            crew_source: crew.source.label().to_string(),
+            crew_key: crew.key,
+            crew_selection: (crew.entries.len() > 1).then_some(REVIEW_CREW_SELECTION_RULE),
             problems: before_pr_problems,
             local_route_incompatible: before_pr_on && local_route,
         },
@@ -320,6 +350,8 @@ fn review_switches_under(
         after_landing: AfterLandingSwitch {
             enabled,
             source: source.label(),
+            crews: policy.review_crew.value.clone(),
+            crew_source: policy.review_crew.source.label().to_string(),
             next_batch_due: health
                 .as_ref()
                 .and_then(|health| health.next_batch_due.clone()),
@@ -328,23 +360,22 @@ fn review_switches_under(
     })
 }
 
-/// Why the shared reviewer crew cannot run a gated review here. A pool can
-/// while any member resolves [ORB-15195].
+/// Why the pre-landing reviewer crew cannot run a gated review here. A pool
+/// can while any member resolves [ORB-15195].
 fn crew_problems(runtime: &OrbitRuntime, policy: &OperationPolicy) -> Vec<String> {
-    let members = match configured_pool_members(runtime, &policy.review_crew.value) {
+    let pool = policy.pre_landing_review_pool();
+    let members = match configured_pool_members(runtime, pool.entries, pool.key) {
         Ok(members) => members,
         Err(error) => {
-            return vec![format!(
-                "workflow.purpose_crews.review does not resolve: {error}"
-            )];
+            return vec![format!("{} does not resolve: {error}", pool.key)];
         }
     };
     match members.as_slice() {
         [] => {
-            vec![
-                "workflow.purpose_crews.review is unset, so every gated delivery is refused"
-                    .to_string(),
-            ]
+            vec![format!(
+                "{}, so every gated delivery is refused",
+                pre_landing_review_crew_unset()
+            )]
         }
         [only] => runtime
             .resolve_crew_for_task(Some(&only.name), None)

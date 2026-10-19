@@ -27,7 +27,8 @@ task that fails.
   distributed-drain protocol revision as the owner and declares the same
   `workflow.required_validation_commands`. If the owner turns on before-PR
   review (`review.timing = "before_pr"`), every replica must be able to run
-  the owner's `workflow.purpose_crews.review`: each pulled task is then reviewed, and the
+  the owner's pre-landing reviewer (`workflow.purpose_crews.pre_landing_review`,
+  or `workflow.purpose_crews.review` while that is unset): each pulled task is then reviewed, and the
   reviewer's fixes committed, on the replica before its pull request opens.
   Crews may differ: a replica only receives tasks whose crew it can run. Operating systems may differ too: a
   task tagged `os:macos` (or `os:linux`, `os:windows`) only goes to a machine
@@ -64,8 +65,9 @@ Check that the two machines match. On each one:
 ```bash
 orbit --version
 # The owner's value decides. With review.timing at before_pr,
-# the replica must be able to run this crew.
+# the replica must be able to run the reviewer crew.
 orbit config get review.timing
+orbit config get workflow.purpose_crews.pre_landing_review
 orbit config get workflow.purpose_crews.review
 orbit doctor
 ```
