@@ -64,7 +64,7 @@ at the production CLI boundary, using the checked-in
 [`v0.24.0` fixture](../../orbit-cli/tests/fixtures/automation-v0.24.0/README.md).
 No production API visibility or crate dependency is changed for testing.
 
-`review_validation.rs` drives the public review-coverage API with the
+`review_validation/main.rs` drives the public review-coverage API with the
 validation records a reviewer files. A superseded attempt with no same-identity
 required pass anywhere in the report must fail closed at both consumers. `validation_evidence` gives
 the gate's escalation reason, and `certificate_acceptable`/`exclusion` refuse
