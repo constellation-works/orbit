@@ -212,6 +212,8 @@ Either way the PR is gated only by the required hosted checks.
 
 Set them when you file the task, or as an operator. An agent's update, the
 implementer's own included, cannot add either tag to an existing task.
+Naming an agent model on the update is enough, even when the process has no
+agent environment.
 
 A tag applies only while every path the final candidate changes matches
 `workflow.light_delivery_paths`. By default that is documentation, CI

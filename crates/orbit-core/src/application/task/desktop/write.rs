@@ -225,6 +225,15 @@ impl OrbitRuntime {
                     if let Some(v) = &f.acceptance_criteria {
                         criteria(v)?;
                     }
+                    // Desktop edits carry no operator-decision grant. An
+                    // attributed agent identity is still refused if a later
+                    // edit adds a light-delivery tag [ORB-16872].
+                    let writer = super::super::update::task_field_writer(
+                        false,
+                        agent.as_deref(),
+                        model.as_deref(),
+                        &actor,
+                    );
                     let validated = self.validate_and_normalize_task_field_edits(
                         &id,
                         &task,
@@ -236,6 +245,7 @@ impl OrbitRuntime {
                             crew: f.crew.clone().map(Some),
                             ..Default::default()
                         },
+                        writer,
                     )?;
                     crew_source = validated.crew_source;
                     let v = validated.params;

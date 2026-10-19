@@ -117,8 +117,9 @@ the owner's captured list. The owner judges the handed-off candidate again when
 it accepts, approves or lands it, and it records that decision in history.
 
 An agent cannot add the tag to an existing task, including its own during its
-run. To review a tagged task anyway, remove the tag (`orbit task update <id>
---tags ...` without it) before it is dispatched.
+run and a tool update that names an agent model when the server process has
+no agent environment. To review a tagged task anyway, remove the tag
+(`orbit task update <id> --tags ...` without it) before it is dispatched.
 
 ### Before-landing review
 

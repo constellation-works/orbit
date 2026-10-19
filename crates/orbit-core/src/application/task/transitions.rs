@@ -399,8 +399,17 @@ impl OrbitRuntime {
             for artifact in &mut start_edits.upsert_artifacts {
                 admit_agent_artifact(artifact)?;
             }
+            // A start has no operator-decision grant. An attributed agent or
+            // model, or an agent envelope, still cannot add a light-delivery
+            // tag on the way into `in-progress` [ORB-16872].
+            let writer = super::update::task_field_writer(
+                false,
+                canonical_agent.as_deref(),
+                canonical_model.as_deref(),
+                effective_label.as_str(),
+            );
             let validated =
-                self.validate_and_normalize_task_field_edits(id, &task, start_edits)?;
+                self.validate_and_normalize_task_field_edits(id, &task, start_edits, writer)?;
             let crew_assignment = validated.crew_assignment;
             let crew_source = validated.crew_source;
             let crew_redraw_history = validated.crew_redraw_history;
