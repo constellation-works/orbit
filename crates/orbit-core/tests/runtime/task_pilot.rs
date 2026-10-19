@@ -24,6 +24,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 mod admission;
+mod artifact_attachment;
 mod blockers;
 mod ci_sweep_races;
 mod creation;

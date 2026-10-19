@@ -129,7 +129,9 @@ Before pulling, check:
   follower can run those commands and access the repository's forge.
 - The follower has an enabled crew, its provider CLI installed and signed
   in, and the tools the task needs. If the owner enables before-PR review,
-  the follower can also run the owner's `workflow.purpose_crews.review`.
+  the follower can also run the owner's pre-landing reviewer:
+  `workflow.purpose_crews.pre_landing_review`, or `workflow.purpose_crews.review`
+  while that is unset.
 
 Start a bounded window on the replica checkout:
 

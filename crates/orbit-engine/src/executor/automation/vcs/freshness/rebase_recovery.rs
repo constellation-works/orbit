@@ -315,7 +315,7 @@ fn read_rebase_state(workspace_path: &Path, name: &str) -> Result<Option<String>
 /// - `Overtaken`: a certified checkpoint matches this attempt in everything
 ///   but its base, and the prepared base strictly descends from the base the
 ///   checkpoint landed on: the base advanced after recovery certified it. The
-///   caller chases the advance ([`super::super::base_chase::chase_advanced_base`]) rather than reusing
+///   caller chases the advance ([`super::super::base::chase::chase_advanced_base`]) rather than reusing
 ///   or refusing it [ORB-14393].
 /// - `Err`: a certified checkpoint was found whose recorded provenance does
 ///   not match this attempt. A hard refusal with no redo.

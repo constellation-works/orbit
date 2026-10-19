@@ -4,9 +4,7 @@ mod add;
 mod baseline_hold;
 mod baseline_repair;
 pub(crate) use baseline_repair::BASELINE_RED_REPAIR_TAG;
-mod blocked_next_step;
-mod blocked_recovery;
-pub(crate) mod blocked_recovery_steps;
+pub(crate) mod blocked_recovery;
 pub(crate) mod contention;
 mod context_repair;
 mod context_widening;
@@ -52,12 +50,11 @@ pub(crate) mod validation_tools;
 pub use crate::runtime::task::{DeclaredContextFiles, declared_context_files};
 pub(crate) use baseline_hold::refresh_baseline_holds_step;
 pub use baseline_hold::{BASELINE_HOLD_REFRESH_JOB, BaselineHoldRefresh};
-pub use blocked_next_step::BlockedNextStep;
 pub(crate) use blocked_recovery::{
     BACKSTOP_DECISIONS, BACKSTOP_LANE_CONTRACT, BlockedRecoveryPreparation, recovery_checkout_path,
 };
 pub use blocked_recovery::{
-    BLOCKED_TASK_RECOVERY_JOB, BlockEpisode, BlockSource, BlockedRecoveryInput,
+    BLOCKED_TASK_RECOVERY_JOB, BlockEpisode, BlockSource, BlockedNextStep, BlockedRecoveryInput,
     BlockedRecoveryTick, BlockedRecoveryView, EpisodeDisposition, FinalRecoveryRecord,
     MAX_ACTIVE_BLOCKED_RECOVERIES, MAX_EPISODE_AGE_HOURS, episode_disposition,
 };

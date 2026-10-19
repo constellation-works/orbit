@@ -141,7 +141,7 @@ fn observe_published<H: RuntimeHost + ?Sized>(
         &submitted.candidate.commit,
     );
     if accepted && status.head_sha.as_deref() != Some(&submitted.candidate.commit) {
-        super::super::landing_checks::verify_published_base_update(
+        super::super::landing::checks::verify_published_base_update(
             workspace_path,
             submitted,
             &status,

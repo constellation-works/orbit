@@ -46,7 +46,7 @@
 //! before it watches the new head. The published head is recorded in the
 //! ledger, so a later round or a resume pins the head this run published.
 //!
-//! [`head_check_evidence`]: super::super::landing_checks::head_check_evidence
+//! [`head_check_evidence`]: super::super::landing::checks::head_check_evidence
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -66,7 +66,7 @@ use super::super::freshness::{commit_sha, remote_branch_sha};
 use super::super::git::{
     base_sync_mode_from_input, git_command_success, git_output, resolve_worktree_start_point,
 };
-use super::super::landing_checks::{HeadCheckEvidence, head_check_evidence, unmoved_red_base};
+use super::super::landing::checks::{HeadCheckEvidence, head_check_evidence, unmoved_red_base};
 use super::super::push::push_batch_changes;
 use super::answers::{CheckState, PullRequestStatus, RequiredChecks, read_required_checks};
 use super::delivery::{DeliveryPin, blocked_checks};
@@ -423,7 +423,7 @@ pub(super) fn base_tip_checks<H: RuntimeHost + ?Sized>(
         resolve_worktree_start_point(workspace, &base, base_sync_mode_from_input(input).ok()?)
             .ok()?;
     let tip = commit_sha(workspace, &base_ref).ok()?;
-    super::super::landing_checks::base_tip_check_evidence(
+    super::super::landing::checks::base_tip_check_evidence(
         host,
         workspace,
         head,

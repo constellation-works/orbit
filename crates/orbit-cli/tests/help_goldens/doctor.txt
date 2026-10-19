@@ -19,6 +19,9 @@ Options:
       --deep
           Scan every database page with SQLite quick_check; default checks only read the header and schema
 
+      --problems
+          Print only failures and warnings
+
       --fix-stale-locks
           Clear dead holder records under the lock, preserving lock files, before diagnosing the workspace
 

@@ -678,7 +678,7 @@ try {
     await page.locator('#auto-drain-start').screenshot({ path: path.join(evidence, `drain-approve-form-${label}.png`) });
     await page.evaluate(async () => {
       await globalThis.setDrainFixturePhase('draining');
-      await globalThis.setDrainFixtureApprovals({ enabled: true, approved_total: 3, held_total: 2, held_by_reason: { missing_complexity: 1, pilot_held: 1 }, held: [{ task_id: 'ORB-8', reason: 'missing_complexity' }, { task_id: 'ORB-9', reason: 'pilot_held' }] });
+      await globalThis.setDrainFixtureApprovals({ enabled: true, approved_total: 3, held_total: 2, held_by_reason: { missing_complexity: 1, warnings: 1 }, held: [{ task_id: 'ORB-8', reason: 'missing_complexity' }, { task_id: 'ORB-22', reason: 'warnings', findings: [{ kind: 'utility_warnings', text: 'Screenshots cannot be attached because the allowlist has no orbit.task.artifact.put' }] }] });
     });
     const live = await page.evaluate(() => {
       const card = document.getElementById('auto-drain-panel');
@@ -686,10 +686,11 @@ try {
       return {
         approved: card.querySelector('[data-stat="approved"] dd')?.firstChild?.textContent,
         held: card.querySelector('[data-stat="approved"] .drain-window-stat-detail')?.textContent,
+        finding: card.querySelector('.drain-approval-findings')?.textContent || '',
         overflowing: Array.from(card.querySelectorAll('*')).filter((node) => node.getClientRects().length > 0 && node.getBoundingClientRect().right > box.right + 1).map((node) => node.className || node.tagName),
       };
     });
-    if (live.approved !== '3' || live.held !== '2 held' || live.overflowing.length) throw new Error(`Live approvals at ${label}: ${JSON.stringify(live)}`);
+    if (live.approved !== '3' || live.held !== '2 held' || !live.finding.includes('ORB-22: utility_warnings: Screenshots cannot be attached') || live.overflowing.length) throw new Error(`Live approvals at ${label}: ${JSON.stringify(live)}`);
     await page.waitForTimeout(400);
     await page.locator('#auto-drain-panel').screenshot({ path: path.join(evidence, `drain-approve-live-${label}.png`) });
     await page.evaluate(async () => {

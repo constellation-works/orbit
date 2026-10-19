@@ -29,9 +29,11 @@ use crate::OrbitRuntime;
 use crate::application::task::legacy_decisions;
 use crate::application::task::{PILOT_VERIFIED_NO_DIFF, UNVERIFIED_REVIEW_FINDING, VerifiedNoDiff};
 
-use super::apply_admission::{PreparedTaskSnapshot, ValidatedTask};
+use super::apply::admission::{PreparedTaskSnapshot, ValidatedTask};
 use super::persist::{assessed_material_drift, with_task_locks};
-use super::promotion::{PromotionFindings, auto_approval_opted_out, promotion_findings};
+use super::promotion::{
+    PromotionFindings, auto_approval_opted_out, promotion_findings, warning_hold_findings,
+};
 
 const DRAIN_JOB: &str = "workspace_auto_pipeline";
 const PILOT_JOB: &str = "task_pilot_pipeline";
@@ -61,6 +63,30 @@ pub(crate) fn approval_note(run_id: &str) -> String {
 /// Whether a `proposal_approved` history note records this drain's approval.
 pub(crate) fn approved_by_drain(note: &str, run_id: &str) -> bool {
     note.starts_with(&approval_note(run_id))
+}
+
+/// Warning findings recorded on the pilot audit for `operation_id`.
+///
+/// A missing or unreadable audit is an empty list: the hold still names
+/// `warnings`, and the pass does not fail because the prose could not be read.
+pub(crate) fn warning_findings_for_hold(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    operation_id: &str,
+) -> Result<Vec<orbit_types::workflow::DrainHoldFinding>, OrbitError> {
+    let comments = runtime.get_task_comments(task_id)?;
+    let Some(body) = super::pilot_receipts(&comments)
+        .find_map(|(_, receipt)| (receipt.operation_id == operation_id).then_some(receipt.body))
+    else {
+        return Ok(Vec::new());
+    };
+    let Ok(audit) = serde_json::from_str::<Value>(body) else {
+        return Ok(Vec::new());
+    };
+    Ok(audit
+        .get("assessment")
+        .map(warning_hold_findings)
+        .unwrap_or_default())
 }
 
 /// The pilot classification a drain hold recorded on a `task_pilot_applied`

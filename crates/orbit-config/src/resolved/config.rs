@@ -317,6 +317,10 @@ impl ResolvedConfig {
             .workflow_purpose_crews_review
             .clone()
             .unwrap_or_default();
+        operation.pre_landing_review_crew.value = snapshot
+            .workflow_purpose_crews_pre_landing_review
+            .clone()
+            .unwrap_or_default();
 
         let compatibility_keys = CompatibilityKeys {
             deprecated_task_id_pattern: parsed

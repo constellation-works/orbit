@@ -833,23 +833,40 @@ fn terminal_findings_preserve_messages_commands_and_one_line_rows() {
             "{findings}"
         );
     }
-    assert!(findings.lines().any(|line| line == format!("Fix: {FIX}")));
     assert!(findings.contains("Fix: orbit index refresh"));
+    assert!(findings.contains("Fix: orbit auto-task recover\n  delivery-code-review"));
     assert!(!findings.contains("database"));
     for line in findings
         .lines()
-        .filter(|line| !line.starts_with("Fix:") && !line.starts_with("Table details"))
+        .filter(|line| !line.starts_with("Table details"))
     {
-        assert!(line.chars().count() <= 48, "unwrapped prose: {line}");
+        assert!(line.chars().count() <= 48, "line exceeds width: {line}");
     }
     assert!(findings.contains("--format plain or --json"));
     let narrow = render_fixture("narrow");
     assert!(
-        narrow.lines().any(|line| line == format!("Fix: {FIX}")),
-        "even an over-width command stays verbatim: {narrow}"
+        !narrow.lines().any(|line| line == format!("Fix: {FIX}")),
+        "over-width action must not stay on one line: {narrow}"
     );
+    assert!(
+        narrow.contains("Fix: orbit auto-task recover\n  delivery-code-review"),
+        "over-width action must wrap onto indented lines: {narrow}"
+    );
+    for line in narrow
+        .lines()
+        .filter(|line| !line.starts_with("Findings:") && !line.starts_with("Table details"))
+    {
+        assert!(
+            line.chars().count() <= 32,
+            "line exceeds narrow width: {line}"
+        );
+    }
     let wide = render_fixture("wide");
     assert!(wide.contains(ERROR_MESSAGE));
+    assert!(
+        wide.lines().any(|line| line == format!("Fix: {FIX}")),
+        "sufficient width keeps action on one line: {wide}"
+    );
     assert!(!wide.contains("Table details shortened"));
     let ok = render_fixture("ok");
     assert_eq!(ok.lines().count(), 4);
@@ -2114,4 +2131,132 @@ fn doctor_fixes_unknown_config_without_retired_keys() {
             .get("future")
             .is_none()
     );
+}
+
+/// ORB-16924: `orbit doctor` prints a summary count at the top, then failures,
+/// warnings, and ok rows in severity order. `--problems` prints only failures
+/// and warnings, while `--json` output remains unchanged.
+#[test]
+fn doctor_prints_summary_count_orders_by_severity_and_filters_problems() {
+    let fixture = WorkCheckout::new();
+
+    // 1. Plain output: first line must be the summary count
+    let plain = command(&fixture)
+        .args(["doctor", "--format", "plain"])
+        .output()
+        .expect("doctor plain");
+    let stdout = String::from_utf8(plain.stdout).expect("UTF-8 stdout");
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(!lines.is_empty(), "doctor output must not be empty");
+    assert!(
+        lines[0].ends_with("failure(s), 0 warning(s).") || lines[0].contains("failure(s)"),
+        "first line must be summary count: {}",
+        lines[0]
+    );
+
+    // 2. Introduce a warning by creating a dangling skill symlink
+    let base = fixture.work.join(".orbit/skills");
+    fs::create_dir_all(&base).expect("skills dir");
+    let link = base.join("dangling-probe");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(base.join("nonexistent"), &link).expect("symlink");
+
+    let table_out = command(&fixture)
+        .args(["doctor", "--format", "table"])
+        .output()
+        .expect("doctor table");
+    let table_str = String::from_utf8(table_out.stdout).expect("UTF-8 stdout");
+
+    // The summary count should be at the top:
+    let first_line = table_str.lines().next().unwrap_or("");
+    assert!(
+        first_line.contains("failure(s)") && first_line.contains("warning(s)."),
+        "top line must be summary count: {first_line}"
+    );
+
+    // Check row ordering in plain output: failures, then warnings, then ok rows
+    let plain_with_warn = command(&fixture)
+        .args(["doctor", "--format", "plain"])
+        .output()
+        .expect("doctor plain with warn");
+    let plain_str = String::from_utf8(plain_with_warn.stdout).expect("UTF-8");
+    let plain_lines: Vec<&str> = plain_str.lines().skip(1).collect(); // skip summary line
+    let mut max_rank = 0;
+    let mut seen_warning = false;
+    let mut seen_ok_after_warning = false;
+    for line in &plain_lines {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() >= 2 {
+            let status = parts[1];
+            let rank = match status {
+                "ERROR" | "error" => 0,
+                "warning" => 1,
+                "ok" => 2,
+                "info" => 3,
+                "skipped" => 4,
+                _ => continue,
+            };
+            assert!(
+                rank >= max_rank,
+                "status {status} (rank {rank}) appeared after higher severity rank {max_rank} in: {line}"
+            );
+            max_rank = rank;
+            if status == "warning" {
+                seen_warning = true;
+            } else if status == "ok" && seen_warning {
+                seen_ok_after_warning = true;
+            }
+        }
+    }
+    #[cfg(unix)]
+    {
+        assert!(seen_warning, "should have found a warning row: {plain_str}");
+        assert!(
+            seen_ok_after_warning,
+            "ok rows should appear after warnings: {plain_str}"
+        );
+    }
+
+    // 3. Test --problems:
+    let problems_out = command(&fixture)
+        .args(["doctor", "--problems", "--format", "plain"])
+        .output()
+        .expect("doctor --problems");
+    let problems_str = String::from_utf8(problems_out.stdout).expect("UTF-8");
+    let problems_lines: Vec<&str> = problems_str.lines().skip(1).collect();
+    for line in &problems_lines {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() >= 2 {
+            let status = parts[1];
+            assert!(
+                status == "ERROR" || status == "warning" || status == "error",
+                "--problems must only include errors and warnings, found {status}: {line}"
+            );
+        }
+    }
+
+    // 4. Test --json with and without --problems:
+    let json_normal = command(&fixture)
+        .args(["doctor", "--json"])
+        .output()
+        .expect("doctor --json");
+    let json_problems = command(&fixture)
+        .args(["doctor", "--problems", "--json"])
+        .output()
+        .expect("doctor --problems --json");
+    let parsed_normal = rows(&json_normal);
+    let parsed_problems = rows(&json_problems);
+    assert_eq!(
+        parsed_normal.len(),
+        parsed_problems.len(),
+        "--problems --json must return all rows"
+    );
+    for (norm, prob) in parsed_normal.iter().zip(&parsed_problems) {
+        assert_eq!(norm["check"], prob["check"]);
+        assert_eq!(norm["status"], prob["status"]);
+        if norm["check"] != "disk-space" {
+            assert_eq!(norm["message"], prob["message"]);
+        }
+        assert_eq!(norm["remediation"], prob["remediation"]);
+    }
 }

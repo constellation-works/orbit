@@ -1790,7 +1790,13 @@ function autoDrainWindow(payload) {
   }
   const approvals = autoDrainApprovals(payload.approvals);
   if (approvals) stat("approved", "approved", approvals.approved, approvals.held, approvals.title);
-  return stats.children.length > 0 ? stats : null;
+  if (stats.children.length === 0) return null;
+  if (!approvals || approvals.lines.length === 0) return stats;
+  const findings = el("ul", { class: "drain-approval-findings" });
+  for (const line of approvals.lines) {
+    findings.append(el("li", { text: line }));
+  }
+  return el("div", { class: "drain-window" }, [stats, findings]);
 }
 
 // The card's last row: the coordinator run (or the replica's pull drain), the
@@ -1827,15 +1833,25 @@ function autoDrainApprovals(approvals) {
     .map(([reason, count]) => `${count} × ${(reason || "unclassified").replaceAll("_", " ")}`);
   const heldTasks = (Array.isArray(approvals.held) ? approvals.held : [])
     .map((task) => `${task.task_id}: ${(task.reason || "unclassified").replaceAll("_", " ")}${task.reason === "pilot_verified_no_diff" && task.detail ? ` (${task.detail})` : ""}`);
+  const lines = (Array.isArray(approvals.held) ? approvals.held : []).flatMap((task) => {
+    const findings = Array.isArray(task.findings) ? task.findings : [];
+    return findings.flatMap((finding) => {
+      const kind = String(finding?.kind || "").trim();
+      const text = String(finding?.text || "").trim();
+      return kind && text ? [`${task.task_id}: ${kind}: ${text}`] : [];
+    });
+  });
   const title = [
     `Approving proposed tasks. ${AUTO_DRAIN_APPROVE_RULE}`,
     reasons.length ? `Held in the latest pass: ${reasons.join(", ")}.` : "",
     heldTasks.join("\n"),
+    lines.join("\n"),
   ].filter(Boolean).join("\n");
   return {
     approved: Number.isFinite(approved) ? approved : "—",
     held: Number.isFinite(held) && held > 0 ? `${held} held` : "",
     title,
+    lines,
   };
 }
 
@@ -2037,7 +2053,7 @@ function autoDrainApproveControl(payload, reasons) {
   });
 }
 
-const AUTO_DRAIN_AUTO_FIX_HELP = "Repair failed required checks and merge conflicts on this window's PRs. Merging still requires Mark done.";
+const AUTO_DRAIN_AUTO_FIX_HELP = "Repair failed required checks and merge conflicts on this window's PRs. Merging still requires Mark shipped tasks done.";
 
 function autoDrainAutoFixControl(payload, reasons) {
   return drainSwitchField({

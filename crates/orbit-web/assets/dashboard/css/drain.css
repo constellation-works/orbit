@@ -141,6 +141,9 @@ main.drain-layout { height: 100%; grid-template-columns: minmax(0, 1fr); padding
 .drain-window-stat dd { order: 1; margin: 0; color: var(--fg-strong); font: 600 20px var(--font-sans); line-height: 1.2; font-variant-numeric: tabular-nums; }
 .drain-window-stat dt { order: 2; color: var(--fg-dim); font: 400 12.5px var(--font-sans); }
 .drain-window-stat-detail { order: 3; color: var(--warn-fg); font-size: 12px; font-weight: 500; }
+.drain-window { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.drain-approval-findings { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.drain-approval-findings li { color: var(--warn-fg); font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
 
 /* Workspace leaf slots: a bar of one segment per slot (or one fill past 24),
    then why nothing more starts beside the count, and a mix of pipelines. */

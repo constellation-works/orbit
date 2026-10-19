@@ -137,7 +137,14 @@ another OS (see [Native host evidence](#native-host-evidence)).
 - **Activity tools.** For an allowlist activity, a tool outside its baseline
   has to be in `required_tools`. A deny-list activity exposes registered
   agent-facing tools except its disallowed names; `required_tools` cannot
-  override a denial, and such a requirement refuses dispatch.
+  override a denial, and such a requirement refuses dispatch. Screenshot and
+  task-artifact attachment is part of the implement lane. Owner mode attaches
+  with `orbit.task.artifact.put`. Claimed mode attaches declared files through
+  the `task_artifacts` handoff even without that tool. A criterion that only
+  requires those screenshots is feasible; task-pilot does not warn that
+  artifact attachment is unavailable because `required_tools` is empty. A
+  criterion that names a tool the lane does not grant, and that
+  `required_tools` does not declare, is still reported.
 - **Operator capability.** Governed operations — workflow run observation and
   resume, `orbit.command.exec`, `orbit.agent.invoke`,
   and the other destructive surfaces — are reserved for an operator.

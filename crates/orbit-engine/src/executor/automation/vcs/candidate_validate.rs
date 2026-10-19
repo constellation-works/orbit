@@ -5,7 +5,7 @@
 //! after the candidate is synchronized onto its base and before it is
 //! published or landed: an agent's report that it ran the commands is not
 //! evidence; this step is. It runs each command the way `claim_validate` does
-//! (see [`super::required_command`]), so a command that fails for lack of a
+//! (see [`super::required::command`]), so a command that fails for lack of a
 //! tool is the validation environment's failure rather than the candidate's
 //! [ORB-13987].
 //!
@@ -567,7 +567,7 @@ fn attach_logs<H: RuntimeHost + ?Sized>(
         // observation needs only its canonical record; recovery must not erase
         // an earlier attempt's cost or failure. Archives are diagnostic only.
         let content =
-            super::required_evidence::retain(host, task_ids, run_id, path, content, claimed)?;
+            super::required::evidence::retain(host, task_ids, run_id, path, content, claimed)?;
         let digest = sha256_hex(&content);
         for task_id in task_ids {
             if let Some(previous) = host.get_task_artifact(task_id, path)?

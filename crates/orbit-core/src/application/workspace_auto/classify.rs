@@ -349,6 +349,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
                     reason: Some(GAP_FIT_REASON.to_string()),
                     blocked_by: Vec::new(),
                     detail: Some(skip.detail.clone()),
+                    findings: Vec::new(),
                 })
                 .collect()
         })
@@ -404,6 +405,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
                         claim_holders.detail_for(blocked_by.iter().map(String::as_str))
                     }),
                     blocked_by,
+                    findings: Vec::new(),
                 }
             })
             .chain(gap_fit_waiting.iter().cloned())
@@ -850,6 +852,7 @@ fn waiting_excluded(
                     (Some(detail), Some(claims)) => Some(format!("{detail} {claims}")),
                     (detail, claims) => detail.or(claims),
                 },
+                findings: Vec::new(),
             }
         })
         .collect()

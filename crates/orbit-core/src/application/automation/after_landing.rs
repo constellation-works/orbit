@@ -83,10 +83,12 @@ fn singleton_review_crew(
     runtime: &OrbitRuntime,
     pool: &[String],
 ) -> Result<Option<String>, OrbitError> {
-    Ok(configured_pool_members(runtime, pool)?
-        .into_iter()
-        .next()
-        .map(|member| member.name))
+    Ok(
+        configured_pool_members(runtime, pool, orbit_config::REVIEW_CREW_KEY)?
+            .into_iter()
+            .next()
+            .map(|member| member.name),
+    )
 }
 
 /// The crew the review task minted for `attempt` carries, or `None` to keep
@@ -446,7 +448,7 @@ pub fn after_landing_health(
 
     let pool = review_crew_pool(runtime, &definition);
     if pool.len() > 1 {
-        let candidates = configured_pool_members(runtime, &pool)
+        let candidates = configured_pool_members(runtime, &pool, orbit_config::REVIEW_CREW_KEY)
             .and_then(|members| runtime.review_crew_candidates(&members));
         if let Err(error) = candidates {
             health.crew_error = Some(error.to_string());

@@ -25,7 +25,7 @@ use super::super::evidence::{
 };
 use crate::OrbitRuntime;
 use crate::application::job::crew_pools::seeded_crew_ticket;
-use crate::application::review::crew::pool_source;
+use crate::application::review::crew::{pool_source, pre_landing_review_crew_unset};
 use crate::application::task::light_delivery::{
     carries, light_delivery_decision, record_light_delivery,
 };
@@ -617,11 +617,11 @@ fn resolve_reviewer_crew(
         return Ok((crew, pool_source(&admission.crew_source)));
     }
     let name = admission.crew.as_deref().ok_or_else(|| {
-        OrbitError::CapabilityDenied(
-            "review_crew_unconfigured: before-PR review needs an explicitly configured \
-             workflow.purpose_crews.review; automatic review never inherits the implementer's crew"
-                .to_string(),
-        )
+        OrbitError::CapabilityDenied(format!(
+            "review_crew_unconfigured: before-PR review needs an explicitly configured reviewer, \
+             but {}; automatic review never inherits the implementer's crew",
+            pre_landing_review_crew_unset()
+        ))
     })?;
     let crew = runtime
         .resolve_crew_for_task(Some(name), None)

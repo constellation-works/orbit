@@ -142,6 +142,7 @@ spec:
             partition_index: "{{ item.partition_index }}"
             workspace_path: "{{ steps.prepare.output.workspace_path }}"
             owner_machine: "{{ steps.prepare.output.owner_machine }}"
+            implementation_lane: "{{ steps.prepare.output.implementation_lane }}"
             base_branch: "{{ steps.prepare.output.source.base_branch }}"
             source_revision: "{{ steps.prepare.output.source.source_revision }}"
             inspection_revision: "{{ steps.prepare.output.source.source_revision }}"
@@ -177,6 +178,7 @@ spec:
             repair_attempt: true
             workspace_path: "{{ steps.prepare.output.workspace_path }}"
             owner_machine: "{{ steps.prepare.output.owner_machine }}"
+            implementation_lane: "{{ steps.prepare.output.implementation_lane }}"
             base_branch: "{{ steps.prepare.output.source.base_branch }}"
             source_revision: "{{ steps.prepare.output.source.source_revision }}"
             inspection_revision: "{{ steps.prepare.output.source.source_revision }}"

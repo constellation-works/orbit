@@ -320,6 +320,16 @@ try {
   await page.goto(`${origin}/`);
   await taskRow('hostb-RUN').waitFor({ state: 'visible' });
   assert(await selectedHost() === 'hostb', 'a bare URL restores the remembered host and writes it to the URL');
+  // A native tray or notification link explicitly selects the serving host,
+  // even when this webview last visited a registered remote.
+  routeLog = [];
+  await page.goto(`${origin}/?host=&workspace=ws_orbit#tasks?open=alpha-ART`);
+  await page.locator('#task-detail-body', { hasText: 'alpha artifact task' }).waitFor({ state: 'visible' });
+  assert(await selectedHost() === null, 'an explicit serving-host link overrides the remembered remote host');
+  assert(logged(/^GET \/api\/distributed\/claims\?task=alpha-ART&/), 'the local tray task detail reads on the serving host');
+  await page.goto(`${origin}/?host=&workspace=ws_orbit#runs?run_id=jrun-remote-1`);
+  await until('the local tray run link', () => logged(/^GET \/api\/runs\/jrun-remote-1\?workspace=ws_orbit$/));
+  assert(await selectedHost() === null, 'an explicit serving-host run link overrides the remembered remote host');
   await page.goto(`${origin}/?host=skewhost`);
   await taskRow('skewhost-RUN').waitFor({ state: 'visible' });
   assert(await page.locator('#host-select').inputValue() === 'skewhost', 'the URL wins over the remembered host');
@@ -791,6 +801,7 @@ try {
       'browser-host-picker-lists-serving-host-first',
       'browser-every-request-follows-the-selected-host',
       'browser-host-url-and-memory-precedence',
+      'browser-native-serving-host-task-and-run-links-override-remembered-remote',
       'browser-workspaces-rebuild-per-host',
       'browser-host-level-failure-and-way-back',
       'browser-host-skew-banner',

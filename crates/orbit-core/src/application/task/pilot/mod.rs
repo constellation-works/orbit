@@ -39,7 +39,6 @@
 
 mod admission;
 mod apply;
-mod apply_admission;
 mod assessment;
 mod attachment_budget;
 mod blockers;
@@ -68,7 +67,7 @@ use assessment::{
 };
 pub(crate) use blockers::{normalize_pilot_self_blockers, pilot_blocker_task_ids};
 pub(crate) use drain_promotion::{
-    approval_disqualification, approved_by_drain, held_classification,
+    approval_disqualification, approved_by_drain, held_classification, warning_findings_for_hold,
 };
 use input::{requested_workspace_root, required_string, required_string_array};
 pub(crate) use no_diff::{NoDiffClosure, PILOT_VERIFIED_NO_DIFF, VerifiedNoDiff};

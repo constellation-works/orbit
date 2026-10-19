@@ -1,4 +1,4 @@
-use super::super::base_claim::failing_tests_selection;
+use super::super::base::claim::failing_tests_selection;
 use super::super::git::{fetch_remote_base, git_output};
 use super::cache::{cache_paths, cached_base_check, read_cached};
 use super::compare::{

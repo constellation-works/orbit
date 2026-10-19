@@ -17,7 +17,7 @@ use orbit_core::{
 };
 use orbit_engine::RuntimeHost;
 use orbit_tools::{ReservationOwnerContext, ToolContext};
-use orbit_types::workflow::{JobRunTrigger, PipelineState, ReviewLayer};
+use orbit_types::workflow::{JobRunTrigger, PipelineState, ReviewAdmission, ReviewLayer};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -352,9 +352,13 @@ fn same_layer_requests_require_a_reviewer_before_any_run() {
             refusal(drain(&runtime, Some(review))),
         ] {
             assert!(
-                refused.contains("workflow.purpose_crews.review is unset")
-                    && refused.contains("configure workflow.purpose_crews.review")
-                    && refused.contains(&format!("review.timing = {policy} (workspace)")),
+                refused.contains(
+                    "workflow.purpose_crews.pre_landing_review and \
+                     workflow.purpose_crews.review are both unset"
+                ) && refused.contains(
+                    "configure workflow.purpose_crews.pre_landing_review or \
+                     workflow.purpose_crews.review"
+                ) && refused.contains(&format!("review.timing = {policy} (workspace)")),
                 "{refused}"
             );
             assert_eq!(runs(&runtime), 0, "a refusal persists no run");
@@ -392,7 +396,10 @@ fn conflicting_or_unrunnable_requests_are_refused_before_any_run() {
         refusal(drain(&crewless, Some(ReviewLayer::BeforeLanding))),
     ] {
         assert!(
-            refused.contains("workflow.purpose_crews.review is unset"),
+            refused.contains(
+                "workflow.purpose_crews.pre_landing_review and workflow.purpose_crews.review \
+                 are both unset"
+            ),
             "{refused}"
         );
     }
@@ -453,10 +460,37 @@ fn requests_outside_a_delivery_run_are_refused() {
     assert_eq!(runs(&runtime), 0, "a refusal persists no run");
 }
 
+/// A run's before-landing or before-PR reviewer is captured from
+/// `workflow.purpose_crews.pre_landing_review`, and from
+/// `workflow.purpose_crews.review` exactly as before while it is unset.
+fn the_pre_landing_pool_names_the_captured_reviewer() {
+    let split = CREW.replace(
+        "[workflow.purpose_crews]\nreview = \"reviewers\"",
+        "[crews.fast]\nmodel = \"fast-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n\
+         [workflow.purpose_crews]\nreview = \"reviewers\"\npre_landing_review = \"fast\"",
+    );
+    assert_ne!(split, CREW, "the fixture adds only the pre-landing pool");
+
+    for (config, reviewer) in [(split.as_str(), "fast"), (CREW, "reviewers")] {
+        let (_root, runtime) = open(ShipMode::Pr, config, true);
+        for review in [ReviewLayer::BeforeLanding, ReviewLayer::BeforePr] {
+            ship(&runtime, ShipMode::Pr, Some(review)).expect_err("the worker never starts");
+            let run = submitted(&runtime, "task_auto_pipeline");
+            let input = runtime.show_job_run(&run).unwrap().input.unwrap();
+            let admission = ReviewAdmission::from_run_input(&input)
+                .unwrap()
+                .expect("the run captures a review admission");
+            assert_eq!(admission.crew.as_deref(), Some(reviewer), "{input}");
+            assert_eq!(admission.crew_source, "workspace", "{input}");
+        }
+    }
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     review_run_option_refusals,
     conflicting_or_unrunnable_requests_are_refused_before_any_run,
     same_layer_requests_require_a_reviewer_before_any_run,
-    requests_outside_a_delivery_run_are_refused
+    requests_outside_a_delivery_run_are_refused,
+    the_pre_landing_pool_names_the_captured_reviewer
 );

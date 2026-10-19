@@ -144,5 +144,6 @@ fn waiting_task(diagnostic: &AdmissionDiagnostic, code: &str) -> DrainWaitingTas
         reason: Some(code.to_string()),
         blocked_by: diagnostic.blocked_by.clone(),
         detail: (!named).then(|| diagnostic.reason.clone()),
+        findings: Vec::new(),
     }
 }

@@ -4,7 +4,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use orbit_desktop::watcher::{PollSummary, Watcher};
+use orbit_desktop::watcher::{
+    AttentionKind, DashboardRoute, PollSummary, RouteTarget, TRAY_ITEM_LIMIT, Watcher,
+};
 use serde_json::{Value, json};
 use url::Url;
 
@@ -171,10 +173,30 @@ impl Dashboard {
     }
 
     fn poll_summary(&mut self, watcher: &mut Watcher) -> (Vec<(String, String)>, PollSummary) {
+        let (detailed, summary) = self.poll_detailed(watcher);
+        (
+            detailed
+                .into_iter()
+                .map(|(title, body, _route)| (title, body))
+                .collect(),
+            summary,
+        )
+    }
+
+    fn poll_detailed(
+        &mut self,
+        watcher: &mut Watcher,
+    ) -> (Vec<(String, String, Option<DashboardRoute>)>, PollSummary) {
         let mut notifications = Vec::new();
         let summary = watcher.poll(
             |path| self.get(path),
-            |title, body| notifications.push((title.to_string(), body.to_string())),
+            |notice| {
+                notifications.push((
+                    notice.title.clone(),
+                    notice.body.clone(),
+                    notice.route.clone(),
+                ))
+            },
         );
         (notifications, summary)
     }
@@ -250,7 +272,7 @@ impl DrainDashboard {
                 self.paths.push(path.into());
                 self.routes.get(path).cloned()
             },
-            |title, body| notes.push((title.into(), body.into())),
+            |notice| notes.push((notice.title.clone(), notice.body.clone())),
         );
         notes
     }
@@ -703,7 +725,9 @@ fn tray_counts_sum_across_hosts_and_a_silent_host_keeps_its_baseline() {
     dashboard
         .failed
         .push(failed_run("local-old", "workspace-a", "Local old"));
-    dashboard.failed_total = Some(2);
+    // The endpoint total counts every failed run. The tray counts distinct
+    // failures in the fetched page, so this total must not become the badge.
+    dashboard.failed_total = Some(4);
     dashboard.remote = Some(RemoteHost {
         name: "owner".into(),
         silent: false,
@@ -714,7 +738,7 @@ fn tray_counts_sum_across_hosts_and_a_silent_host_keeps_its_baseline() {
             json!({"phase": "unavailable"}),
         ],
         failed: vec![failed_run("remote-old", "workspace-b", "Remote old")],
-        failed_total: 3,
+        failed_total: 9,
         review: vec![task_in(7, "workspace-b", "Workspace B")],
     });
     let mut watcher = Watcher::default();
@@ -722,18 +746,16 @@ fn tray_counts_sum_across_hosts_and_a_silent_host_keeps_its_baseline() {
     let (notes, summary) = dashboard.poll_summary(&mut watcher);
     assert!(notes.is_empty(), "the first read only records the baseline");
     assert_eq!(
-        summary,
-        PollSummary::Live {
-            drains: Some(3),
-            failed: Some(5)
-        }
+        live_counts(&summary),
+        (Some(3), Some(2)),
+        "one local failure plus one remote failure, not the failed-run totals 4 and 9"
     );
 
     dashboard.remote.as_mut().unwrap().silent = true;
     dashboard
         .failed
         .push(failed_run("local-new", "workspace-a", "Local new"));
-    dashboard.failed_total = Some(3);
+    dashboard.failed_total = Some(8);
     let (notes, summary) = dashboard.poll_summary(&mut watcher);
     assert_eq!(
         notes,
@@ -743,11 +765,8 @@ fn tray_counts_sum_across_hosts_and_a_silent_host_keeps_its_baseline() {
         )]
     );
     assert_eq!(
-        summary,
-        PollSummary::Live {
-            drains: None,
-            failed: None
-        },
+        live_counts(&summary),
+        (None, None),
         "a host that returns nothing is unavailable, not a zero counted into the sum"
     );
 
@@ -758,11 +777,9 @@ fn tray_counts_sum_across_hosts_and_a_silent_host_keeps_its_baseline() {
         "failed runs and review tasks the silent host already had are not announced when it returns"
     );
     assert_eq!(
-        summary,
-        PollSummary::Live {
-            drains: Some(3),
-            failed: Some(6)
-        }
+        live_counts(&summary),
+        (Some(3), Some(3)),
+        "two local failures plus the remote one, still not the run totals"
     );
 
     let remote = dashboard.remote.as_mut().unwrap();
@@ -774,11 +791,8 @@ fn tray_counts_sum_across_hosts_and_a_silent_host_keeps_its_baseline() {
         "a host the list marks unreachable keeps its baseline"
     );
     assert_eq!(
-        summary,
-        PollSummary::Live {
-            drains: None,
-            failed: None
-        },
+        live_counts(&summary),
+        (None, None),
         "an unreachable host is unavailable, not zero"
     );
     assert!(
@@ -788,4 +802,343 @@ fn tray_counts_sum_across_hosts_and_a_silent_host_keeps_its_baseline() {
             .all(|path| !path.starts_with("api/on/")),
         "an unreachable host is not polled"
     );
+}
+
+fn live_counts(summary: &PollSummary) -> (Option<usize>, Option<u64>) {
+    match summary {
+        PollSummary::Live { drains, failed, .. } => (*drains, *failed),
+        PollSummary::Unreadable => panic!("expected a live tray summary"),
+    }
+}
+
+fn attention(
+    summary: &PollSummary,
+    kind: AttentionKind,
+) -> Vec<&orbit_desktop::watcher::AttentionItem> {
+    match summary {
+        PollSummary::Live { attention, .. } => {
+            attention.iter().filter(|item| item.kind == kind).collect()
+        }
+        PollSummary::Unreadable => panic!("expected a live tray summary"),
+    }
+}
+
+/// A pipeline run for one task. `leaf` set means this run echoed that leaf
+/// (`root_cause`); unset means this run is the leaf.
+fn pipeline_run(run_id: &str, task_id: &str, title: &str, leaf: Option<&str>, at: &str) -> Value {
+    let mut run = json!({
+        "run_id": run_id,
+        "workspace_id": "workspace-a",
+        "workspace_name": "Workspace A",
+        "job_id": if leaf.is_some() { "task_gate_pipeline" } else { "task_pr_pipeline" },
+        "finished_at": at,
+        "tasks": [{"id": task_id, "title": title}],
+        "task_ids": [task_id],
+    });
+    if let Some(leaf) = leaf {
+        run["root_cause"] = json!({
+            "leaf_run_id": leaf,
+            "task_id": task_id,
+            "step": "implement",
+            "code": "provider_unavailable",
+        });
+    }
+    run
+}
+
+#[test]
+fn one_failed_task_counts_and_notifies_once_and_opens_its_leaf_run() {
+    let mut dashboard = Dashboard::new(0);
+    dashboard.review.push(task(0));
+    let mut watcher = Watcher::default();
+    let (notes, summary) = dashboard.poll_detailed(&mut watcher);
+    assert!(notes.is_empty(), "the first read only records the baseline");
+    assert_eq!(live_counts(&summary), (Some(0), Some(0)));
+    assert_eq!(attention(&summary, AttentionKind::Review).len(), 1);
+    assert_eq!(
+        attention(&summary, AttentionKind::Review)[0].menu_label(),
+        "Review: Task 0"
+    );
+    assert_eq!(
+        attention(&summary, AttentionKind::Review)[0].route.target,
+        RouteTarget::Task("task-0".into())
+    );
+
+    // The leaf is not on the page yet. Its gate and auto pipeline still name
+    // it, and the endpoint total counts both runs.
+    dashboard.failed.push(pipeline_run(
+        "jrun-auto",
+        "ORB-1",
+        "Fix the tray",
+        Some("jrun-leaf"),
+        "2026-10-19T03:00:00Z",
+    ));
+    dashboard.failed.push(pipeline_run(
+        "jrun-gate",
+        "ORB-1",
+        "Fix the tray",
+        Some("jrun-leaf"),
+        "2026-10-19T02:00:00Z",
+    ));
+    // Auto-dispatch can discover backlog tasks after submission, leaving its
+    // own input task_ids (and therefore API task labels) empty. Its root cause
+    // still names the failed task; the gate row supplies that task's title.
+    dashboard.failed[0]["job_id"] = json!("task_auto_pipeline");
+    dashboard.failed[0]["task_ids"] = Value::Null;
+    dashboard.failed[0]["tasks"] = Value::Null;
+    dashboard.failed_total = Some(2);
+    let (notes, summary) = dashboard.poll_detailed(&mut watcher);
+    assert_eq!(notes.len(), 1, "gate and auto pipeline notify once");
+    assert_eq!(notes[0].0, "Run failed");
+    assert_eq!(notes[0].1, "Fix the tray · Workspace A");
+    assert_eq!(
+        notes[0].2,
+        Some(DashboardRoute {
+            host: None,
+            workspace: "workspace-a".into(),
+            target: RouteTarget::Run("jrun-leaf".into()),
+        }),
+        "the notification opens the root-cause run"
+    );
+    assert_eq!(
+        live_counts(&summary),
+        (Some(0), Some(1)),
+        "the failed-run total is 2; the tray counts one failure"
+    );
+    let failed = attention(&summary, AttentionKind::Failed);
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0].menu_label(), "Failed: Fix the tray");
+    assert_eq!(failed[0].route, notes[0].2.clone().unwrap());
+
+    // A parent can carry a bundle that does not label the root-cause task.
+    // Its first task is unrelated and must not replace the known leaf title.
+    dashboard.failed[0]["tasks"] = json!([{"id": "ORB-other", "title": "Unrelated task"}]);
+    let (notes, summary) = dashboard.poll_detailed(&mut watcher);
+    assert!(notes.is_empty(), "label enrichment is not another failure");
+    assert_eq!(
+        attention(&summary, AttentionKind::Failed)[0].menu_label(),
+        "Failed: Fix the tray"
+    );
+
+    dashboard.failed.insert(
+        0,
+        pipeline_run(
+            "jrun-leaf",
+            "ORB-1",
+            "Fix the tray",
+            None,
+            "2026-10-19T01:00:00Z",
+        ),
+    );
+    dashboard.failed_total = Some(3);
+    let (notes, summary) = dashboard.poll_detailed(&mut watcher);
+    assert!(
+        notes.is_empty(),
+        "the leaf arriving later is the same failure, not a second notification"
+    );
+    assert_eq!(live_counts(&summary), (Some(0), Some(1)));
+    assert_eq!(attention(&summary, AttentionKind::Failed).len(), 1);
+
+    dashboard.failed.insert(
+        0,
+        pipeline_run(
+            "jrun-leaf-2",
+            "ORB-1",
+            "Fix the tray",
+            None,
+            "2026-10-19T04:00:00Z",
+        ),
+    );
+    dashboard.failed_total = Some(4);
+    let (notes, summary) = dashboard.poll_detailed(&mut watcher);
+    assert_eq!(
+        notes.len(),
+        1,
+        "a second root cause of the same task is a separate failure"
+    );
+    assert_eq!(
+        notes[0].2.as_ref().map(|route| route.target.clone()),
+        Some(RouteTarget::Run("jrun-leaf-2".into()))
+    );
+    assert_eq!(live_counts(&summary), (Some(0), Some(2)));
+    let failed = attention(&summary, AttentionKind::Failed);
+    assert_eq!(failed.len(), 2);
+    assert_eq!(
+        failed[0].route.target,
+        RouteTarget::Run("jrun-leaf-2".into()),
+        "newest failure first"
+    );
+    assert_eq!(failed[1].route.target, RouteTarget::Run("jrun-leaf".into()));
+    assert!(dashboard.poll(&mut watcher).is_empty());
+}
+
+#[test]
+fn tray_lists_at_most_the_bound_of_failed_and_review_items_newest_first() {
+    let mut dashboard = Dashboard::new(0);
+    let extra = 4;
+    let count = TRAY_ITEM_LIMIT + extra;
+    for index in 0..count {
+        // Oldest first in the payload, so a test that kept page order would
+        // show the wrong end of the list.
+        let stamp = format!("2026-10-19T{:02}:00:00Z", index);
+        dashboard.failed.push(pipeline_run(
+            &format!("jrun-{index}"),
+            &format!("ORB-{index}"),
+            &format!("Failure {index}"),
+            None,
+            &stamp,
+        ));
+        dashboard.review.push(json!({
+            "id": format!("task-{index}"),
+            "title": format!("Review {index}"),
+            "workspace_id": "workspace-a",
+            "workspace_name": "Workspace A",
+            "created_at": stamp,
+            "status": "review",
+        }));
+    }
+    dashboard.failed_total = Some(count as u64 * 3);
+    let mut watcher = Watcher::default();
+    let (_, summary) = dashboard.poll_detailed(&mut watcher);
+    assert_eq!(
+        live_counts(&summary).1,
+        Some(count as u64),
+        "the count is every distinct failure in the page, not the menu cap and not the run total"
+    );
+
+    let failed = attention(&summary, AttentionKind::Failed);
+    let review = attention(&summary, AttentionKind::Review);
+    assert_eq!(failed.len(), TRAY_ITEM_LIMIT);
+    assert_eq!(review.len(), TRAY_ITEM_LIMIT);
+    assert_eq!(
+        failed[0].menu_label(),
+        format!("Failed: Failure {}", count - 1)
+    );
+    assert_eq!(
+        failed.last().unwrap().menu_label(),
+        format!("Failed: Failure {extra}")
+    );
+    assert_eq!(
+        review[0].menu_label(),
+        format!("Review: Review {}", count - 1)
+    );
+    assert_eq!(
+        review[0].route.target,
+        RouteTarget::Task(format!("task-{}", count - 1))
+    );
+    assert!(
+        failed
+            .iter()
+            .all(|item| matches!(item.route.target, RouteTarget::Run(_))),
+        "a failed row opens a run route"
+    );
+    assert!(
+        review
+            .iter()
+            .all(|item| matches!(item.route.target, RouteTarget::Task(_))),
+        "a review row opens a task route"
+    );
+}
+
+#[test]
+fn dashboard_route_opens_the_task_or_run_on_that_host_and_workspace() {
+    let base = Url::parse("http://127.0.0.1:9/").unwrap();
+    let task = DashboardRoute {
+        host: Some("remote host".into()),
+        workspace: "workspace-a &/+".into(),
+        target: RouteTarget::Task("ORB-1".into()),
+    };
+    let opened = task.location(&base);
+    assert_eq!(opened.scheme(), "http");
+    assert_eq!(opened.host_str(), Some("127.0.0.1"));
+    assert_eq!(opened.port(), Some(9));
+    let query: std::collections::HashMap<_, _> = opened.query_pairs().collect();
+    assert_eq!(
+        query.get("host").map(std::borrow::Cow::as_ref),
+        Some("remote host")
+    );
+    assert_eq!(
+        query.get("workspace").map(std::borrow::Cow::as_ref),
+        Some("workspace-a &/+")
+    );
+    assert_eq!(opened.fragment(), Some("tasks?open=ORB-1"));
+
+    let run = DashboardRoute {
+        host: None,
+        workspace: "workspace-a".into(),
+        target: RouteTarget::Run("jrun-leaf".into()),
+    };
+    let opened = run.location(&base);
+    assert_eq!(
+        opened
+            .query_pairs()
+            .find(|(key, _)| key == "host")
+            .map(|(_, value)| value.into_owned())
+            .as_deref(),
+        Some(""),
+        "a local click explicitly selects the serving host over a remembered remote"
+    );
+    assert_eq!(
+        opened
+            .query_pairs()
+            .find(|(key, _)| key == "workspace")
+            .map(|(_, value)| value.into_owned())
+            .as_deref(),
+        Some("workspace-a")
+    );
+    assert_eq!(opened.fragment(), Some("runs?run_id=jrun-leaf"));
+}
+
+#[test]
+fn queued_tray_click_keeps_its_route_when_a_refresh_reorders_the_menu() {
+    let mut dashboard = Dashboard::new(0);
+    dashboard.failed.push(pipeline_run(
+        "jrun-original",
+        "ORB-1",
+        "Original failure",
+        None,
+        "2026-10-19T01:00:00Z",
+    ));
+    dashboard.review.push(task(0));
+    let mut watcher = Watcher::default();
+    let (_, before) = dashboard.poll_detailed(&mut watcher);
+    let failed = attention(&before, AttentionKind::Failed)[0];
+    let old_failure_click = failed.route.menu_id();
+    let old_review_click = attention(&before, AttentionKind::Review)[0].route.menu_id();
+
+    // Pause a click from the old menu until a poll inserts a newer failure
+    // ahead of it and removes the review item. No timing or native UI needed.
+    dashboard.failed.push(pipeline_run(
+        "jrun-newest",
+        "ORB-2",
+        "Newer failure",
+        None,
+        "2026-10-19T02:00:00Z",
+    ));
+    dashboard.review.clear();
+    let (_, after) = dashboard.poll_detailed(&mut watcher);
+    let newest = attention(&after, AttentionKind::Failed)[0];
+    assert_ne!(newest.route.menu_id(), old_failure_click);
+    assert_eq!(
+        DashboardRoute::from_menu_id(&old_failure_click),
+        Some(failed.route.clone()),
+        "a queued menu click opens its original run, not the new item at index zero"
+    );
+    assert_eq!(
+        DashboardRoute::from_menu_id(&old_review_click),
+        Some(attention(&before, AttentionKind::Review)[0].route.clone()),
+        "a removed row keeps its original task route"
+    );
+
+    let remote = DashboardRoute {
+        host: Some("host \"with\" / delimiters".into()),
+        workspace: "workspace &/+".into(),
+        target: RouteTarget::Task("task \"quoted\"".into()),
+    };
+    assert_eq!(
+        DashboardRoute::from_menu_id(&remote.menu_id()),
+        Some(remote)
+    );
+    assert_eq!(DashboardRoute::from_menu_id("open"), None);
+    assert_eq!(DashboardRoute::from_menu_id("attention-0"), None);
 }

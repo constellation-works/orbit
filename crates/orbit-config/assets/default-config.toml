@@ -89,7 +89,8 @@ io_full_resume_percent = 10
 
 # [review]
 # timing = "off" | "before_pr" | "before_landing" (default "off"); one review
-# layer before landing, drawn from workflow.purpose_crews.review.
+# layer before landing, drawn from workflow.purpose_crews.pre_landing_review,
+# or from workflow.purpose_crews.review while that is unset.
 #
 # before_pr holds PR creation for a fresh reviewer on the PR route. The
 # reviewer fixes what it finds in its own commit on the candidate; findings it
@@ -113,8 +114,11 @@ io_full_resume_percent = 10
 # is enabled but cannot run.
 
 # [workflow.purpose_crews]
-# review = "sol"          # crew for before-PR, before-landing and after-landing review
+# review = "sol"          # crew for after-landing review tasks, and before landing
+#                          # while pre_landing_review is unset
 # review = ["sol", "grok"] # or a pool (`name` or `name:weight`, like the complexity
 #                          # pools): each review draws one crew by weight, preferring one
 #                          # that did not implement the reviewed work and skipping
 #                          # disabled or provider-limited crews; [] unsets it
+# pre_landing_review = ["luna", "haiku"] # before-PR and before-landing reviewer,
+#                          # written like review; unset or [] falls back to review

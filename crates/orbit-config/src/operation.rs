@@ -8,6 +8,10 @@
 //! `workflow.purpose_crews.review` names the crew of automatic review: one
 //! crew, or a pool written like the complexity pools that each review draws
 //! one crew from [ORB-15195].
+//! `workflow.purpose_crews.pre_landing_review`, written the same way, names
+//! the before-PR and before-landing reviewer on its own and falls back to
+//! `workflow.purpose_crews.review` while unset, so the after-landing review
+//! tasks `delivery-code-review` mints can keep a different pool.
 //! `review.before_landing_hosts` lets an owner whose own deliveries do not
 //! review before landing still capture before-landing review for the claims
 //! of the machines it lists [ORB-15192]; it is refused beside
@@ -64,7 +68,9 @@ use crate::registry::read_optional;
 /// exactly as before, and a pool is captured in a field of its own that an
 /// older snapshot never carries. Nor did a rule's `hosted_check`
 /// [ORB-15677]: an older snapshot never carries it, and a rule without it
-/// keeps the review's hold.
+/// keeps the review's hold. Nor did
+/// `workflow.purpose_crews.pre_landing_review`: an admission captures the
+/// pool it resolved in the fields it always had.
 pub const OPERATION_POLICY_VERSION: u32 = 5;
 
 const MAX_REVIEW_MINUTES: u32 = 1_440;
@@ -89,13 +95,18 @@ pub const LEGACY_REVIEW_MINUTES_KEY: &str = "operation.review_minutes";
 /// Checks a claimed leaf's host owes for the paths it changed.
 pub const REVIEW_HOST_EVIDENCE_KEY: &str = "review.host_evidence";
 
-/// The crew, or crew pool, of automatic review.
+/// The crew, or crew pool, of automatic review: the after-landing review
+/// tasks `delivery-code-review` mints, and the reviewer before landing while
+/// [`PRE_LANDING_REVIEW_CREW_KEY`] is unset.
 pub const REVIEW_CREW_KEY: &str = "workflow.purpose_crews.review";
+/// The crew, or crew pool, of before-PR and before-landing review.
+pub const PRE_LANDING_REVIEW_CREW_KEY: &str = "workflow.purpose_crews.pre_landing_review";
 /// The deprecated spelling of [`REVIEW_CREW_KEY`].
 pub const LEGACY_REVIEW_CREW_KEY: &str = "operation.review_crew";
 
-/// `workflow.purpose_crews.review` as written: one crew name, or a pool of
-/// `name[:weight]` entries [ORB-15195]. A single name is a one-member pool.
+/// `workflow.purpose_crews.review` or `workflow.purpose_crews.pre_landing_review`
+/// as written: one crew name, or a pool of `name[:weight]` entries
+/// [ORB-15195]. A single name is a one-member pool.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(untagged)]
 pub enum ReviewCrewSetting {
@@ -292,6 +303,9 @@ pub struct OperationLayer {
     /// Explicit review crew pool; a single name is a one-entry pool and an
     /// empty pool unsets a crew an earlier layer named.
     pub review_crew: Option<Vec<String>>,
+    /// Explicit pre-landing review crew pool, stated like `review_crew`; an
+    /// empty pool unsets one an earlier layer named, so review falls back.
+    pub pre_landing_review_crew: Option<Vec<String>>,
     /// Explicit `[[review.host_evidence]]` rules; an empty list clears the
     /// rules an earlier layer stated.
     pub review_host_evidence: Option<Vec<HostEvidenceRule>>,
@@ -334,6 +348,11 @@ impl OperationLayer {
                 config_path,
             )?)?,
             review_crew: review_crew(read_optional(document, REVIEW_CREW_KEY, config_path)?)?,
+            pre_landing_review_crew: pre_landing_review_crew(read_optional(
+                document,
+                PRE_LANDING_REVIEW_CREW_KEY,
+                config_path,
+            )?)?,
             review_host_evidence: read_optional::<Vec<HostEvidenceRule>>(
                 document,
                 REVIEW_HOST_EVIDENCE_KEY,
@@ -372,10 +391,19 @@ pub struct OperationPolicy {
     /// before-landing review.
     pub review_minutes: OperationField<u32>,
     /// Crews automatic review draws from, as `name[:weight]` entries: the
-    /// before-PR or before-landing reviewer and the crew of minted
-    /// after-landing review tasks. Empty when unset; one entry for a single
-    /// crew. Crew names are admitted against the registry at load.
+    /// crew of minted after-landing review tasks, and the before-PR or
+    /// before-landing reviewer while `pre_landing_review_crew` is empty.
+    /// Empty when unset; one entry for a single crew. Crew names are
+    /// admitted against the registry at load.
     pub review_crew: OperationField<Vec<String>>,
+    /// Crews the before-PR or before-landing reviewer draws from, in the
+    /// same shape; empty when unset. Read it through
+    /// [`Self::pre_landing_review_pool`], which applies the fallback.
+    #[serde(
+        default = "no_pre_landing_review_crew",
+        skip_serializing_if = "pre_landing_review_crew_unset"
+    )]
+    pub pre_landing_review_crew: OperationField<Vec<String>>,
     /// Checks a claimed leaf's host owes for the paths it changed.
     #[serde(default = "no_host_evidence")]
     pub review_host_evidence: OperationField<Vec<HostEvidenceRule>>,
@@ -403,6 +431,7 @@ impl OperationPolicy {
             review_before_landing_hosts: no_before_landing_hosts(),
             review_minutes: OperationField::built_in(DEFAULT_REVIEW_MINUTES),
             review_crew: OperationField::built_in(Vec::new()),
+            pre_landing_review_crew: no_pre_landing_review_crew(),
             review_host_evidence: no_host_evidence(),
             legacy_after_landing: None,
         }
@@ -477,10 +506,29 @@ impl OperationPolicy {
         self.review_minutes
             .set(layer.review_minutes.as_ref(), source);
         self.review_crew.set(layer.review_crew.as_ref(), source);
+        self.pre_landing_review_crew
+            .set(layer.pre_landing_review_crew.as_ref(), source);
         self.review_host_evidence
             .set(layer.review_host_evidence.as_ref(), source);
         if let Some(after_landing) = layer.legacy_after_landing {
             self.legacy_after_landing = after_landing.then_some(source);
+        }
+    }
+
+    /// The pool before-PR and before-landing review draw from:
+    /// `workflow.purpose_crews.pre_landing_review` when it names a crew, else
+    /// `workflow.purpose_crews.review`. Its entries are empty when neither
+    /// names one.
+    pub fn pre_landing_review_pool(&self) -> ReviewCrewPool<'_> {
+        let (field, key) = if self.pre_landing_review_crew.value.is_empty() {
+            (&self.review_crew, REVIEW_CREW_KEY)
+        } else {
+            (&self.pre_landing_review_crew, PRE_LANDING_REVIEW_CREW_KEY)
+        };
+        ReviewCrewPool {
+            entries: &field.value,
+            key,
+            source: field.source,
         }
     }
 
@@ -494,6 +542,35 @@ impl OperationPolicy {
 
 pub(crate) fn review_minutes(raw: Option<u32>) -> Result<Option<u32>, OrbitError> {
     bounded(raw, REVIEW_MINUTES_KEY, 1, MAX_REVIEW_MINUTES)
+}
+
+/// One review layer's crew pool and the key and layer that supplied it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReviewCrewPool<'a> {
+    /// Canonical `name[:weight]` entries; empty when no key names a crew.
+    pub entries: &'a [String],
+    /// The key the entries came from, or that a fallback ended at.
+    pub key: &'static str,
+    /// The layer that set `key`.
+    pub source: OperationLayerSource,
+}
+
+impl ReviewCrewPool<'_> {
+    /// Whether the pool came from `workflow.purpose_crews.review` because
+    /// `workflow.purpose_crews.pre_landing_review` names no crew.
+    pub fn is_fallback(&self) -> bool {
+        self.key == REVIEW_CREW_KEY
+    }
+}
+
+fn no_pre_landing_review_crew() -> OperationField<Vec<String>> {
+    OperationField::built_in(Vec::new())
+}
+
+/// An unset pool is not serialized, so a resolution that never states the key
+/// reads exactly as it did before the key existed.
+fn pre_landing_review_crew_unset(field: &OperationField<Vec<String>>) -> bool {
+    field.value.is_empty() && field.source == OperationLayerSource::BuiltIn
 }
 
 fn no_host_evidence() -> OperationField<Vec<HostEvidenceRule>> {
@@ -614,10 +691,25 @@ fn host_evidence_rules(rules: Vec<HostEvidenceRule>) -> Result<Vec<HostEvidenceR
 pub(crate) fn review_crew(
     raw: Option<ReviewCrewSetting>,
 ) -> Result<Option<Vec<String>>, OrbitError> {
+    crew_setting(raw, REVIEW_CREW_KEY)
+}
+
+/// The pool one layer's `workflow.purpose_crews.pre_landing_review` states,
+/// admitted exactly as [`review_crew`] admits its key.
+pub(crate) fn pre_landing_review_crew(
+    raw: Option<ReviewCrewSetting>,
+) -> Result<Option<Vec<String>>, OrbitError> {
+    crew_setting(raw, PRE_LANDING_REVIEW_CREW_KEY)
+}
+
+fn crew_setting(
+    raw: Option<ReviewCrewSetting>,
+    key: &str,
+) -> Result<Option<Vec<String>>, OrbitError> {
     match raw {
-        Some(ReviewCrewSetting::One(value)) if value.trim().is_empty() => Err(
-            OrbitError::InvalidInput(format!("{REVIEW_CREW_KEY} must not be empty")),
-        ),
+        Some(ReviewCrewSetting::One(value)) if value.trim().is_empty() => {
+            Err(OrbitError::InvalidInput(format!("{key} must not be empty")))
+        }
         Some(ReviewCrewSetting::One(value)) => Ok(Some(vec![value.trim().to_string()])),
         Some(ReviewCrewSetting::Pool(entries)) => Ok(Some(entries)),
         None => Ok(None),

@@ -23,7 +23,7 @@ use super::super::deferred_sandbox::{claimed_deferred_replays, with_replays};
 use super::super::flaky::rerun_failed_tests;
 use super::super::git::{BaseSyncMode, normalize_base_branch};
 use super::super::light_delivery::light_delivery_decision;
-use super::super::required_command::{RequiredCommandRun, bounded_validation_text};
+use super::super::required::command::{RequiredCommandRun, bounded_validation_text};
 use super::input::{refused, required_workspace};
 use super::observe::{claimed_base_sync, observe, observe_with, require_clean_candidate};
 use super::{already_resolved, no_diff};
@@ -630,7 +630,7 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
         if let Err(error) = serde_json::to_vec(&content)
             .map_err(|error| OrbitError::Execution(error.to_string()))
             .and_then(|bytes| {
-                super::super::required_evidence::retain(
+                super::super::required::evidence::retain(
                     host,
                     std::slice::from_ref(&context.task_id),
                     &context.run_id,

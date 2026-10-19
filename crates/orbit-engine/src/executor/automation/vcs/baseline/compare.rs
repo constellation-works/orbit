@@ -1,5 +1,5 @@
-use super::super::base_claim::{failing_tests_selection, replay_coverage};
-use super::super::required_command::{
+use super::super::base::claim::{failing_tests_selection, replay_coverage};
+use super::super::required::command::{
     MAX_VALIDATION_MESSAGE_BYTES, RequiredCommandRun, VALIDATION_PATH_LINE, VALIDATION_TIMEOUT_MS,
     ValidationSummary, bounded_validation_text,
 };
@@ -307,7 +307,7 @@ impl BaselineCheck {
 /// [ORB-15375] [ORB-15546]: whether a failed candidate `run`'s failures are
 /// all the base's to answer for, given the failures the base's run of the
 /// same check names. The run must name at least one failure, every one a
-/// failed test (`test …`, as [`super::super::base_claim::failure_identities`] reads
+/// failed test (`test …`, as [`super::super::base::claim::failure_identities`] reads
 /// it) that `base_failures` names too, and must neither have timed out,
 /// or been stopped by the supervisor, which could have cut its failures
 /// short, nor deferred a sandbox-confined

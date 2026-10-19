@@ -84,9 +84,11 @@ export async function initHostSwitcher({ select }) {
     console.error("Failed to read registered hosts", error);
     setRegisteredHosts([]);
   }
-  const linked = new URLSearchParams(window.location.search).get("host");
-  if (linked) {
-    setHost(linked);
+  const params = new URLSearchParams(window.location.search);
+  // An explicit empty host selects the serving host, including native tray
+  // and notification links, rather than restoring a remembered remote.
+  if (params.has("host")) {
+    setHost(params.get("host"));
   } else {
     const remembered = rememberedHost();
     const row = remembered ? findRegisteredHost(remembered) : null;

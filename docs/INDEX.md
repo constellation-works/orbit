@@ -117,6 +117,7 @@ a conservative title/status fallback.
 | --- | --- | --- | --- |
 | [Activity / Job](./design/activity-job/1_overview.md) | Activity / Job is Orbit's execution substrate. | Draft | codex |
 | [Agent Families](./design/agent-families/1_overview.md) | Orbit models AI coding systems as first-class agent families and groups concrete provider-model assignments into named crews. | Draft | grok |
+| [Agent Scorecards](./design/agent-scorecards/1_overview.md) | One scorecard per agent role (orchestrators, implementers, reviewers, task pilots), ranked by crew and model, where each problem counts against exactly one role. | Draft | claude |
 | [Auditability](./design/auditability/1_overview.md) | Auditability is Orbit's answer to the operator question that matters after an agent touches a real repository: what happened, why, and who is accountable? | Draft | codex |
 | [Auto-concurrency](./design/auto-concurrency/1_overview.md) | Partly implemented predictive admission — Orbit records per-task CPU and memory samples, builds resource profiles, forecasts host load, and supports shadow or forecast-based admission for local and pull drains; operational accuracy evidence remains limited. | Draft | claude |
 | [Auto-tasks](./design/auto-tasks/1_overview.md) | Dynamically-defined recurring task templates minted by the host clock tick — periodic work as data, not code. | Accepted | claude |

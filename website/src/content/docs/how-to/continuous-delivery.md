@@ -94,7 +94,10 @@ the background, so backlog work keeps starting meanwhile, and the drain
 admits what a pilot approved as soon as it finishes. Tasks tagged `no-auto-approve` stay
 proposed until a human approves them. Other held tasks also stay proposed;
 `orbit run show` and `orbit run readiness` report approval counts and hold
-reasons. Each approval's history note names the drain run.
+reasons. A `warnings` hold also names each finding: under `Approved:` in
+`orbit run show`, and as `findings` (`kind` and the finding's first line) on
+each held task in `orbit run readiness --json`. The dashboard shows that same
+text on the live window's approval hold. Each approval's history note names the drain run.
 
 `--approve-proposed` is off by default and conflicts with `--pull`, since
 only the owner approves work. Approval still respects dependencies, file
@@ -222,7 +225,7 @@ The window length bounds only when new work may start; a task in flight when
 it expires still finishes. **Parallel tasks** (`--concurrency`, default 5) is
 not a batch size: the drain refills each free slot from the whole backlog.
 
-**Mark done** (`--complete`) authorizes this window to move every task it
+**Mark shipped tasks done** (`--complete`) authorizes this window to move every task it
 ships from `review` to `done`, including tasks admitted later in the window. It
 never approves `proposed` tasks. In the dashboard it needs an operator
 session. See [Completing work with
