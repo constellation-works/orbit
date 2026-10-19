@@ -5,7 +5,7 @@ tags: [operations, audit, observability, debugging]
 paths: ["crates/orbit-core/src/runtime/audit/run.rs", "crates/orbit-core/src/runtime/audit/run_projection.rs", "crates/orbit-types/src/telemetry/audit_event.rs"]
 related_features: [auditability, activity-job]
 related_artifacts: [ORB-10014, ORB-10227, ORB-10228, ORB-16383]
-last_validated: 2026-10-17
+last_validated: 2026-10-19
 ---
 
 # Inspect the Audit Trail
@@ -93,7 +93,7 @@ not.
 
 `GET /api/cost` builds the managed-execution cost accounting for one window from
 the invocation store and writes nothing. Each dashboard server shares one
-computation per live workspace runtime and canonical window for 15 seconds,
+computation per live workspace runtime and canonical window for 90 seconds,
 including concurrent requests. Omitted `window` and `window=all` share an
 entry. A rebuilt workspace runtime starts a fresh cache namespace. The retired
 `GET /api/scoreboard` returns the same body with `Deprecation` and `Sunset`
@@ -144,12 +144,12 @@ unexpected execution errors. Tools with only denials still appear, with zero
 comparable calls and a zero rate. Inactive agent-surface calls are policy
 denials, including attempts to enable or disable an already-set inactive tool.
 
-Audit Events places status immediately after time. Actor is the recorded role;
+The Events view places status immediately after time. Actor is the recorded role;
 the column tooltip explains `unverified`, `unknown`, agent names,
 `admin`, and `hook`. Tool calls use one tool/command column, with the invocation
 command on hover, and leave the target blank when it repeats the tool.
 
-Audit Events shows the newest 50 rows and a **Load older events** button that
+The Events view shows the newest 50 rows and a **Load older events** button that
 pages back through the whole selected window. The header reads
 `50 of 19,749 in 24h` (rows shown against the window's event count from
 `/api/audit/summary`); with a status, search or other filter active the window
@@ -168,9 +168,9 @@ all values. Wider cards show those columns. Top duration ranks named tools
 only, excluding the synthetic `unknown` bucket and empty names before choosing
 the top eight.
 
-The denial badge beside Audit in the rail shows the canonical policy-decision
+The denial badge on the Health rail entry shows the canonical policy-decision
 count (`denials` in `/api/audit/summary`, split in its title into audit rows,
-`denials_sql`, and loop denials, `denials_v2`). Clicking it opens Audit Events
+`denials_sql`, and loop denials, `denials_v2`). Clicking it opens Health › Incidents › Events
 filtered to `status=denied` for the window it counted. That list holds every
 denied audit row, including the lock-contention and settlement refusals the
 count excludes, and not the loop denials, so its length can differ from the
@@ -180,7 +180,7 @@ badge.
 `total` and `recent_denials`. Evidence scans are capped at 1,000 rows per
 source, while the canonical count covers the full window.
 
-To reconcile with **Audit Events**, use the same workspace routing and cutoff
+To reconcile with the **Events** view, use the same workspace routing and cutoff
 (`since` in the summary response), select the tool, and count only its `tool`
 `run`/`run-mcp` rows. Count successes plus failures for total, failures for
 failed, denied rows separately, and classify failed rows for unexpected. Fetch
