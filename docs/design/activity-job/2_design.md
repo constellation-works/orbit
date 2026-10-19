@@ -624,7 +624,7 @@ Run finalization moves the task to `backlog` under a `provider_failure_hold` his
 - **Host scope** ([ORB-16379]): an unavailable hold names the failing host's `machine` and excludes its crews only there; pull admission reads the hold as the executor's machine sees it. Capacity, limit and refusal holds name no machine and exclude everywhere, as does a hold stored before `machine` existed. A new hold keeps a still-standing earlier hold's crews in their own scope: everywhere-crews move to `carried_crews` under a machine-scoped hold, and machine-scoped crews stay scoped under a new everywhere hold.
 - **Host outage**: the crews an unavailable failure excluded are also recorded in the host's `provider_crew_outages` until that failure's backoff ends. Local admission adds every live outage to each task's hold, so one expired login keeps every task on this host off the crew, independent of the held task's status.
 - **Refusal** excludes every crew of the provider.
-- **Backoff** doubles for each hold the task got in the last 24 hours, capped at 24 hours.
+- **Backoff** doubles for each hold the task got in the last 24 hours, capped at 24 hours (6 hours for a usage-limit hold).
 - **Admission** (`auto_task_crew_candidates`) draws around the excluded crews while the hold is the task's latest status event and `not_before` has not passed, or while a host outage of the crew lasts. When nothing is left, the backlog snapshot excludes the task with `provider_backoff`.
 
 After [ORB-14697], admission also reads the host's `provider_limit_observations` before dispatch. A live reading that is exhausted, or used at or above `workflow.provider_limit_max_used_pct` (or the provider's `workflow.provider_limit_overrides` entry), removes that provider's crews (or its model's) from the draw that follows the hold. An override written `provider:off` leaves every reading of that provider, including a ledger budget reading, out of that draw; the reading is still recorded and shown, and a usage-limit failure still holds the task. It counts until its reset, else for its window's length, or 60 minutes when the length is unknown, or 30 minutes for an exhausted error reading. A purpose-sourced task retries the unlimited members of its purpose pool before any complexity-pool fallback. A pool or default task falls back to the unlimited members of its complexity pool, never to the default. An explicit crew waits under `workflow.provider_limit_explicit_crews = "wait"`, as does a usage-limit hold on it, and draws from the pool under `"pool"`. With nothing left, the backlog snapshot excludes the task with `provider_limit`. An explicit run-input crew is not gated; `crew_selection.provider_limit` records the reading. A provider that reports no usage can be given a `workflow.provider_limit_budgets` entry [ORB-14699]: admission then reads its spend from the host invocation ledger as a `ledger` observation, computed on each read, which a live stored reading of the provider overrides.
@@ -819,10 +819,10 @@ requirements are normalized in the task store and freeze once the task enters
 
 [ORB-13315] gives an `agent_loop` activity one of two tool policies.
 
-The seeded agent loops (`agent_implement`, `agent_invoke`,
-`agent_review_repair`, `pr_conflict_recovery`, `step_failure_recovery`, and
-`task_pilot`) declare
-`tool_disallow_list`. They refuse registered
+The seeded agent loops (`agent_explore`, `agent_implement`, `agent_invoke`,
+`agent_review_repair`, `final_recovery`, `pr_conflict_recovery`,
+`review_reconciliation_review`, `step_failure_recovery`, `task_pilot` and
+`verify_finding`) declare `tool_disallow_list`. They refuse registered
 control-plane mutations and `orbit.agent.invoke`; the read-only
 `agent_invoke` and `task_pilot` also refuse task and friction writes. Their
 `proc.spawn` program lists now use `proc_disallowed_programs`. The tool registry currently has
@@ -845,7 +845,7 @@ continues to pass registry validation when loaded.
   catalog's existing precedence rule; they cannot replace a shipped activity
   through that path. A workspace-local activity with its own name remains
   supported. `orbit init` and `update-orbit.sh` reseeding replace the managed
-  copies of the six shipped YAMLs with the deny-mode versions.
+  copies of the ten shipped YAMLs with the deny-mode versions.
 - **Deny mode** (`tool_disallow_list`). Declaring the key, even as `[]`,
   selects it. Every registered agent-facing tool is callable except the
   entries the list covers. Existing governance still applies first, so an
@@ -890,9 +890,10 @@ tools, inactive tools and tools that are not agent-facing fail
 `agent_implement`. That activity, and any activity that is not one of the
 shipped non-implementers, still fails `RequiredToolAdmission` when the
 disallow list covers a requirement. The failure names the tool and the
-activity. The shipped non-implementers are `final_recovery`,
-`step_failure_recovery`, `pr_conflict_recovery`, `agent_review_repair`,
-`review_reconciliation_review`, `task_pilot` and `agent_invoke`. For those, a
+activity. The shipped non-implementers are `agent_explore`, `agent_invoke`,
+`agent_review_repair`, `final_recovery`, `pr_conflict_recovery`,
+`review_reconciliation_review`, `step_failure_recovery`, `task_pilot` and
+`verify_finding`. For those, a
 covered requirement is dropped from `requested_tools` and recorded as a note
 on the resolution and on `ToolAllowlistHarnessDelegated`
 (`omitted_requirement_notes`). It stays out of `effective_tools`. A custom
@@ -938,7 +939,7 @@ with a deprecation warning, and the author should declare explicit `tools` or a
 
 ### 7.1 CLI agent path
 
-The path is driven by `cli_runner.rs`, added in [T20260419-0104]. The flow is:
+The path is driven by `cli_runner/mod.rs`, added in [T20260419-0104]. The flow is:
 
 1. Ask the host for the concrete CLI executor and resolve every selected task's requested tools and the effective list (in deny mode, the concrete callable set; §7.0).
 2. Emit the advisory `ToolAllowlistHarnessDelegated` event with the selected task ids, requested list, effective list, policy mode (`tool_policy`), a deny-mode `tool_disallow_list`, and any `omitted_requirement_notes` for requirements a non-implementer dropped (§7.0). The policy fields are optional, so events recorded before deny mode existed still read. An empty notes list is omitted, so events recorded before [ORB-15162] still read.
@@ -1352,7 +1353,7 @@ The body runs before `break_when`, so steps can populate fields the break expres
 
 ### 8.6 Persisted state for v2 job runs
 
-Every job run is a persisted pipeline run. `orbit run ship`, `orbit.pipeline.invoke` + `orbit.pipeline.wait`, and — after [ORB-10801] — `orbit run job` / `orbit job run` all submit through the same path in `pipeline.rs`: the run is persisted, a detached worker is spawned, and the caller returns. `orbit run history -j <job_id>` and `orbit run show <run_id>` inspect the returned ID. `--wait` blocks on the submitted run and maps a non-success terminal state onto a nonzero exit.
+Every job run is a persisted pipeline run. `orbit run ship`, `orbit.pipeline.invoke` + `orbit.pipeline.wait`, and — after [ORB-10801] — `orbit run job` / `orbit job run` all submit through the same path in `application/job/pipeline/submit.rs`: the run is persisted, a detached worker is spawned, and the caller returns. `orbit run history -j <job_id>` and `orbit run show <run_id>` inspect the returned ID. `--wait` blocks on the submitted run and maps a non-success terminal state onto a nonzero exit.
 
 Named `ci_failure_sweep_pipeline` submission resolves and persists one
 `integration_branch` before inserting the run. Precedence is non-empty run

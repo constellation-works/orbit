@@ -16,8 +16,8 @@ related_artifacts: [ORB-12488, ORB-12616, ORB-12500, ORB-13625, ORB-13941, ORB-1
 `orbit.task.pull` creates at most one claim for an intended admission. The owner selects the first
 ready, valid, conflict-free task in its canonical order and atomically records the reservation,
 attempt identity, `in-progress` transition, history, and request receipt. Retries replay the same
-receipt. The internal store foundation now implements admission receipts, claims, replay,
-and compaction, and [ORB-12495] exposed the owner's read-only half — the
+receipt. The internal store foundation now implements admission receipts, claims and replay,
+though tombstone compaction is not yet written, and [ORB-12495] exposed the owner's read-only half — the
 [preflight probe](../2_design.md#41-read-only-admission-probe) and the
 [receipt lookup](#read-only-receipt-reconciliation) below — on the managed MCP and registered CLI
 surfaces. [ORB-13625] registered the executor's mutating half — `orbit.task.pull`,
@@ -104,7 +104,7 @@ defined in [design §4.1](../2_design.md#41-read-only-admission-probe).
 | `caller_fingerprint` | string, optional for historical requests | Type-derived request fingerprint, checked before request deserialization |
 | `caller_before_pr` | bool | Whether the calling drain captured before-PR review (`review.timing = "before_pr"`) at submission; diagnostic only, since a claimed leaf runs the review the `ship` contract captures [ORB-13908] |
 | `review_gate` | bool, optional | Whether the executor's claimed PR leaf runs the before-PR gate; an owner with `review.timing` at `before_pr` admits only an executor that declares it. Absent: `false` |
-| `run_context` | object | Calling drain's `run_id`, `job_name`, and diagnostic `host_id` |
+| `run_context` | object | Calling drain's `run_id`, `job_name`, and diagnostic `machine_name` |
 | `crews` | object, optional | Executor crew capability: `runnable` (crew names its window preflight found runnable; absent means unrestricted), `default_crew` (what a task naming no crew runs as there; absent admits no crew-less task) and `excluded` (`{crew, source, reason}` crews it will not run for the rest of its window). Absent: every crew is admissible |
 | `os` | enum, optional | Executor host OS: `linux`, `macos` or `windows`. A task carrying `os:` tags is admitted only to an executor whose OS one of them names. Absent (an OS outside that set): only tasks without an `os:` tag are admissible |
 | `browser_kit` | bool, optional | Whether the executor's host has a verified headless browser kit (`orbit browser-kit verify` passed against the installed version). A task tagged `ui` is admitted only to an executor that declares one. Absent: `false`, so a request without the field is offered no `ui` task |
@@ -116,7 +116,8 @@ request, so a replay is judged by the capability it was first sent with, and so 
 declared OS. Protocol revision 2 adds `crews`, revision 4 adds `os`, and revision 5 replaces
 `caller_review_policy` with `caller_before_pr` and the ship contract's `review_policy` with
 `before_pr`: an older owner rejects the new field even though it is optional, and a revision-4
-caller still sending `caller_review_policy` is answered `protocol_mismatch`. Revision 6 adds the
+caller still sending `caller_review_policy` is refused as `invalid_input` whose message begins
+`protocol_mismatch:`. Revision 6 adds the
 ship contract's `review` (below) and the typed handoff's before-PR evidence [ORB-13895]; revision 7
 sends `review_gate`, which a revision-6 owner rejects as an unknown field [ORB-13908]. Revision 8
 captures the owner's `required_validation_commands` in the before-PR `review` contract [ORB-14192].
@@ -186,9 +187,10 @@ for a pull drain as for a local one.
 ## Idempotency and admission
 
 1. Apply pre-admission refusals in the table order below: selector, current authorization,
-   trusted invocation context, input shape, version/schema, ship mode, then before-PR review: an
-   owner with `review.timing` at `before_pr` admits only a PR-mode request whose executor declares
-   `review_gate`. The executor's `caller_before_pr` is not checked.
+   trusted invocation context, fingerprint, input shape, version/schema, ship mode, then before-PR
+   review: an owner whose ship contract captures `before_pr` or `before_landing` admits only a
+   PR-mode request whose executor declares `review_gate`. The executor's `caller_before_pr` is not
+   checked.
    These checks also apply to pull receipt replay; the separate read-only receipt lookup below
    is for reconciliation across configuration/upgrades.
 2. Begin the owner store transaction. Its substrate is the task/reservation commit boundary
@@ -228,9 +230,9 @@ for a pull drain as for a local one.
    way.
    Also skip, into `crew_unavailable`, a task the requesting machine's same drain run
    (`run_context.run_id`) released for an `environment`, `transient`, `owner_route` or `provider`
-   failure, and every task when that run released one for an `environment` or `owner_route`
-   failure — the host itself is suppressed for the window; another drain may take them
-   [ORB-14257]. A `transient` release marked `owner_busy` (the leaf's owner call lost to the
+   failure, or by an operator cancel, and every task when that run released one for an
+   `environment` or `owner_route` failure — the host itself is suppressed for the window; another
+   drain may take them [ORB-14257]. A `transient` release marked `owner_busy` (the leaf's owner call lost to the
    owner's own lock-wait deadline) holds neither the task nor the host, and does not count
    against the task's release budget, for the task's first three such releases within the
    budget window; the owner ignores the mark on any other class and records every later busy
@@ -267,7 +269,8 @@ for a pull drain as for a local one.
    No local leaf run, branch, or worktree is created by this transaction.
 5. If none is eligible, persist an `idle` receipt with diagnostics. This changes receipt state but
    creates no task transition, claim, or reservation. End this refill pass on the first idle
-   response, sleep for the configured poll interval, and use a new request ID for the next poll.
+   response, sleep for the configured idle interval (`idle_sleep_seconds`, 60 seconds by default),
+   and use a new request ID for the next poll.
 
 The receipt stores owner-resolved ship configuration as of admission. Replays do not silently change
 the execution contract. Exact request retries may return the same task repeatedly; only one
@@ -406,7 +409,7 @@ with the current executor; preserve it for explicit recovery rather than rewriti
 | `claim` | `claim_id`, `reservation_id`, `reservation_expires_at`, runtime execution machine; absent for idle |
 | `claim_state` | Current phase at response time, separate from the stored admission receipt |
 | `ship` | Owner-resolved mode, base/landing branches, `before_pr`, `before_landing` (for this executor), completion policy, optional durable authorization reference and, only when `before_pr` or `before_landing` is on, the captured `review` contract (`contract_version`, `crew`, `budget`, `required_validation_commands`, and `baseline_commands` when the owner lists any) |
-| `deferred_conflicts[]` | Conflict exclusions with blocking tasks/reservations and selectors; `blocked_by` names the holder when known |
+| `deferred_conflicts[]` | Conflict exclusions with blocking tasks/reservations; `blocked_by` names the holder when known |
 | `crew_unavailable[]` | Ready candidates skipped because the executor cannot run their crew, with the reason; omitted when empty |
 | `os_unavailable[]` | Ready candidates skipped because their `os:` tags name no OS the executor runs, with the wait; omitted when empty |
 | `browser_kit_unavailable[]` | Ready candidates tagged `ui` skipped because the request declares no verified browser kit, with the wait; omitted when empty |
@@ -433,10 +436,10 @@ read, so a preflight cannot report a verdict admission would not reach.
 |---|---|
 | `unknown_selector` | Selector cannot resolve to the named owner workspace |
 | `capability_refused` | Destination is a replica or caller lacks required authority |
-| `invalid_input` | Required request, version/policy declaration, or drain context is missing or malformed |
-| `version_mismatch` | Caller binary version differs from owner |
 | `protocol_skew` | Caller and owner request fingerprints differ (or the owner predates fingerprints); refused before pull, with both fingerprints in the diagnosis |
+| `invalid_input` | Required request, version/policy declaration, or drain context is missing or malformed |
 | `protocol_mismatch` | Legacy probe report for differing integer revisions; current followers surface typed `protocol_skew` |
+| `version_mismatch` | Caller binary version differs from owner |
 | `ship_mode_unsupported` | A remote caller targets a local-only ship workspace |
 | `before_pr_unsupported` | The ship contract captures `before_pr` or `before_landing` (owner's `review.timing`, or a `review.before_landing_hosts` match for this executor) and the executor does not declare `review_gate`, or the ship mode is local (stored receipts may spell it `review_policy_unsupported`) |
 | `request_mismatch` | Existing request ID is reused with different input |
@@ -536,9 +539,9 @@ executor crew capability and provider-unavailable release under [ORB-13941], 202
 
 `TaskCommitBoundary::admission_storage_usage` reports full-receipt and permanent-tombstone
 counts and logical UTF-8 payload bytes. SQLite page and index overhead is additional. An
-idle receipt can compact immediately; a claim in claimed, running, or handed-off phase
-retains its full receipt. At a 30-second poll, one idle drain leaves 2,880 request identities
-per day even after compaction. No age-based tombstone deletion is supported.
+idle receipt is eligible to compact immediately; a claim in claimed, running, or handed-off phase
+retains its full receipt. At the default 60-second idle sleep, one idle drain leaves 1,440 request
+identities per day even after compaction. No age-based tombstone deletion is supported.
 
 Execution provenance is optional on persisted records for backward reading. Run origin is
 captured from the trusted runtime backend at insertion and is not updated by run upserts.
@@ -769,7 +772,7 @@ reads persisted handoffs; claimed leaves use `NoDiff` for this case.
 
 [ORB-13625] delivered the follower half. The owner's `orbit.task.pull` input is
 the caller's durable `AdmissionRequest` (request ID, caller version and schema,
-review policy, run context, and the ship contract its probe reported); it
+`caller_before_pr` and `review_gate`, run context, and the ship contract its probe reported); it
 answers `{receipt, claim_state}`. A follower drain also sends its window's crew capability as `crews` [ORB-13941].
 `orbit.drain.claim.bind` takes `claim_id`,
 `run_id` and the receipt's `ship`; `orbit.drain.claim.settle` takes `claim_id`,

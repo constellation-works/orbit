@@ -2,7 +2,7 @@
 type: design
 summary: "Glossary: Auditability"
 tags: ["auditability"]
-last_validated: 2026-10-15
+last_validated: 2026-10-19
 ---
 
 # Glossary: Auditability
@@ -11,7 +11,7 @@ This glossary covers Orbit-specific auditability terms only. Generic observabili
 
 | Term | Meaning |
 |------|---------|
-| **Audit channel** | One of Orbit's distinct audit storage paths: command audit rows, v2 envelope rows, loop-event rows, blobs, or invocation metrics. See [../2_design.md §1](../2_design.md#1-storage-roots-and-audit-channels). |
+| **Audit channel** | One of Orbit's distinct audit storage paths: command audit rows, v2 envelope rows, loop-event rows, blobs, global tracing events, or invocation metrics. See [../2_design.md §1](../2_design.md#1-storage-roots-and-audit-channels). |
 | **Blob reference** | A sha256 string stored in an audit event that points to redacted content-addressed payload bytes. See [../2_design.md §5](../2_design.md#5-retained-provider-and-tool-event-contracts). |
 | **Command audit row** | A compact SQLite `AuditEvent` record for a CLI or targeted runtime operation. See [../2_design.md §2](../2_design.md#2-command-audit-rows). |
 | **Coverage matrix** | The prescriptive map from operation class to required audit channel. See [../2_design.md §3](../2_design.md#3-tool-driven-and-runtime-audit-records) and [../specs/coverage-matrix.md](../specs/coverage-matrix.md). |
