@@ -9,7 +9,7 @@ doc_role: overview
 type: design
 summary: Partly implemented predictive admission — Orbit records per-task CPU and memory samples, builds resource profiles, forecasts host load, and supports shadow or forecast-based admission for local and pull drains; operational accuracy evidence remains limited.
 tags: [auto-concurrency, drain, capacity, admission]
-paths: ["crates/orbit-core/src/application/workspace_auto/classify.rs", "crates/orbit-core/src/application/pull_drain/refill/**", "crates/orbit-core/src/application/admission/**", "crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-core/src/application/job/pipeline/worker/**", "crates/orbit-config/src/registry/settings/machine.rs", "crates/orbit-types/src/workflow/run/state/drain.rs"]
+paths: ["crates/orbit-core/src/application/workspace_auto/classify.rs", "crates/orbit-core/src/application/pull_drain/refill/**", "crates/orbit-core/src/application/admission/**", "crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-core/src/application/job/pipeline/worker/**", "crates/orbit-config/src/registry/settings/machine.rs", "crates/orbit-types/src/workflow/run/state/drain/mod.rs"]
 related_features: [auto-concurrency, distributed-drain]
 related_artifacts: [ORB-15757]
 ---
@@ -131,7 +131,7 @@ alongside the original implementation work; source links follow the current
 | Gap-fit admission in local drains | [workspace_auto/classify.rs](../../../crates/orbit-core/src/application/workspace_auto/classify.rs), [admission/gap_fit.rs](../../../crates/orbit-core/src/application/admission/gap_fit.rs) | ORB-15772 |
 | Forecast admission for pull drains | [pull_drain/refill/](../../../crates/orbit-core/src/application/pull_drain/refill/mod.rs), [distributed/work_fit.rs](../../../crates/orbit-core/src/application/distributed/work_fit.rs) | ORB-15774 |
 | Host-only `[machine.auto_concurrency]` settings | [settings/machine.rs](../../../crates/orbit-config/src/registry/settings/machine.rs) | ORB-15769 |
-| Admission reasons in drain state, `orbit run show`, and readiness | [run/state/drain.rs](../../../crates/orbit-types/src/workflow/run/state/drain.rs), [run/admission_forecast.rs](../../../crates/orbit-cli/src/command/run/admission_forecast.rs) | ORB-15773 |
+| Admission reasons in drain state, `orbit run show`, and readiness | [run/state/drain/mod.rs](../../../crates/orbit-types/src/workflow/run/state/drain/mod.rs), [run/admission_forecast.rs](../../../crates/orbit-cli/src/command/run/admission_forecast.rs) | ORB-15773 |
 | Forecast recording and `orbit run profiles --accuracy` | [host_resource/forecast/record.rs](../../../crates/orbit-core/src/runtime/host_resource/forecast/record.rs), [host_resource/accuracy.rs](../../../crates/orbit-core/src/runtime/host_resource/accuracy.rs) | ORB-15775 |
 | macOS worker sampling from the process tree | [worker/usage_tree.rs](../../../crates/orbit-core/src/application/job/pipeline/worker/usage_tree.rs), [process/ancestry.rs](../../../crates/orbit-common/src/process/ancestry.rs) | ORB-15776 |
 | Native macOS worker CPU-unit calibration and provenance | [worker/usage_tree.rs](../../../crates/orbit-core/src/application/job/pipeline/worker/usage_tree.rs) | ORB-15994 |

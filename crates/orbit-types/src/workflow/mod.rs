@@ -12,8 +12,7 @@ mod final_recovery;
 pub mod handoff;
 mod host_evidence;
 mod job;
-mod pr_auto_fix;
-mod pr_completion;
+mod pr_recovery;
 mod reconciliation;
 mod review;
 mod review_evidence;
@@ -82,13 +81,13 @@ pub use job::{
     KnowledgeRunMetrics, RunEvent, RunStateUpdate, StepCondition, default_job_max_active_runs,
     default_max_iterations, default_retry_backoff_seconds,
 };
-pub use pr_auto_fix::{
+pub use pr_recovery::{
     PR_AUTO_FIX_ADMITTED_EVENT, PR_AUTO_FIX_BUDGET, PR_AUTO_FIX_CHECK_REPAIR_MARKER,
     PR_AUTO_FIX_CREWS_KEY, PR_AUTO_FIX_PUSHED_EVENT, PrAutoFixAttempt, PrAutoFixBlocker,
     PrAutoFixClaim, PrAutoFixDecision, PrAutoFixPush, decide_pr_auto_fix,
     is_pr_auto_fix_check_repair, pr_auto_fix_attempts, pr_auto_fix_pushes,
 };
-pub use pr_completion::{
+pub use pr_recovery::{
     PR_COMPLETION_MUTATION_STARTED_EVENT, pr_completion_has_mutation_provenance,
 };
 pub use reconciliation::{
@@ -187,8 +186,7 @@ pub use tag_instructions::{
 
 pub mod automation;
 
-mod pr_infrastructure;
-pub use pr_infrastructure::{
+pub use pr_recovery::{
     PR_INFRASTRUCTURE_RESERVED_EVENT, PrInfrastructureAdmission, PrInfrastructureEvidence,
     PrInfrastructureReservation, RequiredGate, decide_pr_infrastructure,
     pr_infrastructure_reservations,
@@ -207,8 +205,7 @@ pub use post_deploy::{
     PostDeployResult, RecordedPostDeploy, post_deploy_header,
 };
 
-mod pr_base_update;
-pub use pr_base_update::{
+pub use pr_recovery::{
     PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission, PrBaseUpdateReservation,
     decide_pr_base_update, pr_base_update_reservations,
 };
