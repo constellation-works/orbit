@@ -12,8 +12,8 @@ use orbit_types::record::FrictionStatus;
 use orbit_types::task::{ExternalRef, Task, TaskRelation, TaskRelationType, TaskStatus};
 use serde_json::{Value, json};
 
-use super::{enter_isolated_child, test_runtime};
 use crate::OrbitRuntime;
+use crate::application::task::tests::{enter_isolated_child, test_runtime};
 use crate::application::task::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, FinalRecoveryRequeueBound,
     TaskAddParams, TaskUpdateParams,
@@ -125,7 +125,7 @@ fn terminal_replay_finishes_side_effects_after_a_post_lock_read_failure() {
         });
         forge.closed.lock().unwrap().clear();
         let request = request(&runtime, &task, &repo, FinalRecoveryCompletion::Done);
-        super::super::final_recovery::FAIL_SIDE_EFFECT_READ.with(|fail| fail.set(true));
+        super::super::apply::FAIL_SIDE_EFFECT_READ.with(|fail| fail.set(true));
         let error = runtime
             .apply_final_recovery(&request, Some(&output))
             .expect_err("post-lock read fails once");

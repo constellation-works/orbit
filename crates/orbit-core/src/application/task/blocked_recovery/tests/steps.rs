@@ -6,7 +6,7 @@
 use orbit_types::workflow::FinalRecoveryDecision;
 use serde_json::json;
 
-use super::super::blocked_recovery_steps::decision_result;
+use super::super::steps::decision_result;
 
 #[test]
 fn only_the_envelope_result_reaches_the_decision_parser() {

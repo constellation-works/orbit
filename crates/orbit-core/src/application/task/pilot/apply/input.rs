@@ -15,8 +15,8 @@ use serde::Deserialize;
 use serde::de::{DeserializeOwned, Deserializer, Error as _};
 use serde_json::{Map, Value};
 
-use super::super::apply_admission::PreparedTaskSnapshot;
 use super::super::source::SourceSnapshot;
+use super::admission::PreparedTaskSnapshot;
 
 /// One input field, read without failing the parse.
 #[derive(Default)]

@@ -13,83 +13,83 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::application::task::{NoDiffClosure, PILOT_VERIFIED_NO_DIFF};
 
-use super::drain_promotion::{self, Approval, DrainAuthority};
+use super::super::drain_promotion::{self, Approval, DrainAuthority};
 
 #[derive(Clone)]
-pub(super) struct PreparedTaskSnapshot {
-    pub(super) context_files: Vec<String>,
-    pub(super) status: TaskStatus,
-    pub(super) complexity: Option<TaskComplexity>,
-    pub(super) title: String,
-    pub(super) tags: Vec<String>,
-    pub(super) material: Option<(String, String)>,
-    pub(super) status_neutral_fingerprint: Option<String>,
+pub(in super::super) struct PreparedTaskSnapshot {
+    pub(in super::super) context_files: Vec<String>,
+    pub(in super::super) status: TaskStatus,
+    pub(in super::super) complexity: Option<TaskComplexity>,
+    pub(in super::super) title: String,
+    pub(in super::super) tags: Vec<String>,
+    pub(in super::super) material: Option<(String, String)>,
+    pub(in super::super) status_neutral_fingerprint: Option<String>,
     /// Freshness-component digests captured with the fingerprint. Absent on a
     /// payload prepared before components were recorded; malformed input fails
     /// the apply instead of dropping the names.
-    pub(super) material_components: Option<BTreeMap<String, String>>,
+    pub(in super::super) material_components: Option<BTreeMap<String, String>>,
     /// History boundary used to prove a durable edit superseded preparation.
     /// Older payloads retain their existing drift refusal without that evidence.
-    pub(super) history_len: Option<usize>,
+    pub(in super::super) history_len: Option<usize>,
     /// Deterministic feasibility findings for the tools this task's acceptance
     /// criteria require, computed at preparation [ORB-11980].
-    pub(super) validation_tool_warnings: Vec<String>,
+    pub(in super::super) validation_tool_warnings: Vec<String>,
     /// Identity of the durable context creation grant the task held at
     /// preparation, `None` for none (or a payload prepared before grants).
-    pub(super) context_creation_identity: Option<String>,
+    pub(in super::super) context_creation_identity: Option<String>,
 }
 
-pub(super) struct ValidatedTask {
-    pub(super) task_id: String,
-    pub(super) after: Vec<String>,
-    pub(super) assessment: Value,
-    pub(super) admission: Option<Admission>,
+pub(in super::super) struct ValidatedTask {
+    pub(in super::super) task_id: String,
+    pub(in super::super) after: Vec<String>,
+    pub(in super::super) assessment: Value,
+    pub(in super::super) admission: Option<Admission>,
     /// Write `backlog` in the atomic pilot mutation itself (CI sweep).
-    pub(super) promote: bool,
+    pub(in super::super) promote: bool,
     /// Recorded as the typed decision of the pilot's history entry: a
     /// drain hold.
-    pub(super) history_decision: Option<orbit_types::task::TaskDecision>,
-    pub(super) complexity: TaskComplexity,
-    pub(super) operation_id: String,
+    pub(in super::super) history_decision: Option<orbit_types::task::TaskDecision>,
+    pub(in super::super) complexity: TaskComplexity,
+    pub(in super::super) operation_id: String,
     /// The typed native-OS finding, persisted as the audit's
     /// `native_os_hold`.
-    pub(super) required_os: Vec<crate::application::task::NativeOsRequirement>,
+    pub(in super::super) required_os: Vec<crate::application::task::NativeOsRequirement>,
     /// The typed owner-machine finding, persisted in the same hold.
-    pub(super) required_machine: Option<crate::application::task::MachineRequirement>,
+    pub(in super::super) required_machine: Option<crate::application::task::MachineRequirement>,
     /// The typed post-deploy finding, persisted as the audit's
     /// `post_deploy`. It holds no admission.
-    pub(super) post_deploy: Vec<super::PostDeployRequirement>,
+    pub(in super::super) post_deploy: Vec<super::super::PostDeployRequirement>,
     /// The typed UI finding: add the `ui` tag when the task lacks it.
-    pub(super) user_facing_ui: bool,
+    pub(in super::super) user_facing_ui: bool,
     /// Exact material certified by the atomic write, recovered from its audit
     /// on replay rather than adopted from a later task read.
-    pub(super) applied_material: Option<AppliedTaskMaterial>,
+    pub(in super::super) applied_material: Option<AppliedTaskMaterial>,
     /// The pilot job run that produced the assessment, persisted as the
     /// audit's `pilot_run_id`.
-    pub(super) pilot_run_id: Option<String>,
+    pub(in super::super) pilot_run_id: Option<String>,
 }
 
 /// The pilot's authorized output, sealed in the same atomic mutation as its
 /// receipt. Selectors and complexity are already carried by `ValidatedTask`.
 #[derive(Serialize, Deserialize)]
-pub(super) struct AppliedTaskMaterial {
-    pub(super) tags: Vec<String>,
-    pub(super) crew: Option<String>,
-    pub(super) crew_source: Option<String>,
-    pub(super) relations: Vec<TaskRelation>,
-    pub(super) material: Option<(String, String)>,
-    pub(super) status_neutral_fingerprint: Option<String>,
-    pub(super) material_components: Option<BTreeMap<String, String>>,
+pub(in super::super) struct AppliedTaskMaterial {
+    pub(in super::super) tags: Vec<String>,
+    pub(in super::super) crew: Option<String>,
+    pub(in super::super) crew_source: Option<String>,
+    pub(in super::super) relations: Vec<TaskRelation>,
+    pub(in super::super) material: Option<(String, String)>,
+    pub(in super::super) status_neutral_fingerprint: Option<String>,
+    pub(in super::super) material_components: Option<BTreeMap<String, String>>,
 }
 
 /// One task's promotion decision, by the authority that requested it.
-pub(super) enum Admission {
+pub(in super::super) enum Admission {
     CiSweep(Value),
     Drain(Value),
 }
 
 /// Who, if anyone, authorized this apply to move `proposed` work to backlog.
-pub(super) enum PromotionAuthority<'a> {
+pub(in super::super) enum PromotionAuthority<'a> {
     None,
     /// A CI sweep's exact filing record; `promotion_authorized` is the literal
     /// authority, carried into each decision.
@@ -98,7 +98,7 @@ pub(super) enum PromotionAuthority<'a> {
     Drain(DrainAuthority),
 }
 
-pub(super) enum CheckedAdmission {
+pub(in super::super) enum CheckedAdmission {
     Apply(Option<Admission>),
     Superseded(Value),
 }
@@ -107,7 +107,7 @@ pub(super) enum CheckedAdmission {
 /// the decision whether this apply made the transition. A hold found at the
 /// approval boundary turns the decision into a withhold with its own
 /// classification.
-pub(super) fn approve_promoted(
+pub(in super::super) fn approve_promoted(
     runtime: &OrbitRuntime,
     validated: &mut ValidatedTask,
     snapshot: &PreparedTaskSnapshot,
@@ -141,7 +141,10 @@ pub(super) fn approve_promoted(
 /// pilot write landed, recording on the decision whether it was archived and
 /// on which commits, or why it stays proposed. The pilot write already
 /// stands, so a failed close is reported rather than failing the apply.
-pub(super) fn close_verified_no_diff(runtime: &OrbitRuntime, validated: &mut ValidatedTask) {
+pub(in super::super) fn close_verified_no_diff(
+    runtime: &OrbitRuntime,
+    validated: &mut ValidatedTask,
+) {
     let decision = match validated.admission.as_mut() {
         Some(Admission::CiSweep(decision) | Admission::Drain(decision))
             if decision["classification"] == PILOT_VERIFIED_NO_DIFF =>

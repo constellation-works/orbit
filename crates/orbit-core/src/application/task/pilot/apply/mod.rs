@@ -6,6 +6,7 @@
 //! own ([`partition`], one task at a time in [`task`]), and [`report`] rolls
 //! the decisions up into the step output.
 
+pub(super) mod admission;
 mod input;
 mod partition;
 mod report;
@@ -21,10 +22,10 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::application::sweep_filing::ci_failure::admission as ci_failure_admission;
 
-use super::apply_admission::{PreparedTaskSnapshot, PromotionAuthority};
 use super::drain_promotion::DrainAuthority;
 use super::requested_workspace_root;
 use super::source::SourceSnapshot;
+use admission::{PreparedTaskSnapshot, PromotionAuthority};
 use input::{ApplyInput, AuthorityInput, ExcludedTask, PreparedPartition, Record};
 use partition::{Partition, settle_partition};
 use report::Report;
