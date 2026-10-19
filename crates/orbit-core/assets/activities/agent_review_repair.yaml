@@ -167,6 +167,14 @@ spec:
        finding. You may still run focused tests to check a finding or a
        repair. A listed failure that is not known red rejects the candidate
        whatever you report.
+       Choose additional checks from the changed behavior and the workspace's
+       validation policy. Do not add `cargo test --workspace`, `make ci`, or
+       another full-workspace suite as a blanket review gate. The owner's
+       `required_validation_commands` remain the full-suite contract; a
+       focused check may investigate a finding without creating another
+       workspace-wide requirement. When the host has not yet supplied a
+       listed required command, satisfy it under the rules below rather than
+       inventing a substitute suite.
        When the manifest names `evidence_carried`, those entries were checked
        on its `from_tree` and Orbit verified that this candidate carries the
        same patch onto a new base; treat them as verified for `candidate.tree`.
@@ -227,6 +235,9 @@ spec:
        run with outcome `passed`, `failed`, `denied` (the runner refused it), or
        `not_run`. Never record a skipped or denied command as passed, and never
        drop a record to make the set look clean.
+       A nonzero test-runner exit caused solely by a verified sandbox
+       refusal is `denied`, as described in step 5, rather than a failed
+       candidate check. Classify that cause before starting a base replay.
 
        When you run a host-required command in any wrapped form, set `check`
        to that host-required command string from the manifest, not the wrapped
@@ -391,7 +402,8 @@ spec:
          `command`, and the task `artifact` path where its result will arrive.
          Keep its validation record `required` and `not_run` or `denied`.
          External checks belong in this list; substantive open findings still
-         reject the candidate. A failed check is never owner-side follow-up:
+         reject the candidate. A genuine test assertion or product failure is
+         never owner-side follow-up:
          the owner cannot pass a record that failed on the candidate. A
          required command that repository guidance says cannot run on this
          host's platform and that refused without
@@ -399,11 +411,25 @@ spec:
          `not_run` and, when it is the only remaining work, name the run on
          the supported platform that the guidance specifies as external
          evidence. Never accept a run that reported incomplete analysis.
-         A test or required command this sandbox stops because a nested
-         sandbox cannot apply (`sandbox_apply: Operation not permitted`, no
-         Bubblewrap namespaces) or that skipped itself for that reason did
-         not pass: record it `not_run` or `denied` and, when it is the only
-         remaining work, list it with kind `host_sandbox_test` and `os`
+         Classify the cause before treating a nonzero test runner exit as a
+         candidate defect. A test or required command this sandbox stops
+         because a nested sandbox cannot apply
+         (`sandbox_apply: Operation not permitted`, no
+         Bubblewrap namespaces), or because the sandbox refuses a required
+         child-process spawn, is unavailable evidence. This includes a test
+         runner that exits nonzero after that refusal: record the affected
+         check `required` and `denied` (or `not_run` for a self-skip), keeping
+         the exact denial, command, affected tests, and evidence for the
+         sandbox cause in `note`. It did not pass or establish a candidate
+         defect. A bare spawn error such as `No such file or directory` is
+         not proof of sandbox refusal: verify the executable and distinguish
+         an explicit sandbox denial or supported host replay from a missing
+         dependency or product failure. A passing base alone does not prove
+         the sandbox caused the candidate failure. Do not relabel a genuine
+         failed assertion, mixed run with unresolved real failures, or
+         unconfirmed spawn failure as unavailable; retain and investigate it.
+         When unavailable checks are the only remaining work, list each
+         with kind `host_sandbox_test` and `os`
          (`linux` or `macos`, the OS it needs). On a claimed leaf the host
          runs it outside this sandbox at settlement; otherwise a Linux owner
          whose host can create namespaces runs a `linux` one at the held
@@ -411,6 +437,12 @@ spec:
          owner-required command, or
          `cargo test -p <crate> --test <target> [<filter>]` with no other
          options and no shell syntax. Any other command is refused.
+         Return `incomplete` with no open defect for the sandbox refusal
+         alone; settlement can hold for the named evidence or accept after
+         the host executes it. Never reject solely because this review
+         sandbox could not execute the check. If a broad diagnostic exposed
+         the refusal, identify the affected test with the admitted focused
+         selector above rather than requesting a new full-workspace replay.
          A run that passed but printed `DEFERRED: …` lines deferred a
          sandbox-confined path it never executed: list each such line in
          the record's `deferred`; that pass does not count as running the

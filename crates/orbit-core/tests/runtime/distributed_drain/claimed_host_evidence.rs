@@ -25,11 +25,17 @@ use orbit_types::workflow::{
 const ARTIFACT: &str = "evidence/host-sandbox-probe.json";
 const LOG_ARTIFACT: &str = "evidence/host-sandbox-probe.log.json";
 
+mod sandbox;
+
 /// A claimed leaf whose follower resolves `cargo` to a stand-in running
 /// `tests/host/<target>.sh` from the checkout it is started in, with the
 /// candidate's probe committed as `probe`, and its review admitted under the
 /// returned attempt.
 fn leaf_with_probe(probe: &str) -> (ReviewedLeaf, String) {
+    leaf_with_probe_at(probe, false)
+}
+
+fn leaf_with_probe_at(probe: &str, before_landing: bool) -> (ReviewedLeaf, String) {
     let home = PathBuf::from(std::env::var("HOME").expect("the isolated child's HOME"));
     let bin = home.join("host-evidence-bin");
     std::fs::create_dir_all(&bin).unwrap();
@@ -37,15 +43,29 @@ fn leaf_with_probe(probe: &str) -> (ReviewedLeaf, String) {
     // `cargo test -p <package> --test <target> [filter] -- --nocapture`
     std::fs::write(&cargo, "#!/bin/sh\nexec sh \"tests/host/$5.sh\"\n").unwrap();
     std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let mut leaf = ReviewedLeaf::admit_with_follower_config(&format!(
+    let follower_config = format!(
         "[workflow.validation_env]\nlogin_shell = false\npath = [\"{}\"]\n",
         bin.display()
-    ));
+    );
+    let mut leaf = if before_landing {
+        ReviewedLeaf::admit_from(
+            &format!(
+                "[review]\nbefore_landing = true\n\n[operation]\nreview_crew = \"{}\"\n",
+                super::claimed_review::REVIEW_CREW
+            ),
+            &follower_config,
+        )
+    } else {
+        ReviewedLeaf::admit_with_follower_config(&follower_config)
+    };
     let repo = leaf.pair.follower_repo.clone();
     std::fs::create_dir_all(repo.join("tests/host")).unwrap();
     std::fs::write(repo.join("tests/host/probe.sh"), probe).unwrap();
     git(&repo, &["add", "tests"]);
     git(&repo, &["commit", "-q", "-m", "Add the sandbox probe"]);
+    if before_landing {
+        leaf.gate_input["before_landing"] = json!(true);
+    }
     let admitted = leaf.admit_review();
     let attempt_id = admitted["attempt_id"].as_str().unwrap().to_string();
     (leaf, attempt_id)
