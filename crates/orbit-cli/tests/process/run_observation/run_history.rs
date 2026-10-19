@@ -189,6 +189,28 @@ fn history_filters_before_limit_and_shows_tasks_and_duration() {
             .is_empty(),
         "{text}"
     );
+    // Plain output labels its timestamp and duration columns only on request,
+    // with the same columns the table shows.
+    let plain = |extra: &[&str]| {
+        let output = fixture
+            .orbit()
+            .args(["run", "history", "--no-reconcile", "--format", "plain"])
+            .args(extra)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let bare = plain(&[]);
+    let headed = plain(&["--header"]);
+    let (plain_header, rows) = headed.split_once('\n').unwrap();
+    assert_eq!(
+        plain_header.split('\t').collect::<Vec<_>>(),
+        header.split_whitespace().collect::<Vec<_>>(),
+        "{headed}"
+    );
+    assert_eq!(rows, bare, "--header only prepends the header row");
+    assert!(!bare.starts_with("RUN_ID"), "{bare}");
     let no_task_json =
         fixture.json(&["run", "history", "--no-reconcile", "--json", "--limit", "1"]);
     assert!(no_task_json["runs"][0]["task_ids"].is_null());

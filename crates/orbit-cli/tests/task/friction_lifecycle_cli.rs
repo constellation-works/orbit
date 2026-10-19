@@ -164,7 +164,7 @@ fn replica_closes_legacy_local_frictions_with_audit_without_owner_mutations() {
     fixture.json(&[
         "friction", "update", &ids[1], "--status", "triaged", "--json",
     ]);
-    let before = fixture.json(&["friction", "list", "--json"]);
+    let before = fixture.json(&["friction", "list", "--status", "all", "--json"]);
 
     // Monthly IDs may collide with unrelated records on the owner. All writes
     // must stay in the replica's local partition, including a missing-local ID.
@@ -191,7 +191,15 @@ fn replica_closes_legacy_local_frictions_with_audit_without_owner_mutations() {
         ]);
         owner_only_id = created["id"].as_str().unwrap().to_string();
     }
-    let owner_before = fixture.json(&["--workspace", owner, "friction", "list", "--json"]);
+    let owner_before = fixture.json(&[
+        "--workspace",
+        owner,
+        "friction",
+        "list",
+        "--status",
+        "all",
+        "--json",
+    ]);
     assert!(
         owner_before
             .as_array()
@@ -220,7 +228,10 @@ fn replica_closes_legacy_local_frictions_with_audit_without_owner_mutations() {
         ])
         .assert()
         .success();
-    assert_eq!(fixture.json(&["friction", "list", "--json"]), before);
+    assert_eq!(
+        fixture.json(&["friction", "list", "--status", "all", "--json"]),
+        before
+    );
 
     for args in [
         vec![
@@ -273,7 +284,10 @@ fn replica_closes_legacy_local_frictions_with_audit_without_owner_mutations() {
             .env("ORBIT_OPERATOR", "1")
             .assert()
             .failure();
-        assert_eq!(fixture.json(&["friction", "list", "--json"]), before);
+        assert_eq!(
+            fixture.json(&["friction", "list", "--status", "all", "--json"]),
+            before
+        );
     }
     let refused_move = json!({
         "id": ids[0], "status": "resolved", "body": "Must remain unchanged",
@@ -294,7 +308,10 @@ fn replica_closes_legacy_local_frictions_with_audit_without_owner_mutations() {
         .command(&["friction", "resolve", &owner_only_id, "--json"])
         .assert()
         .failure();
-    assert_eq!(fixture.json(&["friction", "list", "--json"]), before);
+    assert_eq!(
+        fixture.json(&["friction", "list", "--status", "all", "--json"]),
+        before
+    );
     let prior_audit = fixture.json(&["audit", "list", "--json"]);
     let prior_audit_id = prior_audit
         .as_array()
@@ -332,16 +349,27 @@ fn replica_closes_legacy_local_frictions_with_audit_without_owner_mutations() {
         fixture.json(&["friction", "stats", "--json"])["resolved"],
         2
     );
-    let after = fixture.json(&["friction", "list", "--json"]);
+    let after = fixture.json(&["friction", "list", "--status", "all", "--json"]);
     for status in ["open", "triaged"] {
         fixture
             .command(&["friction", "update", &ids[0], "--status", status, "--json"])
             .assert()
             .failure();
-        assert_eq!(fixture.json(&["friction", "list", "--json"]), after);
+        assert_eq!(
+            fixture.json(&["friction", "list", "--status", "all", "--json"]),
+            after
+        );
     }
     assert_eq!(
-        fixture.json(&["--workspace", owner, "friction", "list", "--json"]),
+        fixture.json(&[
+            "--workspace",
+            owner,
+            "friction",
+            "list",
+            "--status",
+            "all",
+            "--json"
+        ]),
         owner_before
     );
 
@@ -885,6 +913,97 @@ fn friction_update_without_edits_names_flags_on_the_cli_and_fields_over_the_tool
         ));
 }
 
+fn friction_list_defaults_to_unresolved_newest_first_and_labels_plain_columns_on_request() {
+    let fixture = Fixture::new();
+    let add = |body: &str| {
+        fixture.json(&[
+            "friction", "add", "--body", body, "--model", "codex", "--json",
+        ])["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let oldest = add("Oldest open friction");
+    let triaged = add("Triaged friction");
+    let resolved = add("Resolved friction");
+    let newest = add("Newest open friction");
+    fixture.json(&[
+        "friction", "update", &triaged, "--status", "triaged", "--json",
+    ]);
+    fixture.json(&[
+        "friction", "update", &resolved, "--status", "resolved", "--json",
+    ]);
+    let ids = |listed: serde_json::Value| -> Vec<String> {
+        listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let plain = |args: &[&str]| -> String {
+        let output = fixture
+            .command(args)
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        String::from_utf8(output.stdout).unwrap()
+    };
+
+    assert_eq!(
+        ids(fixture.json(&["friction", "list", "--json"])),
+        [newest.as_str(), triaged.as_str(), oldest.as_str()],
+        "the default lists open and triaged records, newest first"
+    );
+    assert_eq!(
+        ids(fixture.json(&["friction", "list", "--status", "all", "--json"])),
+        [
+            newest.as_str(),
+            resolved.as_str(),
+            triaged.as_str(),
+            oldest.as_str()
+        ],
+        "`--status all` lists every status"
+    );
+    assert_eq!(
+        ids(fixture.json(&[
+            "friction", "list", "--status", "all", "--order", "oldest", "--json",
+        ])),
+        [
+            oldest.as_str(),
+            triaged.as_str(),
+            resolved.as_str(),
+            newest.as_str()
+        ],
+        "`--order oldest` restores creation order"
+    );
+    assert_eq!(
+        ids(fixture.json(&["friction", "list", "--status", "resolved,triaged", "--json",])),
+        [resolved.as_str(), triaged.as_str()],
+        "a comma-separated status filter admits each named status"
+    );
+    fixture
+        .command(&["friction", "list", "--status", "closed", "--json"])
+        .assert()
+        .failure();
+
+    let bare = plain(&["friction", "list", "--format", "plain"]);
+    let first_fields = bare
+        .lines()
+        .map(|line| line.split('\t').next().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        first_fields,
+        [newest.as_str(), triaged.as_str(), oldest.as_str()],
+        "plain output without --header is records only: {bare}"
+    );
+    let headed = plain(&["friction", "list", "--format", "plain", "--header"]);
+    let (header, rows) = headed.split_once('\n').unwrap();
+    assert_eq!(header, "ID\tSTATUS\tMODEL\tTAGS\tTASK\tTITLE");
+    assert_eq!(rows, bare, "--header only prepends the header row");
+}
+
 #[test]
 fn friction_tool_input_is_checked_against_the_spec() {
     for (name, check) in [
@@ -925,6 +1044,11 @@ fn friction_clear_semantics_and_replica_admission() {
         (
             "replica_closes_legacy_local_frictions_with_audit_without_owner_mutations",
             replica_closes_legacy_local_frictions_with_audit_without_owner_mutations as fn(),
+        ),
+        (
+            "friction_list_defaults_to_unresolved_newest_first_and_labels_plain_columns_on_request",
+            friction_list_defaults_to_unresolved_newest_first_and_labels_plain_columns_on_request
+                as fn(),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");

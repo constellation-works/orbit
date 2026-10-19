@@ -130,12 +130,22 @@ fn list_in(store: &dyn FrictionStoreBackend, input: &OperationInput) -> Result<V
     let (month_from, month_to) = month_bounds
         .map(|(from, to)| (Some(from), Some(to)))
         .unwrap_or((None, None));
+    let newest_first = match input.optional_string("order")?.as_deref() {
+        None | Some("oldest") => false,
+        Some("newest") => true,
+        Some(value) => {
+            return Err(OrbitError::InvalidInput(format!(
+                "`order` must be `oldest` or `newest`, got '{value}'"
+            )));
+        }
+    };
     let filter = FrictionListFilter {
         model: input.optional_string("model")?,
-        status: input
+        statuses: input
             .optional_string("status")?
-            .map(|status| parse_status(&status))
-            .transpose()?,
+            .map(|statuses| parse_status_filter(&statuses))
+            .transpose()?
+            .unwrap_or_default(),
         tag: input.optional_string("tag")?,
         q: input.optional_string("q")?,
         from: input
@@ -150,6 +160,7 @@ fn list_in(store: &dyn FrictionStoreBackend, input: &OperationInput) -> Result<V
             .or(month_to),
         limit: input.optional_count("limit")?,
         offset: input.optional_count("offset")?.unwrap_or(0),
+        newest_first,
     };
     let records = store
         .list(&filter)?
@@ -339,6 +350,19 @@ fn parse_month_bounds(raw: &str) -> Result<(DateTime<Utc>, DateTime<Utc>), Orbit
         .single()
         .ok_or_else(|| OrbitError::InvalidInput(format!("invalid `month`: {raw}")))?;
     Ok((start, end_exclusive - chrono::Duration::nanoseconds(1)))
+}
+
+/// A list's status filter: one status, several comma-separated, or `all`
+/// for every status (an empty filter).
+fn parse_status_filter(raw: &str) -> Result<Vec<FrictionStatus>, OrbitError> {
+    if raw.trim() == "all" {
+        return Ok(Vec::new());
+    }
+    raw.split(',')
+        .map(str::trim)
+        .filter(|status| !status.is_empty())
+        .map(parse_status)
+        .collect()
 }
 
 fn parse_status(raw: &str) -> Result<FrictionStatus, OrbitError> {

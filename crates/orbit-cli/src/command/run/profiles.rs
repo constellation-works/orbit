@@ -47,8 +47,11 @@ deliveries, and `delivery_peak_cpu` and `delivery_peak_memory_bytes` (`p50` and 
 effective auto-concurrency mode `shadow` or `enforce` recorded each admission pass over the last \
 30 days by default: the forecast 5, 10, 20 and 30 minutes ahead, counting what the pass admitted, against \
 the host's measured CPU and memory for that minute. Error is forecast minus measured: MEAN_ERR \
-is its mean, UNDER how often the forecast was below the measured load, and WORST the largest \
-miss with the minute it forecast. PENDING counts target minutes that have not fully ended at \
+is its mean, MAE its mean absolute value, UNDER how often the forecast was below the measured \
+load, and WORST the largest miss with the minute it forecast. By default each offset shows a \
+summary: PAIRS, the CPU mean error, MAE and under-rate, and the memory mean error and \
+under-rate, with units in the headers. `--wide` prints every column instead, including the \
+worst misses, the unmeasured counts and the attributed (ATTR_) errors. PENDING counts target minutes that have not fully ended at \
 report time, even if partly measured; MISSING counts ended minutes without measurements. \
 MISSING splits into UNSAMPLED, when no delivery run was live in that minute, PARTIAL, when a \
 delivery overlapped the minute but none was running for all of it, and GAP, when a delivery was \
@@ -85,7 +88,7 @@ a drain/time cohort is an operator selection, not proof of homogeneous configura
 Per-task profiles are a separate population; sparse deliveries or wide spread do not become \
 calibrated confidence from selecting an accuracy cohort.\n\n\
 Examples:\n  orbit run profiles\n  orbit run profiles --json\n  orbit run profiles --accuracy\n  \
-orbit run profiles --accuracy --json\n  \
+orbit run profiles --accuracy --wide\n  orbit run profiles --accuracy --json\n  \
 orbit run profiles --accuracy --since 2026-10-15T00:00:00Z --drain <RUN> --mode enforce --json"
 )]
 pub struct RunProfilesArgs {
@@ -101,6 +104,9 @@ pub struct RunProfilesArgs {
     /// Select the recorded admission mode: shadow or enforce (accuracy only)
     #[arg(long, requires = "accuracy", value_parser = ["shadow", "enforce"], hide_possible_values = true)]
     pub mode: Option<String>,
+    /// Print every per-offset accuracy column instead of the summary (accuracy only)
+    #[arg(long, requires = "accuracy")]
+    pub wide: bool,
 }
 
 impl Execute for RunProfilesArgs {
@@ -113,7 +119,7 @@ impl Execute for RunProfilesArgs {
             }
             selection.drain = self.drain;
             selection.mode = self.mode;
-            return accuracy(runtime, selection, report_at);
+            return accuracy(runtime, selection, report_at, self.wide);
         }
         let profiles = runtime.resource_profiles()?;
         let doc = json!({
@@ -239,11 +245,13 @@ fn build_flags(profiles: &[std::sync::Arc<ResourceProfile>]) -> Option<String> {
     Some(text)
 }
 
-/// `--accuracy`: per-offset forecast error, then per-drain shadow and enforce decisions.
+/// `--accuracy`: per-offset forecast error (a summary, or every column when
+/// `wide`), then per-drain shadow and enforce decisions.
 fn accuracy(
     runtime: &OrbitRuntime,
     selection: AccuracySelection,
     report_at: DateTime<Utc>,
+    wide: bool,
 ) -> CommandOut {
     use crate::output::table::{Column, Table};
     use comfy_table::Cell;
@@ -253,61 +261,11 @@ fn accuracy(
     let doc = serde_json::to_value(&report).map_err(|error| {
         orbit_core::OrbitError::Execution(format!("encode forecast accuracy: {error}"))
     })?;
-    let mut offsets = Table::new(vec![
-        Column::new("OFFSET").fixed(),
-        Column::new("PAIRS").fixed(),
-        Column::new("PENDING").fixed(),
-        Column::new("MISSING").fixed(),
-        Column::new("UNSAMPLED").fixed(),
-        Column::new("PARTIAL").fixed(),
-        Column::new("GAP").fixed(),
-        Column::new("CPU_MEAN_ERR").fixed(),
-        Column::new("CPU_MAE").fixed(),
-        Column::new("CPU_UNDER").fixed(),
-        Column::new("CPU_WORST").fixed(),
-        Column::new("MEM_MEAN_ERR").fixed(),
-        Column::new("MEM_MAE").fixed(),
-        Column::new("MEM_UNDER").fixed(),
-        Column::new("MEM_WORST").fixed(),
-        Column::new("ATTR_PAIRS").fixed(),
-        Column::new("ATTR_CPU_MEAN_ERR").fixed(),
-        Column::new("ATTR_CPU_MAE").fixed(),
-        Column::new("ATTR_CPU_UNDER").fixed(),
-        Column::new("ATTR_CPU_WORST").fixed(),
-        Column::new("ATTR_MEM_MEAN_ERR").fixed(),
-        Column::new("ATTR_MEM_MAE").fixed(),
-        Column::new("ATTR_MEM_UNDER").fixed(),
-        Column::new("ATTR_MEM_WORST"),
-    ]);
-    for offset in &report.offsets {
-        let mut row = vec![
-            Cell::new(format!("+{}m", offset.offset_minutes)),
-            Cell::new(if offset.unmeasured > 0 {
-                format!("{} ({} unmeasured)", offset.paired, offset.unmeasured)
-            } else {
-                offset.paired.to_string()
-            }),
-            Cell::new(offset.pending),
-            Cell::new(offset.missing),
-            Cell::new(offset.unsampled),
-            Cell::new(offset.partial),
-            Cell::new(offset.gap),
-        ];
-        row.extend(error_cells(&offset.cpu, |cores| {
-            format!("{cores:+.1} cores")
-        }));
-        row.extend(error_cells(&offset.memory, |bytes| {
-            format!("{:+.1} GiB", bytes / GIB)
-        }));
-        row.push(Cell::new(offset.attributed_paired));
-        row.extend(error_cells(&offset.attributed_cpu, |cores| {
-            format!("{cores:+.1} cores")
-        }));
-        row.extend(error_cells(&offset.attributed_memory, |bytes| {
-            format!("{:+.1} GiB", bytes / GIB)
-        }));
-        offsets.add_row(row);
-    }
+    let offsets = if wide {
+        wide_offsets(&report)
+    } else {
+        summary_offsets(&report)
+    };
     let mut drains = Table::new(vec![
         Column::new("WORKSPACE").fixed(),
         Column::new("DRAIN").fixed(),
@@ -383,6 +341,108 @@ fn accuracy(
         ],
     )
     .into())
+}
+
+/// Every per-offset column: maturity counts, raw and attributed errors with
+/// their worst misses (`--accuracy --wide`).
+fn wide_offsets(report: &ForecastAccuracy) -> crate::output::table::Table {
+    use crate::output::table::{Column, Table};
+    use comfy_table::Cell;
+
+    let mut offsets = Table::new(vec![
+        Column::new("OFFSET").fixed(),
+        Column::new("PAIRS").fixed(),
+        Column::new("PENDING").fixed(),
+        Column::new("MISSING").fixed(),
+        Column::new("UNSAMPLED").fixed(),
+        Column::new("PARTIAL").fixed(),
+        Column::new("GAP").fixed(),
+        Column::new("CPU_MEAN_ERR").fixed(),
+        Column::new("CPU_MAE").fixed(),
+        Column::new("CPU_UNDER").fixed(),
+        Column::new("CPU_WORST").fixed(),
+        Column::new("MEM_MEAN_ERR").fixed(),
+        Column::new("MEM_MAE").fixed(),
+        Column::new("MEM_UNDER").fixed(),
+        Column::new("MEM_WORST").fixed(),
+        Column::new("ATTR_PAIRS").fixed(),
+        Column::new("ATTR_CPU_MEAN_ERR").fixed(),
+        Column::new("ATTR_CPU_MAE").fixed(),
+        Column::new("ATTR_CPU_UNDER").fixed(),
+        Column::new("ATTR_CPU_WORST").fixed(),
+        Column::new("ATTR_MEM_MEAN_ERR").fixed(),
+        Column::new("ATTR_MEM_MAE").fixed(),
+        Column::new("ATTR_MEM_UNDER").fixed(),
+        Column::new("ATTR_MEM_WORST"),
+    ]);
+    for offset in &report.offsets {
+        let mut row = vec![
+            Cell::new(format!("+{}m", offset.offset_minutes)),
+            Cell::new(if offset.unmeasured > 0 {
+                format!("{} ({} unmeasured)", offset.paired, offset.unmeasured)
+            } else {
+                offset.paired.to_string()
+            }),
+            Cell::new(offset.pending),
+            Cell::new(offset.missing),
+            Cell::new(offset.unsampled),
+            Cell::new(offset.partial),
+            Cell::new(offset.gap),
+        ];
+        row.extend(error_cells(&offset.cpu, |cores| {
+            format!("{cores:+.1} cores")
+        }));
+        row.extend(error_cells(&offset.memory, |bytes| {
+            format!("{:+.1} GiB", bytes / GIB)
+        }));
+        row.push(Cell::new(offset.attributed_paired));
+        row.extend(error_cells(&offset.attributed_cpu, |cores| {
+            format!("{cores:+.1} cores")
+        }));
+        row.extend(error_cells(&offset.attributed_memory, |bytes| {
+            format!("{:+.1} GiB", bytes / GIB)
+        }));
+        offsets.add_row(row);
+    }
+    offsets
+}
+
+/// The per-offset summary `--accuracy` prints by default: pairs and the raw
+/// CPU and memory errors an operator reads first, with each unit named once
+/// in its header.
+fn summary_offsets(report: &ForecastAccuracy) -> crate::output::table::Table {
+    use crate::output::table::{Column, Table};
+    use comfy_table::Cell;
+
+    let mut offsets = Table::new(vec![
+        Column::new("OFFSET").fixed(),
+        Column::new("PAIRS").number(),
+        Column::new("CPU_MEAN_ERR (cores)").number(),
+        Column::new("CPU_MAE (cores)").number(),
+        Column::new("CPU_UNDER (%)").number(),
+        Column::new("MEM_MEAN_ERR (GiB)").number(),
+        Column::new("MEM_UNDER (%)").number(),
+    ]);
+    let signed = |value: Option<f64>| value.map_or("-".to_string(), |value| format!("{value:+.1}"));
+    let percent =
+        |rate: Option<f64>| rate.map_or("-".to_string(), |rate| format!("{:.0}", rate * 100.0));
+    for offset in &report.offsets {
+        offsets.add_row(vec![
+            Cell::new(format!("+{}m", offset.offset_minutes)),
+            Cell::new(offset.paired),
+            Cell::new(signed(offset.cpu.mean_error)),
+            Cell::new(
+                offset
+                    .cpu
+                    .mean_absolute_error
+                    .map_or("-".to_string(), |mae| format!("{mae:.1}")),
+            ),
+            Cell::new(percent(offset.cpu.under_rate)),
+            Cell::new(signed(offset.memory.mean_error.map(|bytes| bytes / GIB))),
+            Cell::new(percent(offset.memory.under_rate)),
+        ]);
+    }
+    offsets
 }
 
 fn summary(report: &ForecastAccuracy) -> String {

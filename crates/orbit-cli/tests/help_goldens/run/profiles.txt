@@ -21,18 +21,24 @@ Options:
       --mode <MODE>
           Select the recorded admission mode: shadow or enforce (accuracy only)
 
+      --wide
+          Print every per-offset accuracy column instead of the summary (accuracy only)
+
       --format <MODE>
           Output format (default: auto — a table on a terminal, plain text when piped)
 
           Possible values:
           - auto:   Decide from the sink: a table on a terminal, plain text otherwise
           - table:  Aligned columns with a header
-          - plain:  Untruncated text with tab-separated fields and no header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
           - json:   A single JSON document
           - ndjson: One complete JSON document per line
 
       --json
           Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
 
   -h, --help
           Print help (see a summary with '-h')
@@ -45,7 +51,7 @@ BUILD_FLAG marks no-diff profiles, and templates whose tasks are `no-diff-expect
 
 `--json` emits every profile with its full per-minute series (alive, cpu_cores, cpu_stddev, memory_bytes, memory_mean_bytes, memory_stddev_bytes), its deliveries, its flagged deliveries, and `delivery_peak_cpu` and `delivery_peak_memory_bytes` (`p50` and `p90`).
 
-`--accuracy` reports instead how well the host load forecast held up, from what drains in effective auto-concurrency mode `shadow` or `enforce` recorded each admission pass over the last 30 days by default: the forecast 5, 10, 20 and 30 minutes ahead, counting what the pass admitted, against the host's measured CPU and memory for that minute. Error is forecast minus measured: MEAN_ERR is its mean, UNDER how often the forecast was below the measured load, and WORST the largest miss with the minute it forecast. PENDING counts target minutes that have not fully ended at report time, even if partly measured; MISSING counts ended minutes without measurements. MISSING splits into UNSAMPLED, when no delivery run was live in that minute, PARTIAL, when a delivery overlapped the minute but none was running for all of it, and GAP, when a delivery was running for the whole minute but wrote no host row. The sampler records a host minute only when a worker saw it whole, so the minute a delivery starts or finishes in is PARTIAL, not a sampling defect. PENDING plus MISSING is the compatible unmeasured count. Only ended measured minutes form error pairs. Below, per drain, its shadow passes against what it admitted: WOULD_HOLD counts the tasks it admitted that gap fit would have held, WOULD_ADD those gap fit would have admitted that it did not. ENFORCE_ADMITTED counts the distinct tasks local enforce passes admitted and GAP_HELD the distinct tasks gap fit held; both stay on enforce passes only. Pull drains record one forecast per request, counting a returned claim. PULL_REQUESTS counts these forecasts, PULL_SENT the requests sent to the owner, PULL_WOULD_HOLD the shadow requests enforce would have held because no work fit, and PULL_HELD the enforce requests held for the same reason. `--json` adds every forecast point paired with its measured minute, and names the gap-fit-held task ids.
+`--accuracy` reports instead how well the host load forecast held up, from what drains in effective auto-concurrency mode `shadow` or `enforce` recorded each admission pass over the last 30 days by default: the forecast 5, 10, 20 and 30 minutes ahead, counting what the pass admitted, against the host's measured CPU and memory for that minute. Error is forecast minus measured: MEAN_ERR is its mean, MAE its mean absolute value, UNDER how often the forecast was below the measured load, and WORST the largest miss with the minute it forecast. By default each offset shows a summary: PAIRS, the CPU mean error, MAE and under-rate, and the memory mean error and under-rate, with units in the headers. `--wide` prints every column instead, including the worst misses, the unmeasured counts and the attributed (ATTR_) errors. PENDING counts target minutes that have not fully ended at report time, even if partly measured; MISSING counts ended minutes without measurements. MISSING splits into UNSAMPLED, when no delivery run was live in that minute, PARTIAL, when a delivery overlapped the minute but none was running for all of it, and GAP, when a delivery was running for the whole minute but wrote no host row. The sampler records a host minute only when a worker saw it whole, so the minute a delivery starts or finishes in is PARTIAL, not a sampling defect. PENDING plus MISSING is the compatible unmeasured count. Only ended measured minutes form error pairs. Below, per drain, its shadow passes against what it admitted: WOULD_HOLD counts the tasks it admitted that gap fit would have held, WOULD_ADD those gap fit would have admitted that it did not. ENFORCE_ADMITTED counts the distinct tasks local enforce passes admitted and GAP_HELD the distinct tasks gap fit held; both stay on enforce passes only. Pull drains record one forecast per request, counting a returned claim. PULL_REQUESTS counts these forecasts, PULL_SENT the requests sent to the owner, PULL_WOULD_HOLD the shadow requests enforce would have held because no work fit, and PULL_HELD the enforce requests held for the same reason. `--json` adds every forecast point paired with its measured minute, and names the gap-fit-held task ids.
 
 Last, per drain, what limited its admission passes (`limiters` in `--json`), from the cumulative pass counters on its run state, which survive resume: PASSES counts them, and each outcome column is its share of those passes with the count. Every pass has exactly one outcome, the first that applies of ADMITTED (it started work), FAILED, HELD (an operator stop, a host shutdown, or a pull drain's other reason for sending no request), THROTTLE (host pressure), NO_CANDIDATE (an empty or wholly excluded backlog, or an idle owner), CEILING_FULL, GAP_FIT_HELD and DEFERRED (every candidate deferred on a lock or footprint), so the shares sum to 100%. DETAIL splits HELD by reason and THROTTLE by resource, and gives each waiting reason's share of passes, which overlap. The drains are those with a selected forecast and, without `--mode`, this workspace's drains live since `--since`; their counters cover each drain's whole lineage, not the selected time.
 
@@ -55,5 +61,6 @@ Examples:
   orbit run profiles
   orbit run profiles --json
   orbit run profiles --accuracy
+  orbit run profiles --accuracy --wide
   orbit run profiles --accuracy --json
   orbit run profiles --accuracy --since 2026-10-15T00:00:00Z --drain <RUN> --mode enforce --json

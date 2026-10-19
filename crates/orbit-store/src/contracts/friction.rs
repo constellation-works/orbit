@@ -30,7 +30,8 @@ pub struct FrictionAddParams {
 #[derive(Debug, Clone, Default)]
 pub struct FrictionListFilter {
     pub model: Option<String>,
-    pub status: Option<FrictionStatus>,
+    /// Statuses a record may have. Empty means any status.
+    pub statuses: Vec<FrictionStatus>,
     pub tag: Option<String>,
     /// Substring match across id, title, model, status, `during_task`, tags,
     /// and body. Matched case-insensitively inside SQLite.
@@ -41,6 +42,8 @@ pub struct FrictionListFilter {
     pub limit: Option<usize>,
     /// Rows to skip before decoding, applied by SQLite.
     pub offset: usize,
+    /// Page newest first rather than oldest first.
+    pub newest_first: bool,
 }
 
 #[derive(Debug, Clone)]

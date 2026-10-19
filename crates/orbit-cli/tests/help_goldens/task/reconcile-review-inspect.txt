@@ -13,7 +13,7 @@ Options:
           Possible values:
           - auto:   Decide from the sink: a table on a terminal, plain text otherwise
           - table:  Aligned columns with a header
-          - plain:  Untruncated text with tab-separated fields and no header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
           - json:   A single JSON document
           - ndjson: One complete JSON document per line
 
@@ -28,6 +28,9 @@ Options:
 
       --workspace <SELECTOR>
           Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
 
   -h, --help
           Print help (see a summary with '-h')
