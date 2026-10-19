@@ -80,7 +80,7 @@ Review and commit the checkout files listed by `workspace init`, including MCP c
 ## Features
 
 - [Plan and govern](https://orbit-cli.com/concepts/#plan-and-govern): durable tasks, audit records, friction, and local search.
-- [Execute safely in parallel](https://orbit-cli.com/concepts/#execute-safely-in-parallel): sandboxes, locks, gated pipelines, and nine agent CLIs.
+- [Execute safely in parallel](https://orbit-cli.com/concepts/#execute-safely-in-parallel): sandboxes, locks, gated pipelines, and ten agent CLIs.
 - [Run unattended](https://orbit-cli.com/concepts/#run-unattended): bounded drains, optional completion, recurring reviews, and multiple machines.
 - [Observe and extend](https://orbit-cli.com/concepts/#observe-and-extend): dashboard, plugins, and bundled agent skills.
 

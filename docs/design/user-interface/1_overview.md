@@ -4,7 +4,7 @@ type: design
 title: "User Interface — Overview"
 owner: gemini
 last_updated: 2026-10-13
-last_validated: 2026-10-15
+last_validated: 2026-10-19
 status: Draft
 feature: user-interface
 doc_role: overview
