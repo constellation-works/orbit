@@ -15,6 +15,12 @@
 #   protection, exhausted check budget) fails the run with durable evidence
 #   recorded against the attempt. Repairing the candidate requires fresh
 #   validation and a new handoff, not a resume.
+# - ORB-16880: a provider transport failure (TLS or request timeout, reset
+#   connection, 5xx) before any external write is retried by the landing step
+#   itself, against the same handoff, at most three passes with backoff. A
+#   run that still fails records its attempt stopped with the error, never
+#   leaving it dispatched; only a merge request whose outcome is unknown
+#   keeps its unresolved intent for the next attempt to reconcile.
 # - ORB-14261: a stop on a base conflict or a stale base revokes the handoff's
 #   authority and moves its claim to `repair_pending` with the task back in
 #   progress; the next pull by the original executor (or, after a grace

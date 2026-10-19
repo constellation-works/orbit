@@ -11,7 +11,10 @@ spec:
     evidence the owner's guarded review -> done transition runs behind. A
     changed head or base, a conflict, an unsatisfied branch protection or an
     exhausted check budget stops the attempt with durable evidence instead of
-    repairing the candidate.
+    repairing the candidate. A provider transport failure before any external
+    write is retried against the same handoff a bounded number of times; a
+    run that still fails records a stop with its error, unless a merge intent
+    it sent stays unresolved for the next attempt to reconcile.
   input_schema_json:
     type: object
     required: [handoff_id]
