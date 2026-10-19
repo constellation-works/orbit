@@ -100,9 +100,11 @@ jobs:
     outputs:
       mode: ${{ steps.scope.outputs.mode }}
     steps:
+      # The classification reads only the GitHub API, so check out the run's
+      # own commit (a PR's merge ref): it always carries this workflow's
+      # script, even for a PR branch cut before the script existed.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Classify the change
