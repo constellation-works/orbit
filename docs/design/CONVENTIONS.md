@@ -211,6 +211,7 @@ Retired features are removed from this table along with their folder.
 |---------|--------|------|
 | Activity / Job | [docs/design/activity-job/](./activity-job/) | codex |
 | Agent Families | [docs/design/agent-families/](./agent-families/) | grok |
+| Agent Scorecards | [docs/design/agent-scorecards/](./agent-scorecards/) | claude |
 | Auditability | [docs/design/auditability/](./auditability/) | codex |
 | Auto-concurrency | [docs/design/auto-concurrency/](./auto-concurrency/) | claude |
 | Auto-tasks | [docs/design/auto-tasks/](./auto-tasks/) | claude |
