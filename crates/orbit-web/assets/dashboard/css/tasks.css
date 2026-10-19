@@ -437,8 +437,6 @@
 .row .status-cell:focus-within .task-status-select,
 .row .crew-cell:focus-within .task-crew-select { opacity: 1; }
 
-#tasks-body[data-quick-action-pair="true"] { --task-action-width: 160px; }
-
 .task-quick-cell {
   display: flex;
   flex-direction: row;

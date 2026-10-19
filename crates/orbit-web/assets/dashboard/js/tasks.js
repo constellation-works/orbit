@@ -4124,7 +4124,6 @@ export function renderTasks(tasks, context) {
   // when no visible row has an action (a Done-only view) the whole column is
   // dead space, so the list gives it back as one.
   body.dataset.quickActions = filtered.some(hasQuickAction) ? "some" : "none";
-  body.dataset.quickActionPair = String(filtered.some(task => task.status === "review" && pullRequestLink(task)));
   $("tasks-count").textContent = formatTaskCount(filtered.length, tasks.length, tasksMeta(context));
   renderTaskPagination(context);
   // ORB-10972: the rail shows the matching total the panel header reports, so

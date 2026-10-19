@@ -17,14 +17,16 @@ export async function assertPullRequestLinks(page, evidence) {
       { id: 'PRL-2', status: 'review', external_refs: [pr('12')] },
       { id: 'PRL-3', status: 'review', external_refs: [pr('13', 'javascript:alert(1)')] },
       { id: 'PRL-4', status: 'in-progress', external_refs: [pr('14', 'https://github.com/o/r/pull/14')] },
+      { id: 'PRL-5', status: 'proposed' },
+      { id: 'PRL-6', status: 'backlog' },
     ].map(task => ({
       ...task, title: `Pull request link ${task.id} ${"Long task title with wrapping content ".repeat(8)}`, priority: 'medium', status_transitions: [],
       comments: [], history: [], artifacts: [],
     }));
     const context = {
       getTasks: () => tasks,
-      getActiveStatuses: () => new Set(['review', 'in-progress']),
-      statusOrder: ['in-progress', 'review'],
+      getActiveStatuses: () => new Set(['proposed', 'review', 'backlog', 'in-progress']),
+      statusOrder: ['proposed', 'review', 'backlog', 'in-progress'],
       replaceTask: updated => Object.assign(tasks.find(task => task.id === updated.id), updated),
     };
     globalThis.pullRequestLinkFixture = { priorFetch: globalThis.fetch, render: () => renderTasks(tasks, context) };
@@ -54,9 +56,15 @@ export async function assertPullRequestLinks(page, evidence) {
       'PRL-2': null,
       'PRL-3': null,
       'PRL-4': { text: 'PR #14', href: 'https://github.com/o/r/pull/14', target: '_blank', rel: 'noopener noreferrer' },
+      'PRL-5': null,
+      'PRL-6': null,
     };
-    if (JSON.stringify(rows) !== JSON.stringify(expected)) {
+    if (JSON.stringify(Object.entries(rows).sort()) !== JSON.stringify(Object.entries(expected).sort())) {
       throw new Error(`Review and in-progress rows must link only an http(s) PR page: ${JSON.stringify(rows)}`);
+    }
+    const quickActionPair = await page.locator('#tasks-body').getAttribute('data-quick-action-pair');
+    if (quickActionPair !== null) {
+      throw new Error(`A single linked review action must not set the quick-action pair flag: ${quickActionPair}`);
     }
     const rowActions = await page.evaluate(() => Object.fromEntries(
       ['PRL-1', 'PRL-2', 'PRL-3', 'PRL-4'].map(id => {
@@ -76,14 +84,24 @@ export async function assertPullRequestLinks(page, evidence) {
     const layout = [];
     for (const width of [1440, 375]) {
       await page.setViewportSize({ width, height: 1100 });
+      const actionTracks = await page.evaluate(() => ['PRL-5', 'PRL-1', 'PRL-6'].map(id => {
+        const row = document.querySelector(`[data-key="task-${id}"]`);
+        const columns = getComputedStyle(row).gridTemplateColumns.trim().split(/\s+/);
+        return { id, width: Number.parseFloat(columns.at(-1)) };
+      }));
+      if (actionTracks.some(track => track.width !== 72)) {
+        throw new Error(`Proposed, review and backlog rows keep a 72px action track at ${width}: ${JSON.stringify(actionTracks)}`);
+      }
       const bounds = await page.locator('[data-key="task-PRL-1"]').evaluate(row => {
-        const rect = node => { const r = node.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right }; };
+        const rect = node => { const r = node.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right, bottom: r.bottom }; };
         return { row: rect(row), cell: rect(row.querySelector('.task-quick-cell')), link: rect(row.querySelector('.task-quick-link')), title: rect(row.querySelector('.title')) };
       });
-      if (bounds.link.right > bounds.cell.right + 1 || bounds.cell.right > bounds.row.right + 1) {
+      if (bounds.link.x < bounds.cell.x - 1 || bounds.link.right > bounds.cell.right + 1
+        || bounds.link.y < bounds.cell.y - 1 || bounds.link.bottom > bounds.cell.bottom + 1
+        || bounds.cell.right > bounds.row.right + 1) {
         throw new Error(`A linked review row keeps its PR link within the action column at ${width}: ${JSON.stringify(bounds)}`);
       }
-      layout.push({ width, ...bounds });
+      layout.push({ width, actionTracks, ...bounds });
       await page.screenshot({ path: path.join(evidence, `review-group-${width === 375 ? 'mobile-375' : 'desktop'}.png`) });
     }
     await page.setViewportSize({ width: 1440, height: 1100 });
