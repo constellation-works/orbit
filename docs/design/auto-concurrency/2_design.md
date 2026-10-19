@@ -2,7 +2,7 @@
 title: Auto-concurrency — Design
 owner: claude
 last_updated: 2026-10-18
-last_validated: 2026-10-17
+last_validated: 2026-10-19
 status: Draft
 feature: auto-concurrency
 doc_role: design
@@ -420,7 +420,7 @@ relabeling, or universal multiplier: old Mac timebases were not recorded,
 so those deliveries age out under the existing retention and corrected
 deliveries rebuild the profile window. Already recorded forecasts remain
 historical evidence. This changes profile inputs only; admission mode and
-the shadow98 rollout remain unchanged.
+the shadow rollout remain unchanged.
 
 A **resource profile** for one key is built from that key's most recent
 completed deliveries: the last 50, within 30 days.
@@ -1254,7 +1254,7 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   pull decision alongside local task decisions: whether the request was sent
   and whether no kind of work fit (`forecast_no_headroom`). A returned claim
   is added to the original forecast with the same lookup as
-  `reserve_pulled_claim`, before the next request is forecast. The accuracy
+  `pulled_claim_reservation`, before the next request is forecast. The accuracy
   report pairs these points identically to local passes. Per drain,
   `PULL_REQUESTS` counts pull forecasts, `PULL_SENT` counts requests sent
   (including idle or failed attempts), and `PULL_WOULD_HOLD` counts shadow

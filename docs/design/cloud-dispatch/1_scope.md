@@ -2,15 +2,16 @@
 type: design
 summary: "Scope: a cloud delivery mode that ships a task through a Claude Code cloud session, polls GitHub for its PR, and adopts that PR's number and summary onto the task"
 tags: [cloud, dispatch, claude, routines, pr, polling]
-last_validated: 2026-10-17
+last_validated: 2026-10-19
 ---
 
 # Scope: Cloud dispatch
 
 Status: proposal, not started. Phase 0 is a manual spike with no code, against `orbit` first.
 Open questions resolved 2026-09-23 (see the end of this doc).
-Bearing: the workspace rule that gates read durable artifacts and task state, never the agent's
-final message (root `AGENTS.md`, "Gates"). The cloud session is untrusted remote
+Bearing: the workspace gate rule reads durable artifacts and task state, never the execution
+summary as an oracle (`crates/orbit-core/assets/activities/agent_implement.yaml`); this design
+applies the same rule to the agent's final message. The cloud session is untrusted remote
 execution; GitHub is the only record Orbit believes.
 Precedents: the distributed-drain split where a follower opens the PR and the owner re-reads
 everything from GitHub (`task_claimed_pr_pipeline`, `task_landing_pipeline`, `vcs/landing/`);
@@ -19,7 +20,9 @@ everything from GitHub (`task_claimed_pr_pipeline`, `task_landing_pipeline`, `vc
 ## Problem
 
 Every Orbit delivery runs an agent as a local subprocess in a local worktree
-(`cli_runner/orchestrator/dispatch.rs`, `run_cli_backend`). Throughput is bounded by the host:
+(`crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch.rs`,
+`run_cli_backend_for_step`; entry point `run_cli_backend` in `entry.rs`). Throughput is bounded by
+the host:
 about ten concurrent agents on either the Mac or a Linux server before CPU, ports and
 worktrees contend, and larger codebases lower that ceiling. Claude Code cloud sessions run
 in Anthropic-managed VMs and keep running when the host sleeps. During the 2026-09-23
@@ -212,7 +215,7 @@ The payload carries:
 ## 4. Pipeline
 
 `task_gate_pipeline` already chooses `task_{{ input.mode }}_pipeline`
-(`assets/jobs/task_gate_pipeline.yaml:10-12`). A new `task_cloud_pipeline` slots in beside
+(`crates/orbit-core/assets/jobs/task_gate_pipeline.yaml:10-12`). A new `task_cloud_pipeline` slots in beside
 `task_pr_pipeline` and reuses the gate's locks and eligibility checks unchanged. Its steps
 are deterministic actions. None of them is an `agent_loop`, so the envelope contract doesn't
 apply.
@@ -308,8 +311,8 @@ Cloud runs do not count against the drain's slots. Today they would:
 - `classify_workspace_auto_tasks` counts every live `task_auto_pipeline` run against
   `max_active_leaf_runs` (default 5);
 - `task_auto_pipeline` declares `max_active_runs: 0`, so the job has no ceiling of its own
-  (`assets/jobs/task_auto_pipeline.yaml:43`); the number of live runs is the drain's bound
-  (`assets/jobs/workspace_auto_pipeline.yaml:7-14`, `orbit run auto --concurrency`).
+  (`crates/orbit-core/assets/jobs/task_auto_pipeline.yaml:43`); the number of live runs is the drain's bound
+  (`crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml:7-14`, `orbit run auto --concurrency`).
 
 A cloud task waiting three hours in `cloud_await_pr` would hold one of those slots while the
 host does nothing for it. Phase 1 therefore:
