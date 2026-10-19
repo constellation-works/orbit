@@ -439,6 +439,17 @@ orbit task lint <task-id>
 orbit task lint
 ```
 
+Description path checks expand simple comma brace groups (including multiple
+groups), up to 64 resulting paths, and report each missing member separately.
+Malformed, nested or larger patterns are checked literally. A path immediately
+introduced by `create`, `create a`, `create file`, `create a file`, `new file`,
+`e.g.`, `for example` or `such as` is treated as a creation target or example.
+A path after `to` is a destination when `move` or `rename` appears in the
+preceding six words on that line. Matching ignores case and surrounding Markdown
+quotes, parentheses, commas and colons. These local markers exempt only that
+occurrence: move sources and unmarked missing references still report errors.
+This description heuristic does not change declared selector validation.
+
 Re-declare selectors an **older prune recorded in that task's history**:
 
 ```bash

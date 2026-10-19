@@ -209,3 +209,131 @@ fn lint_reads_only_repository_paths_as_path_mentions() {
         "context entry dir:docs must not cover absolute mention of crates/x/docs/y.md: {docs_findings:?}"
     );
 }
+
+#[test]
+fn lint_expands_brace_members_before_checking_paths() {
+    if !super::dispatch_admission::isolated(
+        "task_lint_paths::lint_expands_brace_members_before_checking_paths",
+    ) {
+        return;
+    }
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    for path in [
+        "crates/x/a.rs",
+        "crates/x/b.rs",
+        "crates/longer/a.rs",
+        "crates/longer/b.rs",
+    ] {
+        let path = root.path().join("repo").join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "// fixture\n").unwrap();
+    }
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+
+    for description in [
+        "Edits `crates/x/{a,b}.rs`.",
+        "Edits crates/{x,longer}/{a,b}.rs.",
+        "Edits crates/{x,longer}.",
+    ] {
+        let findings = lint_description(&runtime, description);
+        assert!(
+            findings
+                .iter()
+                .all(|finding| finding.check != "path_validity"),
+            "existing brace members must not be errors: {description}: {findings:?}"
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.check == "context_completeness"),
+            "expanded existing members must still participate in context lint: {findings:?}"
+        );
+    }
+
+    let findings = lint_description(&runtime, "Edits `crates/x/{a,missing}.rs`.");
+    let errors: Vec<_> = findings
+        .iter()
+        .filter(|finding| finding.check == "path_validity")
+        .collect();
+    assert_eq!(
+        errors.len(),
+        1,
+        "only the missing brace member is an error: {findings:?}"
+    );
+    assert!(
+        errors[0].message.contains("`crates/x/missing.rs`"),
+        "the error must identify the expanded missing member: {findings:?}"
+    );
+}
+
+#[test]
+fn lint_distinguishes_created_and_example_paths_from_existing_references() {
+    if !super::dispatch_admission::isolated(
+        "task_lint_paths::lint_distinguishes_created_and_example_paths_from_existing_references",
+    ) {
+        return;
+    }
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+
+    for description in [
+        "Move `crates/x/source.rs` to `api/runs/{failure,lineage,tasks}.rs`.",
+        "Rename `crates/x/source.rs` to `runs/detail.rs`.",
+        "Add a new file `runs/detail.rs`.",
+        "Create `runs/detail.rs`.",
+        "Create a file: `runs/detail.rs`.",
+        "Use a layout, e.g. `foo/mod.rs`.",
+        "Use a layout (e.g., `foo/mod.rs`).",
+        "Use a layout, for example `foo/mod.rs`.",
+        "Use a layout such as `foo/mod.rs`.",
+    ] {
+        let findings = lint_description(&runtime, description);
+        let errors: Vec<_> = findings
+            .iter()
+            .filter(|finding| finding.check == "path_validity")
+            .collect();
+        let source_count =
+            usize::from(description.starts_with("Move") || description.starts_with("Rename"));
+        assert_eq!(
+            errors.len(),
+            source_count,
+            "created destinations and examples are not existing-file references: {description}: {findings:?}"
+        );
+
+        // A later unmarked occurrence must still be checked, even if the
+        // same path was previously introduced as a creation or example.
+        let description = format!("{description}\nEdits `runs/detail.rs` and `foo/mod.rs`.");
+        let findings = lint_description(&runtime, &description);
+        let errors: Vec<_> = findings
+            .iter()
+            .filter(|finding| finding.check == "path_validity")
+            .collect();
+        let source_count =
+            usize::from(description.starts_with("Move") || description.starts_with("Rename"));
+        assert_eq!(
+            errors.len(),
+            2 + source_count,
+            "only unmarked paths and move sources should be errors: {description}: {findings:?}"
+        );
+        for path in ["runs/detail.rs", "foo/mod.rs"]
+            .into_iter()
+            .chain((source_count == 1).then_some("crates/x/source.rs"))
+        {
+            assert!(
+                errors
+                    .iter()
+                    .any(|finding| finding.severity == TaskLintSeverity::Error
+                        && finding.message.contains(&format!("`{path}`"))),
+                "unmarked missing reference must stay an error: {path}: {findings:?}"
+            );
+        }
+    }
+}

@@ -554,30 +554,6 @@ fn is_over_inclusion_selector(entry: &str) -> bool {
     false
 }
 
-pub(super) fn extract_task_path_mentions(text: &str, workspace_root: &Path) -> Vec<String> {
-    let mut paths = std::collections::BTreeSet::new();
-    let is_wrapper = |ch: char| {
-        matches!(
-            ch,
-            '`' | '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | ',' | ':' | ';'
-        )
-    };
-    for raw in text.split_whitespace() {
-        // Sentence punctuation and closing wrappers interleave at the end of a
-        // token (`(see crates/a.rs).`), so strip them together, not in turn.
-        let trimmed = raw
-            .trim_start_matches(is_wrapper)
-            .trim_end_matches(|ch: char| is_wrapper(ch) || matches!(ch, '.' | '!' | '?'));
-        if let Some(path) = normalize_path_token(trimmed) {
-            if path.starts_with('/') && !is_path_under_workspace(Path::new(&path), workspace_root) {
-                continue;
-            }
-            paths.insert(path);
-        }
-    }
-    paths.into_iter().collect()
-}
-
 /// Whether a token names a pattern, a placeholder, or a host location rather
 /// than a path inside the checkout: globs (`.orbit/**`), `<repo>/README.md`
 /// placeholders, and `~/` home-relative host paths (`~/.orbit/config.toml`).
