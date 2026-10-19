@@ -8,8 +8,11 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_core::application::task::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest,
 };
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{ActorIdentity, OrbitRuntime};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate, blocked_workflow_failure_update};
+use orbit_types::task::{ExecutionLocation, ExternalRef, TaskComplexity, TaskStatus};
+use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 
 use crate::isolated_cli_fixture;
@@ -197,6 +200,170 @@ fn task_show_formats_status_history_and_whole_second_timestamps_without_changing
     assert_eq!(
         before, after,
         "human rendering must leave the JSON bytes unchanged"
+    );
+}
+
+#[test]
+fn task_show_summarizes_active_run_and_limits_artifacts() {
+    if crate::isolated_test::run_in_child(
+        "local_read_projections_cli::task_show_summarizes_active_run_and_limits_artifacts",
+    ) {
+        return;
+    }
+
+    let fixture = Fixture::new();
+    let shown_workspace = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown_workspace["orbit_root"].as_str().unwrap());
+    let run_id = "jrun-show-summary";
+    let now = Utc::now();
+    let id = {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+            .unwrap()
+            .with_actor(ActorIdentity::human("task-show-fixture"));
+        let run = JobRun {
+            run_id: run_id.into(),
+            job_id: "local-run-fixture".into(),
+            attempt: 1,
+            state: JobRunState::Running,
+            scheduled_at: now,
+            created_at: now,
+            started_at: Some(now),
+            finished_at: None,
+            duration_ms: None,
+            pid: None,
+            pid_start_time: None,
+            input: None,
+            retry_source_run_id: None,
+            knowledge_metrics: None,
+            resolved_crew: None,
+            crew_model: None,
+            steps: Vec::new(),
+            executed_on: Some(ExecutionLocation {
+                machine_id: "machine-show-fixture".into(),
+                machine_name: Some("show-fixture-host".into()),
+            }),
+        };
+        runtime
+            .sqlite_store()
+            .unwrap()
+            .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &run, None)
+            .unwrap();
+        let task = runtime
+            .add_task(TaskAddParams {
+                title: "Run summary fixture".into(),
+                acceptance_criteria: vec!["Show the active run".into()],
+                complexity: TaskComplexity::Low,
+                status: Some(TaskStatus::InProgress),
+                external_refs: vec![ExternalRef::github_pr("42").unwrap()],
+                ..Default::default()
+            })
+            .unwrap();
+        runtime
+            .update_task_as_human(
+                &task.id.to_string(),
+                TaskUpdateParams {
+                    pr_status: Some(Some("open".into())),
+                    ..Default::default()
+                },
+                "task-show-fixture".into(),
+            )
+            .unwrap();
+        runtime
+            .apply_task_automation_update(
+                &task.id.to_string(),
+                TaskAutomationUpdate {
+                    job_run_id: Some(run_id.into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        task.id.to_string()
+    };
+
+    let source = fixture.repo.join("show-summary.txt");
+    for index in 0..7 {
+        fs::write(&source, format!("artifact {index}\n")).unwrap();
+        let source_path = source.to_str().unwrap();
+        let artifact_path = format!("reports/show-summary-{index}.txt");
+        fixture
+            .command(&[
+                "task",
+                "artifact",
+                "put",
+                &id,
+                source_path,
+                "--path",
+                &artifact_path,
+            ])
+            .assert()
+            .success();
+    }
+
+    let json_before = fixture.json(&["task", "show", &id, "--json"]);
+    assert_eq!(json_before["job_run_id"], run_id);
+    assert_eq!(json_before["pr_status"], "open");
+    assert_eq!(json_before["artifacts"].as_array().unwrap().len(), 7);
+    assert_eq!(
+        json_before["artifacts"][6]["path"],
+        "reports/show-summary-6.txt"
+    );
+
+    let plain = fixture
+        .command(&["task", "show", &id])
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let plain = String::from_utf8(plain).unwrap();
+    assert!(
+        plain.contains("Run: jrun-show-summary on show-fixture-host (running)"),
+        "{plain}"
+    );
+    assert!(plain.contains("PR: #42 (open)"));
+    assert!(!plain.contains("PR Status:"));
+    assert!(!plain.contains("github-pr: 42"));
+    assert!(plain.contains("Artifacts: 7 total (showing first 5)"));
+    let artifact_lines = plain
+        .lines()
+        .filter(|line| line.starts_with("  - reports/show-summary-"))
+        .collect::<Vec<_>>();
+    assert_eq!(artifact_lines.len(), 5, "{plain}");
+    for index in 0..5 {
+        assert!(plain.contains(&format!("reports/show-summary-{index}.txt")));
+    }
+    assert!(!plain.contains("reports/show-summary-5.txt"));
+    assert!(!plain.contains("reports/show-summary-6.txt"));
+
+    let fields = fixture
+        .command(&[
+            "task",
+            "show",
+            &id,
+            "--fields",
+            "job_run_id,job_run_machine,external_refs,pr_status",
+        ])
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let fields = String::from_utf8(fields).unwrap();
+    assert!(fields.contains("Field: job_run_id\njrun-show-summary"));
+    assert!(fields.contains("Field: pr_status\nopen"));
+    assert!(!fields.contains("Run:"));
+    assert!(!fields.contains("PR: #42"));
+    assert_eq!(
+        fixture.json(&["task", "show", &id, "--json"]),
+        json_before,
+        "text and --fields rendering must not mutate the JSON projection"
     );
 }
 

@@ -12,7 +12,7 @@ Dependencies:
   - ORB-00001 [proposed]
 Relations:
   - blocked_by: ORB-00001 [proposed]
-Artifacts:
+Artifacts: 1
   - evidence.txt (text/plain, 17 bytes)
 Created By: claude
 History:
