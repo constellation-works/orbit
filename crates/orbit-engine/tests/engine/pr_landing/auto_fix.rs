@@ -1869,7 +1869,10 @@ fn plant_commit_ci(fx: &Fixture, sha: &str, run_id: u64, conclusion: &str, log: 
 
 /// A failed PR cut before a base fix must refresh before repair admission,
 /// even without historical CI on its fork point. Current-base failures with
-/// the same diagnostic hold instead; a distinct diagnostic still repairs.
+/// the same diagnostic hold instead; a distinct diagnostic still repairs. A
+/// failure whose same job passed on the fork point is the candidate's: a
+/// green tip does not spend the base update on it, and a base update already
+/// reserved for the pull request does not stop its repair.
 #[test]
 #[allow(
     clippy::print_stderr,
@@ -1891,6 +1894,8 @@ fn auto_fix_checks_current_base_before_spending_a_repair() {
                 "fixed_base_older_red",
                 "fixed_base_exhausted_repairs",
                 "fixed_base_reserved",
+                "candidate_green_tip",
+                "candidate_green_tip_reserved",
             ] {
                 in_fresh_row(sandbox, |row| {
                     eprintln!("scenario: {case}");
@@ -1899,7 +1904,21 @@ fn auto_fix_checks_current_base_before_spending_a_repair() {
                     let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
                     open_for_completion(&fx, &host);
                     let shared = "error[E0433]: cannot find module `broken_base`\n";
-                    plant_commit_ci(&fx, &fx.candidate, 11, "failure", shared);
+                    let own = "error[E0433]: cannot find module `different_failure`\n";
+                    let candidate_only = case.starts_with("candidate_green_tip");
+                    plant_commit_ci(
+                        &fx,
+                        &fx.candidate,
+                        11,
+                        "failure",
+                        if candidate_only { own } else { shared },
+                    );
+                    if candidate_only {
+                        // The fork point's own push run passed the same job,
+                        // so the head's failure is the candidate's change.
+                        let fork_point = fx.local_tip(BASE);
+                        plant_commit_ci(&fx, &fork_point, 51, "success", "");
+                    }
                     if case != "already_current" {
                         fx.advance_base();
                     }
@@ -1913,11 +1932,7 @@ fn auto_fix_checks_current_base_before_spending_a_repair() {
                         } else {
                             "success"
                         },
-                        if case == "candidate" {
-                            "error[E0433]: cannot find module `different_failure`\n"
-                        } else {
-                            shared
-                        },
+                        if case == "candidate" { own } else { shared },
                     );
                     let runs_path = fx.forge.join("commit-ci").join(&tip).join("runs.json");
                     let mut runs: Value =
@@ -1968,7 +1983,7 @@ fn auto_fix_checks_current_base_before_spending_a_repair() {
                             );
                         }
                     }
-                    if case == "fixed_base_reserved" {
+                    if case.ends_with("_reserved") {
                         seed_auto_fix_history(
                             &host,
                             orbit_types::workflow::PR_BASE_UPDATE_RESERVED_EVENT,
@@ -2052,6 +2067,13 @@ fn auto_fix_checks_current_base_before_spending_a_repair() {
                             );
                             assert_eq!(attempts.len(), 1, "{case}: ordinary repair admission");
                             assert_eq!(fx.remote_tip(BRANCH), fx.candidate);
+                            assert!(
+                                !host
+                                    .history(TASK_ID)
+                                    .iter()
+                                    .any(|entry| entry.event == "pr_auto_fix_base_refresh"),
+                                "{case}: a candidate failure spends no base refresh"
+                            );
                         }
                     }
                     assert!(
