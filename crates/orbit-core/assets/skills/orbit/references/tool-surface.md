@@ -186,9 +186,11 @@ What it is not:
 run may call the same tool when `workflow.explore.enabled` is on and
 `workflow.purpose_crews.explorer` has an eligible member. That call gets a
 different, narrower run: an `agent_explore_pipeline` explorer drawn from the
-explorer pool, sandboxed with no writes (Codex in its read-only inner sandbox),
-starting in a `cwd` inside the caller's own worktree, with every task,
-lifecycle, dispatch, commit and invocation tool denied. It never gets a
+explorer pool and sandboxed with no writes, starting in a `cwd` inside the
+caller's own worktree, with every task, lifecycle, dispatch, commit and
+invocation tool denied. Codex uses its read-only inner sandbox when Orbit's
+executor wrapper is off; a provider with no read-only mode is refused before
+it starts unless that wrapper is on. It never gets a
 trusted-host admission. The answer adds `paths_read`. Per-run call and
 concurrency budgets, a timeout ceiling and an answer-size cap apply; each
 refusal names its reason and setting, and the caller continues without
