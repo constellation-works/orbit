@@ -1,5 +1,48 @@
 # Common orchestration decisions
 
+## Correct a running task's course
+
+First check whether the task's existing acceptance criteria still describe the
+right outcome. For a course correction within that scope, add an operator
+comment while the run is active:
+
+```bash
+orbit task update <task-id> --comment "Keep the existing scope; focus the implementation on the retry path."
+```
+
+For a claimed task, make the comment on the owner's task. Comment-only operator
+writes are admitted while the execution claim is active; other unscoped edits
+remain refused. The leaf reads the owner's comment log.
+
+The comment appears in the run's next task-context prompt, oldest first, and is
+delivered at most once in that run. It does not interrupt the current step.
+Check `orbit task show <task-id>` for the `steering_delivered` history event,
+then check the agent's execution summary for its `steering-ack`.
+
+Before `commit`, the owner PR and local pipelines and their claimed variants
+gate on undelivered comments. A gate refusal spends a steering round and sends
+the uncommitted candidate back through the implementer, up to
+`workflow.mid_run_steering.max_rounds` (default `2`, allowed `1`–`10`).
+If rounds are exhausted, or a round carries none of the still-outstanding
+comments, the task is held with `steering_unconsumed`; no candidate is
+committed. Read the outstanding comments and decide whether to requeue, reply
+with more guidance, or accept the candidate through the normal review record.
+
+If the task's actual scope or acceptance criteria changed, use a fresh run:
+steering does not change the task meaning digest. Stop the old run if its
+candidate must not proceed (cancel the child run if it needs to stop
+immediately), wait for the run and claim to settle, update the task, and
+requeue with the old candidate discarded. A live task cannot be requeued.
+
+The setting is off by default. Enable it with
+`[workflow.mid_run_steering].enabled = true`; prefer doing so between drains.
+If enabled with runs already in flight, their absent watermarks make
+post-dispatch comments outstanding at the next prompt or gate, unless an
+inherited candidate or claim watermark supplies the baseline. The
+`task_pr_pipeline`, `task_local_pipeline`,
+`task_claimed_pr_pipeline`, and `task_claimed_local_pipeline` all gate before
+`commit`.
+
 ## Missing context
 
 A newly created task has empty `context_files`. Run zero-input
