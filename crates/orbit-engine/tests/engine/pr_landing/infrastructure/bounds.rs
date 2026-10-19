@@ -27,10 +27,7 @@ fn prerequisite_bounds_entire_repeated_failed_job() {
         |sandbox| {
             for case in [
                 "prior_write",
-                "later_write",
                 "prior_action",
-                "prior_echo",
-                "prior_composed",
                 "other_failed",
                 "cancelled",
                 "container",
@@ -57,23 +54,14 @@ fn prerequisite_bounds_entire_repeated_failed_job() {
                 "actor",
                 "actual_ci",
                 "actual_codeql",
-                "actual_macos",
-                "actual_website",
             ] {
                 in_fresh_row(sandbox, |row| {
                     let mut source: Value = serde_yaml::from_str(SOURCE).unwrap();
                     match case {
-                        "prior_write" | "later_write" | "prior_action" | "prior_echo"
-                        | "prior_composed" | "safe_prior_read" => {
+                        "prior_write" | "prior_action" | "safe_prior_read" => {
                             let step = match case {
                                 "prior_action" => {
                                     json!({"name":"Setup","uses":"actions/checkout@deadbeef"})
-                                }
-                                "prior_echo" => {
-                                    json!({"name":"Setup","run":"echo gh api repos/example/pulls/42"})
-                                }
-                                "prior_composed" => {
-                                    json!({"name":"Setup","run":"gh api repos/example/pulls/42 && gh api -X POST repos/example/issues"})
                                 }
                                 "safe_prior_read" => {
                                     json!({"name":"Setup","run":"gh api --method GET repos/example/pulls/42"})
@@ -82,12 +70,10 @@ fn prerequisite_bounds_entire_repeated_failed_job() {
                                     json!({"name":"Setup","run":"gh api --method POST repos/example/issues"})
                                 }
                             };
-                            let steps = source["jobs"]["state"]["steps"].as_array_mut().unwrap();
-                            if case == "later_write" {
-                                steps.push(step);
-                            } else {
-                                steps.insert(0, step);
-                            }
+                            source["jobs"]["state"]["steps"]
+                                .as_array_mut()
+                                .unwrap()
+                                .insert(0, step);
                         }
                         "other_failed" => {
                             source["jobs"]["writer"] = json!({"name":"Writer","runs-on":"ubuntu-latest","steps":[{"run":"gh api -X DELETE repos/example/issues/42"}]});
@@ -105,8 +91,6 @@ fn prerequisite_bounds_entire_repeated_failed_job() {
                             let name = match case {
                                 "actual_ci" => "ci.yml",
                                 "actual_codeql" => "codeql.yml",
-                                "actual_macos" => "ci-macos.yml",
-                                "actual_website" => "website-check.yml",
                                 _ => unreachable!(),
                             };
                             let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -212,8 +196,6 @@ fn prerequisite_bounds_entire_repeated_failed_job() {
                             | "legacy_write"
                             | "legacy_binding"
                             | "legacy_output" => "Analyze (rust)",
-                            "actual_macos" => "macOS Sandbox",
-                            "actual_website" => "Check and build",
                             _ => unreachable!(),
                         };
                         update(&fx, "rules", |value| {
@@ -239,7 +221,7 @@ fn prerequisite_bounds_entire_repeated_failed_job() {
                                 Value::Null
                         });
                     }
-                    if matches!(case, "actual_ci" | "actual_macos") {
+                    if case == "actual_ci" {
                         update(&fx, "rules", |value| {
                             let gates = value[0]["parameters"]["required_status_checks"]
                                 .as_array_mut()

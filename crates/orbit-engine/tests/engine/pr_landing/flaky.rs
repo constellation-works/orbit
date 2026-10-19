@@ -463,40 +463,13 @@ fn candidate_validate_coverage() {
 
 #[test]
 fn claim_validate_verdicts() {
+    // Claim keeps the pin (`flake`), the claim failure log (`deterministic`),
+    // and the two known-red continuations that return before the pin
+    // (`inherited`, `full_cache`). The other verdict and coverage rows run on
+    // `candidate_validate`, which calls the same replay.
     candidate_replay_rows(
         "flaky::claim_validate_verdicts",
         "claim_validate",
-        &[
-            "flake",
-            "deterministic",
-            "over_bound",
-            "base_skip",
-            "inherited",
-            "subset",
-            "cache_old",
-            "cache_malformed",
-            "cache_partial",
-            "full_cache",
-        ],
-    );
-}
-
-#[test]
-fn claim_validate_coverage() {
-    candidate_replay_rows(
-        "flaky::claim_validate_coverage",
-        "claim_validate",
-        &[
-            "zero",
-            "partial",
-            "mismatch",
-            "skip",
-            "base_zero",
-            "base_partial",
-            "base_missing",
-            "base_malformed",
-            "base_wrong",
-            "base_compile",
-        ],
+        &["flake", "deterministic", "inherited", "full_cache"],
     );
 }

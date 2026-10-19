@@ -62,7 +62,6 @@ after the wrapper signals that its queue interval earned the capped credit.
 
 ### `v2_runtime::runtime_contracts_1`
 
-- `deterministic_reference_dispatches_and_persists_audit_events`
 - `a_deterministic_step_binds_its_task_and_run_from_the_dispatch_not_the_tool_args`
 - `parallel_join_policy_decides_the_block_from_its_branches`
 - `fan_out_collects_outputs_in_item_order_within_the_worker_cap`
@@ -374,7 +373,6 @@ certifies the repaired head as both the original head and publication lease.
 
 ### `v2_local_shell::shell_dispatch_contracts_1`
 
-- `shipped_reference_asset_runs_git_status_in_the_workspace`
 - `a_nonzero_exit_fails_the_activity_and_is_audited`
 - `a_missing_executable_fails_the_activity`
 - `a_timed_out_step_is_terminated_and_reported`
@@ -477,11 +475,7 @@ certifies the repaired head as both the original head and publication lease.
 
 ### `pr_landing::flaky::claim_validate_verdicts`
 
-- `bounded_candidate_replay_judges_flakes_failures_and_coverage_on_both_routes`: claim_validate: flake, deterministic, over_bound, base_skip
-
-### `pr_landing::flaky::claim_validate_coverage`
-
-- `bounded_candidate_replay_judges_flakes_failures_and_coverage_on_both_routes`: claim_validate: zero, partial, mismatch, skip
+- `bounded_candidate_replay_judges_flakes_failures_and_coverage_on_both_routes`: claim_validate: flake, deterministic, inherited, full_cache
 
 ### `pr_landing::claimed_known_red_equal_and_subset`
 
@@ -655,7 +649,7 @@ Each named row keeps a fresh disposable home, temporary directory, cwd, authorit
 
 ## QA required selector reconciliation
 
-The workflow-process-boundary inventory now requires the surviving families above. Its two old required selectors `v2_runtime::deterministic_reference_dispatches_and_persists_audit_events` and `v2_runtime::parallel_join_policy_decides_the_block_from_its_branches` both execute in `v2_runtime::runtime_contracts_1`; the inventory requires that family once because duplicate required selectors are invalid. Both behavioral rows and their assertions remain required inside that family. The other eight old required selectors each map to the family listed above. No surface, behavior class or assertion entry was removed.
+The workflow-process-boundary inventory now requires the surviving families above. Its old required selector `v2_runtime::parallel_join_policy_decides_the_block_from_its_branches` executes in `v2_runtime::runtime_contracts_1`; the inventory requires that family once because duplicate required selectors are invalid. The old selector `v2_runtime::deterministic_reference_dispatches_and_persists_audit_events` was an unshipped example-asset smoke in that same family and is retired; `a_deterministic_step_binds_its_task_and_run_from_the_dispatch_not_the_tool_args` still asserts that a deterministic step's binding comes from dispatch, and the other runtime rows still persist audit events. The other eight old required selectors each map to the family listed above.
 
 PR leaf rows also receive their own disposable sandbox-root counters, generated `gh` executable, PATH, HOME and cwd. The deliberate capture-limit override restores before the next row. TMPDIR stays at the parent-owned child root so immutable cached Git seeds outlive rows; mutable fixture TempDirs and all copied Git objects remain separately owned. Container-only wrappers perform no mutable fixture work.
 

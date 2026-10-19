@@ -7,10 +7,9 @@
     clippy::unwrap_used
 )]
 
-//! v2 runtime integration coverage: the deterministic reference activity
-//! dispatches through a stub `RuntimeHost` and persists its §7 envelope
-//! events, a deterministic step's tool binding comes from the dispatch rather
-//! than its tool arguments, and job assets with `parallel:`, `fan_out:` and `loop:` blocks
+//! v2 runtime integration coverage: a deterministic step's tool binding comes
+//! from the dispatch rather than its tool arguments, and job assets with
+//! `parallel:`, `fan_out:` and `loop:` blocks
 //! keep their join semantics when run through `execute_job_with_resume`,
 //! and the shipped before-PR `review` step retries and recovers a failing
 //! reviewer while charging only reviewer invocations.
@@ -25,10 +24,10 @@ use std::time::Duration;
 
 use orbit_agent::loop_engine::InMemorySink;
 use orbit_common::OrbitError;
-use orbit_engine::activity_job::{V2ActivityCatalog, load_activity_asset, load_job_asset};
+use orbit_engine::activity_job::{V2ActivityCatalog, load_job_asset};
 use orbit_engine::{
-    DispatchError, JobOutcome, ResolvedCliExecutor, ReviewerInvocationRequest, V2AuditWriter,
-    V2DispatchInput, V2SqliteSink, dispatch_v2_activity, execute_job_with_resume,
+    DispatchError, JobOutcome, ReviewerInvocationRequest, V2AuditWriter, V2DispatchInput,
+    V2SqliteSink, dispatch_v2_activity, execute_job_with_resume,
     resolve_job_catalog_refs_for_execution,
 };
 use orbit_types::workflow::activity_job::{
@@ -36,15 +35,6 @@ use orbit_types::workflow::activity_job::{
 };
 use orbit_types::workflow::{JobRunState, PipelineState, ReviewerInvocationEvent};
 use serde_json::{Value, json};
-
-fn deterministic_reference_dispatches_and_persists_audit_events() -> Result<(), String> {
-    let references_dir = workspace_root().join("crates/orbit-core/assets/activities/examples");
-    let tmp_audit = tempfile::tempdir().map_err(|err| err.to_string())?;
-    smoke_dispatch_deterministic(
-        &references_dir.join("deterministic_reference.yaml"),
-        tmp_audit.path(),
-    )
-}
 
 /// [ORB-13115] A deterministic step's tools learn which task and run they
 /// serve from the dispatcher, not from the tool arguments the step forwards.
@@ -136,70 +126,6 @@ fn a_deterministic_step_binds_its_task_and_run_from_the_dispatch_not_the_tool_ar
     assert_eq!(binding.task_id, None, "a step serving no task names none");
 }
 
-fn smoke_dispatch_deterministic(
-    path: &std::path::Path,
-    audit_root: &std::path::Path,
-) -> Result<(), String> {
-    let yaml = std::fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
-    let asset = load_v2(&yaml)?;
-
-    let run_id = "smoke-det-001";
-    let (writer, envelope, _inner) = build_writer_and_sinks(audit_root, run_id);
-
-    let host = EchoHost;
-    let outcome = dispatch_v2_activity(V2DispatchInput {
-        activity_name: &asset.name,
-        spec: &asset.spec.spec,
-        fs_profile: asset.spec.fs_profile.as_deref(),
-        input: Value::Null,
-        audit: writer.clone(),
-        run_id,
-        host: Some(&host),
-    })
-    .map_err(|e| format!("dispatch: {e}"))?;
-
-    if !outcome.success {
-        return Err(format!("deterministic returned non-success: {outcome:?}"));
-    }
-    assert_sqlite_nonempty(&envelope)?;
-    Ok(())
-}
-
-struct EchoHost;
-
-impl orbit_engine::test_support::NullRuntimeHost for EchoHost {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        config: &Value,
-        input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        Ok(serde_json::json!({
-            "action": action,
-            "config": config,
-            "input": input,
-            "echo": "deterministic smoke stub"
-        }))
-    }
-
-    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Err(DispatchError::CliInvocationFailed(
-            "EchoHost has no CLI provider mapping".into(),
-        ))
-    }
-
-    fn tool_context_for_activity(
-        &self,
-        _run_id: Option<&str>,
-        _fs_profile: Option<&str>,
-        _fs_audit: Option<std::sync::Arc<dyn orbit_tools::FsAuditLogger>>,
-        _proc_allowed_programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        orbit_tools::ToolContext::default()
-    }
-}
-
 pub(crate) fn build_writer_and_sinks(
     audit_root: &std::path::Path,
     run_id: &str,
@@ -220,31 +146,6 @@ pub(crate) fn build_writer_and_sinks(
             .with_envelope_sink(envelope.clone()),
     );
     (writer, envelope, inner)
-}
-
-fn load_v2(yaml: &str) -> Result<V2ReferenceAsset, String> {
-    match load_activity_asset(yaml) {
-        Ok(a) => Ok(V2ReferenceAsset {
-            name: a.name,
-            spec: a.spec,
-        }),
-        Err(err) => Err(format!("load: {err}")),
-    }
-}
-
-struct V2ReferenceAsset {
-    name: String,
-    spec: ActivityV2,
-}
-
-fn assert_sqlite_nonempty(sink: &V2SqliteSink) -> Result<(), String> {
-    let count = sink
-        .persisted_event_count()
-        .map_err(|e| format!("read audit sqlite rows: {e}"))?;
-    if count == 0 {
-        return Err("audit sqlite rows are empty".to_string());
-    }
-    Ok(())
 }
 
 pub(crate) fn workspace_root() -> PathBuf {
@@ -2191,10 +2092,6 @@ fn leaf_completion_records_file_and_store_waits_without_leaking_between_steps() 
 fn runtime_contracts_1() {
     crate::git_fixture::isolated(module_path!(), "runtime_contracts_1", || {
         crate::git_fixture::run_scenarios(&[
-            (
-                "deterministic_reference_dispatches_and_persists_audit_events",
-                || deterministic_reference_dispatches_and_persists_audit_events().unwrap(),
-            ),
             (
                 "a_deterministic_step_binds_its_task_and_run_from_the_dispatch_not_the_tool_args",
                 a_deterministic_step_binds_its_task_and_run_from_the_dispatch_not_the_tool_args,
