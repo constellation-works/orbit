@@ -1348,13 +1348,20 @@ existing recovery activities, final validation and push do the repair:
   reservation bounds base refreshes independently of the repair-attempt budget.
   Old fork-point failure logs are unnecessary: the current tip's latest push
   jobs supply the evidence. A green tip alone does not prove the base fixed
-  the failure, though: when the latest push run of the head's fork point
-  passed the same job, the failure is the candidate's. It spends no base
-  refresh, and it takes the ordinary agent repair even when the pull
-  request's one base update is already reserved. Matching current-base
-  failures record `pr_auto_fix_base_red`; ordinary agent repairs retain their
-  existing admission history. Missing evidence leaves the ordinary diagnosis
-  path in place.
+  that one failure: when the latest push run of the head's fork point passed
+  the same job, the failure is the candidate's. That check does not by itself
+  end the comparison. When every failed required check is candidate-owned
+  that way, completion spends no base refresh and admits one ordinary repair,
+  even when the pull request's one base update is already reserved. The same
+  repair path holds when one check is candidate-owned and another is green
+  on the tip without a successful fork-point job, as long as no required
+  check is known-red on the tip. A known-red sibling wins over a
+  candidate-owned check: the tip fails that sibling with the same diagnostic,
+  completion records `pr_auto_fix_base_red`, and no repair attempt is
+  admitted. Other matching current-base failures also record
+  `pr_auto_fix_base_red`. Ordinary agent repairs retain their existing
+  admission history. Missing evidence leaves the ordinary diagnosis path in
+  place.
 - Closed or merged PRs, and heads superseded by a newer push, get no repair.
 
 ### Setting `task.crew`

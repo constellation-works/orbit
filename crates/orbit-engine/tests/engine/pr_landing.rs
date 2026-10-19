@@ -8212,6 +8212,16 @@ check() {
         pending) printf '{"__typename":"CheckRun","name":"test","status":"IN_PROGRESS","conclusion":""}' ;;
         success) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS"}' ;;
         failure) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE"}' ;;
+        # Two required failures. `test` then `lint`, or the reverse. Both
+        # carry isRequired so the policy read does not tag only the last node.
+        paired_failure|paired_failure_reversed)
+            test_check='{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE","isRequired":true}'
+            lint_check='{"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"FAILURE","isRequired":true}'
+            if [ "$1" = paired_failure_reversed ]; then
+                printf '%s,%s' "$lint_check" "$test_check"
+            else
+                printf '%s,%s' "$test_check" "$lint_check"
+            fi ;;
     esac
 }
 
@@ -8276,6 +8286,7 @@ status() {
         pending) merge_state=BLOCKED; rollup=$(check pending) ;;
         success) merge_state=CLEAN; rollup=$(check success) ;;
         failure) merge_state=BLOCKED; rollup=$(check failure) ;;
+        paired_failure|paired_failure_reversed) merge_state=BLOCKED; rollup=$(check "$observed") ;;
         aggregate_failure|aggregate_mixed_failure)
             merge_state=BLOCKED
             rollup='{"__typename":"CheckRun","name":"CodeQL","workflowName":"","status":"COMPLETED","conclusion":"FAILURE"},{"__typename":"CheckRun","name":"Analyze (rust)","workflowName":"CodeQL","status":"COMPLETED","conclusion":"SUCCESS"}'
@@ -8631,7 +8642,7 @@ case "$1 ${2:-}" in
                 if [ -f "$forge/required-policy" ]; then cat "$forge/required-policy"; exit; fi
                 rollup=$(check "$observed")
                 case "$observed" in
-                    mixed_*) ;;
+                    mixed_*|paired_failure|paired_failure_reversed) ;;
                     *) rollup=$(printf '%s' "$rollup" | sed 's/}$/,"isRequired":true}/') ;;
                 esac
                 printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[%s]}}}}]}}}}}\n' "$(head_sha)" "$(head_sha)" "$rollup"
