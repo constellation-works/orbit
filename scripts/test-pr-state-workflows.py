@@ -575,11 +575,118 @@ class NextestShardWorkflowTests(unittest.TestCase):
                          "the shard jobs must select every count partition of NEXTEST_SHARDS")
         self.assertEqual(sorted(partitions.values()), sorted(f"Test shard {k}/{shards}" for k in range(1, shards + 1)))
         [wait] = self.run_step(jobs["ci"], "Await the test build and nextest shards")
-        self.assertEqual(wait[0], "scripts/ci-await-jobs.py")
+        self.assertEqual(Path(wait[0]).name, "ci-await-jobs.py")
         awaited = wait[2::2]
         self.assertEqual(wait[1::2], ["--job"] * len(awaited))
         self.assertEqual(sorted(awaited), sorted([jobs["test-build"]["name"], *partitions.values()]),
                          "the Check job's elapsed time must cover the test build and every shard")
+
+
+@unittest.skipIf(yaml is None, "PyYAML is required to execute workflow controls")
+class WorkflowHelperRevisionTests(unittest.TestCase):
+    """Protect against the workflow/old-PR-head helper skew seen in PR #5247."""
+
+    def test_pr_head_jobs_resolve_orchestration_helpers_from_the_workflow_revision(self):
+        for path in sorted((ROOT / ".github/workflows").glob("*.y*ml")):
+            document = yaml.safe_load(path.read_text())
+            for name, job in document["jobs"].items():
+                checkouts = []
+                for step in job.get("steps", []):
+                    if step.get("uses", "").startswith("actions/checkout@"):
+                        checkouts.append(step.get("with", {}))
+                        continue
+                    if not any("pull_request.head.sha" in c.get("ref", "") for c in checkouts):
+                        continue
+                    for helper in re.findall(r"[\w./-]*scripts/ci-[\w-]+\.(?:py|sh)", step.get("run", "")):
+                        # This entrypoint validates/builds/tests the candidate;
+                        # it and its transitive checks belong to the PR head.
+                        if Path(helper).name == "ci-guardrails.sh":
+                            continue
+                        with self.subTest(workflow=path.name, job=name, helper=helper):
+                            owners = [c for c in checkouts
+                                      if Path(helper).is_relative_to(c.get("path", "."))]
+                            owner = max(owners, key=lambda c: len(Path(c.get("path", ".")).parts))
+                            self.assertEqual(owner.get("ref"), "${{ github.sha }}",
+                                             "PR #5247: orchestration helpers must use the workflow revision")
+
+    def test_old_pr_head_runs_new_wait_interface_without_changing_the_code_under_test(self):
+        scratch = ROOT / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch, prefix="workflow-revisions-") as temporary:
+            root = Path(temporary)
+            repository = root / "repository"
+            repository.mkdir()
+
+            def git(*args, cwd=repository):
+                result = self_test_hang.run(
+                    ["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                     "-c", "core.hooksPath=/dev/null", *args],
+                    step="workflow revision fixture", cwd=cwd, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return result.stdout.strip()
+
+            git("init", "-q")
+            scripts = repository / "scripts"
+            scripts.mkdir()
+            helper = scripts / "ci-await-jobs.py"
+            helper.write_text("import argparse\np=argparse.ArgumentParser()\n"
+                              "p.add_argument('--job', action='append')\np.parse_args()\n")
+            code = repository / "code.txt"
+            code.write_text("PR head code\n")
+            git("add", ".")
+            git("commit", "-qm", "old PR head")
+            head = git("rev-parse", "HEAD")
+            helper.write_text((ROOT / "scripts/ci-await-jobs.py").read_text())
+            code.write_text("workflow revision code\n")
+            git("add", ".")
+            git("commit", "-qm", "new workflow helper interface")
+            workflow = git("rev-parse", "HEAD")
+            job = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]["test-1"]
+            workspace = root / "workspace"
+            workspace.mkdir()
+            for step in job["steps"]:
+                if not step.get("uses", "").startswith("actions/checkout@"):
+                    continue
+                settings = step.get("with", {})
+                expression = settings["ref"].removeprefix("${{").removesuffix("}}").strip()
+                for key, value in (("github.event_name", "pull_request"),
+                                   ("github.event.pull_request.head.sha", head), ("github.sha", workflow)):
+                    expression = expression.replace(key, repr(value))
+                revision = eval(expression.replace("&&", " and ").replace("||", " or "),
+                                {"__builtins__": {}}, {})
+                target = workspace / settings.get("path", ".")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                git("clone", "-q", "--no-checkout", str(repository), str(target))
+                if "sparse-checkout" in settings:
+                    self.assertFalse(settings["sparse-checkout-cone-mode"])
+                    git("sparse-checkout", "set", "--no-cone",
+                        *settings["sparse-checkout"].splitlines(), cwd=target)
+                git("checkout", "-q", revision, cwd=target)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            gh = bin_dir / "gh"
+            gh.write_text("#!/bin/sh\nprintf '%s\\n' " + repr(json.dumps({
+                "name": "Test build", "status": "in_progress", "steps": [{
+                    "name": "Upload nextest archive", "status": "completed", "conclusion": "success"}]
+            })) + "\n")
+            gh.chmod(0o755)
+            env = dict(PATH=f"{bin_dir}:{os.environ['PATH']}", GITHUB_REPOSITORY="fixture/repository",
+                       GITHUB_RUN_ID="42")
+            wait = next(s for s in job["steps"] if s.get("name") == "Await the nextest archive")
+            command = ["bash", "-e", "-o", "pipefail", "-c", wait["run"]]
+            result = self_test_hang.run(command, step="old PR new helper", cwd=workspace,
+                                        env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("step 'Upload nextest archive' succeeded", result.stdout)
+            self.assertEqual(git("rev-parse", "HEAD", cwd=workspace), head)
+            self.assertEqual((workspace / "code.txt").read_text(), "PR head code\n")
+            # Negative control: the same new interface still fails on the old
+            # helper, proving the fixture reproduces the original incident.
+            old = self_test_hang.run(
+                [sys.executable, "scripts/ci-await-jobs.py", "--job", "Test build", "--step", "Upload nextest archive"],
+                step="old helper rejects new interface", cwd=workspace, env=env, capture_output=True, text=True)
+            self.assertEqual(old.returncode, 2)
+            self.assertIn("unrecognized arguments: --step", old.stderr)
 
 
 @unittest.skipIf(yaml is None, "PyYAML not installed; the workflow guard skips locally without it")

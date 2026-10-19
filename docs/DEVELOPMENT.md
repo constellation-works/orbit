@@ -366,6 +366,20 @@ When a comparable base passes but the candidate names at most three failed tests
 
 Hosted CI runs the work of the full `make ci` on open PRs, split across jobs as described below. Each PR-triggered workflow starts with a checkout-free `Live PR state` job (`pull-requests: read` only); if the PR merged or closed while queued, the build and analysis jobs are skipped under unchanged check names, which GitHub treats as passing. An API error fails the gate rather than admitting an unknown state; a PR that closes after the gate read `open` can still finish. Push, scheduled and manual runs skip the gate, so agent-main/main CI and CodeQL still cover merged changes, narrowed in `ci.yml` as described next. `make ci-fast` selects `scripts/test-pr-state-workflows.py` when self-test inputs change; full `make ci` always runs it. The script replays each gate against recorded API responses.
 
+On `pull_request` events, the workflow definition comes from the merge ref,
+while the primary checkout stays at `github.event.pull_request.head.sha` so
+builds, tests and repository guards validate the PR's own code. Workflow-coupled
+orchestration helpers must come from `github.sha`, the workflow's revision.
+Jobs that need both revisions use a second, sparse checkout under
+`.orbit/tmp/workflow-ci` and invoke `ci-await-jobs.py` and
+`ci-download-verified.sh` from its `scripts/` directory. The scope job checks
+out `github.sha` directly. Keep `ci-guardrails.sh` and its candidate checks in
+the primary checkout. Apply this rule to new helper calls in every workflow:
+workflow/helper interface changes must work with older PR heads without
+requiring backward compatibility or a rebase. `scripts/test-pr-state-workflows.py`
+guards helper routing across workflows and executes the new wait interface
+with an older PR head in an isolated two-revision Git fixture.
+
 In `ci.yml`, a `Change scope` job ([ci-change-scope.sh](../scripts/ci-change-scope.sh)) narrows each run before build runners start:
 
 - **`docs`**: every changed path, on a PR or in a push, is Markdown outside `crates/` and `plugin/`. A push additionally requires a successful completed GitHub Actions `Check / Clippy / Test` on its `before` commit. A missing, pending, cancelled, failed or skipped check, or an API error, runs the full gate instead: the previous tip may contain code whose pending run was replaced. Markdown under `crates/` is compiled in as assets, and `plugin/` is the generated skill mirror, so both still take the full gate. Only `Docs guards` runs (`ci-guardrails.sh --static`: doc links and indexes, the skill mirror and the other file and metadata guards).
