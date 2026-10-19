@@ -1032,6 +1032,48 @@ fn a_linux_owner_with_a_macos_follower_draws_the_macos_only_crew() {
     );
 }
 
+/// Unreadable claim evidence is unknown, never proof that a registered host
+/// has not pulled. Exercise the public readiness projection with a damaged
+/// persisted claim, without adding a production fault-injection hook.
+fn unreadable_claims_do_not_report_registered_hosts_as_not_pulling() {
+    const MAC: &str = "hm_fixture_mac";
+    let (_root, linux) = runtime_on(HostOs::Linux, POOL);
+    let task = add(&linux, "unreadable-claims", Some("muse-wonder"), &[]).unwrap();
+    seed_claim_evidence(&linux, MAC, 0);
+    let owner = linux.with_registered_host_oses([(MAC.to_string(), HostOs::Macos)]);
+    assert!(owner.serving_host_oses().contains(&HostOs::Macos));
+
+    let connection = rusqlite::Connection::open(owner.global_root().join("orbit.db")).unwrap();
+    assert_eq!(
+        connection
+            .execute(
+                "UPDATE task_coordination_rows SET payload_json = '{}' WHERE workspace_id = ?1 AND kind = 'distributed-execution-claim-v1'",
+                [owner.workspace_id().unwrap()],
+            )
+            .unwrap(),
+        1
+    );
+    assert!(owner.inspect_execution_claims().is_err());
+    assert_eq!(owner.serving_host_oses(), BTreeSet::from([HostOs::Linux]));
+
+    let readiness = owner
+        .workspace_auto_readiness(std::slice::from_ref(&task.id), None, 50, &[])
+        .unwrap();
+    let waiting = &readiness["tasks"][0];
+    assert_eq!(waiting["task_id"], task.id, "{readiness}");
+    assert_eq!(waiting["reason"], "host_os_mismatch", "{waiting}");
+    let fleet = waiting["host_fleet"].as_str().unwrap();
+    assert!(
+        !fleet.contains("not pulling") && !fleet.contains("no claim here"),
+        "unreadable claim records cannot prove the registered host has no recent claim: {fleet}"
+    );
+    assert!(
+        fleet.contains(MAC),
+        "the registered host remains visible: {fleet}"
+    );
+    assert!(fleet.contains("claim records unreadable"), "{fleet}");
+}
+
 /// Automatic assignment filters by the effective tags before drawing, so a
 /// serving follower cannot make a satisfiable Linux task or edit fail.
 fn serving_host_draws_respect_effective_task_os_tags() {
@@ -1250,6 +1292,7 @@ crate::scenario_table!(
     a_linux_host_waits_on_a_muse_crew_and_a_macos_host_admits_it_scenarios,
     a_linux_host_waits_on_a_muse_crew_and_a_macos_host_admits_it,
     a_linux_owner_with_a_macos_follower_draws_the_macos_only_crew,
+    unreadable_claims_do_not_report_registered_hosts_as_not_pulling,
     serving_host_draws_respect_effective_task_os_tags,
     an_empty_os_intersection_is_refused_on_add_and_update,
     effective_os_readouts_follow_configuration_and_filter_before_the_limit,
