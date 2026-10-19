@@ -1641,3 +1641,74 @@ fn codebase_analytics_warm_p95_on_a_store_copy() {
         "warm p95 over the 500 ms budget: {report}"
     );
 }
+
+#[test]
+fn lock_contention_survives_audit_gc_and_upgrade_backfill() {
+    isolated(
+        "codebase::lock_contention_survives_audit_gc_and_upgrade_backfill",
+        || {
+            let fixture = Fixture::new();
+            let at = Utc::now() - Duration::days(75);
+            reserve(&fixture, "old-reservation", "HF-1", &["src/shared.rs"], at);
+            super::support::rewind_retention_analytics(&fixture);
+            // These old rows predate the upgrade; unscoped and foreign rows must
+            // not become local evidence merely because they name the same path.
+            for (index, workspace) in [
+                (0, Some("ws_http_fixture")),
+                (1, None),
+                (2, Some("foreign")),
+            ] {
+                lock_denial_in_workspace(
+                    &fixture,
+                    index,
+                    Some("HF-2"),
+                    None,
+                    "src/shared.rs",
+                    workspace,
+                );
+            }
+            fixture
+                .runtime
+                .sqlite_store()
+                .unwrap()
+                .with_transaction(|tx| {
+                    tx.connection()
+                        .execute("UPDATE audit_events SET timestamp = ?1", [at.to_rfc3339()])
+                        .map_err(|error| OrbitError::Store(error.to_string()))?;
+                    Ok(())
+                })
+                .unwrap();
+            super::support::upgrade_retention_analytics(&fixture);
+            super::support::upgrade_retention_analytics(&fixture); // backfill runs once
+            // A post-upgrade attempt exercises the ongoing durable write, too.
+            lock_denial(&fixture, 3, Some("HF-3"), None, "src/shared.rs");
+            let read = |window: &str| {
+                // A fresh server avoids the dashboard facts cache masking a prune.
+                json_ok(fixture.server(false).get(&format!(
+                    "/api/codebase/analytics?{WS}&window={window}&min_support=1"
+                )))["lock_contention"]
+                    .clone()
+            };
+            let before: Vec<_> = ["90d", "all"].map(read).into();
+            for section in &before {
+                let lock = row(section, "src/shared.rs").unwrap();
+                assert_eq!(
+                    lock["denials"], 2,
+                    "backfill is idempotent and captures new denials"
+                );
+                assert_eq!(lock["reservations"], 1);
+                assert_eq!(lock["numerator"], 2);
+                assert_eq!(lock["denominator"], 3);
+            }
+            let gc = fixture.runtime.gc_audit(true, Some(60)).unwrap();
+            assert_eq!(gc.tables[0].rows_removed, 3);
+            for (window, expected) in ["90d", "all"].into_iter().zip(before) {
+                assert_eq!(
+                    read(window),
+                    expected,
+                    "denial counts and rates survive audit GC"
+                );
+            }
+        },
+    );
+}

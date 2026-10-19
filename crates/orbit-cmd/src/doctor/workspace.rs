@@ -486,8 +486,12 @@ pub(super) fn doctor_check_store_retention(runtime: &OrbitRuntime) -> WorkspaceD
             WorkspaceDoctorStatus::Warning,
             format!(
                 "store file {} exceeds retention.store_warn_bytes ({}). No store-gc routine is \
-                 enabled. {message} On a large store, set retention.runs_days to 14 to reclaim \
-                 more terminal run state than the 60-day default. VACUUM returns freed pages.",
+                 enabled. {message} On a large store, set retention.runs_days to 30 to reclaim \
+                 more terminal run state than the 60-day default while preserving 30-day reliability \
+                 and forecast-accuracy evidence. Audit pruning removes older Health Events, Incidents, \
+                 Denials, orbit audit and diagnostics friction history. Run archival discards older raw \
+                 pipeline checkpoints; contention and committed-duration analytics stay. \
+                 VACUUM returns freed pages.",
                 human_bytes(overview.store.file_bytes),
                 human_bytes(threshold),
             ),

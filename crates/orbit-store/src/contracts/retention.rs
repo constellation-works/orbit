@@ -9,6 +9,19 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 
+/// Minimal lock-contention evidence retained independently of command audit.
+#[derive(Debug, Clone)]
+pub struct TaskLockDenialRecord {
+    /// Original invocation identity, used when no task or run was named.
+    pub execution_id: String,
+    /// Time of the refused request.
+    pub timestamp: DateTime<Utc>,
+    /// Owning run when the request did not name tasks.
+    pub job_run_id: Option<String>,
+    /// Requester identities and conflicting paths, without command payloads.
+    pub arguments_json: String,
+}
+
 /// The two audit tables retention prunes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditRetentionTable {
@@ -84,6 +97,12 @@ pub struct StoreSpace {
 }
 
 pub trait StoreRetentionBackend: Send + Sync {
+    /// All lock-conflict attempts in one workspace, independent of audit retention.
+    fn list_task_lock_denials(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<TaskLockDenialRecord>, OrbitError>;
+
     /// Distinct `workspace_id` values in `source`, read from the index that
     /// leads with that column. The caller decides which of them are in scope.
     fn distinct_workspace_ids(&self, source: RetentionIdSource) -> Result<Vec<String>, OrbitError>;
