@@ -9,7 +9,7 @@ doc_role: overview
 type: design
 summary: Declaring each verb of a noun once as data so CLI, MCP, dashboard, and runtime handlers are derived adapters instead of hand-copied layers; friction, auto-task, drain, workspace claim, every task tool and the workflow-run tools are migrated onto kernel v2 and validate input at the tool entry, and a planned noun-by-noun migration is accepted and in progress.
 tags: [operations-as-data, architecture, adr-0209]
-paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-common/src/governance/task/**", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs", "crates/orbit-core/src/adapter/tool_host/workflow_tools.rs", "crates/orbit-common/src/governance/search.rs"]
+paths: ["crates/orbit-common/src/governance/operation/**", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-common/src/governance/task/**", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs", "crates/orbit-core/src/adapter/tool_host/workflow_tools.rs", "crates/orbit-common/src/governance/search.rs"]
 related_features: [operations-as-data, orbit-core]
 related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15940, ORB-15941, ORB-15942]
 ---
@@ -103,7 +103,7 @@ and again in the tool handler.
 
 | Concern | File | Task |
 |---------|------|------|
-| The kernel: noun, operation, parameter, effect and redaction vocabulary; the `OperationVerb` trait and `operation_registry!` | [crates/orbit-common/src/governance/operation.rs](../../../crates/orbit-common/src/governance/operation.rs) | [ORB-10358], [ORB-15932] |
+| The kernel: noun, operation, parameter, effect and redaction vocabulary; the `OperationVerb` trait and `operation_registry!` | [crates/orbit-common/src/governance/operation/mod.rs](../../../crates/orbit-common/src/governance/operation/mod.rs) | [ORB-10358], [ORB-15932] |
 | The friction registry (single declaration site) | [crates/orbit-common/src/governance/friction/operations.rs](../../../crates/orbit-common/src/governance/friction/operations.rs) | [ORB-10358] |
 | The auto-task registry (single declaration site) | [crates/orbit-common/src/governance/auto_task/operations.rs](../../../crates/orbit-common/src/governance/auto_task/operations.rs) | [ORB-15935] |
 | The drain registry (six active tool-only verbs, including `orbit.task.pull`) | [crates/orbit-common/src/governance/drain.rs](../../../crates/orbit-common/src/governance/drain.rs) | [ORB-15936] |

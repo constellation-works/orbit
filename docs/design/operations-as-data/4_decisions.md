@@ -9,7 +9,7 @@ doc_role: decisions
 type: design
 summary: Decision log for the operations-as-data registry — the split spec/handler table, what stays hand-written, capability governance, and the kernel v2 rules and planned migration.
 tags: [operations-as-data, architecture, adr-0209]
-paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-common/src/governance/authorization/mod.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-common/src/governance/authorization/catalog.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-common/tests/common/mechanisms/governance.rs", "crates/orbit-cli/tests/tool/tool_list.rs", "crates/orbit-tools/src/mcp_rules.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/host_route.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs"]
+paths: ["crates/orbit-common/src/governance/operation/**", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-common/src/governance/authorization/mod.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-common/src/governance/authorization/catalog.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-common/tests/common/mechanisms/governance.rs", "crates/orbit-cli/tests/tool/tool_list.rs", "crates/orbit-tools/src/mcp_rules.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/host_route.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs"]
 related_features: [operations-as-data]
 related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582, ORB-15932, ORB-15933, ORB-15935, ORB-15937, ORB-15938, ORB-15940, ORB-15941]
 ---
@@ -45,7 +45,7 @@ the same day. They govern kernel v2 and the migration plan in
 ## Split spec/handler table joined by a typed verb enum
 
 **Recorded:** 2026-07-26 00:55:47.755882Z · [ORB-10358]
-**Paths:** `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-common/src/governance/friction/**`
+**Paths:** `crates/orbit-common/src/governance/operation/mod.rs`, `crates/orbit-common/src/governance/friction/**`
 
 ### Context
  [North-star architecture bearing: operations as data behind an operation registry](../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry) bearing 1 describes one operation table holding both the
@@ -86,7 +86,7 @@ verb that is declared but not implemented fails to compile.
 **Amended by:** [The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface](#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface) moves the renderer *selection* (`CliRender`) out of the spec into a CLI surface table. [ORB-15932] did so for friction and removed `CliRender` from the kernel. Routes and renderers stay hand-written.
 
 **Recorded:** 2026-07-26 00:55:47.967899Z · [ORB-10358]
-**Paths:** `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-common/src/governance/friction/**`
+**Paths:** `crates/orbit-common/src/governance/operation/mod.rs`, `crates/orbit-common/src/governance/friction/**`
 
 ### Context
  Once verbs are data, the obvious next step is to make the rest of
@@ -122,7 +122,7 @@ tool names and parameter names from the registry.
 ## Freeze the pre-migration surface as fixtures before migrating
 
 **Recorded:** 2026-07-26 00:55:48.187121Z · [ORB-10358]
-**Paths:** `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-common/src/governance/friction/**`
+**Paths:** `crates/orbit-common/src/governance/operation/mod.rs`, `crates/orbit-common/src/governance/friction/**`
 
 ### Context
  The pilot's hard requirement was that CLI argv/output and MCP tool
@@ -207,7 +207,7 @@ This is an **accident guard, not a security boundary**. Agents on a development 
 ## MCP advertisement is placement; the capability chokepoint is permission
 
 **Recorded:** 2026-08 · [ORB-10478] · **Implemented** in [ORB-10478]
-**Paths:** `crates/orbit-common/src/governance/authorization/mod.rs`, `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-tools/src/builtin/orbit/tests/authorization.rs`
+**Paths:** `crates/orbit-common/src/governance/authorization/mod.rs`, `crates/orbit-common/src/governance/operation/mod.rs`, `crates/orbit-tools/src/builtin/orbit/tests/authorization.rs`
 
 ### Context
 
@@ -378,7 +378,7 @@ including ones nobody has met yet: ask which surfaces need it, then place it.
 ## Declare effect, aliases, and redaction in the spec, and validate input once at the tool entry
 
 **Recorded:** 2026-10-12 · accepted from the 2026-10-12 design review; `effect` and `redact` built on friction by [ORB-15932], input validation by [ORB-15933]
-**Paths:** `crates/orbit-common/src/governance/operation.rs`, `crates/orbit-core/src/adapter/tool_host/friction_tools.rs`, `crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs`, `crates/orbit-tools/src/builtin/orbit/operation.rs`, `crates/orbit-common/src/protocol/tool_input.rs`
+**Paths:** `crates/orbit-common/src/governance/operation/mod.rs`, `crates/orbit-core/src/adapter/tool_host/friction_tools.rs`, `crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs`, `crates/orbit-tools/src/builtin/orbit/operation.rs`, `crates/orbit-common/src/protocol/tool_input.rs`
 
 ### Context
 

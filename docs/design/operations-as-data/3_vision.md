@@ -9,7 +9,7 @@ doc_role: vision
 type: design
 summary: Questions kernel v2 leaves open — typed requests and responses, derived routes, the knowledge/execution split — and what the registry could enable beyond deduplication; ID routing was answered by phase 3a.
 tags: [operations-as-data, architecture, adr-0209]
-paths: ["crates/orbit-common/src/governance/operation.rs"]
+paths: ["crates/orbit-common/src/governance/operation/**"]
 related_features: [operations-as-data, orbit-core]
 related_artifacts: [ORB-10358, ORB-15937]
 ---
