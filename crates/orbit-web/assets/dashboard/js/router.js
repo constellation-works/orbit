@@ -384,7 +384,9 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   // Browser tabs and history entries read as this page's title, so name the
   // destination there too instead of every entry saying "orbit".
   setDashboardTitle(`${destination} · orbit`);
-  document.body.classList.toggle("operations-active", top === "operations" || top === "config");
+  // Config uses the shell's bounded pane so its inspector can stick while
+  // the key list scrolls. Only Operations needs a document-height layout.
+  document.body.classList.toggle("operations-active", top === "operations");
   // ORB-10972: a destination's subtabs show in the rail only while it is
   // open, so the remembered-subtab highlight never reads as a second
   // selection. The `.active` class itself is left alone; it is still the
