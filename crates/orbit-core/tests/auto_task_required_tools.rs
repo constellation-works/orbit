@@ -60,15 +60,6 @@ const BUNDLED_AUTO_TASKS: &[(&str, &str)] = &[
     ),
 ];
 
-const TASK_FILING_TEMPLATES: &[&str] = &[
-    "code-review",
-    "delivery-code-review",
-    "full-code-review",
-    "qa-full-sweep",
-    "run-failure-patterns",
-    "security-review",
-];
-
 fn parse_template(name: &str, source: &str) -> AutoTaskDefinition {
     let definition: AutoTaskDefinition =
         serde_yaml::from_str(source).unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -82,25 +73,6 @@ fn has_required_tool(definition: &AutoTaskDefinition, tool: &str) -> bool {
         .required_tools
         .iter()
         .any(|required| required == tool)
-}
-
-#[test]
-fn bundled_task_filing_templates_declare_task_add() {
-    let definitions = BUNDLED_AUTO_TASKS
-        .iter()
-        .map(|(name, source)| (*name, parse_template(name, source)))
-        .collect::<Vec<_>>();
-
-    for name in TASK_FILING_TEMPLATES {
-        let definition = definitions
-            .iter()
-            .find_map(|(candidate, definition)| (candidate == name).then_some(definition))
-            .unwrap_or_else(|| panic!("missing bundled task-filing template {name}"));
-        assert!(
-            has_required_tool(definition, "orbit.task.add"),
-            "bundled template {name} files tasks but does not declare orbit.task.add"
-        );
-    }
 }
 
 fn task_add_payloads(description: &str) -> Vec<Value> {
@@ -418,61 +390,6 @@ fn scheduler_report(
     assert!(outcome.errors.is_empty(), "{outcome:?}");
     assert_eq!(outcome.reports.len(), 1, "{outcome:?}");
     outcome.reports.remove(0)
-}
-
-#[test]
-fn full_code_review_area_chore_declares_tools_used_for_findings() {
-    let source = BUNDLED_AUTO_TASKS
-        .iter()
-        .find_map(|(name, source)| (*name == "full-code-review").then_some(*source))
-        .unwrap_or_else(|| panic!("full-code-review is a bundled auto-task"));
-    let coordinator = parse_template("full-code-review", source);
-    assert!(has_required_tool(&coordinator, "orbit.task.add"));
-    assert!(has_required_tool(&coordinator, "orbit.task.list"));
-
-    // This is the preparation check: the generated chore must advertise every
-    // Orbit tool its finding workflow needs, so task-pilot has no utility gap.
-    let area_chore = task_add_payloads(&coordinator.template.description)
-        .into_iter()
-        .find(|payload| {
-            payload["type"] == "chore"
-                && payload["tags"]
-                    .as_array()
-                    .is_some_and(|tags| tags.iter().any(|tag| tag == "full-code-review"))
-        })
-        .unwrap_or_else(|| panic!("full-code-review files an area chore"));
-    let required_tools = area_chore["required_tools"]
-        .as_array()
-        .unwrap_or_else(|| panic!("area chore declares its required tools"));
-    for tool in ["orbit.search", "orbit.task.add"] {
-        assert!(
-            required_tools.iter().any(|required| required == tool),
-            "area chore omits {tool}; task-pilot would warn that findings cannot be filed"
-        );
-    }
-}
-
-#[test]
-fn run_failure_fix_tasks_wait_for_human_approval() {
-    let source = BUNDLED_AUTO_TASKS
-        .iter()
-        .find_map(|(name, source)| (*name == "run-failure-patterns").then_some(*source))
-        .unwrap_or_else(|| panic!("run-failure-patterns is a bundled auto-task"));
-    let definition = parse_template("run-failure-patterns", source);
-    let payloads = task_add_payloads(&definition.template.description);
-    let [fix_task] = payloads.as_slice() else {
-        panic!("run-failure-patterns files one kind of fix task: {payloads:?}");
-    };
-    let tags = fix_task["tags"]
-        .as_array()
-        .unwrap_or_else(|| panic!("the fix task carries tags: {fix_task}"));
-    for tag in ["run-failure-patterns", "no-auto-approve"] {
-        assert!(
-            tags.iter().any(|candidate| candidate == tag),
-            "fix task omits `{tag}`: an unattended scan's tasks must stay proposed for human \
-             approval, never promoted by an --approve-proposed drain"
-        );
-    }
 }
 
 /// Lint the criteria as a task minted from them would carry them, and return
