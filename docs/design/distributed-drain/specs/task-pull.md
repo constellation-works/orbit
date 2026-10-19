@@ -359,6 +359,9 @@ state read, or one also narrowed by the exact `Change scope` job of `ci.yml`
 (`scripts/ci-change-scope.sh`, `continue-on-error`): every mode it can output
 either runs such a job or reports it skipped under its name. A skipped check
 run on the old head that no policy requires does not stop the path. The
+workflow scan authenticates path-filtered (`paths` or `paths-ignore`) PR
+workflows but derives no guaranteed contexts from them; they cannot justify
+a base update or prevent a sibling workflow from proving its own emission. The
 inherited-failure and absent-context paths share one durable owner-task
 reservation and absolute deadline across attempts and runs. Reservation
 precedes the expected-head provider update; an unknown outcome is observed,

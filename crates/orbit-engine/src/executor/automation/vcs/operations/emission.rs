@@ -1,5 +1,6 @@
 //! Authenticated, bounded PR workflow emission proof for an older head.
-//! No workflow is executed or interpreted; unsupported semantics refuse.
+//! No workflow is executed or interpreted; path-filtered workflows contribute
+//! no guaranteed contexts, and other unsupported semantics refuse.
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -53,6 +54,12 @@ fn emitted(source: &str, branch: &str) -> Result<Vec<String>, OrbitError> {
         return Ok(vec![]);
     };
     if let Some(selectors) = trigger.as_object() {
+        // A path-filtered workflow cannot guarantee a check on synchronize.
+        // Keep authenticating its blob and identity in `sources`, but do not
+        // let its conditional trigger prevent proof from sibling workflows.
+        if selectors.contains_key("paths") || selectors.contains_key("paths-ignore") {
+            return Ok(vec![]);
+        }
         if selectors
             .keys()
             .any(|key| !matches!(key.as_str(), "branches" | "types"))

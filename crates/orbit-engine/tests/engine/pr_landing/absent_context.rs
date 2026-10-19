@@ -103,6 +103,65 @@ fn absent_context_refreshes_once_before_normal_owner_completion() {
     );
 }
 
+#[test]
+fn path_filtered_website_workflow_preserves_sibling_emission_recovery() {
+    isolated(
+        "absent_context::path_filtered_website_workflow_preserves_sibling_emission_recovery",
+        |sandbox| {
+            let (fx, host) = setup(sandbox, NEW);
+            let website = fs::read_to_string(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../.github/workflows/website-check.yml"),
+            )
+            .unwrap();
+            fx.commit_on_base(".github/workflows/website-check.yml", &website);
+            fs::write(fx.forge.join("website-workflow"), "registered").unwrap();
+            fs::write(fx.forge.join("review-approved"), "approved").unwrap();
+            let proof = orbit_engine::run_private_vcs_operation(
+                "ci.emission_evidence",
+                &json!({
+                    "workspace_path": fx.repo,
+                    "pr": PR_NUMBER,
+                    "head_sha": fx.candidate,
+                    "head_branch": BRANCH,
+                    "base_branch": BASE,
+                    "accepted_base": fx.base_sha,
+                    "deadline_ms": Utc::now().timestamp_millis() + 30_000,
+                }),
+            )
+            .expect("a path-filtered sibling must not abort authenticated emission proof");
+            let sources = &proof["evidence"]["base_sources"];
+            assert_eq!(
+                sources[".github/workflows/ci.yml"]["contexts"],
+                json!(["Protected (rust)"])
+            );
+            assert_eq!(
+                sources[".github/workflows/website-check.yml"]["contexts"],
+                json!([]),
+                "path-filtered checks never contribute guaranteed emission"
+            );
+            let mut input = fx.complete_input();
+            input["auto_fix"] = json!(true);
+            let completed = action(&host, "pr_complete", &input)
+                .expect("a path-filtered sibling must not abort authenticated emission proof");
+            assert_eq!(completed["completed_task_ids"], json!([TASK_ID]));
+            assert_eq!(
+                fs::read_to_string(fx.forge.join("mutations")).unwrap(),
+                "update\nmerge\n",
+                "the missing sibling context permits exactly one update and merge"
+            );
+            assert_eq!(
+                host.history(TASK_ID)
+                    .iter()
+                    .filter(|row| row.event == "pr_base_update_reserved")
+                    .count(),
+                1
+            );
+            assert!(pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).is_empty());
+        },
+    );
+}
+
 struct AcceptedLanding {
     host: DeliveryHost,
     context: orbit_engine::HandoffLandingContext,
@@ -221,6 +280,7 @@ fn unsupported_or_unproven_emission_never_updates_or_repairs() {
                 "condition",
                 "needs",
                 "paths",
+                "paths-ignore",
                 "wrong_branch",
                 "wrong_event",
                 "old_emits",
@@ -257,6 +317,10 @@ fn unsupported_or_unproven_emission_never_updates_or_repairs() {
                         "paths" => {
                             NEW.replace("    branches:", "    paths: ['src/**']\n    branches:")
                         }
+                        "paths-ignore" => NEW.replace(
+                            "    branches:",
+                            "    paths-ignore: ['docs/**']\n    branches:",
+                        ),
                         "wrong_branch" => NEW.replace("branches: [agent-main]", "branches: [main]"),
                         "wrong_event" => NEW.replace("pull_request:", "push:"),
                         _ => NEW.into(),
