@@ -193,7 +193,8 @@ The payload carries:
 - **Where to work.** The repository and base branch, plus the exact branch to push:
   `claude/orbit-orb-12345`, lowercased and derived by Orbit.
 - **The commit marker.** `[ORB-12345]` goes in every commit subject. Dependency and
-  obsolescence checks already key on this marker (`activity-job/2_design.md:915`).
+  obsolescence checks already key on this marker
+  (`crates/orbit-engine/src/executor/automation/vcs/delivery_marker.rs`).
 - **The PR contract.**
   - Title: `[ORB-12345] <task title>`.
   - The body must have an `## Execution summary` section, written under the same rules
@@ -211,7 +212,7 @@ The payload carries:
 ## 4. Pipeline
 
 `task_gate_pipeline` already chooses `task_{{ input.mode }}_pipeline`
-(`assets/jobs/task_gate_pipeline.yaml:117`). A new `task_cloud_pipeline` slots in beside
+(`assets/jobs/task_gate_pipeline.yaml:10-12`). A new `task_cloud_pipeline` slots in beside
 `task_pr_pipeline` and reuses the gate's locks and eligibility checks unchanged. Its steps
 are deterministic actions. None of them is an `agent_loop`, so the envelope contract doesn't
 apply.
@@ -306,14 +307,15 @@ Cloud runs do not count against the drain's slots. Today they would:
 
 - `classify_workspace_auto_tasks` counts every live `task_auto_pipeline` run against
   `max_active_leaf_runs` (default 5);
-- `task_auto_pipeline` declares `max_active_runs: 10` as a hard ceiling
-  (`assets/jobs/workspace_auto_pipeline.yaml:7-14, 50-60`).
+- `task_auto_pipeline` declares `max_active_runs: 0`, so the job has no ceiling of its own
+  (`assets/jobs/task_auto_pipeline.yaml:43`); the number of live runs is the drain's bound
+  (`assets/jobs/workspace_auto_pipeline.yaml:7-14`, `orbit run auto --concurrency`).
 
 A cloud task waiting three hours in `cloud_await_pr` would hold one of those slots while the
 host does nothing for it. Phase 1 therefore:
 
-- dispatches cloud leaves as their own job, `task_cloud_auto_pipeline`, so the job-level
-  `max_active_runs` ceiling of `task_auto_pipeline` doesn't apply to them;
+- dispatches cloud leaves as their own job, `task_cloud_auto_pipeline`, so cloud leaves are
+  kept out of the local leaf count;
 - makes classify count local and cloud leaves separately: local leaves against
   `max_active_leaf_runs` as now, cloud leaves against `[cloud].max_in_flight` only;
 - keeps both counts in one admission pass, so `--stop`, the deadline and
