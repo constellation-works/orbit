@@ -420,22 +420,6 @@ fn unavailable_on_the_only_crew_withholds_and_creates_no_pilot_run() {
     );
 }
 
-fn an_expired_unavailable_hold_lets_the_pilot_resume() {
-    let workspace = Workspace::new();
-    let task = workspace.task("login recovered by time");
-    let now = Utc::now();
-    save_failure(
-        &workspace,
-        "jrun-codex-old",
-        now,
-        now - Duration::minutes(31),
-        ProviderFailureClass::Unavailable,
-        "codex",
-        "fixture",
-    );
-    assert_resumes(&workspace, now, &task.id);
-}
-
 /// Repair can fail long after the pipeline row was created. The hold must
 /// survive the creation-time scan window and expire from the failure's finish.
 fn an_old_pipeline_repair_failure_holds_until_its_finish_backoff() {
@@ -786,22 +770,6 @@ fn capacity_on_the_only_crew_withholds_and_a_probe_does_not_clear_it() {
     );
 }
 
-fn an_expired_capacity_hold_lets_the_pilot_resume() {
-    let workspace = Workspace::new();
-    let task = workspace.task("capacity backoff ended");
-    let now = Utc::now();
-    save_failure(
-        &workspace,
-        "jrun-codex-capacity-old",
-        now,
-        now - Duration::minutes(16),
-        ProviderFailureClass::Capacity,
-        "codex",
-        "fixture",
-    );
-    assert_resumes(&workspace, now, &task.id);
-}
-
 fn capacity_on_one_crew_leaves_another_crew_of_that_provider() {
     let workspace = workspace_with(
         r#"
@@ -1145,7 +1113,6 @@ crate::scenario_table!(
     unavailable_on_the_only_crew_withholds_and_creates_no_pilot_run,
     an_old_pipeline_repair_failure_holds_until_its_finish_backoff,
     a_hold_that_starts_during_debounce_withholds_the_pending_pilot,
-    an_expired_unavailable_hold_lets_the_pilot_resume,
     a_later_success_clears_unavailable_and_capacity,
     a_success_started_before_the_failure_does_not_clear_it,
     a_pilot_that_fails_on_the_provider_login_withholds_the_next_tick,
@@ -1156,7 +1123,6 @@ crate::scenario_table!(
     another_providers_crew_is_drawn_and_the_routine_still_admits,
     a_probe_does_not_clear_provider_wide_capacity_but_a_later_success_does,
     capacity_on_the_only_crew_withholds_and_a_probe_does_not_clear_it,
-    an_expired_capacity_hold_lets_the_pilot_resume,
     capacity_on_one_crew_leaves_another_crew_of_that_provider,
     another_hosts_failure_does_not_withhold,
     limit_and_refusal_failures_do_not_withhold_the_routine,

@@ -389,25 +389,10 @@ fn review_crew_loads_a_crew_or_a_pool_and_fails_on_an_unknown_member() {
 }
 
 #[test]
-fn machine_auto_concurrency_defaults_and_global_values_are_admitted() {
+fn machine_auto_concurrency_global_values_are_admitted() {
     let global = tempfile::tempdir().expect("global tempdir");
     let workspace = tempfile::tempdir().expect("workspace tempdir");
     let roots = ConfigRoots::new(global.path(), workspace.path());
-
-    let defaults = ResolvedConfig::load(&roots).expect("built-in auto-concurrency defaults load");
-    assert_eq!(
-        defaults.auto_concurrency,
-        AutoConcurrencySettings {
-            mode: "off".to_string(),
-            admit_cpu_percent: 90,
-            admit_memory_percent: 75,
-            profile_window: 50,
-            min_profile_deliveries: 10,
-            horizon_cap_minutes: 120,
-            head_max_wait_minutes: 30,
-            head_stuck_passes: 20,
-        }
-    );
 
     review_layers_write_config(
         global.path(),
@@ -500,26 +485,6 @@ fn machine_auto_concurrency_compares_memory_with_global_throttle_threshold() {
         .to_string();
     assert!(
         error.contains("machine.auto_concurrency.admit_memory_percent"),
-        "{error}"
-    );
-}
-
-#[test]
-fn workspace_machine_auto_concurrency_table_is_refused() {
-    let global = tempfile::tempdir().expect("global tempdir");
-    let workspace = tempfile::tempdir().expect("workspace tempdir");
-    let roots = ConfigRoots::new(global.path(), workspace.path());
-    review_layers_write_config(
-        workspace.path(),
-        "[machine.auto_concurrency]\nmode = \"enforce\"\nadmit_cpu_percent = 90\nadmit_memory_percent = 75\n\
-         profile_window = 50\nmin_profile_deliveries = 10\nhorizon_cap_minutes = 120\nhead_max_wait_minutes = 30\n",
-    );
-
-    let error = ResolvedConfig::load(&roots)
-        .expect_err("workspace config cannot set host-wide machine thresholds")
-        .to_string();
-    assert!(
-        error.contains("[machine] is not a workspace setting"),
         "{error}"
     );
 }

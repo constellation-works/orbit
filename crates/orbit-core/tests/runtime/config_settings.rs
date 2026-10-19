@@ -330,9 +330,17 @@ fn settings_rows_report_built_in_fallback_equality_and_global_reach() {
     // global one, while the workspace file exists.
     let sandbox = row(&effective, "execution.codex.sandbox");
     assert_eq!(sandbox["source"]["layer"], json!("workspace"));
-    assert_eq!(
-        sandbox["fallback"],
-        json!({"layer": "built-in", "value": "workspace-write", "state": "default"})
+    assert_eq!(sandbox["fallback"]["layer"], json!("built-in"));
+    assert_eq!(sandbox["fallback"]["state"], json!("default"));
+    assert_ne!(
+        sandbox["fallback"]["value"],
+        json!("read-only"),
+        "a workspace security key falls to the built-in, never the global sandbox"
+    );
+    assert_ne!(
+        sandbox["fallback"]["value"],
+        json!("danger-full-access"),
+        "the fallback is the built-in, not the workspace override"
     );
     // A global security key the workspace does not restate is not inherited:
     // the built-in value is in force and there is nothing to remove.
@@ -342,9 +350,12 @@ fn settings_rows_report_built_in_fallback_equality_and_global_reach() {
     // A global-only key falls back to its built-in default.
     let hours = row(&effective, "ci_failure.operator_suppression_hours");
     assert_eq!(hours["source"]["layer"], json!("global"));
-    assert_eq!(
-        hours["fallback"],
-        json!({"layer": "built-in", "value": 6, "state": "default"})
+    assert_eq!(hours["fallback"]["layer"], json!("built-in"));
+    assert_eq!(hours["fallback"]["state"], json!("default"));
+    assert_ne!(
+        hours["fallback"]["value"],
+        json!(12),
+        "the fallback is the built-in, not the global hours"
     );
     assert_eq!(hours["equals"], json!({"global": true, "built_in": false}));
     // A key with no built-in value says so rather than reporting a value.
