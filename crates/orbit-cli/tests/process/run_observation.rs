@@ -37,6 +37,7 @@ mod admission_forecast;
 mod auth_exclusions;
 mod build_budget;
 mod capacity_backoff;
+mod drain_window;
 #[cfg(target_os = "macos")]
 mod host_resources;
 #[cfg(unix)]

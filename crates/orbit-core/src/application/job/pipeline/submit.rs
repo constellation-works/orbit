@@ -319,7 +319,8 @@ impl OrbitRuntime {
     /// [ORB-10819] `for_seconds` is the drain window: the run keeps re-listing
     /// admissible work and shipping it until the window expires. `None` (or
     /// zero) means one tick, which is what every caller predating the window
-    /// gets. The window bounds only the *start* of new work — a child run
+    /// gets. Windows over 24 hours are refused before submission. The window
+    /// bounds only the *start* of new work — a child run
     /// already in flight when the deadline passes finishes normally.
     /// `max_active_leaf_runs` is the drain's concurrency ceiling: how many
     /// `task_auto_pipeline` children may be live at once. Omitted, the job's
@@ -367,6 +368,7 @@ impl OrbitRuntime {
         auto_concurrency: Option<orbit_types::workflow::AutoConcurrencyMode>,
         review: Option<orbit_types::workflow::ReviewLayer>,
     ) -> Result<PipelineInvokeResult, OrbitError> {
+        crate::application::workflow::validate_drain_window(for_seconds)?;
         self.validate_strict_worker_containment(strict_containment)?;
         self.require_workspace_claim("orbit.workflow.auto", claim_token)?;
         // [ORB-12500] An explicit owner drain is owner coordination work; a

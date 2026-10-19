@@ -1,7 +1,7 @@
 //! Desktop auto-drain translation. Authorization remains at the tool chokepoint;
 //! scheduling, claims, stopping and settlement reuse the CLI/dashboard runtime.
 use crate::application::job::{DrainWorkerLimitRequest, SubmissionKind};
-use crate::application::workflow::MAX_DRAIN_WINDOW_SECONDS;
+use crate::application::workflow::drain_window_input_error;
 use crate::{CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime};
 use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::{
@@ -64,17 +64,11 @@ pub(in crate::adapter::tool_host) fn control(
     }
     let mut result = match action.as_str() {
         "start" => {
-            // The drain refuses a longer window at its first step, so a start
-            // past it would only submit a run that fails.
             let seconds = input
                 .get("for_seconds")
                 .and_then(Value::as_u64)
-                .filter(|seconds| (1..=MAX_DRAIN_WINDOW_SECONDS).contains(seconds))
-                .ok_or_else(|| {
-                    OrbitError::InvalidInput(format!(
-                        "for_seconds must be a whole number from 1 to {MAX_DRAIN_WINDOW_SECONDS} (24 hours)"
-                    ))
-                })?;
+                .filter(|seconds| *seconds > 0)
+                .ok_or_else(drain_window_input_error)?;
             let concurrency = input
                 .get("concurrency")
                 .map(|v| {

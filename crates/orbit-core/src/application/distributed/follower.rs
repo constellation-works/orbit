@@ -231,6 +231,7 @@ impl crate::OrbitRuntime {
     }
 
     /// Verify this replica against its owner and submit its pull drain.
+    /// Windows over 24 hours are refused before contacting the owner.
     pub fn submit_workspace_pull_run(
         &self,
         request: WorkspacePullRequest<'_>,
@@ -239,6 +240,7 @@ impl crate::OrbitRuntime {
         ensure_distributed_mutation_available("orbit.workflow.auto --pull")?;
         // Operator input that needs no owner is checked before the probe, so a
         // typo costs no network round trip.
+        crate::application::workflow::validate_drain_window(request.for_seconds)?;
         if request.max_active_leaf_runs == Some(0) {
             return Err(OrbitError::InvalidInput(
                 "--concurrency must be at least 1".into(),

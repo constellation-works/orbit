@@ -33,7 +33,9 @@ use super::worker_limit::{
 };
 use crate::OrbitRuntime;
 use crate::application::distributed::PULL_DRAIN_JOB;
-use crate::application::workflow::{AUTO_WORKFLOW_ALIAS, MAX_DRAIN_WINDOW_SECONDS, find_workflow};
+use crate::application::workflow::{
+    AUTO_WORKFLOW_ALIAS, MAX_DRAIN_WINDOW_SECONDS, find_workflow, validate_drain_window,
+};
 
 const EXTEND_REQUEST_AUDIT: &str = "pipeline.run.window_extend.requested";
 const EXTEND_COMPLETION_AUDIT: &str = "pipeline.run.window_extend.completed";
@@ -179,7 +181,7 @@ impl OrbitRuntime {
                 run.job_id
             )));
         }
-        if !(1..=MAX_DRAIN_WINDOW_SECONDS).contains(&request.for_seconds) {
+        if request.for_seconds == 0 || validate_drain_window(Some(request.for_seconds)).is_err() {
             return Err(OrbitError::InvalidInput(format!(
                 "the extension must be between 1 second and {MAX_DRAIN_WINDOW_SECONDS} seconds (24 hours)"
             )));

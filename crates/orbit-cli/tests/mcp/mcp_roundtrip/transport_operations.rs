@@ -245,11 +245,31 @@ fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
         json!({"max_active_leaf_runs":5}),
     );
     let mut client = workspace.serve_with_args(&["--operator"]);
-    let refused = client.call_tool_err(
-        "orbit_workflow_auto",
-        json!({"workspace":selector,"action":"start","for_seconds":86_401}),
+    for seconds in [json!(86_401), json!(172_800), json!(u64::MAX), json!(0)] {
+        let refused = client.call_tool_err(
+            "orbit_workflow_auto",
+            json!({"workspace":selector,"action":"start","for_seconds":seconds}),
+        );
+        assert_eq!(refused["code"], "invalid_input", "{refused}");
+        assert_eq!(
+            refused["message"],
+            "invalid input: for_seconds must be a whole number from 1 to 86400 (24 hours)"
+        );
+    }
+    for seconds in [json!(1.5), json!("60"), json!(null)] {
+        let refused = client.call_tool_err(
+            "orbit_workflow_auto",
+            json!({"workspace":selector,"action":"start","for_seconds":seconds}),
+        );
+        assert_eq!(refused["code"], "invalid_input", "{refused}");
+    }
+    assert_eq!(
+        client.call_tool_err(
+            "orbit_workflow_auto",
+            json!({"workspace":selector,"action":"start"})
+        )["code"],
+        "invalid_input"
     );
-    assert_eq!(refused["code"], "invalid_input", "{refused}");
     for (action, mode) in [
         ("start", json!(false)),
         ("start", json!(null)),
@@ -287,11 +307,16 @@ fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
         "schemaVersion: 2\nkind: Job\nmetadata:\n  name: workspace_auto_pipeline\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: done\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n      default_input:\n        seconds: 0\n").unwrap();
     let config = std::fs::read(root.join("config.toml")).unwrap();
     for mode in [None, Some("off"), Some("shadow"), Some("enforce")] {
-        let mut input = json!({"workspace":selector,"action":"start","for_seconds":1});
+        let seconds = if mode.is_none() { 86_400 } else { 1 };
+        let mut input = json!({"workspace":selector,"action":"start","for_seconds":seconds});
         if let Some(mode) = mode {
             input["auto_concurrency"] = json!(mode);
         }
         let receipt = client.call_tool_ok("orbit_workflow_auto", input);
+        assert!(receipt["submitted_at"].is_string(), "{receipt}");
+        assert!(receipt.get("review").is_some());
+        assert!(receipt.get("job_id").is_none());
+        assert!(receipt.get("auto_fix").is_none());
         assert_eq!(receipt["auto_concurrency"]["mode"], mode.unwrap_or("off"));
         assert_eq!(
             receipt["auto_concurrency"]["source"],
@@ -308,6 +333,7 @@ fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
         );
         assert_eq!(shown["auto_concurrency"]["mode"], mode.unwrap_or("off"));
         let recorded = runtime.show_job_run(id).unwrap();
+        assert_eq!(recorded.input.as_ref().unwrap()["for_seconds"], seconds);
         assert_eq!(
             recorded.input.as_ref().unwrap()["auto_concurrency"],
             mode.unwrap_or("off")
