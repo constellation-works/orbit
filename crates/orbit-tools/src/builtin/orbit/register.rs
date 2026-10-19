@@ -1,3 +1,4 @@
+use orbit_common::governance::agents::AGENTS;
 use orbit_common::governance::auto_task::AUTO_TASK;
 use orbit_common::governance::codebase::CODEBASE;
 use orbit_common::governance::drain::DRAIN;
@@ -52,7 +53,9 @@ pub fn register(registry: &mut ToolRegistry) {
     operation::register_noun(registry, &SEARCH);
     // Read-only codebase analytics, the dashboard Codebase view's rankings.
     operation::register_noun(registry, &CODEBASE);
-    // Read-only orchestrator scorecard, the dashboard Orchestrators view's rows.
+    // Read-only agent scorecards, the dashboard Agents view's payloads.
+    operation::register_noun(registry, &AGENTS);
+    // The deprecated orchestrator scorecard aliases of the agents tools.
     operation::register_noun(registry, &ORCHESTRATOR);
     // Workflow ship, run reads and resume, and the auto-drain control come
     // from the shared operation registry.

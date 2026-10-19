@@ -16,7 +16,7 @@
 
 mod attribution;
 mod facts;
-pub(in crate::application) mod records;
+mod records;
 mod roles;
 mod score;
 
@@ -147,6 +147,41 @@ impl OrbitRuntime {
     /// history cannot be read keeps its envelope facts.
     pub fn agent_scan(&self) -> Result<AgentFacts, OrbitError> {
         facts::scan(self)
+    }
+
+    /// Scan, then rank one role for `query`. For callers that keep no scan
+    /// (the CLI and the `orbit.agents.*` tools), so the response reports a
+    /// cache period of zero.
+    pub fn agent_role_scorecard(
+        &self,
+        role: AgentRole,
+        query: &AgentQuery,
+    ) -> Result<Value, OrbitError> {
+        Ok(agent_scorecard(
+            &self.agent_scan()?,
+            role,
+            query,
+            Duration::ZERO,
+        ))
+    }
+
+    /// Scan, then report one row of a role with the tasks behind each term,
+    /// with a cache period of zero as on [`Self::agent_role_scorecard`].
+    pub fn agent_role_detail(
+        &self,
+        role: AgentRole,
+        query: &AgentQuery,
+        crew: &str,
+        model: Option<&str>,
+    ) -> Result<Value, OrbitError> {
+        agent_detail(
+            &self.agent_scan()?,
+            role,
+            query,
+            crew,
+            model,
+            Duration::ZERO,
+        )
     }
 }
 

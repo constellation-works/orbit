@@ -66,6 +66,101 @@
     }
   },
   {
+    "name": "orbit_agents_scorecard",
+    "description": "Rank one agent role's crews and models over the window: each term's count per 100 units of the role's work, weighted and summed, then pulled toward the fleet average. Rows below the minimum support are listed last without a rank; a role whose terms are not computed yet answers status not_computed with its terms and no rows. Scans the workspace once per call (cache_ttl_seconds 0). The payload the dashboard's Agents view reads.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "type": "string",
+          "description": "The agent role to score: orchestrators, implementers, reviewers or pilots."
+        },
+        "window": {
+          "type": "string",
+          "description": "Counts work in this period ending now: 1h, 24h, 7d, 30d, 90d or all (served as 90d, the scan's reach). Default: 30d."
+        },
+        "min_support": {
+          "type": "integer",
+          "description": "Units of the role's work a row needs before it is ranked, at least 1; rows below it are listed last without a rank. Default: 10."
+        },
+        "model": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok"
+          ],
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized."
+        },
+        "workspace": {
+          "type": "string",
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+        }
+      },
+      "required": [
+        "role"
+      ],
+      "additionalProperties": true
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "orbit_agents_show",
+    "description": "One row of an agent role's scorecard and, for each term, its count, rate and contribution with the task IDs behind the count and the records that make it. Use it to follow a count from `orbit_agents_scorecard` to its tasks. Scans the workspace once per call (cache_ttl_seconds 0).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "type": "string",
+          "description": "The agent role to score: orchestrators, implementers, reviewers or pilots."
+        },
+        "crew": {
+          "type": "string",
+          "description": "The row's crew; for orchestrators, the orchestrator name tasks record."
+        },
+        "row_model": {
+          "type": "string",
+          "description": "The row's model (`model unknown` for runs that recorded none); optional when the crew has one row."
+        },
+        "window": {
+          "type": "string",
+          "description": "Counts work in this period ending now: 1h, 24h, 7d, 30d, 90d or all (served as 90d, the scan's reach). Default: 30d."
+        },
+        "min_support": {
+          "type": "integer",
+          "description": "Units of the role's work a row needs before it is ranked, at least 1; rows below it are listed last without a rank. Default: 10."
+        },
+        "model": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok"
+          ],
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized."
+        },
+        "workspace": {
+          "type": "string",
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+        }
+      },
+      "required": [
+        "role",
+        "crew"
+      ],
+      "additionalProperties": true
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
     "name": "orbit_auto_task_add",
     "description": "Create a recurring auto-task definition. The generic scheduler mints a task from its template on each due slot.",
     "inputSchema": {
@@ -654,17 +749,17 @@
   },
   {
     "name": "orbit_orchestrator_scorecard",
-    "description": "Score each orchestrator named by tasks' orchestrator attribution over the tasks it owns that were created in the window: throughput (owned, landed, complexity-weighted landed), proactivity from the typed origin (landed and dropped orchestrator_initiative tasks, unknown origin separately), spec defects (criteria or description edits after the first run, criteria blocks and escalations, incomplete or spec_ambiguous regressions) and rework (review rejects, blocked or unmerged PRs, repeat runs, operator requeues, by cause). Each count is normalized per 100 owned tasks and per 8 active hours, with support counts, then a composite whose weights are in `definitions`. The same payload the dashboard's Orchestrators view reads.",
+    "description": "Deprecated alias of `orbit_agents_scorecard` with role orchestrators, removed in the next release: returns that payload with a `deprecation` note naming the replacement.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "window": {
           "type": "string",
-          "description": "Counts tasks created in this period ending now: 1h, 24h, 7d, 30d, 90d or all. Default: 30d."
+          "description": "Counts work in this period ending now: 1h, 24h, 7d, 30d, 90d or all (served as 90d). Default: 30d."
         },
         "min_support": {
           "type": "integer",
-          "description": "Owned tasks a row needs before its rates are comparable, at least 1; rows below it are marked. Default: 10."
+          "description": "Units of work a row needs before it is ranked, at least 1; rows below it are listed last without a rank. Default: 10."
         },
         "model": {
           "type": "string",
@@ -690,21 +785,21 @@
   },
   {
     "name": "orbit_orchestrator_show",
-    "description": "One orchestrator's scorecard row and, for every component, the task IDs behind its count with the history records that make it (when, what, and the attributed cause for rework). Use it to follow a count from `orbit_orchestrator_scorecard` to its tasks.",
+    "description": "Deprecated alias of `orbit_agents_show` with role orchestrators and the orchestrator as crew, removed in the next release: returns that payload with a `deprecation` note naming the replacement.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "orchestrator": {
           "type": "string",
-          "description": "The orchestrator name a task's orchestrator attribution records."
+          "description": "The orchestrator name a task's orchestrator attribution records: the row's crew."
         },
         "window": {
           "type": "string",
-          "description": "Counts tasks created in this period ending now: 1h, 24h, 7d, 30d, 90d or all. Default: 30d."
+          "description": "Counts work in this period ending now: 1h, 24h, 7d, 30d, 90d or all (served as 90d). Default: 30d."
         },
         "min_support": {
           "type": "integer",
-          "description": "Owned tasks a row needs before its rates are comparable, at least 1; rows below it are marked. Default: 10."
+          "description": "Units of work a row needs before it is ranked, at least 1; rows below it are listed last without a rank. Default: 10."
         },
         "model": {
           "type": "string",

@@ -1,3 +1,4 @@
+pub mod agents;
 pub mod audit;
 pub mod auto_task;
 pub mod browser_kit;
@@ -101,7 +102,7 @@ Operate:
 Observe:
   audit       Query the audit event log
   codebase    Rank the repository paths that are risky for agents to change
-  orchestrator Score orchestrators by the work they file and supervise
+  agents      Score orchestrators, implementers, reviewers and pilots by crew and model
   log         Tail the unified Orbit log feed
   doctor      Diagnose workspace health, provider CLIs, and filesystem access
 
@@ -168,7 +169,7 @@ pub enum Commands {
     // ── Observe ──
     Audit(audit::AuditCommand),
     Codebase(codebase::CodebaseCommand),
-    Orchestrator(orchestrator::OrchestratorCommand),
+    Agents(agents::AgentsCommand),
     Log(log::LogCommand),
     Doctor(doctor::DoctorCommand),
 
@@ -198,4 +199,8 @@ pub enum Commands {
     Skill(skill::SkillCommand),
     #[command(hide = true)]
     Artifacts(task::artifacts::ArtifactsCommand),
+    // Deprecated alias of `orbit agents --role orchestrators`, removed in the
+    // next release.
+    #[command(hide = true)]
+    Orchestrator(orchestrator::OrchestratorCommand),
 }

@@ -1,6 +1,6 @@
 //! Readers of the task records every scorecard counts from: implementation
 //! run spans, spec signals, rework causes and the pull request a task landed
-//! through. Shared by the agent scorecards and the orchestrator scorecard.
+//! through. Shared by the agent scorecards' roles.
 //!
 //! Every reader takes a record Orbit wrote (history entries, their notes and
 //! failure settlements). Nothing reads a self-report.
@@ -84,15 +84,6 @@ impl Cause {
         Cause::Infrastructure,
         Cause::Other,
     ];
-
-    pub(in crate::application) fn as_str(self) -> &'static str {
-        match self {
-            Cause::Spec => "spec",
-            Cause::Crew => "crew",
-            Cause::Infrastructure => "infrastructure",
-            Cause::Other => "other",
-        }
-    }
 }
 
 /// One implementation run: from the entry that moved the task into

@@ -1,4 +1,4 @@
-Show every orchestrator's scorecard row
+Deprecated: use `orbit agents scorecard --role orchestrators`
 
 Usage: orbit orchestrator scorecard [OPTIONS]
 
@@ -7,13 +7,13 @@ Options:
           Override the Orbit root directory (highest precedence)
 
       --window <WINDOW>
-          Count tasks created in this period ending now
+          Count work in this period ending now
           
           [default: 30d]
           [possible values: 1h, 24h, 7d, 30d, 90d, all]
 
       --min-support <MIN_SUPPORT>
-          Owned tasks a row needs before its rates are comparable
+          Units of work a row needs before it is ranked
           
           [default: 10]
 
@@ -38,7 +38,3 @@ Options:
 
   -h, --help
           Print help (see a summary with '-h')
-
-The table shows raw counts and the composite per 100 owned tasks; --json carries every rate
-per 100 owned tasks and per 8 active hours. Follow a row to its tasks with
-`orbit orchestrator show <name>`.

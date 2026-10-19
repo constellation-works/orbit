@@ -13,8 +13,7 @@ use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
 
 #[cfg(unix)]
-#[path = "../support/child_guard.rs"]
-mod child_guard;
+use crate::child_guard;
 
 mod native_reads;
 

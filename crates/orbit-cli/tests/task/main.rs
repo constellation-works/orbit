@@ -8,6 +8,10 @@
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[path = "../support/bound_server.rs"]
+mod bound_server;
+#[path = "../support/child_guard.rs"]
+mod child_guard;
 #[path = "../support/fixture_crew.rs"]
 mod fixture_crew;
 #[path = "../support/git_repo.rs"]
@@ -19,6 +23,7 @@ mod isolated_test;
 #[path = "../support/task_workspace.rs"]
 mod task_workspace;
 
+mod agents_cli;
 mod audit_cli;
 mod auto_task_lifecycle_cli;
 mod auto_task_listing_cli;
@@ -34,7 +39,6 @@ mod delivery_remote_source;
 mod friction_lifecycle_cli;
 mod live_run_status;
 mod local_read_projections_cli;
-mod orchestrator_cli;
 mod pilot_comments;
 mod reconcile_review;
 mod rescue_close_cli;

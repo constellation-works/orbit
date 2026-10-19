@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: Target design for the Agents dashboard destination; covers problem attribution, the shared score, per-role terms, the API, CLI and MCP contract, scan budget and delivery tracks.
 tags: [agent-scorecards, dashboard, analytics]
-paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-web/src/runtime_memo.rs", "crates/orbit-core/src/application/orchestrators/**", "crates/orbit-core/src/application/codebase/pilot.rs", "crates/orbit-core/src/application/codebase/lock_waits.rs", "crates/orbit-web/assets/dashboard/**"]
+paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-web/src/runtime_memo.rs", "crates/orbit-common/src/governance/agents.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-core/src/application/codebase/pilot.rs", "crates/orbit-core/src/application/codebase/lock_waits.rs", "crates/orbit-web/assets/dashboard/**"]
 related_features: [user-interface, review-gate, finding-verification]
 related_artifacts: []
 ---
@@ -301,11 +301,11 @@ The dashboard reads only these routes. The `/api/orchestrators/*` routes were re
 
 ## 7. CLI and MCP
 
-`orbit agents scorecard --role <role> [--window <w>] [--min-support <n>] [--json]` and `orbit agents show --role <role> --crew <crew> [--model <model>] [--window <w>] [--json]` print the same payloads as the API. The read-only MCP tools `orbit.agents.scorecard` and `orbit.agents.show` take the same arguments.
+`orbit agents scorecard --role <role> [--window <w>] [--min-support <n>] [--json]` and `orbit agents show --role <role> --crew <crew> [--model <model>] [--window <w>] [--min-support <n>] [--json]` print the same payloads as `/api/agents/<role>/scorecard` and `/api/agents/<role>/detail`. The table view lists each row's rank (`below` under the minimum support), crew, model, units, score and term counts; `show` lists each term's weight, count, rate and contribution, then the tasks behind every nonzero count. The read-only MCP tools `orbit.agents.scorecard` and `orbit.agents.show` take the same arguments as `role`, `window`, `min_support` and, for `show`, `crew` and `row_model`. The row's model travels as `row_model` because `model` is every tool's caller attribution. A role outside the four is refused, naming the choices.
 
-Each of those scans once per call and reports `cache_ttl_seconds: 0`.
+Each of those scans once per call and reports `cache_ttl_seconds: 0`. The definitions live in `orbit-common`'s `governance::agents` registry; the tools call `OrbitRuntime::agent_role_scorecard` and `agent_role_detail`, which scan and slice like the API without keeping the scan.
 
-`orbit orchestrator scorecard|show` and `orbit.orchestrator.scorecard|show` remain for one release as aliases of `--role orchestrators`, and print a deprecation note naming the replacement. They are removed in the following release.
+`orbit orchestrator scorecard|show` and `orbit.orchestrator.scorecard|show` remain for one release as aliases of `--role orchestrators` (`show <name>` is `--crew <name>`). They answer the agents payload with a `deprecation` field naming the replacement, and the command prints that note to stderr, so `--json` stays parseable. They are hidden from `orbit --help` and are removed in the following release.
 
 ## 8. Scan, Cache and Budget
 
@@ -351,7 +351,7 @@ Tests follow the repository rules: behavior at public boundaries, no copy-matchi
 | D | Implementers role and its panel | C | `application/agents/roles/implementers.rs`, `js/agents-implementers.js` |
 | E | Reviewers role, its scan additions (false rejects, incomplete reviews, findings rejected by finding verification), provisional banner and outcomes panel | C | `application/agents/roles/reviewers.rs`, `js/agents-reviewers.js` |
 | F | Pilots role, its scan additions (pilot receipts, footprint misses, lock waits) and calibration panel; moves the pilot ranking out of Codebase | C | `application/agents/roles/pilots.rs`, `js/agents-pilots.js`, `application/codebase/pilot.rs`, `js/codebase.js` |
-| G | CLI and MCP (`orbit agents`, `orbit.agents.*`, aliases); moves `orbit orchestrator` and `orbit.orchestrator.*` onto the new scorecard and removes `application/orchestrators/` | C | `orbit-cli` and `orbit-tools` command and tool files, goldens |
+| G | CLI and MCP (`orbit agents`, `orbit.agents.*`, aliases); moves `orbit orchestrator` and `orbit.orchestrator.*` onto the new scorecard and removes `application/orchestrators/`. Landed. | C | `orbit-cli` and `orbit-tools` command and tool files, goldens |
 
 ```
 A ── B ── C ─┬─ D
