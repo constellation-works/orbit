@@ -204,6 +204,11 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
             "/orchestrators/detail",
             get(orchestrators::orchestrator_detail),
         )
+        // Observe › Agents: one scorecard per agent role ranked by crew and
+        // model, and who each problem counts against, from one cached scan.
+        .route("/agents/attribution", get(agents::agent_attribution))
+        .route("/agents/:role/scorecard", get(agents::agent_scorecard))
+        .route("/agents/:role/detail", get(agents::agent_detail))
         // `orbit doctor` for the selected workspace: read-only, on demand and
         // cached [ORB-14830]. GET only; repairs stay on the CLI.
         .route("/doctor", get(doctor::doctor))

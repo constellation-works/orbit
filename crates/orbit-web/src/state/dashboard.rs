@@ -75,6 +75,9 @@ pub(super) struct StateInner {
     /// Per-server cache of the orchestrator scorecard scan, one per workspace
     /// runtime. Holds typed facts; every window and drill-down slices them.
     orchestrators: RuntimeMemo<(), orbit_core::application::orchestrators::OrchestratorFacts>,
+    /// Per-server cache of the agent scorecard scan, one per workspace
+    /// runtime. Every role, window, detail and the attribution strip slice it.
+    agents: RuntimeMemo<(), orbit_core::application::agents::AgentFacts>,
     /// Per-server cache of the last `orbit doctor` report for each workspace
     /// runtime, behind `/api/doctor`.
     doctor_reports: DoctorReports,
@@ -420,6 +423,7 @@ impl DashboardState {
                 diagnostics_friction: RuntimeMemo::new("diagnostics friction aggregation"),
                 codebase: RuntimeMemo::new("codebase analytics scan"),
                 orchestrators: RuntimeMemo::new("orchestrator scorecard scan"),
+                agents: RuntimeMemo::new("agent scorecard scan"),
                 doctor_reports: DoctorReports::new(),
                 operator: AtomicBool::new(false),
                 #[cfg(test)]
@@ -538,6 +542,13 @@ impl DashboardState {
         &self,
     ) -> &RuntimeMemo<(), orbit_core::application::orchestrators::OrchestratorFacts> {
         &self.inner.orchestrators
+    }
+
+    /// Process-local agent scorecard scan cache for this server instance.
+    pub(crate) fn agent_memo(
+        &self,
+    ) -> &RuntimeMemo<(), orbit_core::application::agents::AgentFacts> {
+        &self.inner.agents
     }
 
     /// Process-local `/api/diagnostics/errors` memo for this server instance.

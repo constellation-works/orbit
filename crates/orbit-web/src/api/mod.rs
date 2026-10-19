@@ -3,6 +3,7 @@
 //! Each handler delegates to the same `*_to_json` helpers used by the CLI's
 //! `--json` paths so the wire format stays in lockstep with the CLI.
 
+mod agents;
 mod audit;
 mod auto_tasks;
 mod automation;
