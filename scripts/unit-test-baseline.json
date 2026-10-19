@@ -510,6 +510,8 @@
         "repository/task/coordination/tests/lock_holders.rs::a_partition_wait_names_its_exclusive_holder",
         "repository/task/coordination/tests/lock_holders.rs::a_partition_wait_names_its_shared_holders",
         "repository/task/coordination/tests/lock_holders.rs::a_section_held_past_its_threshold_reports_its_label_and_duration",
+        "repository/task/coordination/tests/sidecar_reads.rs::a_history_read_settles_an_interrupted_commit_or_write_first",
+        "repository/task/coordination/tests/sidecar_reads.rs::a_settled_history_read_does_not_wait_for_a_partition_section",
         "repository/task/v2/tests/concurrency.rs::a_reader_never_observes_a_transition_between_its_event_and_its_envelope",
         "repository/task/v2/tests/repair_gate.rs::concurrent_readers_across_store_instances_share_one_attempt",
         "repository/task/v2/tests/repair_gate.rs::degraded_reads_still_fail_on_task_field_corruption",

@@ -19,7 +19,7 @@ use crate::contracts::{
 use crate::repository::task::v2_bundle::COMMIT_LEASE_DIR;
 
 /// The partition's commit leases, by name.
-fn leases(owner: &Owner) -> Vec<std::path::PathBuf> {
+pub(super) fn leases(owner: &Owner) -> Vec<std::path::PathBuf> {
     match std::fs::read_dir(owner.boundary.partition_dir.join(COMMIT_LEASE_DIR)) {
         Ok(entries) => entries
             .map(|entry| entry.expect("lease entry").path())

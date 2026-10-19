@@ -1,5 +1,4 @@
 //! Local landed diffs, attributed only through host delivery evidence.
-use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
@@ -8,6 +7,7 @@ use orbit_types::workflow::LandingObservationStatus;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::job::CodebaseDeliveryScan;
 
 #[derive(Debug, Clone)]
 pub(super) struct Landed {
@@ -16,11 +16,12 @@ pub(super) struct Landed {
     pub(super) paths: BTreeSet<String>,
 }
 
-/// Reuse the repository and each commit diff during one workspace scan.
+/// Reuse the repository, each commit diff and the delivery lookups during one
+/// workspace scan.
 pub(super) struct Scanner {
     repo: Option<git2::Repository>,
     paths: BTreeMap<String, Option<BTreeSet<String>>>,
-    repository: OnceCell<Option<String>>,
+    delivery: CodebaseDeliveryScan,
 }
 
 impl Scanner {
@@ -28,7 +29,7 @@ impl Scanner {
         Self {
             repo: git2::Repository::open(&runtime.paths().repo_root).ok(),
             paths: BTreeMap::new(),
-            repository: OnceCell::new(),
+            delivery: CodebaseDeliveryScan::default(),
         }
     }
 
@@ -44,7 +45,7 @@ impl Scanner {
                 return None;
             }
             let delivery = runtime
-                .observe_codebase_task_delivery(id, &self.repository)
+                .observe_codebase_task_delivery(id, &self.delivery)
                 .ok()?;
             if delivery.landing.status != LandingObservationStatus::Merged {
                 return None;

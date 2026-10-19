@@ -78,6 +78,17 @@ impl TaskCommitBoundary {
         self.recover_pending_in(Section::here("recovery"))
     }
 
+    /// Whether nothing in this partition awaits recovery: no commit lease
+    /// outlived its committer and no older version's commit marker is
+    /// present. The check [`Self::recover_if_pending`] makes first, taking no
+    /// lock and creating nothing, for a read that may then skip the
+    /// partition's sections. A commit that dies after this answer leaves its
+    /// own bundle's lease dead, which that bundle's readers check under its
+    /// lock.
+    pub(crate) fn has_nothing_to_recover(&self) -> Result<bool, OrbitError> {
+        Ok(!self.interrupted_commit()?)
+    }
+
     pub(super) fn recover_pending_in(&self, section: Section) -> Result<(), OrbitError> {
         if BoundaryDepth::active(&self.partition_dir) {
             // This thread is inside its own commit; its journal row is
