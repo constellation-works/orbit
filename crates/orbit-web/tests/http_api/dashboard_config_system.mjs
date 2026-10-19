@@ -217,6 +217,8 @@ const fetch = async (path, options = {}) => {
 
 const context = vm.createContext({
   URLSearchParams, URL, AbortController, console, setTimeout, clearTimeout, fetch, document,
+  // This VM fixture has no layout engine; model the desktop sticky inspector.
+  getComputedStyle: () => ({ position: 'sticky' }),
   window: { location: { search: '', hash: '' } },
 });
 const modules = new Map();
