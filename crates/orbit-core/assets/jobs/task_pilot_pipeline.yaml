@@ -81,8 +81,10 @@
 # - A preparation claim may name tasks whose stored crews differ. Prepare
 #   partitions that claim by `task.crew` before the size cap, so each pilot
 #   worker sees one crew, and run start keeps the first task's crew instead
-#   of refusing the pass. An explicit run with no preparation claim is still
-#   refused when its task ids mix crews.
+#   of refusing the pass. Only the run the live claim admitted gets this:
+#   run start checks the claim against the routine's live attempt and its
+#   action key. Any other run whose task ids mix crews is still refused,
+#   including an explicit run and one whose input merely carries a claim.
 
 schemaVersion: 2
 kind: Job

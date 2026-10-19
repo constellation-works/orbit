@@ -1,9 +1,11 @@
 //! One task-pilot preparation pass assesses siblings whose stored crews differ,
 //! as separate partitions. A hand-assembled mixed list is still refused before
-//! any provider runs.
+//! any provider runs, and so is any run that only carries a preparation claim
+//! in its input without being that live claim's own pilot run.
 
 use std::os::unix::fs::PermissionsExt;
 
+use orbit_common::OrbitError;
 use orbit_core::application::automation::pin_attempt_source;
 use orbit_core::application::task::TaskAddParams;
 use orbit_store::contracts::KeyedJobRunAdmission;
@@ -117,8 +119,8 @@ with open({calls:?}, "a", encoding="utf-8") as handle:
 
 /// The preparation run that owns this batch. Its input is the production
 /// claim: `state_automation` plus every member's task id. Prepare accepts
-/// that claim only from this run.
-fn claimed_preparation_run(workspace: &Workspace, tasks: &[&Task]) -> String {
+/// that claim only from this run. Returns the run and its input.
+fn claimed_preparation_run(workspace: &Workspace, tasks: &[&Task]) -> (String, Value) {
     let store = workspace.runtime.automation_store().unwrap();
     let state = workspace.routine_state();
     let members = tasks
@@ -161,7 +163,7 @@ fn claimed_preparation_run(workspace: &Workspace, tasks: &[&Task]) -> String {
     });
     let KeyedJobRunAdmission::Admitted(run) = workspace
         .jobs
-        .insert_automation_job_run("task_pilot_pipeline", input, &attempt.action_key)
+        .insert_automation_job_run("task_pilot_pipeline", input.clone(), &attempt.action_key)
         .unwrap()
     else {
         panic!("a fresh fixture attempt must admit its own run");
@@ -176,7 +178,7 @@ fn claimed_preparation_run(workspace: &Workspace, tasks: &[&Task]) -> String {
             .unwrap()
     );
     pin_attempt_source(&workspace.runtime, &attempt).unwrap();
-    run.run_id
+    (run.run_id, input)
 }
 
 fn install_routine(workspace: &Workspace) {
@@ -189,12 +191,31 @@ fn install_routine(workspace: &Workspace) {
     .unwrap();
 }
 
-fn a_preparation_pass_assesses_two_crews_as_separate_partitions() {
-    let workspace = workspace();
-    let calls = install_provider(&workspace);
-    install_routine(&workspace);
-    let haiku = task(&workspace, "haiku sibling", "haiku");
-    let sol = task(&workspace, "sol sibling", "sol");
+/// A deterministic-only custom job that names the tasks of its input and
+/// succeeds whenever it starts. It never calls `prepare_task_pilot`, so
+/// only run start can refuse its bundle.
+fn install_probe_job(workspace: &Workspace) -> std::path::PathBuf {
+    let jobs = workspace.runtime.global_root().join("resources/jobs");
+    std::fs::create_dir_all(&jobs).unwrap();
+    let path = jobs.join("mixed_crew_probe.yaml");
+    std::fs::write(
+        &path,
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: mixed_crew_probe\nspec:\n  \
+         state: enabled\n  kind: workflow\n  steps:\n    - id: check\n      \
+         target: activity:pipeline_success_guard\n      default_input:\n        \
+         result: {status: success}\n",
+    )
+    .unwrap();
+    path
+}
+
+/// Two proposed siblings on different crews, and the routine's live,
+/// acknowledged preparation claim over both, as the clock admits it.
+/// Returns the siblings, the claim's own pilot run, and that run's input.
+fn live_preparation_claim(workspace: &Workspace) -> (Task, Task, String, Value) {
+    install_routine(workspace);
+    let haiku = task(workspace, "haiku sibling", "haiku");
+    let sol = task(workspace, "sol sibling", "sol");
     assert_eq!(haiku.crew.as_deref(), Some("haiku"));
     assert_eq!(sol.crew.as_deref(), Some("sol"));
     let routine = pilot_routine();
@@ -219,9 +240,15 @@ fn a_preparation_pass_assesses_two_crews_as_separate_partitions() {
         vec![haiku.id.clone(), sol.id.clone()],
         "one pass bundles both crews: {due:?}"
     );
-
     workspace.install_pilot_job();
-    let run_id = claimed_preparation_run(&workspace, &[&haiku, &sol]);
+    let (run_id, input) = claimed_preparation_run(workspace, &[&haiku, &sol]);
+    (haiku, sol, run_id, input)
+}
+
+fn a_preparation_pass_assesses_two_crews_as_separate_partitions() {
+    let workspace = workspace();
+    let calls = install_provider(&workspace);
+    let (haiku, sol, run_id, _) = live_preparation_claim(&workspace);
     workspace
         .runtime
         .execute_pipeline_run_worker(&run_id)
@@ -305,8 +332,120 @@ fn an_operator_mixed_crew_bundle_is_still_refused() {
     }
 }
 
+/// Whether run start refused `input` as a mixed bundle: an invalid-input
+/// failure before the job's only step ran.
+fn assert_refused_at_start(result: Result<impl std::fmt::Debug, OrbitError>, case: &str) {
+    match result {
+        Err(OrbitError::InvalidInput(_)) => {}
+        other => panic!("{case}: a mixed-crew bundle must be refused at run start: {other:?}"),
+    }
+}
+
+/// [ORB-16860] Run input is caller-shaped, so a preparation marker in it
+/// proves nothing. A job that never prepares a pilot keeps the
+/// one-bundle-one-crew refusal under every marker short of being the live
+/// claim's own pilot run, including that live claim copied verbatim.
+fn a_non_pilot_job_refuses_mixed_crews_under_any_unproven_claim() {
+    let workspace = workspace();
+    let probe = install_probe_job(&workspace);
+    let (haiku, sol, _, live) = live_preparation_claim(&workspace);
+    let mut stale = live["state_automation"].clone();
+    stale["attempt"] = json!(2);
+    let markers = [
+        ("no claim", Value::Null),
+        ("fabricated marker", json!({"kind": "preparation_eligible"})),
+        ("stale claim", stale),
+        (
+            "live claim on another job",
+            live["state_automation"].clone(),
+        ),
+    ];
+    let start = |task_ids: Value, claim: &Value| {
+        workspace.runtime.run_job_v2_from_yaml(
+            &probe,
+            json!({"task_ids": task_ids, "state_automation": claim}),
+        )
+    };
+    // The probe itself starts and succeeds for a one-crew bundle, so a
+    // refusal below is the crew guard and nothing else.
+    for (case, claim) in &markers {
+        start(json!([haiku.id]), claim)
+            .unwrap_or_else(|error| panic!("{case}: a one-crew probe must run: {error}"));
+        assert_refused_at_start(start(json!([haiku.id, sol.id]), claim), case);
+    }
+
+    // The detached worker applies the same rule to a queued run.
+    let queued = workspace
+        .jobs
+        .insert_job_run(
+            "mixed_crew_probe",
+            1,
+            Utc::now(),
+            Some(json!({
+                "task_ids": [haiku.id, sol.id],
+                "state_automation": live["state_automation"],
+            })),
+            None,
+        )
+        .unwrap();
+    let _ = workspace
+        .runtime
+        .execute_pipeline_run_worker(&queued.run_id);
+    let run = workspace.runtime.show_job_run(&queued.run_id).unwrap();
+    assert_eq!(run.state, JobRunState::Failed, "{run:?}");
+    assert_eq!(run.resolved_crew, None, "{run:?}");
+    let checked = workspace
+        .runtime
+        .read_run_state(&queued.run_id)
+        .unwrap()
+        .is_some_and(|state| state.pipeline.get("check").is_some());
+    assert!(!checked, "the probe step must not run: {run:?}");
+}
+
+/// [ORB-16860] Only the run the live claim admitted may mix crews. The same
+/// claim started as a fresh pilot run is refused before any provider work,
+/// and the claim's own run still assesses both crews afterwards.
+fn a_live_claim_admits_mixed_crews_only_in_its_own_pilot_run() {
+    let workspace = workspace();
+    let calls = install_provider(&workspace);
+    let (haiku, sol, run_id, input) = live_preparation_claim(&workspace);
+    let job = workspace
+        .runtime
+        .global_root()
+        .join("resources/jobs/task_pilot_pipeline.yaml");
+    assert_refused_at_start(
+        workspace.runtime.run_job_v2_from_yaml(&job, input),
+        "live claim in a fresh pilot run",
+    );
+    assert_eq!(std::fs::read_to_string(&calls).unwrap(), "");
+    for id in [&haiku.id, &sol.id] {
+        assert!(
+            workspace
+                .runtime
+                .get_task(id)
+                .unwrap()
+                .context_files
+                .is_empty()
+        );
+    }
+
+    workspace
+        .runtime
+        .execute_pipeline_run_worker(&run_id)
+        .unwrap();
+    let run = workspace.runtime.show_job_run(&run_id).unwrap();
+    assert_eq!(run.state, JobRunState::Success, "{run:?}");
+    assert_eq!(
+        std::fs::read_to_string(calls).unwrap().lines().count(),
+        2,
+        "each crew partition is assessed once"
+    );
+}
+
 crate::scenario_table!(
     mixed_crew_task_pilot_bundles_scenarios,
     a_preparation_pass_assesses_two_crews_as_separate_partitions,
-    an_operator_mixed_crew_bundle_is_still_refused
+    an_operator_mixed_crew_bundle_is_still_refused,
+    a_non_pilot_job_refuses_mixed_crews_under_any_unproven_claim,
+    a_live_claim_admits_mixed_crews_only_in_its_own_pilot_run
 );

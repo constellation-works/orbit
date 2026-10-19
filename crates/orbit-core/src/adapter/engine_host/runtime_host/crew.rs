@@ -7,6 +7,7 @@ use crate::OrbitRuntime;
 use crate::application::job::crew_pools::{
     complexity_crews_key, complexity_of_crews_key, random_crew_ticket,
 };
+use crate::runtime::engine::crew::BundleCrews;
 
 /// The retired `workflow.system_crew` activity route [ORB-15663]. A run
 /// admitted before the lane was retired, or a job or activity a user edited,
@@ -93,11 +94,15 @@ pub(super) fn agent_crew_config_for_input(
                     })?
             }
         },
-        (None, None) => runtime.resolve_crew_for_run_input(input).map_err(|error| {
-            DispatchError::JobValidation(format!(
-                "run crew cannot be resolved or used for activity dispatch: {error}"
-            ))
-        })?,
+        // An activity's input is step-shaped, never an authenticated
+        // preparation run, so a mixed bundle here always fails closed.
+        (None, None) => runtime
+            .resolve_crew_for_run_input(input, BundleCrews::Unanimous)
+            .map_err(|error| {
+                DispatchError::JobValidation(format!(
+                    "run crew cannot be resolved or used for activity dispatch: {error}"
+                ))
+            })?,
     };
     // [ORB-11242] The last gate before a provider process is launched, and
     // the only one that sees the crew *after* alias and default resolution.

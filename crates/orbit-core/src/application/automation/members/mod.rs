@@ -5,7 +5,7 @@ mod host;
 mod member_host;
 mod stale;
 
-pub(crate) use claim::claim;
+pub(crate) use claim::{bundle_crews, claim};
 pub(crate) use host::{evaluate, evaluate_with_cache};
 pub(crate) use stale::stale_tasks;
 

@@ -1,10 +1,15 @@
 //! The server-issued claim a pilot run carries.
 
 use crate::OrbitRuntime;
+use crate::runtime::engine::crew::BundleCrews;
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_types::workflow::JobRun;
 use orbit_types::workflow::automation::members::*;
 use serde_json::Value;
+
+/// The job a preparation attempt admits; only its runs may mix crews.
+const PILOT_JOB: &str = "task_pilot_pipeline";
 
 /// Recheck the server-issued claim at the deterministic prepare/apply boundary.
 ///
@@ -48,4 +53,38 @@ pub(crate) fn claim(
     }
 
     Ok(Some(active))
+}
+
+/// Whether `run`, starting with `input`, may name tasks whose crews differ.
+///
+/// Only the live task-pilot preparation attempt's own admitted run may:
+/// prepare partitions it by crew before any pilot runs [ORB-16839]. A
+/// `state_automation` marker proves nothing by itself, since any caller can
+/// shape run input [ORB-16860]. The claim must still be the consumer's live,
+/// unexpired preparation attempt, the run must be of the pilot job, and the
+/// attempt's action key must be bound to this very run. A missing, malformed,
+/// stale or expired claim, another trigger kind, or a live claim carried by a
+/// different run or job keeps the one-bundle-one-crew refusal. Any failure to
+/// prove the claim fails closed to [`BundleCrews::Unanimous`]; prepare
+/// reports a bad claim on its own.
+pub(crate) fn bundle_crews(runtime: &OrbitRuntime, run: &JobRun, input: &Value) -> BundleCrews {
+    if run.job_id != PILOT_JOB {
+        return BundleCrews::Unanimous;
+    }
+    let Ok(Some(active)) = claim(runtime, input) else {
+        return BundleCrews::Unanimous;
+    };
+    let bound = runtime
+        .stores()
+        .jobs()
+        .automation_job_for_key(&active.action_key)
+        .ok()
+        .flatten();
+    if active.kind == StateTriggerKind::PreparationEligible
+        && bound.as_deref() == Some(run.run_id.as_str())
+    {
+        BundleCrews::PreparationPartitions
+    } else {
+        BundleCrews::Unanimous
+    }
 }
