@@ -5,7 +5,7 @@ tags: [operations, website, sandbox, playwright, validation]
 paths: ["website/**"]
 related_features: [orbit-docs]
 related_artifacts: ["ORB-11329", "ORB-11379"]
-last_validated: 2026-10-17
+last_validated: 2026-10-19
 ---
 
 # Validate Website Changes in a Job-Run Sandbox
@@ -350,7 +350,8 @@ Pages are authored by hand under `website/src/content/docs/`, with two exception
 `website/src/pages/`: `/changelog/` renders the repository's tracked `CHANGELOG.md` so the
 site never carries a drifting copy, and `/tasks/` is the landing for the task links Orbit
 mints into pull requests (`website/public/_redirects` sends `/tasks/<id>` there). Nothing on
-this site is fetched or generated at build time, so `npm run build` is a pure function of the
+this site is fetched at build time. Besides the static pages, the build writes a derived Pagefind
+search index (`pagefind: true` in `astro.config.mjs`), so `npm run build` is a pure function of the
 tracked sources. Before website commands run, a cleanup hook removes the retired generated
 `website/src/content/docs/metrics/` directory left by older checkouts. Do not author pages in
 that reserved directory; the hook does not generate content.

@@ -101,7 +101,7 @@ The worker sandbox permits reads of `~/.local/chromium-deps` on both Linux
 different boundary and is not used by this sweep. See the
 [browser kit reference](../../crates/orbit-core/assets/skills/orbit-setup/references/browser-checks.md)
 for host preparation and sandbox checks. Do not install into or modify the
-shared kit during a sweep; `orbit browser-kit` refuses to run inside a worker.
+shared kit during a sweep; the generic default's brief tells workers never to run `orbit browser-kit`.
 
 ```bash
 browser_args=()
