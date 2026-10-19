@@ -31,16 +31,13 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::actions::{cli_executor, dispatch, sandbox, task_context};
-use crate::application::tag_instructions::TagInstructionFailure;
-use crate::runtime::engine::paths::{codex_workspace_write_writable_dirs, current_repo_root};
+use crate::runtime::engine::paths::current_repo_root;
 #[cfg(target_os = "linux")]
 use crate::runtime::recovery_authority::RecoveryAuthority;
 
-use super::task_automation::apply_locked_task_automation_update;
-use super::{activity_tools, checkpoints, crew, invocation};
-
-/// Runs whose last validated tree one process keeps [ORB-16784].
-const MAX_VALIDATED_TREE_RUNS: usize = 256;
+use super::{
+    activity_tools, agent, checkpoints, claims, crew, invocation, task_automation, validation,
+};
 
 impl RuntimeHost for OrbitRuntime {
     fn start_plugin_broker(
@@ -248,25 +245,7 @@ impl RuntimeHost for OrbitRuntime {
     /// claimed leaf has already been refused upstream, and an unbound ordinary
     /// run keeps the pre-existing local admission unchanged.
     fn admit_task_for_workflow(&self, task_id: &str, workflow: &str) -> Result<Task, OrbitError> {
-        if let Some(binding) = self.worker_invocation() {
-            if task_id != binding.task_id {
-                return Err(OrbitError::PolicyDenied(format!(
-                    "worker task binding mismatch: this leaf is bound to '{}', {workflow} \
-                     requested '{task_id}'",
-                    binding.task_id
-                )));
-            }
-            let task: Task = self.read_owner(task_id, "task")?;
-            if task.status != TaskStatus::InProgress {
-                return Err(OrbitError::PolicyDenied(format!(
-                    "claimed task '{task_id}' is '{}' on the owner; only an admitted \
-                     in-progress claim may build a worktree",
-                    task.status
-                )));
-            }
-            return Ok(task);
-        }
-        OrbitRuntime::admit_task_for_workflow_as_system(self, task_id, workflow)
+        claims::admit_task_for_workflow(self, task_id, workflow)
     }
 
     fn update_task_from_activity(
@@ -274,29 +253,7 @@ impl RuntimeHost for OrbitRuntime {
         task_id: &str,
         update: TaskActivityUpdate,
     ) -> Result<Task, OrbitError> {
-        if self.worker_invocation().is_some() {
-            if update.status == TaskStatus::Done {
-                let task = self.get_task(task_id)?;
-                crate::application::task::ensure_post_deploy_criteria_met(self, &task)?;
-                crate::application::task::ensure_completion_run_stopped(
-                    self,
-                    &task,
-                    None,
-                    update.calling_run_id.as_deref(),
-                )?;
-            }
-            self.route_worker_host_tool("orbit.task.update", serde_json::json!({
-                "id": task_id,
-                "_worker_update": orbit_store::contracts::ClaimWorkerUpdate {
-                    status: Some(update.status), expected_status: Some(update.expected_status),
-                    status_note: update.note,
-                    evidence: orbit_store::contracts::ClaimEvidence {summary: update.execution_summary, comment: update.comment, artifacts: vec![], provider_unavailable: None, baseline_red: None, final_recovery: None, failure: None, evidence_hold: None, held_pull_request: None, forge_hold: None, claimed_review: None},
-                    ..Default::default()
-                }
-            }))?;
-            return self.get_task(task_id);
-        }
-        OrbitRuntime::update_task_from_activity(self, task_id, update)
+        claims::update_task_from_activity(self, task_id, update)
     }
 
     /// Orbit admits every step recovery here. Each one stays bounded by its
@@ -385,49 +342,11 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn claim_execution_context(&self) -> Result<orbit_engine::ClaimExecutionContext, OrbitError> {
-        let leaf = self.current_claimed_leaf()?;
-        let ship = &leaf.admission.request.ship;
-        Ok(orbit_engine::ClaimExecutionContext {
-            footprint: leaf.claim.footprint.clone(),
-            workspace_id: leaf.binding.owner_workspace_id.clone(),
-            task_id: leaf.claim.task_id.clone(),
-            claim_id: leaf.claim.claim_id.clone(),
-            machine_id: leaf.claim.executed_on.machine_id.clone(),
-            run_id: leaf.binding.bound_run_id.clone(),
-            ship_mode: ship.mode.clone(),
-            base_branch: ship.base_branch.clone(),
-            landing_branch: ship.landing_branch.clone(),
-            // The owner's list its admission captured [ORB-15622]. The owner
-            // still re-derives its own requirements when it accepts the
-            // handoff, so a list changed since admission produces evidence
-            // the owner refuses, which is the fail-closed direction.
-            required_commands: self
-                .claim_validation_gates(Ok(leaf.owner_gates()))
-                .gates
-                .required_validation_commands,
-        })
+        claims::claim_execution_context(self)
     }
 
     fn attach_claim_validation_log(&self, path: &str, content: Vec<u8>) -> Result<(), OrbitError> {
-        let leaf = self.current_claimed_leaf()?;
-        orbit_types::task::validate_relative_artifact_path(path)?;
-        // The same preloaded payload the spoke connector sends: bytes are read
-        // on the executor and cross the coordination seam path-free, so the
-        // evidence the owner later re-reads by digest lives in the owner's
-        // store rather than on the executor's disk.
-        self.route_worker_tool(
-            "orbit.task.artifact.put",
-            serde_json::json!({
-                "id": leaf.claim.task_id,
-                "artifacts": [{
-                    "path": path,
-                    "content": content,
-                    "media_type": orbit_types::task::media_type_for_artifact_path(path),
-                }],
-            }),
-            Default::default(),
-        )
-        .map(|_| ())
+        validation::attach_claim_validation_log(self, path, content)
     }
 
     fn attach_task_validation_log(
@@ -437,27 +356,7 @@ impl RuntimeHost for OrbitRuntime {
         path: &str,
         content: Vec<u8>,
     ) -> Result<(), OrbitError> {
-        orbit_types::task::validate_relative_artifact_path(path)?;
-        let task = self.get_task(task_id)?;
-        if task.job_run_id.as_deref() != Some(run_id) {
-            return Err(OrbitError::PolicyDenied(format!(
-                "run '{run_id}' does not own task '{task_id}'; it cannot attach validation evidence"
-            )));
-        }
-        self.update_task_as_system(
-            task_id,
-            crate::application::task::TaskUpdateParams {
-                upsert_artifacts: vec![orbit_types::task::TaskArtifact {
-                    path: path.to_string(),
-                    content,
-                    media_type: "application/json".to_string(),
-                    created_by: None,
-                }],
-                ..Default::default()
-            },
-            Some(run_id.to_string()),
-        )
-        .map(|_| ())
+        validation::attach_task_validation_log(self, task_id, run_id, path, content)
     }
 
     fn record_flaky_validation(
@@ -465,25 +364,7 @@ impl RuntimeHost for OrbitRuntime {
         task_id: &str,
         record: &orbit_types::workflow::FlakyValidation,
     ) -> Result<(), OrbitError> {
-        crate::application::review::flaky::record_frictions(self, task_id, record)?;
-        self.apply_task_automation_update(
-            task_id,
-            orbit_engine::TaskAutomationUpdate {
-                append_history: vec![orbit_types::task::TaskHistoryEntry {
-                    at: chrono::Utc::now(),
-                    by: "system".into(),
-                    event: orbit_types::workflow::FLAKY_VALIDATION_EVENT.into(),
-                    note: Some(record.text()),
-                    from_status: None,
-                    to_status: None,
-                    operation_id: None,
-                    decision: Some(orbit_types::task::TaskDecision::FlakyValidation(
-                        record.clone(),
-                    )),
-                }],
-                ..Default::default()
-            },
-        )
+        validation::record_flaky_validation(self, task_id, record)
     }
 
     fn admit_owed_criteria(
@@ -507,27 +388,7 @@ impl RuntimeHost for OrbitRuntime {
         &self,
         handoff: &orbit_types::workflow::handoff::TaskHandoff,
     ) -> Result<(), OrbitError> {
-        let leaf = self.current_claimed_leaf()?;
-        if handoff.task_id != leaf.claim.task_id
-            || handoff.claim_id != leaf.claim.claim_id
-            || handoff.run_id != leaf.binding.bound_run_id
-            || handoff.machine_id != leaf.claim.executed_on.machine_id
-            || handoff.workspace_id != leaf.binding.owner_workspace_id
-        {
-            return Err(OrbitError::PolicyDenied(
-                "handoff identity does not match this claim's trusted binding".into(),
-            ));
-        }
-        // Durable before any owner call: a disconnect here leaves exactly one
-        // immutable settlement for the drain to retry idempotently.
-        self.stores().jobs().mutate_local_pull(
-            &leaf.admission.destination,
-            &leaf.admission.request.request_id,
-            &orbit_store::contracts::LocalPullMutation::Settle(Box::new(
-                orbit_store::contracts::ClaimMutation::AcceptHandoff(handoff.clone()),
-            )),
-        )?;
-        Ok(())
+        claims::record_claim_handoff(self, handoff)
     }
 
     fn widen_task_context_files(
@@ -551,36 +412,7 @@ impl RuntimeHost for OrbitRuntime {
         task_id: &str,
         update: TaskAutomationUpdate,
     ) -> Result<(), OrbitError> {
-        if let Some(binding) = self.worker_invocation() {
-            if update
-                .job_run_id
-                .as_ref()
-                .is_some_and(|run| run != &binding.bound_run_id)
-            {
-                return Err(OrbitError::PolicyDenied(
-                    "worker run binding mismatch".into(),
-                ));
-            }
-            let comment = (!update.append_comments.is_empty()).then(|| {
-                update
-                    .append_comments
-                    .iter()
-                    .map(|comment| comment.message.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            });
-            self.route_worker_host_tool("orbit.task.update", serde_json::json!({
-                "id": task_id,
-                "_worker_update": orbit_store::contracts::ClaimWorkerUpdate {
-                    status: update.status, plan: update.plan, context_files: update.context_files,
-                    external_refs: update.external_refs, status_note: update.status_note,
-                    evidence: orbit_store::contracts::ClaimEvidence {summary: update.execution_summary, comment, artifacts: vec![], provider_unavailable: None, baseline_red: None, final_recovery: None, failure: None, evidence_hold: None, held_pull_request: None, forge_hold: None, claimed_review: None},
-                    ..Default::default()
-                }
-            }))?;
-            return Ok(());
-        }
-        apply_locked_task_automation_update(self, task_id, update)
+        task_automation::apply_task_automation_update(self, task_id, update)
     }
 
     fn required_validation_commands(&self) -> Vec<String> {
@@ -618,35 +450,14 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn record_validated_tree(&self, tree: &orbit_engine::ValidatedTree) -> Result<(), OrbitError> {
-        // A claimed leaf's validation is its owner's evidence, not this host's.
-        if self.worker_invocation().is_some() {
-            return Ok(());
-        }
-        let mut trees = self
-            .validated_trees
-            .lock()
-            .map_err(|_| OrbitError::Execution("validated tree record is poisoned".into()))?;
-        trees.insert(tree.run_id.clone(), tree.clone());
-        // A long-lived host serves many runs; run IDs sort by start time.
-        while trees.len() > MAX_VALIDATED_TREE_RUNS {
-            trees.pop_first();
-        }
-        Ok(())
+        validation::record_validated_tree(self, tree)
     }
 
     fn validated_tree(
         &self,
         run_id: &str,
     ) -> Result<Option<orbit_engine::ValidatedTree>, OrbitError> {
-        if self.worker_invocation().is_some() {
-            return Ok(None);
-        }
-        Ok(self
-            .validated_trees
-            .lock()
-            .map_err(|_| OrbitError::Execution("validated tree record is poisoned".into()))?
-            .get(run_id)
-            .cloned())
+        validation::validated_tree(self, run_id)
     }
 
     fn host_os(&self) -> Option<orbit_types::workflow::EvidenceHostOs> {
@@ -659,27 +470,7 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn agent_provider_config(&self) -> std::collections::HashMap<String, String> {
-        let mut config = std::collections::HashMap::new();
-        let policy = self.codex_execution_policy();
-        config.insert("sandbox".to_string(), policy.sandbox().to_string());
-        if let Some(approval) = policy.approval_policy() {
-            config.insert("approval_policy".to_string(), approval.to_string());
-        }
-        if policy.sandbox() == "workspace-write" {
-            config.insert(
-                "writable_dirs_json".to_string(),
-                serde_json::to_string(&codex_workspace_write_writable_dirs(self.context.paths()))
-                    .unwrap_or_else(|_| "[]".to_string()),
-            );
-        }
-        // Codex's default login shell rereads profiles, and macOS
-        // `path_helper` then moves `workflow.validation_env.path` behind
-        // `/usr/bin`; keep the composed PATH by running a non-login shell.
-        // [ORB-15204]
-        if self.validation_env_policy().pins_agent_path() {
-            config.insert("allow_login_shell".to_string(), "false".to_string());
-        }
-        config
+        agent::agent_provider_config(self)
     }
 
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
@@ -921,18 +712,7 @@ impl RuntimeHost for OrbitRuntime {
         activity_name: &str,
         input: &Value,
     ) -> Result<Vec<TagInstruction>, DispatchError> {
-        OrbitRuntime::tag_instructions_for_activity(self, run_id, activity_name, input).map_err(
-            |failure| match failure {
-                TagInstructionFailure::Store(error) => DispatchError::CliInvocationFailed(format!(
-                    "load tag instructions for `{activity_name}` (run {run_id}): {error}"
-                )),
-                // The same mapping and files refuse identically on every
-                // attempt, so a refusal is not retried.
-                TagInstructionFailure::Refused(error) => {
-                    DispatchError::CliInvocationPermanent(error.to_string())
-                }
-            },
-        )
+        agent::tag_instructions_for_activity(self, run_id, activity_name, input)
     }
 
     fn mid_run_steering_enabled(&self) -> bool {
@@ -1005,18 +785,7 @@ impl RuntimeHost for OrbitRuntime {
         step_id: &str,
         output: &Value,
     ) -> Result<(), DispatchError> {
-        self.stores()
-            .jobs()
-            .update_run_state(run_id, &mut |_, state| {
-                state.record_pipeline_output(step_id, output.clone());
-                Ok(())
-            })
-            .map(|_| ())
-            .map_err(|error| {
-                DispatchError::JobExecution(format!(
-                    "persist step diagnostics (run {run_id}, step `{step_id}`): {error}"
-                ))
-            })
+        checkpoints::checkpoint_step_diagnostic(self, run_id, step_id, output)
     }
 
     fn checkpoint_failure_activity(
@@ -1055,17 +824,7 @@ impl RuntimeHost for OrbitRuntime {
         pull_request: &str,
         proposed: u64,
     ) -> Result<u64, OrbitError> {
-        let mut deadline = proposed;
-        self.stores()
-            .jobs()
-            .update_run_state(run_id, &mut |_, state| {
-                deadline = *state
-                    .completion_deadlines
-                    .entry(pull_request.into())
-                    .or_insert(proposed);
-                Ok(())
-            })?;
-        Ok(deadline)
+        checkpoints::completion_deadline(self, run_id, pull_request, proposed)
     }
 
     fn completion_policy_digest(
