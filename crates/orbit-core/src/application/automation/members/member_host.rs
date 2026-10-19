@@ -380,10 +380,11 @@ impl MemberHost for Host<'_> {
             StateTriggerKind::FindingUnverified => "finding_verification",
         };
 
-        // Every batch member travels as an explicit task id; evaluate already
-        // grouped the attempt by stored crew, and prepare partitions those
-        // ids by `max_partition_size`, so one run fans out over a
-        // crew-homogeneous batch [ORB-12746, ORB-12761].
+        // Every batch member travels as an explicit task id. Finding
+        // verification grouped the attempt by stored crew [ORB-12761].
+        // Task-pilot preparation may carry several crews; prepare partitions
+        // those ids by live `task.crew` and then by `max_partition_size`
+        // [ORB-12746, ORB-16839].
         let task_ids = attempt.task_ids();
         self.runtime
             .submit_automation_pipeline_run(

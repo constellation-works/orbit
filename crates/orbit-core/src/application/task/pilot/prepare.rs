@@ -378,7 +378,11 @@ pub(crate) fn prepare(
             snapshot["status_neutral_fingerprint"] = json!(fingerprints.status_neutral);
             snapshot["material_components"] = json!(fingerprints.components);
         }
-        retained.push((task_id, snapshot));
+        retained.push((
+            task_id,
+            snapshot,
+            crate::runtime::engine::crew::normalized_task_crew(task.crew.as_deref()),
+        ));
     }
 
     // Selection read the holders before any work. This re-check and this
@@ -389,7 +393,7 @@ pub(crate) fn prepare(
         run_id,
         &retained
             .iter()
-            .map(|(task_id, _)| task_id.clone())
+            .map(|(task_id, _, _)| task_id.clone())
             .collect::<Vec<_>>(),
     )
     .map_err(|error| {
@@ -400,22 +404,36 @@ pub(crate) fn prepare(
     } else {
         "active_pilot_prepared"
     };
-    let (task_ids, task_snapshots): (Vec<_>, Vec<_>) = retained
-        .into_iter()
-        .filter(|(task_id, _)| {
-            let free = !held.contains_key(task_id);
-            if !free {
-                excluded.record(task_id, held_reason, &held);
-            }
-            free
-        })
-        .unzip();
+    let mut task_ids = Vec::with_capacity(retained.len());
+    let mut task_snapshots = Vec::with_capacity(retained.len());
+    let mut task_crews = Vec::with_capacity(retained.len());
+    for (task_id, snapshot, crew) in retained {
+        if held.contains_key(&task_id) {
+            excluded.record(&task_id, held_reason, &held);
+            continue;
+        }
+        task_ids.push(task_id);
+        task_snapshots.push(snapshot);
+        task_crews.push(crew);
+    }
 
-    // Size partitions only. Crew homogeneity is the state-consumer batching
-    // step [ORB-12761]: a mixed-crew attempt is rejected at dispatch before
-    // this action runs.
-    let partitions = task_ids
-        .chunks(max_partition_size)
+    // One crew per partition, then the size cap. A preparation pass may carry
+    // siblings whose stored crews differ [ORB-16839]; each pilot worker still
+    // sees a single crew. Same-crew selection order is unchanged, so a
+    // homogeneous batch partitions exactly as a size-only split did.
+    let mut crews_seen: Vec<Option<String>> = Vec::new();
+    let mut groups: Vec<Vec<String>> = Vec::new();
+    for (task_id, crew) in task_ids.iter().zip(task_crews) {
+        if let Some(index) = crews_seen.iter().position(|existing| existing == &crew) {
+            groups[index].push(task_id.clone());
+        } else {
+            crews_seen.push(crew);
+            groups.push(vec![task_id.clone()]);
+        }
+    }
+    let partitions = groups
+        .iter()
+        .flat_map(|ids| ids.chunks(max_partition_size))
         .enumerate()
         .map(|(partition_index, ids)| {
             json!({

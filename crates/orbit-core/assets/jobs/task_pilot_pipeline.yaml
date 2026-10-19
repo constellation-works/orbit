@@ -78,6 +78,11 @@
 # - There is deliberately no per-run `crew` job input: the step-level pool key
 #   below already wins over run input during dispatch, so such an input could
 #   never take effect.
+# - A preparation claim may name tasks whose stored crews differ. Prepare
+#   partitions that claim by `task.crew` before the size cap, so each pilot
+#   worker sees one crew, and run start keeps the first task's crew instead
+#   of refusing the pass. An explicit run with no preparation claim is still
+#   refused when its task ids mix crews.
 
 schemaVersion: 2
 kind: Job

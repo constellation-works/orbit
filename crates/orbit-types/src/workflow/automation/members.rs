@@ -371,9 +371,11 @@ pub struct StateMember {
     pub evidence: serde_json::Value,
     pub first_seen: DateTime<Utc>,
     pub changed_at: DateTime<Utc>,
-    /// Stored `task.crew` identity used to keep a preparation batch
-    /// crew-homogeneous [ORB-12761]. `None` means no explicit crew, which the
-    /// one-bundle-one-crew dispatch rule treats as distinct from any named crew.
+    /// Stored `task.crew` identity. Finding verification keeps a batch
+    /// crew-homogeneous with it [ORB-12761]. Task-pilot preparation records it
+    /// and partitions the run by the live crew instead [ORB-16839]. `None`
+    /// means no explicit crew, which the one-bundle-one-crew dispatch rule
+    /// treats as distinct from any named crew.
     /// Records persisted before this field existed deserialize as `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew: Option<String>,

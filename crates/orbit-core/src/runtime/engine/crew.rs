@@ -712,7 +712,9 @@ impl OrbitRuntime {
     /// same-id local record, if any, is not it. Other ids read the local store;
     /// missing fixture ids are skipped so fake implementer ids do not fail
     /// resolution. Distinct crews — including a mix of set and unset — fail
-    /// closed instead of inheriting `workflow.default_crew`.
+    /// closed instead of inheriting `workflow.default_crew`. A preparation
+    /// claim is the exception: it keeps the first task's crew and prepare
+    /// splits the rest by crew.
     fn task_crew_from_run_input(
         &self,
         input: &Value,
@@ -733,6 +735,14 @@ impl OrbitRuntime {
             match &agreed {
                 None => agreed = Some(crew),
                 Some(existing) if existing == &crew => {}
+                // A preparation claim is the pilot's own bundle. Tasks keep
+                // the crews they were drawn, and prepare splits the claim into
+                // one partition per crew before any pilot worker runs. The run
+                // records the first task's crew so startup still has a crew
+                // and does not inherit `workflow.default_crew`. A bundle an
+                // operator assembled by hand has no preparation claim and
+                // still fails closed below.
+                Some(existing) if preparation_claim(input) => return Ok(existing.clone()),
                 Some(existing) => {
                     return Err(OrbitError::InvalidInput(mixed_bundle_crew_error(
                         existing.as_deref(),
@@ -833,6 +843,17 @@ pub(crate) fn normalized_task_crew(crew: Option<&str>) -> Option<String> {
     crew.map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+/// A state-trigger preparation claim: the task-pilot routine built this
+/// bundle, as opposed to `orbit run task-pilot` or another hand-assembled
+/// `task_ids` list.
+fn preparation_claim(input: &Value) -> bool {
+    input
+        .get("state_automation")
+        .and_then(|claim| claim.get("kind"))
+        .and_then(Value::as_str)
+        == Some("preparation_eligible")
 }
 
 fn mixed_bundle_crew_error(left: Option<&str>, right: Option<&str>) -> String {
