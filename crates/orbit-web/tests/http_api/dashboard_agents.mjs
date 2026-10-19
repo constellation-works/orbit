@@ -3,7 +3,8 @@
 // driving the detail column (breakdown, biggest-penalty tasks linking to the
 // task, shown-not-scored stats), "How the score works" keeping its state
 // across polls, a newer scan re-reading the open detail, the empty and
-// not_computed states, the aggregate placeholder, and the router sending
+// not_computed states, the Reviewers provisional banner, `accepts often` tag
+// and verdict-outcome bars, the aggregate placeholder, and the router sending
 // `#analytics/orchestrators` to `#agents/orchestrators`.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -438,6 +439,73 @@ assert.ok(part('state').classList.contains('agents-state-empty'));
 assert.match(part('state').textContent, /No owned tasks in the 30d window/);
 assert.match(part('strip').textContent, /No problem was recorded in this window/);
 assert.equal(byId['agents-count-orchestrators'].textContent, '0');
+takeAll();
+
+// Reviewers: a banner while any review is younger than the miss lookback,
+// the `accepts often` tag beside a row, yes/no stats and each reviewer's
+// verdict outcomes.
+const REVIEWER_TERMS = [
+  { key: 'findings_held', label: 'Findings that held', weight: 1, definition: 'Findings that held, weighted by severity.', group: 'credit' },
+  { key: 'false_rejects', label: 'False rejects', weight: -2, definition: 'Rejects the next run proved wrong.', group: 'problem' },
+  { key: 'missed_regressions', label: 'Missed regressions', weight: -4, definition: 'review_missed regressions, whenever filed.', group: 'problem' },
+];
+const OUTCOME_KEYS = ['outcome_held_up', 'outcome_caught', 'outcome_false_alarm', 'outcome_missed', 'outcome_unresolved'];
+const reviewerRow = (crew, rank, units, counts, score, provisional, [acceptRate, peers, often], outcomes) => ({
+  crew, model: `gpt-${crew}`, units, below_support: rank == null, rank,
+  counts, per_100: Object.fromEntries(Object.entries(counts).map(([key, count]) => [key, (count * 100) / units])),
+  raw: score, score, runs_without_model: 0, provisional,
+  stats: [
+    { key: 'accept_rate', label: 'Accept rate (%)', value: acceptRate },
+    { key: 'peer_accept_rate', label: "Peers' accept rate on the same tiers (%)", value: peers },
+    { key: 'accepts_often', label: 'Accepts often', value: often },
+    ...OUTCOME_KEYS.map((key, index) => ({ key, label: key, value: outcomes[index] })),
+  ],
+});
+const reviewers = (provisional, computedAt) => ({
+  ...header('reviewers', computedAt), fleet_average: 5, terms: REVIEWER_TERMS, provisional,
+  rows: [
+    reviewerRow('vega', 1, 20, { findings_held: 30, false_rejects: 1, missed_regressions: 0 }, 95, 12, [40, 70, false], [8, 6, 1, 0, 5]),
+    reviewerRow('lyra', 2, 12, { findings_held: 4, false_rejects: 0, missed_regressions: 1 }, 2.3, 4, [92, 70, true], [9, 1, 0, 1, 1]),
+  ],
+});
+const routeReviewers = (provisional, computedAt) => url => {
+  if (url.pathname === '/api/agents/attribution') return response(attribution);
+  if (url.pathname === '/api/agents/reviewers/scorecard') return response(reviewers(provisional, computedAt));
+  if (url.pathname === '/api/agents/reviewers/detail') return response({ error: 'no detail in this fixture' }, 400);
+  return response(notComputed(url.pathname.split('/')[3]));
+};
+agents.setAgentsRole('reviewers');
+loading = agents.fetchAndRenderAgents();
+answer(takeAll(), routeReviewers(16, '2026-10-19T08:10:00.000Z'));
+await loading;
+await settle();
+answer(takeAll(), routeReviewers(16, '2026-10-19T08:10:00.000Z'));
+await settle();
+assert.equal(byId['agents-count-reviewers'].textContent, '2');
+assert.deepEqual(view().children.map(node => node.dataset.key).filter(Boolean), ['strip', 'banner', 'ranking', 'detail', 'how', 'panel'], 'the banner sits under the strip');
+assert.match(part('banner').textContent, /Provisional\. 16 of 32 reviews in this window are younger than the 30-day miss lookback/);
+assert.deepEqual(rankingRows().map(entry => entry.querySelector('span.agents-tag')?.dataset.tag ?? null), [null, 'accepts_often'], 'only the row well above its peers is tagged');
+assert.match(rowNamed('lyra').querySelector('span.agents-tag').title, /92%.*70%/);
+assert.match(part('detail').textContent, /Accepts oftenno/, 'a boolean stat reads as yes or no');
+assert.match(part('detail').textContent, /Provisional12/);
+click(selectButton('lyra'));
+answer(takeAll(), routeReviewers(16, '2026-10-19T08:10:00.000Z'));
+await settle();
+assert.match(part('detail').textContent, /Accepts oftenyes/);
+const outcomes = part('panel');
+assert.equal(outcomes.querySelector('h3').textContent, 'How verdicts turned out');
+assert.deepEqual(outcomes.querySelectorAll('li.agents-cause-row').map(item => item.querySelector('span.agents-cause-total').textContent), ['20 reviews', '12 reviews']);
+const lyraBar = outcomes.querySelectorAll('li.agents-cause-row')[1].querySelectorAll('span.agents-cause-seg');
+assert.deepEqual(lyraBar.map(segment => [segment.dataset.outcome, segment.style.width]),
+  [['outcome_held_up', '45%'], ['outcome_caught', '5%'], ['outcome_missed', '5%'], ['outcome_unresolved', '5%']], 'segments scale to the busiest reviewer and skip empty outcomes');
+// With no review inside the lookback the banner goes.
+loading = agents.fetchAndRenderAgents();
+answer(takeAll(), routeReviewers(0, '2026-10-19T08:15:00.000Z'));
+await loading;
+await settle();
+answer(takeAll(), routeReviewers(0, '2026-10-19T08:15:00.000Z'));
+await settle();
+assert.equal(part('banner'), undefined, 'no banner once every review is past the lookback');
 takeAll();
 
 // The aggregate view has no workspace to rank.

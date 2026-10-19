@@ -42,6 +42,18 @@
 /* Without rows there is no detail column for the disclosure to sit beside. */
 .agents-state ~ .agents-how { grid-column: 1 / -1; }
 .agents-role-panel { grid-area: panel; }
+/* A role's banner sits under the strip; the row exists only with a banner. */
+.agents-body:has(> .agents-banner) {
+  grid-template-areas:
+    "strip strip"
+    "banner banner"
+    "ranking detail"
+    "how detail"
+    "panel detail"
+    ". detail";
+  grid-template-rows: auto auto auto auto auto 1fr;
+}
+.agents-body:has(> .agents-banner) > .agents-banner { grid-area: banner; }
 .agents-body h3 { margin: 0; font-size: 13px; font-weight: 600; color: var(--fg); }
 .agents-muted { margin: 4px 0 0; color: var(--fg-mute); font-size: 12px; line-height: 1.45; }
 .agents-error { margin: 4px 0 0; color: var(--status-blocked); font-size: 12px; }
@@ -208,12 +220,37 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
 .agents-cause-name { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agents-cause-bar { display: flex; height: 10px; border-radius: 2px; overflow: hidden; background: var(--hair); }
 .agents-cause-seg { display: block; height: 100%; }
+.agents-banner { border: 1px solid var(--warn-line); border-radius: 3px; background: var(--warn-wash); padding: 8px 12px; }
+.agents-banner p { margin: 0; color: var(--warn-fg); font-size: 12.5px; line-height: 1.5; }
+.agents-banner strong { font-weight: 600; }
+.agents-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.agents-tag {
+  padding: 0 5px;
+  border: 1px solid var(--warn-line);
+  border-radius: 2px;
+  background: var(--warn-wash);
+  color: var(--warn-fg);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  line-height: 15px;
+  text-transform: uppercase;
+}
+.agents-outcome-outcome_held_up { background: var(--status-done); }
+.agents-outcome-outcome_caught { background: var(--status-review); }
+.agents-outcome-outcome_false_alarm { background: var(--status-proposed); }
+.agents-outcome-outcome_missed { background: var(--status-blocked); }
+.agents-outcome-outcome_unresolved { background: var(--hair); border: 1px solid var(--fg-disabled); box-sizing: border-box; }
 .agents-cause-total { text-align: right; color: var(--fg-mute); font-family: var(--font-mono); font-size: 11.5px; }
 
 @media (max-width: 900px) {
   .agents-body {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas: "strip" "ranking" "detail" "how" "panel";
+    grid-template-rows: none;
+  }
+  .agents-body:has(> .agents-banner) {
+    grid-template-areas: "strip" "banner" "ranking" "detail" "how" "panel";
     grid-template-rows: none;
   }
 }

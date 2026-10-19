@@ -1,11 +1,12 @@
 //! The one workspace scan behind every agent scorecard: each task with
 //! activity in the last 90 days (envelope, history and comments), the
 //! implementation job runs that name those tasks, the review gate's
-//! settlement comments and the typed `regression_from` links. The scan keeps
-//! the records; [`super::attribution`] decides who each problem counts
-//! against, and the roles only slice the result by window.
+//! settlement comments, the finding-verification verdicts on review-filed
+//! findings and the typed `regression_from` links. The scan keeps the
+//! records; [`super::attribution`] decides who each problem counts against,
+//! and the roles only slice the result by window.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
@@ -18,12 +19,16 @@ use orbit_types::workflow::ReviewVerdict;
 use serde_json::Value;
 
 use super::attribution::{self, Charge, Credit};
+use super::candidates::Candidates;
 use super::records::{
     Cause, block_cause, blocked_pr, bounded, cites_criteria, is_operator_requeue, landed,
     landing_pr, restart_cause, run_spans, spec_blocker_kind, spec_documents,
 };
 use crate::OrbitRuntime;
 use crate::application::codebase::failed_claim_settlements;
+use crate::application::task::{
+    FindingSeverity, FindingVerdict, is_review_finding, latest_verification,
+};
 
 /// How far back the scan reads. Every window, `all` included, fits inside it.
 pub(super) const SCAN_DAYS: i64 = 90;
@@ -42,6 +47,16 @@ const SETTLEMENT_LEADS: &[&str] = &[
 ];
 /// The settlement comment's reviewer line, before the crew name.
 const REVIEWER_LINE: &str = "- Reviewer: crew `";
+/// The settlement comment's line naming the reviewed implementation commit.
+const IMPLEMENTATION_LINE: &str = "- Implementation: `";
+/// The settlement comment's line naming the final candidate commit.
+const FINAL_CANDIDATE_LINE: &str = "- Final candidate: `";
+/// The settlement comment's line with the reviewer's runtime in seconds.
+const RUNTIME_LINE: &str = "- Reviewer runtime: ";
+/// A finding's sub-line naming the paths a fixed finding changed.
+const CHANGED_LINE: &str = "- Changed: ";
+/// A finding's sub-line naming the paths an open or disposed finding cites.
+const CITED_LINE: &str = "- Cited: ";
 
 /// A recorded occurrence that counts against some role, or against none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -72,6 +87,14 @@ pub enum Problem {
     DisposedFinding,
     /// Reviewer fixes that failed owner revalidation and were escalated.
     FailedFix,
+    /// A `reject` whose next implementation run changed none of its open
+    /// findings' cited paths and whose next review accepted.
+    FalseReject,
+    /// A finding a review job filed as a task that finding verification
+    /// REJECTED.
+    RejectedFinding,
+    /// A review gate settlement with verdict `incomplete`.
+    IncompleteReview,
 }
 
 impl Problem {
@@ -90,6 +113,9 @@ impl Problem {
             Problem::Regression => "regression",
             Problem::DisposedFinding => "disposed_finding",
             Problem::FailedFix => "failed_fix",
+            Problem::FalseReject => "false_reject",
+            Problem::RejectedFinding => "rejected_finding",
+            Problem::IncompleteReview => "incomplete_review",
         }
     }
 
@@ -135,6 +161,45 @@ pub(super) struct Record {
     pub(super) ended: Option<usize>,
 }
 
+/// What a review finding's settlement records about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FindingState {
+    /// Left open: it blocks a `reject`.
+    Open,
+    /// Repaired by the reviewer.
+    Fixed,
+    /// Closed by an authorized decision.
+    Disposed,
+}
+
+/// One finding of a settled review.
+#[derive(Debug, Clone)]
+pub(super) struct Finding {
+    pub(super) severity: String,
+    pub(super) state: FindingState,
+    /// The paths a fixed finding changed, or an open or disposed one cites.
+    pub(super) paths: BTreeSet<String>,
+    /// The finding's settlement line: its id, severity, state and summary.
+    pub(super) line: String,
+}
+
+/// How the run after a `reject` turned out for the findings it left open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum RejectOutcome {
+    /// No review settled after it yet.
+    Pending,
+    /// The records cannot tell: no open finding cites a path, a settlement
+    /// names no commit, or the repository lacks one of the commits.
+    Unknown,
+    /// The next review settled. `changed` holds the cited paths whose
+    /// content differs between the rejected candidate and the next reviewed
+    /// one; `accepted` is whether the next review's verdict passed.
+    Judged {
+        changed: BTreeSet<String>,
+        accepted: bool,
+    },
+}
+
 /// One settled review gate attempt, from its settlement comment.
 #[derive(Debug, Clone)]
 pub(super) struct Review {
@@ -143,8 +208,54 @@ pub(super) struct Review {
     pub(super) verdict: ReviewVerdict,
     /// The reviewer's crew and model as the settlement names them.
     pub(super) reviewer: Runner,
-    /// Findings closed by an authorized decision, each as one line.
-    pub(super) disposed: Vec<String>,
+    pub(super) findings: Vec<Finding>,
+    /// The implementation commit the reviewer examined.
+    pub(super) reviewed: Option<String>,
+    /// The candidate the verdict binds to, after any reviewer commit.
+    pub(super) final_candidate: Option<String>,
+    /// The reviewer's runtime in seconds.
+    pub(super) seconds: Option<u64>,
+    /// Reviewer fixes that a gate escalation says failed owner revalidation.
+    pub(super) fix_failed: bool,
+    /// An `incomplete` verdict whose block the run failure classification
+    /// names as infrastructure.
+    pub(super) infrastructure: bool,
+    /// For a `reject`, how the next run treated its open findings.
+    pub(super) outcome: RejectOutcome,
+}
+
+impl Review {
+    /// The findings closed by an authorized decision.
+    pub(super) fn disposed(&self) -> impl Iterator<Item = &Finding> {
+        self.findings
+            .iter()
+            .filter(|finding| finding.state == FindingState::Disposed)
+    }
+
+    /// The findings left open.
+    pub(super) fn open(&self) -> impl Iterator<Item = &Finding> {
+        self.findings
+            .iter()
+            .filter(|finding| finding.state == FindingState::Open)
+    }
+
+    /// A `reject` the next run proved wrong: it changed none of the cited
+    /// paths and the next review accepted.
+    pub(super) fn false_reject(&self) -> bool {
+        self.verdict == ReviewVerdict::Reject
+            && matches!(&self.outcome, RejectOutcome::Judged { changed, accepted } if changed.is_empty() && *accepted)
+    }
+}
+
+/// A finding a review job filed as a `bug` task, and what finding
+/// verification decided about it.
+#[derive(Debug, Clone)]
+pub(super) struct FiledFinding {
+    /// The review task it was spawned from.
+    pub(super) filer: Option<String>,
+    /// The latest verdict, with when it was recorded and the severity the
+    /// verifier rated.
+    pub(super) verdict: Option<(FindingVerdict, DateTime<Utc>, Option<FindingSeverity>)>,
 }
 
 /// A typed `regression_from` link: `regressing` regressed `culprit`.
@@ -178,6 +289,8 @@ pub(super) struct TaskFacts {
     pub(super) landed_at: Option<DateTime<Utc>>,
     pub(super) records: Vec<Record>,
     pub(super) reviews: Vec<Review>,
+    /// Set when the task is a finding a review job filed.
+    pub(super) filed: Option<FiledFinding>,
 }
 
 impl TaskFacts {
@@ -193,6 +306,17 @@ impl TaskFacts {
                     .rposition(|attempt| attempt.start <= at)
             })
     }
+}
+
+/// The review job attempt that filed `task`: the attempt of the task it was
+/// spawned from whose span contains the filing. `None` for a task no review
+/// job filed, or whose filer is outside the scan or has no attempt then.
+pub(super) fn filing_attempt<'a>(
+    by_id: &HashMap<&str, &'a TaskFacts>,
+    task: &TaskFacts,
+) -> Option<(&'a TaskFacts, usize)> {
+    let filer = by_id.get(task.filed.as_ref()?.filer.as_deref()?)?;
+    Some((filer, filer.attempt_at(task.created_at)?))
 }
 
 /// One scan of a workspace: every role and the attribution strip slice it.
@@ -253,6 +377,7 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<AgentFacts, OrbitError> {
     let mut runs = implementation_runs(runtime, horizon);
     let run_costs = run_costs(runtime, horizon, computed_at);
     let settlements = failed_claim_settlements(runtime);
+    let candidates = Candidates::open(runtime);
     let mut facts = Vec::new();
     for task in tasks {
         if task.created_at < horizon && task.updated_at < horizon {
@@ -270,14 +395,16 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<AgentFacts, OrbitError> {
         let task_settlements = settlements.get(&id).map(Vec::as_slice).unwrap_or_default();
         let classify = |entry: &TaskHistoryEntry| block_cause(entry, task_settlements);
         let task_runs = runs.remove(&id).unwrap_or_default();
-        facts.push(task_facts(
+        let mut task_facts = task_facts(
             &task,
             &history,
             &comments,
             &task_runs,
             &classify,
             computed_at,
-        ));
+        );
+        judge_rejects(&mut task_facts.reviews, &candidates);
+        facts.push(task_facts);
     }
 
     let (charges, credits) = attribution::attribute(&facts, &regressions);
@@ -614,6 +741,9 @@ fn task_facts(
                 reviews.push(review);
             }
         } else if failed_fix(comment) {
+            if let Some(review) = reviews.iter_mut().rfind(|review| review.at <= comment.at) {
+                review.fix_failed = true;
+            }
             records.push(Record {
                 problem: Problem::FailedFix,
                 at: comment.at,
@@ -623,6 +753,31 @@ fn task_facts(
             });
         }
     }
+    // An incomplete review is infrastructure's when the block that followed
+    // its settlement is.
+    for review in &mut reviews {
+        if review.verdict == ReviewVerdict::Incomplete {
+            review.infrastructure = history
+                .iter()
+                .filter(|entry| {
+                    entry.at >= review.at
+                        && entry
+                            .to_status
+                            .is_some_and(|status| status != TaskStatus::InProgress)
+                })
+                .min_by_key(|entry| entry.at)
+                .is_some_and(|entry| classify(entry) == Cause::Infrastructure);
+        }
+    }
+    let filed = is_review_finding(task).then(|| FiledFinding {
+        filer: task
+            .relations
+            .iter()
+            .find(|relation| relation.relation_type == TaskRelationType::SpawnedFrom)
+            .map(|relation| relation.target.to_string()),
+        verdict: latest_verification(history)
+            .map(|record| (record.verdict, record.verified_at, record.severity)),
+    });
 
     records.sort_by_key(|record| record.at);
     TaskFacts {
@@ -645,11 +800,46 @@ fn task_facts(
         landed_at,
         records,
         reviews,
+        filed,
     }
 }
 
-/// A review gate settlement comment: its attempt, verdict, reviewer and the
-/// findings it closed by an authorized decision.
+/// Judge each `reject` by the review that settled after it: which of its
+/// open findings' cited paths the next implementation changed, and whether
+/// that next review passed.
+fn judge_rejects(reviews: &mut [Review], candidates: &Candidates) {
+    for index in 0..reviews.len() {
+        if reviews[index].verdict != ReviewVerdict::Reject {
+            continue;
+        }
+        let review = &reviews[index];
+        let cited: BTreeSet<String> = review
+            .open()
+            .flat_map(|finding| finding.paths.iter().cloned())
+            .collect();
+        let outcome = match reviews.get(index + 1) {
+            None => RejectOutcome::Pending,
+            Some(_) if cited.is_empty() => RejectOutcome::Unknown,
+            Some(next) => {
+                let from = review.final_candidate.as_ref().or(review.reviewed.as_ref());
+                match from
+                    .zip(next.reviewed.as_ref())
+                    .and_then(|(from, to)| candidates.changed(from, to, &cited))
+                {
+                    Some(changed) => RejectOutcome::Judged {
+                        changed,
+                        accepted: next.verdict.passed(),
+                    },
+                    None => RejectOutcome::Unknown,
+                }
+            }
+        };
+        reviews[index].outcome = outcome;
+    }
+}
+
+/// A review gate settlement comment: its attempt, verdict, reviewer, the
+/// commits it names, its runtime and its findings.
 fn settlement(comment: &TaskComment) -> Option<Review> {
     let message = comment.message.trim_start();
     let rest = SETTLEMENT_LEADS
@@ -658,29 +848,104 @@ fn settlement(comment: &TaskComment) -> Option<Review> {
     let (attempt_id, rest) = rest.split_once('`')?;
     let verdict = rest.strip_prefix(": verdict **")?.split_once("**")?.0;
     let verdict: ReviewVerdict = serde_json::from_value(Value::from(verdict)).ok()?;
-    let mut reviewer = Runner::default();
-    let mut disposed = Vec::new();
+    let mut review = Review {
+        attempt_id: attempt_id.to_string(),
+        at: comment.at,
+        verdict,
+        reviewer: Runner::default(),
+        findings: Vec::new(),
+        reviewed: None,
+        final_candidate: None,
+        seconds: None,
+        fix_failed: false,
+        infrastructure: false,
+        outcome: RejectOutcome::Pending,
+    };
     for line in message.lines() {
         if let Some(rest) = line.strip_prefix(REVIEWER_LINE)
             && let Some((crew, rest)) = rest.split_once('`')
         {
-            reviewer.crew = Some(crew.to_string());
-            reviewer.model = rest
+            review.reviewer.crew = Some(crew.to_string());
+            review.reviewer.model = rest
                 .split_once(" / ")
                 .and_then(|(_, model)| model.split_once(')'))
                 .map(|(model, _)| model.trim().to_string())
                 .filter(|model| !model.is_empty());
-        } else if line.starts_with("- `") && line.contains(", disposed: ") {
-            disposed.push(bounded(line.trim_start_matches("- ")));
+        } else if let Some(rest) = line.strip_prefix(IMPLEMENTATION_LINE) {
+            review.reviewed = commit(rest);
+        } else if let Some(rest) = line.strip_prefix(FINAL_CANDIDATE_LINE) {
+            review.final_candidate = commit(rest);
+        } else if let Some(rest) = line.strip_prefix(RUNTIME_LINE) {
+            review.seconds = rest
+                .split_once('s')
+                .and_then(|(seconds, _)| seconds.trim().parse().ok());
+        } else if let Some(finding) = finding(line) {
+            review.findings.push(finding);
+        } else if let Some(sub) = line.strip_prefix("  ")
+            && let Some(finding) = review.findings.last_mut()
+        {
+            match finding.state {
+                FindingState::Fixed => {
+                    if let Some(change) = sub.strip_prefix(CHANGED_LINE) {
+                        finding.paths = changed_paths(change);
+                    }
+                }
+                FindingState::Open | FindingState::Disposed => {
+                    if let Some(cited) = sub.strip_prefix(CITED_LINE) {
+                        finding.paths = path_list(cited);
+                    }
+                }
+            }
         }
     }
-    Some(Review {
-        attempt_id: attempt_id.to_string(),
-        at: comment.at,
-        verdict,
-        reviewer,
-        disposed,
+    Some(review)
+}
+
+/// A settlement's finding line: ``- `<id>` [<severity>, <state>] <summary>``.
+fn finding(line: &str) -> Option<Finding> {
+    let rest = line.strip_prefix("- `")?;
+    let (_, rest) = rest.split_once("` [")?;
+    let (severity, rest) = rest.split_once(", ")?;
+    let state = if rest.starts_with("open]") {
+        FindingState::Open
+    } else if rest.starts_with("fixed]") {
+        FindingState::Fixed
+    } else if rest.starts_with("disposed: ") {
+        FindingState::Disposed
+    } else {
+        return None;
+    };
+    Some(Finding {
+        severity: severity.trim().to_ascii_lowercase(),
+        state,
+        paths: BTreeSet::new(),
+        line: bounded(line.trim_start_matches("- ")),
     })
+}
+
+/// The commit a settlement line opens with, between backticks.
+fn commit(rest: &str) -> Option<String> {
+    let (commit, _) = rest.split_once('`')?;
+    (!commit.is_empty()).then(|| commit.to_string())
+}
+
+/// The paths a fixed finding's `Changed:` line ends on, in parentheses.
+fn changed_paths(change: &str) -> BTreeSet<String> {
+    change
+        .strip_suffix(')')
+        .and_then(|change| change.rsplit_once(" ("))
+        .map(|(_, paths)| path_list(paths))
+        .unwrap_or_default()
+}
+
+/// A comma-separated path list.
+fn path_list(paths: &str) -> BTreeSet<String> {
+    paths
+        .split(", ")
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// The gate escalation of reviewer fixes that failed owner revalidation.

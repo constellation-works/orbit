@@ -8,12 +8,14 @@
 // One renderer serves every role: the strip, the ranking, the detail column
 // and the "How the score works" disclosure. A role's own panel comes from its
 // module in ROLE_PANELS (js/agents-<role>.js); a role without one shows none.
+// A panel may also add a banner under the strip and tags beside a row's name.
 // A role whose scorecard is not computed yet shows an empty state with its
 // terms. Pure vanilla JS, no build step; every node is built with `el()`.
 
 import { el, syncNodes, fetchJson, getWindow, wireWindowSelector, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, bindTaskLink, formatDateTime } from './common.js';
 import { orchestratorsPanel } from './agents-orchestrators.js';
 import { implementersPanel } from './agents-implementers.js';
+import { reviewersPanel } from './agents-reviewers.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -25,10 +27,13 @@ const ROLE_LABELS = {
   pilots: "Pilots",
 };
 // Each role's panel below the shared layout: `{ title, render(context) }`,
-// where `render` returns the panel's child nodes.
+// where `render` returns the panel's child nodes. Optional hooks:
+// `banner(context)` returns the banner's content or null, and `rowTags(row)`
+// returns the tags shown under a row's name.
 const ROLE_PANELS = {
   orchestrators: orchestratorsPanel,
   implementers: implementersPanel,
+  reviewers: reviewersPanel,
 };
 const NOT_SCORED_REASONS = {
   infrastructure: "rework caused by infrastructure",
@@ -265,6 +270,12 @@ function signed(value) {
   return value < 0 ? `−${text}` : `+${text}`;
 }
 
+function statText(value) {
+  if (typeof value === "number") return number(value);
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  return String(value ?? "—");
+}
+
 function plural(n, one, many = `${one}s`) {
   return `${n} ${n === 1 ? one : many}`;
 }
@@ -301,7 +312,10 @@ function render() {
         + ` · rows under ${scorecard.min_support} ${scorecard.unit} are greyed and unranked`
       : `${ROLE_LABELS[role]} are not computed yet · window ${windowLabel()}`;
   }
+  const panel = ROLE_PANELS[role];
   const nodes = [stripNode()];
+  const banner = panel && panel.banner && scorecard.status === "ok" ? panel.banner({ scorecard, rows: ranking, roleHref }) : null;
+  if (banner) nodes.push(bannerNode(banner));
   if (scorecard.status !== "ok") {
     nodes.push(stateNode("not-computed", `${ROLE_LABELS[role]} are not computed yet`,
       `This role's scorecard is not computed yet, so it ranks no rows. "How the score works" lists the terms it will be scored on.`));
@@ -314,9 +328,15 @@ function render() {
     if (row) nodes.push(detailNode(row));
   }
   nodes.push(howNode());
-  const panel = ROLE_PANELS[role];
   if (panel && scorecard.status === "ok" && ranking.length) nodes.push(rolePanelNode(panel));
   syncNodes(body, nodes);
+}
+
+function bannerNode(content) {
+  const node = el("section", { class: "agents-banner", role: "note" }, [content]);
+  node.dataset.key = "banner";
+  node.dataset.hash = JSON.stringify([role, content.textContent]);
+  return node;
 }
 
 function stateNode(key, heading, text) {
@@ -409,6 +429,7 @@ function scoreBar(value, scale) {
 function rankingNode(ranking) {
   const scale = scoreScale(ranking);
   const selectedKey = selected.get(role);
+  const panel = ROLE_PANELS[role];
   const header = el("tr", {}, [
     el("th", { class: "agents-num", text: "Rank" }),
     el("th", { text: "Crew · model" }),
@@ -433,6 +454,8 @@ function rankingNode(ranking) {
       el("span", { class: "agents-model", text: row.model }),
     ]);
     select.addEventListener("click", () => selectRow(row));
+    const tags = panel && panel.rowTags ? panel.rowTags(row) : [];
+    if (tags.length) select.append(el("span", { class: "agents-tags" }, tags));
     const nameCell = el("th", { class: "agents-name" }, [select]);
     nameCell.setAttribute("scope", "row");
     const support = el("td", { class: "agents-num agents-support" }, [el("span", { text: String(row.units) })]);
@@ -501,7 +524,7 @@ function detailNode(row) {
   stat(`${scorecard.unit[0].toUpperCase()}${scorecard.unit.slice(1)}`, String(row.units));
   for (const entry of Array.isArray(row.stats) ? row.stats : []) {
     if (entry.key === "tier_comparison") continue; // Rendered in the role panel.
-    stat(entry.label, typeof entry.value === "number" ? number(entry.value) : String(entry.value ?? "—"));
+    stat(entry.label, statText(entry.value));
   }
   if (row.runs_without_model) stat("Runs with no model", String(row.runs_without_model));
   if (row.provisional != null) stat("Provisional", String(row.provisional));

@@ -1,7 +1,7 @@
 ---
 title: Review Gate — Design
 owner: codex
-last_updated: 2026-10-18
+last_updated: 2026-10-19
 last_validated: 2026-10-15
 status: Accepted
 feature: review-gate
@@ -262,6 +262,7 @@ Findings:
 - `F1` [high, fixed] <summary>
   - Changed: <what the reviewer changed> (<paths>)
 - `F2` [low, open] <summary>
+  - Cited: <paths the finding cites>
 
 - Reviewer: crew `<crew>` (<provider> / <model>)
 - Implementation: `<sha>` on base `<sha>` (N commit(s), unchanged by review)
@@ -277,6 +278,8 @@ Findings:
 
 <what the verdict means for delivery>
 ```
+
+A fixed finding names its changed paths on its `Changed:` line. Any other finding that cites paths lists them on a `Cited:` line. The [agent scorecards](../agent-scorecards/2_design.md#53-reviewers) judge a `reject` by whether the next implementation run changed those paths.
 
 With a reviewer commit, settlement returns `reviewer_fixed: true`,
 `implementation_head_sha` (the head the reviewer examined), and

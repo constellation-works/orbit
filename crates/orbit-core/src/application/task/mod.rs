@@ -73,7 +73,7 @@ pub use finding_verification::{
 };
 pub(crate) use finding_verification::{
     UNVERIFIED_REVIEW_FINDING, VERIFIABLE_STATUSES, VerdictWrite, VerifierAssignment,
-    finding_fingerprint, needs_verification, next_tier,
+    finding_fingerprint, latest_verification, needs_verification, next_tier,
 };
 pub use lint::{TaskLintFinding, TaskLintReport, TaskLintSeverity};
 pub use listing::{

@@ -55,8 +55,9 @@ fn codebase_view_executes_subtab_swap_sections_empty_state_and_denial_badge() {
 /// Observe › Agents counts each role tab's ranked rows, splits the strip by
 /// owner, moves the detail column with the selected row, keeps "How the score
 /// works" open across polls, re-reads the detail after a newer scan, shows the
-/// empty and not-computed states, and routes `#analytics/orchestrators` to
-/// `#agents/orchestrators`.
+/// empty and not-computed states, the Reviewers provisional banner, `accepts
+/// often` tag and verdict-outcome bars, and routes `#analytics/orchestrators`
+/// to `#agents/orchestrators`.
 #[test]
 fn agents_view_executes_selection_disclosure_states_and_redirect() {
     let result = std::process::Command::new("node")

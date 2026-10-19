@@ -208,7 +208,8 @@ fn landing_consequence(
 }
 
 /// Every finding of the attempt with its disposition and, for a fix, what
-/// the reviewer changed and where.
+/// the reviewer changed and where; any other finding names the paths it
+/// cites.
 fn finding_lines(findings: &[orbit_types::workflow::ReviewFinding]) -> String {
     if findings.is_empty() {
         return "Findings: none.".to_string();
@@ -229,6 +230,10 @@ fn finding_lines(findings: &[orbit_types::workflow::ReviewFinding]) -> String {
         ));
         if let Some(change) = finding_change(finding) {
             lines.push_str(&format!("\n  - Changed: {change}"));
+        } else if !finding.paths.is_empty() {
+            // The agent scorecards judge a `reject` by whether the next run
+            // changed these paths.
+            lines.push_str(&format!("\n  - Cited: {}", finding.paths.join(", ")));
         }
     }
     lines
