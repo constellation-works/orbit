@@ -250,6 +250,7 @@ version exist:
    `npx -y @orbit-tools/cli@<version> mcp serve`.
 4. If review stalls, escalate to `marketplace-publishing@cursor.com`. Do not
    send that mail from CI or assume a public catalog push API exists.
+
 ## Publish the Official MCP Registry record
 
 After the GitHub Release and its matching `@orbit-tools/cli` version are
