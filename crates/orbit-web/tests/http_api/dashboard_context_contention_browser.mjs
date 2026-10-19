@@ -23,6 +23,8 @@ let readiness = { task_id: 'CTX-1', eligible: false, reason: 'context_lock_confl
   blocking_task_ids: ['CTX-3', 'CTX-2'], detail: 'waits on CTX-2: file:src/shared.rs' };
 let locksUnavailable = false;
 let matches = true;
+let taskHolders = true;
+let reservations = [{ reservation_id: 'reservation-fixture', task_ids: ['CTX-1'], files: ['file:reserved.rs'], actor: 'fixture', owner_run_id: 'jrun-20261019-1450-fixture', expires_at: '2099-01-01T00:00:00Z' }];
 const list = items => ({ items, total: items.length, limit: 100, truncated: false });
 function locks(workspace) {
   const active = tasks.filter(task => task.status === 'in-progress');
@@ -36,7 +38,7 @@ function locks(workspace) {
         ? active.filter(holder => holder.id !== task.id).map(holder => ({ id: holder.id, status: holder.status, selector: holder.context_files[0] })) : [],
     })) };
   }
-  return { by_task: active, total_locked: 2, total_tasks: active.length, context_contention };
+  return { by_task: taskHolders ? active : [], by_reservation: reservations, locked_files: [...(taskHolders ? ['dir:src', 'file:src/shared.rs'] : []), ...reservations.flatMap(row => row.files)], total_locked: (taskHolders ? 2 : 0) + reservations.length, total_tasks: new Set([...(taskHolders ? active.map(task => task.id) : []), ...reservations.flatMap(row => row.task_ids)]).size, total_reservations: reservations.length, context_contention };
 }
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
@@ -77,6 +79,7 @@ const results = [];
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   const errors = [];
   page.on('pageerror', error => errors.push(String(error)));
   await page.goto(`http://127.0.0.1:${server.address().port}/?host=fixture-host&workspace=ws_fixture&window=24h#tasks`);
@@ -91,6 +94,52 @@ try {
     await page.waitForFunction(() => !document.getElementById('refresh-btn').disabled);
   };
   const highlights = id => page.locator(`#detail-${id} .file-list .context-contended-backlog, #detail-${id} .file-list .context-contended-active`);
+  // Locks held is the same card in the Tasks dock and on Drain. Exercise
+  // reservation-only payloads too: they must never show the empty state.
+  const panel = page.locator('#locks-panel');
+  await page.locator('#locks-body .lock-task-group').first().waitFor();
+  await panel.screenshot({ path: path.join(evidence, 'locks-tasks-dark-1440.png') });
+  await page.evaluate(() => { location.hash = '#drain'; });
+  await panel.waitFor({ state: 'visible' });
+  await panel.screenshot({ path: path.join(evidence, 'locks-drain-dark-1440.png'), animations: 'disabled' });
+  await page.locator('#drain-summary').screenshot({ path: path.join(evidence, 'drain-summary-dark-1440.png'), animations: 'disabled' });
+  await page.setViewportSize({ width: 375, height: 1100 });
+  await page.locator('#drain-summary').screenshot({ path: path.join(evidence, 'drain-summary-dark-375.png'), animations: 'disabled' });
+  await panel.scrollIntoViewIfNeeded();
+  await panel.screenshot({ path: path.join(evidence, 'locks-drain-dark-375.png') });
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  const reservation = page.locator('[data-key="lock-reservation-reservation-fixture"]');
+  await reservation.waitFor();
+  assert.equal(await panel.locator('.lock-task-group').count(), 3, 'task and reservation holders render together');
+  assert((await page.locator('#locks-count').textContent()).includes('3 tasks'), 'reservation-only task contributes to distinct count');
+  assert((await page.locator('[data-tile="locks"]').textContent()).includes('3 tasks'), 'Drain summary counts reservation holders');
+  const reservationLink = reservation.getByRole('link', { name: 'CTX-1', exact: true });
+  const reservationHref = new URL(await reservationLink.getAttribute('href'), page.url());
+  assert.equal(reservationHref.hash, '#tasks?open=CTX-1');
+  assert.equal(reservationHref.searchParams.get('workspace'), 'ws_fixture');
+  assert.equal(reservationHref.searchParams.get('host'), 'fixture-host');
+  await reservation.locator('summary').click();
+  assert.deepEqual(await reservation.locator('.lock-file-row').allTextContents(), ['file:reserved.rs']);
+  await refresh();
+  assert.equal(await reservation.locator('details').getAttribute('open'), '', 'reservation disclosure survives refresh');
+  taskHolders = false;
+  await refresh();
+  assert.equal(await panel.locator('.lock-task-group').count(), 1, 'reservation-only locks remain visible');
+  assert.equal(await panel.locator('.locks-empty').count(), 0);
+  reservations = [{ reservation_id: 'manual-fixture', task_ids: [], files: ['file:manual.rs'], actor: 'fixture' }];
+  await refresh();
+  const manual = page.locator('[data-key="lock-reservation-manual-fixture"]');
+  await manual.waitFor();
+  assert.equal(await manual.getByRole('link').count(), 0, 'manual reservations need no task holder');
+  assert((await manual.textContent()).includes('Manual reservation'));
+  reservations = [];
+  await refresh();
+  await panel.locator('.locks-empty').waitFor();
+  taskHolders = true;
+  await refresh();
+  assert.equal(await panel.locator('.lock-task-group').count(), 2, 'released reservation disappears');
+  results.push({ scenario: 'reservation holders, scoped links, files, distinct counts, reservation-only, disclosure refresh and release', passed: true });
+  await page.evaluate(() => { location.hash = '#tasks'; });
   await open('CTX-1');
   await page.waitForFunction(() => document.querySelectorAll('#detail-CTX-1 .context-contended-backlog').length === 3);
   assert.equal(await highlights('CTX-1').count(), 3, 'unrelated entry stays normal');

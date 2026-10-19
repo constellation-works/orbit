@@ -17,7 +17,7 @@ use orbit_core::application::task::{
 };
 use orbit_core::runtime::engine::ConfiguredCrewRegistryProjection;
 use orbit_core::{AuditEvent, OrbitError, OrbitRuntime, ResolvedCrewProjection, Task, TaskStatus};
-use orbit_types::task::{TaskEnvelopeV2, task_base_json};
+use orbit_types::task::task_base_json;
 use orbit_types::telemetry::audit_event_base_json;
 use serde_json::{Map, Value, json};
 
@@ -337,20 +337,11 @@ fn explicit_task_crew(task: &Task) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
-pub(crate) fn task_lock_to_json(task: &TaskEnvelopeV2) -> Value {
-    json!({
-        "id": task.id,
-        "title": task.title,
-        "status": task.status.to_string(),
-        "job_run_id": task.job_run_id,
-        "crew": task.crew,
-        "crew_source": task.crew_source,
-        "orchestrator": task.orchestrator,
-        "context_files": task.context_files,
-    })
-}
-
-pub(crate) fn task_locks_json(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
+/// Add dashboard-only contention highlights to the authoritative lock listing.
+pub(crate) fn decorate_task_locks(
+    runtime: &OrbitRuntime,
+    mut locks: Value,
+) -> Result<Value, OrbitError> {
     let candidates = runtime.task_candidates(
         &orbit_core::application::task::TaskListFilter {
             statuses: Some(vec![
@@ -366,12 +357,18 @@ pub(crate) fn task_locks_json(runtime: &OrbitRuntime) -> Result<Value, OrbitErro
     // informational population is deliberately narrower than lock holders:
     // review tasks still appear in by_task, but never cause these highlights.
     let mut contenders = OverlapIndex::new();
-    for task in &candidates.items {
-        if task.status == TaskStatus::InProgress {
-            for selector in
-                declared_context_files(&task.context_files, &runtime.paths().repo_root).retained
+    for holder in locks["by_task"].as_array().into_iter().flatten() {
+        if holder["status"] != "in-progress" {
+            continue;
+        }
+        if let Some(id) = holder["id"].as_str() {
+            for selector in holder["context_files"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
             {
-                contenders.insert(&selector, (task.id.clone(), task.status, selector.clone()));
+                contenders.insert(selector, (id.to_string(), selector.to_string()));
             }
         }
     }
@@ -382,47 +379,13 @@ pub(crate) fn task_locks_json(runtime: &OrbitRuntime) -> Result<Value, OrbitErro
                 let expanded = declared_context_files(std::slice::from_ref(selector), &runtime.paths().repo_root);
                 let matches: Vec<Value> = expanded.retained.iter()
                     .flat_map(|requested| contenders.overlapping(requested))
-                    .filter(|(_, (id, _, _))| *id != task.id)
-                    .map(|(_, (id, status, held))| json!({"id": id, "status": status.to_string(), "selector": held}))
+                    .filter(|(_, (id, _))| *id != task.id)
+                    .map(|(_, (id, held))| json!({"id": id, "status": "in-progress", "selector": held}))
                     .collect();
                 json!({"selector": selector, "known": expanded.invalid.is_empty(), "contenders": matches})
             }).collect();
             (task.id.clone(), json!({"status": task.status.to_string(), "entries": entries}))
         }).collect();
-    let (tasks, locked_files) = task_locks(candidates.items);
-    let json_by_task: Vec<Value> = tasks.iter().map(task_lock_to_json).collect();
-    Ok(json!({
-        "locked_files": locked_files.iter().cloned().collect::<Vec<_>>(),
-        "by_task": json_by_task,
-        "total_locked": locked_files.len(),
-        "total_tasks": tasks.len(),
-        "context_contention": contention,
-    }))
-}
-
-fn task_locks(mut tasks: Vec<TaskEnvelopeV2>) -> (Vec<TaskEnvelopeV2>, BTreeSet<String>) {
-    tasks.retain(|task| matches!(task.status, TaskStatus::InProgress | TaskStatus::Review));
-
-    tasks.sort_by_key(|task| {
-        (
-            task_lock_status_rank(task.status),
-            task.created_at,
-            task.id.clone(),
-        )
-    });
-
-    let locked_files: BTreeSet<String> = tasks
-        .iter()
-        .flat_map(|task| task.context_files.iter().cloned())
-        .collect();
-
-    (tasks, locked_files)
-}
-
-fn task_lock_status_rank(status: TaskStatus) -> u8 {
-    match status {
-        TaskStatus::InProgress => 0,
-        TaskStatus::Review => 1,
-        _ => 2,
-    }
+    locks["context_contention"] = json!(contention);
+    Ok(locks)
 }

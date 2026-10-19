@@ -400,6 +400,7 @@ function paintLocksPanel(payload) {
   const count = $("locks-count");
   if (!body || !count) return;
   const byTask = Array.isArray(payload && payload.by_task) ? payload.by_task : [];
+  const byReservation = Array.isArray(payload && payload.by_reservation) ? payload.by_reservation : [];
   const totalLocked = Number.isFinite(Number(payload && payload.total_locked))
     ? Number(payload.total_locked)
     : 0;
@@ -408,7 +409,7 @@ function paintLocksPanel(payload) {
     : byTask.length;
   count.textContent = `${totalLocked} ${totalLocked === 1 ? "file" : "files"} · ${totalTasks} ${totalTasks === 1 ? "task" : "tasks"}`;
 
-  if (byTask.length === 0) {
+  if (byTask.length === 0 && byReservation.length === 0) {
     const empty = el("div", { class: "locks-empty", text: "No files currently locked." });
     empty.dataset.key = "locks-empty";
     empty.dataset.hash = "locks-empty";
@@ -477,6 +478,44 @@ function paintLocksPanel(payload) {
     group.appendChild(idButton);
     return group;
   });
+  for (const reservation of byReservation) {
+    const key = `lock-reservation-${reservation.reservation_id}`;
+    const files = Array.isArray(reservation.files) ? reservation.files : [];
+    const taskIds = Array.isArray(reservation.task_ids) ? reservation.task_ids : [];
+    const group = el("div", { class: "lock-task-group lock-reservation-group" });
+    group.dataset.key = key;
+    group.dataset.hash = JSON.stringify(reservation);
+    const details = detailsPanel(key, { class: "lock-task-details" });
+    const holders = el("span", { class: "lock-reservation-holders" });
+    for (const taskId of taskIds) {
+      const link = el("a", { class: "mono", text: String(taskId) });
+      bindTaskLink(link, String(taskId));
+      holders.appendChild(link);
+    }
+    if (!taskIds.length) holders.appendChild(el("span", { text: "Manual reservation" }));
+    const header = el("summary", { class: "lock-task-header" }, [
+      el("span", {
+        class: "lock-reservation-label",
+        text: "Reservation",
+        title: reservation.expires_at ? `Expires ${reservation.expires_at}` : "Reserved lock surface",
+      }),
+      el("span", { class: "lock-count", text: `${files.length} ${files.length === 1 ? "file" : "files"}` }),
+      el("span", { class: "lock-task-meta" }, [
+        holders,
+        reservation.owner_run_id ? el("span", {
+          class: "lock-job mono",
+          text: shortRunId(reservation.owner_run_id),
+          title: `job_run=${reservation.owner_run_id}`,
+        }) : null,
+      ]),
+    ]);
+    details.appendChild(header);
+    const list = el("div", { class: "lock-file-list" });
+    for (const file of files) list.appendChild(el("div", { class: "lock-file-row mono", text: String(file), title: String(file) }));
+    details.appendChild(list);
+    group.appendChild(details);
+    nodes.push(group);
+  }
   syncNodes(body, nodes);
 }
 

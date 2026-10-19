@@ -191,6 +191,11 @@ orbit task locks list                      # files held by active tasks and rese
 orbit task locks release <reservation_id>  # operator escape hatch
 ```
 
+The dashboard's **Locks held** card uses the same listing, including active
+reservations and distinct task counts. No-diff tasks hold no context locks;
+other holders use admission's canonical selectors and unlocked-path rules.
+Listing locks also expires old reservations and records their audit events.
+
 Release only after confirming the holding task is genuinely inactive, and only
 through this surface — never by editing the store. The full diagnostic sequence
 for a reservation blocking a run is in

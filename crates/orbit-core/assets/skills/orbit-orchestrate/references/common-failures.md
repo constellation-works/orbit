@@ -10,7 +10,7 @@ Symptoms:
 
 - A gate, auto, or task run repeatedly emits `task.locks.reserve.denied`.
 - Conflicts name `held_by: "reservation"` with the same `held_by_id` on each retry.
-- CLI-only `orbit task locks list` or reservation-store inspection shows the blocking reservation belongs to a different task that is already `done`, `rejected`, `archived`, or otherwise no longer active.
+- The dashboard’s **Locks held** card, `orbit task locks list`, or reservation-store inspection shows the blocking reservation belongs to a different task that is already `done`, `rejected`, `archived`, or otherwise no longer active.
   `failed` is a run state, not a task lifecycle status.
 - The reservation has `owner_run_id: null`, so terminal run cleanup cannot release it by owner.
 

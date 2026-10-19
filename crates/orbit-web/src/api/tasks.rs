@@ -28,7 +28,7 @@ use super::{
     validate_id,
 };
 use crate::projections::{
-    TaskListProjection, task_detail_json, task_locks_json, task_to_json_with_sidecars,
+    TaskListProjection, decorate_task_locks, task_detail_json, task_to_json_with_sidecars,
 };
 
 /// Actor recorded for a dashboard-authored comment when the request supplies no
@@ -460,7 +460,13 @@ fn task_list_page_json(
 }
 
 pub(super) async fn list_task_locks(Ws(runtime): Ws) -> Response {
-    match blocking("task locks", move || Ok(task_locks_json(&runtime))).await {
+    match blocking("task locks", move || {
+        Ok(runtime
+            .run_tool("orbit.task.locks", json!({}))
+            .and_then(|locks| decorate_task_locks(&runtime, locks)))
+    })
+    .await
+    {
         Ok(Ok(value)) => Json(value).into_response(),
         Ok(Err(e)) => server_error(e),
         Err(response) => *response,
