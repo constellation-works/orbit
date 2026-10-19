@@ -16,6 +16,7 @@ mod desktop_write;
 mod final_recovery;
 mod handoff;
 mod init;
+mod isolation;
 mod lock_commands;
 mod plugin_build;
 mod plugin_conformance;

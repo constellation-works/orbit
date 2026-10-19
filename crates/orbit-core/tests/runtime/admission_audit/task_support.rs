@@ -19,6 +19,7 @@ const ISOLATED_TEST_ENV: &str = "ORBIT_TEST_TASK_FIXTURE_CHILD";
 ///
 /// Returns `true` inside the child, where the caller runs its body, and
 /// `false` in the parent once the child ran exactly that test and passed.
+/// Child diagnostics and coverage notices are forwarded to the test command.
 pub(crate) fn enter_isolated_child(module: &str, test: &str) -> bool {
     let module = module
         .strip_prefix(concat!(env!("CARGO_CRATE_NAME"), "::"))
@@ -43,15 +44,11 @@ pub(crate) fn enter_isolated_child(module: &str, test: &str) -> bool {
         .current_dir(home.path())
         .output()
         .expect("run isolated fixture");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        output.status.success(),
-        "isolated `{exact_test}` failed:\n{stdout}\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        stdout.contains("test result: ok. 1 passed;"),
-        "the isolated child must run `{exact_test}` itself, not filter it out:\n{stdout}"
+    orbit_common::test_env::assert_child_test_passed(
+        &exact_test,
+        output.status,
+        &output.stdout,
+        &output.stderr,
     );
     false
 }
