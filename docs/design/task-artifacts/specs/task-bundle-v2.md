@@ -260,11 +260,11 @@ The local registry must maintain generated status and terminal-month views or re
 
 The initial registry projections are:
 
-- `task_bundle_index(task_id, workspace_id, status, priority, job_run_id, created_at, updated_at, terminal_month, complexity, task_type)`. `complexity` is `low`/`medium`/`hard`/`xhard`/`unassessed`, or empty when the envelope left it unset. `task_type` is `feature`/`bug`/`refactor`/`chore`. For either column, SQL `NULL` means the row has not been rewritten since the column was added.
+- `task_bundle_index(task_id, workspace_id, status, priority, job_run_id, created_at, updated_at, terminal_month, complexity, task_type)`. `complexity` is `low`/`medium`/`hard`/`xhard`/`unassessed`, or empty when the envelope left it unset. `task_type` is `feature`/`bug`/`refactor`/`chore`. SQL `NULL` means a binary that knows the column has not rewritten the row. An older writer's upsert preserves the previous `task_type`, which can disagree with the canonical envelope; freshness treats that disagreement as stale the same way it treats `NULL`. `complexity` `NULL` still means that column has not been rewritten.
 - `task_bundle_tags(task_id, workspace_id, tag)`.
 - `task_bundle_relations(source_task_id, workspace_id, relation_type, target_task_id)`. The physical column name is historical; `produces` and `resolves` rows may store non-task artifact IDs in `target_task_id`, and `covered_by` may store a GitHub PR external key.
 
-Indexes are generated data. The bundle envelope is canonical, and repair/rebuild paths may delete and regenerate index rows from bundles. The `task_bundle_index.updated_at` value is the envelope version stamp. Query paths should treat a missing row, incomplete index, or `updated_at` mismatch as a cache miss: rebuild from registered bundles when possible, otherwise fall back to bundle reads rather than treating the index as proof that tasks do not exist.
+Indexes are generated data. The bundle envelope is canonical, and repair/rebuild paths may delete and regenerate index rows from bundles. The `task_bundle_index.updated_at` value is the envelope version stamp. Query paths should treat a missing row, incomplete index, `updated_at` mismatch, or a `task_type` that disagrees with the envelope (including when `updated_at` still matches) as a cache miss: rebuild from registered bundles when possible, otherwise fall back to bundle reads rather than treating the index as proof that tasks do not exist. Defect reads keep the rebuild best-effort, so a refused repair can still serve the projection it already holds.
 
 ## Local Locks
 
@@ -277,7 +277,7 @@ The file bundle does not provide all-or-nothing transactions across Markdown sid
 - `task.yaml` remains canonical for structured metadata.
 - JSONL tail corruption is repaired only at the final partial row; corruption before the tail is an error.
 - The last event with `to_status` must match `task.yaml.status`; a mismatch on a *settled* bundle is corruption and must fail reads. A mismatch observed while a writer is mid-publication is not corruption and must not be observable at all — see [Concurrent reads and lifecycle writes](#concurrent-reads-and-lifecycle-writes).
-- Generated indexes are invalid when the row count, `updated_at`, or any indexed listing field (status, priority, job run, `created_at`, tags) differs from registered bundle envelopes and must be rebuilt from bundles.
+- Generated indexes are invalid when the row count, `updated_at`, `task_type`, or any indexed listing field (status, priority, job run, `created_at`, tags) differs from registered bundle envelopes and must be rebuilt from bundles.
 - Artifact manifest entries must reference existing relative files with matching size and SHA-256; unmanifested files are ignored until a future compaction/prune command removes them.
 
 Malformed registered bundles surface as a typed `task_bundle_corrupt`

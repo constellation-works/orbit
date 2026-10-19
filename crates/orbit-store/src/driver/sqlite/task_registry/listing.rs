@@ -26,8 +26,8 @@ use crate::contracts::{IndexedTaskRow, TaskIndexFilter, TaskIndexKey, TaskIndexS
 const ID_CHUNK: usize = 500;
 
 impl TaskRegistryStore {
-    /// Every index row of a workspace with the fields listing filters and
-    /// orders by, for the freshness scan to compare against envelopes.
+    /// Every index row of a workspace with listing and defect projection
+    /// fields, for the freshness scan to compare against envelopes.
     pub fn indexed_task_rows_for_workspace(
         &self,
         partition_id: &str,
@@ -40,7 +40,7 @@ impl TaskRegistryStore {
         // workspace, against about 15 ms through the `(task_id, tag)` key.
         let mut stmt = conn
             .prepare(
-                "SELECT i.task_id, i.status, i.priority, i.job_run_id, i.created_at, i.updated_at, t.tag, r.target_task_id
+                "SELECT i.task_id, i.status, i.priority, i.job_run_id, i.created_at, i.updated_at, t.tag, r.target_task_id, i.task_type
                  FROM task_bundle_index i
                  LEFT JOIN task_bundle_tags t ON t.task_id = i.task_id AND +t.workspace_id = i.workspace_id
                  LEFT JOIN task_bundle_relations r ON r.source_task_id = i.task_id AND r.relation_type = 'child_of'
@@ -54,6 +54,7 @@ impl TaskRegistryStore {
                     IndexedTaskRow {
                         status: row.get(1)?,
                         priority: row.get(2)?,
+                        task_type: row.get(8)?,
                         job_run_id: row.get(3)?,
                         created_at: row.get(4)?,
                         updated_at: row.get(5)?,
