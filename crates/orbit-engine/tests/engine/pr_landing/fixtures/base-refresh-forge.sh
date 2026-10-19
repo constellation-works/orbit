@@ -66,6 +66,7 @@ if [ -f "$forge/merged" ]; then
     merge_commit="{\"oid\":\"$(cat "$forge/merged")\"}"
 fi
 review=''
+[ ! -f "$forge/review-approved" ] || review=APPROVED
 [ ! -f "$forge/review" ] || review=REVIEW_REQUIRED
 if [ -f "$forge/auth" ] && [ "$1" = api ]; then echo 'HTTP 403 forbidden' >&2; exit 1; fi
 [ ! -f "$forge/review-required" ] || review=REVIEW_REQUIRED
@@ -98,6 +99,9 @@ case "$1 ${2:-}" in
         printf '{"number":42,"state":"open","merged":false,"head":{"sha":"%s","ref":"%s","repo":%s},"base":{"sha":"%s","ref":"%s","repo":%s}}\n' "$head" "$branch" "$repo" "$base_sha" "$base" "$repo" ;;
     'api repos/{owner}/{repo}/actions/workflows?per_page=100')
         if [ -f "$forge/truncated" ]; then echo '{"total_count":2,"workflows":[]}'; exit; fi
+        if [ -f "$forge/website-workflow" ]; then
+            echo '{"total_count":2,"workflows":[{"id":600,"path":".github/workflows/ci.yml","state":"active"},{"id":601,"path":".github/workflows/website-check.yml","state":"active"}]}'; exit
+        fi
         echo '{"total_count":1,"workflows":[{"id":600,"path":".github/workflows/ci.yml","state":"active"}]}' ;;
     'api apps/github-actions') echo '{"id":900,"slug":"github-actions"}' ;;
     'api repos/{owner}/{repo}/pulls/42/update-branch')
