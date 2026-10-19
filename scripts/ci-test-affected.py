@@ -185,10 +185,11 @@ def pull_request_scope(metadata, paths):
     Stricter than the local gate. Every path outside crates/ runs everything
     (workspace manifests, toolchain, .cargo/, .github/, scripts/, plugin/ and
     any other repository file a test may read), except Markdown outside
-    crates/ and plugin/: the docs scope (ci-change-scope.sh) already runs no
-    test for it, and the one such page a test reads is a FILE_READERS entry
-    that selects its reader. A member manifest can change the features of the
-    whole workspace build, so it runs everything too. Inside crates/,
+    crates/ and plugin/: no Cargo test reads it, and the one such page a test
+    reads is a FILE_READERS entry that selects its reader. The workspace-wide
+    Check job still runs the scripts/test-* self-tests that read Markdown, such
+    as test-release-promotion.py. A member manifest can change the features of
+    the whole workspace build, so it runs everything too. Inside crates/,
     affected_packages adds FILE_READERS' cross-crate readers and runs
     everything for a path no member owns.
     """

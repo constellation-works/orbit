@@ -618,6 +618,12 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
                          "affected:orbit-cli,orbit-cmd,orbit-core,orbit-web")
         self.assertEqual(self.pull_request("plugin/skills/x.md"), "full")
         self.assertEqual(self.pull_request("website/src/content/docs/reference/config.md"), "affected:orbit-cli")
+        # Markdown that a scripts/test-* self-test reads is code too: test-release-promotion.py
+        # executes RELEASING.md's procedures, and test-qa-full-sweep.py digests npm/README.md.
+        self.assertEqual(self.pull_request("RELEASING.md"), "full")
+        self.assertEqual(self.pull_request("RELEASING.md", "README.md"), "full")
+        self.assertEqual(self.pull_request("npm/README.md"), "full")
+        self.assertEqual(self.pull_request("RELEASING.md", "crates/orbit-cli/src/main.rs"), "affected:orbit-cli")
         # A listing that disagrees with the reported count is not trusted.
         self.assertEqual(self.pull_request("docs/guide.md", count=2), "full")
         self.assertEqual(self.classify("pull_request", {}, PR="7"), "full", "an API error runs the full gate")
@@ -660,6 +666,10 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
                 self.assertEqual(self.push("crates/orbit-cli/src/main.rs", same_tree=True, head_scope=head_scope),
                                  "full", "a push tests every crate the merged PR did not")
         self.assertEqual(self.push("docs/guide.md"), "docs")
+        # A push whose Markdown delta a self-test reads runs the full gate, as a pull request does.
+        self.assertEqual(self.push("RELEASING.md"), "full")
+        self.assertEqual(self.push("README.md", "RELEASING.md"), "full")
+        self.assertEqual(self.push("npm/README.md"), "full")
         self.assertEqual(self.classify("push", {}, SHA=self.SHA, BEFORE=self.BEFORE), "full")
 
     def test_docs_push_after_untested_before_runs_full_gate(self):
