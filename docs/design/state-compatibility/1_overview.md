@@ -2,7 +2,7 @@
 title: State Compatibility — Overview
 owner: claude
 last_updated: 2026-09-13
-last_validated: 2026-10-17
+last_validated: 2026-10-19
 status: Draft
 feature: state-compatibility
 doc_role: overview

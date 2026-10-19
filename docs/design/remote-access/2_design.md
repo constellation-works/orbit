@@ -2,7 +2,7 @@
 title: "Remote Access — Design"
 owner: codex
 last_updated: 2026-10-08
-last_validated: 2026-10-17
+last_validated: 2026-10-19
 status: Accepted
 feature: remote-access
 doc_role: design
