@@ -2,9 +2,9 @@
 //!
 //! All verbs call the read-only `orbit.codebase.*` tools, so `--json` is the
 //! payload the dashboard's Codebase view reads. What is left here is the text
-//! rendering: each ranking's leading rows, the regression breakdowns and the
-//! task-pilot crews for `analytics`, one path's standings with the tasks
-//! behind every count for `show`, and co-change measures for `related`.
+//! rendering: each ranking's leading rows and the regression breakdowns for
+//! `analytics`, one path's standings with the tasks behind every count for
+//! `show`, and co-change measures for `related`.
 
 use std::fmt::Write as _;
 
@@ -158,8 +158,6 @@ fn analytics_blocks(value: &Value) -> Vec<Block> {
     }
     blocks.push(Block::table(table));
 
-    blocks.extend(task_pilot_blocks(&value["task_pilot"]));
-
     blocks.push(Block::text(format!(
         "\nShowing up to {TEXT_ROWS} rows per ranking; --json carries up to {} and the \
          regression cross-tabs. Follow a path to its tasks with `orbit codebase show <path>`.",
@@ -206,49 +204,6 @@ fn regression_blocks(section: &Value) -> Vec<Block> {
         blocks.push(Block::table(table));
     }
     blocks
-}
-
-/// Each pilot crew and model's footprint scores against landed diffs, with
-/// the filer's selectors as the baseline the lift is measured from.
-fn task_pilot_blocks(section: &Value) -> Vec<Block> {
-    let mut table = Table::new(vec![
-        Column::new("#").number(),
-        Column::new("CREW").fixed(),
-        Column::new("MODEL").fixed(),
-        Column::new("F1").number(),
-        Column::new("RECALL").number(),
-        Column::new("PRECISION").number(),
-        Column::new("AUTHOR F1").number(),
-        Column::new("LIFT").number(),
-        Column::new("WIDENINGS/TASK").number(),
-        Column::new("TASKS").number(),
-    ])
-    .empty_message("no pilot crew reaches the minimum support in this window");
-    for (index, row) in rows(section).iter().take(TEXT_ROWS).enumerate() {
-        let lift = row["lift"]["f1"].as_f64().unwrap_or(0.0) * 100.0;
-        table.add_row(vec![
-            (index + 1).to_string(),
-            row["crew"].as_str().unwrap_or("not recorded").to_string(),
-            row["model"].as_str().unwrap_or("not recorded").to_string(),
-            percent(&row["f1"]),
-            percent(&row["recall"]["rate"]),
-            percent(&row["precision"]["rate"]),
-            percent(&row["author"]["f1"]),
-            format!("{lift:+.0} pts"),
-            format!("{:.1}", row["widenings_per_task"].as_f64().unwrap_or(0.0)),
-            count(&row["support"]),
-        ]);
-    }
-    vec![
-        Block::text(format!(
-            "\nTask pilot: pilot selectors against each assessed task's landed diff \
-             ({} assessed; {} crews below minimum support; {} unattributed)",
-            count(&section["assessed"]),
-            count(&section["below_support"]),
-            count(&section["unattributed"]),
-        )),
-        Block::table(table),
-    ]
 }
 
 fn show_blocks(value: &Value) -> Vec<Block> {

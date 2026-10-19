@@ -186,17 +186,16 @@ tr.audit-detail-row td {
 [data-ranking="rejected"], [data-tile="rejected"] { --cb-color: #9aa4b2; }
 [data-ranking="change_coupling"], [data-tile="change_coupling"] { --cb-color: #7aa7ff; }
 [data-ranking="lock_contention"], [data-tile="lock_contention"] { --cb-color: #63d297; }
-[data-ranking="task_pilot"], [data-tile="task_pilot"] { --cb-color: #4cc9d6; }
 .codebase-dot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%; background: var(--cb-color, var(--fg-mute)); }
 
-/* Four tiles a row (two rows of four), all eight once the row is wide. */
+/* Four tiles a row (four, then three), all seven once the row is wide. */
 .codebase-tiles {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 @media (min-width: 1500px) {
-  .codebase-tiles { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+  .codebase-tiles { grid-template-columns: repeat(7, minmax(0, 1fr)); }
 }
 @media (max-width: 760px) {
   .codebase-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -312,15 +311,6 @@ tr.audit-detail-row td {
   white-space: nowrap;
 }
 .codebase-tag.wide { color: var(--status-proposed); border-color: var(--warn-line); background: var(--warn-wash); }
-.codebase-tag.lift { color: var(--state-success); }
-.codebase-tag.drop { color: var(--status-proposed); }
-/* A task-pilot row names its crew, then its model. */
-.codebase-pilot { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; }
-.codebase-pilot-crew { font-size: 13.5px; font-weight: 600; color: var(--fg); }
-.codebase-pilot-model { font-family: var(--font-mono); font-size: 12px; color: var(--fg-mute); overflow-wrap: anywhere; }
-.codebase-pilot.large .codebase-pilot-crew { font-size: 15px; }
-.codebase-pilot-paths { display: flex; flex-direction: column; gap: 2px; }
-.codebase-selector { font-family: var(--font-mono); font-size: 12px; color: #c4cbd4; overflow-wrap: anywhere; }
 .codebase-note { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--fg-mute); }
 .codebase-empty { margin: 0; padding: 4px 16px 16px; font-size: 13px; color: var(--fg-dim); }
 .codebase-list-foot {

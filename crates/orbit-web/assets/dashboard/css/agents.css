@@ -274,3 +274,23 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
 .agents-tier-table { border-collapse: collapse; width: 100%; font-size: 12px; white-space: nowrap; }
 .agents-tier-table th, .agents-tier-table td { padding: 8px; border-bottom: 1px solid var(--border); text-align: right; }
 .agents-tier-table th:first-child, .agents-tier-table td:first-child { text-align: left; }
+
+/* Pilots: one assessed-by-observed tier matrix per row. */
+.agents-tier-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 12px; margin-top: 10px; }
+.agents-tier-card { border: 1px solid var(--hair); border-radius: 3px; padding: 8px 10px; min-width: 0; }
+.agents-tier-card h4 { display: flex; align-items: baseline; gap: 8px; margin: 0 0 8px; font-size: 13px; }
+.agents-tier-crew { color: var(--fg); overflow-wrap: anywhere; }
+.agents-tier-matrix th[scope="row"] { color: var(--fg-dim); font-weight: 500; }
+.agents-tier-cell.is-on { background: color-mix(in srgb, var(--status-done) 18%, transparent); color: var(--fg); font-weight: 600; }
+.agents-tier-cell.is-easy,
+.agents-tier-cell.is-hard { color: var(--fg-dim); }
+.agents-tier-cell.is-zero { color: var(--fg-disabled); font-weight: 400; }
+.agents-tier-counts { display: grid; grid-template-columns: repeat(4, auto); gap: 2px 12px; margin: 8px 0 0; font-size: 12px; }
+.agents-tier-counts dt { grid-row: 1; color: var(--fg-mute); }
+.agents-tier-counts dd { grid-row: 2; margin: 0; font-family: var(--font-mono); color: var(--fg); }
+.agents-tier-matrix { width: 100%; }
+.agents-tier-matrix thead th:first-child { white-space: normal; min-width: 5.5rem; }
+@media (max-width: 640px) {
+  .agents-tier-matrix th,
+  .agents-tier-matrix td { padding: 6px; }
+}

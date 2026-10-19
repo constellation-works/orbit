@@ -944,11 +944,10 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 "a run without a model is `model unknown`: {strip}"
             );
 
-            // Pilots is the only role whose scorecard is still a stub.
             let payload = json_ok(server.get(&format!(
                 "/api/agents/pilots/scorecard?{WS}&window=all&min_support=1"
             )));
-            assert_eq!(payload["status"], "not_computed", "{payload}");
+            assert_eq!(payload["status"], "ok", "{payload}");
             assert_eq!(payload["rows"], json!([]), "{payload}");
             assert!(
                 !payload["terms"].as_array().unwrap().is_empty(),

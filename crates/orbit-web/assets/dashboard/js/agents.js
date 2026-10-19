@@ -16,6 +16,7 @@ import { el, syncNodes, fetchJson, getWindow, wireWindowSelector, requestPanel, 
 import { orchestratorsPanel } from './agents-orchestrators.js';
 import { implementersPanel } from './agents-implementers.js';
 import { reviewersPanel } from './agents-reviewers.js';
+import { pilotsPanel } from './agents-pilots.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -34,6 +35,7 @@ const ROLE_PANELS = {
   orchestrators: orchestratorsPanel,
   implementers: implementersPanel,
   reviewers: reviewersPanel,
+  pilots: pilotsPanel,
 };
 const NOT_SCORED_REASONS = {
   infrastructure: "rework caused by infrastructure",
@@ -276,6 +278,13 @@ function statText(value) {
   return String(value ?? "—");
 }
 
+// A term weight exactly as configured: 0.25 must not read as 0.3.
+function weight(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  const text = String(Math.abs(value));
+  return value < 0 ? `−${text}` : `+${text}`;
+}
+
 function plural(n, one, many = `${one}s`) {
   return `${n} ${n === 1 ? one : many}`;
 }
@@ -437,7 +446,7 @@ function rankingNode(ranking) {
     ...terms().map((term) => el("th", {
       class: "agents-num",
       text: term.label,
-      title: `${term.label} per 100 ${scorecard.unit} (weight ${signed(term.weight)}): ${term.definition}`,
+      title: `${term.label} per 100 ${scorecard.unit} (weight ${weight(term.weight)}): ${term.definition}`,
     })),
     el("th", { class: "agents-score-col", text: "Score" }),
   ]);
@@ -509,7 +518,7 @@ function detailNode(row) {
     });
     const item = el("li", {}, [
       el("span", { class: "agents-term-label", text: term.label }),
-      el("span", { class: "agents-term-weight", text: `× ${signed(term.weight)}`, title: "weight" }),
+      el("span", { class: "agents-term-weight", text: `× ${weight(term.weight)}`, title: "weight" }),
       el("span", { class: "agents-bar agents-bar-centered", "aria-hidden": "true" }, [fill, el("span", { class: "agents-bar-zero", style: { left: "50%" } })]),
       el("span", { class: "agents-term-value", text: signed(value), title: `${number(row.counts && row.counts[term.key])} counted, ${number(row.per_100 && row.per_100[term.key])} per 100 ${scorecard.unit}` }),
     ]);
@@ -523,7 +532,8 @@ function detailNode(row) {
   };
   stat(`${scorecard.unit[0].toUpperCase()}${scorecard.unit.slice(1)}`, String(row.units));
   for (const entry of Array.isArray(row.stats) ? row.stats : []) {
-    if (entry.key === "tier_comparison") continue; // Rendered in the role panel.
+    // Structured stats (tier comparisons, the tier matrix) render in the role panel.
+    if (entry.value !== null && typeof entry.value === "object") continue;
     stat(entry.label, statText(entry.value));
   }
   if (row.runs_without_model) stat("Runs with no model", String(row.runs_without_model));
@@ -621,7 +631,7 @@ function howNode() {
   for (const term of terms()) {
     list.append(el("dt", {}, [
       el("span", { text: term.label }),
-      el("span", { class: term.weight < 0 ? "agents-weight negative" : "agents-weight", text: signed(term.weight) }),
+      el("span", { class: term.weight < 0 ? "agents-weight negative" : "agents-weight", text: weight(term.weight) }),
     ]));
     list.append(el("dd", { text: term.definition }));
   }

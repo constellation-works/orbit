@@ -302,12 +302,13 @@ fn record_landing(root: &Path, id: &str, commit: &str) {
     append_row(path, &row);
 }
 
-/// `orbit codebase analytics` grades a task-pilot crew's selectors against
-/// the landed diff, in its JSON and in its text table.
+/// `orbit agents scorecard --role pilots` grades a task-pilot crew's
+/// selectors against the landed diff, in its JSON and in its text table, and
+/// `orbit codebase analytics` no longer carries a task-pilot ranking.
 #[test]
-fn codebase_cli_ranks_task_pilot_crews_against_the_landed_diff() {
+fn pilot_cli_ranks_task_pilot_crews_against_the_landed_diff() {
     if crate::isolated_test::run_in_child(
-        "codebase_cli::codebase_cli_ranks_task_pilot_crews_against_the_landed_diff",
+        "codebase_cli::pilot_cli_ranks_task_pilot_crews_against_the_landed_diff",
     ) {
         return;
     }
@@ -400,34 +401,54 @@ fn codebase_cli_ranks_task_pilot_crews_against_the_landed_diff() {
     let commit = crate::git_repo::run(&fixture.repo, &["rev-parse", "HEAD"]);
     record_landing(&fixture.root, &task, &commit);
 
-    let selection = [
+    let codebase = fixture.json(&[
         "codebase",
         "analytics",
         "--window",
         "30d",
         "--min-support",
         "1",
+        "--json",
+    ]);
+    assert!(codebase.get("task_pilot").is_none(), "{codebase}");
+
+    let selection = [
+        "agents",
+        "scorecard",
+        "--role",
+        "pilots",
+        "--window",
+        "30d",
+        "--min-support",
+        "1",
     ];
     let payload = fixture.json(&[&selection[..], &["--json"]].concat());
-    let row = &payload["task_pilot"]["rows"][0];
+    let row = &payload["rows"][0];
     assert_eq!(
-        (row["crew"].as_str(), row["model"].as_str(), &row["support"]),
+        (row["crew"].as_str(), row["model"].as_str(), &row["units"]),
         (Some("luna"), Some("luna-model"), &json!(1)),
         "{payload}"
     );
+    let stat = |key: &str| {
+        row["stats"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|stat| stat["key"] == key)
+            .unwrap_or_else(|| panic!("{key}: {row}"))["value"]
+            .clone()
+    };
     assert_eq!(
-        row["recall"]["rate"], 1.0,
+        stat("recall_percent"),
+        100,
         "dir:src covers both landed files"
     );
     assert_eq!(
-        row["precision"]["rate"], 0.5,
+        stat("precision_percent"),
+        50,
         "docs/unused.md covered nothing"
     );
-    assert_eq!(row["author"]["recall"]["rate"], 0.5);
-    assert_eq!(
-        row["over_declarations"][0]["selectors"],
-        json!(["file:docs/unused.md"])
-    );
+    assert_eq!(stat("filer_f1_percent"), 66.67);
 
     let human = fixture
         .command(&selection)
@@ -439,10 +460,10 @@ fn codebase_cli_ranks_task_pilot_crews_against_the_landed_diff() {
         .clone();
     let human = String::from_utf8(human).unwrap();
     assert!(
-        human.lines().any(|line| line.contains("luna")
-            && line.contains("luna-model")
-            && line.contains("67%")),
-        "the text table ranks the crew by F1:\n{human}"
+        human
+            .lines()
+            .any(|line| line.contains("luna") && line.contains("luna-model")),
+        "the text table ranks the crew:\n{human}"
     );
 }
 

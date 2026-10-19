@@ -1,11 +1,11 @@
 // Analytics › Codebase: which parts of the repository are expensive or risky for
 // agents to change, ranked from records Orbit already keeps
 // (/api/codebase/analytics). "Touched" is the declared footprint, not the
-// landed diff; the Task pilot ranking alone grades selectors against landed
-// diffs. The server caches one scan per workspace; the window, minimum
+// landed diff. The server caches one scan per workspace; the window, minimum
 // support and rollup only slice it, so the 30 s poll never rescans bundles.
+// How well task pilots predicted landed diffs is graded under Agents › Pilots.
 //
-// The view is eight ranking tiles, the list of the selected tile and a detail
+// The view is seven ranking tiles, the list of the selected tile and a detail
 // panel for the selected row. Tile, row and the other view choices live here,
 // not in the hash, and every node is keyed and hashed for `syncNodes`, so a
 // poll that answers the same payload leaves the page exactly as it was.
@@ -83,26 +83,20 @@ const RANKINGS = {
     label: "Lock contention", below: "too few requesters",
     definition: "Requesters denied a lock on the path ÷ requesters that reserved or were denied it. Retries by one task or run count once.",
   },
-  task_pilot: {
-    label: "Task pilot", below: "below support",
-    definition: "Each task-pilot crew and model, graded on the done tasks it assessed against the files their landed commit changed. Recall: landed files a pilot selector covers ÷ landed files. Precision: pilot selectors that cover a landed file ÷ pilot selectors; an unused selector still holds a context lock other tasks wait on. F1 is their harmonic mean. Lift is the F1 gain over the filer's own selectors from before any pilot ran. A dir: or wildcard selector covers the files beneath or matching it, and a mirrored or generated file (plugin/skills, CLI and MCP goldens, docs/INDEX.md) counts as covered when its source is. Bulk tasks (more than 12 landed files) and no-diff-expected tasks are left out. Ranked by F1, for crews with at least the minimum assessed tasks.",
-  },
+
 };
 const OVERLAP = {
   label: "In several rankings",
   title: "Paths in more than one ranking",
 };
-const TILE_ORDER = ["overlap", ...PATH_RANKINGS, "change_coupling", "lock_contention", "task_pilot"];
-// Tasks listed under a pilot row's misses and over-declarations before "All".
-const PILOT_TASKS_SHOWN = 3;
+const TILE_ORDER = ["overlap", ...PATH_RANKINGS, "change_coupling", "lock_contention"];
 const ROLLUP_NOUNS = { file: "File", dir: "Directory", crate: "Crate" };
 
 let codebaseQuery = { ...DEFAULT_QUERY };
 // What the reader picked on the page: the tile, the row (`path:<path>` or
-// `pair:<left>\n<right>` or `pilot:<crew>\n<model>`), whether expected pairs
-// are hidden, whether lock contention is sorted by total wait, whether every
-// regressed task is listed (`true`) or which pilot task list is opened in
-// full (its label), and which path was last copied.
+// `pair:<left>\n<right>`), whether expected pairs are hidden, whether lock
+// contention is sorted by total wait, whether every regressed task is
+// listed, and which path was last copied.
 let view = { tile: "overlap", selected: null, hideExpected: false, lockByWait: false, allTasks: false, copied: null };
 let lastData = null;
 let lastPayloadKey = null;
@@ -322,15 +316,6 @@ function expectedPair(paths) {
 
 const pathKey = (path) => `path:${path}`;
 const pairKey = (paths) => `pair:${(paths || []).join("\n")}`;
-const pilotKey = (row) => `pilot:${row.crew ?? ""}\n${row.model ?? ""}`;
-const crewName = (row) => row.crew || "crew not recorded";
-const modelName = (row) => row.model || "model not recorded";
-
-// A lift in percentage points, signed.
-function points(delta) {
-  const value = Math.round((Number(delta) || 0) * 100);
-  return `${value > 0 ? "+" : value < 0 ? "−" : "±"}${Math.abs(value)} pts`;
-}
 
 // ---- model ------------------------------------------------------------------
 
@@ -372,7 +357,6 @@ function listEntries(model) {
   if (view.tile === "change_coupling") {
     return pairs.filter((pair) => !(view.hideExpected && pair.expected)).map((pair) => ({ key: pairKey(pair.row.paths), pair }));
   }
-  if (view.tile === "task_pilot") return rowsOf(data, "task_pilot").map((row, at) => ({ key: pilotKey(row), pilot: { row, rank: at + 1 } }));
   const rows = view.tile === "lock_contention" ? lockRowsShown(data) : rowsOf(data, view.tile);
   return rows.map((row) => ({ key: pathKey(row.path), path: row.path }));
 }
@@ -537,15 +521,7 @@ function tileModels(model) {
   const lock = lockIsQuiet(data)
     ? { key: "lock_contention", label: RANKINGS.lock_contention.label, big: "None", sub: "no lock refused", foot: "nothing to rank", tone: "good" }
     : rateTile("lock_contention");
-  const pilots = section(data, "task_pilot");
-  const topPilot = rowsOf(data, "task_pilot")[0];
-  const pilot = {
-    key: "task_pilot", label: RANKINGS.task_pilot.label,
-    big: topPilot ? `F1 ${pct(topPilot.f1)}` : "None",
-    sub: topPilot ? `top: ${crewName(topPilot)} · ${modelName(topPilot)}` : `${plural(pilots.assessed, "assessed task")} in this window`,
-    foot: `${rowsOf(data, "task_pilot").length} ranked · ${count(pilots.below_support)} ${RANKINGS.task_pilot.below}`,
-  };
-  return [overlap, regressions, rateTile("footprint_misses"), blocked, rejectedTile, coupling, lock, pilot];
+  return [overlap, regressions, rateTile("footprint_misses"), blocked, rejectedTile, coupling, lock];
 }
 
 function tilesNode(model) {
@@ -1032,53 +1008,6 @@ function lockContent(model) {
   return content;
 }
 
-function pilotContent(model) {
-  const { data, selected } = model;
-  const pilots = section(data, "task_pilot");
-  const rows = rowsOf(data, "task_pilot");
-  const below = Number(pilots.below_support) || 0;
-  const content = [];
-  if (rows.length === 0) {
-    content.push(el("div", { class: "codebase-empty-state" }, [
-      el("p", {
-        class: "codebase-empty-title",
-        text: below > 0
-          ? `No pilot crew has ${count(data.min_support)} or more assessed tasks that landed in this window; ${plural(below, "crew")} fall${below === 1 ? "s" : ""} below it.`
-          : "No task a pilot assessed landed in this window.",
-      }),
-      below > 0 ? el("div", { class: "codebase-actions" }, [lowerSupportButton(data, `Lower to ${LOWERED_SUPPORT}`)]) : null,
-    ]));
-  } else {
-    content.push(rowList(rows.map((row, at) => rowButton(pilotKey(row), selected, [
-      el("span", { class: "codebase-rank", text: String(at + 1) }),
-      el("span", { class: "codebase-pathcell" }, [
-        el("span", { class: "codebase-pilot" }, [
-          el("span", { class: "codebase-pilot-crew", text: crewName(row) }),
-          el("span", { class: "codebase-pilot-model", text: modelName(row) }),
-        ]),
-        el("span", { class: "codebase-chips" }, [
-          el("span", { class: "codebase-extra", text: `recall ${pct(row.recall?.rate)} · precision ${pct(row.precision?.rate)}` }),
-          el("span", { class: `codebase-tag ${Number(row.lift?.f1) >= 0 ? "lift" : "drop"}`, text: `${points(row.lift?.f1)} vs author`, title: `Filer's selectors: F1 ${pct(row.author?.f1)}` }),
-          el("span", { class: "codebase-extra", text: `${(Number(row.widenings_per_task) || 0).toFixed(1)} widenings per task` }),
-        ]),
-      ]),
-      el("span", { class: "codebase-metric" }, [
-        rateBar(row.f1),
-        el("span", { class: "codebase-rate", text: pct(row.f1) }),
-        el("span", { class: "codebase-frac", text: plural(row.support, "task") }),
-      ]),
-    ]))));
-  }
-  const parts = [`${plural(pilots.assessed, "assessed task")} landed in this window.`];
-  if (below > 0 && rows.length) parts.push(`${plural(below, "crew")} below minimum support ${count(data.min_support)} ${below === 1 ? "is" : "are"} hidden.`);
-  if (Number(pilots.unattributed) > 0) parts.push(`${plural(pilots.unattributed, "assessment")} could not be matched to a pilot run.`);
-  if (Number(pilots.without_assessment) > 0) parts.push(`${plural(pilots.without_assessment, "landed task")} had no pilot assessment.`);
-  const left = (Number(pilots.excluded_large) || 0) + (Number(pilots.excluded_no_diff) || 0);
-  if (left > 0) parts.push(`${count(pilots.excluded_large)} bulk and ${count(pilots.excluded_no_diff)} no-diff tasks are left out.`);
-  content.push(listFoot([note(parts.join(" "))]));
-  return content;
-}
-
 function listNode(model) {
   const { data, pairs } = model;
   const tile = view.tile;
@@ -1116,8 +1045,7 @@ function listNode(model) {
   const content = tile === "overlap" ? overlapContent(model)
     : tile === "change_coupling" ? couplingContent(model)
       : tile === "lock_contention" ? lockContent(model)
-        : tile === "task_pilot" ? pilotContent(model)
-          : rankingContent(model, tile);
+        : rankingContent(model, tile);
   const node = withId(el("section", { class: "codebase-list", "aria-labelledby": "codebase-list-title" }, [head, ...content]), "codebase-list");
   node.dataset.ranking = tile;
   const hashed = tile === "overlap" ? [data.rollup, model.overlaps, PATH_RANKINGS.map((key) => rowsOf(data, key))]
@@ -1175,11 +1103,11 @@ function regressionDetail(model, row) {
   const block = el("div", { class: "codebase-detail-block" });
   const head = el("div", { class: "codebase-detail-head" }, [el("p", { class: "codebase-eyebrow", text: "Regressed tasks" })]);
   if (tasks.length > TASKS_SHOWN) {
-    const toggle = actionButton(view.allTasks === true ? "Show fewer" : `All ${count(tasks.length)} →`, () => {
-      view = { ...view, allTasks: view.allTasks !== true };
+    const toggle = actionButton(view.allTasks ? "Show fewer" : `All ${count(tasks.length)} →`, () => {
+      view = { ...view, allTasks: !view.allTasks };
       paint();
     }, "link");
-    toggle.setAttribute("aria-expanded", String(view.allTasks === true));
+    toggle.setAttribute("aria-expanded", String(view.allTasks));
     head.appendChild(toggle);
   }
   block.appendChild(head);
@@ -1187,7 +1115,7 @@ function regressionDetail(model, row) {
   if (filters.length) {
     block.appendChild(note(`Filtered to ${filters.map(({ label, key }) => `${label.toLowerCase()} ${valueLabel(model.data.regression_filter[key])}`).join(", ")}: only matching regressions are counted and listed.`, "codebase-filter-note"));
   }
-  const shown = view.allTasks === true ? tasks : tasks.slice(0, TASKS_SHOWN);
+  const shown = view.allTasks ? tasks : tasks.slice(0, TASKS_SHOWN);
   const list = el("ul", { class: "codebase-tasks" });
   for (const task of shown) list.appendChild(regressedTaskNode(task, model.regressedPaths));
   block.appendChild(list);
@@ -1277,91 +1205,19 @@ function pairDetail(pair) {
   ];
 }
 
-function pilotTaskList(label, entries, items, empty) {
-  const block = el("div", { class: "codebase-detail-block" });
-  const head = el("div", { class: "codebase-detail-head" }, [el("p", { class: "codebase-eyebrow", text: label })]);
-  const open = view.allTasks === label;
-  if (entries.length > PILOT_TASKS_SHOWN) {
-    const toggle = actionButton(open ? "Show fewer" : `All ${count(entries.length)} →`, () => {
-      view = { ...view, allTasks: open ? false : label };
-      paint();
-    }, "link");
-    toggle.setAttribute("aria-expanded", String(open));
-    head.appendChild(toggle);
-  }
-  block.appendChild(head);
-  if (entries.length === 0) {
-    block.appendChild(note(empty));
-    return block;
-  }
-  const list = el("ul", { class: "codebase-tasks" });
-  for (const entry of open ? entries : entries.slice(0, PILOT_TASKS_SHOWN)) {
-    const link = el("a", { class: "codebase-task-link", text: entry.task_id });
-    link.setAttribute("href", taskHref(entry.task_id));
-    const values = items(entry);
-    const item = el("li", { class: "codebase-task" }, [
-      el("span", { class: "codebase-task-top" }, [link, el("span", { class: "codebase-crew", text: plural(values.length, label === "Worst misses" ? "missed file" : "unused selector") })]),
-      el("span", { class: "codebase-task-title", text: entry.title || "" }),
-      el("span", { class: "codebase-pilot-paths" }, values.map((value) => label === "Worst misses" ? pathNode(value) : el("code", { class: "codebase-selector", text: value }))),
-    ]);
-    item.dataset.task = entry.task_id;
-    list.appendChild(item);
-  }
-  block.appendChild(list);
-  return block;
-}
-
-function pilotDetail(pilot, limit) {
-  const { row, rank } = pilot;
-  const standing = (label, pilotRate, authorRate, fraction) => {
-    const item = el("li", { class: "codebase-standing" }, [
-      el("span", { class: "codebase-standing-label" }, [el("span", { class: "codebase-dot", "aria-hidden": "true" }), label]),
-      el("span", { class: "codebase-standing-rank", text: `author ${pct(authorRate)}` }),
-      el("span", { class: "codebase-metric" }, [
-        rateBar(pilotRate),
-        el("span", { class: "codebase-rate", text: pct(pilotRate) }),
-        fraction ? el("span", { class: "codebase-frac", text: fraction }) : null,
-      ]),
-    ]);
-    item.dataset.metric = label.toLowerCase();
-    return item;
-  };
-  const scores = el("ul", { class: "codebase-standings" }, [
-    standing("F1", row.f1, row.author?.f1, null),
-    standing("Recall", row.recall?.rate, row.author?.recall?.rate, `${count(row.recall?.numerator)} of ${count(row.recall?.denominator)} landed files`),
-    standing("Precision", row.precision?.rate, row.author?.precision?.rate, `${count(row.precision?.numerator)} of ${count(row.precision?.denominator)} selectors`),
-  ]);
-  return [
-    el("div", { class: "codebase-detail-block" }, [
-      withId(el("p", { class: "codebase-eyebrow", text: `Task pilot #${rank}` }), "codebase-detail-title"),
-      el("span", { class: "codebase-pilot large" }, [
-        el("span", { class: "codebase-pilot-crew", text: crewName(row) }),
-        el("span", { class: "codebase-pilot-model", text: modelName(row) }),
-      ]),
-      note(`${plural(row.support, "assessed task")} · ${points(row.lift?.f1)} F1 over the filer's selectors · ${plural(row.widenings, "mid-run widening")} (${(Number(row.widenings_per_task) || 0).toFixed(1)} per task)`),
-    ]),
-    el("div", { class: "codebase-detail-block" }, [el("p", { class: "codebase-eyebrow", text: "Scores" }), scores]),
-    pilotTaskList("Worst misses", row.misses || [], (entry) => entry.paths || [], "Every landed file was covered by a pilot selector."),
-    pilotTaskList("Largest over-declarations", row.over_declarations || [], (entry) => entry.selectors || [], "Every pilot selector covered a landed file."),
-    note(`Tasks with the most landed files no pilot selector covered, and with the most selectors that covered no landed file; at most ${count(limit)} each.`),
-  ];
-}
-
 function detailNode(model) {
   const key = model.selected;
   const entry = model.entries.find((candidate) => candidate.key === key);
   const content = !entry
     ? [note("Nothing is ranked here, so there is no row to show.")]
     : entry.pair ? pairDetail(entry.pair)
-      : entry.pilot ? pilotDetail(entry.pilot, section(model.data, "task_pilot").drilldown_limit)
-        : pathDetail(model, entry.path);
+      : pathDetail(model, entry.path);
   const node = withId(el("aside", { class: "codebase-detail", "aria-labelledby": entry ? "codebase-detail-title" : null, "aria-label": entry ? null : "Detail" }, content), "codebase-detail");
   if (entry && entry.pair) node.dataset.ranking = "change_coupling";
-  if (entry && entry.pilot) node.dataset.ranking = "task_pilot";
   const hits = entry && entry.path ? model.index.get(entry.path) : null;
   return keyed(node, "detail", {
     key, rollup: model.data.rollup, filter: model.data.regression_filter || null, limit: model.limit, allTasks: view.allTasks, copied: view.copied === (entry && entry.path),
-    hits, pair: entry && entry.pair ? entry.pair : null, pilot: entry && entry.pilot ? entry.pilot : null, lengths: PATH_RANKINGS.map((ranking) => rowsOf(model.data, ranking).length),
+    hits, pair: entry && entry.pair ? entry.pair : null, lengths: PATH_RANKINGS.map((ranking) => rowsOf(model.data, ranking).length),
     wide: hits && hits.regressions ? (hits.regressions.row.regressed_tasks || []).map((task) => model.regressedPaths.get(task.task_id) || 0) : null,
   });
 }

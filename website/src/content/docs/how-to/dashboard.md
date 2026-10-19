@@ -468,6 +468,28 @@ infrastructure. How often a reviewer accepts or rejects is never scored.
   regression, and unresolved (not judged yet, incomplete, or fixes that
   failed).
 
+The **Pilots** tab grades each task-pilot crew and model on the done tasks
+whose newest pilot assessment was written in the window, compared with the
+files each task actually landed. Bulk tasks (more than 12 landed files) and
+`no-diff-expected` tasks are left out. It credits **F1 lift**, the F1 points the
+pilot's selectors gained over the filer's own selectors, and **tier
+calibration**, tasks assessed at the tier their cost placed them in. It counts
+**costly misses**, landed files no pilot selector covered that a base conflict
+or the task's own refused lock request named, and **lock-wait hours**, the
+time other tasks waited on paths the task reserved through a pilot selector
+that covered none of its landed files. The detail column also shows recall,
+precision and F1 against the landed diff, the filer's F1, and missed and unused
+selectors. This ranking replaces the task-pilot tile Analytics → Codebase used
+to show.
+
+The observed tier ranks the window's assessed tasks by total implementation
+cost and cuts the ranking into tiers in the same proportions the pilots
+assigned. The **Tier calibration** panel shows one matrix per row: assessed
+tier down the side, observed tier across the top. The diagonal is on tier.
+**Too easy** counts tasks assessed below their observed tier and **too hard**
+tasks assessed above it. **Not placed** counts tasks without a tier or a
+priced implementation. Cost only places tasks in tiers; it is never scored.
+
 With **all** selected, Agents covers the last 90 days. From a terminal,
 `orbit agents scorecard --role <role>` prints the same ranking and
 `orbit agents show --role <role> --crew <crew>` one row's tasks.

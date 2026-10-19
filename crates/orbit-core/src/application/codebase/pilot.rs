@@ -1,6 +1,7 @@
-//! Task-pilot footprint grading: how well each pilot crew and model predicted
-//! the files a done task's landed commit changed, beside the filer's own
-//! selectors as a baseline.
+//! Task-pilot receipts and the evidence the Agents › Pilots scorecard grades:
+//! each done task a pilot assessed, with its landed diff, the pilot's and the
+//! filer's selectors and the paths its run was contested on, and the lock
+//! waits other tasks spent on paths each such task held.
 //!
 //! A task's pilot selectors are the newest task-pilot receipt's
 //! `context_files_after`; the filer's are the oldest receipt's
@@ -10,98 +11,48 @@
 //! matched to the one task-pilot run active when it was written, or among
 //! several, the one whose step outputs carry its operation id.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_common::fs::path_glob::RelativePathGlob;
 use orbit_store::contracts::JobRunQuery;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use super::facts::{Anchor, CodebaseFacts, TaskFacts};
-use super::sections::{LARGE_FOOTPRINT_CAP, Params, merge, rate_fields};
+use super::facts::{Anchor, BlockCause, CodebaseFacts};
+use super::lock_waits::wait_episodes;
+use super::regression::RegressionFilter;
+use super::sections::{LARGE_FOOTPRINT_CAP, Params, Rollup};
 use crate::OrbitRuntime;
 
 /// The actor that writes task-pilot receipts.
 const PILOT_ACTOR: &str = "task-pilot";
 /// The job every task-pilot run (scheduled, drain or CI sweep) belongs to.
 const PILOT_JOB: &str = "task_pilot_pipeline";
-/// Tasks listed under a row's misses and over-declarations.
-const DRILLDOWN_LIMIT: usize = 10;
-
-/// Sources whose CLI help, CLI output and MCP tool goldens are regenerated
-/// from: a golden counts as covered when a selector reaches one of them.
-const CLI_MCP_SOURCES: &[&str] = &[
-    "crates/orbit-cli/src/",
-    "crates/orbit-mcp/src/",
-    "crates/orbit-tools/src/",
-    "crates/orbit-common/src/governance/",
-];
-
-/// Where a generated or mirrored output comes from.
-enum Source {
-    /// The same relative path under another prefix.
-    Mirror(&'static str),
-    /// Any file under these prefixes.
-    Within(&'static [&'static str]),
-}
-
-/// Generated or mirrored outputs, by path prefix (a trailing `/`) or exact
-/// path. A landed output counts as covered when a selector covers its source.
-const DERIVED: &[(&str, Source)] = &[
-    (
-        "plugin/skills/",
-        Source::Mirror("crates/orbit-core/assets/skills/"),
-    ),
-    (
-        "crates/orbit-cli/tests/help_goldens/",
-        Source::Within(CLI_MCP_SOURCES),
-    ),
-    (
-        "crates/orbit-cli/tests/output_goldens/",
-        Source::Within(CLI_MCP_SOURCES),
-    ),
-    (
-        "crates/orbit-cli/tests/snapshots/",
-        Source::Within(CLI_MCP_SOURCES),
-    ),
-    ("docs/INDEX.md", Source::Within(&["docs/"])),
-];
-
-/// The crew and model of the pilot run behind an assessment, as the run's
-/// record resolved them; either is `None` when the run recorded none.
-#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct PilotRun {
-    crew: Option<String>,
-    model: Option<String>,
-}
-
-/// What a done task's task-pilot receipts say about its footprint.
-#[derive(Debug, Clone)]
-pub(super) struct PilotFacts {
-    /// The pilot's final selectors.
-    after: Vec<String>,
-    /// The filer's selectors before any pilot ran.
-    author: Vec<String>,
-    /// The run behind the newest assessment; `None` when no run is found.
-    run: Option<PilotRun>,
+/// The pilot run behind an assessment: its id, the crew and model its
+/// record resolved (either `None` when it recorded none) and how long it ran.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(in crate::application) struct PilotRun {
+    pub(in crate::application) run_id: String,
+    pub(in crate::application) crew: Option<String>,
+    pub(in crate::application) model: Option<String>,
+    /// Start to finish; `None` while it runs or when either is unrecorded.
+    pub(in crate::application) seconds: Option<f64>,
 }
 
 struct RunRecord {
-    run_id: String,
     started_at: Option<DateTime<Utc>>,
     finished_at: Option<DateTime<Utc>>,
     run: PilotRun,
 }
 
 /// The workspace's task-pilot runs, read once per scan without their steps.
-pub(super) struct PilotRuns {
+struct PilotRuns {
     runs: Vec<RunRecord>,
 }
 
 impl PilotRuns {
-    pub(super) fn load(runtime: &OrbitRuntime) -> Self {
+    fn load(runtime: &OrbitRuntime) -> Self {
         let runs = runtime
             .stores()
             .jobs()
@@ -111,17 +62,20 @@ impl PilotRuns {
                 ..Default::default()
             })
             .unwrap_or_else(|error| {
-                tracing::warn!(%error, "codebase analytics: task-pilot runs unreadable");
+                tracing::warn!(%error, "pilot scorecard: task-pilot runs unreadable");
                 Vec::new()
             })
             .into_iter()
             .map(|run| RunRecord {
-                run_id: run.run_id.to_string(),
                 started_at: run.started_at,
                 finished_at: run.finished_at,
                 run: PilotRun {
+                    run_id: run.run_id.to_string(),
                     crew: run.resolved_crew,
                     model: run.crew_model,
+                    seconds: run.started_at.zip(run.finished_at).map(|(start, end)| {
+                        (end - start).num_milliseconds().max(0) as f64 / 1000.0
+                    }),
                 },
             })
             .collect();
@@ -143,7 +97,7 @@ impl PilotRuns {
             return self
                 .runs
                 .iter()
-                .find(|record| record.run_id == run_id)
+                .find(|record| record.run.run_id == run_id)
                 .map(|record| record.run.clone());
         }
         let active: Vec<&RunRecord> = self
@@ -159,7 +113,7 @@ impl PilotRuns {
                 .into_iter()
                 .filter(|record| {
                     runtime
-                        .read_run_state(&record.run_id)
+                        .read_run_state(&record.run.run_id)
                         .ok()
                         .flatten()
                         .and_then(|state| serde_json::to_string(&state.step_outputs).ok())
@@ -243,340 +197,145 @@ pub(super) fn inputs(runtime: &OrbitRuntime, id: &str) -> Result<Option<PilotInp
     }))
 }
 
-/// Attribute a task's receipts to the pilot run behind its newest
-/// assessment. Runs are read at every scan, not stored with the task: a run
-/// still active when the receipt was written may finish later.
-pub(super) fn attribute(
+/// One done task a pilot assessed: what its receipts and landed diff say,
+/// and the pilot run behind its newest assessment.
+#[derive(Debug, Clone)]
+pub(in crate::application) struct Assessment {
+    pub(in crate::application) task_id: String,
+    /// When the newest assessment was written: the window it falls in.
+    pub(in crate::application) at: DateTime<Utc>,
+    /// `None` when no task-pilot run is found for the receipt.
+    pub(in crate::application) run: Option<PilotRun>,
+    /// The pilot's final selectors.
+    pub(in crate::application) after: Vec<String>,
+    /// The filer's selectors before any pilot ran.
+    pub(in crate::application) author: Vec<String>,
+    /// The files the landed commit changed.
+    pub(in crate::application) landed: BTreeSet<String>,
+    /// Paths the task's own work was contested on: those a base-conflict
+    /// block recorded and those a refused lock request of the task named,
+    /// each with when and which.
+    pub(in crate::application) contested: Vec<Contest>,
+}
+
+/// One path a task's work was contested on.
+#[derive(Debug, Clone)]
+pub(in crate::application) struct Contest {
+    pub(in crate::application) at: DateTime<Utc>,
+    pub(in crate::application) path: Anchor,
+    /// `base conflict` or `lock conflict`.
+    pub(in crate::application) kind: &'static str,
+}
+
+/// One lock-wait episode another task spent on a path an assessed task held.
+#[derive(Debug, Clone)]
+pub(in crate::application) struct HeldWait {
+    /// The assessed task holding the path.
+    pub(in crate::application) holder: String,
+    pub(in crate::application) waiter: String,
+    pub(in crate::application) path: Anchor,
+    pub(in crate::application) started_at: DateTime<Utc>,
+    pub(in crate::application) wait_ms: i64,
+    /// How the wait ended: `admitted`, `left_backlog` or `waiting`.
+    pub(in crate::application) end: &'static str,
+}
+
+/// What the pilots scorecard reads from one codebase scan.
+#[derive(Debug, Clone, Default)]
+pub(in crate::application) struct PilotEvidence {
+    pub(in crate::application) assessments: Vec<Assessment>,
+    pub(in crate::application) waits: Vec<HeldWait>,
+}
+
+/// Every done task with a landing receipt and a pilot assessment, apart
+/// from bulk tasks (more than [`LARGE_FOOTPRINT_CAP`] landed files) and
+/// `no-diff-expected` ones, each attributed to its pilot run, and every lock
+/// wait, whenever it happened, on a path one of them held.
+pub(in crate::application) fn pilot_evidence(
     runtime: &OrbitRuntime,
-    runs: &PilotRuns,
-    inputs: PilotInputs,
-    now: DateTime<Utc>,
-) -> PilotFacts {
-    let run = runs.attribute(
-        runtime,
-        inputs.run_id.as_deref(),
-        inputs.at,
-        &inputs.operation_id,
-        now,
-    );
-    PilotFacts {
-        after: inputs.after,
-        author: inputs.author,
-        run,
-    }
-}
-
-/// One declared selector that can cover files.
-struct Declared<'a> {
-    raw: &'a str,
-    anchor: Anchor,
-    /// Set for a selector whose path holds a wildcard.
-    glob: Option<RelativePathGlob>,
-}
-
-/// The path selectors among `raw`, one per anchor. Module and command
-/// selectors name no files and are left out.
-fn declared(raw: &[String]) -> Vec<Declared<'_>> {
-    let mut seen = BTreeSet::new();
-    raw.iter()
-        .filter_map(|raw| {
-            let anchor = Anchor::parse(raw)?;
-            if !seen.insert(anchor.clone()) {
-                return None;
-            }
-            let glob = anchor
-                .path
-                .contains(['*', '?'])
-                .then(|| {
-                    let pattern = if anchor.dir {
-                        format!("{}/**", anchor.path)
-                    } else {
-                        anchor.path.clone()
-                    };
-                    RelativePathGlob::new(&pattern).ok()
-                })
-                .flatten();
-            Some(Declared { raw, anchor, glob })
-        })
-        .collect()
-}
-
-impl Declared<'_> {
-    /// A file selector covers its file, a directory selector the files
-    /// beneath it, and a wildcard selector the files its pattern matches.
-    fn covers(&self, path: &str) -> bool {
-        if let Some(glob) = &self.glob {
-            return glob.matches(path);
+    facts: &CodebaseFacts,
+) -> PilotEvidence {
+    let mut runs = None;
+    let mut assessments = Vec::new();
+    for task in &facts.tasks {
+        let (Some(landed), Some(inputs)) = (&task.landed, &task.pilot) else {
+            continue;
+        };
+        if task.no_diff || landed.paths.len() > LARGE_FOOTPRINT_CAP {
+            continue;
         }
-        self.anchor.path == path
-            || (self.anchor.dir
-                && path
-                    .strip_prefix(&self.anchor.path)
-                    .is_some_and(|rest| rest.starts_with('/')))
-    }
-
-    /// Whether the selector reaches any file under `prefix`.
-    fn reaches(&self, prefix: &str) -> bool {
-        self.anchor.path.starts_with(prefix)
-            || (self.anchor.dir && prefix.starts_with(&format!("{}/", self.anchor.path)))
-    }
-
-    /// [`Self::covers`], or covers the source a generated output comes from.
-    fn covers_landed(&self, path: &str) -> bool {
-        self.covers(path)
-            || DERIVED.iter().any(|(output, source)| {
-                let rest = if output.ends_with('/') {
-                    path.strip_prefix(output)
-                } else {
-                    (path == *output).then_some("")
-                };
-                rest.is_some_and(|rest| match source {
-                    Source::Mirror(prefix) => self.covers(&format!("{prefix}{rest}")),
-                    Source::Within(prefixes) => prefixes.iter().any(|prefix| self.reaches(prefix)),
+        let runs = runs.get_or_insert_with(|| PilotRuns::load(runtime));
+        let run = runs.attribute(
+            runtime,
+            inputs.run_id.as_deref(),
+            inputs.at,
+            &inputs.operation_id,
+            facts.computed_at,
+        );
+        let mut contested: Vec<Contest> = task
+            .blocks
+            .iter()
+            .filter_map(|block| match &block.cause {
+                BlockCause::BaseConflict(paths) => Some((block.at, paths)),
+                _ => None,
+            })
+            .flat_map(|(at, paths)| {
+                paths.iter().map(move |path| Contest {
+                    at,
+                    path: path.clone(),
+                    kind: "base conflict",
                 })
             })
-    }
-}
-
-/// Sums behind recall and precision over one or more tasks.
-#[derive(Default)]
-struct Score {
-    /// Landed files some selector covered.
-    covered: usize,
-    landed: usize,
-    /// Selectors that covered at least one landed file.
-    useful: usize,
-    declared: usize,
-}
-
-impl Score {
-    fn add(&mut self, other: &Score) {
-        self.covered += other.covered;
-        self.landed += other.landed;
-        self.useful += other.useful;
-        self.declared += other.declared;
-    }
-
-    fn recall(&self) -> f64 {
-        ratio(self.covered, self.landed)
-    }
-
-    fn precision(&self) -> f64 {
-        ratio(self.useful, self.declared)
-    }
-
-    /// The harmonic mean of precision and recall; 0 when both are.
-    fn f1(&self) -> f64 {
-        let (precision, recall) = (self.precision(), self.recall());
-        if precision + recall == 0.0 {
-            0.0
-        } else {
-            2.0 * precision * recall / (precision + recall)
-        }
-    }
-
-    fn json(&self) -> Value {
-        json!({
-            "recall": rate_fields(self.covered, self.landed),
-            "precision": rate_fields(self.useful, self.declared),
-            "f1": self.f1(),
-        })
-    }
-}
-
-fn ratio(numerator: usize, denominator: usize) -> f64 {
-    if denominator == 0 {
-        0.0
-    } else {
-        numerator as f64 / denominator as f64
-    }
-}
-
-/// Grade `selectors` against a landed diff: the score, the landed files no
-/// selector covered and the selectors that covered none.
-fn grade<'a>(
-    selectors: &'a [String],
-    landed: &BTreeSet<String>,
-) -> (Score, Vec<String>, Vec<&'a str>) {
-    let declared = declared(selectors);
-    let mut useful = vec![false; declared.len()];
-    let mut missed = Vec::new();
-    for path in landed {
-        let mut covered = false;
-        for (index, selector) in declared.iter().enumerate() {
-            if selector.covers_landed(path) {
-                useful[index] = true;
-                covered = true;
+            .collect();
+        for denial in &facts.lock_denials {
+            if denial.task_ids.contains(&task.id) {
+                contested.extend(denial.files.iter().map(|path| Contest {
+                    at: denial.at,
+                    path: path.clone(),
+                    kind: "lock conflict",
+                }));
             }
         }
-        if !covered {
-            missed.push(path.clone());
-        }
-    }
-    let unused = declared
-        .iter()
-        .zip(&useful)
-        .filter(|(_, useful)| !**useful)
-        .map(|(selector, _)| selector.raw)
-        .collect();
-    let score = Score {
-        covered: landed.len() - missed.len(),
-        landed: landed.len(),
-        useful: useful.iter().filter(|useful| **useful).count(),
-        declared: declared.len(),
-    };
-    (score, missed, unused)
-}
-
-struct Graded<'a> {
-    task: &'a TaskFacts,
-    missed: Vec<String>,
-    unused: Vec<&'a str>,
-}
-
-#[derive(Default)]
-struct PilotRow<'a> {
-    pilot: Score,
-    author: Score,
-    widenings: usize,
-    tasks: Vec<Graded<'a>>,
-}
-
-/// The task-pilot ranking: per pilot crew and model, the recall, precision
-/// and F1 of the pilot's final selectors against each assessed task's landed
-/// diff, the same for the filer's selectors, and mid-run widenings. Rows at
-/// or above the minimum support (assessed tasks) rank by F1, then support.
-pub(super) fn task_pilot(facts: &CodebaseFacts, params: &Params) -> Value {
-    let mut rows: BTreeMap<PilotRun, PilotRow> = BTreeMap::new();
-    let mut excluded_large = 0;
-    let mut excluded_no_diff = 0;
-    let mut without_assessment = 0;
-    let mut unattributed = 0;
-    for task in &facts.tasks {
-        let Some(landed) = &task.landed else {
-            continue;
-        };
-        if !params.within(landed.at) {
-            continue;
-        }
-        if task.no_diff {
-            excluded_no_diff += 1;
-            continue;
-        }
-        if landed.paths.len() > LARGE_FOOTPRINT_CAP {
-            excluded_large += 1;
-            continue;
-        }
-        let Some(pilot) = &task.pilot else {
-            without_assessment += 1;
-            continue;
-        };
-        let Some(run) = &pilot.run else {
-            unattributed += 1;
-            continue;
-        };
-        let row = rows.entry(run.clone()).or_default();
-        let (score, missed, unused) = grade(&pilot.after, &landed.paths);
-        row.pilot.add(&score);
-        row.author.add(&grade(&pilot.author, &landed.paths).0);
-        row.widenings += task.widenings.len();
-        row.tasks.push(Graded {
-            task,
-            missed,
-            unused,
+        assessments.push(Assessment {
+            task_id: task.id.clone(),
+            at: inputs.at,
+            run,
+            after: inputs.after.clone(),
+            author: inputs.author.clone(),
+            landed: landed.paths.clone(),
+            contested,
         });
     }
-    let assessed: usize = rows.values().map(|row| row.tasks.len()).sum();
-    let mut below_support = 0;
-    let mut ranked: Vec<(PilotRun, PilotRow)> = rows
-        .into_iter()
-        .filter(|(_, row)| {
-            let supported = row.tasks.len() >= params.min_support;
-            below_support += usize::from(!supported);
-            supported
-        })
-        .collect();
-    ranked.sort_by(|(left_run, left), (right_run, right)| {
-        right
-            .pilot
-            .f1()
-            .total_cmp(&left.pilot.f1())
-            .then_with(|| right.tasks.len().cmp(&left.tasks.len()))
-            .then_with(|| left_run.cmp(right_run))
-    });
-    let rows: Vec<Value> = ranked
-        .into_iter()
-        .map(|(run, row)| row_json(run, row))
-        .collect();
-    json!({
-        "rows": rows,
-        "below_support": below_support,
-        "assessed": assessed,
-        "unattributed": unattributed,
-        "without_assessment": without_assessment,
-        "excluded_large": excluded_large,
-        "excluded_no_diff": excluded_no_diff,
-        "large_footprint_cap": LARGE_FOOTPRINT_CAP,
-        "drilldown_limit": DRILLDOWN_LIMIT,
-    })
-}
-
-fn row_json(run: PilotRun, mut row: PilotRow) -> Value {
-    let support = row.tasks.len();
-    let task = |task: &TaskFacts| json!({ "task_id": task.id, "title": task.title });
-    row.tasks.sort_by(|left, right| {
-        right
-            .missed
-            .len()
-            .cmp(&left.missed.len())
-            .then_with(|| left.task.id.cmp(&right.task.id))
-    });
-    let misses: Vec<Value> = row
-        .tasks
+    let assessed: BTreeSet<&str> = assessments
         .iter()
-        .filter(|graded| !graded.missed.is_empty())
-        .take(DRILLDOWN_LIMIT)
-        .map(|graded| {
-            let mut value = task(graded.task);
-            value["paths"] = json!(graded.missed);
-            value
-        })
+        .map(|assessment| assessment.task_id.as_str())
         .collect();
-    row.tasks.sort_by(|left, right| {
-        right
-            .unused
-            .len()
-            .cmp(&left.unused.len())
-            .then_with(|| left.task.id.cmp(&right.task.id))
-    });
-    let over_declarations: Vec<Value> = row
-        .tasks
-        .iter()
-        .filter(|graded| !graded.unused.is_empty())
-        .take(DRILLDOWN_LIMIT)
-        .map(|graded| {
-            let mut value = task(graded.task);
-            value["selectors"] = json!(graded.unused);
-            value
-        })
-        .collect();
-    let lift = json!({
-        "recall": row.pilot.recall() - row.author.recall(),
-        "precision": row.pilot.precision() - row.author.precision(),
-        "f1": row.pilot.f1() - row.author.f1(),
-    });
-    let extra = json!({
-        "crew": run.crew,
-        "model": run.model,
-        "support": support,
-        "author": row.author.json(),
-        "lift": lift,
-        "widenings": row.widenings,
-        "widenings_per_task": ratio(row.widenings, support),
-        "missed_files": row.pilot.landed - row.pilot.covered,
-        "unused_selectors": row.pilot.declared - row.pilot.useful,
-        "misses": misses,
-        "over_declarations": over_declarations,
-    });
-    merge(row.pilot.json(), extra)
+    let every_wait = Params {
+        since: None,
+        min_support: 1,
+        rollup: Rollup::File,
+        filter: RegressionFilter::default(),
+    };
+    let mut waits = Vec::new();
+    for (key, episode) in wait_episodes(facts, &every_wait) {
+        let path = Anchor {
+            path: key.trim_end_matches('/').to_string(),
+            dir: key.ends_with('/'),
+        };
+        for holder in episode
+            .holders
+            .iter()
+            .filter(|holder| assessed.contains(holder.as_str()))
+        {
+            waits.push(HeldWait {
+                holder: holder.clone(),
+                waiter: episode.task_id.clone(),
+                path: path.clone(),
+                started_at: episode.started_at,
+                wait_ms: episode.wait_ms(),
+                end: episode.end.as_str(),
+            });
+        }
+    }
+    PilotEvidence { assessments, waits }
 }

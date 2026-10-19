@@ -76,6 +76,27 @@ fn agents_view_executes_selection_disclosure_states_and_redirect() {
     );
 }
 
+/// Observe › Agents › Pilots ranks the crews, leaves the tier matrix out of
+/// the detail column and renders one assessed-by-observed matrix per row with
+/// its diagonal and its too-easy and too-hard counts.
+#[test]
+fn agents_pilots_view_executes_ranking_detail_and_tier_matrix() {
+    let result = std::process::Command::new("node")
+        .args([
+            "--experimental-vm-modules",
+            "tests/http_api/dashboard_agents_pilots.mjs",
+        ])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("node is required to execute the dashboard pilots fixture");
+    assert!(
+        result.status.success(),
+        "dashboard pilots view behavior failed:\n{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
 #[test]
 fn settings_system_view_executes_render_provenance_override_edit_and_refused_write() {
     let result = std::process::Command::new("node")

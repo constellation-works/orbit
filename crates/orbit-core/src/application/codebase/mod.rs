@@ -5,8 +5,9 @@
 //!
 //! "Touched" means a task's declared footprint (`context_files`, widened
 //! selectors included), not the diff that landed. The related-file query
-//! separately measures verified landed diffs, including unreserved Markdown,
-//! and the task-pilot ranking grades each pilot's selectors against them.
+//! separately measures verified landed diffs, including unreserved Markdown.
+//! The same scan supplies the evidence the Agents › Pilots scorecard grades
+//! pilots by (`pilot_evidence`).
 //! [`OrbitRuntime::codebase_scan`] lists every task's envelope from the task
 //! index and takes what its history, comments and failed claim settlements
 //! say from the store's derived per-task facts (`stored`), reading a task's
@@ -44,7 +45,10 @@ use crate::OrbitRuntime;
 
 pub use facts::CodebaseFacts;
 pub(in crate::application) use facts::{
-    BlockCause, SettledFailure, actor_kind, classify_block, failed_claim_settlements,
+    Anchor, BlockCause, SettledFailure, actor_kind, classify_block, failed_claim_settlements,
+};
+pub(in crate::application) use pilot::{
+    Contest, HeldWait, PilotEvidence, PilotRun, pilot_evidence,
 };
 pub use regression::RegressionFilter;
 use sections::{Params, ROW_LIMIT, Rollup};
@@ -143,7 +147,7 @@ impl OrbitRuntime {
     /// Scan the workspace's tasks, reservations and lock denials once, reusing
     /// the stored facts of every task unchanged since they were computed. A
     /// task whose history cannot be read keeps its envelope facts. Landed paths
-    /// and pilot grading use task-history receipts only, without delivery
+    /// and pilot receipts use task-history receipts only, without delivery
     /// observation.
     pub fn codebase_scan(&self) -> Result<CodebaseFacts, OrbitError> {
         facts::scan(self, None, true)
@@ -179,9 +183,8 @@ impl OrbitRuntime {
     }
 }
 
-/// The six path rankings, the task-pilot ranking and the paths several
-/// path rankings share (`overlap`), with the
-/// selection and scan facts. `cache_ttl` is how long the caller keeps
+/// The six path rankings and the paths several of them share (`overlap`),
+/// with the selection and scan facts. `cache_ttl` is how long the caller keeps
 /// `facts`, reported as `cache_ttl_seconds`.
 pub fn codebase_analytics(
     facts: &CodebaseFacts,

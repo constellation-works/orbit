@@ -1,8 +1,7 @@
 // Analytics › Codebase: its hash, the window / group-by segments and
 // minimum-support stepper, the ranking tiles, the cross-ranking overlap list,
-// each ranking's list and empty state, the detail panel, the task-pilot
-// ranking with its misses and over-declarations, a poll that keeps the
-// reader's place; and the Health denial badge that opens Events filtered to
+// each ranking's list and empty state, the detail panel, a poll that keeps
+// the reader's place; and the Health denial badge that opens Events filtered to
 // denials, with Events' default failure + denied filter.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -199,21 +198,6 @@ assert.deepEqual([pressed('codebase-window'), pressed('codebase-rollup'), byId['
 const rate = (numerator, denominator) => ({ rate: numerator / denominator, numerator, denominator });
 const regressed = (id, crew, by) => ({ task_id: id, title: `Task ${id}`, crew, regression_tasks: by });
 const wide = regressed('ORB-9', 'opus', ['ORB-90']);
-// Two pilot crews: luna lifts F1 over its filers and missed files in four
-// tasks; haiku does worse than its filers and missed nothing.
-const missed = (id, paths) => ({ task_id: id, title: `Task ${id}`, paths });
-const luna = {
-  crew: 'luna', model: 'luna-model', support: 5, recall: rate(6, 10), precision: rate(4, 5), f1: 0.6857,
-  author: { recall: rate(2, 10), precision: rate(2, 2), f1: 0.3333 }, lift: { recall: 0.4, precision: -0.2, f1: 0.3524 },
-  widenings: 3, widenings_per_task: 0.6, missed_files: 4, unused_selectors: 1,
-  misses: [missed('ORB-21', ['src/a.rs', 'src/b.rs']), missed('ORB-22', ['src/c.rs']), missed('ORB-23', ['src/d.rs']), missed('ORB-24', ['src/e.rs'])],
-  over_declarations: [{ task_id: 'ORB-31', title: '<b>web</b>', selectors: ['file:docs/unused.md'] }],
-};
-const haiku = {
-  crew: 'haiku', model: null, support: 6, recall: rate(6, 6), precision: rate(6, 12), f1: 0.6667,
-  author: { recall: rate(5, 6), precision: rate(5, 6), f1: 0.8333 }, lift: { recall: 0.1667, precision: -0.3333, f1: -0.1667 },
-  widenings: 0, widenings_per_task: 0, missed_files: 0, unused_selectors: 6, misses: [], over_declarations: [],
-};
 const full = {
   window: '30d', rollup: 'dir', min_support: 5, touched: 'declared_footprint', tasks_scanned: 4933,
   computed_at: '2026-10-10T12:00:00.000Z', cache_ttl_seconds: 300, row_limit: 25,
@@ -257,8 +241,6 @@ const full = {
     { paths: ['src/a/', 'src/b/'], ...rate(16, 40), reservations: [30, 26] },
   ] },
   lock_contention: { below_support: 0, reservations: 2557, denials: 0, wait_time_recorded: false, rows: [] },
-  task_pilot: { rows: [luna, haiku], below_support: 1, assessed: 14, unattributed: 2, without_assessment: 3,
-    excluded_large: 1, excluded_no_diff: 4, large_footprint_cap: 12, drilldown_limit: 10 },
   overlap: { ranked_paths: 8, rows: [
     { path: 'src/a/', rankings: ['regressions', 'footprint_misses', 'blocked', 'rejected'], top_rate: 0.65 },
     { path: 'src/c/', rankings: ['regressions', 'footprint_misses'], top_rate: 0.8 },
@@ -276,10 +258,10 @@ assert.deepEqual(
 );
 assert.match(byId['codebase-meta'].textContent, /^4,933 tasks scanned · computed .+ · recomputed every 5 min$/);
 
-// Eight tiles, each a toggle button; the overlap list is open by default.
+// Seven tiles, each a toggle button; the overlap list is open by default.
 assert.deepEqual(tiles().map(node => node.dataset.tile),
-  ['overlap', 'regressions', 'footprint_misses', 'blocked', 'rejected', 'change_coupling', 'lock_contention', 'task_pilot']);
-assert.deepEqual(tiles().map(node => node.getAttribute('aria-pressed')), ['true', 'false', 'false', 'false', 'false', 'false', 'false', 'false']);
+  ['overlap', 'regressions', 'footprint_misses', 'blocked', 'rejected', 'change_coupling', 'lock_contention']);
+assert.deepEqual(tiles().map(node => node.getAttribute('aria-pressed')), ['true', 'false', 'false', 'false', 'false', 'false', 'false']);
 assert.equal(tiles().every(node => node.tagName === 'BUTTON' && node.getAttribute('type') === 'button'), true);
 assert.equal(tile('overlap').querySelector('span.codebase-tile-big').textContent, '5 paths');
 assert.equal(tile('regressions').querySelector('span.codebase-tile-big').textContent, '65%');
@@ -288,8 +270,6 @@ assert.match(tile('regressions').querySelector('span.codebase-tile-foot').textCo
 assert.ok(tile('blocked').querySelector('span.codebase-tile-foot.warn'), 'Blocked warns about its unclassified blocks');
 assert.equal(tile('lock_contention').querySelector('span.codebase-tile-big').textContent, 'None');
 assert.ok(tile('lock_contention').querySelector('span.codebase-tile-foot.good'), 'nothing to rank is the good state');
-assert.deepEqual(['big', 'sub', 'foot'].map(name => tile('task_pilot').querySelector(`span.codebase-tile-${name}`).textContent),
-  ['F1 69%', 'top: luna · luna-model', '2 ranked · 1 below support']);
 
 // The overlap list: exactly the paths in two or more path rankings, by count,
 // then by the highest rate outside Rejected; one chip per ranking.
@@ -336,7 +316,7 @@ assert.equal(rowPaths()[rows().indexOf(selectedRow())], 'src/b/');
 
 // Selecting a tile swaps the list and keeps the row when the new list has it.
 click(tile('regressions'));
-assert.deepEqual(tiles().map(node => node.getAttribute('aria-pressed')), ['false', 'true', 'false', 'false', 'false', 'false', 'false', 'false']);
+assert.deepEqual(tiles().map(node => node.getAttribute('aria-pressed')), ['false', 'true', 'false', 'false', 'false', 'false', 'false']);
 assert.equal(part('list').dataset.ranking, 'regressions');
 assert.deepEqual(rowPaths(), ['src/a/', 'src/b/', 'src/c/', 'src/d/', 'src/e/']);
 assert.equal(rowPaths()[rows().indexOf(selectedRow())], 'src/b/');
@@ -463,54 +443,8 @@ await serve(waited);
 assert.deepEqual(rowPaths(), ['src/slow.rs', 'src/hot.rs'], 'a poll keeps the chosen sort');
 click(sortByWait());
 assert.deepEqual(rowPaths(), ['src/hot.rs', 'src/slow.rs', 'src/run.rs'], 'the toggle restores the rate order');
-
-// Task pilot: crews ranked by F1 as the server ordered them, each with its
-// recall and precision, its lift over the filers' selectors and widenings,
-// and a footer naming what the ranking leaves out.
-await serve(full);
-click(tile('task_pilot'));
-assert.equal(part('list').dataset.ranking, 'task_pilot');
-const crews = () => rows().map(row => [row.querySelector('span.codebase-pilot-crew').textContent, row.querySelector('span.codebase-pilot-model').textContent]);
-assert.deepEqual(crews(), [['luna', 'luna-model'], ['haiku', 'model not recorded']]);
-assert.deepEqual(rows().map(row => row.querySelector('span.codebase-rate').textContent), ['69%', '67%']);
-assert.deepEqual(rows().map(row => row.querySelector('span.codebase-frac').textContent), ['5 tasks', '6 tasks']);
-assert.match(rows()[0].textContent, /recall 60% · precision 80%/);
-assert.equal(rows()[0].querySelector('span.codebase-tag.lift').textContent, '+35 pts vs author');
-assert.equal(rows()[1].querySelector('span.codebase-tag.drop').textContent, '−17 pts vs author', 'a crew worse than its filers shows a drop');
-assert.match(rows()[0].textContent, /0\.6 widenings per task/);
-assert.equal(part('list').querySelector('div.codebase-list-foot').textContent,
-  '14 assessed tasks landed in this window. 1 crew below minimum support 5 is hidden. 2 assessments could not be matched to a pilot run. 3 landed tasks had no pilot assessment. 1 bulk and 4 no-diff tasks are left out.');
-
-// Its detail: the scores beside the filers', then the tasks with the worst
-// misses and the largest over-declarations, each linked to its task.
-assert.equal(selectedRow(), rows()[0]);
-assert.equal(part('detail').dataset.ranking, 'task_pilot');
-assert.equal(part('detail').querySelector('p.codebase-eyebrow').textContent, 'Task pilot #1');
-assert.deepEqual(part('detail').querySelectorAll('li.codebase-standing').map(item => [item.dataset.metric, item.querySelector('span.codebase-rate').textContent, item.querySelector('span.codebase-standing-rank').textContent]),
-  [['f1', '69%', 'author 33%'], ['recall', '60%', 'author 20%'], ['precision', '80%', 'author 100%']]);
-const pilotBlock = label => part('detail').querySelectorAll('div.codebase-detail-block')
-  .find(block => block.querySelector('p.codebase-eyebrow')?.textContent === label);
-const listed = label => pilotBlock(label).querySelectorAll('li.codebase-task');
-assert.deepEqual(listed('Worst misses').map(item => item.dataset.task), ['ORB-21', 'ORB-22', 'ORB-23'], 'three tasks before All');
-assert.deepEqual(listed('Worst misses')[0].querySelectorAll('span.codebase-path').map(node => node.textContent), ['src/a.rs', 'src/b.rs']);
-assert.match(listed('Worst misses')[0].querySelector('a.codebase-task-link').getAttribute('href'), /#tasks\?open=ORB-21$/);
-const allMisses = button(pilotBlock('Worst misses'), 'All 4 →');
-assert.equal(allMisses.getAttribute('aria-expanded'), 'false');
-click(allMisses);
-assert.equal(listed('Worst misses').length, 4, 'All lists every task with a miss');
-assert.equal(button(pilotBlock('Largest over-declarations'), 'All 4 →'), undefined, 'one task needs no All');
-const over = listed('Largest over-declarations');
-assert.deepEqual(over.map(item => item.dataset.task), ['ORB-31']);
-assert.equal(over[0].querySelector('span.codebase-task-title').textContent, '<b>web</b>', 'task titles stay text');
-assert.deepEqual(over[0].querySelectorAll('code.codebase-selector').map(node => node.textContent), ['file:docs/unused.md']);
-assert.match(over[0].querySelector('a.codebase-task-link').getAttribute('href'), /#tasks\?open=ORB-31$/);
-const pilotNodes = view().children.slice();
-await serve(full);
-assert.ok(view().children.every((node, index) => node === pilotNodes[index]), 'a poll keeps the pilot list and its open detail');
-click(rows()[1]);
-assert.equal(part('detail').querySelector('p.codebase-eyebrow').textContent, 'Task pilot #2');
-assert.equal(listed('Worst misses').length, 0);
-assert.match(pilotBlock('Worst misses').textContent, /Every landed file was covered by a pilot selector\./);
+// A row only lock contention ranks: the next tile falls back to its first row.
+click(rows()[0]);
 
 // Regressions: one chip row per dimension with its link counts (absent and
 // unclassified apart, zero counts hidden) and the definitions; the nature x
@@ -644,7 +578,7 @@ assert.equal(part('list').querySelectorAll('button.codebase-facet').length, 0);
 assert.match(part('list').querySelector('div.codebase-facets').textContent, /^No regression_from link targets a task done in this window/);
 assert.equal(part('list').querySelector('table.codebase-crosstab'), null, 'no cross-tab without links');
 await serve(full);
-click(tile('task_pilot'));
+click(tile('lock_contention'));
 
 // The window and group-by segments and the stepper rewrite the selection and
 // ask for a new hash; an unchanged one asks for nothing.
@@ -678,17 +612,12 @@ const empty = {
   blocked: { rows: [], below_support: 0, causes: [{ cause: 'unclassified', kind: 'unclassified', tasks: 0 }, { cause: 'run_failure', kind: 'attributed', tasks: 0 }] },
   rejected: { rows: [], below_support: 0, rejected_with_run: 0, excluded_without_run: 0 },
   overlap: { rows: [], ranked_paths: 0 },
-  task_pilot: { rows: [], below_support: 2, assessed: 7, unattributed: 0, without_assessment: 0, excluded_large: 0, excluded_no_diff: 0, large_footprint_cap: 12, drilldown_limit: 10 },
 };
 await serve(empty);
-assert.equal(part('list').dataset.ranking, 'task_pilot', 'the open tile survives a new payload');
-assert.equal(tile('task_pilot').querySelector('span.codebase-tile-big').textContent, 'None');
-assert.equal(part('list').querySelector('p.codebase-empty-title').textContent,
-  'No pilot crew has 15 or more assessed tasks that landed in this window; 2 crews fall below it.');
+assert.equal(part('list').dataset.ranking, 'lock_contention', 'the open tile survives a new payload');
+assert.equal(tile('lock_contention').querySelector('span.codebase-tile-big').textContent, 'None');
 assert.equal(rows().length, 0);
 assert.equal(part('detail').querySelector('p.codebase-note').textContent, 'Nothing is ranked here, so there is no row to show.');
-assert.ok(button(part('list'), 'Lower to 5'), 'crews below support offer a lower minimum');
-click(tile('lock_contention'));
 click(tile('overlap'));
 assert.ok(part('list').querySelector('div.codebase-hint'), 'crate grouping warns that the overlap list says little');
 assert.ok(part('list').querySelector('p.codebase-empty'));

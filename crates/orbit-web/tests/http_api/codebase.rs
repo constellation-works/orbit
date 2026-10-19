@@ -24,11 +24,16 @@ use super::support::{Fixture, isolated, json_ok};
 
 const WS: &str = "workspace=ws_http_fixture";
 
-fn add(fixture: &Fixture, title: &str, files: &[&str], relations: Vec<TaskRelation>) -> String {
+pub(super) fn add(
+    fixture: &Fixture,
+    title: &str,
+    files: &[&str],
+    relations: Vec<TaskRelation>,
+) -> String {
     add_with_status(fixture, title, files, relations, TaskStatus::Backlog)
 }
 
-fn add_with_status(
+pub(super) fn add_with_status(
     fixture: &Fixture,
     title: &str,
     files: &[&str],
@@ -58,7 +63,7 @@ fn regression_from(target: &str) -> Vec<TaskRelation> {
     }]
 }
 
-fn bundle_dir(root: &Path, task_id: &str) -> Option<PathBuf> {
+pub(super) fn bundle_dir(root: &Path, task_id: &str) -> Option<PathBuf> {
     for entry in fs::read_dir(root).ok()? {
         let path = entry.ok()?.path();
         if !path.is_dir() {
@@ -79,7 +84,7 @@ fn bundle_dir(root: &Path, task_id: &str) -> Option<PathBuf> {
 /// Append one history row to a disposable fixture task, as a lifecycle writer
 /// would: the analytics read history, and the transitions they classify
 /// (run failures, widening) have no public operator entry point.
-fn append_event(
+pub(super) fn append_event(
     fixture: &Fixture,
     task_id: &str,
     at: DateTime<Utc>,
@@ -221,7 +226,7 @@ fn git(repo: &Path, args: &[&str]) -> String {
 }
 
 /// A Git repository at the fixture's checkout with one seed commit.
-fn init_repo(fixture: &Fixture) -> PathBuf {
+pub(super) fn init_repo(fixture: &Fixture) -> PathBuf {
     let repo = fixture.work.parent().unwrap().to_path_buf();
     git(&repo, &["init", "-q"]);
     fs::write(repo.join("seed"), "seed").unwrap();
@@ -232,7 +237,7 @@ fn init_repo(fixture: &Fixture) -> PathBuf {
 
 /// Commit `files` as `task`'s landed diff and record its owner landing at
 /// `at`, as the landing evidence the landed-diff facts read.
-fn land(fixture: &Fixture, repo: &Path, task: &str, files: &[&str], at: DateTime<Utc>) {
+pub(super) fn land(fixture: &Fixture, repo: &Path, task: &str, files: &[&str], at: DateTime<Utc>) {
     for file in files {
         fs::create_dir_all(repo.join(file).parent().unwrap()).unwrap();
         fs::write(repo.join(file), task).unwrap();
@@ -250,11 +255,11 @@ fn land(fixture: &Fixture, repo: &Path, task: &str, files: &[&str], at: DateTime
     );
 }
 
-fn reserve(fixture: &Fixture, id: &str, task: &str, files: &[&str], at: DateTime<Utc>) {
+pub(super) fn reserve(fixture: &Fixture, id: &str, task: &str, files: &[&str], at: DateTime<Utc>) {
     reserve_request(fixture, id, &[task], None, files, at);
 }
 
-fn reserve_request(
+pub(super) fn reserve_request(
     fixture: &Fixture,
     id: &str,
     tasks: &[&str],
@@ -1595,7 +1600,6 @@ fn codebase_scan_reuses_stored_task_facts_until_a_task_changes() {
 
             let (cold, trace) = scan(&all);
             assert_eq!(operations(&trace, "codebase_landed_diff"), 1, "{trace:?}");
-            assert_eq!(cold["task_pilot"]["assessed"], 1, "{cold}");
             assert!(row(&cold["blocked"], "src/blocked.rs").is_some(), "{cold}");
             assert!(row(&cold["blocked"], "src/quiet.rs").is_none(), "{cold}");
             assert!(
@@ -1638,7 +1642,6 @@ fn codebase_scan_reuses_stored_task_facts_until_a_task_changes() {
                 row(&changed["rejected"], "src/rejected.rs").is_none(),
                 "{changed}"
             );
-            assert_eq!(changed["task_pilot"]["assessed"], 1, "{changed}");
 
             let store = fixture.runtime.sqlite_store().unwrap();
             let connection = store.connection();
@@ -2304,7 +2307,7 @@ fn codebase_related_uses_landed_diffs_and_filters_support_and_window() {
 
 /// A task-pilot run of `crew` and `model`, active from `started` to
 /// `finished`, as the run record the ranking attributes assessments to.
-fn seed_pilot_run(
+pub(super) fn seed_pilot_run(
     fixture: &Fixture,
     run_id: &str,
     crew: &str,
@@ -2344,7 +2347,7 @@ fn seed_pilot_run(
 /// Append a task-pilot receipt comment in the shape the pilot's atomic apply
 /// writes: the audit body sealed under its operation id, naming its pilot run
 /// unless `run_id` is `None` (a receipt written before that field).
-fn pilot_receipt(
+pub(super) fn pilot_receipt(
     fixture: &Fixture,
     task_id: &str,
     at: DateTime<Utc>,
@@ -2384,249 +2387,6 @@ fn pilot_receipt(
         .open(path)
         .unwrap();
     writeln!(file, "{}", serde_json::to_string(&row).unwrap()).unwrap();
-}
-
-/// Each pilot crew and model is graded against the landed diffs of the tasks
-/// it assessed: dir and wildcard selectors cover the files beneath them, a
-/// mirrored skill and a CLI golden count through their sources, the filer's
-/// selectors are the baseline, a receipt from before the run link is matched
-/// to the one pilot run active then, and no-diff, bulk, unassessed,
-/// unattributed and out-of-window tasks are left out.
-#[test]
-fn codebase_task_pilot_grades_each_crew_against_landed_diffs() {
-    isolated(
-        "codebase::codebase_task_pilot_grades_each_crew_against_landed_diffs",
-        || {
-            let fixture = Fixture::new();
-            let repo = init_repo(&fixture);
-            let now = Utc::now();
-            seed_pilot_run(
-                &fixture,
-                "jrun-pilot-luna",
-                "luna",
-                "luna-model",
-                now - Duration::minutes(60),
-                now - Duration::minutes(50),
-            );
-            seed_pilot_run(
-                &fixture,
-                "jrun-pilot-haiku",
-                "haiku",
-                "claude-haiku-5-5",
-                now - Duration::minutes(120),
-                now - Duration::minutes(110),
-            );
-            let piloted = |title: &str,
-                           files: &[&str],
-                           run: Option<&str>,
-                           before: &[&str],
-                           after: &[&str],
-                           receipt_at: DateTime<Utc>,
-                           landed_at: DateTime<Utc>| {
-                let task = add_with_status(&fixture, title, &[], vec![], TaskStatus::Done);
-                pilot_receipt(&fixture, &task, receipt_at, run, before, after);
-                land(&fixture, &repo, &task, files, landed_at);
-                task
-            };
-            let luna = Some("jrun-pilot-luna");
-            let haiku = Some("jrun-pilot-haiku");
-            let at = now - Duration::minutes(55);
-            // luna: every landed file covered; one of five selectors unused.
-            let skills = piloted(
-                "web and skills",
-                &[
-                    "src/web/app.js",
-                    "src/web/style.css",
-                    "crates/orbit-core/assets/skills/orbit/SKILL.md",
-                    "plugin/skills/orbit/SKILL.md",
-                ],
-                luna,
-                &["file:src/web/app.js"],
-                &[
-                    "dir:src/web",
-                    "file:crates/orbit-core/assets/skills/orbit/SKILL.md",
-                    "file:docs/unused.md",
-                ],
-                at,
-                now,
-            );
-            let cli = piloted(
-                "cli and goldens",
-                &[
-                    "src/lib.rs",
-                    "src/main.rs",
-                    "crates/orbit-cli/src/command/codebase.rs",
-                    "crates/orbit-cli/tests/help_goldens/codebase/root.txt",
-                ],
-                luna,
-                &[],
-                &[
-                    "file:src/*.rs",
-                    "file:crates/orbit-cli/src/command/codebase.rs",
-                ],
-                at,
-                now,
-            );
-            widen(&fixture, &cli, "src/extra.rs", true);
-            // haiku: half its prediction right where the filer was exact,
-            // then a whole directory where the filer named the wrong file.
-            let missed = piloted(
-                "half right",
-                &["src/x.rs", "src/y.rs"],
-                haiku,
-                &["file:src/x.rs", "file:src/y.rs"],
-                &["file:src/x.rs", "file:src/z.rs"],
-                now - Duration::minutes(115),
-                now,
-            );
-            piloted(
-                "legacy receipt",
-                &["docs/guide.md"],
-                None,
-                &["file:docs/other.md"],
-                &["dir:docs"],
-                now - Duration::minutes(115),
-                now,
-            );
-            // Left out: no-diff, bulk, unassessed, unattributed, too old.
-            let no_diff = fixture
-                .runtime
-                .add_task(TaskAddParams {
-                    title: "no diff".into(),
-                    description: "codebase analytics fixture".into(),
-                    tags: vec!["no-diff-expected".into()],
-                    status: Some(TaskStatus::Done),
-                    ..Default::default()
-                })
-                .unwrap()
-                .id
-                .to_string();
-            pilot_receipt(&fixture, &no_diff, at, luna, &[], &["file:src/n.rs"]);
-            land(&fixture, &repo, &no_diff, &["src/n.rs"], now);
-            let bulk: Vec<String> = (0..13).map(|n| format!("bulk/{n}.rs")).collect();
-            piloted(
-                "bulk",
-                &bulk.iter().map(String::as_str).collect::<Vec<_>>(),
-                luna,
-                &[],
-                &["dir:bulk"],
-                at,
-                now,
-            );
-            let unassessed = add_with_status(&fixture, "unassessed", &[], vec![], TaskStatus::Done);
-            land(&fixture, &repo, &unassessed, &["src/u.rs"], now);
-            piloted(
-                "deleted run",
-                &["src/d.rs"],
-                Some("jrun-deleted"),
-                &[],
-                &["file:src/d.rs"],
-                at,
-                now,
-            );
-            piloted(
-                "old",
-                &["src/old.rs"],
-                luna,
-                &[],
-                &["file:src/other.rs"],
-                now - Duration::days(40),
-                now - Duration::days(40),
-            );
-
-            let server = fixture.server(false);
-            let payload = json_ok(server.get(&format!(
-                "/api/codebase/analytics?{WS}&window=30d&min_support=1"
-            )));
-            let section = &payload["task_pilot"];
-            assert_eq!(section["assessed"], 4, "{section}");
-            assert_eq!(section["excluded_no_diff"], 1, "{section}");
-            assert_eq!(section["excluded_large"], 1, "{section}");
-            assert_eq!(section["without_assessment"], 1, "{section}");
-            assert_eq!(section["unattributed"], 1, "{section}");
-            assert_eq!(section["below_support"], 0);
-            let rows = section["rows"].as_array().unwrap();
-            assert_eq!(
-                rows.iter()
-                    .map(|row| (
-                        row["crew"].as_str().unwrap(),
-                        row["model"].as_str().unwrap()
-                    ))
-                    .collect::<Vec<_>>(),
-                [("luna", "luna-model"), ("haiku", "claude-haiku-5-5")],
-                "ranked by F1"
-            );
-            let close = |value: &Value, expected: f64| {
-                assert!(
-                    (value.as_f64().unwrap() - expected).abs() < 1e-9,
-                    "{value} != {expected}"
-                );
-            };
-            let luna_row = &rows[0];
-            assert_eq!(luna_row["support"], 2);
-            assert_eq!(
-                (
-                    &luna_row["recall"]["numerator"],
-                    &luna_row["recall"]["denominator"]
-                ),
-                (&json!(8), &json!(8)),
-                "dir, wildcard, mirrored and golden files are covered: {luna_row}"
-            );
-            assert_eq!(
-                (
-                    &luna_row["precision"]["numerator"],
-                    &luna_row["precision"]["denominator"]
-                ),
-                (&json!(4), &json!(5))
-            );
-            close(&luna_row["f1"], 2.0 * 0.8 / 1.8);
-            assert_eq!(luna_row["author"]["recall"]["numerator"], 1);
-            assert_eq!(luna_row["author"]["precision"]["denominator"], 1);
-            close(&luna_row["author"]["f1"], 2.0 * 0.125 / 1.125);
-            close(
-                &luna_row["lift"]["f1"],
-                2.0 * 0.8 / 1.8 - 2.0 * 0.125 / 1.125,
-            );
-            assert_eq!(luna_row["widenings"], 1);
-            close(&luna_row["widenings_per_task"], 0.5);
-            assert_eq!(luna_row["misses"], json!([]));
-            assert_eq!(
-                luna_row["over_declarations"],
-                json!([{"task_id": skills, "title": "web and skills", "selectors": ["file:docs/unused.md"]}])
-            );
-
-            let haiku_row = &rows[1];
-            assert_eq!(
-                haiku_row["support"], 2,
-                "the legacy receipt is matched by its run's window"
-            );
-            close(&haiku_row["recall"]["rate"], 2.0 / 3.0);
-            close(&haiku_row["precision"]["rate"], 2.0 / 3.0);
-            close(&haiku_row["author"]["f1"], 2.0 / 3.0);
-            close(&haiku_row["lift"]["f1"], 0.0);
-            assert_eq!(
-                haiku_row["misses"],
-                json!([{"task_id": missed, "title": "half right", "paths": ["src/y.rs"]}])
-            );
-            assert_eq!(
-                haiku_row["over_declarations"][0]["selectors"],
-                json!(["file:src/z.rs"])
-            );
-
-            let supported = json_ok(server.get(&format!(
-                "/api/codebase/analytics?{WS}&window=30d&min_support=3"
-            )));
-            assert_eq!(supported["task_pilot"]["rows"], json!([]));
-            assert_eq!(supported["task_pilot"]["below_support"], 2);
-            let all = json_ok(server.get(&format!(
-                "/api/codebase/analytics?{WS}&window=all&min_support=1"
-            )));
-            assert_eq!(
-                all["task_pilot"]["assessed"], 5,
-                "the 40-day-old landing counts only in a window that reaches it"
-            );
-        },
-    );
 }
 
 #[test]

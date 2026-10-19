@@ -5,7 +5,7 @@
 
 mod implementers;
 mod orchestrators;
-mod pilots;
+pub(super) mod pilots;
 mod reviewers;
 
 use chrono::{DateTime, Utc};

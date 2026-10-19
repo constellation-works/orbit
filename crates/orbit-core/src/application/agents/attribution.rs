@@ -20,6 +20,7 @@ use serde_json::{Map, Value, json};
 
 use super::facts::{Problem, Record, RegressionLink, Review, TaskFacts, filing_attempt};
 use super::records::{Cause, complexity_weight, label};
+use super::roles::pilots::{Graded, costly_charge_detail, wait_charge_detail};
 use super::{AgentFacts, AgentRole, MODEL_UNKNOWN};
 use crate::application::task::FindingVerdict;
 
@@ -74,11 +75,13 @@ pub struct Credit {
     pub anchor: DateTime<Utc>,
 }
 
-/// Every problem in `tasks` and every regression against them, each with
-/// one owner, and the landed credit of each task's final run.
+/// Every problem in `tasks`, every regression against them and every pilot
+/// problem of their graded assessments, each with one owner, and the landed
+/// credit of each task's final run.
 pub(super) fn attribute(
     tasks: &[TaskFacts],
     regressions: &[RegressionLink],
+    pilots: &[Graded],
 ) -> (Vec<Charge>, Vec<Credit>) {
     let mut charges = Vec::new();
     let mut credits = Vec::new();
@@ -139,6 +142,9 @@ pub(super) fn attribute(
             cause: None,
         };
         charges.push(draft.review_job(filing_attempt(&by_id, task)));
+    }
+    for graded in pilots {
+        charges.extend(pilot_charges(graded));
     }
     charges.sort_by(|left, right| {
         left.at
@@ -288,14 +294,17 @@ fn record_charge(task: &TaskFacts, record: &Record) -> Charge {
                 .find(|review| review.at <= record.at);
             draft.reviewer(review)
         }
-        // Read from settlements, verdicts and relations, never from records.
+        // Read from settlements, verdicts, relations and pilot grading, never
+        // from records.
         Problem::ReviewReject
         | Problem::ReviewFixes
         | Problem::Regression
         | Problem::DisposedFinding
         | Problem::FalseReject
         | Problem::RejectedFinding
-        | Problem::IncompleteReview => draft.not_scored("no_cause"),
+        | Problem::IncompleteReview
+        | Problem::CostlyMiss
+        | Problem::LockWait => draft.not_scored("no_cause"),
     }
 }
 
@@ -376,6 +385,38 @@ fn regression_charge(task: &TaskFacts, link: &RegressionLink) -> Charge {
         RegressionEscape::Nondeterministic => draft.not_scored("nondeterministic"),
         RegressionEscape::Unclassified => draft.not_scored("unclassified"),
     }
+}
+
+/// An assessment's costly misses and the lock waits it caused, charged to
+/// the pilot run behind it in the window of the assessment.
+fn pilot_charges(graded: &Graded) -> impl Iterator<Item = Charge> + '_ {
+    let charge = move |problem, at, detail| {
+        let run = graded.run.as_ref();
+        Charge {
+            task_id: graded.task_id.clone(),
+            problem,
+            owner: Owner::Role(AgentRole::Pilots),
+            crew: run.and_then(|run| run.crew.clone()),
+            model: run.and_then(|run| run.model.clone()),
+            run_id: graded.run_id(),
+            at,
+            anchor: graded.at,
+            detail,
+            cause: None,
+        }
+    };
+    let misses = graded.costly.iter().map(move |(path, contest)| {
+        charge(
+            Problem::CostlyMiss,
+            contest.at,
+            costly_charge_detail(path, contest),
+        )
+    });
+    let waits = graded
+        .waits
+        .iter()
+        .map(move |wait| charge(Problem::LockWait, wait.started_at, wait_charge_detail(wait)));
+    misses.chain(waits)
 }
 
 /// The window's problems by owner, with Not scored by reason and each
