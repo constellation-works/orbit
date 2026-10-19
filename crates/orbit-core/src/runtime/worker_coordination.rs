@@ -250,6 +250,9 @@ impl OrbitRuntime {
         mut session: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
         check_worker_host_input(&input, session.worker_host_call)?;
+        if name == "orbit.search" {
+            check_worker_search_scope(&input)?;
+        }
         let bound = self
             .worker_invocation()
             .ok_or_else(|| OrbitError::PolicyDenied("worker binding missing".into()))?;
@@ -376,10 +379,40 @@ fn decode_owner_read<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, 
     Err(OrbitError::Store(format!("owner read response: {direct}")))
 }
 
+/// Search from a claimed worker may read only its bound owner workspace.
+/// Check both canonical fields and aliases even if both are supplied: parser
+/// precedence must never turn a conflicting alias into a scope escape.
+pub(crate) fn check_worker_search_scope(input: &Value) -> Result<(), OrbitError> {
+    let wider = ["workspaces", "workspace_scope"].iter().any(|key| {
+        input.get(key).is_some_and(|value| {
+            !value.is_null()
+                && !value.as_array().is_some_and(Vec::is_empty)
+                && !value.as_str().is_some_and(|s| s.trim().is_empty())
+        })
+    }) || ["all_workspaces", "allWorkspaces"].iter().any(|key| {
+        input.get(key).is_some_and(|value| {
+            !value.is_null()
+                && value.as_bool() != Some(false)
+                && !value
+                    .as_str()
+                    .is_some_and(|s| s.trim().eq_ignore_ascii_case("false"))
+        })
+    });
+    if wider {
+        return Err(OrbitError::PolicyDenied(
+            "claimed_owner_bridge_refused: search is limited to the claimed workspace; federated scope is unavailable".into(),
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn is_coordination_tool(name: &str) -> bool {
     name.starts_with("orbit.task.")
         || name.starts_with("orbit.friction.")
-        || matches!(name, "orbit.auto_task.add" | "orbit.auto_task.update")
+        || matches!(
+            name,
+            "orbit.search" | "orbit.auto_task.add" | "orbit.auto_task.update"
+        )
 }
 
 /// A required child can start before the parent has recorded its PID. Wait

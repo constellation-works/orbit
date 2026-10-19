@@ -13,6 +13,73 @@ use super::*;
 
 use super::claimed_review::{ReviewedLeaf, revision};
 
+/// A pulled leaf deduplicates against owner records through the public tool API.
+fn a_claimed_worker_searches_and_lists_only_its_owners_workspace() {
+    let leaf = ReviewedLeaf::admit();
+    let owner = &leaf.pair.wire.owner;
+    let found = owner
+        .run_tool(
+            "orbit.task.add",
+            json!({
+                "title": "Distinctive audit duplicate", "description": "Owner-only dedupe record.",
+                "complexity": "low", "model": "codex", "workspace": leaf.pair.owner_repo,
+            }),
+        )
+        .unwrap();
+    let duplicate = found["id"].as_str().unwrap();
+    let listed = leaf
+        .bound
+        .run_tool("orbit.task.list", json!({"fields": ["id", "title"]}))
+        .unwrap();
+    assert!(
+        listed["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|task| task["id"] == duplicate),
+        "{listed}"
+    );
+    let query = json!({"query": "Distinctive audit duplicate", "kind": "task"});
+    let searched = leaf.bound.run_tool("orbit.search", query.clone()).unwrap();
+    assert_eq!(searched["results"][0]["id"], duplicate, "{searched}");
+    for scope in [
+        json!({"workspaces": ["ws_other"]}),
+        json!({"workspace_scope": ["ws_other"]}),
+        json!({"all_workspaces": true}),
+        json!({"allWorkspaces": "true"}),
+    ] {
+        let mut input = query.clone();
+        input
+            .as_object_mut()
+            .unwrap()
+            .extend(scope.as_object().unwrap().clone());
+        assert!(leaf.bound.run_tool("orbit.search", input.clone()).is_err());
+        // The owner also refuses scope widening if a worker bypasses the broker.
+        let binding = leaf.bound.worker_invocation().unwrap().clone();
+        input["workspace"] = json!(binding.owner_workspace_id);
+        assert!(
+            owner
+                .execute_owner_coordination(
+                    "orbit.search",
+                    input,
+                    ToolSessionContext {
+                        worker_invocation: Some(binding),
+                        effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+                        ..Default::default()
+                    }
+                )
+                .is_err()
+        );
+    }
+    for tool in ["orbit.search", "orbit.task.list"] {
+        assert!(
+            leaf.bound
+                .run_tool(tool, json!({"query": "duplicate", "workspace": "ws_other"}))
+                .is_err()
+        );
+    }
+}
+
 fn a_claimed_worker_files_follow_up_work_only_from_its_active_claim() {
     let leaf = ReviewedLeaf::admit();
     let add = |relations: Value| {
@@ -440,6 +507,7 @@ fn a_claimed_worker_cannot_plant_review_records_that_its_gate_still_writes() {
 crate::scenario_table!(
     a_claimed_worker_files_follow_up_work_only_from_its_active_claim_scenarios,
     a_claimed_worker_files_follow_up_work_only_from_its_active_claim,
+    a_claimed_worker_searches_and_lists_only_its_owners_workspace,
     agent_input_cannot_select_host_updates_or_escape_the_worker_allowlist,
     a_worker_update_persists_redacted_text_and_a_task_scoped_audit,
     a_claimed_worker_cannot_plant_review_records_that_its_gate_still_writes

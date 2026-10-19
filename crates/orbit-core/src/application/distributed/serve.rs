@@ -58,15 +58,13 @@ use super::{ensure_distributed_mutation_available, owner_binary_version};
 
 /// A remote claimed implementer's restrictions, using the same deny set as
 /// the engine and the same coordination classification and closed bridge as
-/// dispatch. Search is local to the replica, so it cannot satisfy a declared
-/// requirement to read the authoritative owner's records either.
+/// dispatch. Workspace search and listing use the claimed-owner bridge;
+/// other coordination tools must remain satisfiable under the same boundary.
 fn claimed_required_tool_hold(task: &Task) -> Option<String> {
     task.required_tools.iter().find_map(|tool| {
         let restriction = if CLAIMED_MODE_DENIED_TOOLS.contains(&tool.as_str()) {
             "denied in claimed mode; the implementer returns task state through its output"
-        } else if (crate::runtime::is_coordination_tool(tool) || tool == "orbit.search")
-            && !is_claimed_owner_tool(tool)
-        {
+        } else if crate::runtime::is_coordination_tool(tool) && !is_claimed_owner_tool(tool) {
             "owner coordination outside the closed claimed-owner bridge"
         } else {
             return None;

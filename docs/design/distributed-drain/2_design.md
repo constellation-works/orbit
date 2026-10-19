@@ -296,6 +296,18 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
 - The injected task envelope is the task. The claim is the authority to work on it, and the owner
   fences stale work when the claim settles (`stale_claim`). A read through `orbit.task.show` is
   scoped by the run broker to that claimed task.
+- The closed claimed-owner bridge carries `orbit.task.show`, `orbit.search`,
+  `orbit.task.list`, `orbit.task.add`, `orbit.friction.add`, and
+  `orbit.task.artifact.get` / `orbit.task.artifact.put` through the run coordinator.
+  Search and task listing read the owner's authoritative records only in the claimed
+  workspace; search cannot request federated `workspaces` or `all_workspaces`
+  (including their aliases). Task show and artifacts remain scoped to the claimed
+  task, and follow-up creation retains its claim relation checks. No additional
+  mutations are bridged. A task requiring `orbit.task.update` remains held before
+  claim admission, with a reason naming that exact denied tool; audit templates
+  that require it must run on the owner. Claimed audits that do not require updates
+  can deduplicate with search/list, file findings with `task.add`, and return
+  dedupe evidence and their execution summary in the step output.
 - The CLI runner denies `orbit.task.update` on top of the activity's own
   list (`CLAIMED_MODE_DENIED_TOOLS` in `cli_runner/orchestrator/policy.rs`; an allowlisted activity has
   it removed instead). The prompt is not the only guard. The runner treats an invocation as

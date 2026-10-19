@@ -1006,13 +1006,32 @@ fn excluded(pass: &Value, crew: &str) -> Value {
         .unwrap_or(Value::Null)
 }
 
+/// Read-only audit requirements are admitted through the closed owner bridge.
+fn claimed_workspace_reads_are_satisfiable_before_a_leaf_is_created() {
+    for tool in ["orbit.search", "orbit.task.list"] {
+        let mut pair = Pair::new(0);
+        let task = backlog_task_with_input(
+            &pair.wire.owner,
+            &pair.owner_repo,
+            "src/audit.rs",
+            None,
+            json!({"required_tools": [tool]}),
+        );
+        pair.tasks.push(task.clone());
+        let drain = pair.start_drain();
+        let _leaf = pair.queued_leaf(&drain, 1);
+        assert_eq!(pair.owner_claims().len(), 1, "{tool} must be claimable");
+        assert_eq!(pair.owner_claims()[0]["claim"]["task_id"], task);
+    }
+}
+
 /// Required tools must be satisfiable before a follower creates any claim or
 /// leaf (F2026-10-352/353/354). Provenance never changes that authority.
 fn unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf() {
     let pair = Pair::new(0);
     let owner = &pair.wire.owner;
     let mut held = Vec::new();
-    for tool in ["orbit.task.update", "orbit.search", "orbit.task.list"] {
+    for tool in ["orbit.task.update", "orbit.task.requeue"] {
         for automated in [false, true] {
             let file = format!("src/requirement{}.rs", held.len());
             let task = if automated {
@@ -2467,6 +2486,7 @@ crate::scenario_table!(
     contract_refusals_do_not_trip_the_breaker_but_genuine_failures_still_do,
     a_follower_never_receives_a_claim_for_a_crew_its_window_cannot_run,
     unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf,
+    claimed_workspace_reads_are_satisfiable_before_a_leaf_is_created,
     a_follower_is_handed_only_tasks_its_os_satisfies,
     a_provider_auth_failure_releases_the_claim_and_excludes_the_crew_for_the_window
 );

@@ -41,7 +41,7 @@ pub(crate) fn execute(
             | WorkspaceClaimVerb::Show => false,
         },
         OrbitBuiltinAction::Search(verb) => match verb {
-            SearchVerb::Query => false,
+            SearchVerb::Query => true,
         },
         OrbitBuiltinAction::Codebase(verb) => match verb {
             CodebaseVerb::Analytics | CodebaseVerb::Show | CodebaseVerb::Related => false,
@@ -106,6 +106,10 @@ pub(crate) fn execute(
         return Err(OrbitError::PolicyDenied(
             "worker owner destination mismatch".into(),
         ));
+    }
+    if action == OrbitBuiltinAction::Search(SearchVerb::Query) {
+        crate::runtime::check_worker_search_scope(input)?;
+        return Ok(None);
     }
     if action == OrbitBuiltinAction::Task(TaskVerb::Show)
         && let Some(projection) = input.get("_worker_read").and_then(Value::as_str)

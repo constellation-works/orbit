@@ -363,8 +363,9 @@ it — see [friction.md](friction.md). Then:
   failure. A task you file must be `spawned_from` the claimed task; a claimed
   `delivery-code-review` or `code-review` task may also give each finding a
   `regression_from` relation to its culprit, classified with its `regression`
-  nature and escape ([task-fields.md](task-fields.md#behavior-affecting-optional-fields)). `orbit.search` does not reach the
-  owner, so skip the duplicate search and say so; the owner's triage dedupes.
+  nature and escape ([task-fields.md](task-fields.md#behavior-affecting-optional-fields)). `orbit.search` and `orbit.task.list` reach the
+  owner's authoritative records in the claimed workspace through the coordinator;
+  use them for duplicate checks. Federated search scopes are refused.
   Return a finding the owner still refuses in `unfiled_findings` as
   `{title, description}` objects (plain strings fail the implement step before
   anything is committed or pushed); the handoff attaches it to the claimed task

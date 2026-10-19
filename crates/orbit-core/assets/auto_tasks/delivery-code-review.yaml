@@ -49,9 +49,9 @@ template:
     `allow_missing_context: true` and identify that intended path. Never file a
     finding without context selectors.
     Search for duplicates with `orbit.search` (`"kind":"task"`) before filing.
-    A claimed run on another machine cannot reach the owner's search: file
-    without it and record the skipped search in the evidence; the owner's
-    triage dedupes. A finding the owner still refuses goes in the step output's
+    A claimed run reaches the owner's search and task list through its run's
+    coordinator, scoped to the claimed workspace. Record the duplicate-check
+    evidence. A finding the owner still refuses goes in the step output's
     `unfiled_findings`, which the handoff attaches to this task.
     Complete the supplied evidence template, replace action_id with this task ID,
     write it to `.orbit/tmp/automation-coverage.json`, and attach it in this

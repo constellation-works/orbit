@@ -113,10 +113,13 @@ pub const CLAIMED_MODE_DENIED_TOOLS: &[&str] = &["orbit.task.update"];
 /// reaches that owner with through its run's coordinator, the step runner's
 /// broker [ORB-14260]. The agent sandbox masks the SSH credentials the owner
 /// route needs, so these calls cross the broker instead, each scoped by the
-/// broker's own records to the claimed task. The list is closed; any other
-/// coordination tool from such a worker's sandbox is refused.
-pub const CLAIMED_OWNER_TOOLS: [&str; 5] = [
+/// broker's own records to the claimed task or its workspace for search/list.
+/// The list is closed; any other coordination tool from such a worker's sandbox
+/// is refused.
+pub const CLAIMED_OWNER_TOOLS: [&str; 7] = [
     "orbit.task.show",
+    "orbit.search",
+    "orbit.task.list",
     "orbit.task.add",
     "orbit.friction.add",
     "orbit.task.artifact.get",

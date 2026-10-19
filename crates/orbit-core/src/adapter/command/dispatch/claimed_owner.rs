@@ -16,6 +16,7 @@
 //! each checked against that scope before anything reaches the owner:
 //!
 //! - `orbit.task.show` and the artifact calls name the claimed task;
+//! - `orbit.search` and `orbit.task.list` read only the claimed workspace;
 //! - `orbit.task.add` names the claimed task as `spawned_from`, and any other
 //!   relation only as `regression_from`: the owner, which holds the claimed
 //!   task's tags, allows that only for a review task's findings;
@@ -437,6 +438,20 @@ pub(super) fn execute_brokered(
         );
     }
     let owner_input = match tool {
+        "orbit.search" | "orbit.task.list" => {
+            // These are workspace reads, unlike the task-scoped show/artifact
+            // calls. The binding supplies the destination; search cannot fan
+            // out into any other workspace on the owner.
+            if object.keys().any(|key| key.starts_with('_')) {
+                return Err(denied(
+                    "internal fields are not accepted for workspace reads",
+                ));
+            }
+            if tool == "orbit.search" {
+                crate::runtime::check_worker_search_scope(&input)?;
+            }
+            input.clone()
+        }
         TASK_SHOW => {
             accept_fields(object, &["id", "fields", "field", "run_id", "model"])?;
             require_claimed_task(object, binding)?;

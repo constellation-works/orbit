@@ -275,9 +275,10 @@ spec:
       `{"type":"spawned_from","target":"<claimed task ID>"}`. A review task
       minted by `delivery-code-review` or `code-review` may also give each
       finding a `regression_from` relation to the task in its workspace that
-      introduced it. `orbit.search` and `orbit.task.list` do not reach the
-      owner, so skip a duplicate search the task asks for and say so in
-      `comment`; the owner's triage dedupes filed tasks. If the owner still
+      introduced it. `orbit.search` and `orbit.task.list` reach the owner's
+      authoritative records in the claimed workspace through the run's
+      coordinator; use them for duplicate checks. Federated search scopes
+      are refused. If the owner still
       refuses a finding, return it in `unfiled_findings` as
       `[{"title":..., "description":..., "relations":[...]}]`. The handoff
       attaches these to the claimed task as `unfiled-findings.json` for the
