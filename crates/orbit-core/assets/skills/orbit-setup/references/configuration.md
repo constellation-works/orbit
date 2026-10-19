@@ -41,7 +41,8 @@ orbit config path
 ```
 
 `orbit config show` annotates every setting as `workspace`, `global`,
-`built-in`, or `environment`, with the file it came from. Reach for it before
+`built-in`, or `environment`, with the file it came from. `machine.id` and
+`machine.task_prefix` render as identity, not as settable rows. Reach for it before
 assuming a value.
 
 ## Common settings
@@ -51,7 +52,7 @@ assuming a value.
 | `workflow.base_branch` | Config fallback for ship/auto/pilot base branch. A registered workspace `base_branch` takes precedence. |
 | `workflow.default_crew` | Crew for any task that doesn't declare one. |
 | `workflow.<tier>_complexity_crews` | Automatic crew pool per task complexity (`low`, `medium`, `hard`, `xhard`); entries `name` or `name:weight`. Empty (`[]`) routes that tier to `default_crew`. Orbit's own work draws from them too while its purpose pool is unset: auto-task templates by complexity, the task pilot and PR auto-fix from `low`, failure and PR conflict recovery from `medium`. The retired system-crew key loads with a deprecation warning and is ignored. |
-| `workflow.purpose_crews.<purpose>` | Weighted pool for one purpose of work, written like the complexity pools: `task_pilot`, `failure_recovery`, `final_recovery`, `auto_fix`, `review`, `baseline_red_repair`, `sweep_tasks` (every task the CI failure, Dependabot and code-scanning sweeps file, and merged-head repairs a review reconciliation files). An explicit task, template or activity crew wins; otherwise the purpose pool is drawn, narrowed by `--allow-crew`; unset or `[]` keeps the earlier route. A provider limit or failure hold on the assigned member redraws from the pool's other enabled members before the complexity pool. `final_recovery` and `review` have no earlier route: `final_recovery = []` disables final recovery, and `review` is described below. `orbit config show` lists each purpose's resolved pool and its source. |
+| `workflow.purpose_crews.<purpose>` | Weighted pool for one purpose of work, written like the complexity pools: `task_pilot`, `failure_recovery`, `final_recovery`, `auto_fix`, `review`, `baseline_red_repair`, `sweep_tasks` (every task the CI failure, Dependabot and code-scanning sweeps file, and merged-head repairs a review reconciliation files). An explicit task, template or activity crew wins; otherwise the purpose pool is drawn, narrowed by `--allow-crew`; unset or `[]` keeps the earlier route. A provider limit or failure hold on the assigned member redraws from the pool's other enabled members before the complexity pool. `final_recovery` and `review` have no earlier route: `final_recovery = []` disables final recovery, and `review` is described below. `orbit config show --all` lists each purpose's resolved pool and its source (`crew_purposes` in `--json`). |
 | `workflow.auto_ship` | Opt-in for `orbit run ship-sweep` unattended ship dispatch. The seeded `ship-sweep` routine does not read it. |
 | `workflow.provider_limit_max_used_pct` | Skip a crew while a live usage window of its provider or model is exhausted or used at or above this percent (1..=100, default 90; 100 skips only on exhaustion). |
 | `workflow.provider_limit_overrides` | Per-provider replacement for that percent: `provider:percent` (1..=100) or `provider:off` (record readings without gating). Each provider once. |
@@ -105,8 +106,8 @@ still load, translated with a warning (`before-pr` → `review.timing = "before_
 `none` → `review.timing = "off"`), and a later release makes them errors. Move
 them to `[review]` and the auto-task flag. `operation.review_reviewer_starts` and
 `operation.review_repair_cycles` are ignored with a warning; delete them.
-`orbit config show` reports the review timing and the after-landing switch with
-their sources.
+`orbit config show --all` reports the review timing and the after-landing switch with
+their sources; `--json` includes the same `review` object, and the default text view prints the `review.*` rows without that summary.
 
 Use `orbit config keys` to distinguish fixed registry keys from settings
 authored as TOML. Read-only identity keys are listed and refused by

@@ -1,4 +1,4 @@
-Display configuration values, with source provenance and derived paths
+Display configuration values, with source provenance
 
 Usage: orbit config show [OPTIONS]
 
@@ -13,7 +13,7 @@ Options:
           [possible values: effective, global, workspace]
 
       --all
-          List every key, including unconfigured advanced keys and sections whose keys are all unset
+          List every key, including unconfigured advanced keys and sections whose keys are all unset, plus the Paths, Crew purposes and Review summaries
           
           [aliases: --advanced]
 

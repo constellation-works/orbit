@@ -31,7 +31,8 @@ before deleting the existing root.
 
 ```bash
 orbit config path              # the config.toml in effect
-orbit config show              # values with their source, plus derived paths
+orbit config show              # values with their source
+orbit config show --all        # also Paths, Crew purposes and Review
 orbit config get workflow.default_crew
 orbit config set workflow.default_crew opus
 orbit config keys              # every settable key, with type and description
@@ -40,10 +41,15 @@ orbit config keys              # every settable key, with type and description
 `orbit config show` hides unconfigured **Advanced** keys and counts them in each
 section heading. A key set in any layer remains visible, even if that layer is
 shadowed or its security value is not inherited. Use `--all` (alias `--advanced`)
-to list every key and expand unset sections. `--scope global|workspace` applies
+to list every key, expand unset sections, and append Paths, Crew purposes and
+Review. Those three blocks restate rows the sections already print, so the
+default view omits them. `--json` always includes `crew_purposes` and `review`.
+`machine.id` and `machine.task_prefix` render under Identity, not as Machine
+keys; `machine.name` stays a Machine key. `--scope global|workspace` applies
 the same filter to that file. JSON always includes all keys; each provenance
 record has `tier: "standard"` or `tier: "advanced"`. Tiers affect display only;
-loading, `config get`, and `config set` keep their existing behavior.
+loading, `config get`, and `config set` keep their existing behavior. Row
+descriptions are one sentence; the tables below keep the defaults and ranges.
 
 `orbit config set` writes the workspace file; `--global` writes the global one.
 If the workspace file does not exist yet, add `--fresh` to start it empty or
@@ -307,8 +313,9 @@ first five, a crew is chosen in this order:
 draw. A task's purpose comes from the tag it was filed with
 (`baseline-red-repair`, `ci-failure-sweep`, the Dependabot and code-scanning
 tags, a merged-head follow-up tag), or from a `crew-purpose:<purpose>` tag an
-auto-task template adds. `orbit config show` lists each purpose's resolved
-pool and where it comes from, and `orbit run show` names the rule behind each
+auto-task template adds. `orbit config show --all` lists each purpose's resolved
+pool and where it comes from (the default view already prints the purpose
+keys; `--json` includes `crew_purposes`), and `orbit run show` names the rule behind each
 activity crew a run drew.
 
 `[workflow] system_crew` is deprecated: it still loads for one release with a
@@ -427,7 +434,7 @@ Notes:
 - After-landing review is not a config key. Turn it on with
   `orbit auto-task toggle delivery-code-review on`; it reviews landed
   deliveries in batches, observing `origin/<branch>` when that remote exists.
-  `orbit config show` and `orbit doctor` report both review switches, and
+  `orbit config show --all` and `orbit doctor` report both review switches, and
   doctor is not ok while the observed commit trails the remote-tracking head
   past the batch's maximum wait.
 - `operation.review_policy` and `operation.review_minutes` are deprecated and

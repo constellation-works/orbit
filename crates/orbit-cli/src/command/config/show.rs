@@ -17,7 +17,8 @@ pub struct ConfigShowArgs {
     #[arg(long, value_enum, default_value_t = ConfigScopeArg::Effective)]
     pub scope: ConfigScopeArg,
     /// List every key, including unconfigured advanced keys and sections
-    /// whose keys are all unset.
+    /// whose keys are all unset, plus the Paths, Crew purposes and Review
+    /// summaries.
     #[arg(long, visible_alias = "advanced")]
     pub all: bool,
 }
@@ -31,9 +32,13 @@ impl Execute for ConfigShowArgs {
             json["review"] = review.json;
             let purposes = orbit_core::application::config::crew_purposes_view(effective.values());
             let mut text = effective_text(runtime, effective.values(), self.all);
-            text.push_str(&crew_purposes_text(&purposes));
+            // Crew purposes and Review restate rows the sections above already
+            // print. The default view omits them; `--all` and `--json` keep them.
+            if self.all {
+                text.push_str(&crew_purposes_text(&purposes));
+                text.push_str(&review.text);
+            }
             json["crew_purposes"] = purposes;
-            text.push_str(&review.text);
             return Ok(Payload::detail(json, text).into());
         }
 
