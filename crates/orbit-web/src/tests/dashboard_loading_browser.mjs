@@ -1,4 +1,4 @@
-// Usage: node dashboard_loading_browser.mjs /path/to/playwright/index.mjs /evidence/directory [--run-detail|--locks-only|--auth-exclusions|--task-lookup]
+// Usage: node dashboard_loading_browser.mjs /path/to/playwright/index.mjs /evidence/directory [--run-detail|--locks-only|--auth-exclusions|--task-lookup|--clock]
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -7,6 +7,7 @@ import { dashboardFile } from './dashboard_static.mjs';
 import { assertRunDetailActions, assertRunDetailPresentation } from './dashboard_run_detail_browser.mjs';
 import { assertWorkspaceScope } from './dashboard_workspace_scope_browser.mjs';
 import { assertRunTaskLabels, assertTaskLinkScopeHistory, assertTaskLookupClear } from './dashboard_run_tasks_browser.mjs';
+import { assertClockRepaint } from './dashboard_clock_browser.mjs';
 import { assertTaskTitleLayout } from '../../tests/http_api/dashboard_task_titles_browser.mjs';
 import { assertPullRequestLinks } from '../../tests/http_api/dashboard_pull_request_links_browser.mjs';
 
@@ -16,6 +17,7 @@ fs.mkdirSync(evidence, { recursive: true });
 const scenarios = fileURLToPath(new URL('./dashboard_loading.mjs', import.meta.url));
 const locksOnly = process.argv[4] === '--locks-only';
 const authExclusionsOnly = process.argv[4] === '--auth-exclusions';
+const clockOnly = process.argv[4] === '--clock';
 const locksOnlyScenario = `
 const tasks = Array.from({ length: 20 }, (_, index) => ({
   id: 'BASE-' + index, title: 'Base task ' + index, status: 'in-progress', priority: 'medium',
@@ -1301,11 +1303,13 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 let browser;
 try {
   browser = await chromium.launch({ headless: true });
-  if (!locksOnly && !authExclusionsOnly) await assertTaskLookupClear(browser, `http://127.0.0.1:${server.address().port}`, evidence);
+  if (!locksOnly && !authExclusionsOnly) await assertClockRepaint(browser, `http://127.0.0.1:${server.address().port}`, evidence);
+  if (clockOnly) console.log('Dashboard clock switch repainted kept task detail and run rows in place.');
+  if (!locksOnly && !authExclusionsOnly && !clockOnly) await assertTaskLookupClear(browser, `http://127.0.0.1:${server.address().port}`, evidence);
   if (process.argv[4] === '--task-lookup') {
     console.log('Dashboard task lookup dismissal browser checks passed.');
   }
-  if (process.argv[4] !== '--task-lookup') {
+  if (process.argv[4] !== '--task-lookup' && !clockOnly) {
   if (!locksOnly && !authExclusionsOnly) await assertWorkspaceScope(browser, `http://127.0.0.1:${server.address().port}`, evidence);
   if (!locksOnly && !authExclusionsOnly) await assertTaskLinkScopeHistory(browser, `http://127.0.0.1:${server.address().port}`, evidence);
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });

@@ -24,7 +24,7 @@
 // currentness and merge certainty inside the transaction that would change
 // anything.
 
-import { captureWorkspaceVisit, el, fetchJson, formatDateTime, infoHint, postJson, isAggregateView, getRegisteredHosts, getWorkspace, getWorkspaceRevision, hostWriteRefusal, runHref } from './common.js';
+import { captureWorkspaceVisit, clockStamp, el, fetchJson, formatDateTime, infoHint, postJson, isAggregateView, getRegisteredHosts, getWorkspace, getWorkspaceRevision, hostWriteRefusal, runHref } from './common.js';
 
 const CONSOLE_PATH = "/api/distributed/claims";
 
@@ -481,6 +481,13 @@ function formatWhen(options, value) {
   return options && typeof options.formatTime === "function" ? options.formatTime(value) : formatDateTime(value);
 }
 
+// The claim panel sits in a task detail that is kept across refreshes, so its
+// times are stamped for a UTC/Local switch to repaint in place.
+function whenNode(options, value) {
+  const text = formatWhen(options, value);
+  return text ? clockStamp(el("span", { text }), value) : null;
+}
+
 // --- claim panel ------------------------------------------------------------
 
 /// Render one claim: the delivery handoff's facts first (branch, candidate,
@@ -499,11 +506,11 @@ export function buildClaimPanel(claim, capabilities, options = {}) {
 
   // A task can hold several claims (a retry after recovery); the id and birth
   // time are what tell them apart.
-  const created = formatWhen(options, claim.created_at);
+  const created = whenNode(options, claim.created_at);
   panel.appendChild(
     el("div", { class: "claim-header" }, [
       el("span", { class: "claim-id mono", text: `claim ${shortId(claim.claim_id)}`, title: claim.claim_id || "" }),
-      created ? el("span", { class: "claim-created", text: `created ${created}` }) : null,
+      created ? el("span", { class: "claim-created" }, ["created ", created]) : null,
     ]),
   );
 
@@ -612,12 +619,11 @@ function buildReservationLine(claim, options) {
   if (claim.unsettled !== true) {
     return line("reservation", "released", { class: "released" });
   }
-  const expiresAt = formatWhen(options, reservation.expires_at);
-  const when = expiresAt ? ` ${expiresAt}` : "";
+  const expiresAt = whenNode(options, reservation.expires_at);
   const text = reservation.expired
-    ? `expired${when}`
-    : expiresAt ? `expires ${expiresAt}` : "no expiry recorded";
-  return line("reservation", text, {
+    ? (expiresAt ? ["expired ", expiresAt] : ["expired"])
+    : expiresAt ? ["expires ", expiresAt] : ["no expiry recorded"];
+  return line("reservation", el("span", { class: "value" }, text), {
     class: reservation.expired ? "expired" : "",
     note: reservation.note,
   });
