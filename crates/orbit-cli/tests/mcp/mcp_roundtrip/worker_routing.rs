@@ -26,7 +26,7 @@ sys.exit(subprocess.call([{binary}] + argv, cwd={work}, env=env, stderr=subproce
 }
 
 #[test]
-fn mcp_worker_remote_owner_route_treats_null_and_blank_workspace_as_absent() {
+fn claimed_worker_reads_owner_records_and_preserves_workspace_routing() {
     const CHILD_ENV: &str = "ORBIT_TEST_WORKER_REMOTE_OWNER_CHILD";
     if std::env::var_os(CHILD_ENV).is_none() {
         let temp = tempdir().expect("isolated worker home");
@@ -42,7 +42,7 @@ fn mcp_worker_remote_owner_route_treats_null_and_blank_workspace_as_absent() {
             .env(CHILD_ENV, "1")
             .args([
                 "--exact",
-                "mcp_roundtrip::worker_routing::mcp_worker_remote_owner_route_treats_null_and_blank_workspace_as_absent",
+                "mcp_roundtrip::worker_routing::claimed_worker_reads_owner_records_and_preserves_workspace_routing",
                 "--nocapture",
             ]);
         let output = assert_cmd::Command::from_std(child)
@@ -54,7 +54,7 @@ fn mcp_worker_remote_owner_route_treats_null_and_blank_workspace_as_absent() {
             .clone();
         assert!(
             String::from_utf8_lossy(&output).contains("1 passed"),
-            "child test `mcp_roundtrip::worker_routing::mcp_worker_remote_owner_route_treats_null_and_blank_workspace_as_absent` did not execute: {}",
+            "child test `mcp_roundtrip::worker_routing::claimed_worker_reads_owner_records_and_preserves_workspace_routing` did not execute: {}",
             String::from_utf8_lossy(&output)
         );
         return;
@@ -101,6 +101,35 @@ fn mcp_worker_remote_owner_route_treats_null_and_blank_workspace_as_absent() {
         .expect("owner workspace id");
     let owner_destination = format!("{owner_machine_id}/{owner_workspace_id}");
     drop(owner_operator);
+
+    // A second workspace on the same owner must never leak into claimed reads.
+    let other_work = owner.home.join("other-work");
+    std::fs::create_dir_all(&other_work).expect("other owner workspace");
+    assert!(
+        crate::git_repo::command()
+            .args(["init", "--quiet"])
+            .current_dir(&other_work)
+            .status()
+            .expect("initialize other workspace Git")
+            .success()
+    );
+    orbit_ok(McpWorkspace::orbit_command(&other_work, &owner.home).args([
+        "workspace",
+        "init",
+        "--name",
+        "other-owner-workspace",
+    ]));
+    orbit_ok(
+        McpWorkspace::orbit_command(&other_work, &owner.home).args([
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--input",
+            &json!({"title": "Remote worker route probe", "description": "Other workspace record",
+                "complexity": "low", "workspace": other_work, "model": "codex"})
+            .to_string(),
+        ]),
+    );
 
     let worker = McpWorkspace::init_with_task_prefix("mcp-roundtrip", &[], "WRK");
     let (worker_machine_id, _) = machine_identity(&worker.home);
@@ -224,6 +253,75 @@ fn mcp_worker_remote_owner_route_treats_null_and_blank_workspace_as_absent() {
         .expect("register worker process");
 
     let mut client = worker.serve();
+
+    // Admitted over the real drain protocol, these reads must return owner
+    // records rather than the empty worker store or another owner workspace.
+    let listed = client.call_tool_ok("orbit_task_list", json!({"fields": ["id", "title"]}));
+    assert_eq!(
+        listed["tasks"],
+        json!([{"id": task_id, "title": "Remote worker route probe"}])
+    );
+    let found = client.call_tool_ok(
+        "orbit_search",
+        json!({"query": "Remote worker route probe", "kind": "task"}),
+    );
+    assert_eq!(found["results"][0]["id"], task_id, "{found}");
+    assert_eq!(
+        found["results"].as_array().expect("search results").len(),
+        1,
+        "only the claimed workspace: {found}"
+    );
+    for (tool, input, expected) in [
+        (
+            "orbit.task.list",
+            json!({"fields": ["id", "title"]}),
+            listed.clone(),
+        ),
+        (
+            "orbit.search",
+            json!({"query": "Remote worker route probe", "kind": "task"}),
+            found.clone(),
+        ),
+    ] {
+        let output = orbit_ok(
+            McpWorkspace::orbit_command(&worker.work, &worker.home).args([
+                "tool",
+                "run",
+                tool,
+                "--input",
+                &input.to_string(),
+            ]),
+        );
+        let actual: Value = serde_json::from_slice(&output.stdout).expect("CLI owner response");
+        assert_eq!(
+            actual, expected,
+            "{tool}: CLI and MCP reach the same owner records"
+        );
+    }
+    for input in [
+        json!({"all_workspaces": true}),
+        json!({"allWorkspaces": "true"}),
+        json!({"workspaces": ["ws_other"]}),
+        json!({"workspace_scope": [owner_workspace_id]}),
+    ] {
+        let mut input = input;
+        input["query"] = json!("Remote worker route probe");
+        let refused = client.call_tool_err("orbit_search", input);
+        assert_eq!(refused["code"], "policy_denied", "{refused}");
+    }
+    for tool in ["orbit_search", "orbit_task_list"] {
+        let refused =
+            client.call_tool_err(tool, json!({"workspace": "ws_other", "query": "probe"}));
+        // Workspace-required tools may reject an unknown selector before the
+        // claim binding is resolved; neither refusal may return foreign records.
+        assert!(
+            matches!(
+                refused["code"].as_str(),
+                Some("policy_denied" | "invalid_input")
+            ),
+            "{refused}"
+        );
+    }
 
     // The worker reads the source before forwarding bytes to its remote owner.
     // MCP must trim even when an exact trailing-space sibling also exists.
