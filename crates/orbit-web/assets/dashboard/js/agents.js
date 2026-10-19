@@ -13,6 +13,7 @@
 
 import { el, syncNodes, fetchJson, getWindow, wireWindowSelector, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, bindTaskLink, formatDateTime } from './common.js';
 import { orchestratorsPanel } from './agents-orchestrators.js';
+import { implementersPanel } from './agents-implementers.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -27,6 +28,7 @@ const ROLE_LABELS = {
 // where `render` returns the panel's child nodes.
 const ROLE_PANELS = {
   orchestrators: orchestratorsPanel,
+  implementers: implementersPanel,
 };
 const NOT_SCORED_REASONS = {
   infrastructure: "rework caused by infrastructure",
@@ -498,6 +500,7 @@ function detailNode(row) {
   };
   stat(`${scorecard.unit[0].toUpperCase()}${scorecard.unit.slice(1)}`, String(row.units));
   for (const entry of Array.isArray(row.stats) ? row.stats : []) {
+    if (entry.key === "tier_comparison") continue; // Rendered in the role panel.
     stat(entry.label, typeof entry.value === "number" ? number(entry.value) : String(entry.value ?? "—"));
   }
   if (row.runs_without_model) stat("Runs with no model", String(row.runs_without_model));

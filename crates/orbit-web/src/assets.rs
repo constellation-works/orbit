@@ -127,6 +127,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/agents.js"),
     ),
     (
+        "/static/js/agents-implementers.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/agents-implementers.js"),
+    ),
+    (
         "/static/js/agents-orchestrators.js",
         JS,
         include_bytes!("../assets/dashboard/js/agents-orchestrators.js"),

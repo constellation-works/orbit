@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contracts::{InvocationQuery, JobRunQuery};
 use orbit_types::task::{
     GITHUB_PR_EXTERNAL_REF_SYSTEM, RegressionClassification, Task, TaskComment, TaskComplexity,
     TaskHistoryEntry, TaskOrigin, TaskRelationType, TaskStatus,
@@ -202,6 +202,7 @@ pub struct AgentFacts {
     pub(super) tasks_scanned: usize,
     pub(super) tasks: Vec<TaskFacts>,
     pub(super) charges: Vec<Charge>,
+    pub(super) run_costs: BTreeMap<String, Option<f64>>,
     pub(super) credits: Vec<Credit>,
 }
 
@@ -250,6 +251,7 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<AgentFacts, OrbitError> {
     }
 
     let mut runs = implementation_runs(runtime, horizon);
+    let run_costs = run_costs(runtime, horizon, computed_at);
     let settlements = failed_claim_settlements(runtime);
     let mut facts = Vec::new();
     for task in tasks {
@@ -284,8 +286,45 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<AgentFacts, OrbitError> {
         tasks_scanned,
         tasks: facts,
         charges,
+        run_costs,
         credits,
     })
+}
+
+/// The same provider/derived telemetry as Cost, grouped by workspace-local
+/// delivery run. Missing prices or a truncated read never become zero spend.
+fn run_costs(
+    runtime: &OrbitRuntime,
+    horizon: DateTime<Utc>,
+    until: DateTime<Utc>,
+) -> BTreeMap<String, Option<f64>> {
+    const LIMIT: usize = 100_000;
+    let records = match runtime.workspace_invocation_records(InvocationQuery {
+        since: Some(horizon),
+        until: Some(until),
+        limit: LIMIT,
+        ..Default::default()
+    }) {
+        Ok(records) if records.len() < LIMIT => records,
+        Ok(_) => {
+            tracing::warn!("agent scorecards: cost scan truncated; costs unavailable");
+            return BTreeMap::new();
+        }
+        Err(error) => {
+            tracing::warn!(%error, "agent scorecards: costs unreadable");
+            return BTreeMap::new();
+        }
+    };
+    let mut costs = BTreeMap::new();
+    for record in records {
+        let cost = record
+            .provider_cost_usd
+            .or(record.derived_cost_usd)
+            .filter(|cost| cost.is_finite() && *cost >= 0.0);
+        let total = costs.entry(record.job_run_id).or_insert(Some(0.0));
+        *total = total.zip(cost).map(|(sum, cost)| sum + cost);
+    }
+    costs
 }
 
 /// The implementation job runs active since `horizon`, by the task their

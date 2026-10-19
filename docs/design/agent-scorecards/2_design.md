@@ -18,11 +18,11 @@ related_artifacts: []
 
 This document is the target design for the Agents destination: one scorecard per agent role, ranked by crew and model. It is a **Draft** that becomes the description of current behaviour as the delivery tracks in §10 land. It fixes the attribution rules, the shared score, each role's terms, and the API payload first, so that every track builds against a stable contract.
 
-The core and dashboard tracks have landed. Sections marked **Current** describe the code: the destination and layout (§1, except the panels later tracks add), the ranking unit (§2), attribution (§3, except the problems later tracks add), the shared score (§4), the Orchestrators role (§5.1), the API (§6) and the scan and cache (§8). Everything else is the target. The view itself is described in [user-interface 2_design.md §5c](../user-interface/2_design.md#5c-observe--agents). Until the pilots track lands, the Task pilot ranking stays in Analytics › Codebase.
+The core and dashboard tracks have landed. Sections marked **Current** describe the code: the destination and layout (§1, except the panels later tracks add), the ranking unit (§2), attribution (§3, except the problems later tracks add), the shared score (§4), the Orchestrators and Implementers roles (§5.1–5.2), the API (§6) and the scan and cache (§8). Everything else is the target. The view itself is described in [user-interface 2_design.md §5c](../user-interface/2_design.md#5c-observe--agents). Until the pilots track lands, the Task pilot ranking stays in Analytics › Codebase.
 
 ## 1. Destination and Layout
 
-**Current**, except the Implementers, Reviewers and Pilots panels, the Reviewers banner and the move of the Task pilot ranking, which arrive with their roles.
+**Current**, except the Reviewers and Pilots panels, the Reviewers banner and the move of the Task pilot ranking, which arrive with their roles.
 
 **Agents** is a top-level Observe destination beside Health and Analytics. Its secondary tabs are its roles: **Orchestrators** (`#agents/orchestrators`, the default), **Implementers** (`#agents/implementers`), **Reviewers** (`#agents/reviewers`) and **Pilots** (`#agents/pilots`). Each tab shows its count of ranked rows. Navigation changes:
 
@@ -183,7 +183,36 @@ Shown, not scored:
 - tasks by tier;
 - first reviews needing changes compared with the average for the same tier. Rejects and repairs grow with complexity, so this is the fair comparison across pools that get different tiers. It stays unscored until a month of data shows its variance.
 
-The role panel plots each row's score against its cost per weighted landed task. A dashed line joins the rows that no other supported row beats on both.
+The public runtime scorecard and detail APIs return `status: ok`. Tasks count
+once per crew and model, even if that row ran them more than once in the
+window. First-pass credit uses the first settled review of that row's
+candidates; a later accept does not erase an earlier reject. Review verdicts
+enter their own terms once and are not added to crew rework. The shared
+attribution assigns `review_missed` to reviewers and `no_test` to the final
+implementer.
+
+The not-scored `stats` expose `cost_per_weighted_landed` in USD,
+`median_run_seconds` for completed implementation spans, `tasks_by_tier`,
+and structured `tier_comparison` rows. Cost sums the workspace's recorded
+invocations for the row's delivery runs (including delivery review and repair
+activities), counting each run once, using provider-reported cost when present
+and derived pricing otherwise, from the same telemetry as `/cost`. It divides
+by this row's weighted landed credit. Missing run telemetry, an unpriced
+invocation, a truncated cost scan, or no landed credit returns null, never
+zero. These are recorded costs as of the scan, not a final bill. Pulled work
+without local cost records remains unpriced.
+
+Each tier row reports implemented tasks, first reviews, those needing changes
+(`reject` or `accept_with_fixes`), their percentage, and the fleet percentage
+on the same tier, including this row. A task contributes its first review per
+crew and model; unreviewed tasks have a null rate.
+
+The role panel plots each priced row's score against cost per weighted landed
+task. A dashed line joins supported rows for which no other supported row has
+both an equal-or-higher score and equal-or-lower cost, with at least one strict
+improvement. Ties remain on the frontier; below-support rows are grey context
+and cannot set it. Missing costs are omitted from the plot. A per-tier table
+shows review rates beside the fleet rate and scrolls within its box on phones.
 
 ### 5.3 Reviewers
 
@@ -351,7 +380,8 @@ Each track updates the docs its change makes stale in the same PR. That includes
 
 - ORB-16952 — track B: the core scan, one-owner attribution, shared score, role registry with Orchestrators computed, and the `/api/agents` routes and cache.
 - ORB-16953 — track C: the Agents destination, its role tabs, the shared renderer and the orchestrators panel; retired Analytics › Orchestrators and `/api/orchestrators/*`.
-- ORB-16954, ORB-16955, ORB-16956 — tracks D, E and F: the Implementers, Reviewers and Pilots roles (planned).
+- ORB-16954 — track D: the Implementers role and cost/tier panel (current).
+- ORB-16955, ORB-16956 — tracks E and F: the Reviewers and Pilots roles (planned).
 - ORB-16957 — track G: CLI and MCP (planned).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

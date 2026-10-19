@@ -479,3 +479,6 @@ assert.equal(agents.getAgentsRole(), 'reviewers', 'an unknown role keeps the rol
 assert.equal(window.location.hash, '#agents/reviewers?window=7d', 'and names it in the hash');
 takeAll();
 console.log('dashboard agents ok');
+
+// Reuse this shell/DOM harness for role-specific public view behavior.
+export { agents, common, answer, takeAll, response, settle, part, click, selectButton, byId, pending, notComputed, attribution };

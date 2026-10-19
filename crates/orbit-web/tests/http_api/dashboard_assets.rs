@@ -62,7 +62,7 @@ fn agents_view_executes_selection_disclosure_states_and_redirect() {
     let result = std::process::Command::new("node")
         .args([
             "--experimental-vm-modules",
-            "tests/http_api/dashboard_agents.mjs",
+            "tests/http_api/dashboard_agents_implementers.mjs",
         ])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()

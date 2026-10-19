@@ -195,6 +195,172 @@ fn as_f64(value: &Value) -> f64 {
         .unwrap_or_else(|| panic!("a number: {value}"))
 }
 
+/// Costs and tier comparisons describe work without changing its score;
+/// the same crew's models remain separate through runtime and HTTP reads.
+#[test]
+fn implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cost() {
+    isolated(
+        "agents::implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cost",
+        || {
+            use orbit_core::InvocationInsertParams;
+            use orbit_core::application::agents::{AgentQuery, agent_detail, agent_scorecard};
+            use orbit_types::telemetry::InvocationTrace;
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let mut ids = Vec::new();
+            for (index, verdict) in ["accept", "accept_with_fixes"].iter().enumerate() {
+                let id = add(
+                    &fixture,
+                    Owned {
+                        title: verdict,
+                        orchestrator: None,
+                        origin: None,
+                        complexity: TaskComplexity::Medium,
+                        status: TaskStatus::Done,
+                        relations: vec![],
+                    },
+                );
+                let run = format!("jrun-model-{index}");
+                let model = format!("model-{index}");
+                let start = now - Duration::hours(3);
+                implementation_run(
+                    &fixture,
+                    &run,
+                    &id,
+                    "crew",
+                    Some(&model),
+                    start,
+                    now - Duration::hours(2),
+                );
+                append(
+                    &fixture,
+                    &id,
+                    start,
+                    "started",
+                    None,
+                    Some(TaskStatus::InProgress),
+                );
+                append(
+                    &fixture,
+                    &id,
+                    now - Duration::hours(2),
+                    "status_changed",
+                    None,
+                    Some(TaskStatus::Done),
+                );
+                comment(
+                    &fixture,
+                    &id,
+                    &format!(
+                        "before-PR review settled attempt `rv-{index}`: verdict **{verdict}**\n- Reviewer: crew `reviewer` (codex / review-model)"
+                    ),
+                );
+                fixture
+                    .runtime
+                    .insert_invocation_trace_record(&InvocationInsertParams {
+                        job_run_id: run,
+                        activity_id: "implement_one".into(),
+                        agent: "codex".into(),
+                        provider: None,
+                        model: Some(model),
+                        task_ids: vec![id.clone()],
+                        trace: InvocationTrace {
+                            provider_cost_usd: Some(6.0),
+                            ..Default::default()
+                        },
+                    })
+                    .unwrap();
+                ids.push(id);
+            }
+            let query = AgentQuery::parse(Some("30d"), Some(1)).unwrap();
+            let facts = fixture.runtime.agent_scan().unwrap();
+            let card = agent_scorecard(
+                &facts,
+                AgentRole::Implementers,
+                &query,
+                std::time::Duration::ZERO,
+            );
+            assert_eq!(card["status"], "ok");
+            let rows = card["rows"].as_array().unwrap();
+            assert_eq!(rows.len(), 2, "models are distinct even under one crew");
+            let stat = |row: &Value, key: &str| {
+                row["stats"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|stat| stat["key"] == key)
+                    .unwrap()["value"]
+                    .clone()
+            };
+            let accepted = rows.iter().find(|row| row["model"] == "model-0").unwrap();
+            let repaired = rows.iter().find(|row| row["model"] == "model-1").unwrap();
+            assert_eq!(accepted["counts"]["first_pass_accepts"], 1);
+            assert_eq!(repaired["counts"]["reviewer_repairs"], 1);
+            assert_eq!(repaired["counts"]["crew_rework"], 0);
+            assert!(
+                as_f64(&accepted["score"]) > as_f64(&repaired["score"]),
+                "an accepted candidate outranks one repaired by its reviewer"
+            );
+            for row in rows {
+                let weighted = as_f64(&row["counts"]["weighted_landed"]);
+                assert_eq!(stat(row, "cost_per_weighted_landed"), json!(6.0 / weighted));
+                assert_eq!(stat(row, "median_run_seconds"), 3600);
+                let tiers = stat(row, "tier_comparison");
+                assert_eq!(tiers[0]["tasks"], 1);
+                assert_eq!(tiers[0]["first_reviews"], 1);
+                assert_eq!(tiers[0]["fleet_needing_changes_percent"], 50);
+            }
+            assert_eq!(
+                stat(accepted, "tier_comparison")[0]["needing_changes_percent"],
+                0
+            );
+            assert_eq!(
+                stat(repaired, "tier_comparison")[0]["needing_changes_percent"],
+                100
+            );
+            fixture
+                .runtime
+                .insert_invocation_trace_record(&InvocationInsertParams {
+                    job_run_id: "jrun-model-0".into(),
+                    activity_id: "implement_one".into(),
+                    agent: "codex".into(),
+                    provider: None,
+                    model: Some("model-0".into()),
+                    task_ids: vec![ids[0].clone()],
+                    trace: InvocationTrace {
+                        provider_cost_usd: Some(12.0),
+                        ..Default::default()
+                    },
+                })
+                .unwrap();
+            let next_facts = fixture.runtime.agent_scan().unwrap();
+            let detail = agent_detail(
+                &next_facts,
+                AgentRole::Implementers,
+                &query,
+                "crew",
+                Some("model-0"),
+                std::time::Duration::ZERO,
+            )
+            .unwrap();
+            assert_eq!(
+                detail["row"]["score"], accepted["score"],
+                "cost never enters the score"
+            );
+            assert_eq!(
+                stat(&detail["row"], "cost_per_weighted_landed"),
+                json!(18.0 / as_f64(&accepted["counts"]["weighted_landed"]))
+            );
+            let server = fixture.server(false);
+            let http = json_ok(server.get(&format!(
+                "/api/agents/implementers/detail?{WS}&crew=crew&model=model-0&min_support=1"
+            )));
+            assert_eq!(http["status"], "ok");
+            assert_eq!(http["row"], detail["row"]);
+        },
+    );
+}
+
 /// One fixture workspace, read through the runtime API and the routes: every
 /// problem has exactly one owner or a Not scored reason and the attribution
 /// totals are the problems behind the four roles; a task two crews worked
@@ -600,6 +766,57 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 "only the final run is credited"
             );
 
+            let query =
+                orbit_core::application::agents::AgentQuery::parse(Some("30d"), Some(1)).unwrap();
+            let implemented = orbit_core::application::agents::agent_scorecard(
+                &facts,
+                AgentRole::Implementers,
+                &query,
+                std::time::Duration::ZERO,
+            );
+            assert_eq!(implemented["status"], "ok");
+            let sol = implemented["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["crew"] == "sol")
+                .unwrap();
+            assert_eq!(sol["units"], 2);
+            assert_eq!(
+                sol["counts"]["escaped_regressions"], 1,
+                "only no_test reaches the implementer; review_missed is the reviewer's"
+            );
+            assert_eq!(sol["counts"]["review_rejects"], 1);
+            assert_eq!(
+                sol["counts"]["first_pass_accepts"], 0,
+                "a later accept does not erase the first reject"
+            );
+            assert_eq!(
+                sol["counts"]["crew_rework"], 0,
+                "the review reject is not also crew rework"
+            );
+            let luna = implemented["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["crew"] == "luna")
+                .unwrap();
+            assert_eq!(
+                luna["counts"]["weighted_landed"], 0,
+                "landed credit goes only to the final implementer"
+            );
+            assert_eq!(luna["counts"]["crew_rework"], 2);
+            let cost = sol["stats"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|stat| stat["key"] == "cost_per_weighted_landed")
+                .unwrap();
+            assert!(
+                cost["value"].is_null(),
+                "missing telemetry is not free work"
+            );
+
             // The routes: the first request scans, every later selection is
             // served from that scan.
             let server = fixture.counted_task_server();
@@ -727,7 +944,7 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 "a run without a model is `model unknown`: {strip}"
             );
 
-            for role in ["implementers", "reviewers", "pilots"] {
+            for role in ["reviewers", "pilots"] {
                 let payload = json_ok(server.get(&format!(
                     "/api/agents/{role}/scorecard?{WS}&window=all&min_support=1"
                 )));
@@ -758,7 +975,7 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 format!("/api/agents/orchestrators/scorecard?{WS}&min_support=0"),
                 format!("/api/agents/orchestrators/detail?{WS}"),
                 format!("/api/agents/orchestrators/detail?{WS}&crew=nobody"),
-                format!("/api/agents/implementers/detail?{WS}&crew=sol"),
+                format!("/api/agents/implementers/detail?{WS}&crew=nobody"),
                 format!("/api/agents/attribution?{WS}&window=1y"),
             ] {
                 assert_eq!(server.get(&refused).status().as_u16(), 400, "{refused}");
