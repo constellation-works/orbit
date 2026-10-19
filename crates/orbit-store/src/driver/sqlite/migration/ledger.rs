@@ -550,12 +550,18 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_forecast_attribution,
     },
+    Migration {
+        version: 54,
+        name: "retention_analytics",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_retention_analytics,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 53;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 54;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

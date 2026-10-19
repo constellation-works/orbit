@@ -179,6 +179,11 @@ pub(super) fn resolve_retention_days(
 ) -> Result<u32, OrbitError> {
     const MAX_DAYS: u32 = 36_500;
     match raw {
+        Some(value) if key == "retention.runs_days" && value < 30 => {
+            Err(OrbitError::InvalidInput(format!(
+                "{key} has invalid value {value}; expected 30..={MAX_DAYS}: Reliability Pipeline echo dedupe and forecast-accuracy per-drain limiter shares require 30 days of run state"
+            )))
+        }
         Some(value) if value == 0 || value > MAX_DAYS => Err(OrbitError::InvalidInput(format!(
             "{key} has invalid value {value}; expected 1..={MAX_DAYS}"
         ))),

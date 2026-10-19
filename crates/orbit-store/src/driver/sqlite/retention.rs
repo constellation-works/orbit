@@ -73,6 +73,31 @@ const JOURNAL_CANDIDATES_SQL: &str = "\
     ORDER BY settled_at, journal_id";
 
 impl StoreRetentionBackend for Store {
+    fn list_task_lock_denials(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<crate::contracts::TaskLockDenialRecord>, OrbitError> {
+        let conn = self.read()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT execution_id, timestamp, job_run_id, arguments_json
+             FROM task_lock_denials WHERE workspace_id = ?1 ORDER BY timestamp, execution_id",
+            )
+            .map_err(sqlite_store_error)?;
+        stmt.query_map([workspace_id], |row| {
+            let timestamp: String = row.get(1)?;
+            Ok(crate::contracts::TaskLockDenialRecord {
+                execution_id: row.get(0)?,
+                timestamp: crate::parse_timestamp(&timestamp)?,
+                job_run_id: row.get(2)?,
+                arguments_json: row.get(3)?,
+            })
+        })
+        .map_err(sqlite_store_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sqlite_store_error)
+    }
+
     fn distinct_workspace_ids(&self, source: RetentionIdSource) -> Result<Vec<String>, OrbitError> {
         let conn = self.read()?;
         distinct_workspace_ids(&conn, source)

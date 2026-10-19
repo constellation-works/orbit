@@ -712,3 +712,32 @@ pub(super) fn error_code(response: Response, status: u16, code: &str) -> Value {
     assert_eq!(value["code"], json!(code), "{value}");
     value
 }
+
+/// Restore the pre-retention-analytics store shape so the public open path
+/// must backfill existing rows. Fixture-only; every caller runs in a child.
+pub(super) fn rewind_retention_analytics(fixture: &Fixture) {
+    fixture
+        .runtime
+        .sqlite_store()
+        .unwrap()
+        .with_transaction(|tx| {
+            tx.connection()
+                .execute_batch(
+                    "DROP TRIGGER retain_task_lock_denial;
+             DROP TRIGGER retain_run_commit_insert;
+             DROP TRIGGER retain_run_commit_update;
+             DROP TABLE task_lock_denials;
+             ALTER TABLE job_runs DROP COLUMN commit_decision;
+             ALTER TABLE job_runs DROP COLUMN commit_committed;
+             DELETE FROM schema_meta WHERE key = 'migration.v0054';",
+                )
+                .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// Run pending store migrations through the production open boundary.
+pub(super) fn upgrade_retention_analytics(fixture: &Fixture) {
+    orbit_store::Store::open(&fixture.global.join("orbit.db")).unwrap();
+}

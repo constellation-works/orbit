@@ -2440,3 +2440,101 @@ fn codebase_task_pilot_grades_each_crew_against_landed_diffs() {
         },
     );
 }
+
+#[test]
+fn lock_contention_survives_audit_gc_and_upgrade_backfill() {
+    isolated(
+        "codebase::lock_contention_survives_audit_gc_and_upgrade_backfill",
+        || {
+            let fixture = Fixture::new();
+            let at = Utc::now() - Duration::days(75);
+            reserve(&fixture, "old-reservation", "HF-1", &["src/shared.rs"], at);
+            super::support::rewind_retention_analytics(&fixture);
+            // These old rows predate the upgrade; unscoped and foreign rows must
+            // not become local evidence merely because they name the same path.
+            for (index, workspace) in [
+                (0, Some("ws_http_fixture")),
+                (1, None),
+                (2, Some("foreign")),
+            ] {
+                lock_denial_in_workspace(
+                    &fixture,
+                    index,
+                    Some("HF-2"),
+                    None,
+                    "src/shared.rs",
+                    workspace,
+                );
+            }
+            fixture
+                .runtime
+                .sqlite_store()
+                .unwrap()
+                .with_transaction(|tx| {
+                    tx.connection()
+                        .execute("UPDATE audit_events SET timestamp = ?1", [at.to_rfc3339()])
+                        .map_err(|error| OrbitError::Store(error.to_string()))?;
+                    Ok(())
+                })
+                .unwrap();
+            super::support::upgrade_retention_analytics(&fixture);
+            super::support::upgrade_retention_analytics(&fixture); // backfill runs once
+            // A post-upgrade attempt exercises the ongoing durable write, too.
+            lock_denial(&fixture, 3, Some("HF-3"), None, "src/shared.rs");
+            let read = |window: &str| {
+                // A fresh server avoids the dashboard facts cache masking a prune.
+                json_ok(fixture.server(false).get(&format!(
+                    "/api/codebase/analytics?{WS}&window={window}&min_support=1"
+                )))["lock_contention"]
+                    .clone()
+            };
+            let before: Vec<_> = ["90d", "all"].map(read).into();
+            for section in &before {
+                let lock = row(section, "src/shared.rs").unwrap();
+                assert_eq!(
+                    lock["denials"], 2,
+                    "backfill is idempotent and captures new denials"
+                );
+                assert_eq!(lock["reservations"], 1);
+                assert_eq!(lock["numerator"], 2);
+                assert_eq!(lock["denominator"], 3);
+            }
+            let gc = fixture.runtime.gc_audit(true, Some(60)).unwrap();
+            assert_eq!(gc.tables[0].rows_removed, 3);
+            for (window, expected) in ["90d", "all"].into_iter().zip(before) {
+                let after = read(window);
+                let (after_rows, expected_rows) = (
+                    row(&after, "src/shared.rs").unwrap(),
+                    row(&expected, "src/shared.rs").unwrap(),
+                );
+                assert_eq!(after_rows["wait"]["episodes"], 2, "{after}");
+                assert_eq!(after_rows["wait"]["waiting"], 2, "{after}");
+                assert!(
+                    after_rows["wait"]["total_ms"].as_i64()
+                        >= expected_rows["wait"]["total_ms"].as_i64(),
+                    "an open wait still measures from its pruned denial: {after}"
+                );
+                assert_eq!(
+                    without_open_wait_durations(after),
+                    without_open_wait_durations(expected),
+                    "denial counts and rates survive audit GC"
+                );
+            }
+        },
+    );
+}
+
+/// `section` without wait durations, which grow with the scan time while a
+/// task is still waiting, so two reads compare only what the prune can change.
+fn without_open_wait_durations(mut section: Value) -> Value {
+    for rows in ["rows", "rows_by_wait"] {
+        for row in section[rows].as_array_mut().into_iter().flatten() {
+            if let Some(wait) = row["wait"].as_object_mut() {
+                for duration in ["median_ms", "max_ms", "total_ms"] {
+                    wait.remove(duration);
+                }
+            }
+        }
+    }
+    section
+}
