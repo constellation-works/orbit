@@ -168,11 +168,23 @@ impl Fixture {
         fixture
     }
 
-    /// Run `orbit` with pinned identity and geometry so the only remaining
-    /// non-determinism is timestamps and the workspace's own temp paths,
-    /// both handled by [`redact`]. `extra_env` layers on top for the
-    /// color-configuration sweep.
+    /// Run `orbit` with pinned identity and geometry. `extra_env` layers on
+    /// top for the color-configuration sweep.
     fn run(&self, args: &[&str], extra_env: &[(&str, &str)]) -> std::process::Output {
+        let output = self.run_output(args, extra_env);
+        assert!(
+            output.status.success(),
+            "`orbit {}` failed\nstdout:\n{}\nstderr:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    }
+
+    /// Run `orbit` without asserting success for public-boundary rejection
+    /// cases.
+    fn run_output(&self, args: &[&str], extra_env: &[(&str, &str)]) -> std::process::Output {
         let mut command = cargo_bin_cmd!("orbit");
         // ORB-11300: one shared list, so this fixture and its siblings cannot
         // drift apart on which ambient variable still routes a write. The
@@ -194,15 +206,7 @@ impl Fixture {
         for (key, value) in extra_env {
             command.env(key, value);
         }
-        let output = command.args(args).output().expect("run orbit");
-        assert!(
-            output.status.success(),
-            "`orbit {}` failed\nstdout:\n{}\nstderr:\n{}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        output
+        command.args(args).output().expect("run orbit")
     }
 
     fn redact(&self, text: &str) -> String {
@@ -1133,6 +1137,60 @@ fn config_reference_lists_every_registry_key() {
         "reference/config.md `Settable keys` table diverges from `orbit config keys`: \
          keys missing from the page {missing:?}; page rows with no registry key {stale:?}"
     );
+}
+
+/// The published answer-cap range must describe the values `orbit config set`
+/// accepts, including both inclusive endpoints and their adjacent rejections.
+#[test]
+fn config_reference_max_answer_bytes_matches_cli_bounds() {
+    const KEY: &str = "workflow.explore.max_answer_bytes";
+
+    let page = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../website/src/content/docs/reference/config.md");
+    let page = std::fs::read_to_string(&page)
+        .unwrap_or_else(|error| panic!("read {}: {error}", page.display()));
+    let row = page
+        .lines()
+        .find(|line| line.starts_with("| `workflow.explore.max_answer_bytes` |"))
+        .expect("config reference has a max_answer_bytes row");
+    let range = Regex::new(r"\(`(\d+)`(?:–|-|—)`(\d+)`\)").expect("range regex");
+    let captures = range
+        .captures(row)
+        .expect("max_answer_bytes row documents an inclusive numeric range");
+    let minimum: u64 = captures[1].parse().expect("numeric minimum");
+    let maximum: u64 = captures[2].parse().expect("numeric maximum");
+    assert!(minimum <= maximum, "documented minimum exceeds maximum");
+
+    let below_minimum = minimum
+        .checked_sub(1)
+        .expect("max_answer_bytes minimum must be positive");
+    let above_maximum = maximum
+        .checked_add(1)
+        .expect("max_answer_bytes maximum leaves room for an adjacent value");
+    let fixture = Fixture::new();
+    for (index, (value, accepted)) in [
+        (minimum, true),
+        (below_minimum, false),
+        (maximum, true),
+        (above_maximum, false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let value = value.to_string();
+        let mut args = vec!["config", "set"];
+        if index == 0 {
+            args.push("--fresh");
+        }
+        args.extend([KEY, value.as_str()]);
+        let output = fixture.run_output(&args, &[]);
+        assert_eq!(
+            output.status.success(),
+            accepted,
+            "published bounds must match `orbit config set` for {KEY}={value}; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 /// Inventory of record-output conversions in this change, and the remaining
