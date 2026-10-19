@@ -234,7 +234,7 @@ Tests that call a supervisor directly are left out.
 
 | Caller | Entry point | What it needs |
 |--------|-------------|---------------|
-| `orbit-core/src/runtime/task_pr_forge.rs` | `run_process` | Deadline, fail-at-limit capture, signal fan-out |
+| `orbit-core/src/runtime/task/pr_forge.rs` | `run_process` | Deadline, fail-at-limit capture, signal fan-out |
 | `orbit-core/src/application/review/fulfilment/codeql.rs` | `run_process` (CodeQL evidence sandbox) | Sandbox spawn, deadline, capture, signal fan-out |
 | `orbit-tools/src/external.rs`, `builtin/proc/spawn.rs` (`proc.spawn`) | `run_process` | Stdin payload, deadline, capture, debug echo |
 | `orbit-tools/src/builtin/github/{common,auth,logs}.rs` | `run_process`; `run_process_streaming_stdout` (logs) | Deadline, capture or stdout relay, typed capture-limit stop |
