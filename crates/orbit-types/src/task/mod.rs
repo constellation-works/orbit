@@ -85,7 +85,10 @@ pub use readiness::{
     task_readiness_json,
 };
 pub use receipt::CommentReceipt;
-pub use regression::{RegressionClassification, RegressionEscape, RegressionNature};
+pub use regression::{
+    REGRESSION_RISK_MARKED_EVENT, RegressionClassification, RegressionEscape, RegressionNature,
+    RegressionRiskMarks,
+};
 pub use show_fields::{
     TASK_SHOW_DELIVERY_FIELD, TASK_SHOW_PROJECTION_FIELDS, TASK_SHOW_PROJECTION_FIELDS_CSV,
     TASK_SHOW_PUBLIC_DTO_FIELDS, is_task_show_projection_field, refuses_implementer_writes,

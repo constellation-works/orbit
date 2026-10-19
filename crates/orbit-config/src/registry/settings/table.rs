@@ -21,9 +21,10 @@ use super::resolve::{
     resolve_host_shutdown_hold_minutes, resolve_light_delivery_paths, resolve_machine_id,
     resolve_machine_name, resolve_material_fields, resolve_memory_limit,
     resolve_mid_run_steering_max_rounds, resolve_non_empty, resolve_optional_choice,
-    resolve_optional_non_empty, resolve_percent, resolve_reclaim, resolve_retention_days,
-    resolve_task_prefix, resolve_unlocked_context_paths, resolve_unlocked_path_validation_commands,
-    resolve_validation_path_mode, resolve_worker_tasks_max,
+    resolve_optional_non_empty, resolve_percent, resolve_reclaim, resolve_regression_risk_bound,
+    resolve_retention_days, resolve_task_prefix, resolve_unlocked_context_paths,
+    resolve_unlocked_path_validation_commands, resolve_validation_path_mode,
+    resolve_worker_tasks_max,
 };
 use crate::memory_limit::MemoryLimit;
 use crate::operation;
@@ -591,6 +592,40 @@ define_config_settings! {
         section: ConfigSection::Delivery, order: 141,
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u8>| resolve_mid_run_steering_max_rounds(raw),
+    },
+    workflow_regression_risk_enabled: bool => bool {
+        key: "workflow.regression_risk.enabled", value_type: "bool",
+        description: "Mark regression-prone context files in implement and review prompts.",
+        section: ConfigSection::Delivery, order: 150,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
+    },
+    workflow_regression_risk_window_days: u32 => u32 {
+        key: "workflow.regression_risk.window_days", value_type: "integer",
+        description: "Trailing days of delivered tasks a regression-risk mark is computed over.",
+        section: ConfigSection::Delivery, order: 151,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<u32>| resolve_regression_risk_bound(raw, 30, 365, "workflow.regression_risk.window_days"),
+    },
+    workflow_regression_risk_min_support: u32 => u32 {
+        key: "workflow.regression_risk.min_support", value_type: "integer",
+        description: "Touching tasks a file needs in the window before it can be marked.",
+        section: ConfigSection::Delivery, order: 152,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<u32>| resolve_regression_risk_bound(raw, 5, 10_000, "workflow.regression_risk.min_support"),
+    },
+    workflow_regression_risk_threshold_percent: u8 => u8 {
+        key: "workflow.regression_risk.threshold_percent", value_type: "integer",
+        description: "Share of a file's touching tasks that regressed, in percent, that marks it.",
+        section: ConfigSection::Delivery, order: 153,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<u8>| resolve_percent(raw, 40, "workflow.regression_risk.threshold_percent"),
+    },
+    workflow_regression_risk_max_files: u32 => u32 {
+        key: "workflow.regression_risk.max_files", value_type: "integer",
+        description: "Most context files one prompt marks, highest regression rate first.",
+        section: ConfigSection::Delivery, order: 154,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<u32>| resolve_regression_risk_bound(raw, 3, 20, "workflow.regression_risk.max_files"),
     },
     workflow_provider_limit_budgets: Vec<String> => Vec<String> {
         key: "workflow.provider_limit_budgets", value_type: "array<string>",

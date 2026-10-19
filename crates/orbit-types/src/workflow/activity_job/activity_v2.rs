@@ -55,6 +55,12 @@ pub struct AgentLoopSpec {
     /// instruction is byte-identical to `instruction` alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steering_instruction: Option<String>,
+    /// How the agent acts on the task context's `regression_risk` marks,
+    /// appended to the instruction only when the host marked a context file
+    /// for this prompt. Declaring it is what asks the host for marks; absent,
+    /// or with nothing marked, the rendered instruction is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regression_risk_instruction: Option<String>,
     /// Tool allowlist (§6). Custom activities keep this exact allowlist
     /// contract. An empty list with no `tool_disallow_list` is deprecated:
     /// asset load warns and enforcement keeps its legacy behaviour until the

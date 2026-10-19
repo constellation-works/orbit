@@ -57,6 +57,11 @@ The common `agent_loop` fields are:
   templates consume structured response fields)
 - `require_completion_envelope` (default `true`; opt **out** only for an
   activity whose non-completion is harmless — see §7.6a)
+- optional `regression_risk_instruction` (declaring it asks the host, through
+  `RuntimeHost::regression_risk_for_agent_input`, for the task's
+  regression-risk marks; the engine adds them to the envelope's task snapshot
+  as `regression_risk` and appends this text only when a path is marked — see
+  [`[workflow.regression_risk]`](../../CONFIG.md#workflowregression_risk--regression-prone-context-files-in-prompts))
 
 A former `Groundhog(GroundhogSpec)` variant (a sibling activity kind from [T20260420-0510-2]) was removed as unused in [ORB-10332]; activity specs are now only `agent_loop` and `deterministic`.
 

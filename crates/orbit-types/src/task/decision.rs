@@ -15,7 +15,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{ContextFilesWidening, TaskStatus};
+use super::{ContextFilesWidening, RegressionRiskMarks, TaskStatus};
 use crate::workflow::{FlakyValidation, HeldCandidate, KnownRedValidation};
 
 /// History event the final-recovery applier records its decision on.
@@ -65,6 +65,9 @@ pub enum TaskDecision {
     /// Tests a candidate failed and then passed in one isolated replay,
     /// recorded on the `flaky_validation` event.
     FlakyValidation(FlakyValidation),
+    /// Context files a prompt marked as regression-prone, recorded on the
+    /// `regression_risk_marked` event.
+    RegressionRiskMarked(RegressionRiskMarks),
 }
 
 /// What the final-recovery applier did with a decision.

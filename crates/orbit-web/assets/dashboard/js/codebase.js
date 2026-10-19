@@ -810,7 +810,56 @@ function regressionBreakdowns(data) {
     sliceNode(regressions.by_complexity, "complexity", "complexities", "Regression rate by complexity", data.min_support),
   ]));
   node.appendChild(note("Rates are done tasks a matching regression named ÷ done tasks, by the regressed task's crew (else its implementer) and complexity. Crews take different complexity tiers, so compare crews within a tier."));
+  node.appendChild(riskMarksNode(data));
   return node;
+}
+
+// A rate with the counts behind it, so a small sample reads as one.
+function sampleNode(rates) {
+  const denominator = Number(rates && rates.denominator) || 0;
+  if (!denominator) return el("td", { class: "codebase-risk-none", text: "no tasks" });
+  return el("td", {}, [
+    el("span", { class: "codebase-rate", text: pct(rates.rate) }),
+    " ",
+    el("span", { class: "codebase-frac", text: `${count(rates.numerator)}/${count(denominator)}` }),
+  ]);
+}
+
+/// Regression-risk marks: the marked paths' regression rate for tasks
+/// delivered with marks against the same paths before the first mark.
+function riskMarksNode(data) {
+  const marks = section(data, "regressions").risk_marks || {};
+  const block = el("div", { class: "codebase-slice codebase-risk-marks" }, [el("p", { class: "codebase-eyebrow", text: "Regression-risk marks: with marks vs before" })]);
+  if (!marks.enabled_at) {
+    block.appendChild(note("No implement or review prompt has marked a regression-prone file yet, so there is nothing to compare."));
+    return block;
+  }
+  const header = (text, scope) => {
+    const cell = el("th", { text });
+    cell.setAttribute("scope", scope);
+    return cell;
+  };
+  const rowNode = (label, row, total) => {
+    const name = header(total ? label : "", "row");
+    if (!total) name.appendChild(pathNode(label));
+    const item = el("tr", { class: total ? "codebase-risk-total" : "" }, [
+      name,
+      sampleNode(row.with_marks),
+      sampleNode(row.before),
+    ]);
+    item.dataset.path = total ? "" : label;
+    return item;
+  };
+  const body = el("tbody", {}, [
+    rowNode(`All ${plural(marks.marked_paths, "marked path")}`, marks, true),
+    ...(Array.isArray(marks.rows) ? marks.rows : []).map((row) => rowNode(row.path, row, false)),
+  ]);
+  const head = el("tr", {}, [header("", "col"), header("With marks", "col"), header(`${count(marks.window_days)} days before`, "col")]);
+  block.appendChild(el("div", { class: "codebase-crosstab-scroll" }, [
+    el("table", { class: "codebase-risk-table", "aria-label": "Regression rate on marked paths with marks and before" }, [el("thead", {}, [head]), body]),
+  ]));
+  block.appendChild(note(`With marks: done tasks in this window whose implement or review prompt marked the path, regressed ÷ marked. Before: done tasks that touched the path in the ${count(marks.window_days)} days before the first mark (${String(marks.enabled_at).slice(0, 10)}). Recent tasks have had less time to be named by a regression.`));
+  return block;
 }
 
 function definitionsNode() {

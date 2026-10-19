@@ -470,6 +470,14 @@ tr.audit-detail-row td {
 .codebase-crosstab td[data-level="3"] { background: rgba(255, 122, 107, 0.4); color: var(--fg); }
 .codebase-crosstab td[data-level="4"] { background: rgba(255, 122, 107, 0.6); color: #fff; font-weight: 600; }
 .codebase-slice .codebase-crew-row { grid-template-columns: minmax(64px, 120px) minmax(0, 1fr) 48px 60px; }
+.codebase-risk-table { border-collapse: collapse; font-size: 12px; }
+.codebase-risk-table th { padding: 4px 8px; font-weight: 500; color: var(--fg-mute); text-align: left; text-transform: none; letter-spacing: normal; }
+.codebase-risk-table thead th { white-space: nowrap; }
+.codebase-risk-table td { padding: 5px 8px; border-top: 1px solid #1f252d; white-space: nowrap; color: var(--fg-dim); }
+.codebase-risk-table tbody th { border-top: 1px solid #1f252d; max-width: 360px; overflow-wrap: anywhere; }
+.codebase-risk-table .codebase-risk-total th { color: var(--fg); }
+.codebase-risk-table .codebase-frac { font-family: var(--font-mono); color: var(--fg-mute); }
+.codebase-risk-none { font-style: italic; }
 
 @media (max-width: 520px) {
   .codebase-head { padding: 12px; }

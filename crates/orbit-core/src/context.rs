@@ -458,6 +458,9 @@ pub(crate) struct OrbitRuntimeSettings {
     /// `workflow.light_delivery_paths`: the paths a `skip-review` or
     /// `skip-validation` candidate may change [ORB-16855].
     light_delivery_paths: Vec<String>,
+    /// `[workflow.regression_risk]`: whether implement and review prompts
+    /// mark regression-prone context files, and the gates for a mark.
+    regression_risk: orbit_config::RegressionRiskSettings,
 }
 
 impl OrbitRuntimeSettings {
@@ -496,6 +499,7 @@ impl OrbitRuntimeSettings {
         unlocked_path_validation_commands: Vec<String>,
         generated_paths: std::collections::BTreeMap<String, String>,
         light_delivery_paths: Vec<String>,
+        regression_risk: orbit_config::RegressionRiskSettings,
     ) -> Self {
         Self {
             persistence,
@@ -531,7 +535,12 @@ impl OrbitRuntimeSettings {
             unlocked_path_validation_commands,
             generated_paths,
             light_delivery_paths,
+            regression_risk,
         }
+    }
+
+    pub(crate) fn regression_risk(&self) -> orbit_config::RegressionRiskSettings {
+        self.regression_risk
     }
 
     pub(crate) fn mid_run_steering(&self) -> orbit_config::MidRunSteeringSettings {

@@ -61,6 +61,29 @@ use super::evidence::{
 /// staleness of `last_activity_at` and the progress rows one invocation writes.
 const PROVIDER_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
 
+/// Add the host's `regression_risk` marks to the task snapshot of an
+/// activity that declares how to act on them, and return that instruction
+/// when it did. An activity without one, a prompt with no task snapshot, or
+/// a task with nothing marked leaves the snapshot and instruction as they
+/// are.
+fn attach_regression_risk<'a>(
+    host: &dyn RuntimeHost,
+    spec: &'a AgentLoopSpec,
+    run_id: &str,
+    activity_name: &str,
+    input: &Value,
+    task_ctx: Option<&mut Value>,
+) -> Option<&'a str> {
+    let instruction = spec
+        .regression_risk_instruction
+        .as_deref()
+        .filter(|instruction| !instruction.trim().is_empty())?;
+    let context = task_ctx?.as_object_mut()?;
+    let marks = host.regression_risk_for_agent_input(run_id, activity_name, input)?;
+    context.insert("regression_risk".to_string(), marks);
+    Some(instruction)
+}
+
 /// Run a catalog activity on behalf of a pipeline step whose id differs from
 /// the activity name. Policy and broker authorization use `activity_name`;
 /// audit labels and worktree-boundary reports use `step_id`.
@@ -113,7 +136,9 @@ pub(crate) fn run_cli_backend_for_step(
         omitted_requirement_notes: activity_tools.omitted_requirement_notes.clone(),
     });
 
-    let task_ctx = host.task_context_for_agent_input(run_id, step_id, input)?;
+    let mut task_ctx = host.task_context_for_agent_input(run_id, step_id, input)?;
+    let regression_risk_instruction =
+        attach_regression_risk(host, spec, run_id, activity_name, input, task_ctx.as_mut());
     let tool_ctx = activity_tool_context(host, spec, run_id, fs_profile, &provider);
     // A shipment pipeline renders the assigned checkout twice: once as the
     // child cwd and once inside the agent contract. Validate that pair against
@@ -156,6 +181,10 @@ pub(crate) fn run_cli_backend_for_step(
     if let Some(tools) = &inspection_tools {
         envelope_spec.instruction.push_str("\n\n");
         envelope_spec.instruction.push_str(tools.instruction);
+    }
+    if let Some(instruction) = regression_risk_instruction {
+        envelope_spec.instruction.push_str("\n\n");
+        envelope_spec.instruction.push_str(instruction);
     }
     // Trusted per-tag guidance goes last, after every built-in rule it may
     // not override. The audit row names what the prompt carried.

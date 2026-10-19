@@ -512,6 +512,41 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.regression_risk.enabled": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.regression_risk.max_files": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.regression_risk.min_support": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.regression_risk.threshold_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.regression_risk.window_days": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.required_validation_commands": {
       "scope": "built-in",
       "state": "default",

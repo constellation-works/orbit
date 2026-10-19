@@ -514,6 +514,24 @@ pub(crate) fn resolve_percent(raw: Option<u8>, default: u8, key: &str) -> Result
     }
 }
 
+/// A `workflow.regression_risk.*` count: `default` when unset, else
+/// `1..=max`.
+pub(super) fn resolve_regression_risk_bound(
+    raw: Option<u32>,
+    default: u32,
+    max: u32,
+    key: &str,
+) -> Result<u32, OrbitError> {
+    let value = raw.unwrap_or(default);
+    if (1..=max).contains(&value) {
+        Ok(value)
+    } else {
+        Err(OrbitError::InvalidInput(format!(
+            "{key} has invalid value {value}; expected 1..={max}"
+        )))
+    }
+}
+
 /// Admit output locators without allowing them to replace execution identity.
 pub(super) fn resolve_build_output_env(
     raw: Option<Vec<String>>,
