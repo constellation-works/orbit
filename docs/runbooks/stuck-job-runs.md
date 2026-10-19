@@ -209,10 +209,14 @@ leaf's text. Codes come from recorded error codes or the terminal run state,
 never from command output. Required-validation messages contain a bounded
 summary and task artifact paths for the candidate and base logs; read those
 artifacts for the captured output. A run that failed on its own has `root_cause: null`. So one failed delivery no longer
-reads as three failures: `orbit run history --state failed --incidents` shows one row per
+reads as three failures. `orbit run history --state failed --incidents` shows one row per
 incident, the leaf when it is listed, and the CASCADED column (`--json`: `cascaded_run_ids`)
-counts the parents folded into it. A parent whose waited-on children were all cancelled ends
-`cancelled`, not `failed`.
+counts the parents folded into it. `orbit run history --failures` folds further, to one row
+per task and root cause: `RUN_ID` is the root-cause run even when that run is outside the
+page, `STEP` and `CREW` are that run's, `CAUSE` is its error's first line with no
+60-character cap, and `SHOW` is `orbit run show` for that run. `--json` is
+`{"failures":[...]}`. It cannot be combined with `--incidents`. A parent whose waited-on
+children were all cancelled ends `cancelled`, not `failed`.
 
 The dashboard's run detail follows that same child-dispatch chain in one response.
 The failure box links every run id and task id in the message and adds a Root cause
@@ -222,9 +226,14 @@ who cancelled it, when, and the recorded reason, or says `no reason recorded`.
 An auto drain dispatches its leaves detached and never observes their outcomes, so the drain's
 own `State: success` only means the coordinator ran. `orbit run show <drain-run-id>` adds a
 `Leaves:` line (admitted, succeeded, failed, running, cancelled), a `WARNING:` with each failed
-leaf, its task, error, and the `orbit job resume <leaf-run-id>` that retries it, and a
-`Still waiting:` block naming the backlog tasks the drain's last pass never started and what
-blocked them. `--json` carries the same in `drain_summary` (null for a run that is not a drain).
+leaf, and a `Still waiting:` block naming the backlog tasks the drain's last pass never started
+and what blocked them. The failed-leaf line names the root-cause run (the same id a retry would
+resume), the task, that task's current status, the leaf's state, and its error. The retry line
+is printed only while a named task is still `blocked` or its status cannot be read; a task that
+was readmitted or completed no longer gets `orbit job resume` advice. `--json` carries the same
+in `drain_summary` (null for a run that is not a drain): `run_id` stays the dispatched leaf and
+`resume_run_id` is the root-cause run. The `Resume:` line on a failed run's own header is
+unchanged: it names the child that did the work when the run being shown is itself resumable.
 
 A run parked on task locks shows `Waiting on locks: file:src/lib.rs (held by ORB-1)`. The run
 persists only the selectors; `orbit run show` resolves the holder from the live lock projection

@@ -22,7 +22,7 @@ Only *flexible* columns are ever truncated — fixed columns render whole or are
 | `orbit auto-task list` | `TITLE` | `orbit auto-task show <name>` |
 | `orbit task list` | `TITLE` | `orbit task show <id>` |
 | `orbit job list` | `TARGET_ID` | `orbit job show <job_id>` |
-| `orbit run history` | — (fixed columns) | `orbit run show <run_id>` (task titles, full errors), `orbit run show <run_id> -s <step>` |
+| `orbit run history` | `ERROR` (already capped at 60 characters), and with `--failures` the flexible `CAUSE` column | `orbit run show <run_id>`; `--failures` prints that command in `SHOW` for the root-cause run |
 | `orbit run events` | `SUMMARY` | `orbit run trace <run_id>`, `orbit run logs <run_id>` |
 | `orbit run show` (step summary) | `TARGET`, `ERROR MESSAGE` | `orbit run show <run_id> -s <step>` |
 | `orbit routine list` | `SOURCE` | `orbit routine show <name>` |
@@ -47,9 +47,13 @@ These views can truncate a column and have no detail command. Listed rather than
 
 `orbit run history` shows TASK (comma-separated task IDs) and DURATION
 (human-readable recorded wall time). Runs without task bindings have an empty
-TASK cell; missing durations have an empty DURATION cell. Error details remain
-in `orbit run show`, which also displays each task ID and its title when the
-task still exists.
+TASK cell; missing durations have an empty DURATION cell. The ERROR cell is
+capped at 60 characters. `--failures` replaces that table with one row per task
+and root cause: TASK, the root-cause RUN_ID, STEP, CREW, CAUSE (the first line
+of that run's error, uncapped, and the only flexible column), and SHOW
+(`orbit run show` for the root-cause run). Error details remain in `orbit run
+show`, which also displays each task ID and its title when the task still
+exists.
 
 Combine `--task <id>`, `--state failed,held`, and `--since 24h` to select a
 recent delivery history. `--task` matches exact IDs in the submitted `task_ids`
