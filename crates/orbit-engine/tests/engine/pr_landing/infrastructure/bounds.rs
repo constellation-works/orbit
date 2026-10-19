@@ -12,6 +12,18 @@ fn complete_infrastructure(
     action(host, "pr_complete", &input)
         .map_err(|error| orbit_common::OrbitError::Execution(error.to_string()))
 }
+fn actual_workflow_path(case: &str) -> std::path::PathBuf {
+    let name = match case {
+        "actual_ci" => "ci.yml",
+        "actual_codeql" => "codeql.yml",
+        "actual_macos" => "ci-macos.yml",
+        "actual_website" => "website-check.yml",
+        _ => unreachable!(),
+    };
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../.github/workflows")
+        .join(name)
+}
 fn rerun_count(fx: &Fixture) -> usize {
     fs::read_to_string(fx.forge.join("calls"))
         .unwrap()
@@ -102,18 +114,10 @@ fn prerequisite_bounds_entire_repeated_failed_job() {
                         }
                         case if case.starts_with("actual_") => {
                             // Exercise the repository's actual source, not a copy of its command.
-                            let name = match case {
-                                "actual_ci" => "ci.yml",
-                                "actual_codeql" => "codeql.yml",
-                                "actual_macos" => "ci-macos.yml",
-                                "actual_website" => "website-check.yml",
-                                _ => unreachable!(),
-                            };
-                            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-                                .join("../../.github/workflows")
-                                .join(name);
-                            source =
-                                serde_yaml::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+                            source = serde_yaml::from_str(
+                                &fs::read_to_string(actual_workflow_path(case)).unwrap(),
+                            )
+                            .unwrap();
                         }
                         case if case.starts_with("legacy_") => {
                             let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(
@@ -184,6 +188,11 @@ fn prerequisite_bounds_entire_repeated_failed_job() {
                             "tests/engine/pr_landing/infrastructure/fixtures/legacy-codeql.yml",
                         ))
                         .unwrap()
+                    } else if case.starts_with("actual_") {
+                        // Commit the file's exact bytes. A re-serialized copy expands
+                        // YAML aliases such as `*workflow-ci-helpers`, so the fixture
+                        // would not be the workflow production reads.
+                        fs::read_to_string(actual_workflow_path(case)).unwrap()
                     } else {
                         serde_yaml::to_string(&source).unwrap()
                     };
