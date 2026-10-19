@@ -120,6 +120,20 @@ if os.environ.get("GUARD_TEST_PROBE_WORKER_MARKER") and (
     assert os.environ["ORBIT_RUN_ID"] == "jrun-fixture"
 if arguments[0] == "metadata":
     print(open(os.environ["GUARD_TEST_METADATA"]).read())
+elif arguments[0] == "tree":
+    # Selected crates' dev-dependencies add features: GUARD_TEST_TREE_FEATURES
+    # maps a crate to the `tokio` features it requests; the workspace has all,
+    # plus GUARD_TEST_TREE_WORKSPACE_ONLY, which no selection reaches.
+    requested = json.loads(os.environ.get("GUARD_TEST_TREE_FEATURES", "{}"))
+    selected = ([name for name in json.load(open(os.environ["GUARD_TEST_METADATA"]))["workspace_members"]]
+                if "--workspace" in arguments else
+                [arguments[index + 1] for index, argument in enumerate(arguments) if argument == "-p"])
+    features = {"rt", *(feature for name in selected for feature in requested.get(name, []))}
+    if "--workspace" in arguments and os.environ.get("GUARD_TEST_TREE_WORKSPACE_ONLY"):
+        features.add(os.environ["GUARD_TEST_TREE_WORKSPACE_ONLY"])
+    features = sorted(features)
+    print("tokio v1.0.0\t" + ",".join(features))
+    print("tokio v1.0.0\t" + ",".join(features) + " (*)")
 elif arguments == ["nextest", "--version"]:
     sys.exit(int(os.environ.get("GUARD_TEST_NO_NEXTEST", "0")))
 elif "--doc" in arguments:
@@ -363,6 +377,24 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
                     file.unlink()
                 else:
                     file.write_text(old)
+
+    def test_a_ci_test_build_adds_the_crates_that_keep_workspace_features(self):
+        def build(crates, features=None, **environment):
+            result = self.gate("--test-build-packages", crates,
+                               GUARD_TEST_TREE_FEATURES=json.dumps(features or {}), **environment)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout.splitlines()[:2]
+
+        # orbit-cli alone resolves tokio without orbit-web's dev-dependency feature.
+        self.assertEqual(build("orbit-cli", {"orbit-web": ["test-util"]}),
+                         ["orbit-cli orbit-web", "-p orbit-cli -p orbit-web --lib --bins --tests"])
+        self.assertEqual(build("orbit-cli", {"orbit-web": ["test-util"], "orbit-cmd": ["io-util"]})[0],
+                         "orbit-cli orbit-cmd orbit-web")
+        self.assertEqual(build("orbit-tools"), ["orbit-tools", "-p orbit-tools --lib --bins --tests"],
+                         "a selection that already resolves the workspace's features builds alone")
+        # A crate the checkout lacks, or a gap no member closes, builds the workspace.
+        self.assertEqual(build("orbit-retired")[0], "workspace")
+        self.assertEqual(build("orbit-cli", GUARD_TEST_TREE_WORKSPACE_ONLY="signal")[0], "workspace")
 
     def test_full_test_targets_and_doctests_run_under_build_admission(self):
         self.touch_core()

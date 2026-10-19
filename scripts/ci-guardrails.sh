@@ -144,18 +144,45 @@ export GIT_OPTIONAL_LOCKS=0
 # the archive, --test-partitions runs the partition guard over the archive
 # itself, so the guard proves what the shards receive while they already run.
 # NEXTEST_SHARDS (ci.yml) is the shard count.
+#
+# CI_TEST_SCOPE is the Change scope job's mode. For `affected:<crate>,...` (a
+# pull request; scripts/ci-change-scope.sh) both builds take only those crates
+# plus the members `ci-test-affected.py --test-build-packages` adds to keep
+# the workspace's dependency features, and record that package list beside
+# the archive (PATH.packages). The partition guard then admits empty shards.
+# A selection the checkout cannot build falls back to the workspace.
 if [[ "$partitions" == true ]]; then
+  allow_empty=()
+  if [[ -f "$archive.packages" ]]; then
+    allow_empty=(--allow-empty)
+  fi
   # nextest extracts the archive for each listing; keep it in the checkout.
   TMPDIR="$guard_logs" run_phase workspace-test-partitions \
-    "$repo_root/scripts/check-nextest-partitions.py" --shards "${NEXTEST_SHARDS:?set NEXTEST_SHARDS}" -- \
-    cargo nextest list --archive-file "$archive" --workspace-remap "$repo_root"
+    "$repo_root/scripts/check-nextest-partitions.py" --shards "${NEXTEST_SHARDS:?set NEXTEST_SHARDS}" \
+    ${allow_empty[@]+"${allow_empty[@]}"} -- cargo nextest list --archive-file "$archive" --workspace-remap "$repo_root"
   exit 0
 fi
 if [[ -n "$archive" ]]; then
   lint="$repo_root/scripts/with-test-build-lint.sh"
-  run_phase workflow-test-list-build "$repo_root/scripts/check-ci-macos.sh" --workspace-build
+  macos_selection=()
+  read -r -a targets <<<"--workspace --lib --bins --tests"
+  rm -f "$archive.packages"
+  if [[ "${CI_TEST_SCOPE:-}" == affected:* ]]; then
+    build=$(python3 "$repo_root/scripts/ci-test-affected.py" --test-build-packages "${CI_TEST_SCOPE#affected:}") ||
+      build=""
+    packages="$(sed -n 1p <<<"$build")"
+    if [[ -n "$packages" && "$packages" != workspace ]]; then
+      read -r -a targets <<<"$(sed -n 2p <<<"$build")"
+      macos_selection=(--packages "${packages// /,}")
+      printf '%s\n' "$packages" >"$archive.packages"
+      echo "ci-guardrails: testing affected crates ${CI_TEST_SCOPE#affected:}; building $packages ($(sed -n 3p <<<"$build"))"
+    else
+      echo "ci-guardrails: testing every crate; no buildable selection for ${CI_TEST_SCOPE#affected:} ($(sed -n 3p <<<"$build"))"
+    fi
+  fi
+  run_phase workflow-test-list-build "$repo_root/scripts/check-ci-macos.sh" --workspace-build ${macos_selection[@]+"${macos_selection[@]}"}
   run_phase workspace-test-archive "$lint" cargo nextest archive --locked \
-    --workspace --lib --bins --tests --archive-file "$archive"
+    "${targets[@]}" --archive-file "$archive"
   exit 0
 fi
 

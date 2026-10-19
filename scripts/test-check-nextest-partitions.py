@@ -47,13 +47,13 @@ class PartitionGuardTests(unittest.TestCase):
         self.lister.write_text(LISTER)
         self.lister.chmod(0o755)
 
-    def guard(self, listings, shards=3):
+    def guard(self, listings, shards=3, *options):
         listings = dict(listings, universe=TESTS)
         (self.root / "listings.json").write_text(json.dumps(listings))
         calls = self.root / "calls.jsonl"
         calls.write_text("")
         result = subprocess.run(
-            [sys.executable, str(SCRIPTS / "check-nextest-partitions.py"), "--shards", str(shards),
+            [sys.executable, str(SCRIPTS / "check-nextest-partitions.py"), "--shards", str(shards), *options,
              "--", str(self.lister), "nextest", "list", "--archive-file", "fixture.tar.zst"],
             env=dict(os.environ, FIXTURE_LISTINGS=str(self.root / "listings.json"), FIXTURE_CALLS=str(calls)),
             text=True, capture_output=True)
@@ -89,6 +89,23 @@ class PartitionGuardTests(unittest.TestCase):
         for name, (listings, message) in cases.items():
             with self.subTest(case=name):
                 result, _calls = self.guard(listings)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(message, result.stderr)
+
+    def test_an_affected_crates_archive_admits_empty_shards_but_not_gaps_or_overlaps(self):
+        few = TESTS[:2]
+        for listings in ({"full": few, "count:1/3": few[:1], "count:2/3": few[1:], "count:3/3": []},
+                         {"full": [], "count:1/3": [], "count:2/3": [], "count:3/3": []}):
+            with self.subTest(tests=len(listings["full"])):
+                result, _calls = self.guard(listings, 3, "--allow-empty")
+                self.assertEqual(result.returncode, 0, result.stderr)
+        for listings, message in (
+                ({"full": few, "count:1/3": few[:1], "count:2/3": [], "count:3/3": []},
+                 "no shard selects orbit-core::runtime b"),
+                ({"full": few, "count:1/3": few, "count:2/3": few[1:], "count:3/3": []},
+                 "orbit-core::runtime b is in shard 1 and shard 2")):
+            with self.subTest(message=message):
+                result, _calls = self.guard(listings, 3, "--allow-empty")
                 self.assertNotEqual(result.returncode, 0, result.stdout)
                 self.assertIn(message, result.stderr)
 

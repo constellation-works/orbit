@@ -182,7 +182,8 @@ else:
         workflows.mkdir(parents=True, exist_ok=True)
         (self.root / "Cargo.toml").touch()
         self.metadata.write_text(json.dumps(dict(
-            packages=[dict(id="path+file:///fixture/orbit-types#0.1.0", name="orbit-types")])))
+            packages=[dict(id="path+file:///fixture/orbit-types#0.1.0", name="orbit-types",
+                           targets=[dict(name="orbit_types", kind=["lib"])])])))
         (workflows / "ci-macos.yml").write_text('''on:
   push:
     branches: [main, agent-main]
@@ -983,6 +984,42 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                 self.assertTrue((row["idle"] and not formatting["idle"]) or row["nice"] > formatting["nice"],
                                 (row, formatting))
 
+    def test_an_affected_scope_builds_and_archives_only_its_build_set(self):
+        """A pull request's `affected:` scope narrows the folded build and the
+        archive to the selection's build set, and lets shards be empty; a
+        selection the checkout cannot build takes the workspace path."""
+        self.prepare_ci()
+        archive = str(self.root / "nextest-archive.tar.zst")
+        self.write_executable(self.scripts / "ci-test-affected.py", '#!/usr/bin/env python3\n'
+                              'import os, sys\n'
+                              'assert sys.argv[1:] == ["--test-build-packages", "orbit-types"], sys.argv\n'
+                              'print(os.environ["GUARD_TEST_BUILD_SET"])\n')
+        listing = ["--", "cargo", "nextest", "list", "--archive-file", archive, "--workspace-remap", str(self.root)]
+        cases = (
+            ("orbit-types\n-p orbit-types --lib --bins --tests\nfeature anchors: none",
+             ["-p", "orbit-types", "--lib"], ["--allow-empty"]),
+            ("workspace\n--workspace --lib --bins --tests\nthis checkout has no crate orbit-types",
+             ["--workspace", "--lib"], []),
+            ("", ["--workspace", "--lib"], []),
+        )
+        for build_set, selection, partition_options in cases:
+            with self.subTest(build_set=build_set.split("\n", 1)[0]):
+                self.log.write_text("")
+                result = self.run_guard("ci-guardrails.sh", "--test-archive", archive, env_overrides={
+                    "NEXTEST_SHARDS": "3", "CI_TEST_SCOPE": "affected:orbit-types",
+                    "GUARD_TEST_BUILD_SET": build_set})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+                self.assertIn(["test", *selection, "--bins", "--tests", "--examples", "--locked", "--no-run",
+                               "--message-format", "json"], calls)
+                self.assertIn(["nextest", "archive", "--locked", *selection, "--bins", "--tests",
+                               "--archive-file", archive], calls)
+                result = self.run_guard("ci-guardrails.sh", "--test-partitions", archive,
+                                        env_overrides={"NEXTEST_SHARDS": "3"})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((self.guard_calls / "check-nextest-partitions.py").read_text().splitlines(),
+                                 ["--shards", "3", *partition_options, *listing])
+
     def test_macos_check_defaults_to_per_package_listing(self):
         # Without --workspace-build (the macOS job and local runs, whose `-p`
         # artifacts are already warm) the per-package listing is unchanged.
@@ -1093,9 +1130,23 @@ raise SystemExit(101)
 
     def test_macos_check_rejects_unknown_flags(self):
         self.prepare_ci()
-        result = self.run_guard("check-ci-macos.sh", "--fast")
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("usage:", result.stderr)
+        for arguments in (["--fast"], ["--packages", "orbit-types"]):
+            with self.subTest(arguments=arguments):
+                result = self.run_guard("check-ci-macos.sh", *arguments)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("usage:", result.stderr)
+
+    def test_macos_check_lists_only_the_filters_of_an_affected_build(self):
+        # A filter naming a crate outside the build set lists nothing: that
+        # crate's tests did not change, and is not built.
+        self.prepare_ci()
+        result = self.run_guard("check-ci-macos.sh", "--workspace-build", "--packages", "orbit-web")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("orbit-types fixture_test names a crate outside this build; not listed", result.stdout)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertIn(["test", "-p", "orbit-web", "--bins", "--tests", "--examples", "--locked", "--no-run",
+                       "--message-format", "json"], calls)
+        self.assertFalse(any(call[:1] == ["fixture-test-bin"] for call in calls), calls)
 
     def test_full_invokes_cargo_deny_guard(self):
         self.prepare_ci()

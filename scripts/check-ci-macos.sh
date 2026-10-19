@@ -19,10 +19,16 @@ evidence_output=""
 # the per-package listing, without that lint, for callers whose `-p` artifacts
 # are already warm (the macOS job, local runs without --workspace-build).
 # [DANI-10428]
+# --packages CRATE,... (with --workspace-build) builds only those crates, the
+# pull-request test build of the affected crates, and lists only the filters
+# that name one of them. A filter naming another crate is unaffected by the
+# change: that crate's sources and dependencies did not change, and an edit to
+# the workflow itself runs the full build.
 workspace_build=""
+packages=""
 
 usage() {
-  echo "usage: $0 [--evidence-output PATH] [--workspace-build]" >&2
+  echo "usage: $0 [--evidence-output PATH] [--workspace-build [--packages CRATE,...]]" >&2
   exit 2
 }
 
@@ -37,16 +43,22 @@ while [[ $# -gt 0 ]]; do
       workspace_build=1
       shift
       ;;
+    --packages)
+      [[ -n "${2:-}" ]] || usage
+      packages="$2"
+      shift 2
+      ;;
     *) usage ;;
   esac
 done
+[[ -z "$packages" || -n "$workspace_build" ]] || usage
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "check-ci-macos: python3 is required; install it before running" >&2
   exit 1
 fi
 
-python3 - "$repo_root" "$workflow" "$evidence_output" "$workspace_build" <<'PY'
+python3 - "$repo_root" "$workflow" "$evidence_output" "$workspace_build" "$packages" <<'PY'
 from __future__ import annotations
 
 import hashlib
@@ -66,6 +78,7 @@ repo_root = Path(sys.argv[1]).resolve()
 workflow = Path(sys.argv[2]).resolve()
 evidence_output = Path(sys.argv[3]).resolve() if sys.argv[3] else None
 workspace_build = bool(sys.argv[4])
+selected_packages = [name for name in sys.argv[5].split(",") if name]
 
 if not workflow.is_file():
     print(f"check-ci-macos: workflow does not exist: {workflow}", file=sys.stderr)
@@ -293,17 +306,28 @@ def workspace_test_executables() -> dict[str, list[TestBinary]]:
         ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"],
         "cargo metadata failed",
     )
+    if metadata is None:
+        return {}
+    packages = json.loads(metadata)["packages"]
+    selection = ["--workspace", "--lib"]
+    if selected_packages:
+        # Cargo rejects --lib when no selected crate has a library.
+        has_library = any({"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"} & set(target["kind"])
+                          for package in packages if package["name"] in selected_packages
+                          for target in package.get("targets", []))
+        selection = [argument for name in selected_packages for argument in ("-p", name)]
+        selection += ["--lib"] if has_library else []
     # The all-targets lint flags come from the shared wrapper. The nextest run,
     # doctests and the sandbox gate use it too, so they reuse these artifacts.
     build = run_listing(
         [str(repo_root / "scripts/with-test-build-lint.sh"),
-         "cargo", "test", "--workspace", "--lib", "--bins", "--tests", "--examples",
+         "cargo", "test", *selection, "--bins", "--tests", "--examples",
          "--locked", "--no-run", "--message-format", "json"],
         "workspace test build failed",
     )
-    if metadata is None or build is None:
+    if build is None:
         return {}
-    names = {pkg["id"]: pkg["name"] for pkg in json.loads(metadata)["packages"]}
+    names = {pkg["id"]: pkg["name"] for pkg in packages}
     executables: dict[str, list[TestBinary]] = {}
     for line in build.splitlines():
         if not line.startswith("{"):
@@ -391,6 +415,9 @@ executables = workspace_test_executables() if workspace_build and filtered_tests
 for step in filtered_tests:
     if step.darwin_only and platform.system() != "Darwin":
         print(f"check-ci-macos: {step.describe()} is Darwin-only; listed by the macOS job")
+        continue
+    if selected_packages and step.package not in selected_packages:
+        print(f"check-ci-macos: {step.describe()} names a crate outside this build; not listed")
         continue
     listing = list_filtered_tests(step)
     if listing is None:
