@@ -44,6 +44,13 @@ const analytics = {
     regressed_tasks: [], by_crew: [],
   }] },
   lock_contention: { below_support: 0, reservations: 2557, denials: 0, wait_time_recorded: false, rows: [] },
+  task_pilot: { below_support: 1, assessed: 40, unattributed: 1, without_assessment: 2, excluded_large: 1, excluded_no_diff: 3, large_footprint_cap: 12, drilldown_limit: 10, rows: [{
+    crew: 'luna', model: 'luna-model', support: 18, recall: rate(40, 50), precision: rate(30, 36), f1: 0.8163,
+    author: { recall: rate(20, 50), precision: rate(20, 22), f1: 0.5556 }, lift: { recall: 0.4, precision: -0.076, f1: 0.2607 },
+    widenings: 4, widenings_per_task: 0.22, missed_files: 10, unused_selectors: 6,
+    misses: [{ task_id: 'ORB-3', title: 'Fixture pilot miss', paths: ['crates/orbit-core/src/runtime/task/a-long-module-name/with/nested/paths/mod.rs'] }],
+    over_declarations: [{ task_id: 'ORB-4', title: 'Fixture over-declaration', selectors: ['dir:crates/orbit-web/assets/dashboard'] }],
+  }] },
   footprint_misses: { below_support: 0, population: 400, rows: [
     { path: 'docs/README.md', ...rate(6, 18), widenings: 7 },
     { path: 'crates/orbit-core/src/application/task/mod.rs', ...rate(5, 30), widenings: 5 },
@@ -442,12 +449,12 @@ try {
   });
   assert.ok(fullWidth.panel >= fullWidth.main - 2, `Codebase takes the full width: ${JSON.stringify(fullWidth)}`);
 
-  // Seven tiles are toggle buttons; the overlap list is open by default and
+  // Eight tiles are toggle buttons; the overlap list is open by default and
   // holds exactly the paths in two or more of the four path rankings.
   const tiles = page.locator('#codebase-body .codebase-tile');
-  assert.equal(await tiles.count(), 7);
+  assert.equal(await tiles.count(), 8);
   assert.deepEqual(await tiles.evaluateAll(nodes => nodes.map(node => [node.tagName, node.getAttribute('aria-pressed')])),
-    [['BUTTON', 'true'], ...Array.from({ length: 6 }, () => ['BUTTON', 'false'])]);
+    [['BUTTON', 'true'], ...Array.from({ length: 7 }, () => ['BUTTON', 'false'])]);
   const rowPaths = () => page.locator('#codebase-list .codebase-row .codebase-path').evaluateAll(nodes => nodes.map(node => node.textContent));
   assert.deepEqual(await rowPaths(), ['crates/orbit-core/src/application/task/mod.rs', 'docs/README.md', 'src/blocked.rs']);
   const selectedPath = () => page.locator('#codebase-list .codebase-row[aria-current="true"] .codebase-path').textContent();
@@ -512,7 +519,7 @@ try {
   }
   // Text contrast against the composited background, through the alpha
   // washes of selected rows and hints.
-  const lowContrast = await page.evaluate(() => {
+  const contrastFailures = () => page.evaluate(() => {
     const parse = value => (value.match(/[\d.]+/g) || []).map(Number);
     const blend = (top, under) => {
       const alpha = top[3] ?? 1;
@@ -548,11 +555,47 @@ try {
     }
     return failures;
   });
-  assert.deepEqual(lowContrast, [], 'codebase text meets 4.5:1');
+  assert.deepEqual(await contrastFailures(), [], 'codebase text meets 4.5:1');
+
+  // Task pilot: the crew row, its scores and its misses and over-declarations
+  // fit a phone and a desktop, with readable text.
+  await page.locator('#codebase-body .codebase-tile[data-tile="task_pilot"]').click();
+  assert.deepEqual(await page.locator('#codebase-list .codebase-pilot-crew').allTextContents(), ['luna']);
+  assert.deepEqual(await page.locator('#codebase-detail .codebase-task a.codebase-task-link').allTextContents(), ['ORB-3', 'ORB-4']);
+  for (const width of [375, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    const fit = await page.evaluate(() => {
+      // `text` measures the rendered text, which can spill past a shrunk flex
+      // item's box; tiles ellipsize their subtitle, so they are measured by box.
+      const outside = (scope, selector, text) => {
+        const bounds = document.getElementById(scope).getBoundingClientRect();
+        return [...document.querySelectorAll(selector)].filter(node => {
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          const box = text ? range.getBoundingClientRect() : node.getBoundingClientRect();
+          return box.left < bounds.left - 1 || box.right > bounds.right + 1;
+        }).map(node => `${node.className}: ${node.textContent.slice(0, 40)}`);
+      };
+      return {
+        page: document.documentElement.scrollWidth - innerWidth,
+        outside: [
+          ...outside('codebase-body', '#codebase-body .codebase-tile, #codebase-body .codebase-row, #codebase-body .codebase-metric', false),
+          ...outside('codebase-detail', '#codebase-detail .codebase-task, #codebase-detail .codebase-standing, #codebase-detail .codebase-frac', true),
+        ],
+      };
+    });
+    assert.deepEqual(fit, { page: 0, outside: [] }, `the task pilot view fits at ${width}`);
+    assert.deepEqual(await contrastFailures(), [], `task pilot text meets 4.5:1 at ${width}`);
+    for (const part of width < 1280 ? ['list', 'detail'] : ['list']) {
+      await page.locator(`#codebase-${part}`).evaluate(node => node.scrollIntoView({ block: 'start' }));
+      await page.screenshot({ path: path.join(evidence, `codebase-pilot-${part}-${width}.png`), animations: 'disabled' });
+    }
+  }
   await page.setViewportSize({ width: 1440, height: 900 });
   assert.deepEqual(errors, []);
   fs.writeFileSync(path.join(evidence, 'measurements.json'), JSON.stringify({ events: measurements, codebase: { fullWidth }, errors }, null, 2));
-  console.log('Audit browser: Events statuses and Tools summary columns at 1440/1024/1920/375, duplicate targets, duration buckets, keyboard expansion, paging order across a filter change, and the full-width Analytics › Codebase view (tiles, overlap list, detail, poll stability, hash, 375 px and contrast) passed');
+  console.log('Audit browser: Events statuses and Tools summary columns at 1440/1024/1920/375, duplicate targets, duration buckets, keyboard expansion, paging order across a filter change, and the full-width Analytics › Codebase view (tiles, overlap list, detail, poll stability, hash, task pilot, 375 px and contrast) passed');
 } catch (error) {
   if (page) await page.screenshot({ path: path.join(evidence, 'failure.png'), fullPage: true }).catch(() => {});
   throw error;

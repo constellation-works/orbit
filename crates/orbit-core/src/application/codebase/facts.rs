@@ -21,8 +21,8 @@ use orbit_store::contracts::{
 };
 use orbit_types::identity::all_agent_families;
 use orbit_types::task::{
-    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, TaskHistoryEntry, TaskRelationType,
-    TaskStatus,
+    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, NO_DIFF_EXPECTED_TAG, TaskHistoryEntry,
+    TaskRelationType, TaskStatus,
 };
 use orbit_types::telemetry::{AuditEvent, AuditEventStatus};
 use orbit_types::workflow::{
@@ -154,6 +154,10 @@ pub(super) const ACTOR_KINDS: &[&str] = &["operator", "agent", "system", "unknow
 #[derive(Debug, Clone)]
 pub(super) struct TaskFacts {
     pub(super) landed: Option<super::landed::Landed>,
+    /// For a landed task, what its task-pilot receipts predicted.
+    pub(super) pilot: Option<super::pilot::PilotFacts>,
+    /// Tagged `no-diff-expected`: the task was not meant to change files.
+    pub(super) no_diff: bool,
     pub(super) id: String,
     pub(super) title: String,
     pub(super) crew: Option<String>,
@@ -234,6 +238,7 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<CodebaseFacts, OrbitError> 
     let settlements = failed_claim_settlements(runtime);
     let mut facts = Vec::with_capacity(tasks.len());
     let mut landed_scan = super::landed::Scanner::new(runtime);
+    let pilot_runs = super::pilot::PilotRuns::load(runtime);
     for task in tasks {
         let id = task.id.to_string();
         let history = runtime.get_task_history(&id).unwrap_or_else(|error| {
@@ -293,8 +298,14 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<CodebaseFacts, OrbitError> 
         let landed = (task.status == TaskStatus::Done)
             .then(|| landed_scan.read(runtime, &id, &history))
             .flatten();
+        let no_diff = task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG);
+        let pilot = (landed.is_some() && !no_diff)
+            .then(|| super::pilot::read(runtime, &pilot_runs, &id, computed_at))
+            .flatten();
         facts.push(TaskFacts {
             landed,
+            pilot,
+            no_diff,
             regressed_by: regressed_by.remove(&id).unwrap_or_default(),
             id,
             title: task.title,

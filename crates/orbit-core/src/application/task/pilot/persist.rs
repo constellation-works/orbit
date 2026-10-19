@@ -383,6 +383,7 @@ pub(super) fn apply_task(
                     "complexity_before": snapshot.complexity,
                     "complexity_after": task.complexity,
                     "applied_material": written,
+                    "pilot_run_id": task.pilot_run_id,
                 }))
                 .map_err(|error| {
                     OrbitError::Execution(format!("serialize task-pilot audit: {error}"))

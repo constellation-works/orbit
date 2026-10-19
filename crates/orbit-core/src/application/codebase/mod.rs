@@ -5,7 +5,8 @@
 //!
 //! "Touched" means a task's declared footprint (`context_files`, widened
 //! selectors included), not the diff that landed. The related-file query
-//! separately measures verified landed diffs, including unreserved Markdown.
+//! separately measures verified landed diffs, including unreserved Markdown,
+//! and the task-pilot ranking grades each pilot's selectors against them.
 //! [`OrbitRuntime::codebase_scan`] reads every task bundle's history once;
 //! [`codebase_analytics`] and [`codebase_path_detail`] only slice those facts
 //! by window, minimum support and rollup, so a caller that keeps the facts
@@ -15,6 +16,7 @@ mod detail;
 mod facts;
 mod landed;
 mod lock_waits;
+mod pilot;
 mod related;
 mod sections;
 
@@ -135,7 +137,8 @@ impl OrbitRuntime {
     }
 }
 
-/// The six rankings and the paths several share (`overlap`), with the
+/// The six path rankings, the task-pilot ranking and the paths several
+/// path rankings share (`overlap`), with the
 /// selection and scan facts. `cache_ttl` is how long the caller keeps
 /// `facts`, reported as `cache_ttl_seconds`.
 pub fn codebase_analytics(

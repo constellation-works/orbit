@@ -376,7 +376,7 @@
   },
   {
     "name": "orbit.codebase.analytics",
-    "description": "Rank the workspace's repository paths by how often tasks that declared them regressed, widened their footprint onto them, were blocked by a run failure or were rejected after a run, plus lock contention and paths reserved together. Every ranking is a rate over distinct tasks with its numerator and denominator; `overlap` lists the paths found in several rankings. The same payload the dashboard's Codebase view reads.",
+    "description": "Rank the workspace's repository paths by how often tasks that declared them regressed, widened their footprint onto them, were blocked by a run failure or were rejected after a run, plus lock contention and paths reserved together. Every ranking is a rate over distinct tasks with its numerator and denominator; `overlap` lists the paths found in several rankings. `task_pilot` grades each task-pilot crew and model's final selectors against the landed diffs of the tasks it assessed (recall, precision, F1, lift over the filer's selectors). The same payload the dashboard's Codebase view reads.",
     "enabled": true,
     "active": true,
     "status": "active",
