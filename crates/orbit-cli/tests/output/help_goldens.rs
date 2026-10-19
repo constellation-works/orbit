@@ -31,6 +31,7 @@ const CASES: &[(&[&str], &str)] = &[
     (&["codebase"], "codebase/root.txt"),
     (&["codebase", "analytics"], "codebase/analytics.txt"),
     (&["codebase", "show"], "codebase/show.txt"),
+    (&["codebase", "related"], "codebase/related.txt"),
     (&["gc"], "gc/root.txt"),
     (&["gc", "audit"], "gc/audit.txt"),
     (&["gc", "deployments"], "gc/deployments.txt"),

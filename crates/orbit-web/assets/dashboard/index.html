@@ -510,6 +510,16 @@
               </div>
             </div>
           </div>
+          <section class="codebase-related" aria-labelledby="codebase-related-title">
+            <h3 id="codebase-related-title">What changes alongside a file?</h3>
+            <form id="codebase-related-form" class="codebase-related-search">
+              <label for="codebase-path-search">Repository file</label>
+              <input id="codebase-path-search" type="search" autocomplete="off" placeholder="Start typing a path…" aria-controls="codebase-path-options">
+              <button type="submit" class="action">Find related files</button>
+            </form>
+            <div id="codebase-path-options" class="codebase-path-options" aria-label="Matching paths"></div>
+            <div id="codebase-related-results" aria-live="polite"></div>
+          </section>
           <div class="body codebase-body" id="codebase-body" tabindex="0" role="region" aria-label="Codebase analytics">
             <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
               <div class="skeleton skeleton-row"></div>

@@ -5,6 +5,7 @@ Usage: orbit codebase [OPTIONS] <COMMAND>
 Commands:
   analytics  Show the codebase rankings and the paths several share
   show       Show one path's rankings and the tasks behind each count
+  related    List files that usually change alongside a repository file
 
 Options:
       --root <ROOT>

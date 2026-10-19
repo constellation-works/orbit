@@ -192,6 +192,7 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
         // Analytics › Codebase: per-path regression, contention, footprint-miss,
         // coupling, blocked and rejected rates from one cached scan.
         .route("/codebase/analytics", get(codebase::codebase_analytics))
+        .route("/codebase/related", get(codebase::codebase_related))
         // `orbit doctor` for the selected workspace: read-only, on demand and
         // cached [ORB-14830]. GET only; repairs stay on the CLI.
         .route("/doctor", get(doctor::doctor))

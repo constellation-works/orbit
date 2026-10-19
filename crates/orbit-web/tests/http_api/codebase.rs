@@ -1641,3 +1641,158 @@ fn codebase_analytics_warm_p95_on_a_store_copy() {
         "warm p95 over the 500 ms budget: {report}"
     );
 }
+
+/// Landed diffs, including Markdown without a reservation, drive related
+/// files; declared-only and bulk history cannot inflate shared support.
+#[test]
+fn codebase_related_uses_landed_diffs_and_filters_support_and_window() {
+    isolated(
+        "codebase::codebase_related_uses_landed_diffs_and_filters_support_and_window",
+        || {
+            let fixture = Fixture::new();
+            let repo = fixture.work.parent().unwrap();
+            let git = |args: &[&str]| {
+                let output = std::process::Command::new("git")
+                    .args([
+                        "-c",
+                        "user.name=Fixture",
+                        "-c",
+                        "user.email=fixture@example.invalid",
+                    ])
+                    .args(args)
+                    .current_dir(repo)
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                String::from_utf8(output.stdout).unwrap().trim().to_string()
+            };
+            git(&["init", "-q"]);
+            fs::write(repo.join("seed"), "seed").unwrap();
+            git(&["add", "seed"]);
+            git(&["commit", "-qm", "seed"]);
+            let now = Utc::now();
+            let seed = |title: &str, files: &[&str], declared: &[&str], at: DateTime<Utc>| {
+                let task = add_with_status(&fixture, title, declared, vec![], TaskStatus::Done);
+                for file in files {
+                    fs::create_dir_all(repo.join(file).parent().unwrap()).unwrap();
+                    fs::write(repo.join(file), title).unwrap();
+                }
+                git(&[&["add", "--"][..], files].concat());
+                git(&["commit", "-qm", title]);
+                let commit = git(&["rev-parse", "HEAD"]);
+                append_event(
+                    &fixture,
+                    &task,
+                    at,
+                    "landing_completed",
+                    Some(json!({"delivery": {"merge_commit": commit}}).to_string()),
+                    Some(TaskStatus::Done),
+                );
+                task
+            };
+            let first = seed("first", &["src/a.rs", "docs/b.md"], &["src/a.rs"], now);
+            let second = seed(
+                "second",
+                &["src/a.rs", "docs/b.md", "src/c.rs"],
+                &["src/a.rs", "docs/b.md", "src/c.rs"],
+                now,
+            );
+            seed("partner only", &["docs/b.md"], &["docs/b.md"], now);
+            seed(
+                "undeclared partner only",
+                &["docs/b.md"],
+                &["src/a.rs"],
+                now,
+            );
+            seed("path only", &["src/a.rs"], &["src/a.rs"], now);
+            seed(
+                "old",
+                &["src/a.rs", "src/old.rs"],
+                &["src/a.rs"],
+                now - Duration::days(40),
+            );
+            let mut bulk: Vec<_> = (0..13).map(|n| format!("bulk/{n}")).collect();
+            bulk.extend(["src/a.rs".into(), "docs/b.md".into()]);
+            seed(
+                "bulk",
+                &bulk.iter().map(String::as_str).collect::<Vec<_>>(),
+                &["src/a.rs"],
+                now,
+            );
+            reserve(
+                &fixture,
+                "related-both",
+                &first,
+                &["src/a.rs", "src/c.rs"],
+                now,
+            );
+            reserve(&fixture, "related-alone", &second, &["src/a.rs"], now);
+            let server = fixture.server(false);
+            let payload = json_ok(server.get(&format!(
+                "/api/codebase/related?{WS}&path=src/a.rs&window=30d&min_support=1&top=1"
+            )));
+            assert_eq!(payload["rows"].as_array().unwrap().len(), 1, "{payload}");
+            let row = &payload["rows"][0];
+            assert_eq!(row["path"], "docs/b.md");
+            assert_eq!(
+                row["support"],
+                json!({"both":2,"path":3,"partner":4,"either":5})
+            );
+            assert_eq!(row["jaccard"], 0.4);
+            assert!((row["conditional_rate"].as_f64().unwrap() - 2.0 / 3.0).abs() < 1e-9);
+            assert_eq!(row["footprint_miss_count"], 2);
+            assert!(
+                row["footprint_miss_tasks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|task| task["task_id"] == first)
+            );
+            assert!(
+                row["reservation_coupling"].is_null(),
+                "Markdown needs no reservation to co-change"
+            );
+            assert_eq!(payload["excluded_large"], 1);
+            let all = json_ok(server.get(&format!(
+                "/api/codebase/related?{WS}&path=src/a.rs&window=all&min_support=1"
+            )));
+            assert_eq!(all["path_support"], 4);
+            let c = all["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["path"] == "src/c.rs")
+                .unwrap();
+            assert_eq!(c["reservation_coupling"]["rate"], 0.5);
+            let filtered = json_ok(server.get(&format!(
+                "/api/codebase/related?{WS}&path=src/a.rs&window=30d&min_support=3"
+            )));
+            assert!(filtered["rows"].as_array().unwrap().is_empty());
+            let unknown = json_ok(server.get(&format!(
+                "/api/codebase/related?{WS}&path=unknown&min_support=1"
+            )));
+            assert!(unknown["rows"].as_array().unwrap().is_empty());
+            for query in ["top=0", "min_support=0", "window=1y", "path=../outside"] {
+                assert_eq!(
+                    server
+                        .get(&format!("/api/codebase/related?{WS}&path=src/a.rs&{query}"))
+                        .status()
+                        .as_u16(),
+                    400
+                );
+            }
+            let analytics = json_ok(server.get(&format!("/api/codebase/analytics?{WS}")));
+            assert!(
+                analytics["known_paths"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|p| p == "docs/b.md")
+            );
+        },
+    );
+}

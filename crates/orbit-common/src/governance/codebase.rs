@@ -18,6 +18,8 @@ operation_registry! {
         Analytics => ANALYTICS,
         /// One path's standing in every ranking, with the tasks behind it.
         Show => SHOW,
+        /// Files most often changed alongside a repository path.
+        Related => RELATED,
     }
 }
 
@@ -134,3 +136,58 @@ const fn path_param(mut param: ParamSpec) -> ParamSpec {
     param.redact = Redaction::Path;
     param
 }
+
+const RELATED_SELECTION: &[ParamSpec] = &[
+    defaulted(
+        both(
+            "window",
+            ParamType::Enum(WINDOWS),
+            "Landed period ending now. Default: 30d.",
+            CliArgKind::flag("window"),
+            "Landed period ending now",
+        ),
+        "30d",
+    ),
+    defaulted(
+        both(
+            "min_support",
+            ParamType::Integer,
+            "Minimum shared landed tasks, at least 1. Default: 15.",
+            CliArgKind::flag("min-support"),
+            "Minimum shared landed tasks",
+        ),
+        "15",
+    ),
+    defaulted(
+        both(
+            "top",
+            ParamType::Integer,
+            "Maximum partners, from 1 to 100. Default: 10.",
+            CliArgKind::flag("top"),
+            "Maximum related paths (1–100)",
+        ),
+        "10",
+    ),
+];
+const RELATED: OperationSpec<CodebaseVerb> = OperationSpec {
+    verb: CodebaseVerb::Related,
+    cli_path: &["related"],
+    tool_name: "orbit.codebase.related",
+    tool_description: "Rank files by landed co-change Jaccard with a repository-relative file path. Reports conditional rate, shared and individual task support, reservation coupling when present, undeclared landed partners and the tasks behind the counts. Excludes bulk tasks; missing local landed objects are reported as unavailable. Read-only; never fetches Git objects.",
+    cli_about: "List files that usually change alongside a repository file",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Read,
+    params: &[RELATED_PATH, RELATED_SELECTION, MODEL],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+};
+
+const RELATED_PATH: &[ParamSpec] = &[path_param(required(both(
+    "path",
+    ParamType::Path,
+    "A repository-relative file path, including a deleted file with landed history.",
+    CliArgKind::Positional,
+    "A repository-relative file path",
+)))];

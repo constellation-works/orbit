@@ -4,15 +4,18 @@
 //! tools all read this one service.
 //!
 //! "Touched" means a task's declared footprint (`context_files`, widened
-//! selectors included), not the diff that landed. [`OrbitRuntime::codebase_scan`]
-//! reads every task bundle's history once; [`codebase_analytics`] and
-//! [`codebase_path_detail`] only slice those facts by window, minimum support
-//! and rollup, so a caller that keeps the facts (the dashboard) answers
-//! another selection without rescanning.
+//! selectors included), not the diff that landed. The related-file query
+//! separately measures verified landed diffs, including unreserved Markdown.
+//! [`OrbitRuntime::codebase_scan`] reads every task bundle's history once;
+//! [`codebase_analytics`] and [`codebase_path_detail`] only slice those facts
+//! by window, minimum support and rollup, so a caller that keeps the facts
+//! (the dashboard) answers another selection without rescanning.
 
 mod detail;
 mod facts;
+mod landed;
 mod lock_waits;
+mod related;
 mod sections;
 
 use std::time::Duration;
@@ -143,6 +146,7 @@ pub fn codebase_analytics(
     let params = query.params();
     let mut payload = sections::all_sections(facts, &params);
     payload = sections::merge(payload, query.header(facts, params.since));
+    payload["known_paths"] = json!(related::known_paths(facts));
     payload["cache_ttl_seconds"] = json!(cache_ttl.as_secs());
     payload
 }
@@ -159,4 +163,29 @@ pub fn codebase_path_detail(
     let params = query.params();
     let detail = detail::path_detail(facts, &params, path)?;
     Ok(sections::merge(detail, query.header(facts, params.since)))
+}
+
+/// Rank files that changed alongside `path` in landed tasks. Related queries
+/// always use file paths, independently of the analytics rollup.
+pub fn codebase_related(
+    facts: &CodebaseFacts,
+    query: &CodebaseQuery,
+    path: &str,
+    top: usize,
+) -> Result<Value, OrbitError> {
+    let params = query.params();
+    let payload = related::related(facts, &params, path, top)?;
+    Ok(sections::merge(query.header(facts, params.since), payload))
+}
+
+impl OrbitRuntime {
+    /// Scan and rank files that changed alongside one repository file.
+    pub fn codebase_related(
+        &self,
+        query: &CodebaseQuery,
+        path: &str,
+        top: usize,
+    ) -> Result<Value, OrbitError> {
+        codebase_related(&self.codebase_scan()?, query, path, top)
+    }
 }

@@ -18,6 +18,11 @@ pub(super) fn dispatch(
         input.optional_string("rollup")?.as_deref(),
     )?;
     match verb {
+        CodebaseVerb::Related => runtime.codebase_related(
+            &query,
+            &input.required_string("path")?,
+            input.optional_count("top")?.unwrap_or(10),
+        ),
         CodebaseVerb::Analytics => runtime.codebase_analytics(&query),
         CodebaseVerb::Show => runtime.codebase_path_detail(&query, &input.required_string("path")?),
     }

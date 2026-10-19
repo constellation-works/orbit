@@ -43,7 +43,7 @@ pub(crate) fn execute(
             SearchVerb::Query => false,
         },
         OrbitBuiltinAction::Codebase(verb) => match verb {
-            CodebaseVerb::Analytics | CodebaseVerb::Show => false,
+            CodebaseVerb::Analytics | CodebaseVerb::Show | CodebaseVerb::Related => false,
         },
         OrbitBuiltinAction::Workflow(verb) => match verb {
             WorkflowVerb::Auto
@@ -336,7 +336,9 @@ pub(crate) fn execute(
             SearchVerb::Query => return Ok(None),
         },
         OrbitBuiltinAction::Codebase(verb) => match verb {
-            CodebaseVerb::Analytics | CodebaseVerb::Show => return Ok(None),
+            CodebaseVerb::Analytics | CodebaseVerb::Show | CodebaseVerb::Related => {
+                return Ok(None);
+            }
         },
         OrbitBuiltinAction::Workflow(verb) => match verb {
             WorkflowVerb::Auto

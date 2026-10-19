@@ -322,6 +322,52 @@
     }
   },
   {
+    "name": "orbit_codebase_related",
+    "description": "Rank files by landed co-change Jaccard with a repository-relative file path. Reports conditional rate, shared and individual task support, reservation coupling when present, undeclared landed partners and the tasks behind the counts. Excludes bulk tasks; missing local landed objects are reported as unavailable. Read-only; never fetches Git objects.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "A repository-relative file path, including a deleted file with landed history."
+        },
+        "window": {
+          "type": "string",
+          "description": "Landed period ending now. Default: 30d."
+        },
+        "min_support": {
+          "type": "integer",
+          "description": "Minimum shared landed tasks, at least 1. Default: 15."
+        },
+        "top": {
+          "type": "integer",
+          "description": "Maximum partners, from 1 to 100. Default: 10."
+        },
+        "model": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok"
+          ],
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized."
+        },
+        "workspace": {
+          "type": "string",
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": true
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  {
     "name": "orbit_codebase_show",
     "description": "One repository path's standing in every codebase ranking: rate, numerator, denominator, place in the ranking, and the task IDs behind each numerator (refused requesters for lock contention, reserving requesters for each coupled pair). Use it to follow a rate from `orbit_codebase_analytics` to its tasks.",
     "inputSchema": {
