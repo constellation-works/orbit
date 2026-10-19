@@ -15,7 +15,7 @@
 //! exposed to command handlers; `plugin` and `workspace` own host plugins and
 //! the workspace binding, catalog, and claim; `host_signal` probes host
 //! lifecycle signals, such as a scheduled reboot, that hold new admissions;
-//! `task_pr_forge` is the forge a task's terminal decision closes its
+//! `task::pr_forge` is the forge a task's terminal decision closes its
 //! Orbit-authored PRs through.
 
 mod activity_catalog;
@@ -41,7 +41,8 @@ pub(crate) mod recovery_decision;
 mod resolve;
 pub(crate) mod run_input;
 pub(crate) mod task;
-pub mod task_pr_forge;
+// Preserve the public forge path without exposing task runtime internals.
+pub use task::pr_forge as task_pr_forge;
 pub use task::{InfraBlockedTask, StaleTaskReservation};
 pub(crate) mod tool_exec;
 pub(crate) mod upgrade_handover;

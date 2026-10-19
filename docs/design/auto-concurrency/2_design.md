@@ -1132,7 +1132,7 @@ Linux eligibility and raw history retention remain unchanged.
 
 Implemented for local and pull drains, with local passes in `workspace_auto/classify/` (recording),
 `runtime/host_resource/forecast/record.rs` (the recorded points) and
-`runtime/host_resource/accuracy.rs` (the report), read through
+`runtime/host_resource/accuracy/report.rs` (the report), read through
 `OrbitRuntime::forecast_accuracy` and shown by
 `orbit run profiles --accuracy`:
 
