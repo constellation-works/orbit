@@ -111,8 +111,12 @@ target, not a hosted speedup or the whole-job 900-second budget.
 | `discovery_requests.rs` | `run_logs_rejects_an_unknown_scope` | `requests.golden.json` |
 | `discovery_requests.rs` | `pr_list_projects_each_head_sha_under_its_own_name` | `requests.golden.json` |
 | `discovery_requests.rs` | `pr_list_defaults_to_a_bounded_open_query` | `requests.golden.json` |
-| `discovery_requests.rs` | `discovery_tools_run_in_the_selected_workspace_rather_than_the_process_cwd/github.run.view` | `fallback.golden.json` |
-| `discovery_requests.rs` | `discovery_tools_without_a_selected_workspace_keep_the_callers_directory/github.run.view` | `fallback.golden.json` |
+| `mod.rs` | `discovery_tools_run_in_the_selected_workspace_rather_than_the_process_cwd/github.run.view` | `fallback.golden.json` |
+| `mod.rs` | `discovery_tools_without_a_selected_workspace_keep_the_callers_directory/github.run.view` | `fallback.golden.json` |
+| `mod.rs` | `discovery_tools_run_in_the_selected_workspace_rather_than_the_process_cwd/github.pr.list` | `fallback.golden.json` |
+| `mod.rs` | `discovery_tools_run_in_the_selected_workspace_rather_than_the_process_cwd/github.run.list` | `fallback.golden.json` |
+| `mod.rs` | `discovery_tools_without_a_selected_workspace_keep_the_callers_directory/github.pr.list` | `fallback.golden.json` |
+| `mod.rs` | `discovery_tools_without_a_selected_workspace_keep_the_callers_directory/github.run.list` | `fallback.golden.json` |
 | `bounded_logs.rs` | `a_short_log_is_returned_whole_and_unmarked` | `streamed.golden.json` |
 | `bounded_logs.rs` | `an_oversized_log_is_capped_while_keeping_both_ends` | `streamed.golden.json` |
 | `bounded_logs.rs` | `truncation_never_splits_a_multibyte_character` | `streamed.golden.json` |
