@@ -19,10 +19,16 @@
 //! writer can record it once admission has created the root; otherwise every
 //! later command against a freshly created root would hash again until some
 //! other writer happened to record it.
+//!
+//! A debug build's test run also shares digests between its processes
+//! through [`SHARED_TEST_DIGESTS_ENV`]: each test process and `orbit` child
+//! starts against a fresh generation root, so without it every one of them
+//! hashes its whole debug image again.
 
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -37,6 +43,17 @@ const MAX_ENTRIES: usize = 8;
 /// The record is small JSON; anything larger is not ours.
 const MAX_CACHE_BYTES: u64 = 16 * 1024;
 const VERSION: u32 = 1;
+
+/// Set to an absolute directory to share image digests between the processes
+/// of a debug build's test run.
+///
+/// `.cargo/config.toml` sets it for every process Cargo launches, so test
+/// binaries and the `orbit` children they spawn inherit it. A process whose
+/// generation root holds no entry for its image looks there before hashing,
+/// in a cache file per image name that keeps the same identity key and
+/// settle rule as the root's own. The root's cache is still read and written
+/// exactly as if the image had been hashed. Release builds ignore the variable.
+pub const SHARED_TEST_DIGESTS_ENV: &str = "ORBIT_TEST_SHARED_IMAGE_DIGESTS";
 
 /// The kernel's identity for one version of one file's bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -190,4 +207,46 @@ pub(super) fn digest_with_cache(
         hashed_at: now,
     };
     Ok((digest, Some(unremembered)))
+}
+
+/// `hash(file)`, answered from the test run's shared cache when a debug build
+/// names one in [`SHARED_TEST_DIGESTS_ENV`] and `image_name` has an entry for
+/// the file's identity. A fresh digest is shared for the run's later
+/// processes. Any failure to use the shared cache only means hashing.
+pub(super) fn shared_test_digest(
+    image_name: Option<&OsStr>,
+    file: File,
+    hash: impl FnOnce(File) -> Result<String, OrbitError>,
+) -> Result<String, OrbitError> {
+    let Some(path) = shared_test_cache_path(
+        image_name,
+        cfg!(debug_assertions)
+            .then(|| std::env::var_os(SHARED_TEST_DIGESTS_ENV))
+            .flatten()
+            .as_deref(),
+    ) else {
+        return hash(file);
+    };
+    digest_with_cache(Some(&path), true, SystemTime::now(), file, hash).map(|(digest, _)| digest)
+}
+
+/// The shared cache file for `image_name` under `directory`. The name must be
+/// a plain file name: a replaced Linux image reads back as `name (deleted)`,
+/// and that image is always hashed.
+fn shared_test_cache_path(
+    image_name: Option<&OsStr>,
+    directory: Option<&OsStr>,
+) -> Option<PathBuf> {
+    let directory = Path::new(directory?);
+    let name = image_name?.to_str()?;
+    let plain = !name.is_empty()
+        && !name.starts_with('.')
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
+    if !directory.is_absolute() || !plain {
+        return None;
+    }
+    crate::fs::io::create_private_dir_all(directory).ok()?;
+    Some(directory.join(format!("{name}.json")))
 }

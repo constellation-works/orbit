@@ -71,12 +71,21 @@ pub(super) fn process_digest(
                 let cache = cache_root.and_then(|root| {
                     validated_generation_record_path(root, IMAGE_DIGEST_CACHE).ok()
                 });
+                let image_name = std::env::current_exe()
+                    .ok()
+                    .and_then(|image| image.file_name().map(ToOwned::to_owned));
                 let (digest, unremembered) = image_digest::digest_with_cache(
                     cache.as_deref(),
                     record,
                     SystemTime::now(),
                     file,
-                    hash_executable,
+                    |file| {
+                        image_digest::shared_test_digest(
+                            image_name.as_deref(),
+                            file,
+                            hash_executable,
+                        )
+                    },
                 )?;
                 if let (Some(cache), Some(unremembered)) = (cache, unremembered) {
                     *UNREMEMBERED.lock().unwrap_or_else(PoisonError::into_inner) =

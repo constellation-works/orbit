@@ -149,6 +149,7 @@ pub use handoff::{
 };
 pub use identity::{Access, CompatibilityIdentity, FeatureFloor, LedgerCompatibility};
 pub use image::{executable_generation, process_generation};
+pub use image_digest::SHARED_TEST_DIGESTS_ENV;
 pub use paths::authority_root;
 pub use registry::{ParticipantRecord, ParticipantRole, PendingSwitch, pending_switch};
 pub use update::{CandidateAdmission, GenerationUpdate};
