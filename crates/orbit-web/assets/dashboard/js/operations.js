@@ -2951,6 +2951,7 @@ function renderAutoDrain(payload) {
 const DRAIN_POOL_SHORT = { eligible: "Eligible", locks: "Locks", capacity: "Capacity", other: "Other" };
 // Holder and dependency links a wait row shows before folding the rest.
 const DRAIN_WAIT_LINKS = 3;
+const drainExpandedWaitGroups = new Set();
 
 // Task links for `ids`, comma-separated, the rest folded into "+N more".
 function drainTaskLinks(ids) {
@@ -2962,6 +2963,31 @@ function drainTaskLinks(ids) {
   });
   if (ids.length > shown.length) nodes.push(` +${ids.length - shown.length} more`);
   return nodes;
+}
+
+function drainWaitingTaskLinks(group) {
+  if (!group.taskIds.length) return null;
+  const workspaceId = selectedWorkspace()?.id;
+  const links = el("span", { class: "drain-wait-task-links" }, group.taskIds.flatMap((taskId, index) => [
+    ...(index ? [", "] : []),
+    taskLink(taskId, workspaceId),
+  ]));
+  if (group.taskIds.length <= DRAIN_WAIT_LINKS) {
+    return el("div", { class: "drain-wait-tasks" }, [el("span", { class: "drain-wait-task-label", text: "Waiting tasks: " }), links]);
+  }
+  const disclosure = el("details", { class: "drain-wait-task-disclosure" });
+  disclosure.open = drainExpandedWaitGroups.has(group.key);
+  const summary = el("summary", { text: `${group.taskIds.length} waiting tasks` });
+  summary.addEventListener("click", () => {
+    if (disclosure.open) drainExpandedWaitGroups.delete(group.key);
+    else drainExpandedWaitGroups.add(group.key);
+  });
+  disclosure.append(summary, links);
+  disclosure.addEventListener("toggle", () => {
+    if (disclosure.open) drainExpandedWaitGroups.add(group.key);
+    else drainExpandedWaitGroups.delete(group.key);
+  });
+  return el("div", { class: "drain-wait-tasks" }, [disclosure]);
 }
 
 // The muted line under a wait: what the holder holds (from the locks card's
@@ -2999,7 +3025,7 @@ function drainWaitDetail(group, capacity) {
 
 // Why the backlog waits: the snapshot split by pool as a stacked bar, then
 // one row per wait (the same words as the Tasks readiness dots), with its
-// count, its pool's colour, a detail line and links to the tasks it waits on.
+// count, its pool's colour, a detail line, holder links and member task links.
 function renderDrainWaits(payload) {
   const body = $("drain-waits-body");
   if (!body) return;
@@ -3018,11 +3044,13 @@ function renderDrainWaits(payload) {
     pools[view.pool] = (pools[view.pool] || 0) + 1;
     if (!view.badge) continue;
     const key = view.badge.text;
-    const group = groups.get(key) || { count: 0, pool: view.pool, badge: view.badge, dependencies: [] };
+    const group = groups.get(key) || { key, count: 0, pool: view.pool, badge: view.badge, dependencies: [], taskIds: [] };
     group.count += 1;
+    if (typeof entry.task_id === "string" && entry.task_id) group.taskIds.push(entry.task_id);
     for (const { taskId } of view.badge.dependencies) if (!group.dependencies.includes(taskId)) group.dependencies.push(taskId);
     groups.set(key, group);
   }
+  for (const key of drainExpandedWaitGroups) if (!groups.has(key)) drainExpandedWaitGroups.delete(key);
   if (tasks.length) {
     const bar = el("div", { class: "drain-pool-bar", role: "img",
       "aria-label": DRAIN_POOLS.map(({ key, label }) => `${label}: ${pools[key]}`).join(", ") });
@@ -3052,6 +3080,7 @@ function renderDrainWaits(payload) {
         el("span", { class: "drain-wait-text" }, [
           reason,
           detail && detail.length ? el("span", { class: "drain-wait-detail" }, Array.isArray(detail) ? detail : [detail]) : null,
+          drainWaitingTaskLinks(group),
         ]),
       ]);
       row.dataset.pool = group.pool;

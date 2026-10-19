@@ -425,6 +425,7 @@ try {
     if (result.panels.join(' ') !== 'auto-drain-panel drain-waits-panel drain-fleet-panel auto-drain-start locks-panel') throw new Error(`Drain dock cards out of order at ${label}: ${result.panels}`);
     if (result.scroll || result.clipped || result.overflowing.length) throw new Error(`Drain card overflows at ${label} (dock ${result.dockWidth}px): ${result.overflowing}`);
     if (result.durations !== 6 || !result.bar) throw new Error(`Drain card incomplete at ${label}: ${JSON.stringify(result)}`);
+    await page.waitForTimeout(350);
     await page.screenshot({ path: path.join(evidence, `drain-${label}.png`), fullPage: true });
     return result.dockWidth;
   };
@@ -624,20 +625,75 @@ try {
   await page.evaluate(() => {
     const task = (n, reason) => ({ task_id: `ORB-${9000 + n}`, status: 'backlog', eligible: false, reason, conflicts: reason === 'context_lock_conflict' ? [{ requested_file: 'file:a.rs', locking_task_id: 'ORB-30' }] : undefined });
     const reasons = [...Array(17).fill('context_lock_conflict'), ...Array(13).fill('resource_throttled'), ...Array(3).fill('capacity_saturated'), 'operator_validation_handoff', 'pilot_already_landed', 'surface_reserved'];
-    return globalThis.setDrainFixtureReadiness({
+    globalThis.__drainWaitReadinessFixture = {
       capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 0, resource_throttle: { resources: [{ resource: 'cpu', percent: 164, high_percent: 90, resume_percent: 75, since: '2026-10-04T08:40:00Z' }] } },
       tasks: reasons.map((reason, i) => task(i, reason)),
-    });
+    };
+    return globalThis.setDrainFixtureReadiness(globalThis.__drainWaitReadinessFixture);
   });
-  for (const [label, width, dock] of [['1440', 1440, 336], ['390', 390, null]]) {
-    await page.setViewportSize({ width, height: 1000 });
+  for (const [label, width, dock, height] of [['1440', 1440, 336, 1000], ['390', 390, null, 1000], ['375', 375, null, 812]]) {
+    await page.setViewportSize({ width, height });
     await drainCheck(`backlog36-${label}`, dock);
+    if (label !== '390') {
+      await page.locator('#drain-waits-panel').scrollIntoViewIfNeeded();
+      await page.waitForTimeout(350);
+      await page.screenshot({ path: path.join(evidence, `drain-waits-${label}.png`) });
+    }
     const pooled = await page.evaluate(async () => {
       const { drainReadinessFor } = await import('/js/drain-waits.js');
       return Array.from({ length: 36 }, (_, i) => drainReadinessFor(`ORB-${9000 + i}`)?.pool).filter(Boolean).length;
     });
     if (pooled !== 36) throw new Error(`Readiness at ${label}px does not place all 36 tasks: ${pooled}`);
   }
+  const waitRows = await page.evaluate(() => {
+    const body = document.getElementById('drain-waits-body');
+    const rows = [...body.querySelectorAll('.drain-wait')];
+    const links = [...body.querySelectorAll('.drain-wait-task-links a')].map(link => ({ id: link.textContent, href: link.getAttribute('href') }));
+    const large = rows.find(row => row.querySelector('.drain-wait-count')?.textContent === '17');
+    const short = rows.find(row => row.querySelector('.drain-wait-count')?.textContent === '3');
+    return {
+      links,
+      groups: rows.map(row => ({
+        count: Number(row.querySelector('.drain-wait-count')?.textContent),
+        ids: [...row.querySelectorAll('.drain-wait-task-links a')].map(link => link.textContent).sort(),
+      })),
+      largePool: large?.dataset.pool,
+      largeDisclosure: Boolean(large?.querySelector('details.drain-wait-task-disclosure')),
+      largeOpen: large?.querySelector('details')?.open,
+      largeLinkCount: large?.querySelectorAll('.drain-wait-task-links a').length,
+      shortDisclosure: Boolean(short?.querySelector('details')),
+      shortLinkCount: short?.querySelectorAll('.drain-wait-task-links a').length,
+      poolBar: Boolean(body.querySelector('.drain-pool-bar[role="img"]')),
+      legend: Boolean(body.querySelector('.drain-pool-legend')),
+      holderLink: large?.querySelector('.drain-wait-reason a')?.textContent,
+      detail: Boolean(rows.some(row => row.querySelector('.drain-wait-detail'))),
+      truncationNote: Boolean(body.querySelector('.drain-waits-note')),
+    };
+  });
+  const expectedWaitTaskIds = Array.from({ length: 36 }, (_, i) => `ORB-${9000 + i}`).sort();
+  const expectedWaitGroups = [
+    Array.from({ length: 17 }, (_, i) => `ORB-${9000 + i}`),
+    Array.from({ length: 13 }, (_, i) => `ORB-${9017 + i}`),
+    Array.from({ length: 3 }, (_, i) => `ORB-${9030 + i}`),
+    ['ORB-9033'], ['ORB-9034'], ['ORB-9035'],
+  ].sort((left, right) => left[0].localeCompare(right[0]));
+  const actualWaitTaskIds = waitRows.links.map(link => link.id).sort();
+  const actualWaitGroups = waitRows.groups.map(group => group.ids).sort((left, right) => left[0].localeCompare(right[0]));
+  if (JSON.stringify(actualWaitTaskIds) !== JSON.stringify(expectedWaitTaskIds)
+      || waitRows.links.some(link => !link.href?.includes(link.id))) throw new Error(`Drain reason rows must link every waiting task to its task: ${JSON.stringify(waitRows.links)}`);
+  if (JSON.stringify(actualWaitGroups) !== JSON.stringify(expectedWaitGroups)) throw new Error(`Drain reason rows must list only their waiting tasks: ${JSON.stringify(waitRows.groups)}`);
+  if (waitRows.largePool !== 'locks' || !waitRows.largeDisclosure || waitRows.largeOpen || waitRows.largeLinkCount !== 17
+      || waitRows.shortDisclosure || waitRows.shortLinkCount !== 3) throw new Error(`Drain reason link groups do not use the expected disclosure boundary: ${JSON.stringify(waitRows)}`);
+  if (!waitRows.poolBar || !waitRows.legend || waitRows.holderLink !== 'ORB-30' || !waitRows.detail || !waitRows.truncationNote) throw new Error(`Drain waits lost part of the existing card layout: ${JSON.stringify(waitRows)}`);
+  await page.locator('#drain-waits-body .drain-wait[data-pool="locks"] details summary').click();
+  if (!await page.locator('#drain-waits-body .drain-wait[data-pool="locks"] details').evaluate(details => details.open)) throw new Error('Drain wait disclosure did not open');
+  await page.evaluate(() => globalThis.setDrainFixtureReadiness(globalThis.__drainWaitReadinessFixture));
+  const expandedWaits = await page.locator('#drain-waits-body .drain-wait[data-pool="locks"] details').evaluate(details => ({
+    open: details.open,
+    visibleLinks: [...details.querySelectorAll('.drain-wait-task-links a')].filter(link => link.checkVisibility()).length,
+  }));
+  const waitsOverflow = await page.locator('#drain-waits-panel').evaluate(panel => panel.scrollWidth > panel.clientWidth + 1);
+  if (!expandedWaits.open || expandedWaits.visibleLinks !== 17 || waitsOverflow) throw new Error(`Expanded task links must survive refresh and fit on a phone: ${JSON.stringify({ expandedWaits, waitsOverflow })}`);
   await page.setViewportSize({ width: 1024, height: 900 });
   await page.evaluate(() => globalThis.setDrainFixtureReadiness());
   await page.evaluate(async () => { const { setDockMode } = await import('/js/log-tail.js'); setDockMode('log'); });
