@@ -111,7 +111,14 @@ window navigates only to the status page and the running dashboard. Every other 
 The shell is its own Cargo workspace (its `Cargo.toml` has its own `[workspace]` table), not a member of the root one, so `make ci` and the main CI
 jobs never build it. [`.github/workflows/desktop.yml`](../.github/workflows/desktop.yml) runs
 format, watcher regression tests without the webview stack, Clippy and test checks on macOS and
-Linux whenever `desktop/` changes. A manual run of that workflow also uploads unsigned bundles for
+Linux, plus a separate Linux advisory check of the committed desktop lockfile. It runs when
+`desktop/`, the workflow, `deny.toml`, the cargo-deny/download wrappers or the advisory regression
+changes. From the repository root, reproduce the advisory check with
+`scripts/cargo-deny.sh --manifest-path desktop/Cargo.toml --locked check advisories`;
+`make audit` covers only the root workspace. The shared
+[supply-chain policy](../docs/DEVELOPMENT.md#supply-chain-cargo-deny) records the exact-ID
+desktop maintenance exceptions, upstream constraints and re-review ownership.
+A manual run of that workflow also uploads unsigned bundles for
 testing. Releases are built separately, as described in [Releases](#releases).
 
 The server supervisor lives in the `orbit_desktop` library (`src/sidecar.rs`), apart from the
