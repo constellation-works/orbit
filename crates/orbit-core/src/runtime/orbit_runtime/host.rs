@@ -81,7 +81,9 @@ impl OrbitRuntime {
         if self.registered_host_oses.is_empty() {
             return oses;
         }
-        let recent = self.recently_claiming_machines();
+        let Ok(recent) = self.recently_claiming_machines() else {
+            return oses;
+        };
         for (machine_id, os) in &self.registered_host_oses {
             if recent.contains_key(machine_id) {
                 oses.insert(*os);
@@ -95,6 +97,7 @@ impl OrbitRuntime {
     /// host(s): mac-mini pulling (claimed here within 7 days), mbp not
     /// pulling (no claim here within 7 days)`. Pulling is the same claim
     /// evidence [`Self::serving_host_oses`] counts, not a live heartbeat.
+    /// Unreadable records leave the registered hosts' pulling status unknown.
     /// `None` when `wanted` is empty.
     pub(crate) fn host_os_fleet_note(
         &self,
@@ -120,12 +123,15 @@ impl OrbitRuntime {
         let days = SERVING_CLAIM_EVIDENCE_DAYS;
         let hosts = matching
             .into_iter()
-            .map(|(machine_id, _)| match recent.get(machine_id) {
-                Some(name) => format!(
-                    "{} pulling (claimed here within {days} days)",
-                    name.as_deref().unwrap_or(machine_id)
-                ),
-                None => format!("{machine_id} not pulling (no claim here within {days} days)"),
+            .map(|(machine_id, _)| match &recent {
+                Err(_) => format!("{machine_id} (claim records unreadable)"),
+                Ok(recent) => match recent.get(machine_id) {
+                    Some(name) => format!(
+                        "{} pulling (claimed here within {days} days)",
+                        name.as_deref().unwrap_or(machine_id)
+                    ),
+                    None => format!("{machine_id} not pulling (no claim here within {days} days)"),
+                },
             })
             .collect::<Vec<_>>()
             .join(", ");
@@ -134,12 +140,13 @@ impl OrbitRuntime {
 
     /// Machines with an execution claim in this workspace created or
     /// updated within [`SERVING_CLAIM_EVIDENCE_DAYS`], by machine id, with
-    /// the name the claim recorded. Unreadable claim records yield none.
-    fn recently_claiming_machines(&self) -> std::collections::BTreeMap<String, Option<String>> {
+    /// the name the claim recorded. Propagate unreadable records so callers
+    /// can distinguish missing evidence from an unsuccessful inspection.
+    fn recently_claiming_machines(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, Option<String>>, OrbitError> {
         let cutoff = Utc::now() - Duration::days(SERVING_CLAIM_EVIDENCE_DAYS);
-        let Ok(claims) = self.inspect_execution_claims() else {
-            return std::collections::BTreeMap::new();
-        };
+        let claims = self.inspect_execution_claims()?;
         let mut recent = std::collections::BTreeMap::new();
         for claim in claims.iter().filter(|claim| {
             [&claim.updated_at, &claim.created_at]
@@ -155,7 +162,7 @@ impl OrbitRuntime {
                 name.clone_from(&location.machine_name);
             }
         }
-        recent
+        Ok(recent)
     }
 
     /// Read the browser kit admission checks `ui` tasks against from `home`

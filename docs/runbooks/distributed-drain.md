@@ -219,6 +219,11 @@ and the `orbit run show` waiting line of its local drain also name each
 registered host of that OS and whether it is pulling, meaning it holds a claim
 in this workspace from the last seven days (`registered macos host(s): mac-mini
 pulling (claimed here within 7 days)`), or say `no registered host runs macos`.
+A readable claim store with no recent claim reports that host as `not pulling
+(no claim here within 7 days)`. If claim inspection fails, the fleet note lists
+the registered hosts with `claim records unreadable`; it cannot determine
+whether those hosts have pulled recently. Unreadable evidence also leaves only
+the owner's own OS serving creation-time crew draws.
 A task whose dependency is still open also shows that OS wait in readiness
 (`tasks[].host_os_wait`), after its dependency. Retag with `orbit.task.update` to reroute a
 backlog task; running or claimed work is not moved.
