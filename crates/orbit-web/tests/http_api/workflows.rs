@@ -188,6 +188,46 @@ fn auto_stop_is_idempotent_and_preserves_in_flight_children() {
 const WS: &str = "ws_http_fixture";
 
 #[test]
+fn auto_windows_refuse_oversized_input_without_creating_a_run() {
+    isolated(
+        "workflows::auto_windows_refuse_oversized_input_without_creating_a_run",
+        || {
+            let fixture = Fixture::new();
+            fixture.job("workspace_auto_pipeline");
+            let server = fixture.server(true);
+            let uri = format!("/api/workflows/auto?workspace={WS}");
+            let before = run_ids(&fixture);
+            for duration in ["2d", "86401s"] {
+                let response = server.send("POST", &uri, json!({"for_duration":duration}));
+                let status = response.status().as_u16();
+                let error: Value = response.json().unwrap();
+                assert_eq!(status, 400, "{error}");
+                assert_eq!(
+                    error["error"],
+                    "for_seconds must be a whole number from 1 to 86400 (24 hours)"
+                );
+                assert_eq!(run_ids(&fixture), before, "refused input creates no run");
+            }
+            for body in [json!({}), json!({"for_duration":"0s"})] {
+                assert_eq!(server.send("POST", &uri, body).status().as_u16(), 400);
+                assert_eq!(run_ids(&fixture), before, "minimum-window rules remain");
+            }
+            for duration in ["1s", "24h"] {
+                let receipt = json_ok(server.send("POST", &uri, json!({"for_duration":duration})));
+                assert_eq!(receipt["job_id"], "workspace_auto_pipeline");
+                assert!(receipt["submitted_at"].is_string(), "{receipt}");
+                assert!(receipt.get("review").is_some());
+                assert_eq!(receipt["auto_fix"], false);
+                assert_eq!(
+                    run_input(&fixture, &receipt)["for_seconds"],
+                    if duration == "1s" { 1 } else { 86_400 }
+                );
+            }
+        },
+    );
+}
+
+#[test]
 fn resume_requires_current_completion_authority_and_preserves_review_only_admission() {
     isolated(
         "workflows::resume_requires_current_completion_authority_and_preserves_review_only_admission",

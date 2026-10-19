@@ -318,27 +318,55 @@ fn a_follower_without_required_validation_commands_starts_a_pull_drain() {
         .logical_workspace_id
         .clone();
 
-    let submitted = follower
-        .submit_workspace_pull_run(
-            orbit_core::WorkspacePullRequest {
-                selector: &format!("{OWNER}/{logical}"),
-                for_seconds: Some(60),
-                max_active_leaf_runs: Some(1),
-                allowed_crews: &[],
-                actor: None,
-            },
-            orbit_types::workflow::JobRunTrigger::cli(),
-        )
-        .expect_err("a fixture without job assets never submits a run");
+    let probes_before = pair.wire.calls("orbit.drain.probe").len();
+    for seconds in [86_401, 172_800, u64::MAX] {
+        let before = follower.list_job_runs(Default::default()).unwrap();
+        let error = follower
+            .submit_workspace_pull_run(
+                orbit_core::WorkspacePullRequest {
+                    selector: &format!("{OWNER}/{logical}"),
+                    for_seconds: Some(seconds),
+                    ..Default::default()
+                },
+                orbit_types::workflow::JobRunTrigger::cli(),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(error, OrbitError::InvalidInput(ref message)
+            if message == "for_seconds must be a whole number from 1 to 86400 (24 hours)"),
+            "{error}"
+        );
+        assert_eq!(follower.list_job_runs(Default::default()).unwrap(), before);
+        assert_eq!(
+            pair.wire.calls("orbit.drain.probe").len(),
+            probes_before,
+            "invalid input never probes the owner"
+        );
+    }
 
-    assert!(
-        matches!(
-            submitted,
-            OrbitError::NotFound { ref id, .. } if id == "workspace_pull_pipeline"
-        ),
-        "an empty requirement list must not refuse a pull drain: {submitted}"
-    );
-    assert_eq!(pair.wire.calls("orbit.drain.probe").len(), 2);
+    for for_seconds in [Some(60), None, Some(0), Some(86_400)] {
+        let submitted = follower
+            .submit_workspace_pull_run(
+                orbit_core::WorkspacePullRequest {
+                    selector: &format!("{OWNER}/{logical}"),
+                    for_seconds,
+                    max_active_leaf_runs: Some(1),
+                    allowed_crews: &[],
+                    actor: None,
+                },
+                orbit_types::workflow::JobRunTrigger::cli(),
+            )
+            .expect_err("a fixture without job assets never submits a run");
+
+        assert!(
+            matches!(
+                submitted,
+                OrbitError::NotFound { ref id, .. } if id == "workspace_pull_pipeline"
+            ),
+            "an empty requirement list must not refuse a pull drain: {submitted}"
+        );
+    }
+    assert_eq!(pair.wire.calls("orbit.drain.probe").len(), 8);
 }
 
 /// An unreadable persisted cancel request fails the whole pass visibly; it

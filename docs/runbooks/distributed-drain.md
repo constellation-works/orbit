@@ -599,6 +599,13 @@ the follower, from the replica checkout:
 orbit run auto --pull <selector> --for 8h --concurrency 3
 ```
 
+Owner and pull drains accept windows up to 24 hours. CLI `--for`, HTTP
+`POST /api/workflows/auto` (`for_duration`), and MCP `orbit.workflow.auto`
+(`for_seconds`) refuse a longer window before creating a run, with
+`for_seconds must be a whole number from 1 to 86400 (24 hours)`. The CLI
+keeps its one-pass shorthand when `--for` is omitted or zero; HTTP and MCP
+require a positive window.
+
 `<selector>` is the owner's host-qualified selector from federated discovery
 (`orbit_workspace_list`, e.g. `hm_owner/ws_orbit`); an owner with no host entry
 (`orbit host add`) is refused as an unknown selector, and the message says so. Before anything is

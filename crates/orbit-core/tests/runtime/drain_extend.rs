@@ -362,6 +362,23 @@ fn invalid_concurrency_given_with_an_extension_fails_and_leaves_state_unchanged(
         let drain = drains.running(job, 3600, stamped, |_| {});
         let before_state = drains.state(&drain);
 
+        for window in [
+            Duration::zero(),
+            Duration::seconds(86_401),
+            Duration::days(2),
+        ] {
+            let error = drains.extend(&drain, window, None).unwrap_err();
+            assert!(
+                matches!(error, OrbitError::InvalidInput(ref message)
+                if message == "the extension must be between 1 second and 86400 seconds (24 hours)"),
+                "{error}"
+            );
+            assert_eq!(
+                drains.state(&drain),
+                before_state,
+                "{job}: invalid windows change no state"
+            );
+        }
         let error = drains
             .extend(&drain, Duration::hours(3), Some(0))
             .unwrap_err();
@@ -397,7 +414,7 @@ fn invalid_concurrency_given_with_an_extension_fails_and_leaves_state_unchanged(
         let completions_failure = drains.completions(&drain, AuditEventStatus::Failure);
         assert_eq!(
             completions_failure.len(),
-            1,
+            4,
             "{job}: {completions_failure:?}"
         );
         assert_eq!(completions_failure[0]["outcome"], "rejected");
@@ -407,6 +424,8 @@ fn invalid_concurrency_given_with_an_extension_fails_and_leaves_state_unchanged(
             completions_success.is_empty(),
             "{job}: no success audit should be recorded"
         );
+        let accepted = drains.extend(&drain, Duration::hours(24), None).unwrap();
+        assert_eq!(accepted.outcome, DrainWindowExtensionOutcome::Extended);
     }
 }
 
