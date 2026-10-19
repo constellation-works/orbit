@@ -691,9 +691,10 @@ class VerifiedDownloadTests(unittest.TestCase):
         self._ensure_cargo_shim()
         with tempfile.TemporaryDirectory(dir=self.root, prefix=f"case-{tool}-{mode}-") as case_dir:
             case_root = Path(case_dir)
-            scripts = case_root / "scripts"
-            scripts.mkdir()
+            scripts = case_root / ".orbit/tmp/workflow-ci/scripts"
+            scripts.mkdir(parents=True)
             (scripts / HELPER.name).symlink_to(HELPER)
+            scratch_before = sorted((case_root / ".orbit/tmp").iterdir())
             cargo_home = case_root / "cargo"
             version = {"version": "9.9.9", "version-prefix": "1.2.34"}.get(mode, "1.2.3")
             stream = io.BytesIO()
@@ -724,7 +725,7 @@ class VerifiedDownloadTests(unittest.TestCase):
             if mode in ("digest", "archive"):
                 self.assertFalse(installed.exists(), "unverified bytes must never be installed")
             tmp_dir = case_root / ".orbit/tmp"
-            self.assertEqual(list(tmp_dir.iterdir()) if tmp_dir.exists() else [], [],
+            self.assertEqual(sorted(tmp_dir.iterdir()), scratch_before,
                              "installer trap cleans both outcomes")
 
     def test_actual_linux_install_steps_verify_extract_and_refuse_invalid_archives_or_versions(self):
