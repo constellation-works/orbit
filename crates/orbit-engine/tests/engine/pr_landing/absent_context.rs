@@ -1,11 +1,11 @@
 //! Real Git and provider-source proof through public completion/landing actions.
 use super::*;
 
-const NEW: &str = "name: CI\non:\n  pull_request:\n    branches: [agent-main]\npermissions: {}\njobs:\n  check:\n    name: Protected (${{ matrix.language }})\n    strategy:\n      matrix:\n        language: [rust]\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo check\n";
+pub(super) const NEW: &str = "name: CI\non:\n  pull_request:\n    branches: [agent-main]\npermissions: {}\njobs:\n  check:\n    name: Protected (${{ matrix.language }})\n    strategy:\n      matrix:\n        language: [rust]\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo check\n";
 
 const LIVE_PR_GATE: &str = "tests/engine/pr_landing/infrastructure/fixtures/live-pr-gate.yml";
 const LIVE_PR_GATE_CONTEXT: &str = "Windows cargo check (x86_64-pc-windows-msvc)";
-fn setup(sandbox: &Path, source: &str) -> (Fixture, DeliveryHost) {
+pub(super) fn setup(sandbox: &Path, source: &str) -> (Fixture, DeliveryHost) {
     setup_with_context(sandbox, source, "Protected (rust)")
 }
 fn setup_with_context(sandbox: &Path, source: &str, context: &str) -> (Fixture, DeliveryHost) {
@@ -205,10 +205,10 @@ fn workflow_source_bounds_are_checked_during_emission_proof() {
     );
 }
 
-struct AcceptedLanding {
+pub(super) struct AcceptedLanding {
     host: DeliveryHost,
-    context: orbit_engine::HandoffLandingContext,
-    updates: Mutex<Vec<orbit_engine::HandoffLandingUpdate>>,
+    pub(super) context: orbit_engine::HandoffLandingContext,
+    pub(super) updates: Mutex<Vec<orbit_engine::HandoffLandingUpdate>>,
 }
 impl orbit_engine::test_support::NullRuntimeHost for AcceptedLanding {
     fn admit_handoff_base_update(
@@ -243,7 +243,7 @@ impl orbit_engine::test_support::NullRuntimeHost for AcceptedLanding {
         Ok(())
     }
 }
-fn accepted_landing(fx: &Fixture, host: DeliveryHost) -> AcceptedLanding {
+pub(super) fn accepted_landing(fx: &Fixture, host: DeliveryHost) -> AcceptedLanding {
     let revision = |commit: &str| orbit_types::workflow::automation::SourceRevision {
         commit: commit.into(),
         tree: git(&fx.repo, &["rev-parse", &format!("{commit}^{{tree}}")]),

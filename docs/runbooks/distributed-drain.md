@@ -1381,6 +1381,18 @@ one. From then on:
 - Each accepted handoff is authorized in the same transaction that moves the
   task to `review`, and `task_landing_pipeline` starts at once. The task
   reaches `done` when the landing job has verified the merge.
+- A provider transport failure (a TLS or request timeout, a reset
+  connection, an HTTP 5xx) that interrupts the landing before it records a
+  merge intent or requests a check rerun or branch update is retried by the
+  same landing job against the same handoff: at most three passes, 20s and
+  then 60s apart, within the job's check-wait budget. A credential,
+  permission or rate-limit refusal is not retried. A landing job that still
+  fails, for that or any other reason, records its attempt `stopped` with
+  the error, so the dashboard and `orbit.drain.claims` show the stop instead
+  of an attempt left `dispatched` behind a finished job. A failure after the
+  merge request was sent is never resent: the attempt keeps its unresolved
+  merge intent, and the next attempt (**Retry landing**) reconciles that
+  intent against the pull request before anything else.
 - When a pull request's hosted check fails, the landing classifies each
   failed job from its failed-step log (the CI sweep's log read and error
   signature) before it stops anything:

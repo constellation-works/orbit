@@ -75,6 +75,7 @@ mod auto_fix;
 mod check_annotations;
 mod flaky;
 mod infrastructure;
+mod landing_transport;
 #[cfg(target_os = "linux")]
 mod stable_build_mount;
 

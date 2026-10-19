@@ -506,7 +506,21 @@ fn an_owed_hosted_check_must_pass_before_the_owner_merges() {
         assert_eq!(!sent.is_empty(), merges, "{case}: {sent:?} {error}");
         let steps = host.steps.lock().unwrap().clone();
         match stop_reason {
-            None => assert!(steps.is_empty(), "{case}: {steps:?}"),
+            // The owed check passed, so the landing went on to the merge; the
+            // fixture refuses its merge-policy read, and the failed run
+            // settles with its own stop rather than an owed-check refusal.
+            None => {
+                assert_eq!(
+                    steps,
+                    vec![HandoffLandingStep::Stop { repairable: false }],
+                    "{case}"
+                );
+                let message = error.to_string();
+                assert!(
+                    message.contains("no permitted merge method") && !message.contains(OWED),
+                    "{case}: {message}"
+                );
+            }
             Some(reason) => {
                 assert_eq!(
                     steps,

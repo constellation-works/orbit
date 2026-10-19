@@ -30,15 +30,26 @@
 //!    stops for the one automatic repair; a transient one is rerun once, and
 //!    one the candidate caused stops for the same single repair [ORB-15956]
 //!    [ORB-16322].
+//! 4. **Settle every run.** A provider transport failure (a TLS or request
+//!    timeout, a reset connection, a 5xx) that interrupts a pass before it
+//!    records a merge intent or requests a check recovery is retried
+//!    against the same handoff, a bounded number of times with backoff,
+//!    from the owner's current state. A run that still fails, for that or
+//!    any other reason, records a stop with its error, so the attempt never
+//!    stays dispatched behind a finished run. The one exception is a merge
+//!    intent this owner sent and could not resolve: that attempt keeps its
+//!    recorded uncertainty, which the next attempt reconciles first.
 //!
 //! The guarded `review -> done` transition is the owner store's, behind its own
 //! recheck of the current authorization and the digest-pinned validation
 //! evidence. This activity only supplies the merge evidence that permits it.
 
+use std::cell::Cell;
+use std::ops::Deref;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use orbit_common::OrbitError;
+use orbit_common::{OrbitError, PrivateVcsFailureClass};
 use orbit_types::workflow::automation::{DirectLandingRequest, SourceRevision};
 use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery};
 use serde_json::{Value, json};
@@ -72,6 +83,12 @@ const MAX_WAIT_SECONDS: u64 = 6 * 60 * 60;
 const MIN_POLL_INTERVAL_SECONDS: u64 = 5;
 const MAX_POLL_INTERVAL_SECONDS: u64 = 10 * 60;
 
+/// Landing passes one run makes when a provider transport failure interrupts
+/// a pass before any external write, including the first. Each later pass
+/// waits out the matching backoff first.
+const TRANSPORT_PASSES: u32 = 3;
+const TRANSPORT_BACKOFF: [Duration; 2] = [Duration::from_secs(20), Duration::from_secs(60)];
+
 pub(in crate::executor::automation) fn handoff_land<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
@@ -79,7 +96,169 @@ pub(in crate::executor::automation) fn handoff_land<H: RuntimeHost + ?Sized>(
     let handoff_id = input_string_field(input, "handoff_id").ok_or_else(|| {
         OrbitError::InvalidInput("handoff_land: handoff_id is required".to_string())
     })?;
-    let context = host.handoff_landing_context(&handoff_id)?;
+    // One budget for the whole run: a retried pass does not restart the wait.
+    let budget = LandingBudget::from_input(input)?;
+    let mut passes = 1;
+    loop {
+        let pass = LandingPass::new(host.handoff_landing_context(&handoff_id)?);
+        let error = match land(host, &pass, input, &budget) {
+            Ok(landed) => return Ok(landed),
+            Err(error) => error,
+        };
+        if pass.settled.get() {
+            return Err(error);
+        }
+        if passes < TRANSPORT_PASSES
+            && !pass.wrote.get()
+            && transport_failure(&error)
+            && let Some(backoff) = TRANSPORT_BACKOFF.get((passes - 1) as usize).copied()
+            && budget.allows(backoff)?
+        {
+            tracing::warn!(
+                %error,
+                handoff_id,
+                pass = passes,
+                "handoff_land: provider transport failure before any external write; retrying \
+                 the same handoff"
+            );
+            sleep(backoff);
+            passes += 1;
+            continue;
+        }
+        return Err(settle_failure(host, &pass, passes, error));
+    }
+}
+
+/// A provider failure the provider boundary classified as a transport
+/// failure: no credential, permission, rate-limit or permanent-HTTP signal.
+fn transport_failure(error: &OrbitError) -> bool {
+    error
+        .private_vcs_failure()
+        .is_some_and(|failure| failure.class == PrivateVcsFailureClass::TransientObservation)
+}
+
+/// Record the stop a failed run left unrecorded, and return the error the run
+/// fails with. An intent this owner published and could not resolve is left
+/// as it is: the store refuses a stop past it, and the next attempt
+/// reconciles it against the provider before anything else.
+fn settle_failure<H: RuntimeHost + ?Sized>(
+    host: &H,
+    pass: &LandingPass,
+    passes: u32,
+    error: OrbitError,
+) -> OrbitError {
+    if pass.intent_open.get() {
+        return error;
+    }
+    let message = error.to_string();
+    let message = message.strip_prefix("handoff_land: ").unwrap_or(&message);
+    let tries = if passes > 1 {
+        format!(" after {passes} tries")
+    } else {
+        String::new()
+    };
+    let reason = format!("the landing run failed{tries}: {message}; the candidate stays in review");
+    match record_stop(host, pass, &reason, false) {
+        Ok(stopped) => stopped,
+        Err(refused) => {
+            tracing::warn!(
+                %refused,
+                %error,
+                handoff_id = %pass.handoff_id,
+                "handoff_land: the failed run's stop could not be recorded"
+            );
+            error
+        }
+    }
+}
+
+/// The check-wait budget of one landing run, shared by every pass it makes.
+struct LandingBudget {
+    max_wait_seconds: u64,
+    poll_interval_seconds: u64,
+    started: Instant,
+    deadline_ms: u64,
+}
+
+impl LandingBudget {
+    fn from_input(input: &Value) -> Result<Self, OrbitError> {
+        let max_wait_seconds = bounded_u64(
+            input,
+            "max_wait_seconds",
+            DEFAULT_MAX_WAIT_SECONDS,
+            MAX_WAIT_SECONDS,
+        )?;
+        let poll_interval_seconds = bounded_u64(
+            input,
+            "poll_interval_seconds",
+            DEFAULT_POLL_INTERVAL_SECONDS,
+            MAX_POLL_INTERVAL_SECONDS,
+        )?
+        .max(MIN_POLL_INTERVAL_SECONDS);
+        let deadline_ms =
+            super::completion_deadline::now_ms()?.saturating_add(if max_wait_seconds == 0 {
+                // Zero disables poll waits; synchronous provider operations still
+                // receive a finite recovery deadline.
+                60_000
+            } else {
+                max_wait_seconds.saturating_mul(1000)
+            });
+        Ok(Self {
+            max_wait_seconds,
+            poll_interval_seconds,
+            started: Instant::now(),
+            deadline_ms,
+        })
+    }
+
+    /// Whether a retry that first waits `backoff` still starts within budget.
+    fn allows(&self, backoff: Duration) -> Result<bool, OrbitError> {
+        let backoff_ms = u64::try_from(backoff.as_millis()).unwrap_or(u64::MAX);
+        Ok(super::completion_deadline::now_ms()?.saturating_add(backoff_ms) < self.deadline_ms)
+    }
+}
+
+/// One pass over the owner's current landing state, and what it recorded.
+///
+/// Every durable landing step goes through [`record`], which keeps these
+/// facts, so a failed run knows whether it still owes its attempt a stop.
+struct LandingPass {
+    context: HandoffLandingContext,
+    /// A stop or completion is recorded: the attempt is settled.
+    settled: Cell<bool>,
+    /// A merge intent was recorded or a check recovery requested, so an
+    /// external write may have happened and the pass is not retried.
+    wrote: Cell<bool>,
+    /// A merge intent stands unresolved.
+    intent_open: Cell<bool>,
+}
+
+impl LandingPass {
+    fn new(context: HandoffLandingContext) -> Self {
+        let intent_open = context.unresolved_merge_intent.is_some();
+        Self {
+            context,
+            settled: Cell::new(false),
+            wrote: Cell::new(false),
+            intent_open: Cell::new(intent_open),
+        }
+    }
+}
+
+impl Deref for LandingPass {
+    type Target = HandoffLandingContext;
+
+    fn deref(&self) -> &HandoffLandingContext {
+        &self.context
+    }
+}
+
+fn land<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &LandingPass,
+    input: &Value,
+    budget: &LandingBudget,
+) -> Result<Value, OrbitError> {
     // Every containment judgement below reads the landing ref, so the owner's
     // view of it is refreshed once before any of them run.
     let view = LandingView::refresh(
@@ -92,31 +271,31 @@ pub(in crate::executor::automation) fn handoff_land<H: RuntimeHost + ?Sized>(
     // about an external write. Nothing else may happen until real state says
     // what became of it.
     if let Some(intent_id) = context.unresolved_merge_intent.clone()
-        && let Some(landed) = reconcile_intent(host, &context, &intent_id, &view)?
+        && let Some(landed) = reconcile_intent(host, context, &intent_id, &view)?
     {
         return Ok(landed);
     }
 
     match context.candidate.delivery.clone() {
         HandoffDelivery::PullRequest { number } => {
-            land_pull_request(host, &context, number, input, &view)
+            land_pull_request(host, context, number, budget, &view)
         }
         // [ORB-15677] Only a pull request's hosted CI runs the checks the
         // review owed it; a local candidate has none to wait for.
         HandoffDelivery::LocalCandidate if !context.owed_hosted_checks.is_empty() => Err(stop(
             host,
-            &context,
+            context,
             &format!(
                 "the review owed hosted checks ({}) to a pull request, but the candidate is \
                  delivered locally; the candidate stays in review",
                 context.owed_hosted_checks.join(", ")
             ),
         )?),
-        HandoffDelivery::LocalCandidate => land_local_candidate(host, &context, input, &view),
-        HandoffDelivery::NoDiff { .. } => land_no_diff(host, &context, &view),
+        HandoffDelivery::LocalCandidate => land_local_candidate(host, context, input, &view),
+        HandoffDelivery::NoDiff { .. } => land_no_diff(host, context, &view),
         HandoffDelivery::AlreadyLanded {
             covering_commit, ..
-        } => land_already_landed(host, &context, &covering_commit, &view),
+        } => land_already_landed(host, context, &covering_commit, &view),
     }
 }
 
@@ -183,7 +362,7 @@ impl LandingView {
 /// resolving an intent is not proof that the authorized candidate landed.
 fn reconcile_intent<H: RuntimeHost + ?Sized>(
     host: &H,
-    context: &HandoffLandingContext,
+    context: &LandingPass,
     intent_id: &str,
     view: &LandingView,
 ) -> Result<Option<Value>, OrbitError> {
@@ -302,9 +481,9 @@ fn reconcile_intent<H: RuntimeHost + ?Sized>(
 
 fn land_pull_request<H: RuntimeHost + ?Sized>(
     host: &H,
-    context: &HandoffLandingContext,
+    context: &LandingPass,
     number: u64,
-    input: &Value,
+    budget: &LandingBudget,
     view: &LandingView,
 ) -> Result<Value, OrbitError> {
     let candidate = &context.candidate;
@@ -313,29 +492,12 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
     let workspace_path = workspace.to_string_lossy().into_owned();
     let mut pin = pin_for(candidate);
 
-    let max_wait_seconds = bounded_u64(
-        input,
-        "max_wait_seconds",
-        DEFAULT_MAX_WAIT_SECONDS,
-        MAX_WAIT_SECONDS,
-    )?;
-    let poll_interval_seconds = bounded_u64(
-        input,
-        "poll_interval_seconds",
-        DEFAULT_POLL_INTERVAL_SECONDS,
-        MAX_POLL_INTERVAL_SECONDS,
-    )?
-    .max(MIN_POLL_INTERVAL_SECONDS);
-
-    let started = Instant::now();
-    let deadline_ms =
-        super::completion_deadline::now_ms()?.saturating_add(if max_wait_seconds == 0 {
-            // Zero disables poll waits; synchronous provider operations still
-            // receive a finite recovery deadline.
-            60_000
-        } else {
-            max_wait_seconds.saturating_mul(1000)
-        });
+    let LandingBudget {
+        max_wait_seconds,
+        poll_interval_seconds,
+        started,
+        deadline_ms,
+    } = *budget;
     let mut recovery = CheckRecovery::before(deadline_ms);
     let mut unreported = UnreportedChecks::new();
     let mut waited_seconds = 0_u64;
@@ -550,6 +712,8 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 )?);
             }
             let tip = landing_tip(context, view);
+            // A rerun or branch update is an external write, and one that
+            // failed may have been applied, so neither retries the pass.
             let recovered = recover_failed_checks(
                 host,
                 context,
@@ -558,7 +722,11 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 tip.as_deref(),
                 &mut recovery,
                 &reason,
-            )?;
+            )
+            .inspect_err(|_| context.wrote.set(true))?;
+            if matches!(recovered, CheckRecoveryStep::Acted) {
+                context.wrote.set(true);
+            }
             if let Some(observation) = recovery.required_observation.take() {
                 diagnostic["required_checks"] = observation;
             }
@@ -664,10 +832,13 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 }
                 let capabilities = resolve_permitted_merge(host, &workspace_path, &pr_number)
                     .map_err(|error| {
-                        OrbitError::Execution(format!(
-                            "handoff_land: no permitted merge method for pull request \
+                        operations::carry_class(
+                            &error,
+                            OrbitError::Execution(format!(
+                                "handoff_land: no permitted merge method for pull request \
                                  #{pr_number}: {error}"
-                        ))
+                            )),
+                        )
                     })?;
                 if max_wait_seconds > 0 && super::completion_deadline::now_ms()? >= deadline_ms {
                     return Err(landing_timeout(
@@ -763,7 +934,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
 
 fn landing_timeout<H: RuntimeHost + ?Sized>(
     host: &H,
-    context: &HandoffLandingContext,
+    context: &LandingPass,
     number: u64,
     max_wait_seconds: u64,
     owed: &[String],
@@ -791,7 +962,7 @@ fn landing_timeout<H: RuntimeHost + ?Sized>(
 /// landing branch is the entire external effect.
 fn land_local_candidate<H: RuntimeHost + ?Sized>(
     host: &H,
-    context: &HandoffLandingContext,
+    context: &LandingPass,
     input: &Value,
     view: &LandingView,
 ) -> Result<Value, OrbitError> {
@@ -909,7 +1080,7 @@ fn land_local_candidate<H: RuntimeHost + ?Sized>(
 /// verified here against the real landing ref.
 fn land_already_landed<H: RuntimeHost + ?Sized>(
     host: &H,
-    context: &HandoffLandingContext,
+    context: &LandingPass,
     covering_commit: &str,
     view: &LandingView,
 ) -> Result<Value, OrbitError> {
@@ -949,7 +1120,7 @@ fn land_already_landed<H: RuntimeHost + ?Sized>(
 /// `observe_or_stop` already stops when it no longer contains it.
 fn land_no_diff<H: RuntimeHost + ?Sized>(
     host: &H,
-    context: &HandoffLandingContext,
+    context: &LandingPass,
     view: &LandingView,
 ) -> Result<Value, OrbitError> {
     let observed = observe_or_stop(host, context, None, view)?;
@@ -983,7 +1154,7 @@ fn land_no_diff<H: RuntimeHost + ?Sized>(
 /// cannot verify, and the evidence says why.
 fn observe_or_stop<H: RuntimeHost + ?Sized>(
     host: &H,
-    context: &HandoffLandingContext,
+    context: &LandingPass,
     status: Option<&PullRequestStatus>,
     view: &LandingView,
 ) -> Result<HandoffCandidate, OrbitError> {
@@ -1183,22 +1354,33 @@ fn pin_for(candidate: &HandoffCandidate) -> DeliveryPin {
 
 fn record<H: RuntimeHost + ?Sized>(
     host: &H,
-    context: &HandoffLandingContext,
+    context: &LandingPass,
     step: HandoffLandingStep,
     observed: Option<HandoffCandidate>,
     evidence: &Value,
 ) -> Result<(), OrbitError> {
     host.record_handoff_landing(&HandoffLandingUpdate {
         handoff_id: context.handoff_id.clone(),
-        step,
+        step: step.clone(),
         observed,
         evidence: evidence.to_string(),
-    })
+    })?;
+    match step {
+        HandoffLandingStep::PublishIntent { .. } => {
+            context.wrote.set(true);
+            context.intent_open.set(true);
+        }
+        HandoffLandingStep::ResolveIntent { .. } => context.intent_open.set(false),
+        HandoffLandingStep::Complete | HandoffLandingStep::Stop { .. } => {
+            context.settled.set(true);
+        }
+    }
+    Ok(())
 }
 
 fn complete<H: RuntimeHost + ?Sized>(
     host: &H,
-    context: &HandoffLandingContext,
+    context: &LandingPass,
     observed: HandoffCandidate,
     evidence: &Value,
 ) -> Result<Value, OrbitError> {
@@ -1221,7 +1403,7 @@ fn complete<H: RuntimeHost + ?Sized>(
 /// durable attempt supplies its attempt number/run; `observed` stays empty.
 fn stop_pr<H: RuntimeHost + ?Sized>(
     host: &H,
-    context: &HandoffLandingContext,
+    context: &LandingPass,
     observation: &Value,
     repairable: bool,
     reason: &str,
@@ -1262,7 +1444,7 @@ fn stop_pr<H: RuntimeHost + ?Sized>(
 /// evidence an operator reads and the failure they see say the same thing.
 fn stop<H: RuntimeHost + ?Sized>(
     host: &H,
-    context: &HandoffLandingContext,
+    context: &LandingPass,
     reason: &str,
 ) -> Result<OrbitError, OrbitError> {
     record_stop(host, context, reason, false)
@@ -1272,7 +1454,7 @@ fn stop<H: RuntimeHost + ?Sized>(
 /// it lands on. The owner store hands it to one automatic repair.
 fn stop_for_repair<H: RuntimeHost + ?Sized>(
     host: &H,
-    context: &HandoffLandingContext,
+    context: &LandingPass,
     reason: &str,
 ) -> Result<OrbitError, OrbitError> {
     record_stop(host, context, reason, true)
@@ -1280,7 +1462,7 @@ fn stop_for_repair<H: RuntimeHost + ?Sized>(
 
 fn record_stop<H: RuntimeHost + ?Sized>(
     host: &H,
-    context: &HandoffLandingContext,
+    context: &LandingPass,
     reason: &str,
     repairable: bool,
 ) -> Result<OrbitError, OrbitError> {
