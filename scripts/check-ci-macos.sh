@@ -78,6 +78,16 @@ def indentation(line: str) -> int:
     return len(line) - len(line.lstrip(" "))
 
 
+def inline_branch_entries(stripped: str) -> list[str]:
+    # Entries of a one-line `branches: [a, b]` list, with quotes removed. A
+    # word-boundary match would also accept `agent-main-experimental`, because
+    # `-` is a non-word character.
+    match = re.fullmatch(r"branches:\s*\[([^\]]*)\]", stripped)
+    if match is None:
+        return []
+    return [entry.strip().strip("'\"") for entry in match.group(1).split(",")]
+
+
 def runs_on_agent_main_pushes() -> bool:
     # The macOS workflow runs on agent-main pushes, not pull requests: its
     # checks are not required, and its failures are repaired after merge.
@@ -100,7 +110,7 @@ def runs_on_agent_main_pushes() -> bool:
         if stripped == "push:":
             in_push, push_indent = True, indent
             continue
-        if in_push and re.fullmatch(r"branches:\s*\[[^\]]*\bagent-main\b[^\]]*\]", stripped):
+        if in_push and "agent-main" in inline_branch_entries(stripped):
             return True
     return False
 
