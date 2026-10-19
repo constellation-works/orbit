@@ -2,7 +2,7 @@
 title: Federated MCP — Design
 owner: grok
 last_updated: 2026-10-12
-last_validated: 2026-10-17
+last_validated: 2026-10-19
 status: Draft
 feature: federated-mcp
 doc_role: design

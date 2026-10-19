@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Federated workspace MCP mux, selector, capabilities, list schema, and fail-closed routing"
-last_validated: 2026-10-17
+last_validated: 2026-10-19
 title: Spec — Federated workspace MCP
 owner: grok
 status: Draft
