@@ -209,6 +209,86 @@
     ]
   },
   {
+    "name": "orbit.agents.scorecard",
+    "description": "Rank one agent role's crews and models over the window: each term's count per 100 units of the role's work, weighted and summed, then pulled toward the fleet average. Rows below the minimum support are listed last without a rank; a role whose terms are not computed yet answers status not_computed with its terms and no rows. Scans the workspace once per call (cache_ttl_seconds 0). The payload the dashboard's Agents view reads.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "role",
+        "description": "The agent role to score: orchestrators, implementers, reviewers or pilots.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "window",
+        "description": "Counts work in this period ending now: 1h, 24h, 7d, 30d, 90d or all (served as 90d, the scan's reach). Default: 30d.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "min_support",
+        "description": "Units of the role's work a row needs before it is ranked, at least 1; rows below it are listed last without a rank. Default: 10.",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.agents.show",
+    "description": "One row of an agent role's scorecard and, for each term, its count, rate and contribution with the task IDs behind the count and the records that make it. Use it to follow a count from `orbit.agents.scorecard` to its tasks. Scans the workspace once per call (cache_ttl_seconds 0).",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "role",
+        "description": "The agent role to score: orchestrators, implementers, reviewers or pilots.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "crew",
+        "description": "The row's crew; for orchestrators, the orchestrator name tasks record.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "row_model",
+        "description": "The row's model (`model unknown` for runs that recorded none); optional when the crew has one row.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "window",
+        "description": "Counts work in this period ending now: 1h, 24h, 7d, 30d, 90d or all (served as 90d, the scan's reach). Default: 30d.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "min_support",
+        "description": "Units of the role's work a row needs before it is ranked, at least 1; rows below it are listed last without a rank. Default: 10.",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
     "name": "orbit.auto_task.add",
     "description": "Create a recurring auto-task definition. The generic scheduler mints a task from its template on each due slot.",
     "enabled": true,
@@ -797,7 +877,7 @@
   },
   {
     "name": "orbit.orchestrator.scorecard",
-    "description": "Score each orchestrator named by tasks' orchestrator attribution over the tasks it owns that were created in the window: throughput (owned, landed, complexity-weighted landed), proactivity from the typed origin (landed and dropped orchestrator_initiative tasks, unknown origin separately), spec defects (criteria or description edits after the first run, criteria blocks and escalations, incomplete or spec_ambiguous regressions) and rework (review rejects, blocked or unmerged PRs, repeat runs, operator requeues, by cause). Each count is normalized per 100 owned tasks and per 8 active hours, with support counts, then a composite whose weights are in `definitions`. The same payload the dashboard's Orchestrators view reads.",
+    "description": "Deprecated alias of `orbit.agents.scorecard` with role orchestrators, removed in the next release: returns that payload with a `deprecation` note naming the replacement.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -805,13 +885,13 @@
     "parameters": [
       {
         "name": "window",
-        "description": "Counts tasks created in this period ending now: 1h, 24h, 7d, 30d, 90d or all. Default: 30d.",
+        "description": "Counts work in this period ending now: 1h, 24h, 7d, 30d, 90d or all (served as 90d). Default: 30d.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "min_support",
-        "description": "Owned tasks a row needs before its rates are comparable, at least 1; rows below it are marked. Default: 10.",
+        "description": "Units of work a row needs before it is ranked, at least 1; rows below it are listed last without a rank. Default: 10.",
         "param_type": "integer",
         "required": false
       },
@@ -825,7 +905,7 @@
   },
   {
     "name": "orbit.orchestrator.show",
-    "description": "One orchestrator's scorecard row and, for every component, the task IDs behind its count with the history records that make it (when, what, and the attributed cause for rework). Use it to follow a count from `orbit.orchestrator.scorecard` to its tasks.",
+    "description": "Deprecated alias of `orbit.agents.show` with role orchestrators and the orchestrator as crew, removed in the next release: returns that payload with a `deprecation` note naming the replacement.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -833,19 +913,19 @@
     "parameters": [
       {
         "name": "orchestrator",
-        "description": "The orchestrator name a task's orchestrator attribution records.",
+        "description": "The orchestrator name a task's orchestrator attribution records: the row's crew.",
         "param_type": "string",
         "required": true
       },
       {
         "name": "window",
-        "description": "Counts tasks created in this period ending now: 1h, 24h, 7d, 30d, 90d or all. Default: 30d.",
+        "description": "Counts work in this period ending now: 1h, 24h, 7d, 30d, 90d or all (served as 90d). Default: 30d.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "min_support",
-        "description": "Owned tasks a row needs before its rates are comparable, at least 1; rows below it are marked. Default: 10.",
+        "description": "Units of work a row needs before it is ranked, at least 1; rows below it are listed last without a rank. Default: 10.",
         "param_type": "integer",
         "required": false
       },

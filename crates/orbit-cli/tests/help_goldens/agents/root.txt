@@ -1,0 +1,33 @@
+Score orchestrators, implementers, reviewers and pilots by crew and model
+
+Usage: orbit agents [OPTIONS] <COMMAND>
+
+Commands:
+  scorecard  Show one role's scorecard rows by crew and model
+  show       Show one row's terms and the tasks behind each count
+
+Options:
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
+
+  -h, --help
+          Print help (see a summary with '-h')

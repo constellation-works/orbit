@@ -185,7 +185,7 @@ A role whose scorecard answers `status: not_computed` shows an empty state sayin
 
 The detail column sits right of the ranking on a wide screen and stacks under it below 900 px. At 375 px the page never scrolls sideways: the role tabs and the ranking each scroll in their own box, and the legend links, role tabs, disclosure summary and task links keep 44 px touch targets. Every node is built with `el()`.
 
-The view reads only `/api/agents/*`. The old `/api/orchestrators/scorecard` and `/api/orchestrators/detail` routes are removed. `orbit orchestrator scorecard|show` and the `orbit.orchestrator.*` MCP tools still print the previous orchestrator composite until the CLI and MCP move to the agent scorecards.
+The view reads only `/api/agents/*`. The old `/api/orchestrators/scorecard` and `/api/orchestrators/detail` routes are removed. From a terminal or MCP, `orbit agents scorecard|show` and the `orbit.agents.*` tools print the same payloads ([agent scorecards design §7](../agent-scorecards/2_design.md#7-cli-and-mcp)).
 
 ## 6. Top-Level Navigation
 

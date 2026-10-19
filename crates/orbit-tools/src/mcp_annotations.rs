@@ -20,7 +20,9 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
     use McpToolAnnotations as A;
     Some(match canonical_name {
         // Observation of Orbit's own state.
-        "orbit.auto_task.list"
+        "orbit.agents.scorecard"
+        | "orbit.agents.show"
+        | "orbit.auto_task.list"
         | "orbit.auto_task.show"
         | "orbit.codebase.analytics"
         | "orbit.codebase.show"

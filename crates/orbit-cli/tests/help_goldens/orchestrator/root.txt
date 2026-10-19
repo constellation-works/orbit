@@ -1,10 +1,10 @@
-Score orchestrators by the work they file and supervise
+Deprecated alias of `orbit agents` for the orchestrators role
 
 Usage: orbit orchestrator [OPTIONS] <COMMAND>
 
 Commands:
-  scorecard  Show every orchestrator's scorecard row
-  show       Show one orchestrator's row and the tasks behind each count
+  scorecard  Deprecated: use `orbit agents scorecard --role orchestrators`
+  show       Deprecated: use `orbit agents show --role orchestrators --crew <name>`
 
 Options:
       --root <ROOT>

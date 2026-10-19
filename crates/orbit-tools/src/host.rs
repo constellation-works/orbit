@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use orbit_common::OrbitError;
+use orbit_common::governance::agents::AgentsVerb;
 use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::codebase::CodebaseVerb;
 use orbit_common::governance::drain::DrainVerb;
@@ -101,6 +102,8 @@ pub enum OrbitBuiltinAction {
     /// Auto-task verbs are registry data, like friction's.
     AutoTask(AutoTaskVerb),
     AgentInvoke,
+    /// Read-only agent scorecard verbs.
+    Agents(AgentsVerb),
     /// Read-only codebase analytics verbs.
     Codebase(CodebaseVerb),
     CommandExec,
@@ -113,7 +116,7 @@ pub enum OrbitBuiltinAction {
     /// ADR-0209 bearing 1 [ORB-10358]: friction verbs are registry data, so one
     /// action variant carries the verb instead of one variant per verb.
     Friction(FrictionVerb),
-    /// Read-only orchestrator scorecard verbs.
+    /// The deprecated orchestrator scorecard aliases of [`Self::Agents`].
     Orchestrator(OrchestratorVerb),
     PipelineInvoke,
     PipelineWait,
@@ -131,6 +134,12 @@ pub enum OrbitBuiltinAction {
 impl From<CodebaseVerb> for OrbitBuiltinAction {
     fn from(verb: CodebaseVerb) -> Self {
         Self::Codebase(verb)
+    }
+}
+
+impl From<AgentsVerb> for OrbitBuiltinAction {
+    fn from(verb: AgentsVerb) -> Self {
+        Self::Agents(verb)
     }
 }
 

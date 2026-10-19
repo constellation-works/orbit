@@ -440,7 +440,11 @@ impl Commands {
             Commands::Codebase(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Codebase))
             }
-            // The orchestrator scorecard is registry-driven like codebase.
+            // The agent scorecards are registry-driven like codebase.
+            Commands::Agents(command) => {
+                registry_operation(&command.command, runtime_dispatch!(Agents))
+            }
+            // The deprecated orchestrator aliases are registry-driven too.
             Commands::Orchestrator(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Orchestrator))
             }

@@ -58,6 +58,8 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             .collect::<Vec<_>>(),
         [
             "orbit.agent.invoke",
+            "orbit.agents.scorecard",
+            "orbit.agents.show",
             "orbit.auto_task.add",
             "orbit.auto_task.list",
             "orbit.auto_task.mint",

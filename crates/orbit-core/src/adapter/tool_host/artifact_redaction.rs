@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
+use orbit_common::governance::agents::AgentsVerb;
 use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::codebase::CodebaseVerb;
 use orbit_common::governance::drain::DrainVerb;
@@ -347,6 +348,12 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
                 ..NO_REDACTION
             },
         },
+        OrbitBuiltinAction::Agents(verb) => match verb {
+            AgentsVerb::Scorecard | AgentsVerb::Show => ActionPolicy {
+                declared: verb.spec().params,
+                ..NO_REDACTION
+            },
+        },
         OrbitBuiltinAction::Orchestrator(verb) => match verb {
             OrchestratorVerb::Scorecard | OrchestratorVerb::Show => ActionPolicy {
                 declared: verb.spec().params,
@@ -412,6 +419,9 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
         },
         OrbitBuiltinAction::Codebase(verb) => match verb {
             CodebaseVerb::Analytics | CodebaseVerb::Show | CodebaseVerb::Related => false,
+        },
+        OrbitBuiltinAction::Agents(verb) => match verb {
+            AgentsVerb::Scorecard | AgentsVerb::Show => false,
         },
         OrbitBuiltinAction::Orchestrator(verb) => match verb {
             OrchestratorVerb::Scorecard | OrchestratorVerb::Show => false,

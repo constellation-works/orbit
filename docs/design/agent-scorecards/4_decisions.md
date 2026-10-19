@@ -9,7 +9,7 @@ doc_role: decisions
 type: design
 summary: Standing rules for agent scorecards; one owner per problem, cost shown but never scored, reviewers scored on accuracy.
 tags: [agent-scorecards, dashboard, analytics]
-paths: ["crates/orbit-core/src/application/orchestrators/**", "crates/orbit-core/src/application/codebase/pilot.rs"]
+paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-core/src/application/codebase/pilot.rs"]
 related_features: [user-interface, review-gate]
 related_artifacts: []
 ---

@@ -1,0 +1,49 @@
+Show one role's scorecard rows by crew and model
+
+Usage: orbit agents scorecard [OPTIONS] --role <ROLE>
+
+Options:
+      --role <ROLE>
+          The agent role to score
+          
+          [possible values: orchestrators, implementers, reviewers, pilots]
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --window <WINDOW>
+          Count work in this period ending now
+          
+          [default: 30d]
+          [possible values: 1h, 24h, 7d, 30d, 90d, all]
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --min-support <MIN_SUPPORT>
+          Units of work a row needs before it is ranked
+          
+          [default: 10]
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields; a header row only with --header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+      --header
+          Start plain output with a tab-separated header row (table output always has one)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+The table shows each row's units, score and term counts; --json carries every rate per 100
+units and the term definitions. Follow a row to its tasks with
+`orbit agents show --role <role> --crew <crew>`.

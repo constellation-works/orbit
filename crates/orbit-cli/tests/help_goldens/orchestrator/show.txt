@@ -1,4 +1,4 @@
-Show one orchestrator's row and the tasks behind each count
+Deprecated: use `orbit agents show --role orchestrators --crew <name>`
 
 Usage: orbit orchestrator show [OPTIONS] <ORCHESTRATOR>
 
@@ -11,13 +11,13 @@ Options:
           Override the Orbit root directory (highest precedence)
 
       --window <WINDOW>
-          Count tasks created in this period ending now
+          Count work in this period ending now
           
           [default: 30d]
           [possible values: 1h, 24h, 7d, 30d, 90d, all]
 
       --min-support <MIN_SUPPORT>
-          Owned tasks a row needs before its rates are comparable
+          Units of work a row needs before it is ranked
           
           [default: 10]
 

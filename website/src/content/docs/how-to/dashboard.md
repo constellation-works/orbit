@@ -448,8 +448,8 @@ comparisons never change the score. On a phone, the ranking and tier table
 scroll within their own boxes and the detail stacks below the ranking.
 
 With **all** selected, Agents covers the last 90 days. From a terminal,
-`orbit orchestrator scorecard` still prints the previous orchestrator
-scorecard.
+`orbit agents scorecard --role <role>` prints the same ranking and
+`orbit agents show --role <role> --crew <crew>` one row's tasks.
 
 ## Automation
 

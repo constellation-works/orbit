@@ -1,4 +1,5 @@
 mod agent_tools;
+mod agents_tools;
 mod artifact_redaction;
 mod auto_task_tools;
 mod codebase_tools;

@@ -1,3 +1,4 @@
+pub mod agents;
 pub mod authorization;
 pub mod auto_task;
 pub mod codebase;

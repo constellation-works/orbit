@@ -1,4 +1,4 @@
-//! The orchestrator scorecard has no guarded modes; its shared spec owns input validation.
+//! The deprecated orchestrator scorecard aliases have no guarded modes; their shared spec owns input validation.
 use super::operation::GuardedModes;
 use crate::ToolContext;
 use orbit_common::{
