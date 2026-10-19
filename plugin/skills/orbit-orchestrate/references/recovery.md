@@ -151,9 +151,13 @@ from the merge. Each `orbit run auto` pass settles a `blocked`, `in-progress` or
 `review` task whose delivery PR is among the recent merges into its target
 branch, when no run or claim of its own is live. To settle one task now, run
 `orbit task settle-merged <task-id>` in the owning workspace's checkout. It reads
-each PR Orbit recorded for the task, and names the reason when the task does not
-settle. The settlement starts no work, so another task's claim on the same files
-does not refuse it. History records it as `external_merge_settled`, with a
+each PR Orbit recorded for the task, including a held or kept PR from a released
+or failed claim even without an accepted handoff. That PR must name the task and
+be merged into the landing branch its claim's admission receipt recorded; a
+missing or expired receipt cannot prove it. An owed post-deploy measurement still
+requires the operator's met record. The command names the reason when the task
+does not settle. The settlement starts no work, so another task's claim on the
+same files does not refuse it. History records it as `external_merge_settled`, with a
 landing note naming the PR and merge commit
 ([stuck job runs](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/stuck-job-runs.md#a-delivery-pull-request-merged-outside-orbit)).
 

@@ -20,9 +20,11 @@
 //! `orbit/<TASK-ID>-…`, its body names the task, and it was authored by a
 //! delivery identity (`pr.delivery_authors`, else the login this machine's
 //! forge credentials act as), or it is the delivery PR of a follower handoff
-//! this owner accepted. The target branch is that handoff's landing branch,
-//! else the base branch the task's delivery run was submitted against, else
-//! the workspace base branch.
+//! this owner accepted, or a PR preserved with a released or failed claim's
+//! candidate. A claim PR targets its accepted handoff's landing branch, or
+//! the landing branch in its original admission receipt. Other PRs target
+//! the base branch the task's delivery run was submitted against, else the
+//! workspace base branch.
 //!
 //! The write is Orbit's own: `done` with a landing note naming the PR and its
 //! merge commit, recorded in history as [`EXTERNAL_MERGE_SETTLED_EVENT`]. It
@@ -38,6 +40,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
+use orbit_store::contracts::{AdmissionIdentity, AdmissionLookup, ExecutionClaimPhase};
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskStatus, names_task_delivery_pull_request,
@@ -77,7 +80,7 @@ pub struct ExternalMergeSettlement {
 /// A task that may settle, with the PRs that may have delivered it.
 struct Candidate {
     task: Task,
-    /// Accepted follower handoff PRs, each with its landing branch.
+    /// Accepted handoff and released claim PRs, each with its landing branch.
     follower_prs: BTreeMap<u64, String>,
 }
 
@@ -230,25 +233,74 @@ impl OrbitRuntime {
         if let Some(owed) = self.owed_settlement_hold(&task.id) {
             return Err(owed);
         }
-        let candidate = Candidate {
-            follower_prs: self.accepted_handoff_pull_requests(&task.id),
-            task,
-        };
+        let mut follower_prs = self.released_claim_pull_requests(&task.id);
+        follower_prs.extend(self.accepted_handoff_pull_requests(&task.id));
+        let candidate = Candidate { follower_prs, task };
         if candidate.pr_numbers().is_empty() {
             return Err("Orbit recorded no delivery pull request for it".to_string());
         }
         Ok(candidate)
     }
 
+    /// PRs kept with this task's released or failed claim candidates. The
+    /// original admission must still prove which branch each claim targeted;
+    /// missing, expired or unreadable receipts contribute no authority.
+    fn released_claim_pull_requests(&self, task_id: &str) -> BTreeMap<u64, String> {
+        let tasks = self.stores().tasks();
+        let Ok(claims) = tasks.inspect_execution_claims() else {
+            return BTreeMap::new();
+        };
+        claims
+            .into_iter()
+            .filter(|state| {
+                state.claim.task_id == task_id
+                    && matches!(
+                        state.claim.phase,
+                        ExecutionClaimPhase::Revoked | ExecutionClaimPhase::Failed
+                    )
+            })
+            .filter_map(|state| {
+                let number = state
+                    .preserved_candidate?
+                    .candidate
+                    .pull_request?
+                    .parse::<u64>()
+                    .ok()?;
+                let claim = state.claim;
+                let AdmissionLookup::Found { receipt, .. } = tasks
+                    .lookup_admission(
+                        &AdmissionIdentity::trusted_local(claim.executed_on.clone()),
+                        &claim.request_id,
+                    )
+                    .ok()?
+                else {
+                    return None;
+                };
+                let original = receipt.claim.as_ref()?;
+                if original.claim_id != claim.claim_id
+                    || original.task_id != task_id
+                    || original.request_id != claim.request_id
+                    || original.executed_on != claim.executed_on
+                    || receipt.machine_id != claim.executed_on.machine_id
+                    || receipt.request.request_id != claim.request_id
+                    || receipt.request.ship.landing_branch.trim().is_empty()
+                {
+                    return None;
+                }
+                Some((number, receipt.request.ship.landing_branch))
+            })
+            .collect()
+    }
+
     /// The delivery identities, or none when they cannot be read: only
-    /// accepted follower PRs then prove themselves Orbit's.
+    /// recorded claim PRs then prove themselves Orbit's.
     fn settlement_authors(&self, repo_root: &std::path::Path) -> Vec<String> {
         self.delivery_authors(self.task_pr_forge(), repo_root)
             .unwrap_or_else(|error| {
                 tracing::warn!(
                     target: "orbit.core.external_merge",
                     error = %error,
-                    "could not read the delivery identity; only accepted follower pull \
+                    "could not read the delivery identity; only recorded claim pull \
                      requests can settle a task"
                 );
                 Vec::new()

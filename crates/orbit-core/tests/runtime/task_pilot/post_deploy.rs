@@ -186,6 +186,26 @@ fn an_owed_post_deploy_criterion_settles_in_review_until_an_operator_records_it(
     assert!(show(&workspace, &task).get("owed_criteria").is_none());
     RuntimeHost::admit_owed_criteria(&workspace.runtime, &task.id, RUN, &[owed(2, HOST)]).unwrap();
 
+    let refused = workspace
+        .runtime
+        .settle_externally_merged_task(&task.id)
+        .expect_err("an external merge cannot discharge an owed host measurement");
+    assert!(
+        refused.to_string().contains("post-deploy met record"),
+        "{refused}"
+    );
+    assert!(
+        workspace
+            .runtime
+            .settle_externally_merged_tasks()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        workspace.runtime.get_task(&task.id).unwrap().status,
+        TaskStatus::Review
+    );
+
     let completion = complete(&workspace, &task);
     assert_eq!(
         completion["owed_task_ids"],
