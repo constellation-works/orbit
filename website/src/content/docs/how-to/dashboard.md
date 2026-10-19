@@ -169,13 +169,18 @@ View URLs keep older section names: `#diagnostics/…` is Health,
 
 ## Tasks
 
-Search by ID or title, or filter by status. Press Enter on a full task ID to
-open it even when the filter, page, or selected workspace hides it.
+Search by ID or title, or filter by status. Done, Rejected, Archived,
+Someday, All, and Not ready are under **More**. Press Enter on a full task ID
+to open it even when the filter, page, or selected workspace hides it.
+**New task** proposes a task.
 
 Tasks are grouped in the order you act on them: **Awaiting approval**
-(`proposed`), review, blocked, in progress, then backlog. Each row carries the
-action its group waits on: **Approve** on a proposed task, **Ship** on a
-backlog task, and **View run** on a task in progress.
+(`proposed`), review, blocked, in progress, then backlog. Each row shows the
+title on its first line and the full task ID on its second, followed by what a
+backlog task waits on (`Waits on ORB-77`, `Throttled`) or where a running or
+blocked task's run is. Each row carries the action its group waits on:
+**Approve** on a proposed task, **Ship** on a backlog task, and **View run**
+on a task in progress.
 
 Open a task to see its detail and every action its status allows:
 
@@ -187,9 +192,9 @@ Open a task to see its detail and every action its status allows:
 | **archive** | Any status except `archived`. |
 | **comment** | Any status. |
 
-The row's status and crew dropdowns are editable when a workspace is
-selected, or in **All workspaces** for a row that names its owner. The status
-list shows every status:
+The row's crew dropdown and the detail's status dropdown are editable when a
+workspace is selected, or in **All workspaces** for a row that names its
+owner. The status list shows every status:
 
 - Moves the [lifecycle table](../../concepts/tasks/#transition-rules) allows
   still ask for the evidence they need, such as a plan or completion summary.
@@ -239,9 +244,16 @@ state and the accepted handoff.
 
 The auto-drain card starts and stops a
 [delivery window](../continuous-delivery/): a time-bounded run that ships
-approved backlog tasks in parallel. It sits at the top of the Tasks dock's
-**Drain** mode, with the **Start a window** card below it; `#auto-drain` and
-`#operations/auto-drain` open it. It needs a single active workspace.
+approved backlog tasks in parallel. It leads the **Drain** page's
+**Overview** tab, with **Start a window** and **Locks held** beside it (below
+it on a narrow screen); `#drain`, `#auto-drain` and `#operations/auto-drain`
+open it. It needs a single active workspace.
+
+Above the cards, an amber banner says when a host resource throttle is
+holding admissions: which resource, when admissions resume and since when,
+with a gauge of the reading against its resume and stop thresholds. Summary
+tiles follow: the window's state, slots in use, the queue's waiting and
+eligible counts, and locked files with how many tasks hold them.
 
 ![The Drain dock: the Auto-drain card with its state, workspace leaf slots, and Send pending results, then Start a window with its eligible and waiting counts, window length, parallel tasks, completion mode, proposed-task handling, and Start.](../../../assets/dashboard/dashboard-drain-card.png)
 
@@ -254,7 +266,8 @@ The card shows:
 - **Capacity.** Running tasks against the limit, free slots, and what a window
   started now would admit.
 - **Admission forecast.** The last pass's forecast time, CPU and memory peaks
-  against the admit thresholds, headroom, and any candidate enforce held. A pass that built no
+  against the admit thresholds (for example `85.6% peak at +10m`, then
+  `27.4 cores · 12.4 pts under the 98% ceiling`), and any candidate enforce held. A pass that built no
   forecast says `no forecast this pass` and, when an earlier forecast was
   kept, shows that one too. Shadow decisions are marked hypothetical; they
   do not hold anyone.
@@ -263,7 +276,12 @@ The card shows:
   card splits the same snapshot into **Eligible now**, **Waiting on locks**,
   **Waiting on capacity**, and **Waiting, other**; click one to filter the
   card. Each backlog row's dot shows its pool, and its tooltip names the wait,
-  such as `Waits on ABC-2` and the lock they contend for.
+  such as `Waits on ABC-2` and the lock they contend for. On the Drain page,
+  **Why N tasks are waiting** splits the same snapshot by pool and lists each
+  wait with its count, a link to the task it waits on, and what that task
+  holds. **Locks held** lists each task holding locked files, its status,
+  file count, and how many waiting tasks it blocks; expand a row for the
+  paths.
 
 | Control | Effect |
 |---|---|

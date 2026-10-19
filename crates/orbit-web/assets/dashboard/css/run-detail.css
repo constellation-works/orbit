@@ -135,94 +135,171 @@ a.failure-id-link:focus-visible {
   color: var(--fg-mute);
   font-style: italic;
 }
+/* A claim reads as a two-column list of facts — a muted sentence-case label,
+   then the value, with the server's note beneath the value — so the task
+   detail's Delivery section scans like the rest of the overview. */
 .claim-panel {
-  border: 1px solid var(--border);
-  border-radius: 2px;
-  padding: 10px 12px;
-  margin-bottom: 10px;
-  font-size: 12px;
+  font-size: 13px;
 }
-.claim-panel:last-child { margin-bottom: 0; }
+.claim-panel + .claim-panel {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--hair);
+}
 .claim-header {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 4px 12px;
-  padding-bottom: 6px;
-  margin-bottom: 4px;
-  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
 }
-.claim-header .claim-id { font-family: var(--font-mono); font-size: 11px; color: var(--fg); }
-.claim-header .claim-created { color: var(--fg-mute); font-size: 11px; }
+.claim-header .claim-id { font-family: var(--font-mono); font-size: 12px; color: var(--fg-dim); }
+.claim-header .claim-created { color: var(--fg-mute); font-size: 12px; }
 .claim-line {
   display: grid;
-  grid-template-columns: minmax(90px, 140px) 1fr;
-  gap: 8px;
-  padding: 3px 0;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 2px 14px;
+  padding: 4px 0;
   align-items: baseline;
 }
 .claim-line > .label {
-  color: var(--fg-dim);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  grid-row: 1 / span 2;
+  color: var(--fg-mute);
+  font-size: 13px;
 }
-.claim-line > .value { overflow-wrap: anywhere; }
-.claim-line .mono, .claim-footprint .mono { font-family: var(--font-mono); font-size: 11px; }
+.claim-line > .label::first-letter { text-transform: uppercase; }
+.claim-line > :nth-child(2) { min-width: 0; color: var(--fg); overflow-wrap: anywhere; }
+.claim-line.mono-value > .value,
+.claim-line .mono, .claim-footprint .mono { font-family: var(--font-mono); font-size: 12px; }
+.claim-line a { color: var(--accent); text-decoration: none; }
+.claim-line a:hover { text-decoration: underline; }
+.claim-line > .exec-origin { font-size: 12px; }
 .claim-line.expired > .value { color: var(--state-failed); }
 .claim-line.remote > .value { color: var(--fg-dim); }
 .claim-line.released > .value { color: var(--fg-mute); }
-/* Labels stack above values once the detail column is too narrow for two
-   columns; a 90px label track leaves a machine id or selector unreadable. */
-@media (max-width: 480px) {
-  .claim-line { grid-template-columns: 1fr; gap: 2px; }
-}
+.claim-line.landing-stopped > .value { color: var(--danger-fg); }
+.claim-line.landing-merged > .value,
+.claim-line.authority-authorized > .value,
+.claim-line.authority-completed > .value { color: var(--state-success); }
 .claim-note {
-  grid-column: 1 / -1;
+  grid-column: 2;
   color: var(--fg-mute);
-  font-size: 11px;
-  line-height: 1.4;
+  font-size: 12px;
+  line-height: 1.45;
   overflow-wrap: anywhere;
 }
-.claim-footprint { max-height: 180px; overflow-y: auto; }
+/* Labels stack above values once the column is too narrow for two; a
+   112px label track leaves a machine id or selector unreadable. */
+@media (max-width: 480px) {
+  .claim-line { grid-template-columns: 1fr; gap: 2px; }
+  .claim-line > .label { grid-row: auto; }
+  .claim-note { grid-column: 1; }
+}
+@container task-pane (max-width: 400px) {
+  .claim-line { grid-template-columns: 1fr; gap: 2px; }
+  .claim-line > .label { grid-row: auto; }
+  .claim-note { grid-column: 1; }
+}
+/* The handoff's delivery facts lead the claim; a hairline parts them from
+   the attempt that produced them. */
+.handoff-panel {
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--hair);
+}
+/* Long lists and raw evidence sit behind a native disclosure. */
+.claim-disclosure > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+  cursor: pointer;
+  list-style: none;
+}
+.claim-disclosure > summary::-webkit-details-marker { display: none; }
+.claim-disclosure > summary::after {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+.claim-disclosure[open] > summary::after { transform: rotate(45deg); }
+.claim-disclosure > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.claim-footprint {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  overflow-y: auto;
+  background: var(--bg-well);
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+  color: var(--fg-soft);
+  overflow-wrap: anywhere;
+}
+.landing-evidence {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hair);
+}
+.landing-evidence > summary {
+  display: flex;
+  width: 100%;
+  color: var(--fg-dim);
+  font-size: 13px;
+}
+.landing-evidence > summary::after { order: -1; }
+.claim-disclosure-meta { margin-left: auto; color: var(--fg-mute); font-size: 12px; }
+.landing-evidence-body {
+  margin: 10px 0 0;
+  padding: 12px 14px;
+  max-height: 220px;
+  overflow: auto;
+  background: var(--bg-well);
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--fg-soft);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .claim-warning {
-  border-left: 2px solid var(--state-failed);
-  padding: 6px 10px;
+  border: 1px solid var(--danger-line);
+  border-radius: var(--radius-sm);
+  background: var(--danger-wash);
+  padding: 8px 12px;
   margin: 8px 0;
   color: var(--fg);
 }
 .claim-warning .label {
-  color: var(--fg-dim);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  color: var(--danger-fg);
+  font-size: 12px;
   margin-right: 8px;
-}
-.handoff-panel {
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-}
-.handoff-panel h5 {
-  margin: 0 0 6px 0;
 }
 .claim-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hair);
 }
 .claim-action {
-  background: var(--bg-elev);
+  min-height: 30px;
+  background: transparent;
   color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 2px;
-  padding: 4px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0 12px;
   font: inherit;
-  font-size: 11px;
+  font-size: 12.5px;
   cursor: pointer;
 }
 .claim-action:hover:not(:disabled) { color: var(--fg); border-color: var(--fg-dim); }
@@ -239,13 +316,15 @@ a.failure-id-link:focus-visible {
 }
 .claim-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .claim-reason {
+  min-height: 30px;
+  box-sizing: border-box;
   background: var(--bg);
   color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 2px;
-  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  padding: 0 10px;
   font: inherit;
-  font-size: 11px;
+  font-size: 12.5px;
   min-width: 0;
   flex: 1 1 160px;
 }
@@ -254,14 +333,14 @@ a.failure-id-link:focus-visible {
    why, and the server refuses the call either way. */
 .claim-action-denied {
   color: var(--fg-mute);
-  font-size: 11px;
+  font-size: 12px;
   font-style: italic;
   overflow-wrap: anywhere;
 }
 .claim-feedback {
   padding: 6px 10px;
   margin-bottom: 8px;
-  font-size: 11px;
+  font-size: 12px;
   border-left: 2px solid var(--border);
   overflow-wrap: anywhere;
 }

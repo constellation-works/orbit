@@ -411,7 +411,7 @@ try {
         dockWidth: Math.round(dock.getBoundingClientRect().width),
         cardVisible: cardBox.height > 0,
         startVisible: start.getBoundingClientRect().height > 0,
-        panels: [...dock.querySelectorAll('.dock-pane[data-pane="drain"] > .panel')].map(panel => panel.id),
+        panels: [...dock.querySelectorAll('.dock-pane[data-pane="drain"] .panel')].map(panel => panel.id),
         scroll: [card, start].some(box => box.scrollWidth > box.clientWidth + 1),
         clipped: [card, start].some(box => box.scrollHeight > box.clientHeight + 1),
         overflowing,
@@ -420,7 +420,9 @@ try {
       };
     });
     if (result.mode !== 'drain' || !result.cardVisible || !result.startVisible) throw new Error(`#auto-drain did not open the Drain dock at ${label}: ${JSON.stringify(result)}`);
-    if (result.panels.join(' ') !== 'auto-drain-panel auto-drain-start drain-waits-panel drain-fleet-panel locks-panel') throw new Error(`Drain dock cards out of order at ${label}: ${result.panels}`);
+    // The main column (status, waits, fleet) comes before the side column
+    // (Start a window, then Locks held) in reading and tab order.
+    if (result.panels.join(' ') !== 'auto-drain-panel drain-waits-panel drain-fleet-panel auto-drain-start locks-panel') throw new Error(`Drain dock cards out of order at ${label}: ${result.panels}`);
     if (result.scroll || result.clipped || result.overflowing.length) throw new Error(`Drain card overflows at ${label} (dock ${result.dockWidth}px): ${result.overflowing}`);
     if (result.durations !== 6 || !result.bar) throw new Error(`Drain card incomplete at ${label}: ${JSON.stringify(result)}`);
     await page.screenshot({ path: path.join(evidence, `drain-${label}.png`), fullPage: true });
@@ -490,13 +492,13 @@ try {
   }));
   await page.evaluate(() => globalThis.setDrainFixturePull({ runId: 'jrun-pull-fixture' }));
   let pulled = await pullIndicator();
-  if (pulled.globalHidden || !pulled.global.includes('Draining · 1 of 2') || pulled.tabLabel !== 'Drain: Pull drain') throw new Error(`Pull drain indicator: ${JSON.stringify(pulled)}`);
+  if (pulled.globalHidden || !pulled.global.includes('Draining · 1 of 2') || pulled.tabLabel !== 'Overview: Pull drain') throw new Error(`Pull drain indicator: ${JSON.stringify(pulled)}`);
   await page.evaluate(() => globalThis.setDrainFixturePull({ runId: 'jrun-pull-fixture', admissionsStopped: true }));
   pulled = await pullIndicator();
-  if (pulled.globalHidden || !pulled.global.includes('Draining · 1 of 2') || pulled.tabLabel !== 'Drain: Pull drain · admissions stopped') throw new Error(`Stopped pull drain indicator: ${JSON.stringify(pulled)}`);
+  if (pulled.globalHidden || !pulled.global.includes('Draining · 1 of 2') || pulled.tabLabel !== 'Overview: Pull drain · admissions stopped') throw new Error(`Stopped pull drain indicator: ${JSON.stringify(pulled)}`);
   await page.evaluate(() => globalThis.setDrainFixturePull({}));
   const cleared = await pullIndicator();
-  if (cleared.globalHidden || !cleared.global.includes('Draining · 1 of 2') || cleared.tabLabel !== 'Drain: idle') throw new Error(`Indicator after pull drain ends: ${JSON.stringify(cleared)}`);
+  if (cleared.globalHidden || !cleared.global.includes('Draining · 1 of 2') || cleared.tabLabel !== 'Overview: idle') throw new Error(`Indicator after pull drain ends: ${JSON.stringify(cleared)}`);
 
   // ORB-14566: changing concurrency alters the readiness URL but must keep
   // the panel scope stable while that refresh is pending, then restore focus.
@@ -607,14 +609,14 @@ try {
       workspace: card.querySelector('.drain-capacity-bar').getAttribute('aria-label'),
       admitted: card.querySelector('[data-stat="admitted"] dd')?.textContent,
       running: card.querySelector('[data-stat="running"] dd')?.textContent,
-      throttle: Boolean(card.querySelector('.drain-throttle-note')),
+      throttle: Boolean(document.querySelector('#drain-banner:not([hidden]) .drain-throttle-note')),
       tab: document.getElementById('dock-tab-drain').textContent.trim(),
       stop: card.querySelector('.drain-stop-note:not([hidden])').textContent,
     };
   });
   if (!/throttle.*cpu/.test(drainEvidence.summary) || /finish|must clear/.test(drainEvidence.summary) || !drainEvidence.throttle) throw new Error(`Throttle blamed on running tasks: ${drainEvidence.summary}`);
   if (drainEvidence.workspace !== 'Workspace: 6 of 12 leaf slots in use' || drainEvidence.admitted !== '3' || drainEvidence.running !== '1') throw new Error(`Unscoped Drain counts: ${JSON.stringify(drainEvidence)}`);
-  if (drainEvidence.tab !== 'Drain') throw new Error(`Duplicated Drain tab state: ${drainEvidence.tab}`);
+  if (drainEvidence.tab !== 'Overview') throw new Error(`Duplicated Drain tab state: ${drainEvidence.tab}`);
   if (!/Stop starting new tasks/.test(drainEvidence.stop) || !/keep running/.test(drainEvidence.stop) || /settlements/.test(drainEvidence.stop)) throw new Error(`Stop help must explain the operator's action: ${drainEvidence.stop}`);
   fs.writeFileSync(path.join(evidence, 'drain-readiness-1024.json'), `${JSON.stringify(drainEvidence, null, 2)}\n`);
   // ORB-14705: a 36-task backlog (17 locks, 13 throttled, 3 saturated, 3 other)
@@ -882,8 +884,9 @@ try {
   if (taskLayout.listWidth < taskLayout.inner - 80) {
     throw new Error(`task list is not full-width at 375px: ${taskLayout.listWidth} vs ${taskLayout.inner}`);
   }
-  if (!taskLayout.areas.includes('id title') || !taskLayout.areas.includes('crew run quick')) {
-    throw new Error(`375px task row must use the 520px two-row areas, got ${JSON.stringify(taskLayout)}`);
+  // A phone row stacks: the title, then the ID line, then the crew and action.
+  if (!taskLayout.areas.includes('"title title"') || !taskLayout.areas.includes('"crew quick"')) {
+    throw new Error(`375px task row must stack the title over the crew and action, got ${JSON.stringify(taskLayout)}`);
   }
   await assertNoOverflow('375x812 / tasks');
   await page.screenshot({ path: path.join(evidence, 'tasks-375x812.png'), fullPage: true });

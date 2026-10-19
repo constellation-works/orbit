@@ -6,7 +6,7 @@ import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { DRAIN_POOLS, backlogReadiness, drainReadinessEntry, drainReadinessFor, drainReadinessView, drainWaitSignature } from './drain-waits.js';
 import { elapsedLabel, onTaskRuntimeChange, runStartedAt, taskContextContenders, taskLockFiles } from './task-runtime.js';
-import { buildDistributedBlock, buildExecutionProvenance, claimedReviewApproval, handoffApprovalRequest, invalidateDistributedConsole } from './distributed.js';
+import { buildAttentionCallout, buildDeliveryProgress, buildDistributedBlock, buildExecutionProvenance, claimAttention, claimedReviewApproval, deliverySteps, handoffApprovalRequest, invalidateDistributedConsole, lastKnownClaims } from './distributed.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -1038,10 +1038,12 @@ export function buildChips(context) {
     return node;
   };
   // The open statuses lead as chips with a dot and a count; the closed ones,
-  // all and not ready follow a divider as quieter toggles of the same kind.
+  // All and Not ready wait behind More, a disclosure. A quiet chip that is on
+  // stays in view while More is closed, so the filter the list obeys is
+  // always on screen.
   const defaults = new Set(defaultActiveStatuses(context));
   const primary = el("div", { class: "chip-group" });
-  const secondary = el("div", { class: "chip-group chip-group-quiet" });
+  const secondary = el("div", { class: "chip-group chip-group-quiet", id: "task-filter-more" });
   for (const status of statusOrder(context)) {
     const node = chip(STATUS_LABELS[status] || status, { status }, !defaults.has(status));
     node.addEventListener("click", () => {
@@ -1067,7 +1069,19 @@ export function buildChips(context) {
     navigateTasksHash(context);
   });
   secondary.append(allChip, notReady);
-  container.append(primary, el("span", { class: "chip-divider", "aria-hidden": "true" }), secondary);
+  const more = el("button", {
+    class: "chip-more",
+    type: "button",
+    "aria-controls": "task-filter-more",
+    "aria-expanded": "false",
+    title: "Closed statuses, All and Not ready",
+  }, [el("span", { text: "More" })]);
+  more.addEventListener("click", () => {
+    const open = more.getAttribute("aria-expanded") !== "true";
+    more.setAttribute("aria-expanded", String(open));
+    secondary.classList.toggle("open", open);
+  });
+  container.append(primary, more, secondary);
   refreshChips(context);
 }
 
@@ -1199,7 +1213,7 @@ function buildReadinessBadge(task) {
 
 // The readiness dot beside a backlog task's ID: the pool colour, its words as
 // the dot's label and the full wait in the tooltip. A row the snapshot does
-// not mention keeps an empty slot so the IDs stay aligned.
+// not mention keeps a hidden dot and says nothing.
 function buildReadinessDot(task) {
   const readiness = drainReadinessFor(task.id);
   if (!readiness) return el("span", { class: "ready-dot none", "aria-hidden": "true" });
@@ -1208,11 +1222,30 @@ function buildReadinessDot(task) {
   return dot;
 }
 
-// `[source] Rest of the title`: the bracketed source prefix reads quieter than
-// the problem it introduces. Both stay one line of the same title text.
+// A backlog row's second line after its ID: the readiness dot and why the
+// task is or is not starting, in the drain snapshot's own words. The dot's
+// label already says it to assistive technology, so the visible words are
+// hidden from it rather than read twice.
+function buildRowReason(task) {
+  const dot = buildReadinessDot(task);
+  const readiness = drainReadinessFor(task.id);
+  if (!readiness) return el("span", { class: "row-reason none" }, [dot]);
+  const words = readiness.badge ? readiness.badge.text : readiness.poolLabel;
+  const text = `${words.charAt(0).toUpperCase()}${words.slice(1)}`.replace(/\bmacos\b/g, "macOS");
+  return el("span", { class: "row-reason" }, [
+    dot,
+    el("span", { class: "row-reason-text", text, title: readiness.title, "aria-hidden": "true" }),
+  ]);
+}
+
+// `[source] Rest of the title`: the bracketed source prefixes become tag chips
+// beside the title (`[auto-task]` reads as an "auto-task" chip), so the title
+// starts with the problem it names.
 function splitTitlePrefix(title) {
   const match = /^((?:\[[^\]]+\]\s*)+)(.*)$/.exec(String(title || ""));
-  return match && match[2] ? [match[1], match[2]] : ["", String(title || "")];
+  if (!match || !match[2]) return [[], String(title || "")];
+  const labels = [...match[1].matchAll(/\[([^\]]+)\]/g)].map((part) => part[1].trim()).filter(Boolean);
+  return [labels, match[2]];
 }
 
 // Where a running or blocked task's run is and what it holds: the host, the
@@ -1241,7 +1274,7 @@ function buildRunCell(task) {
   ].filter(Boolean).join("\n");
   return el("span", { class: "run-cell", title }, [
     el("span", { class: `run-host${host ? "" : " none"}`, text: host || "no run" }),
-    sub.length ? el("span", { class: "run-sub", text: sub.join(" · ") }) : null,
+    ...sub.map((text) => el("span", { class: "run-sub", text })),
   ]);
 }
 
@@ -1715,8 +1748,9 @@ function emptyFieldView(text) {
   return el("div", { class: "field-empty", text });
 }
 
+// Numbered, because criteria are cited by number ("criterion 3 is met").
 function buildCriteriaList(criteria) {
-  const ul = el("ul", { class: "ac-list" });
+  const ul = el("ol", { class: "ac-list" });
   for (const ac of criteria) {
     const rendered = renderMarkdownInline(ac);
     if (rendered !== null) {
@@ -2537,6 +2571,37 @@ function renderCommentsPanel(panel, task, context) {
   panel.replaceChildren(head, thread);
 }
 
+// Descriptions longer than this open clamped behind "Show full description".
+// Estimated from the source, like a long comment, because the detail is built
+// off-document and cannot be measured before it paints.
+const LONG_DESCRIPTION_CHARS = 700;
+const LONG_DESCRIPTION_LINES = 12;
+// Tasks whose description the operator expanded; a rebuild keeps it open.
+const expandedDescriptions = new Set();
+
+function isLongDescription(text) {
+  const value = String(text || "");
+  return value.length > LONG_DESCRIPTION_CHARS || value.split("\n").length > LONG_DESCRIPTION_LINES;
+}
+
+// The attention callout's Retry landing goes to the claim panel's own control,
+// which asks for the reason and sends the request; nothing is sent from here.
+function goToLandingRetry(detail, claim) {
+  if (typeof detail.activateTab === "function") detail.activateTab("overview");
+  const block = detail.querySelector(".distributed-block");
+  if (block && block.classList.contains("collapsed")) {
+    block.classList.remove("collapsed");
+    const heading = block.querySelector("h4");
+    if (heading) heading.setAttribute("aria-expanded", "true");
+  }
+  const panel = Array.from(detail.querySelectorAll(".claim-panel"))
+    .find((node) => node.getAttribute("data-claim-id") === String((claim && claim.claim_id) || ""));
+  const target = panel && (panel.querySelector('[data-reason-for="retry-handoff"]') || panel.querySelector(".claim-actions"));
+  if (!target) return;
+  if (typeof target.scrollIntoView === "function") target.scrollIntoView({ block: "center", behavior: "smooth" });
+  if (target.tagName === "INPUT") target.focus({ preventScroll: true });
+}
+
 function buildTaskDetail(task, context, drain = null) {
   const detail = el("div", { class: "row-detail task-detail" });
   detail.addEventListener("click", (e) => e.stopPropagation());
@@ -2551,6 +2616,7 @@ function buildTaskDetail(task, context, drain = null) {
     let classes = "field-block";
     if (collapsible) classes += " collapsible";
     if (collapsed) classes += " collapsed";
+    if (header.class) classes += ` ${header.class}`;
     const block = el("div", { class: classes });
     const heading = [el("span", { class: "field-title", text: title })];
     if (header.count != null) heading.push(el("span", { class: "field-count", text: String(header.count) }));
@@ -2569,6 +2635,7 @@ function buildTaskDetail(task, context, drain = null) {
     block.appendChild(h4);
     block.appendChild(child);
     parent.appendChild(block);
+    return block;
   };
   const actionSlot = () => el("span", { class: "field-actions" });
 
@@ -2580,12 +2647,75 @@ function buildTaskDetail(task, context, drain = null) {
   const showsEditor = (field) =>
     canMutateTask(task) || taskFieldHasValue(task, TASK_FIELD_EDITORS[field]);
 
-  if (showsEditor("description")) {
-    addField(leftCol, "Description", editor("description"));
-  }
+  // What needs the operator, and how far the delivery has come, sit above the
+  // tabs. Both come from the claim read the Delivery block makes, which lands
+  // after the detail is built; until then the last read for this task (if any)
+  // paints them, so a rebuilt detail neither flashes nor shifts. They repaint
+  // only when what they show changes.
+  const pullRequest = pullRequestLink(task);
+  const attentionSlot = el("div", { class: "task-attention-slot" });
+  const progressSlot = el("div", { class: "delivery-progress-slot" });
+  let deliverySignature = null;
+  const paintDelivery = (claims) => {
+    const attention = claimAttention(claims);
+    const steps = deliverySteps(claims);
+    const signature = JSON.stringify([
+      attention ? [attention.kind, attention.headline, attention.body, attention.retry, attention.claim.claim_id, attention.evidence && attention.evidence.raw] : null,
+      steps,
+    ]);
+    if (signature === deliverySignature) return;
+    deliverySignature = signature;
+    const callout = buildAttentionCallout(attention, { pullRequest, onRetry: (claim) => goToLandingRetry(detail, claim) });
+    attentionSlot.replaceChildren(...(callout ? [callout] : []));
+    const progress = buildDeliveryProgress(steps);
+    progressSlot.replaceChildren(...(progress ? [progress] : []));
+  };
+  const known = lastKnownClaims(task.id);
+  if (known) paintDelivery(known);
+
+  // ORB-12516: distributed claim provenance and the owner's handoff actions,
+  // first in the overview because a delivery in flight is what an operator
+  // opens the task to act on. The block hides itself when this workspace holds
+  // no claim for the task, so an ordinary single-host detail is unchanged;
+  // there is no distributed tab.
+  leftCol.appendChild(
+    buildDistributedBlock(task.id, {
+      onTaskChanged: () => refreshTasks(context),
+      onClaims: paintDelivery,
+      formatTime: (value) => fmtAbsTimeValue(context, value),
+      pullRequest,
+    }),
+  );
 
   if (showsEditor("acceptance_criteria")) {
-    addField(leftCol, "Acceptance criteria", editor("acceptance_criteria"), true, false);
+    const count = Array.isArray(task.acceptance_criteria) ? task.acceptance_criteria.length : 0;
+    const actions = actionSlot();
+    addField(leftCol, "Acceptance criteria", editor("acceptance_criteria", actions), false, false, count ? { count, actions } : { actions });
+  }
+
+  if (showsEditor("description")) {
+    const actions = actionSlot();
+    const block = addField(leftCol, "Description", editor("description", actions), false, false, { actions, class: "description-block" });
+    if (isLongDescription(task.description)) {
+      const open = expandedDescriptions.has(task.id);
+      if (!open) block.classList.add("clamped");
+      const toggle = el("button", {
+        class: "description-toggle",
+        type: "button",
+        text: open ? "Show less" : "Show full description",
+        "aria-expanded": String(open),
+      });
+      toggle.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const nowOpen = block.classList.contains("clamped");
+        block.classList.toggle("clamped", !nowOpen);
+        if (nowOpen) expandedDescriptions.add(task.id);
+        else expandedDescriptions.delete(task.id);
+        toggle.setAttribute("aria-expanded", String(nowOpen));
+        toggle.textContent = nowOpen ? "Show less" : "Show full description";
+      });
+      block.appendChild(toggle);
+    }
   }
 
   // Criteria the delivery owes until the deployed build is measured; an
@@ -2607,16 +2737,6 @@ function buildTaskDetail(task, context, drain = null) {
   if (task.review && typeof task.review === "object") {
     addField(leftCol, "Review gate", buildReviewGate(task.review), true, true);
   }
-
-  // ORB-12516: distributed claim provenance and the owner's handoff actions.
-  // The block hides itself when this workspace holds no claim for the task, so
-  // an ordinary single-host detail is unchanged; there is no distributed tab.
-  leftCol.appendChild(
-    buildDistributedBlock(task.id, {
-      onTaskChanged: () => refreshTasks(context),
-      formatTime: (value) => fmtAbsTimeValue(context, value),
-    }),
-  );
 
   // The side column leads with what identifies the task — who made it, which
   // run, when — then the levers an operator sets, then the graph around it.
@@ -2741,6 +2861,8 @@ function buildTaskDetail(task, context, drain = null) {
       content: comments > 0 ? buildCommentsPanel(task, context) : el("p", { class: "field-empty", text: "No comments yet." }),
     },
   ], context);
+  detail.appendChild(attentionSlot);
+  detail.appendChild(progressSlot);
   for (const section of sections) detail.appendChild(section);
   renderTaskRuns(runs, task, context);
   detail.appendChild(buildActionsRow(task, detail, context));
@@ -3989,24 +4111,13 @@ function buildGroupHeader(status, group) {
   return header;
 }
 
-// The column labels under a card's head. Run groups add the host column.
-function buildGroupColumns(status) {
-  const run = RUN_GROUPS.has(status);
-  const head = el("div", { class: `row header col-head${run ? " run-layout" : ""}` }, [
-    el("span", { class: "id-cell", text: "ID" }),
-    el("span", { class: "title", text: "Task" }),
-    el("span", { class: "crew-cell", text: "Crew" }),
-    run ? el("span", { class: "run-cell", text: status === "blocked" ? "Host · locks" : "Host · running" }) : null,
-    el("span", { class: "task-quick-cell" }),
-  ]);
-  head.dataset.key = `columns-${status}`;
-  head.dataset.hash = `columns-${status}`;
-  return head;
-}
+// The legend's short word for each readiness pool; its title says it in full.
+const READY_POOL_WORDS = { eligible: "eligible", locks: "locks", capacity: "capacity", other: "other" };
 
-// The Backlog card's readiness strip: one bar split by pool, then a legend
-// whose entries filter the card to that pool. Absent until the drain snapshot
-// arrives, so the card never claims a readiness it does not know.
+// The Backlog card's readiness strip: one slim bar split by pool, a legend
+// whose entries filter the card to that pool, and a link to the Drain view that
+// explains each wait. Absent until the drain snapshot arrives, so the card
+// never claims a readiness it does not know.
 function buildBacklogReadiness(group, context) {
   const { known, counts } = backlogReadiness(group);
   if (!known) return null;
@@ -4032,8 +4143,8 @@ function buildBacklogReadiness(group, context) {
         title: on ? "Show every backlog task" : `Show only tasks ${label.toLowerCase()}`,
       }, [
         el("span", { class: "ready-filter-dot", "aria-hidden": "true" }),
-        el("span", { text: label }),
         el("strong", { class: "ready-filter-count", text: String(counts[key]) }),
+        el("span", { text: READY_POOL_WORDS[key] || label.toLowerCase() }),
       ]);
       button.dataset.pool = key;
       button.disabled = counts[key] === 0 && !on;
@@ -4045,7 +4156,9 @@ function buildBacklogReadiness(group, context) {
     }),
     counts.unknown > 0 ? el("span", { class: "ready-unknown", text: `${counts.unknown} not in the drain snapshot` }) : null,
   ]);
-  const strip = el("div", { class: "group-readiness" }, [bar, legend]);
+  const why = el("a", { class: "ready-why", text: "Why? See Drain", title: "Open the Drain view: what each backlog task waits on" });
+  why.href = "#drain";
+  const strip = el("div", { class: "group-readiness" }, [bar, legend, why]);
   strip.dataset.key = "readiness-backlog";
   strip.dataset.hash = `${DRAIN_POOLS.map(({ key }) => counts[key]).join(",")},${counts.unknown}-${readyPoolFilter || ""}`;
   return strip;
@@ -4168,10 +4281,10 @@ export function renderTasks(tasks, context) {
   if (emptyNote) nodes.push(emptyNote);
   for (const status of ordered) {
     const group = groups.get(status);
-    // Each status is one card: its head, the backlog's readiness strip, the
-    // column labels, then the rows. The nodes stay siblings in the list so
-    // row reuse and keyboard roving work across groups; CSS draws the
-    // card from the first node of each run to the one marked `group-end`.
+    // Each status is one card: its head, the backlog's readiness strip, then
+    // the rows. The nodes stay siblings in the list so row reuse and keyboard
+    // roving work across groups; CSS draws the card from the first node of
+    // each run to the one marked `group-end`.
     const groupNodes = [buildGroupHeader(status, group)];
     let rows = group;
     if (status === "backlog") {
@@ -4179,7 +4292,6 @@ export function renderTasks(tasks, context) {
       if (strip) groupNodes.push(strip);
       if (readyPoolFilter && strip) rows = group.filter((t) => drainReadinessFor(t.id)?.pool === readyPoolFilter);
     }
-    groupNodes.push(buildGroupColumns(status));
     for (const t of rows) {
       const rowKey = `task-${t.id}`;
       const run = RUN_GROUPS.has(t.status);
@@ -4189,31 +4301,39 @@ export function renderTasks(tasks, context) {
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {
-        const idCell = el("span", { class: "id-cell" }, [
-          t.status === "backlog" ? buildReadinessDot(t) : null,
+        // Two lines beside the crew and the action: the title with its tag
+        // chips, then the ID and what the task is waiting on or where its run
+        // is. The ID line comes first in the DOM so Tab goes title → crew →
+        // action; the grid draws it under the title.
+        const meta = el("span", { class: "row-meta" }, [
           makeCopyButton(t.id, { class: "id mono", title: "Copy task ID" }),
+          t.status === "backlog" ? buildRowReason(t) : null,
+          run ? buildRunCell(t) : null,
         ]);
-        const titleBadges = [...buildOsBadges(t), ...buildReadinessBadge(t)];
-        const [prefix, rest] = splitTitlePrefix(t.title);
-        // The title is the row's disclosure: the row holds the copy-id button,
-        // the crew select and the quick action, so it cannot be a button itself.
-        const titleCell = el("button", { class: "title" }, [
+        const [prefixes, rest] = splitTitlePrefix(t.title);
+        const tags = [
           aggregate && t.workspace_name
             ? el("span", { class: "ws-badge mono", text: t.workspace_name, title: `Workspace: ${t.workspace_name}` })
             : null,
-          ...titleBadges,
-          prefix ? el("span", { class: "title-prefix", text: prefix }) : null,
-          rest,
+          ...buildOsBadges(t),
+          ...buildReadinessBadge(t),
+          ...prefixes.map((label) => el("span", { class: "title-tag", text: label, title: `[${label}]` })),
+        ].filter(Boolean);
+        // The title is the row's disclosure: the row holds the copy-id button,
+        // the crew select and the quick action, so it cannot be a button itself.
+        const titleCell = el("button", { class: "title" }, [rest]);
+        const titleLine = el("span", { class: "title-line" }, [
+          titleCell,
+          tags.length ? el("span", { class: "title-tags" }, tags) : null,
         ]);
         const quickError = buildQuickActionError(t);
         const statusFeedbackNode = buildFoldedStatusFeedback(t.id, context);
         const statusNote = statusFeedbackNode ? el("div", { class: "task-status-note" }, [statusFeedbackNode]) : null;
         if (statusNote) stopRowInteraction(statusNote);
-        row = el("div", { class: `row${run ? " run-layout" : ""}${quickError ? " has-quick-error" : ""}${statusNote ? " has-status-note" : ""}`, title: t.title }, [
-          idCell,
-          titleCell,
+        row = el("div", { class: `row${quickError ? " has-quick-error" : ""}${statusNote ? " has-status-note" : ""}`, title: t.title }, [
+          meta,
+          titleLine,
           buildCrewUpdateControl(t, context),
-          run ? buildRunCell(t) : null,
           buildQuickAction(t, context),
           ...(quickError ? [quickError] : []),
           statusNote,
@@ -4236,7 +4356,7 @@ export function renderTasks(tasks, context) {
     }
     if (rows.length === 0) groupNodes.push(buildFilteredEmpty(status));
     // A card whose rows carry no action (Blocked) gives the action column
-    // back, so its crew and host columns sit at the card's right edge.
+    // back, so its crew sits at the card's right edge.
     const noQuick = !group.some(hasQuickAction);
     groupNodes.forEach((node, index) => {
       node.dataset.group = status;
@@ -4359,9 +4479,18 @@ function buildListTaskDetail(t, drafts, existing, context) {
   // its read state instead; a detail rendered from the cached projection must
   // not be rebuilt just because a refresh has a read in flight.
   const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
-  const detailHash = `${JSON.stringify(state.task || t)}-${readState}-${taskDrainSignature(drain)}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}`;
+  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}`;
+  const detailHash = `${baseHash}-${taskDrainSignature(drain)}`;
   const existingDetail = existing.get(key);
   if (existingDetail && existingDetail.dataset.hash === detailHash) return existingDetail;
+  // Only the drain readiness changed (its read landed after the detail was
+  // shown): repaint that card in place, so the detail — and whatever control
+  // in it has focus — is not rebuilt under the operator.
+  if (state.task && existingDetail && existingDetail.dataset.baseHash === baseHash && existingDetail.querySelector(".readiness-list")) {
+    refreshDraftDetails(existingDetail, t, context, state.task);
+    existingDetail.dataset.hash = detailHash;
+    return existingDetail;
+  }
   const detail = state.task
     ? buildTaskDetail(state.task, context, drain)
     : buildTaskDetailPlaceholder(t, state, context);
@@ -4371,11 +4500,47 @@ function buildListTaskDetail(t, drafts, existing, context) {
   // The row's disclosure and the tabs point here, so the detail needs a real id.
   detail.id = key;
   detail.dataset.hash = detailHash;
+  detail.dataset.baseHash = baseHash;
   return detail;
+}
+
+// The muted line under the pane title: who runs the task, where it last ran,
+// when it was made, and its pull request. Each part appears only when known.
+function buildPaneMeta(task, context) {
+  const value = (text) => el("span", { class: "task-pane-meta-value mono", text });
+  const parts = [];
+  const crew = explicitCrewValue(task);
+  parts.push(el("span", { class: "task-pane-meta-crew" }, ["Crew ", value(crew || defaultCrewOptionText(task))]));
+  const machine = task.job_run_machine;
+  if (machine && machine.machine_id) {
+    parts.push(el("span", { class: "task-pane-meta-host" }, [
+      "Ran ",
+      buildExecutionProvenance(
+        summaryExecutionLocation(machine),
+        task.job_run_id ? { runId: String(task.job_run_id), workspace: task.workspace_id } : null,
+      ),
+    ]));
+  }
+  if (task.created_at) parts.push(el("span", { text: `Created ${fmtAbsTimeValue(context, task.created_at)}` }));
+  const pullRequest = pullRequestLink(task);
+  if (pullRequest) {
+    const link = el("a", { class: "task-pane-pr", text: pullRequest.number ? `PR #${pullRequest.number}` : "Pull request" });
+    link.href = pullRequest.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    parts.push(link);
+  }
+  const meta = el("div", { class: "task-pane-meta" }, parts);
+  const signature = [crew || defaultCrewOptionText(task), machine && machine.machine_id, machine && machine.machine_name,
+    task.job_run_id, task.created_at, pullRequest && pullRequest.url].join("|");
+  return { meta, signature };
 }
 
 function buildPaneHead(task, pinned, context) {
   const page = taskPageId === task.id;
+  // The list row is a summary; the meta line reads the full record once the
+  // detail's read has it.
+  const record = isTaskSummary(task) ? taskDetails.get(task.id) || task : task;
   const back = el("button", {
     class: "action task-pane-back",
     type: "button",
@@ -4383,21 +4548,39 @@ function buildPaneHead(task, pinned, context) {
     title: page ? "Back to the task list at this task (Esc)" : "Back to the task list (Esc)",
   });
   back.addEventListener("click", () => closeTaskPane(context, { forget: true }));
+  // Icon buttons: the glyph is CSS, the accessible name is the label.
   const full = page ? null : el("button", {
-    class: "action task-pane-full",
+    class: "task-pane-icon task-pane-full",
     type: "button",
-    text: "Open full page",
-    title: "Show this task across the full width (Enter on its row)",
+    title: "Open full page (Enter on its row)",
+    "aria-label": "Open full page",
   });
   if (full) full.addEventListener("click", () => openTaskPage(task.id, context));
   const close = page ? null : el("button", {
-    class: "task-pane-close",
+    class: "task-pane-icon task-pane-close",
     type: "button",
-    text: "×",
     title: "Close (Esc)",
     "aria-label": "Close task detail",
   });
   if (close) close.addEventListener("click", () => closeTaskPane(context, { forget: true }));
+  const { meta, signature } = buildPaneMeta(record, context);
+  const key = `pane-head-${task.id}`;
+  const baseHash = `${task.id}-${task.title}-${task.status}-${pinned}-${page}`;
+  // The meta line fills in when the detail's read lands. Update it in place on
+  // the head already shown rather than rebuilding the head, which would take
+  // the focused heading (and the phone sheet's focus) with it.
+  const shown = Array.from($("task-detail-body")?.children || []).find((node) => node.dataset && node.dataset.key === key);
+  if (shown && shown.dataset.baseHash === baseHash) {
+    if (shown.dataset.metaSignature !== signature) {
+      const previous = shown.querySelector(".task-pane-meta");
+      if (previous && previous.parentNode) {
+        previous.parentNode.insertBefore(meta, previous);
+        previous.parentNode.removeChild(previous);
+      }
+      shown.dataset.metaSignature = signature;
+    }
+    return shown;
+  }
   const title = el("h2", { class: "task-pane-title", id: "task-pane-title", text: task.title || task.id });
   title.tabIndex = -1;
   const head = el("div", { class: "task-pane-head" }, [
@@ -4410,9 +4593,12 @@ function buildPaneHead(task, pinned, context) {
       close,
     ]),
     title,
+    meta,
   ]);
-  head.dataset.key = `pane-head-${task.id}`;
-  head.dataset.hash = `${task.id}-${task.title}-${task.status}-${pinned}-${page}`;
+  head.dataset.key = key;
+  head.dataset.hash = baseHash;
+  head.dataset.baseHash = baseHash;
+  head.dataset.metaSignature = signature;
   return head;
 }
 

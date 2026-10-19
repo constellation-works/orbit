@@ -37,6 +37,11 @@ const CONSOLE_PATH = "/api/distributed/claims";
 export const CONSOLE_TTL_MS = 10000;
 const cachedConsoles = new Map();
 const inflightConsoles = new Map();
+// The last read per task in this workspace visit, kept past the TTL. A detail
+// rebuilt after the memo expired paints its attention callout from it at once
+// instead of flashing empty until the re-read lands; the re-read then replaces
+// it. Nothing decides from it: actions always carry a fresh read's identity.
+const knownConsoles = new Map();
 // The outcome of the operator's last action, per task. It outlives the block
 // that reported it: the detail is rebuilt once the action changes the task, and
 // a message written only to the old container would be lost with it.
@@ -82,6 +87,7 @@ export function loadDistributedConsole({ taskId, force = false } = {}) {
           return body;
         }
         cachedConsoles.set(key, { payload: body, at: Date.now() });
+        knownConsoles.set(key, { payload: body, revision });
         inflightConsoles.delete(key);
         return body;
       })
@@ -97,6 +103,258 @@ export function loadDistributedConsole({ taskId, force = false } = {}) {
 export function claimsForTask(payload, taskId) {
   const claims = payload && Array.isArray(payload.claims) ? payload.claims : [];
   return claims.filter((claim) => claim && claim.task_id === taskId);
+}
+
+/// The task's claims from the last read in this workspace visit, however old,
+/// or `null` when there has been none. For painting only, never for deciding.
+export function lastKnownClaims(taskId) {
+  if (isAggregateView() || !taskId) return null;
+  const entry = knownConsoles.get(String(taskId));
+  if (!entry || entry.revision !== getWorkspaceRevision()) return null;
+  return entry.payload && entry.payload.owner_workspace === false ? [] : claimsForTask(entry.payload, taskId);
+}
+
+// --- what needs the operator ------------------------------------------------
+
+/// Landing evidence is an opaque string: an `owner_landing_refusal` JSON
+/// diagnostic, or older plain text. Read it defensively for the parts an
+/// operator acts on — the human reason, the required check that failed and the
+/// failing test's signature — and keep the raw text (pretty-printed when it is
+/// JSON) for the disclosure. Anything unexpected falls back to plain text.
+export function readLandingEvidence(evidence) {
+  if (evidence == null || evidence === "") return null;
+  const raw = typeof evidence === "string" ? evidence : JSON.stringify(evidence);
+  let parsed = null;
+  if (typeof evidence === "object") {
+    parsed = evidence;
+  } else {
+    try {
+      parsed = JSON.parse(raw);
+    } catch (_) {
+      parsed = null;
+    }
+  }
+  const structured = parsed !== null && typeof parsed === "object";
+  let reason = null;
+  if (structured && !Array.isArray(parsed)) {
+    const value = parsed.reason;
+    if (typeof value === "string") reason = value;
+    else if (value && typeof value.value === "string") reason = value.value;
+  } else if (!structured) {
+    reason = raw;
+  }
+  reason = reason && reason.trim() ? reason.trim() : null;
+  const check = reason ? (/status check '([^'\n]+)' failed/.exec(reason) || [])[1] || null : null;
+  const test = reason ? (/failed with signature `([^`\n]+)`/.exec(reason) || [])[1] || null : null;
+  return {
+    raw,
+    structured,
+    pretty: structured ? JSON.stringify(parsed, null, 2) : raw,
+    reason,
+    check,
+    test,
+  };
+}
+
+/// The claim the detail's summary describes: the newest live one (unsettled or
+/// handed off), else the newest of any.
+export function currentClaim(claims) {
+  const list = Array.isArray(claims) ? claims.filter(Boolean) : [];
+  if (list.length === 0) return null;
+  const newest = (rows) => rows.reduce((best, row) =>
+    (!best || String(row.created_at || "") > String(best.created_at || "") ? row : best), null);
+  return newest(list.filter((claim) => claim.unsettled === true || claim.phase === "handed_off")) || newest(list);
+}
+
+/// Whether this claim's stopped (or uncertain) landing may be retried. The
+/// claim panel offers Retry landing exactly when this holds.
+export function landingRetryOffered(claim) {
+  const handoff = claim && claim.handoff;
+  const authority = (handoff && handoff.authority) || {};
+  return Boolean(handoff && claim.phase === "handed_off" && authority.state === "authorized" &&
+    !claim.landing_invalidated && (handoff.landing?.state === "stopped" || claim.unresolved_merge_intent));
+}
+
+/// What the task needs from the operator now, from its current claim, or
+/// `null` when nothing does. Uncertain merges come first: until one is
+/// reconciled nothing else about the claim can move.
+export function claimAttention(claims) {
+  const claim = currentClaim(claims);
+  if (!claim) return null;
+  const handoff = claim.handoff || null;
+  const landing = (handoff && handoff.landing) || {};
+  if (claim.unresolved_merge_intent) {
+    return {
+      kind: "uncertain-merge",
+      tone: "danger",
+      claim,
+      headline: "Merge outcome unknown — reconcile it before acting",
+      body: "A merge was sent and its reply was lost. Revoking and recovering are refused until it is reconciled against the provider.",
+      evidence: readLandingEvidence(landing.evidence),
+      retry: landingRetryOffered(claim),
+    };
+  }
+  if (handoff && landing.state === "stopped" && (claim.phase === "handed_off" || claim.phase === "repair_pending")) {
+    const evidence = readLandingEvidence(landing.evidence);
+    const repairing = claim.phase === "repair_pending";
+    let headline = "Landing stopped";
+    if (evidence && evidence.check) headline = "Landing stopped — a required check failed";
+    if (repairing) headline = `${headline}; an automatic repair is pending`;
+    return {
+      kind: "landing-stopped",
+      tone: repairing ? "warning" : "danger",
+      claim,
+      headline,
+      body: landing.summary || null,
+      evidence,
+      retry: landingRetryOffered(claim),
+    };
+  }
+  if (claim.landing_invalidated && handoff && claim.phase === "handed_off") {
+    return {
+      kind: "landing-invalidated",
+      tone: "warning",
+      claim,
+      headline: "Landing authority was invalidated",
+      body: "The owner will not land this candidate. It stays in review until a new validated handoff.",
+      evidence: null,
+      retry: false,
+    };
+  }
+  return null;
+}
+
+/// The delivery's five stages, each `done`, `failed`, `active` or `pending`,
+/// from the current claim's phase, completion authority and landing state.
+/// `null` when the task has no claim.
+export function deliverySteps(claims) {
+  const claim = currentClaim(claims);
+  if (!claim) return null;
+  const handoff = claim.handoff || null;
+  const authority = (handoff && handoff.authority && handoff.authority.state) || null;
+  const landing = (handoff && handoff.landing && handoff.landing.state) || null;
+  const landed = claim.phase === "landed" || landing === "merged" || authority === "completed";
+  const ended = claim.phase === "failed" || claim.phase === "revoked";
+  const step = (label, state) => ({ label, state });
+  const implemented = handoff || landed ? "done" : ended ? "failed" : "active";
+  const handedOff = handoff || landed ? "done" : "pending";
+  let approved = "pending";
+  if (authority === "authorized" || landed) approved = "done";
+  else if (authority === "revoked") approved = "failed";
+  else if (handoff && authority === "not_authorized" && !ended) approved = "active";
+  let landingStep = "pending";
+  let landingLabel = "Landing";
+  if (landed) landingStep = "done";
+  else if (landing === "stopped") { landingStep = "failed"; landingLabel = "Landing stopped"; }
+  else if (landing === "dispatched") landingStep = "active";
+  return [
+    step("Implemented", implemented),
+    step("Handed off", handedOff),
+    step("Approved", approved),
+    step(landingLabel, landingStep),
+    step("Done", landed ? "done" : "pending"),
+  ];
+}
+
+/// The thin five-segment strip above the detail's tabs.
+export function buildDeliveryProgress(steps) {
+  if (!Array.isArray(steps) || steps.length === 0) return null;
+  const list = el("ol", { class: "delivery-progress", "aria-label": "Delivery progress" });
+  for (const { label, state } of steps) {
+    const item = el("li", { class: `delivery-step ${state}` }, [
+      el("span", { class: "delivery-step-bar" }),
+      el("span", { class: "delivery-step-label", text: label }),
+    ]);
+    item.dataset.state = state;
+    if (state === "active") item.setAttribute("aria-current", "step");
+    // The colour is never the only signal: a reader hears the state too.
+    item.title = `${label}: ${STEP_STATE_WORDS[state] || state}`;
+    list.appendChild(item);
+  }
+  return list;
+}
+
+// Server text reads as a sentence here: a capital first letter and a stop.
+function sentence(text) {
+  const value = text ? String(text).trim() : "";
+  if (!value) return null;
+  const capital = value.charAt(0).toUpperCase() + value.slice(1);
+  return /[.!?…]$/.test(capital) ? capital : `${capital}.`;
+}
+
+// The first line of a long reason, bounded: the full text is in the panel's
+// raw evidence.
+function firstLine(text) {
+  const value = text ? String(text).split("\n")[0].trim() : "";
+  if (!value) return null;
+  return value.length > 240 ? `${value.slice(0, 239)}…` : value;
+}
+
+const STEP_STATE_WORDS = { done: "done", failed: "failed", active: "in progress", pending: "not yet" };
+
+/// The callout at the top of the detail. `options.pullRequest` is the task's
+/// `{number, url}` when it has one; `options.onRetry(claim)` takes the
+/// operator to the claim panel's own Retry landing control, which keeps the
+/// one place that sends the request and asks for its reason.
+export function buildAttentionCallout(attention, options = {}) {
+  if (!attention) return null;
+  // A labelled region, not an alert: the detail is rebuilt whenever its task
+  // changes, and an alert would be announced again on every rebuild.
+  const callout = el("section", { class: `task-attention ${attention.tone}` });
+  callout.dataset.attention = attention.kind;
+  const headingId = `attention-${attention.claim && attention.claim.claim_id ? attention.claim.claim_id : "claim"}`;
+  callout.setAttribute("aria-labelledby", headingId);
+  const heading = el("h3", { class: "task-attention-title", id: headingId, text: attention.headline });
+  const body = el("p", { class: "task-attention-body" });
+  const evidence = attention.evidence;
+  // The failing check and test lead when the evidence names them; otherwise
+  // the stop's own first line, else the server's summary of the state.
+  const summary = sentence(attention.body);
+  const reason = evidence && !evidence.check ? firstLine(evidence.reason) : null;
+  const hasBody = Boolean((evidence && evidence.check) || reason || summary);
+  if (evidence && evidence.check) {
+    body.appendChild(el("span", { class: "mono", text: evidence.check }));
+    if (evidence.test) {
+      body.append(" fails on ");
+      body.appendChild(el("span", { class: "mono task-attention-test", text: evidence.test }));
+      body.append(".");
+    } else {
+      body.append(" failed.");
+    }
+    if (summary) body.append(` ${summary}`);
+  } else if (reason) {
+    body.textContent = sentence(reason);
+  } else if (summary) {
+    body.textContent = summary;
+  }
+  const actions = el("div", { class: "task-attention-actions" });
+  const pr = options.pullRequest && options.pullRequest.url ? options.pullRequest : null;
+  const link = (text, href, primary) => {
+    const anchor = el("a", { class: primary ? "attention-action primary" : "attention-action", text });
+    anchor.href = href;
+    anchor.target = "_blank";
+    anchor.rel = "noopener noreferrer";
+    return anchor;
+  };
+  if (pr && evidence && evidence.check) actions.appendChild(link("View failing checks", `${pr.url.replace(/\/+$/, "")}/checks`, true));
+  if (pr) actions.appendChild(link(pr.number ? `Open PR #${pr.number}` : "Open pull request", pr.url, false));
+  if (attention.retry && typeof options.onRetry === "function") {
+    const retry = el("button", { class: "attention-action", type: "button", text: "Retry landing…" });
+    retry.title = "Go to Retry landing in the delivery panel, which asks for a reason";
+    retry.addEventListener("click", (event) => {
+      event.stopPropagation();
+      options.onRetry(attention.claim);
+    });
+    actions.appendChild(retry);
+  }
+  const content = el("div", { class: "task-attention-content" }, [
+    heading,
+    hasBody ? body : null,
+    actions.children.length ? actions : null,
+  ]);
+  callout.appendChild(el("span", { class: "task-attention-icon", "aria-hidden": "true" }));
+  callout.appendChild(content);
+  return callout;
 }
 
 // --- shared renderers -------------------------------------------------------
@@ -223,12 +481,15 @@ function formatWhen(options, value) {
 
 // --- claim panel ------------------------------------------------------------
 
-/// Render one claim: provenance, phase, footprint, reservation, handoff and the
-/// owner actions the caller wires.
+/// Render one claim: the delivery handoff's facts first (branch, candidate,
+/// pull request, review, validation, authority, landing), then the attempt
+/// that produced them (provenance, phase, reservation, footprint), the raw
+/// landing evidence behind a disclosure, and the owner actions the caller
+/// wires.
 ///
 /// Pure with respect to the DOM it creates — it reads only its arguments — so
 /// the behavior scenarios can drive it without a server. `options` carries the
-/// action handlers and an optional `formatTime`.
+/// action handlers, an optional `formatTime` and the task's `pullRequest`.
 export function buildClaimPanel(claim, capabilities, options = {}) {
   const panel = el("div", { class: "claim-panel" });
   panel.setAttribute("data-claim-id", claim.claim_id || "");
@@ -244,6 +505,8 @@ export function buildClaimPanel(claim, capabilities, options = {}) {
     ]),
   );
 
+  if (claim.handoff) panel.appendChild(buildHandoffPanel(claim.handoff, options));
+
   const run = claim.bound_run;
   panel.appendChild(line("execution", buildExecutionProvenance(
     claim.executed_on,
@@ -252,7 +515,7 @@ export function buildClaimPanel(claim, capabilities, options = {}) {
 
   if (run && run.run_id) {
     if (claim.bound_run_navigable) {
-      const link = el("a", { class: "value", text: run.run_id });
+      const link = el("a", { class: "value mono", text: run.run_id });
       link.href = runHref(run.run_id);
       panel.appendChild(line("bound run", link));
     } else {
@@ -278,17 +541,7 @@ export function buildClaimPanel(claim, capabilities, options = {}) {
   panel.appendChild(line("last event", enumLabel(EVENT_LABELS, claim.last_event)));
 
   panel.appendChild(buildReservationLine(claim, options));
-
-  const footprint = Array.isArray(claim.footprint) ? claim.footprint : [];
-  const files = el("div", { class: "claim-footprint" });
-  for (const entry of footprint) files.appendChild(el("div", { class: "mono", text: entry }));
-  panel.appendChild(
-    line("footprint", files, {
-      note: claim.footprint_protected
-        ? `${footprint.length} frozen selector(s), still protected`
-        : `${footprint.length} selector(s), no longer protecting files`,
-    }),
-  );
+  panel.appendChild(buildFootprintLine(claim));
 
   if (claim.landing_invalidated) {
     panel.appendChild(
@@ -299,11 +552,53 @@ export function buildClaimPanel(claim, capabilities, options = {}) {
     panel.appendChild(uncertainMergeBanner(claim.unresolved_merge_intent));
   }
 
-  if (claim.handoff) panel.appendChild(buildHandoffPanel(claim.handoff));
+  const evidence = claim.handoff && claim.handoff.landing ? claim.handoff.landing.evidence : null;
+  if (evidence) panel.appendChild(buildEvidenceDisclosure(evidence));
 
   const actions = buildClaimActions(claim, capabilities, options);
   if (actions) panel.appendChild(actions);
   return panel;
+}
+
+function countOf(count, noun) {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/// The frozen footprint is a list of selectors that can run long, so it sits
+/// behind a disclosure whose summary says how many and whether they still
+/// protect their files.
+function buildFootprintLine(claim) {
+  const footprint = Array.isArray(claim.footprint) ? claim.footprint : [];
+  const summaryText = claim.footprint_protected
+    ? `${countOf(footprint.length, "frozen selector")} · still protected`
+    : `${countOf(footprint.length, "selector")} · no longer protecting files`;
+  if (footprint.length === 0) return line("footprint", summaryText);
+  const files = el("div", { class: "claim-footprint" });
+  for (const entry of footprint) files.appendChild(el("div", { class: "mono", text: entry }));
+  const details = el("details", { class: "claim-disclosure" }, [
+    el("summary", { text: summaryText }),
+    files,
+  ]);
+  return line("footprint", details);
+}
+
+function charCount(text) {
+  const count = String(text).length;
+  return count < 1000 ? `${count} chars` : `${(count / 1000).toFixed(1)}k chars`;
+}
+
+/// The landing attempt's raw evidence, collapsed: it can run to kilobytes of
+/// diagnostic JSON, and the human reason it carries is already summarised in
+/// the landing line and the attention callout. JSON is pretty-printed.
+function buildEvidenceDisclosure(evidence) {
+  const read = readLandingEvidence(evidence);
+  return el("details", { class: "claim-disclosure landing-evidence" }, [
+    el("summary", {}, [
+      el("span", { class: "claim-disclosure-title", text: "Raw landing evidence" }),
+      el("span", { class: "claim-disclosure-meta", text: `${read.structured ? "JSON" : "text"} · ${charCount(read.raw)}` }),
+    ]),
+    el("pre", { class: "landing-evidence-body mono", text: read.pretty }),
+  ]);
 }
 
 /// The reservation window only means something while the claim is live. Once a
@@ -340,24 +635,26 @@ function uncertainMergeBanner(intentId) {
   ]);
 }
 
-function buildHandoffPanel(handoff) {
+function buildHandoffPanel(handoff, options = {}) {
   const wrap = el("div", { class: "handoff-panel" });
   wrap.setAttribute("data-handoff-id", handoff.handoff_id || "");
-  wrap.appendChild(el("h5", { class: "section-title", text: "Delivery handoff" }));
 
   const candidate = handoff.candidate || {};
   const delivery = candidate.delivery || {};
   wrap.appendChild(line("repository", candidate.repository));
-  wrap.appendChild(
-    line("branches", `${candidate.source_branch || "?"} → ${candidate.base_branch || "?"} (lands on ${candidate.landing_branch || "?"})`),
-  );
+  // Where the work goes: the base it was cut from is named only when it is not
+  // the branch it lands on.
+  const landingBranch = candidate.landing_branch || candidate.base_branch || "?";
+  const base = candidate.base_branch && candidate.base_branch !== landingBranch ? ` (from base ${candidate.base_branch})` : "";
+  wrap.appendChild(line("branch", `${candidate.source_branch || "?"} → ${landingBranch}${base}`, { class: "mono-value" }));
   wrap.appendChild(
     line(
       "candidate",
       `${shortCommit(candidate.candidate && candidate.candidate.commit)} on base ${shortCommit(candidate.base && candidate.base.commit)}`,
+      { class: "mono-value" },
     ),
   );
-  wrap.appendChild(line("delivery", deliveryLabel(delivery)));
+  wrap.appendChild(line("delivery", deliveryValue(delivery, options.pullRequest)));
 
   const review = handoff.review || {};
   // The typed not-required disposition, said plainly. `review` as a task status
@@ -371,15 +668,19 @@ function buildHandoffPanel(handoff) {
 
   const validation = Array.isArray(handoff.validation) ? handoff.validation : [];
   const required = Array.isArray(handoff.required_commands) ? handoff.required_commands : [];
-  const logs = el("div", { class: "handoff-validation" });
-  for (const entry of validation) {
-    logs.appendChild(el("div", { class: "mono", text: `${entry.path} · ${shortCommit(entry.sha256)}` }));
+  if (validation.length === 0 && required.length === 0) {
+    wrap.appendChild(line("validation", "no owner-required commands"));
+  } else {
+    const logs = el("div", { class: "handoff-validation" });
+    for (const entry of validation) {
+      logs.appendChild(el("div", { class: "mono", text: `${entry.path} · ${shortCommit(entry.sha256)}` }));
+    }
+    wrap.appendChild(
+      line("validation", logs, {
+        note: `${validation.length} captured log(s) for ${required.length} owner-required command(s): ${required.join(", ") || "none"}`,
+      }),
+    );
   }
-  wrap.appendChild(
-    line("validation", logs, {
-      note: `${validation.length} captured log(s) for ${required.length} owner-required command(s): ${required.join(", ") || "none"}`,
-    }),
-  );
 
   const authority = handoff.authority || {};
   wrap.appendChild(
@@ -396,8 +697,20 @@ function buildHandoffPanel(handoff) {
       note: landing.summary,
     }),
   );
-  if (landing.evidence) wrap.appendChild(line("landing evidence", landing.evidence));
   return wrap;
+}
+
+/// The delivery, linked to its pull request when the task records that pull
+/// request's page and the numbers agree.
+function deliveryValue(delivery, pullRequest) {
+  const text = deliveryLabel(delivery);
+  const number = delivery && delivery.kind === "pull_request" && delivery.number != null ? String(delivery.number) : null;
+  if (!number || !pullRequest || !pullRequest.url || String(pullRequest.number || "") !== number) return text;
+  const link = el("a", { class: "value", text });
+  link.href = pullRequest.url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  return link;
 }
 
 function deliveryLabel(delivery) {
@@ -545,8 +858,7 @@ function buildClaimActions(claim, capabilities, handlers) {
       handlers.onApprove && handlers.onApprove(claim, requestId),
     );
   }
-  if (handoff && claim.phase === "handed_off" && authority.state === "authorized" &&
-      !claim.landing_invalidated && (handoff.landing?.state === "stopped" || claim.unresolved_merge_intent)) {
+  if (landingRetryOffered(claim)) {
     add("retry-handoff", "Retry landing", "handoff_retry",
       (reason, _status, requestId) => handlers.onRetryHandoff && handlers.onRetryHandoff(claim, reason, requestId),
       { reasonRequired: true, reasonPlaceholder: "why this landing should retry" });
@@ -647,7 +959,7 @@ export async function claimedReviewApproval(taskId) {
   if (live.length === 0) return null;
   const handedOff = live.find((claim) => claim.phase === "handed_off" && claim.handoff);
   if (!handedOff) {
-    return { refusal: "this task's distributed claim has not handed off yet; see distributed execution below" };
+    return { refusal: "this task's distributed claim has not handed off yet; see Delivery in the task detail" };
   }
   const authority = handedOff.handoff.authority || {};
   if (authority.state === "not_authorized") return { claim: handedOff };
@@ -706,7 +1018,7 @@ const FEEDBACK_TTL_MS = 20000;
 /// which is the normal case: the block simply does not appear. A replica
 /// checkout keeps it hidden too — the owner machine holds claim state, and a
 /// note repeated on every task would be noise.
-export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onContent, formatTime } = {}) {
+export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onContent, onClaims, formatTime, pullRequest } = {}) {
   const visit = captureWorkspaceVisit();
   const announce = (rendered) => {
     if (onContent) onContent(rendered);
@@ -720,11 +1032,21 @@ export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onConten
     return note;
   };
 
+  // Every read that lands is also handed to `onClaims`, so the detail's
+  // attention callout and progress strip follow the panel's own state.
+  const share = (claims, capabilities) => {
+    if (onClaims) onClaims(claims, capabilities || {});
+  };
+
   const render = (payload) => {
     if (!visit.isCurrent()) return false;
     container.textContent = "";
-    if (payload && payload.owner_workspace === false) return announce(false);
+    if (payload && payload.owner_workspace === false) {
+      share([], null);
+      return announce(false);
+    }
     const claims = claimsForTask(payload, taskId);
+    share(claims, payload && payload.capabilities);
     // The common case: this workspace holds no claim for this task, so the
     // block does not appear at all.
     if (claims.length === 0) return announce(false);
@@ -740,6 +1062,7 @@ export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onConten
       container.appendChild(
         buildClaimPanel(claim, capabilities, {
           formatTime,
+          pullRequest,
           onApprove: (target, requestId) => act(() => approveHandoff(target, requestId)),
           onRetryHandoff: (target, reason, requestId) => act(() => retryHandoff(target, reason, requestId)),
           onRevoke: (target, reason, requestId) => act(() => revokeHandoff(target, reason, requestId)),
@@ -888,7 +1211,7 @@ export function buildDistributedBlock(taskId, opts = {}) {
   // Hidden until the read says this task actually has a claim, so an ordinary
   // single-host task detail is unchanged.
   block.style.display = "none";
-  const heading = el("h4", { class: "section-title" }, [el("span", { class: "field-title", text: "Distributed execution" })]);
+  const heading = el("h4", { class: "section-title" }, [el("span", { class: "field-title", text: "Delivery" })]);
   const body = el("div", { class: "claim-body" });
   makeToggleRow(heading, {
     expanded: true,

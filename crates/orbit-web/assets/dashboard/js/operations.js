@@ -5,7 +5,7 @@ import { navigateToRun, setActiveTab } from './router.js';
 import { renderAutomation } from './automation.js';
 import { FLEET_CACHE_MS, fetchFleetDrains, fleetDrainLabel, peekFleetDrains, renderFleetDrains } from './fleet-drains.js';
 import { cpuLoadMultiple } from './host-resources.js';
-import { DRAIN_LOCK_REASONS, drainCrewNote, drainReason, drainReadinessView, setDrainReadiness } from './drain-waits.js';
+import { DRAIN_LOCK_REASONS, DRAIN_POOLS, drainCrewNote, drainReason, drainReadinessView, setDrainReadiness } from './drain-waits.js';
 import { sparkline, svg } from './sparkline.js';
 
 const $ = (id) => document.getElementById(id);
@@ -92,6 +92,7 @@ export function initOperations(nextContext) {
   clearAllFeedbackTimers();
   unsubscribeWorkspace = onWorkspaceChange(() => {
     lastOperations = lastAutoTasks = lastAutoDrain = lastJobs = null;
+    lastDrainLocks = null;
     updateRoutineFailureBadge([]);
     announcedDrainState = null;
     updateDrainIndicators("idle", "idle");
@@ -101,6 +102,7 @@ export function initOperations(nextContext) {
       const body = $(id);
       if (body) body.textContent = "";
     }
+    hideDrainPageExtras();
     for (const id of ["routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback", "job-operation-feedback"]) feedback(id, "", "");
   });
 }
@@ -1602,8 +1604,10 @@ function fetchAndRenderAutoTasks() {
 // fixed `pendingOperations` key, guard released in `finally`) rather than
 // tasks.js's per-task Ship guard.
 //
-// The Drain page keeps the live window and forecast above window controls,
-// admission passes, waits, fleet drains and locked files.
+// The Drain page leads with a host-throttle banner and summary tiles, then two
+// columns: the live window and forecast, why tasks wait (with the last
+// admission pass) and fleet drains on the left; Start a window and the locks
+// held on the right.
 
 // [ORB-12728] The live coordinator readiness reports, if any. The server
 // nests it under `capacity` (where the slot picture comes from); an older
@@ -1706,7 +1710,7 @@ function updateDrainIndicators(phase, label) {
   const tabState = $("dock-drain-state");
   if (tab) {
     tab.dataset.drainState = indicatorPhase;
-    tab.setAttribute("aria-label", `Drain: ${indicatorLabel}`);
+    tab.setAttribute("aria-label", `Overview: ${indicatorLabel}`);
     tab.title = indicatorLabel;
   }
   if (tabState) tabState.textContent = aggregate ? "fleet" : phase === "winding_down" ? label : "";
@@ -1850,14 +1854,20 @@ function autoDrainDurationControl(payload) {
   return segment;
 }
 
+const AUTO_DRAIN_MODE_HELP = {
+  enforce: "Admits only when the forecast fits.",
+  shadow: "Admits freely and records what the forecast would have decided.",
+  off: "Admits without forecasting. Host safety limits still apply.",
+};
+
 function autoDrainModeControl(payload) {
   const configured = payload.auto_concurrency?.configured_mode;
-  const label = el("label", { class: "drain-field-label", text: "Auto-concurrency mode" });
+  const label = el("label", { class: "drain-field-label", text: "Admission control" });
   label.htmlFor = "auto-drain-mode";
   const select = el("select", { class: "drain-mode-select" });
   select.id = "auto-drain-mode";
   select.dataset.drainFocus = "mode";
-  for (const [value, text] of [["", `Inherit host (${configured || "unknown"})`], ["off", "Off"], ["shadow", "Shadow"], ["enforce", "Enforce"]]) {
+  for (const [value, text] of [["", `Host default (${configured || "unknown"})`], ["off", "Off"], ["shadow", "Shadow"], ["enforce", "Enforce"]]) {
     const option = el("option", { text });
     option.value = value;
     select.appendChild(option);
@@ -1870,9 +1880,13 @@ function autoDrainModeControl(payload) {
     autoDrainMode = select.value;
     renderAutoDrain(payload);
   });
+  const chosen = authorized ? autoDrainMode : "";
+  const help = chosen
+    ? `${AUTO_DRAIN_MODE_HELP[chosen]} For this window only; configuration is unchanged.`
+    : `Uses this host's auto-concurrency mode.${AUTO_DRAIN_MODE_HELP[configured] ? ` ${AUTO_DRAIN_MODE_HELP[configured]}` : ""}`;
   return el("div", { class: "drain-field" }, [label, select,
     el("p", { class: "drain-field-hint", text: authorized
-      ? "Off admits without forecasting; shadow records decisions; enforce uses forecast fit. Host safety limits still apply. The mode is captured for this window; configuration is unchanged."
+      ? help
       : "A per-window mode requires an operator session on an owner workspace." }),
   ]);
 }
@@ -1926,8 +1940,11 @@ function autoDrainConcurrencyControl(payload, form) {
     return button;
   };
   form.syncConcurrency();
-  return el("div", { class: "drain-field" }, [
-    label,
+  const hint = el("p", { class: "drain-field-hint", text: "Upper bound; the forecast may admit fewer." });
+  hint.id = "auto-drain-concurrency-hint";
+  input.setAttribute("aria-describedby", `${problem.id} ${hint.id}`);
+  return el("div", { class: "drain-field drain-field-row" }, [
+    el("div", { class: "drain-field-text" }, [label, hint]),
     el("div", { class: "drain-stepper" }, [step(-1, "Decrease"), input, step(1, "Increase")]),
   ]);
 }
@@ -2031,11 +2048,15 @@ function autoDrainAutoFixControl(payload, reasons) {
     autoDrainAutoFix = input.checked;
     renderAutoDrain(payload);
   });
+  input.className = "drain-switch";
+  input.setAttribute("role", "switch");
   const help = el("p", { class: `drain-field-hint${reasons.autoFix ? " warn" : ""}`, text: reasons.autoFix || AUTO_DRAIN_AUTO_FIX_HELP });
   help.id = "auto-drain-auto-fix-help";
-  return el("div", { class: "drain-field" }, [
-    el("label", { class: "drain-field-label" }, [input, el("span", { text: " Auto-fix PR blockers" })]),
-    help,
+  const label = el("label", { class: "drain-field-label", text: "Auto-fix PR blockers" });
+  label.htmlFor = input.id;
+  return el("div", { class: "drain-field drain-field-row" }, [
+    el("div", { class: "drain-field-text" }, [label, help]),
+    input,
   ]);
 }
 
@@ -2400,18 +2421,179 @@ function throttleReading(resource, percent, threshold = false) {
   return threshold ? `${percent}%` : `${resource} ${Math.round(Number(percent))}%`;
 }
 
-// Sustained host pressure holds every new admission until it clears, so the
-// card names the resource, value, threshold and since-when instead of leaving
-// an idle drain to read as an empty backlog.
-function autoDrainThrottleNote(capacity) {
+// The resources a throttle holds, or an empty list.
+function throttledResources(capacity) {
   const resources = capacity?.resource_throttle?.resources;
-  if (!Array.isArray(resources) || resources.length === 0) return null;
+  return Array.isArray(resources) ? resources.filter(item => item && item.resource) : [];
+}
+
+// A throttled resource by the name the top bar gives it.
+function throttleName(resource) {
+  return resource === "cpu" ? "load" : String(resource);
+}
+
+function throttleNames(resources) {
+  const names = [...new Set(resources.map(item => throttleName(item.resource)))];
+  return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0] || "";
+}
+
+// One resource's reading against its two thresholds: the fill is the reading,
+// the green tick where admissions resume, the red one where they stop. The
+// scale runs a quarter past the higher of the reading and the stop threshold.
+function throttleGauge(item) {
+  const percent = Number(item.percent);
+  const high = Number(item.high_percent);
+  const resume = Number(item.resume_percent);
+  if (![percent, high, resume].every(Number.isFinite)) return null;
+  const scale = Math.max(high, percent) * 1.25 || 100;
+  const at = value => `${Math.min(100, Math.max(0, (value / scale) * 100))}%`;
+  const tick = value => (item.resource === "cpu" ? cpuLoadMultiple(value, true) : `${Math.round(value)}%`);
+  const now = item.resource === "cpu" ? `${cpuLoadMultiple(percent)} cores` : `${Math.round(percent)}%`;
+  return el("div", { class: "drain-gauge" }, [
+    el("div", { class: "drain-gauge-head" }, [
+      el("span", { text: `${throttleName(item.resource)} now` }),
+      el("span", { class: "drain-gauge-now mono", text: now }),
+    ]),
+    el("div", { class: "drain-gauge-track" }, [
+      el("span", { class: "drain-gauge-fill", style: { width: at(percent) } }),
+      el("span", { class: "drain-gauge-mark resume", style: { left: at(resume) } }),
+      el("span", { class: "drain-gauge-mark high", style: { left: at(high) } }),
+    ]),
+    el("div", { class: "drain-gauge-scale mono" }, [
+      el("span", { class: "resume", text: `resume ${tick(resume)}`, style: { left: at(resume) } }),
+      el("span", { class: "high", text: `stop ${tick(high)}`, style: { left: at(high) } }),
+    ]),
+  ]);
+}
+
+// Sustained host pressure holds every new admission until it clears, so the
+// page leads with it: what is held, when it resumes and since when, and a
+// gauge per resource. The full sentence (each reading, both thresholds and
+// since-when) is what assistive technology announces; the visible parts say
+// the same in short.
+function autoDrainThrottleNote(capacity) {
+  const resources = throttledResources(capacity);
+  if (resources.length === 0) return null;
   const held = resources
     .map(item => `${throttleReading(item.resource, item.percent)} (throttled at ≥ ${throttleReading(item.resource, item.high_percent, true)} since ${time(item.since)}; resumes below ${throttleReading(item.resource, item.resume_percent, true)})`)
     .join("; ");
-  const note = el("p", { class: "operation-control-note drain-throttle-note", text: `Admissions throttled: ${held}. Running tasks are not touched.` });
+  const sentence = `Admissions throttled: ${held}. Running tasks are not touched.`;
+  const resumes = resources
+    .map(item => `${throttleName(item.resource)} falls below ${throttleReading(item.resource, item.resume_percent, true)}`)
+    .join(" and ");
+  const since = resources.map(item => Date.parse(item.since || "")).filter(Number.isFinite).sort((a, b) => a - b)[0];
+  const detail = [
+    `New tasks start once ${resumes}.`,
+    Number.isFinite(since) ? `Throttled since ${clockHm(new Date(since).toISOString())}.` : "",
+    "Running tasks are not affected.",
+  ].filter(Boolean).join(" ");
+  const note = el("section", { class: "operation-control-note drain-throttle-note", title: sentence }, [
+    el("div", { class: "drain-banner-text", "aria-hidden": "true" }, [
+      el("span", { class: "drain-banner-icon" }),
+      el("div", { class: "drain-banner-copy" }, [
+        el("p", { class: "drain-banner-headline", text: `Admissions paused — host ${throttleNames(resources)} ${resources.length > 1 ? "are" : "is"} throttled` }),
+        el("p", { class: "drain-banner-detail", text: detail }),
+      ]),
+    ]),
+    el("div", { class: "drain-banner-gauges", "aria-hidden": "true" }, resources.map(throttleGauge).filter(Boolean)),
+    el("span", { class: "visually-hidden", text: sentence }),
+  ]);
   note.setAttribute("role", "status");
   return note;
+}
+
+// The top of the page: the throttle banner, when a throttle holds admissions.
+function renderDrainBanner(payload) {
+  const banner = $("drain-banner");
+  if (!banner) return;
+  const note = payload ? autoDrainThrottleNote(payload.capacity) : null;
+  banner.textContent = "";
+  banner.hidden = !note;
+  if (note) banner.append(note);
+}
+
+function hideDrainPageExtras() {
+  for (const id of ["drain-banner", "drain-summary"]) {
+    const node = $(id);
+    if (!node) continue;
+    node.textContent = "";
+    node.hidden = true;
+  }
+}
+
+// The locks payload (`/api/tasks/locks`) the Locks held card renders; the
+// summary tiles and the wait rows read it too. app.js hands it over.
+let lastDrainLocks = null;
+
+export function setDrainLocks(payload) {
+  lastDrainLocks = payload && Array.isArray(payload.by_task) ? payload : null;
+  if (!lastAutoDrain || !selectedWorkspace()) return;
+  renderDrainSummary(lastAutoDrain);
+  renderDrainWaits(lastAutoDrain);
+}
+
+// How many waiting tasks name each task as their lock holder, from the last
+// readiness snapshot of the selected workspace.
+export function drainHolderCounts() {
+  const counts = new Map();
+  const tasks = Array.isArray(lastAutoDrain?.tasks) ? lastAutoDrain.tasks : [];
+  for (const entry of tasks) {
+    if (!entry || entry.eligible === true) continue;
+    for (const holder of drainReadinessView(entry).badge?.holders || []) counts.set(holder, (counts.get(holder) || 0) + 1);
+  }
+  return counts;
+}
+
+function drainTile(key, label, value, sub, lead = null) {
+  const tile = el("div", { class: "drain-tile" }, [
+    el("span", { class: "drain-tile-label", text: label }),
+    el("span", { class: "drain-tile-value" }, [lead, ...value]),
+    sub ? el("span", { class: "drain-tile-sub", text: sub }) : null,
+  ]);
+  tile.dataset.tile = key;
+  return tile;
+}
+
+// Four figures across the top: the window's state, slots in use, the queue
+// and locked files. A tile whose figures are unknown is left out.
+function renderDrainSummary(payload) {
+  const summary = $("drain-summary");
+  if (!summary) return;
+  summary.textContent = "";
+  if (!payload || !selectedWorkspace()) {
+    summary.hidden = true;
+    return;
+  }
+  const { capacity, phase, running, label, pulling, pullLabel } = autoDrainPhase(payload);
+  const tiles = [];
+  const state = pulling ? "pulling" : phase;
+  const word = pulling ? pullLabel : phase === "idle" ? (workspaceReadOnlyReason() ? "Read-only" : "Idle") : label;
+  const stateSub = pulling ? "A replica pull drain is admitting"
+    : phase === "draining" ? autoDrainTimeLeft(capacity.ends_at) || "A window is admitting"
+      : phase === "winding_down" ? `${autoDrainPlural(running, "task")} still running`
+        : "No window is running";
+  tiles.push(drainTile("state", "Auto-drain", [el("span", { text: word })], stateSub,
+    el("span", { class: `drain-dot ${state}`, "aria-hidden": "true" })));
+  const busy = autoDrainNumber(capacity.active_leaf_runs ?? capacity.occupancy?.active_leaf_runs);
+  const limit = autoDrainNumber(capacity.max_active_leaf_runs);
+  if (Number.isFinite(busy) && Number.isFinite(limit) && limit > 0) {
+    const free = autoDrainNumber(capacity.free_slots);
+    tiles.push(drainTile("slots", "Slots in use", [String(busy), el("span", { class: "drain-tile-of", text: ` / ${limit}` })],
+      Number.isFinite(free) ? `${Math.max(0, free)} free · parallel limit ${limit}` : `Parallel limit ${limit}`));
+  }
+  if (Array.isArray(payload.tasks)) {
+    const counts = autoDrainCounts(payload);
+    tiles.push(drainTile("queue", "Queue", [String(counts.waiting), el("span", { class: "drain-tile-unit", text: " waiting" })],
+      `${counts.eligible} eligible right now`));
+  }
+  if (lastDrainLocks) {
+    const files = Number(lastDrainLocks.total_locked);
+    const holders = Number.isFinite(Number(lastDrainLocks.total_tasks)) ? Number(lastDrainLocks.total_tasks) : lastDrainLocks.by_task.length;
+    tiles.push(drainTile("locks", "Locked files", [String(Number.isFinite(files) ? files : 0)],
+      holders > 0 ? `Held by ${autoDrainPlural(holders, "task")}` : "No task holds a lock"));
+  }
+  summary.append(...tiles);
+  summary.hidden = false;
 }
 
 // [ORB-14698] Each provider usage window that keeps crews out of admission,
@@ -2599,14 +2781,17 @@ function forecastPeaks(forecast) {
         Number.isFinite(admitNumber) ? el("span", { class: "drain-forecast-tick", style: { left: clamp(admitNumber) } }) : null,
       ]);
     }
+    // The figure reads as the peak and when, then the amount and how far it
+    // sits from the admit ceiling, in percentage points.
+    const margin = Number.isFinite(roomNumber) && Number.isFinite(admitNumber)
+      ? `${Math.abs(roomNumber).toFixed(1)} pts ${roomNumber < 0 ? "over" : "under"} the ${admitNumber}% ceiling`
+      : Number.isFinite(admitNumber) ? `${admitNumber}% ceiling` : "";
     return el("div", { class: `drain-forecast-peak${over ? " over" : ""}`, title: detail }, [
       el("dt", { text: name }),
       el("dd", { class: "drain-forecast-bar" }, [graphic]),
-      el("dd", { class: "drain-forecast-figure mono" }, [
-        el("span", { "aria-hidden": "true" }, [
-          known ? `${percent.toFixed(1)}%` : "unknown",
-          Number.isFinite(admitNumber) ? el("span", { class: "drain-forecast-threshold", text: ` / ${admitNumber}%` }) : null,
-        ]),
+      el("dd", { class: "drain-forecast-figure" }, [
+        el("span", { class: "drain-forecast-figure-main", "aria-hidden": "true", text: known ? `${percent.toFixed(1)}% peak${when ? ` ${when}` : ""}` : "host capacity unknown" }),
+        el("span", { class: "drain-forecast-figure-sub", "aria-hidden": "true", text: [amount, margin].filter(Boolean).join(" · ") }),
         el("span", { class: "visually-hidden", text: detail }),
       ]),
     ]);
@@ -2707,16 +2892,19 @@ function autoDrainForecast(payload) {
 }
 
 // The status card reads top to bottom: the live window's figures (if any),
-// the slots it competes for and why nothing more starts, any host or provider
+// the slots it competes for and why nothing more starts, any provider or crew
 // hold, the last admission forecast, then the run and Stop. Its deadline sits
-// in the header. Starting a window is its own card below, hidden in a
-// read-only view.
+// in the header. A host throttle leads the page as a banner above the summary
+// tiles, and starting a window is its own card beside, hidden in a read-only
+// view.
 function renderAutoDrain(payload) {
   lastAutoDrain = payload;
   const waits = $("drain-waits-panel");
   if (waits) waits.hidden = false;
   setDrainReadiness(payload);
   renderDrainWaits(payload);
+  renderDrainBanner(payload);
+  renderDrainSummary(payload);
   const body = $("auto-drain-body");
   if (!body) return;
   // A poll or a control click rebuilds both cards; keep keyboard focus on the
@@ -2726,7 +2914,8 @@ function renderAutoDrain(payload) {
   renderAutoDrainHead(payload);
   const reasons = autoDrainReasons(payload);
   const holds = [
-    autoDrainThrottleNote(payload.capacity),
+    // A page without the banner slot keeps the note in the card.
+    $("drain-banner") ? null : autoDrainThrottleNote(payload.capacity),
     autoDrainProviderLimitNote(payload.provider_limits),
     autoDrainProviderAuth(payload.provider_auth_failures),
     drainCrewNote(payload),
@@ -2747,23 +2936,121 @@ function renderAutoDrain(payload) {
   if (focusKey) document.querySelector?.(`[data-drain-focus="${focusKey}"]`)?.focus();
 }
 
-// Reuse the task list's wait descriptions so both views name the same cause.
+const DRAIN_POOL_SHORT = { eligible: "Eligible", locks: "Locks", capacity: "Capacity", other: "Other" };
+// Holder and dependency links a wait row shows before folding the rest.
+const DRAIN_WAIT_LINKS = 3;
+
+// Task links for `ids`, comma-separated, the rest folded into "+N more".
+function drainTaskLinks(ids) {
+  const shown = ids.slice(0, DRAIN_WAIT_LINKS);
+  const nodes = [];
+  shown.forEach((id, index) => {
+    if (index > 0) nodes.push(", ");
+    nodes.push(taskLink(id, selectedWorkspace()?.id));
+  });
+  if (ids.length > shown.length) nodes.push(` +${ids.length - shown.length} more`);
+  return nodes;
+}
+
+// The muted line under a wait: what the holder holds (from the locks card's
+// payload), the run that claims it, the dependencies still open, when a
+// throttle clears, or the server's own detail.
+function drainWaitDetail(group, capacity) {
+  const { badge } = group;
+  if (badge.holders.length) {
+    const held = badge.holders
+      .map(id => lastDrainLocks?.by_task.find(task => String(task?.id) === id))
+      .filter(Boolean)
+      .map(task => {
+        const files = Array.isArray(task.context_files) ? task.context_files.length : 0;
+        return `${task.id} holds ${autoDrainPlural(files, "locked file")}${task.status ? ` · ${normalizeTaskStatus(task.status)}` : ""}`;
+      });
+    return held.length ? held.join("; ") : badge.detail;
+  }
+  if (badge.runIds.length) {
+    const runs = [];
+    badge.runIds.slice(0, DRAIN_WAIT_LINKS).forEach((runId, index) => {
+      if (index > 0) runs.push(", ");
+      runs.push(runLink(runId, selectedWorkspace()?.id, autoDrainShortRunId(runId)));
+    });
+    return ["Claimed by ", ...runs];
+  }
+  if (group.dependencies.length) return ["Waiting for ", ...drainTaskLinks(group.dependencies)];
+  if (badge.reason === "resource_throttled") {
+    const resources = throttledResources(capacity);
+    if (resources.length) {
+      return `Clears when ${resources.map(item => `${throttleName(item.resource)} falls below ${throttleReading(item.resource, item.resume_percent, true)}`).join(" and ")}`;
+    }
+  }
+  return badge.detail;
+}
+
+// Why the backlog waits: the snapshot split by pool as a stacked bar, then
+// one row per wait (the same words as the Tasks readiness dots), with its
+// count, its pool's colour, a detail line and links to the tasks it waits on.
 function renderDrainWaits(payload) {
   const body = $("drain-waits-body");
   if (!body) return;
   body.textContent = "";
   const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
-  const groups = new Map();
-  for (const entry of tasks.filter(entry => !entry.eligible)) {
-    const view = drainReadinessView(entry);
-    const label = view.badge?.text || view.label;
-    groups.set(label, (groups.get(label) || 0) + 1);
-  }
   const counts = autoDrainCounts(payload);
-  body.append(el("p", { class: "drain-section-label", text: `${counts.eligible} eligible now · ${counts.waiting} waiting` }));
-  if (groups.size) body.append(el("ul", { class: "drain-waits-list" }, [...groups].map(([reason, count]) =>
-    el("li", { text: `${count} · ${reason}` }))));
-  body.append(el("p", { class: "drain-waits-note", text: "Current readiness snapshot; eligibility can change before admission. Open Tasks for individual blockers." }));
+  const title = $("drain-waits-title");
+  if (title) {
+    title.textContent = counts.waiting === 0 ? "Nothing is waiting"
+      : `Why ${autoDrainPlural(counts.waiting, "task")} ${counts.waiting === 1 ? "is" : "are"} waiting`;
+  }
+  const pools = Object.fromEntries(DRAIN_POOLS.map(({ key }) => [key, 0]));
+  const groups = new Map();
+  for (const entry of tasks) {
+    const view = drainReadinessView(entry);
+    pools[view.pool] = (pools[view.pool] || 0) + 1;
+    if (!view.badge) continue;
+    const key = view.badge.text;
+    const group = groups.get(key) || { count: 0, pool: view.pool, badge: view.badge, dependencies: [] };
+    group.count += 1;
+    for (const { taskId } of view.badge.dependencies) if (!group.dependencies.includes(taskId)) group.dependencies.push(taskId);
+    groups.set(key, group);
+  }
+  if (tasks.length) {
+    const bar = el("div", { class: "drain-pool-bar", role: "img",
+      "aria-label": DRAIN_POOLS.map(({ key, label }) => `${label}: ${pools[key]}`).join(", ") });
+    for (const { key } of DRAIN_POOLS) {
+      if (!pools[key]) continue;
+      const segment = el("span", { class: "drain-pool-seg", style: { flexGrow: String(pools[key]) } });
+      segment.dataset.pool = key;
+      bar.appendChild(segment);
+    }
+    const legend = el("ul", { class: "drain-pool-legend", "aria-hidden": "true" }, DRAIN_POOLS.map(({ key }) => {
+      const item = el("li", { class: "drain-pool-key" }, [el("span", { class: "drain-pool-swatch" }), `${DRAIN_POOL_SHORT[key]} ${pools[key]}`]);
+      item.dataset.pool = key;
+      return item;
+    }));
+    body.append(el("div", { class: "drain-pools" }, [bar, legend]));
+  }
+  if (groups.size) {
+    const rows = [...groups.values()].sort((left, right) => right.count - left.count).map((group) => {
+      const { badge } = group;
+      const reason = el("span", { class: "drain-wait-reason" }, badge.holders.length
+        ? ["waits on ", ...drainTaskLinks(badge.holders)]
+        : [badge.text]);
+      const detail = drainWaitDetail(group, payload.capacity);
+      const row = el("li", { class: "drain-wait", title: badge.title }, [
+        el("span", { class: "drain-wait-count mono", text: String(group.count) }),
+        el("span", { class: "drain-wait-swatch", "aria-hidden": "true" }),
+        el("span", { class: "drain-wait-text" }, [
+          reason,
+          detail && detail.length ? el("span", { class: "drain-wait-detail" }, Array.isArray(detail) ? detail : [detail]) : null,
+        ]),
+      ]);
+      row.dataset.pool = group.pool;
+      return row;
+    });
+    body.append(el("ul", { class: "drain-waits-list" }, rows));
+  } else {
+    body.append(el("p", { class: "drain-waits-note", text: tasks.length
+      ? `Every backlog task is eligible: ${autoDrainPlural(counts.eligible, "task")} can start now.`
+      : "Nothing is waiting in the backlog." }));
+  }
   if (payload.capacity?.candidate_pool_truncated) body.append(el("p", {
     class: "drain-waits-note", text: "The candidate pool is truncated; these waits cover only the returned tasks.",
   }));
@@ -2795,9 +3082,11 @@ function fetchDrainPass(payload) {
   });
 }
 
-// The Start card: window length, parallel tasks, what happens when a task
-// finishes and to proposed tasks, then Start. Each choice says what it does in
-// visible text under the control.
+// The Start card: window length, parallel tasks and admission control, then
+// what happens after a task ships (completion, proposed tasks, auto-fix,
+// review). Each choice says what it does in visible text under the control.
+// A sunk footer sums the window up, warns when a throttle will hold its
+// admissions, and holds Start.
 function renderAutoDrainStart(payload, reasons) {
   const card = $("auto-drain-start");
   const body = $("auto-drain-start-body");
@@ -2811,20 +3100,61 @@ function renderAutoDrainStart(payload, reasons) {
   // The concurrency field and the Start button are built apart but depend on
   // each other; they meet here.
   const form = {};
+  const durationLabel = el("span", { class: "drain-field-label", text: "Window length" });
+  durationLabel.id = "auto-drain-duration-label";
   body.append(
     el("div", { class: "drain-field drain-field-duration" }, [
-      el("span", { class: "drain-field-label", text: "Window length" }),
+      durationLabel,
       autoDrainDurationControl(payload),
+      el("p", { class: "drain-field-hint", text: "Admissions stop when the window closes; tasks already started run to the end." }),
     ]),
     autoDrainConcurrencyControl(payload, form),
+    form.problem,
     autoDrainModeControl(payload),
+    el("div", { class: "drain-divider", role: "separator", "aria-label": "After a task ships" }, [el("span", { text: "After a task ships" })]),
     autoDrainCompletionControl(payload, reasons),
     autoDrainApproveControl(payload, reasons),
     autoDrainAutoFixControl(payload, reasons),
     autoDrainReviewControl(payload, reasons),
-    form.problem,
-    autoDrainStartButton(payload, form),
+    autoDrainStartFoot(payload, form),
   );
+}
+
+// "1h window · up to 5 in parallel · enforce", plus each opt-in that is on.
+function autoDrainStartSummary(payload) {
+  const capacity = payload.capacity || {};
+  const limit = autoDrainNumber(capacity.max_active_leaf_runs);
+  const parallel = autoDrainConcurrencyValid() && autoDrainConcurrency
+    ? autoDrainConcurrency
+    : Number.isFinite(limit) && limit >= 1 ? String(Math.trunc(limit)) : "";
+  const mode = (payload.controls_authorized === true && payload.replica !== true && autoDrainMode)
+    || payload.auto_concurrency?.configured_mode || "";
+  return [
+    `${autoDrainDuration} window`,
+    parallel ? `up to ${parallel} in parallel` : "runtime default parallelism",
+    mode ? (mode === "off" ? "no forecast" : mode) : "",
+    autoDrainComplete ? "marks done" : "",
+    autoDrainApproveProposed ? "approves proposals" : "",
+    autoDrainAutoFix ? "auto-fix on" : "",
+    autoDrainReview ? `adds ${autoDrainReview} review` : "",
+  ].filter(Boolean).join(" · ");
+}
+
+function autoDrainStartFoot(payload, form) {
+  const summary = el("p", { class: "drain-start-summary", text: autoDrainStartSummary(payload) });
+  const previous = form.syncConcurrency;
+  form.syncConcurrency = () => {
+    previous?.();
+    summary.textContent = autoDrainStartSummary(payload);
+  };
+  const resources = throttledResources(payload.capacity);
+  const held = resources.length
+    ? el("p", { class: "drain-start-held" }, [
+      el("span", { class: "drain-banner-icon small", "aria-hidden": "true" }),
+      el("span", { text: `Starts now, but nothing is admitted until the ${throttleNames(resources)} throttle clears.` }),
+    ])
+    : null;
+  return el("div", { class: "drain-start-foot" }, [summary, held, autoDrainStartButton(payload, form)]);
 }
 
 // A panel poll paints the snapshot it already has. Opening the fleet card
@@ -2903,6 +3233,7 @@ function fetchAndRenderAutoDrain() {
   if (!workspace) {
     return requestPanel("auto-drain-body", "fleet", () => loadFleetSnapshot({ refreshWhenStale: true }), payload => {
       setDrainReadiness({});
+      hideDrainPageExtras();
       for (const id of ["drain-waits-panel", "drain-fleet-panel"]) {
         const panel = $(id);
         if (panel) panel.hidden = true;

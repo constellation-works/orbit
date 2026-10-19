@@ -277,13 +277,14 @@ assert(getComputedStyle(mintedStatus, '::before').backgroundColor === getCompute
 assert(getComputedStyle(mintedStatus).getPropertyValue('--dot').trim() === getComputedStyle(mintedStatus).getPropertyValue('--status-in-progress').trim(), 'in-progress status uses its theme colour');
 taskStatus.remove();
 
-// The Drain pane is two cards: the status card (live window, workspace slots,
-// holds, Stop) and Start a window (duration, concurrency, completion,
-// approving, Start). Why each backlog task waits is the Tasks list's job now,
-// read from the same readiness payload.
+// The Drain pane leads with a host-throttle banner, then the status card
+// (live window, workspace slots, holds, Stop) and Start a window (duration,
+// concurrency, completion, approving, Start). The Tasks list reads each
+// backlog task's wait from the same readiness payload.
 const drainBody = get('auto-drain-body');
 const startBody = get('auto-drain-start-body');
-const drainText = () => `${get('auto-drain-body').textContent} ${get('auto-drain-start-body').textContent}`;
+const drainBanner = get('drain-banner');
+const drainText = () => `${drainBanner.textContent} ${get('auto-drain-body').textContent} ${get('auto-drain-start-body').textContent}`;
 const drainButton = label => button('auto-drain-body', label) || button('auto-drain-start-body', label);
 const startNode = id => descendants(get('auto-drain-start-body')).find(node => node.id === id);
 const durations = descendants(startBody).filter(node => node.type === 'button' && String(node.className || '').includes('drain-duration'));
@@ -496,10 +497,11 @@ assert(
   `the throttle names both thresholds for held resources above high and in hysteresis band: ${drainText()}`
 );
 assert(!drainText().includes('89% ≥'), 'hysteresis band reading must not render a false comparison against high threshold');
-assert(descendants(drainBody).some(node => node.getAttribute?.('role') === 'status' && node.textContent.includes('Admissions throttled')), 'the throttle note is announced as status');
+assert(descendants(drainBanner).some(node => node.getAttribute?.('role') === 'status' && node.textContent.includes('Admissions throttled')), 'the throttle banner is announced as status');
+assert(!drainBanner.hidden && !drainBody.querySelector('.drain-throttle-note'), 'the throttle leads the page once, not again in the status card');
 resourceThrottle = null;
 await fetchAndRenderOperations();
-assert(!drainText().includes('Admissions throttled'), 'the note clears with the throttle');
+assert(!drainText().includes('Admissions throttled') && drainBanner.hidden, 'the note clears with the throttle');
 
 // ORB-14705: every readiness task lands in exactly one pool, so the Backlog
 // strip's counts add up to the backlog; "blocked" stays a task status.
@@ -532,7 +534,7 @@ drainTasksOverride = null;
   const chip = get('host-resource-chips').querySelector('[data-resource="cpu"] .v');
   resourceThrottle = { resources: [{ resource: 'cpu', percent: 164, high_percent: 90, resume_percent: 75, since: '2026-10-04T08:40:00Z' }] };
   await fetchAndRenderAutoDrainPane();
-  const note = drainBody.querySelector('.drain-throttle-note').textContent;
+  const note = drainBanner.querySelector('.drain-throttle-note').textContent;
   assert(chip.textContent === '1.6× cores' && note.includes(`load ${chip.textContent} (throttled at ≥ 0.9× cores`) && note.includes('resumes below 0.75× cores'), `chip ${chip.textContent} vs note ${note}`);
   assert(!/cpu \d|164/.test(note), `the note never states cpu as a bare percentage: ${note}`);
   resourceThrottle = null;
@@ -1317,8 +1319,8 @@ forecast = forecastCard();
 forecastText = forecast?.textContent || '';
 assert(!forecast.querySelector('.drain-forecast-meter'), `a series replaces the bars: ${forecastText}`);
 const sparkExpect = [
-  { name: 'CPU', minute: '6', label: '+6m', limit: 89, left: 2 * 5 / 60 * 100, peak: '90.0%', text: '90.0% / 89%' },
-  { name: 'Memory', minute: '2', label: '+2m', limit: 74, left: 5 / 60 * 100, peak: '40.0%', text: '40.0% / 74%' },
+  { name: 'CPU', minute: '6', label: '+6m', limit: 89, left: 2 * 5 / 60 * 100, peak: '90.0%', text: '90.0% peak at +6m' },
+  { name: 'Memory', minute: '2', label: '+2m', limit: 74, left: 5 / 60 * 100, peak: '40.0%', text: '40.0% peak at +2m' },
 ];
 sparkRows().forEach((row, index) => {
   const want = sparkExpect[index];

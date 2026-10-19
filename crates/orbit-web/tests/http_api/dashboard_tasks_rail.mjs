@@ -169,6 +169,13 @@ const common = modules.get('common.js').namespace;
 
 // A matching set of 65 tasks read in pages of 50, as /api/tasks serves them.
 const task = (index, extra = {}) => ({ id: `ORB-${index}`, title: `Task ${index}`, status: 'in-progress', priority: 'medium', ...extra });
+// A row's title sits inside its title line, and this stub does not bubble, so
+// a click on the title reaches the row's disclosure handler from the row.
+const clickTitle = title => {
+  let row = title.parentNode;
+  while (row && !('rovingRow' in row.dataset)) row = row.parentNode;
+  row.dispatch('click', { target: title });
+};
 const matching = Array.from({ length: 65 }, (_, index) => index + 1);
 const page = (offset, size, total, extra) => ({
   total,
@@ -230,7 +237,7 @@ paint({ total: 1, limit: 50, offset: 0, next_cursor: null }, [constrained]);
 let osRow = byId['tasks-body'].querySelectorAll('.row').find(row => row.dataset.key === 'task-ORB-67');
 assert.equal(osRow.querySelector('.os-badge').title, `Runs on ${constrained.os_requirement.describe}`);
 const osTitle = osRow.querySelector('button.title');
-osTitle.parentNode.dispatch('click', { target: osTitle });
+clickTitle(osTitle);
 assert.equal(paneBody.querySelector('.task-os-readout').textContent, constrained.os_requirement.describe);
 constrained.os_requirement = { any_of: [], state: 'unresolved', describe: 'unresolved (crew fixture-crew)' };
 paint({ total: 1, limit: 50, offset: 0, next_cursor: null }, [constrained]);
@@ -251,7 +258,7 @@ const historyTask = task(66, {
 paint({ total: 1, limit: 50, offset: 0, next_cursor: null }, [historyTask]);
 const historyTitle = byId['tasks-body'].querySelector('.row button.title');
 assert.ok(historyTitle, 'task title disclosure exists');
-historyTitle.parentNode.dispatch('click', { target: historyTitle });
+clickTitle(historyTitle);
 const historyLines = paneBody.querySelectorAll('.history-line').map(line => line.textContent);
 assert.ok(historyLines.some(line => line.includes(': status proposed → backlog')), historyLines.join('\n'));
 assert.ok(historyLines.some(line => line.includes(': started backlog → in-progress')), historyLines.join('\n'));
@@ -261,7 +268,7 @@ assert.ok(historyLines.some(line => line.includes(': status_changed')), historyL
 const openTask = fixture => {
   paint({ total: 1, limit: 50, offset: 0, next_cursor: null }, [fixture]);
   const title = byId['tasks-body'].querySelector('.row button.title');
-  title.parentNode.dispatch('click', { target: title });
+  clickTitle(title);
   return paneBody.querySelector('.comment-card');
 };
 const card = openTask(pilotTask);
@@ -405,7 +412,7 @@ currentTasks = [contextDraftTask];
 served = contextDraftPage;
 renderTasks(currentTasks, contextDraftContext);
 const contextDraftTitle = rowFor('ORB-37').querySelector('button.title');
-contextDraftTitle.parentNode.dispatch('click', { target: contextDraftTitle });
+clickTitle(contextDraftTitle);
 let contextDraftDetail = paneBody.querySelector('#detail-ORB-37');
 assert.ok(
   contextDraftDetail.querySelector('.file-list .field-empty').textContent.includes('no context files'),
@@ -574,7 +581,7 @@ const paintCards = () => {
 const showCard = id => {
   if (paneBody.querySelector(`#detail-${id}`)) return;
   const title = rowFor(id).querySelector('button.title');
-  title.parentNode.dispatch('click', { target: title });
+  clickTitle(title);
 };
 const readinessCard = id => {
   showCard(id);
@@ -585,7 +592,7 @@ heldReads.set('ORB-41', holdRead());
 paintCards();
 for (const item of cardTasks) {
   const title = rowFor(item.id).querySelector('button.title');
-  title.parentNode.dispatch('click', { target: title });
+  clickTitle(title);
 }
 assert.ok(readinessCard('ORB-41').textContent.includes('Checking whether the drain can take this task'), 'a read in flight says so');
 assert.ok(!readinessCard('ORB-41').textContent.includes('Ready'), 'a read in flight claims no readiness');
@@ -678,7 +685,7 @@ assert.ok(!crewNote.textContent.includes('ORB-44'), 'an eligible task is not lis
 assert.equal(drainWaits.drainCrewNote({ capacity: { allowed_crews: null }, tasks: Object.values(readinessEntries) }), null, 'no restriction, no note');
 // Clicking the selected row again closes the pane.
 const selectedTitle = backlogBody.querySelector('.row.expanded button.title');
-selectedTitle.parentNode.dispatch('click', { target: selectedTitle });
+clickTitle(selectedTitle);
 assert.equal(byId['task-detail-pane'].hidden, true, 'the selected row toggles the pane closed');
 assert.equal(backlogBody.querySelector('.row.expanded'), null, 'no row reads as selected once the pane closes');
 
@@ -708,7 +715,7 @@ for (const fixture of [
   currentTasks = [liveTask];
   renderTasks(currentTasks, cardContext);
   const title = rowFor(fixture.id).querySelector('button.title');
-  title.parentNode.dispatch('click', { target: title });
+  clickTitle(title);
   await settleReads();
 
   const read = liveRunReads.findLast(url => url.searchParams.get('task') === fixture.id);
@@ -821,7 +828,7 @@ const paintOrdinary = ordinaryTask => {
 const openOrdinaryDraft = ordinaryTask => {
   paintOrdinary(ordinaryTask);
   const title = rowFor(ordinaryTask.id).querySelector('button.title');
-  title.parentNode.dispatch('click', { target: title });
+  clickTitle(title);
   const detail = paneBody.querySelector(`#detail-${ordinaryTask.id}`);
   const readiness = readinessCard(ordinaryTask.id);
   assert.ok(readiness.textContent.includes('Checking whether the drain can take this task'), 'an ordinary detail shows its held readiness read');
@@ -1111,7 +1118,7 @@ const before = listNodes();
 window.location.hash = '#tasks?status=in-progress&open=ORB-7';
 window.history = { replaceState: (_state, _title, url) => { window.location.hash = url; } };
 const titleOf = id => rowFor(id).querySelector('button.title');
-titleOf('ORB-8').parentNode.dispatch('click', { target: titleOf('ORB-8') });
+clickTitle(titleOf('ORB-8'));
 assert.deepEqual(selectedRows(), ['task-ORB-8'], 'clicking another row moves the selection');
 assert.ok(listNodes().every((node, index) => node === before[index]) && listNodes().length === before.length, 'selection keeps every list node in place');
 assert.deepEqual(paneBody.children.map(node => node.dataset.key), ['pane-head-ORB-8', 'detail-ORB-8']);
@@ -1147,7 +1154,7 @@ assert.equal(runLink.textContent, 'jrun-tab-1');
 assert.ok(runLink.href.includes('#runs?run_id=jrun-tab-1'), 'each run links to its run detail');
 assert.ok(paneBody.querySelector('.task-run-error').textContent.includes('gate failed'));
 assert.ok(paneBody.querySelector('.task-runs-more').textContent.includes('1 of 3'), 'a partial list says so');
-titleOf('ORB-6').parentNode.dispatch('click', { target: titleOf('ORB-6') });
+clickTitle(titleOf('ORB-6'));
 assert.deepEqual(shownPanel(), ['runs'], 'the chosen tab stays chosen for the next task');
 await settleReads();
 assert.equal(runReads.at(-1).searchParams.get('task_id'), 'ORB-6', 'and reads that task\'s runs');

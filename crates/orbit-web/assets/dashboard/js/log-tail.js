@@ -614,7 +614,8 @@ function writeLogCounts(counts) {
   const state = $("dock-log-state");
   if (!state) return;
   const level = counts.err > 0 ? "err" : counts.deny > 0 ? "deny" : counts.warn > 0 ? "warn" : "";
-  state.textContent = level ? `${counts[level]} ${level}` : "";
+  const word = { err: "error", deny: "denial", warn: "warning" }[level];
+  state.textContent = level ? `${counts[level]} ${word}${counts[level] === 1 ? "" : "s"}` : "";
   state.dataset.level = level;
 }
 
