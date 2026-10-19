@@ -12,6 +12,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { dashboardFile } from '../../src/tests/dashboard_static.mjs';
+import { implementerCard, implementerDetail } from './agents_implementers_fixture.mjs';
 
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
 const evidence = path.resolve(process.argv[3]);
@@ -74,17 +75,19 @@ function header(role, url) {
   return {
     role, window: requested === 'all' ? '90d' : requested, requested_window: requested,
     since: '2026-09-19T08:00:00Z', min_support: 10, computed_at: computedAt, cache_ttl_seconds: 300, tasks_scanned: 6450,
-    status: role === 'orchestrators' ? 'ok' : 'not_computed', unit: UNITS[role], terms: terms(role),
+    status: ['orchestrators', 'implementers'].includes(role) ? 'ok' : 'not_computed', unit: UNITS[role], terms: terms(role),
   };
 }
 function scorecard(role, url) {
   const head = header(role, url);
+  if (role === 'implementers') return { ...implementerCard(), ...head };
   if (role !== 'orchestrators') return { ...head, fleet_average: null, rows: [] };
   const rows = url.searchParams.get('window') === '1h' ? [] : orchestratorRows;
   return { ...head, fleet_average: rows.length ? 192.13 : null, rows };
 }
 const task = (id, title, count, detail) => ({ task_id: id, title, status: 'done', count, occurrences: [{ at: '2026-10-12T14:03:00Z', detail, run_id: null }] });
 function detail(role, url) {
+  if (role === 'implementers') return implementerDetail(url.searchParams.get('crew'), url.searchParams.get('model'));
   const crew = url.searchParams.get('crew');
   const row = orchestratorRows.find(entry => entry.crew === crew);
   const tasks = {
@@ -179,7 +182,7 @@ try {
   // Role tabs and their counts; the strip; the default selection.
   await page.waitForFunction(() => document.getElementById('agents-count-pilots').textContent === '—');
   const counts = await page.locator('#agents-roles .agents-role-count').allTextContents();
-  assert.deepEqual(counts, ['3', '—', '—', '—'], 'three ranked orchestrators; the other roles are not computed');
+  assert.deepEqual(counts, ['3', '5', '—', '—'], 'three ranked orchestrators and five implementers; reviewers and pilots are not computed');
   assert.match(await body.locator('.agents-strip').textContent(), /112 problems in 30d/);
   assert.equal(await body.locator('.agents-strip-seg.is-current.agents-owner-orchestrators').count(), 1);
   assert.equal(await body.locator('.agents-row-select[aria-pressed="true"] .agents-crew').textContent(), 'claude-orchestrator');
@@ -221,7 +224,7 @@ try {
   pass('disclosure survives a refresh');
 
   // The other role tabs are not computed yet.
-  for (const role of ROLES.slice(1)) {
+  for (const role of ROLES.slice(2)) {
     await page.locator(`#agents-roles [data-view="${role}"]`).click();
     await body.locator('.agents-state-not-computed').waitFor();
     assert.equal(new URL(page.url()).hash, `#agents/${role}?window=30d`);
@@ -231,6 +234,40 @@ try {
     await shot(`agents-${role}-dark-1440`);
   }
   pass('not computed roles');
+
+  // Implementers uses the shared ranking/detail and its own cost/tier panel.
+  await page.locator('#agents-roles [data-view="implementers"]').click();
+  await body.locator('.agents-cost-point').first().waitFor();
+  await body.locator('.agents-penalty .agents-task').first().waitFor();
+  assert.equal(await body.locator('.agents-row').count(), 6);
+  assert.equal(await body.locator('.agents-cost-point').count(), 5);
+  assert.equal(await body.locator('.agents-cost-point.is-frontier').count(), 3);
+  assert.equal(await body.locator('.agents-cost-frontier').count(), 2);
+  assert.equal(await body.locator('.agents-tier-table tbody tr').count(), 12);
+  assert.match(await body.locator('.agents-tier-table').textContent(), /20%20\.59%/);
+  await shot('agents-implementers-dark-1440');
+  await body.locator('.agents-role-panel h3').evaluate(node => node.scrollIntoView({ block: 'start' }));
+  await page.evaluate(() => window.scrollBy(0, -80));
+  await shot('agents-implementers-panel-dark-1440');
+  await body.locator('.agents-row', { hasText: 'costly' }).locator('button').click();
+  await page.waitForFunction(() => document.querySelector('#agents-detail h3')?.textContent === 'costly');
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.waitForTimeout(100);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  const tierFits = await body.locator('.agents-tier-table').evaluate(table => {
+    const box = table.parentElement;
+    return getComputedStyle(box).overflowX === 'auto' && box.scrollWidth > box.clientWidth;
+  });
+  assert.ok(tierFits, 'the tier table scrolls inside its box at 375px');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await shot('agents-implementers-dark-375');
+  await body.locator('.agents-role-panel h3').evaluate(node => node.scrollIntoView({ block: 'start' }));
+  await page.evaluate(() => window.scrollBy(0, -80));
+  await shot('agents-implementers-panel-dark-375');
+  await body.locator('.agents-tier-table').scrollIntoViewIfNeeded();
+  await shot('agents-implementers-tiers-dark-375');
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  pass('implementers ranking, detail, frontier and tier comparison at desktop and phone widths');
 
   // An empty window says so.
   await page.locator('#agents-roles [data-view="orchestrators"]').click();
@@ -279,7 +316,7 @@ try {
   await shot('agents-orchestrators-dark-375');
   await page.locator('#agents-detail').scrollIntoViewIfNeeded();
   await shot('agents-orchestrators-detail-dark-375');
-  for (const role of ROLES.slice(1)) {
+  for (const role of ROLES.slice(2)) {
     await page.locator(`#agents-roles [data-view="${role}"]`).click();
     await body.locator('.agents-state-not-computed').waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, `${role} fits 375px`);

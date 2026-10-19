@@ -423,6 +423,30 @@ rework. Rework caused by the crew and review rejects count against
 **Reviewers**.
 The **Rework by cause** panel shows where each orchestrator's rework went.
 
+The **Implementers** tab ranks each crew and model separately. It credits
+weighted landed work and first-pass accepts, and counts review rejects,
+reviewer repairs, crew-caused rework, and regressions that escaped because
+there was no test. A review reject is counted once; regressions the reviewer
+missed count against Reviewers. Each task counts once per crew and model
+that started an implementation run in the window.
+
+**Score against cost** plots the score against recorded USD per weighted
+landed task. Higher and farther left is better. The dashed frontier joins
+supported rows no other supported row matches or beats on both measures
+while improving at least one. Ties stay on the frontier. Grey points have too
+little work to rank and cannot set it. Unpriced rows stay in the ranking and
+are omitted from the plot. Cost uses recorded delivery-run invocations,
+including delivery reviews and repairs, and prefers provider cost to derived
+pricing. Missing or unpriced telemetry and rows with no landed work show a
+dash; a dash does not mean free work.
+
+The **First reviews by tier** table compares each row's first reviews needing
+changes (rejects or reviewer repairs) with the fleet rate for the same tier,
+including that row. A dash means no first reviews. The detail column also
+shows median completed run time and tasks by tier. Cost, time and tier
+comparisons never change the score. On a phone, the ranking and tier table
+scroll within their own boxes and the detail stacks below the ranking.
+
 With **all** selected, Agents covers the last 90 days. From a terminal,
 `orbit orchestrator scorecard` still prints the previous orchestrator
 scorecard.
