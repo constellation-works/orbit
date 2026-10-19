@@ -422,11 +422,11 @@ impl TaskDocumentStoreBackend for TaskV2Store {
 
 impl TaskHistoryStoreBackend for TaskV2Store {
     fn get_task_comments(&self, id: &str) -> Result<Option<Vec<TaskComment>>, OrbitError> {
-        self.in_boundary(|| self.get_task_comments(id))
+        self.read_task_comments(id)
     }
 
     fn get_task_history(&self, id: &str) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
-        self.in_boundary(|| self.get_task_history(id))
+        self.read_task_history(id)
     }
 
     fn update_task_history(

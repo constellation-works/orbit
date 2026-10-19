@@ -449,6 +449,8 @@ fn codebase_cli_ranks_task_pilot_crews_against_the_landed_diff() {
 /// Analytics is history-only, and old done tasks cannot add delivery I/O to
 /// a related query. Git's own trace records identity resolution independently
 /// of the observer diagnostic, without timing assertions or synthetic load.
+/// However many tasks a scan observes, it parses the job catalog at most once
+/// (ORB-16938: a 7-minute scan reparsed it for every task).
 #[test]
 fn codebase_delivery_reads_are_lazy_and_window_bounded() {
     if crate::isolated_test::run_in_child(
@@ -533,7 +535,8 @@ fn codebase_delivery_reads_are_lazy_and_window_bounded() {
             .env("GIT_TRACE", &trace)
             .env(
                 "RUST_LOG",
-                "orbit_core::application::job::run::delivery=debug",
+                "orbit_core::application::job::run::delivery=debug,\
+                 orbit_core::application::job::catalog=debug",
             )
             .assert()
             .success()
@@ -558,6 +561,14 @@ fn codebase_delivery_reads_are_lazy_and_window_bounded() {
                 .count(),
             expected_observations,
             "{verb}/{window}: delivery observation must be lazy and window-bounded: {stderr}"
+        );
+        assert!(
+            stderr
+                .lines()
+                .filter(|line| line.contains("job_catalog_load=true"))
+                .count()
+                <= 1,
+            "{verb}/{window}: one scan must parse the job catalog at most once: {stderr}"
         );
         serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
     };

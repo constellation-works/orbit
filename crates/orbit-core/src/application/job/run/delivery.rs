@@ -12,14 +12,18 @@
 //! this workspace's run store, the task in its task store, the run's own
 //! submitted `task_ids` must name the task, and the job must hold task
 //! delivery. Evidence that is missing or does not match is reported as a typed
-//! gap, never filled from a weaker source. A claimed leaf's task lives in its
-//! owner's store instead, so its executor answers for the leaf on the durable
-//! admission binding the leaf to that task's claim.
+//! gap, never filled from a weaker source. A codebase scan observes tasks it
+//! read from this workspace's own task listing, which stands in for the task
+//! lookup. A claimed leaf's task lives in its owner's store instead, so its
+//! executor answers for the leaf on the durable admission binding the leaf to
+//! that task's claim.
 
+use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_engine::activity_job::V2ActivityCatalog;
 use orbit_store::contracts::JobRunQuery;
 use orbit_types::workflow::{
     ActivityV2Spec, CommitObservation, CommitObservationStatus, DeliveryEvidenceGap,
@@ -33,6 +37,7 @@ use serde_json::Value;
 use crate::runtime::run_input::recorded_task_ids;
 
 use crate::OrbitRuntime;
+use crate::application::job::catalog::V2JobNameCache;
 
 const COMMIT_ACTIVITY: &str = "git_commit";
 const PR_LANDING_ACTIVITY: &str = "pr_complete";
@@ -107,6 +112,28 @@ fn host_activity(step: &JobV2Step) -> Option<&'static str> {
         .find(|activity| name == activity && spec.action == *activity)
 }
 
+/// The catalogs one observation resolves definitions from, each parsed at
+/// most once however many runs it reads.
+#[derive(Default)]
+struct DeliveryDefinitions {
+    jobs: V2JobNameCache,
+    activities: OnceCell<Option<V2ActivityCatalog>>,
+}
+
+/// Run and job ids by submitted task, newest run first.
+type RunsByTask = HashMap<String, Vec<(String, String)>>;
+
+/// What a codebase scan reuses across the delivery observations it makes:
+/// the repository identity, this workspace's runs indexed by submitted task,
+/// and the definitions those runs resolve. Each is read once, on the first
+/// observation that needs it.
+#[derive(Default)]
+pub(crate) struct CodebaseDeliveryScan {
+    repository: OnceCell<Option<String>>,
+    runs: OnceCell<Result<RunsByTask, String>>,
+    definitions: DeliveryDefinitions,
+}
+
 impl OrbitRuntime {
     /// Observe what one task-delivery run committed and landed for one task
     /// of this workspace. Read-only: the run is read as stored, without the
@@ -115,15 +142,6 @@ impl OrbitRuntime {
         &self,
         run_id: &str,
         task_id: &str,
-    ) -> Result<RunDeliveryObservation, OrbitError> {
-        self.observe_run_delivery_with_repository(run_id, task_id, || self.delivery_repository())
-    }
-
-    fn observe_run_delivery_with_repository(
-        &self,
-        run_id: &str,
-        task_id: &str,
-        repository: impl FnOnce() -> Option<String>,
     ) -> Result<RunDeliveryObservation, OrbitError> {
         let run_id = bounded_id(run_id, "run_id")?;
         let task_id = bounded_id(task_id, "task_id")?;
@@ -134,7 +152,12 @@ impl OrbitRuntime {
                 "run '{run_id}' did not deliver task '{task_id}' in this workspace"
             )));
         }
-        self.project_stored_delivery(&run, &task.id, repository)
+        self.project_stored_delivery(
+            &run,
+            &task.id,
+            || self.delivery_repository(),
+            &DeliveryDefinitions::default(),
+        )
     }
 
     /// [ORB-14661] Observe what a claimed leaf run committed and landed for
@@ -156,7 +179,12 @@ impl OrbitRuntime {
                 "run '{run_id}' did not deliver its claimed task"
             )));
         }
-        self.project_stored_delivery(&run, task_id, || self.delivery_repository())
+        self.project_stored_delivery(
+            &run,
+            task_id,
+            || self.delivery_repository(),
+            &DeliveryDefinitions::default(),
+        )
     }
 
     /// The observation of `run` for `task_id`, whose ownership the caller
@@ -166,9 +194,10 @@ impl OrbitRuntime {
         run: &JobRun,
         task_id: &str,
         repository: impl FnOnce() -> Option<String>,
+        definitions: &DeliveryDefinitions,
     ) -> Result<RunDeliveryObservation, OrbitError> {
         let run_id = run.run_id.as_str();
-        let shape = self.delivery_shape(run)?;
+        let shape = self.delivery_shape(run, definitions)?;
         let state = self.read_run_state(run_id)?;
         let repository = repository();
         let executed = shape
@@ -186,6 +215,7 @@ impl OrbitRuntime {
                 state.as_ref(),
                 shape.as_ref(),
                 task_id,
+                definitions,
             ),
         };
         let landing = observe_landing(
@@ -216,8 +246,12 @@ impl OrbitRuntime {
     /// Resolve catalog refs exactly as execution does, using the pinned
     /// definition where one exists. An unresolved or non-host action never
     /// authenticates a checkpoint.
-    fn delivery_shape(&self, run: &JobRun) -> Result<Option<DeliveryJobShape>, OrbitError> {
-        let Ok((_, mut job)) = self.resolve_run_definition(run) else {
+    fn delivery_shape(
+        &self,
+        run: &JobRun,
+        definitions: &DeliveryDefinitions,
+    ) -> Result<Option<DeliveryJobShape>, OrbitError> {
+        let Some(mut job) = self.run_definition(&run.run_id, &run.job_id, definitions) else {
             return Ok(None);
         };
         if !job.holds_task_delivery() {
@@ -226,10 +260,29 @@ impl OrbitRuntime {
                 run.run_id
             )));
         }
-        Ok(self.v2_activity_catalog().ok().and_then(|catalog| {
-            orbit_engine::resolve_job_catalog_refs_for_execution(&mut job, &catalog).ok()?;
+        let activities = definitions
+            .activities
+            .get_or_init(|| self.v2_activity_catalog().ok());
+        Ok(activities.as_ref().and_then(|catalog| {
+            orbit_engine::resolve_job_catalog_refs_for_execution(&mut job, catalog).ok()?;
             Some(DeliveryJobShape::from_job(&job))
         }))
+    }
+
+    /// The definition [`Self::resolve_run_definition`] resolves for a run:
+    /// its pinned snapshot, else the catalog job it names. `None` when
+    /// neither can be read.
+    fn run_definition(
+        &self,
+        run_id: &str,
+        job_id: &str,
+        definitions: &DeliveryDefinitions,
+    ) -> Option<JobV2> {
+        match self.read_run_definition_snapshot(run_id) {
+            Ok(Some((job, _))) => Some(job),
+            Ok(None) => self.v2_job_by_name_cached(&definitions.jobs, job_id),
+            Err(_) => None,
+        }
     }
 
     fn observe_stored_commit(
@@ -238,6 +291,7 @@ impl OrbitRuntime {
         state: Option<&PipelineState>,
         shape: Option<&DeliveryJobShape>,
         task_id: &str,
+        definitions: &DeliveryDefinitions,
     ) -> CommitObservation {
         let ordinary = observe_commit(run, state, shape, task_id);
         let (Some(state), Some(step)) = (state, shape.and_then(|shape| shape.commit.as_ref()))
@@ -259,7 +313,7 @@ impl OrbitRuntime {
         if !inherited {
             return ordinary;
         }
-        match self.inherited_commit(run, state, step, output, task_id) {
+        match self.inherited_commit(run, state, step, output, task_id, definitions) {
             Ok(commit) => commit,
             Err(gap) => commit_gap(gap, Some(step)),
         }
@@ -276,6 +330,7 @@ impl OrbitRuntime {
         step: &DeliveryStep,
         output: &Value,
         task_id: &str,
+        definitions: &DeliveryDefinitions,
     ) -> Result<CommitObservation, DeliveryEvidenceGap> {
         if !inherited_checkpoint_matches(current_state, step, output) {
             return Err(DeliveryEvidenceGap::CheckpointInconsistent);
@@ -300,7 +355,7 @@ impl OrbitRuntime {
                 return Err(DeliveryEvidenceGap::OwnershipMismatch);
             }
             let shape = self
-                .delivery_shape(&parent)
+                .delivery_shape(&parent, definitions)
                 .ok()
                 .flatten()
                 .ok_or(DeliveryEvidenceGap::JobDefinitionUnavailable)?;
@@ -352,26 +407,88 @@ impl OrbitRuntime {
         }
         let task_id = bounded_id(task_id, "task_id")?;
         let task = self.get_task(task_id)?;
-        let run_id = self.latest_delivery_run_id(&task.id)?;
+        // Filter submitted task bindings before hydrating run inputs, newest
+        // first. No global cap: newer non-delivery jobs must not hide the
+        // latest delivery run. Steps are not needed to choose the run.
+        let runs = self.list_job_runs_filtered_backend(&JobRunQuery {
+            task_id: Some(task.id.clone()),
+            include_steps: false,
+            ..JobRunQuery::default()
+        })?;
+        let run_id = self.latest_delivery_run_id(
+            &task.id,
+            runs.iter()
+                .filter(|run| run_task_ids(run).contains(&task.id.as_str()))
+                .map(|run| (run.run_id.as_str(), run.job_id.as_str())),
+            &DeliveryDefinitions::default(),
+        )?;
         self.observe_run_delivery(&run_id, &task.id)
     }
 
-    /// Keep repository identity resolution bounded across a codebase scan,
-    /// including failed resolutions, without weakening delivery ownership checks.
+    /// [`Self::observe_task_delivery`] for one task of a codebase scan, which
+    /// read `task_id` from this workspace's own task listing: that listing
+    /// establishes the task's ownership, so the task is not read again. The
+    /// run is still read, and must name the task, before any evidence is.
+    /// Everything `scan` holds is resolved once across the scan, including
+    /// a failed resolution.
     pub(crate) fn observe_codebase_task_delivery(
         &self,
         task_id: &str,
-        repository: &std::cell::OnceCell<Option<String>>,
+        scan: &CodebaseDeliveryScan,
     ) -> Result<RunDeliveryObservation, OrbitError> {
         tracing::debug!(task_id, codebase_delivery_observation = true);
         let task_id = bounded_id(task_id, "task_id")?;
-        let task = self.get_task(task_id)?;
-        let run_id = self.latest_delivery_run_id(&task.id)?;
-        self.observe_run_delivery_with_repository(&run_id, &task.id, || {
-            repository
-                .get_or_init(|| self.delivery_repository())
-                .clone()
-        })
+        let runs = scan
+            .runs
+            .get_or_init(|| {
+                self.delivery_runs_by_task()
+                    .map_err(|error| error.to_string())
+            })
+            .as_ref()
+            .map_err(|error| OrbitError::Store(error.clone()))?;
+        let run_id = self.latest_delivery_run_id(
+            task_id,
+            runs.get(task_id)
+                .into_iter()
+                .flatten()
+                .map(|(run_id, job_id)| (run_id.as_str(), job_id.as_str())),
+            &scan.definitions,
+        )?;
+        let run = self.show_job_run_observed(&run_id)?;
+        if !run_task_ids(&run).contains(&task_id) {
+            return Err(OrbitError::InvalidInput(format!(
+                "run '{run_id}' did not deliver task '{task_id}' in this workspace"
+            )));
+        }
+        self.project_stored_delivery(
+            &run,
+            task_id,
+            || {
+                scan.repository
+                    .get_or_init(|| self.delivery_repository())
+                    .clone()
+            },
+            &scan.definitions,
+        )
+    }
+
+    /// Every run of this workspace by the tasks it was submitted with, newest
+    /// first, from one listing without steps.
+    fn delivery_runs_by_task(&self) -> Result<RunsByTask, OrbitError> {
+        let mut by_task = RunsByTask::new();
+        let runs = self.list_job_runs_filtered_backend(&JobRunQuery {
+            include_steps: false,
+            ..JobRunQuery::default()
+        })?;
+        for run in &runs {
+            for task_id in run_task_ids(run).into_iter().collect::<HashSet<_>>() {
+                by_task
+                    .entry(task_id.to_string())
+                    .or_default()
+                    .push((run.run_id.clone(), run.job_id.clone()));
+            }
+        }
+        Ok(by_task)
     }
 
     fn delivery_repository(&self) -> Option<String> {
@@ -380,32 +497,22 @@ impl OrbitRuntime {
             .ok()
     }
 
-    fn latest_delivery_run_id(&self, task_id: &str) -> Result<String, OrbitError> {
-        // Filter submitted task bindings before hydrating run inputs, newest
-        // first. No global cap: newer non-delivery jobs must not hide the
-        // latest delivery run. Steps are not needed to choose the run.
-        let runs = self.list_job_runs_filtered_backend(&JobRunQuery {
-            task_id: Some(task_id.to_string()),
-            include_steps: false,
-            ..JobRunQuery::default()
-        })?;
-        let mut delivers = HashMap::<String, bool>::new();
-        for run in runs {
-            if !run_task_ids(&run).contains(&task_id) {
-                continue;
-            }
-            // A direct-path run judges its own pinned snapshot, so the verdict
-            // is per run; catalog-backed runs of one job share it.
-            let holds_delivery = match self.read_run_definition_snapshot(&run.run_id) {
-                Ok(Some((job, _))) => job.holds_task_delivery(),
-                Ok(None) => *delivers.entry(run.job_id.clone()).or_insert_with(|| {
-                    self.load_v2_job_asset_by_name(&run.job_id)
-                        .is_ok_and(|(_, job)| job.holds_task_delivery())
-                }),
-                Err(_) => false,
-            };
-            if holds_delivery {
-                return Ok(run.run_id);
+    /// The first of `runs`, the task's runs newest first as `(run_id,
+    /// job_id)`, whose definition holds task delivery. A direct-path run
+    /// judges its own pinned snapshot; catalog-backed runs of one job share
+    /// the catalog's verdict.
+    fn latest_delivery_run_id<'a>(
+        &self,
+        task_id: &str,
+        runs: impl Iterator<Item = (&'a str, &'a str)>,
+        definitions: &DeliveryDefinitions,
+    ) -> Result<String, OrbitError> {
+        for (run_id, job_id) in runs {
+            if self
+                .run_definition(run_id, job_id, definitions)
+                .is_some_and(|job| job.holds_task_delivery())
+            {
+                return Ok(run_id.to_string());
             }
         }
         Err(OrbitError::InvalidInput(format!(

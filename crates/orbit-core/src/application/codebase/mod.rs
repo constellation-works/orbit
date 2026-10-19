@@ -7,13 +7,15 @@
 //! selectors included), not the diff that landed. The related-file query
 //! separately measures verified landed diffs, including unreserved Markdown,
 //! and the task-pilot ranking grades each pilot's selectors against them.
-//! [`OrbitRuntime::codebase_scan`] reads every task bundle's history once;
-//! [`codebase_analytics`] and [`codebase_path_detail`] only slice those facts
-//! by window, minimum support and rollup. Analytics uses verified landing
-//! receipts in task history, without observing delivery runs. Related queries
-//! use [`OrbitRuntime::codebase_related_scan`] for window-scoped delivery
-//! fallback. A caller that keeps the history-only facts
-//! (the dashboard) answers another selection without rescanning.
+//! [`OrbitRuntime::codebase_scan`] reads every task bundle's history once,
+//! from its event log alone and outside the task commit lock when nothing is
+//! left to recover; [`codebase_analytics`] and [`codebase_path_detail`] only
+//! slice those facts by window, minimum support and rollup. Analytics uses
+//! verified landing receipts in task history, without observing delivery
+//! runs. Related queries use [`OrbitRuntime::codebase_related_scan`] for
+//! window-scoped delivery fallback, which lists the workspace's runs and
+//! parses the job catalog once per scan. A caller that keeps the history-only
+//! facts (the dashboard) answers another selection without rescanning.
 
 mod detail;
 mod facts;

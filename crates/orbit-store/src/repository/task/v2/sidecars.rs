@@ -1,13 +1,74 @@
 use super::*;
 
 impl TaskV2Store {
+    /// A task's comments for a reader outside any boundary section.
+    ///
+    /// When the partition has nothing to recover, only the comment log is
+    /// read, under the task's shared bundle lock: no commit lock, no lock
+    /// holder record, no other bundle file. A reader that finds an
+    /// interrupted commit or an incomplete write falls back to
+    /// [`Self::get_task_comments`] inside the boundary, which settles the
+    /// partition first. A codebase scan reads every task's history and the
+    /// comments of many, so this is the read it pays per task (ORB-16938).
+    pub(crate) fn read_task_comments(
+        &self,
+        id: &str,
+    ) -> Result<Option<Vec<TaskComment>>, OrbitError> {
+        orbit_types::task::validate_orb_task_id(id)?;
+        match self.read_sidecar_outside_boundary(id, TaskBundleStoreV2::read_comments_if_settled)? {
+            Some(rows) => {
+                Ok(rows.map(|rows| rows.into_iter().map(task_comment_from_row).collect()))
+            }
+            None => self.in_boundary(|| self.get_task_comments(id)),
+        }
+    }
+
+    /// [`Self::read_task_comments`] for the task's history.
+    pub(crate) fn read_task_history(
+        &self,
+        id: &str,
+    ) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
+        orbit_types::task::validate_orb_task_id(id)?;
+        let _span = history_read_span(id);
+        match self.read_sidecar_outside_boundary(id, TaskBundleStoreV2::read_events_if_settled)? {
+            Some(rows) => Ok(rows.map(task_history_from_events)),
+            None => self.in_boundary(|| self.settled_task_history(id)),
+        }
+    }
+
+    /// One sidecar read without entering the boundary: `Some` with the rows,
+    /// or `Some(None)` for a missing task, when the partition and the bundle
+    /// are settled; `None` when the caller must settle them first. A legacy
+    /// composition has no journal to consult and keeps its locked read.
+    fn read_sidecar_outside_boundary<T>(
+        &self,
+        id: &str,
+        read: SettledSidecarRead<T>,
+    ) -> Result<Option<Option<Vec<T>>>, OrbitError> {
+        let Some(boundary) = &self.coordination else {
+            return Ok(None);
+        };
+        if !boundary.has_nothing_to_recover()? {
+            return Ok(None);
+        }
+        match read(&self.bundle_store, id) {
+            Ok(Some(rows)) => Ok(Some(Some(rows))),
+            Ok(None) => Ok(None),
+            Err(OrbitError::NotFound {
+                kind: NotFoundKind::Task,
+                ..
+            }) => Ok(Some(None)),
+            Err(err) => Err(err),
+        }
+    }
+
     pub(crate) fn get_task_comments(
         &self,
         id: &str,
     ) -> Result<Option<Vec<TaskComment>>, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
         self.ensure_recovered()?;
-        match self.bundle_store.read_bundle(id) {
+        match self.bundle_store.read_bundle_lightweight(id) {
             Ok(bundle) => Ok(Some(
                 bundle
                     .comments
@@ -28,14 +89,14 @@ impl TaskV2Store {
         id: &str,
     ) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
+        let _span = history_read_span(id);
+        self.settled_task_history(id)
+    }
+
+    /// The history from the whole bundle, once the partition has settled.
+    fn settled_task_history(&self, id: &str) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
         self.ensure_recovered()?;
-        let _span = orbit_common::tracing::trace_span!(
-            target: "orbit.store.task_query",
-            "task_history_read",
-            task_id = %id,
-        )
-        .entered();
-        match self.bundle_store.read_bundle(id) {
+        match self.bundle_store.read_bundle_lightweight(id) {
             Ok(bundle) => Ok(Some(task_history_from_events(bundle.events))),
             Err(OrbitError::NotFound {
                 kind: NotFoundKind::Task,
@@ -44,6 +105,21 @@ impl TaskV2Store {
             Err(err) => Err(err),
         }
     }
+}
+
+/// One sidecar log read on its own, `None` when it must be read with the
+/// bundle instead.
+type SettledSidecarRead<T> = fn(&TaskBundleStoreV2, &str) -> Result<Option<Vec<T>>, OrbitError>;
+
+/// One span per history read, whichever path serves it: what a selection's
+/// history cost is counted in.
+fn history_read_span(id: &str) -> orbit_common::tracing::span::EnteredSpan {
+    orbit_common::tracing::trace_span!(
+        target: "orbit.store.task_query",
+        "task_history_read",
+        task_id = %id,
+    )
+    .entered()
 }
 
 /// Project a bundle's event rows as the task history read surface.

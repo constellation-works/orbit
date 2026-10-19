@@ -21,8 +21,8 @@ use crate::driver::file::task_bundle::bundle_lock_target;
 pub(crate) use crate::driver::file::task_bundle::{TaskBundleV2, TaskDocumentV2, TaskSearchDocs};
 use crate::driver::file::task_bundle::{
     append_jsonl_row, append_jsonl_rows, cleanup_partial_bundle_best_effort, is_unpublished_stub,
-    publish_envelope, read_bundle_at, read_bundle_lightweight_at, read_envelope_at,
-    read_search_docs_at, recover_pending_write, write_bundle_at,
+    publish_envelope, read_bundle_at, read_bundle_lightweight_at, read_comments_at,
+    read_envelope_at, read_events_at, read_search_docs_at, recover_pending_write, write_bundle_at,
 };
 use crate::driver::sqlite::task_registry::{TaskBundleBinding, TaskRegistryStore};
 use crate::fs::yaml::write_yaml_durable_with;
@@ -33,6 +33,7 @@ use crate::fs::yaml::write_yaml_durable_with;
 const BUNDLE_READ_STEP: &str = "bundle read";
 const ENVELOPE_READ_STEP: &str = "envelope read";
 const SEARCH_DOCS_READ_STEP: &str = "search docs read";
+const SIDECAR_READ_STEP: &str = "sidecar read";
 
 /// Directory beside a partition's bundles holding one lease per task whose
 /// coordinated commit has prepared and not yet settled. Its committer holds
@@ -56,17 +57,26 @@ pub(crate) fn commit_lease_path(bundle_dir: &Path) -> Option<PathBuf> {
 /// the commit's replay then truncates. The partition replays the commit the
 /// next time any section enters it, so the caller can retry.
 fn refuse_interrupted_commit(bundle_dir: &Path) -> Result<(), OrbitError> {
-    let Some(lease) = commit_lease_path(bundle_dir) else {
-        return Ok(());
-    };
-    match probe_file_lock(&lease).map_err(|err| OrbitError::from_write_io(&lease, err))? {
-        FileLockProbe::Free => Err(OrbitError::Store(format!(
+    if has_interrupted_commit(bundle_dir)? {
+        return Err(OrbitError::Store(format!(
             "task bundle '{}' has an interrupted commit awaiting replay; retry once its \
              partition has recovered",
             bundle_dir.display()
-        ))),
-        FileLockProbe::Absent | FileLockProbe::Held => Ok(()),
+        )));
     }
+    Ok(())
+}
+
+/// Whether this bundle's commit lease outlived its committer; see
+/// [`refuse_interrupted_commit`].
+fn has_interrupted_commit(bundle_dir: &Path) -> Result<bool, OrbitError> {
+    let Some(lease) = commit_lease_path(bundle_dir) else {
+        return Ok(false);
+    };
+    Ok(
+        probe_file_lock(&lease).map_err(|err| OrbitError::from_write_io(&lease, err))?
+            == FileLockProbe::Free,
+    )
 }
 
 /// This task's exclusive bundle lock, held until the guard drops. See
@@ -443,6 +453,48 @@ impl TaskBundleStoreV2 {
         })
         .ok()
         .flatten()
+    }
+
+    /// This task's event log alone, read under its shared bundle lock without
+    /// the rest of the bundle (see [`read_events_at`]).
+    ///
+    /// `None` when the log cannot be read on its own: an incomplete write is
+    /// recorded for the bundle, or a commit interrupted after its decision
+    /// awaits replay. The caller then settles the partition and reads the
+    /// whole bundle.
+    pub(crate) fn read_events_if_settled(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<Vec<TaskEventRowV2>>, OrbitError> {
+        self.read_sidecar_if_settled(task_id, read_events_at)
+    }
+
+    /// [`Self::read_events_if_settled`] for the comment log.
+    pub(crate) fn read_comments_if_settled(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<Vec<TaskCommentRowV2>>, OrbitError> {
+        self.read_sidecar_if_settled(task_id, read_comments_at)
+    }
+
+    fn read_sidecar_if_settled<T>(
+        &self,
+        task_id: &str,
+        read: fn(&Path) -> Result<Option<Vec<T>>, OrbitError>,
+    ) -> Result<Option<Vec<T>>, OrbitError> {
+        let bundle_dir = self.bundle_path(task_id)?;
+        // As for a whole-bundle read, a missing bundle needs no lock target.
+        if !bundle_dir.try_exists()? {
+            return read(&bundle_dir);
+        }
+        hold_step(SIDECAR_READ_STEP, || {
+            with_shared_file_lock(&bundle_lock_target(&bundle_dir), "task artifact v2", || {
+                if has_interrupted_commit(&bundle_dir)? {
+                    return Ok(None);
+                }
+                read(&bundle_dir)
+            })
+        })
     }
 
     /// Read one registered bundle's envelope, skipping it when a concurrent
