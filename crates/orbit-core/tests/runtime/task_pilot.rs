@@ -31,6 +31,9 @@ mod crew_selection;
 mod freshness;
 mod inspection;
 mod malformed_input;
+// The provider fixture is an executable script.
+#[cfg(unix)]
+mod mixed_crews;
 mod native_os;
 mod pilot_output;
 mod post_deploy;
@@ -49,16 +52,19 @@ struct Workspace {
 
 impl Workspace {
     fn new() -> Self {
+        Self::with_config(
+            "[crews.fixture]\nmodel = \"fixture-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"fixture\"\n",
+        )
+    }
+
+    /// `new`, with `config` as the workspace crew registry.
+    fn with_config(config: &str) -> Self {
         let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("home/.orbit");
         let repo = root.path().join("repo");
         std::fs::create_dir_all(&global).unwrap();
         std::fs::create_dir_all(repo.join(".orbit")).unwrap();
-        std::fs::write(
-            repo.join(".orbit/config.toml"),
-            "[crews.fixture]\nmodel = \"fixture-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"fixture\"\n",
-        )
-        .unwrap();
+        std::fs::write(repo.join(".orbit/config.toml"), config).unwrap();
         let git = |args: &[&str]| {
             git_in(&repo, args, None);
         };
