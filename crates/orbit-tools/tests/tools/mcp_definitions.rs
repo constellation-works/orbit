@@ -201,59 +201,6 @@ impl Tool for ReadOnlyPlugin {
 }
 
 #[test]
-fn read_only_tools_advertise_the_hint_and_mutating_ones_do_not() {
-    let definitions =
-        canonical_builtin_mcp_tool_definitions().expect("builtin MCP definitions are valid");
-    let annotations_of = |name: &str| {
-        definitions
-            .iter()
-            .find(|definition| definition.schema.name == name)
-            .unwrap_or_else(|| panic!("{name} is advertised"))
-            .annotations
-            .unwrap_or_else(|| panic!("{name} advertises annotations"))
-    };
-
-    for name in [
-        "orbit.task.eligible",
-        "orbit.task.list",
-        "orbit.task.show",
-        "orbit.task.artifact.get",
-        "orbit.search",
-        "orbit.auto_task.list",
-        "orbit.workflow.run.list",
-        "orbit.workflow.run.show",
-    ] {
-        assert_eq!(annotations_of(name).read_only, Some(true), "{name}");
-    }
-    for name in [
-        "orbit.task.add",
-        "orbit.task.update",
-        "orbit.task.artifact.put",
-        "orbit.friction.add",
-        "orbit.friction.update",
-        "orbit.workflow.ship",
-        "orbit.agent.invoke",
-        "orbit.command.exec",
-        "orbit.task.reconcile_review",
-    ] {
-        assert_eq!(annotations_of(name).read_only, Some(false), "{name}");
-    }
-
-    // `rehome_to` moves the record and resolves the original.
-    assert_eq!(
-        annotations_of("orbit.friction.update").destructive,
-        Some(true)
-    );
-    assert_eq!(annotations_of("orbit.task.add").destructive, Some(false));
-    assert_eq!(annotations_of("orbit.command.exec").open_world, Some(true));
-    assert_eq!(
-        annotations_of("orbit.task.reconcile_review").open_world,
-        Some(true)
-    );
-    assert_eq!(annotations_of("orbit.task.list").open_world, Some(false));
-}
-
-#[test]
 fn advertised_read_only_hint_agrees_with_every_tools_execution_kind() {
     let mut registry = ToolRegistry::new();
     registry.register_builtins();

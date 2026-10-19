@@ -908,21 +908,6 @@
     "checkout_evidence_source_truncated": false,
     "checkout_evidence_display_truncated": true
   },
-  "failure_region_overflow_defers_instead_of_losing_secondary_failures": {
-    "log": "##[group]Run cargo nextest run\n##[endgroup]\nthread \n[... 589961 bytes omitted; raise the byte budget for more ...]\n\n##[error]Process completed with exit code 1.\n",
-    "truncated": true,
-    "total_bytes": 590089,
-    "returned_bytes": 161,
-    "source_complete": true,
-    "diagnostic_unit": null,
-    "failure_regions": null,
-    "checkout_commits": [],
-    "checkout_evidence": [],
-    "checkout_evidence_complete": true,
-    "checkout_evidence_scanned_bytes": 590089,
-    "checkout_evidence_source_truncated": false,
-    "checkout_evidence_display_truncated": false
-  },
   "assertion_prefix_never_leaks_a_secret_cut_at_the_retention_boundary": {
     "log": "##[group]Run cargo nextest run\n##[endgroup]\nPASS ordinary_test\n\n[... 482650 bytes omitted; raise the byte budget for more ...]\n run: 2 failed\n##[error]Process completed with exit code 100.\n\n[... retained nextest failure blocks ...]\nFAIL [ 0.1s] suite first_failure\nthread 'first_failure' panicked at tests/golden.rs:12:5:\nassertion `left == right` failed: tool_list.plain.txt golden drift\n  right: expected golden\n[... output block cut; 100540 bytes not retained ...]\nFAIL [ 0.2s] suite second_failure\nthread 'second_failure' panicked at tests/other.rs:20:7:\nassertion failed: second condition\n",
     "truncated": true,

@@ -111,8 +111,8 @@ target, not a hosted speedup or the whole-job 900-second budget.
 | `discovery_requests.rs` | `run_logs_rejects_an_unknown_scope` | `requests.golden.json` |
 | `discovery_requests.rs` | `pr_list_projects_each_head_sha_under_its_own_name` | `requests.golden.json` |
 | `discovery_requests.rs` | `pr_list_defaults_to_a_bounded_open_query` | `requests.golden.json` |
-| `discovery_requests.rs` | `discovery_tools_run_in_the_selected_workspace_rather_than_the_process_cwd` | `fallback.golden.json` |
-| `discovery_requests.rs` | `discovery_tools_without_a_selected_workspace_keep_the_callers_directory` | `fallback.golden.json` |
+| `discovery_requests.rs` | `discovery_tools_run_in_the_selected_workspace_rather_than_the_process_cwd/github.run.view` | `fallback.golden.json` |
+| `discovery_requests.rs` | `discovery_tools_without_a_selected_workspace_keep_the_callers_directory/github.run.view` | `fallback.golden.json` |
 | `bounded_logs.rs` | `a_short_log_is_returned_whole_and_unmarked` | `streamed.golden.json` |
 | `bounded_logs.rs` | `an_oversized_log_is_capped_while_keeping_both_ends` | `streamed.golden.json` |
 | `bounded_logs.rs` | `truncation_never_splits_a_multibyte_character` | `streamed.golden.json` |
@@ -141,7 +141,6 @@ target, not a hosted speedup or the whole-job 900-second budget.
 | `bounded_logs.rs` | `selected_command_preserves_unicode_and_redacts_secrets_across_chunk_boundaries` | `streamed.golden.json` |
 | `bounded_logs.rs` | `oversized_command_keeps_all_failure_regions_and_counts_assertion_omissions` | `streamed.golden.json` |
 | `bounded_logs.rs` | `partial_regions_never_override_missing_source_ambiguous_commands_or_hidden_columns` | `streamed.golden.json` |
-| `bounded_logs.rs` | `failure_region_overflow_defers_instead_of_losing_secondary_failures` | `streamed.golden.json` |
 | — | `oversized_command_keeps_a_multiline_panic_payload_through_the_failure_block` | `streamed.golden.json` |
 | — | `failure_block_over_the_region_budget_is_marked_cut` | `streamed.golden.json` |
 | `bounded_logs.rs` | `assertion_prefix_never_leaks_a_secret_cut_at_the_retention_boundary` | `streamed.golden.json` |

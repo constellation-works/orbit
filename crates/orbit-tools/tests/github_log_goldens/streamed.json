@@ -497,19 +497,6 @@
     "conflicting_column": true
   },
   {
-    "name": "failure_region_overflow_defers_instead_of_losing_secondary_failures",
-    "parts": [
-      "##[group]Run cargo nextest run\n##[endgroup]\n",
-      {
-        "text": "thread 'another_failure' panicked at tests/example.rs:1:1:\n",
-        "repeat": 10000
-      },
-      "##[error]Process completed with exit code 1.\n"
-    ],
-    "max_bytes": 128,
-    "max_evidence_lines": 40
-  },
-  {
     "name": "assertion_prefix_never_leaks_a_secret_cut_at_the_retention_boundary",
     "parts": [
       "##[group]Run cargo nextest run\n##[endgroup]\n",

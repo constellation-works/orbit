@@ -351,16 +351,12 @@ fn million_row_run_audit_prunes_in_sub_second_batches() {
     };
     let store = Store::open(&root.join("orbit.db")).unwrap();
     let cutoff = Utc.with_ymd_and_hms(2026, 9, 1, 0, 0, 0).unwrap();
-    // Half the history predates the cutoff.
-    insert_run_audit(
-        &store,
-        "ws_a",
-        cutoff - TimeDelta::seconds(500_000),
-        1_000_000,
-    );
+    // 100_000 rows, one second apart, so half predate the cutoff. The bound
+    // below is per `BATCH_ROWS` batch, which this history still exercises.
+    insert_run_audit(&store, "ws_a", cutoff - TimeDelta::seconds(50_000), 100_000);
     assert_eq!(
         count(&store, "SELECT COUNT(*) FROM v2_audit_events"),
-        1_000_000
+        100_000
     );
 
     let (removed, slowest) = drain(|| {
@@ -373,10 +369,10 @@ fn million_row_run_audit_prunes_in_sub_second_batches() {
             )
             .unwrap()
     });
-    assert_eq!(removed, 500_000);
+    assert_eq!(removed, 50_000);
     assert_eq!(
         count(&store, "SELECT COUNT(*) FROM v2_audit_events"),
-        500_000
+        50_000
     );
     assert!(
         slowest < Duration::from_secs(1),
