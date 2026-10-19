@@ -284,6 +284,11 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
                 rendered.contains("no forecast built this pass"),
                 "{rendered}"
             );
+            assert!(!rendered.contains("Stuck head"), "{rendered}");
+            assert!(
+                !rendered.contains("nothing behind it is admitted until it fits"),
+                "{rendered}"
+            );
             // The retained forecast names its time, age and drain, and its
             // peaks are not presented as this pass's.
             let at = last["forecast_at"].as_str().unwrap();
@@ -371,6 +376,16 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
     );
 
     // The last terminal drain remains useful history, not a current hold.
+    let last_built = state
+        .pull_drain
+        .drain_last_pass
+        .as_ref()
+        .unwrap()
+        .admission_forecast
+        .as_ref()
+        .unwrap()
+        .clone();
+    state.pull_drain.drain_last_forecast = Some(last_built);
     let forecast = state
         .pull_drain
         .drain_last_pass
@@ -380,6 +395,9 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
         .as_mut()
         .unwrap();
     forecast.mode = "enforce".into();
+    // Exercise the ended-origin guard independently of current_retained,
+    // which requires a timestamp on the current pass.
+    forecast.forecast_at = None;
     forecast.skipped.push(orbit_types::workflow::GapFitSkip {
         task_id: ids[0].clone(),
         profile_source: "exact".into(),
@@ -397,6 +415,16 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
         )
         .unwrap();
     let history = fixture.json(&["run", "readiness", "--json"]);
+    assert_eq!(
+        history["capacity"]["admission_forecast"]["head"]["stall"]["stuck"],
+        true
+    );
+    let history_json = serde_json::to_string(&history).unwrap();
+    assert!(!history_json.contains("Stuck head"), "{history_json}");
+    assert!(
+        !history_json.contains("nothing behind it is admitted until it fits"),
+        "{history_json}"
+    );
     for task in history["tasks"].as_array().unwrap() {
         assert_eq!(
             task["reason"], "ready",
@@ -422,6 +450,11 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
         (vec!["run", "show", id, "--no-reconcile"], "): "),
     ] {
         let rendered = text(&fixture, &args);
+        assert!(!rendered.contains("Stuck head"), "{rendered}");
+        assert!(
+            !rendered.contains("nothing behind it is admitted until it fits"),
+            "{rendered}"
+        );
         let line = rendered
             .lines()
             .find(|line| line.starts_with("Last forecast "))
@@ -445,6 +478,7 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
         )
         .unwrap();
 
+    state.pull_drain.drain_last_forecast = None;
     state
         .pull_drain
         .drain_last_pass
