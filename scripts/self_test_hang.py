@@ -19,6 +19,7 @@ here.
 import os
 import signal
 import subprocess
+import time
 
 # Past the removed 10s and 20s workflow-step caps, far under the ceiling.
 SLOW_FIXTURE_SECONDS = 25
@@ -76,17 +77,23 @@ def _hang_message(step, argv, limit, stderr):
     return message
 
 
-def run(argv, *, step, timeout=None, check=False, input=None, capture_output=False, **popen_kwargs):
+def run(argv, *, step, timeout=None, check=False, input=None, capture_output=False,
+        ready_file=None, startup_timeout=None, **popen_kwargs):
     """Run argv until it exits, or fail when it is still running at the ceiling.
 
     `step` is the workflow step or command name in the hang diagnostic.
     `timeout` defaults to `HANG_CEILING_SECONDS`.
+    When `ready_file` is set, wait for a non-empty file before starting the
+    hang timeout. `startup_timeout` bounds that fixture setup phase.
     """
     if not isinstance(step, str) or not step.strip():
         raise ValueError("hang guard requires a step or command name")
     limit = HANG_CEILING_SECONDS if timeout is None else timeout
     if limit <= 0:
         raise ValueError("hang ceiling must be positive")
+    ready_limit = HANG_CEILING_SECONDS if startup_timeout is None else startup_timeout
+    if ready_file is not None and ready_limit <= 0:
+        raise ValueError("startup timeout must be positive")
     if capture_output:
         popen_kwargs["stdout"] = subprocess.PIPE
         popen_kwargs["stderr"] = subprocess.PIPE
@@ -95,6 +102,28 @@ def run(argv, *, step, timeout=None, check=False, input=None, capture_output=Fal
     popen_kwargs["start_new_session"] = True
     proc = subprocess.Popen(argv, **popen_kwargs)
     try:
+        if ready_file is not None:
+            deadline = time.monotonic() + ready_limit
+            while True:
+                try:
+                    ready = os.path.getsize(ready_file) > 0
+                except FileNotFoundError:
+                    ready = False
+                if ready or proc.poll() is not None:
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    _kill_group(proc)
+                    try:
+                        _, stderr = proc.communicate(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        stderr = b""
+                    message = f"fixture for {step} did not become ready within {ready_limit:g}s"
+                    detail = _tail(stderr)
+                    if detail:
+                        message = f"{message}\n{detail}"
+                    raise AssertionError(message) from None
+                time.sleep(min(0.01, remaining))
         try:
             stdout, stderr = proc.communicate(input=input, timeout=limit)
         except subprocess.TimeoutExpired:

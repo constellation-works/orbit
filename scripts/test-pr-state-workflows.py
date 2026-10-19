@@ -341,30 +341,27 @@ exit "${FIXTURE_VERSION_EXIT:-0}"
         exited = textwrap.dedent("""\
             import os, sys, time
             record = sys.argv[1]
-            read_fd, write_fd = os.pipe()
             child = os.fork()
             if child == 0:
-                os.close(read_fd)
-                os.write(write_fd, b"ready")
-                os.close(write_fd)
                 time.sleep(30)
                 os._exit(0)
-            os.close(write_fd)
-            if os.read(read_fd, 5) != b"ready":
-                os._exit(2)
-            os.close(read_fd)
-            with open(record, "w", encoding="utf-8") as handle:
+            temporary = record + ".tmp"
+            with open(temporary, "w", encoding="utf-8") as handle:
                 handle.write(f"{os.getpid()}\\n{child}\\n")
                 handle.flush()
                 os.fsync(handle.fileno())
+            os.replace(temporary, record)
             os._exit(0)
             """)
         live = textwrap.dedent("""\
             import os, sys, time
-            with open(sys.argv[1], "w", encoding="utf-8") as handle:
+            record = sys.argv[1]
+            temporary = record + ".tmp"
+            with open(temporary, "w", encoding="utf-8") as handle:
                 handle.write(f"{os.getpid()}\\n")
                 handle.flush()
                 os.fsync(handle.fileno())
+            os.replace(temporary, record)
             time.sleep(30)
             """)
         for step, script, count in (
@@ -379,7 +376,7 @@ exit "${FIXTURE_VERSION_EXIT:-0}"
                         self_test_hang.run(
                             [sys.executable, "-c", script, marker],
                             step=step, cwd=self.root, capture_output=True, text=True,
-                            timeout=limit)
+                            timeout=limit, ready_file=record)
                     self.assertIn(
                         f"hung step: {step} (command {sys.executable} exceeded {limit:g}s)",
                         str(caught.exception))
