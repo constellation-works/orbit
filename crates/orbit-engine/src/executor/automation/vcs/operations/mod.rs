@@ -47,6 +47,8 @@ pub(crate) const CI_CHECK_ANNOTATIONS: &str = "ci.check_annotations";
 pub(super) const DEFAULT_TIMEOUT_MS: u64 = 15_000;
 const SLOW_TIMEOUT_MS: u64 = 30_000;
 const LONG_TIMEOUT_MS: u64 = 60_000;
+/// Maximum authenticated GitHub Actions workflow source read for PR proofs.
+pub(super) const MAX_WORKFLOW_SOURCE_BYTES: usize = 256 * 1024;
 
 /// The `refusal` a reviewed merge reports, instead of failing, when its
 /// caller opts in with `report_base_modified`.

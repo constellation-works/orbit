@@ -4,6 +4,21 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
+# Keep workflow source reads comfortably below the engine's 256 KiB bound.
+workflow_source_cap_bytes=$((256 * 1024))
+workflow_source_guard_bytes=$((workflow_source_cap_bytes * 3 / 4))
+shopt -s nullglob
+workflow_files=("$repo_root"/.github/workflows/*.yml "$repo_root"/.github/workflows/*.yaml)
+for workflow in "${workflow_files[@]}"; do
+  size=$(wc -c <"$workflow")
+  size=${size//[[:space:]]/}
+  if ((size > workflow_source_guard_bytes)); then
+    relative_path=${workflow#"$repo_root"/}
+    echo "ci-guardrails: workflow $relative_path is $size bytes; cap is $workflow_source_cap_bytes bytes (75% guard threshold: $workflow_source_guard_bytes bytes)" >&2
+    exit 1
+  fi
+done
+
 # Modes: the default full run (`make ci`); --fast (`make ci-fast`); the offline
 # file/metadata-only --static (`make ci-guards`); and the two
 # parts of the split hosted workflow (.github/workflows/ci.yml). --checks runs

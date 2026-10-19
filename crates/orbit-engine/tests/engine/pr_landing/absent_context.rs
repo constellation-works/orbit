@@ -162,6 +162,49 @@ fn path_filtered_website_workflow_preserves_sibling_emission_recovery() {
     );
 }
 
+#[test]
+fn workflow_source_bounds_are_checked_during_emission_proof() {
+    isolated(
+        "absent_context::workflow_source_bounds_are_checked_during_emission_proof",
+        |sandbox| {
+            for (case, padding) in [("between_limits", 70 * 1024), ("over_limit", 256 * 1024)] {
+                in_fresh_row(sandbox, |row| {
+                    let mut source = NEW.to_owned();
+                    source.push_str(&format!("\n# {}\n", "x".repeat(padding)));
+                    if case == "between_limits" {
+                        assert!(source.len() > 64 * 1024 && source.len() < 256 * 1024);
+                    } else {
+                        assert!(source.len() > 256 * 1024);
+                    }
+
+                    let (fx, host) = setup(row, &source);
+                    fs::write(fx.forge.join("review-approved"), "approved").unwrap();
+                    let mut input = fx.complete_input();
+                    input["auto_fix"] = json!(true);
+                    let result = action(&host, "pr_complete", &input);
+
+                    if case == "between_limits" {
+                        let completed = result.unwrap_or_else(|error| panic!("{case}: {error}"));
+                        assert_eq!(completed["completed_task_ids"], json!([TASK_ID]));
+                        assert_eq!(
+                            fs::read_to_string(fx.forge.join("mutations")).unwrap(),
+                            "update\nmerge\n"
+                        );
+                    } else {
+                        let error = result.expect_err(case).to_string();
+                        assert!(
+                            error.contains("truncated workflow emission source"),
+                            "{error}"
+                        );
+                        assert!(!fx.forge.join("mutations").exists());
+                        assert!(pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).is_empty());
+                    }
+                });
+            }
+        },
+    );
+}
+
 struct AcceptedLanding {
     host: DeliveryHost,
     context: orbit_engine::HandoffLandingContext,
