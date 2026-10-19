@@ -270,7 +270,8 @@ impl OrbitRuntime {
         // Once Start succeeds, setup errors belong to this run and must reach
         // the same terminal lifecycle as execution errors in detached workers.
         let outcome = (|| {
-            self.record_run_crew_for_job(&run.run_id, &input, yaml_path)?;
+            let bundle = crate::application::automation::members::bundle_crews(self, &run, &input);
+            self.record_run_crew_for_job(&run.run_id, &input, yaml_path, bundle)?;
             self.record_event(OrbitEvent::JobRunStarted {
                 job_id: run.job_id.clone(),
                 run_id: run.run_id.clone(),

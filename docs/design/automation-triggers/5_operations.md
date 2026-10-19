@@ -822,8 +822,11 @@ dispatches one pipeline run carrying every member's task id as an explicit
 admission. Task-pilot preparation admits every due crew in that batch
 [ORB-16839]: prepare partitions the run by each task's stored crew and then
 into groups of at most five, so two crews are assessed in that one run as
-separate partitions instead of one rejected bundle. A hand-assembled
-`orbit run task-pilot` list that mixes crews is still refused at run start.
+separate partitions instead of one rejected bundle. Run start admits the mix
+only for the run the live attempt admitted, checked against that attempt and
+its action key [ORB-16860]. A hand-assembled `orbit run task-pilot` list that
+mixes crews, or any other job whose input merely carries a claim, is still
+refused at run start.
 A burst of *N* same-crew eligible tasks still yields one run with ⌈N/5⌉ pilot
 partitions and up to five concurrent workers instead of *N* serial runs;
 members beyond the batch stay pending for the next admission. The attempt's

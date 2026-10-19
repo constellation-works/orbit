@@ -157,7 +157,8 @@ impl OrbitRuntime {
         // validation, event persistence, and resume-state reads cannot escape
         // with a durable `running` projection.
         let outcome = (|| {
-            self.record_run_crew_for_job(&run.run_id, &input, yaml_path)?;
+            let bundle = crate::application::automation::members::bundle_crews(self, run, &input);
+            self.record_run_crew_for_job(&run.run_id, &input, yaml_path, bundle)?;
 
             if announce_start {
                 self.record_event(OrbitEvent::JobRunStarted {
