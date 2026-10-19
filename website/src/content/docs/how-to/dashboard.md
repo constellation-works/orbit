@@ -447,6 +447,27 @@ shows median completed run time and tasks by tier. Cost, time and tier
 comparisons never change the score. On a phone, the ranking and tier table
 scroll within their own boxes and the detail stacks below the ranking.
 
+The **Reviewers** tab ranks the reviewers of the review gate, and the review
+jobs that file findings as tasks, by how their verdicts turned out. A reviewer
+earns for findings and fixes that held: fixes that passed revalidation, open
+findings on a reject whose cited files the next run changed, and filed
+findings that finding verification confirmed, each weighted by severity. It
+loses for findings that were disposed or rejected by verification, for false
+rejects (the next run changed none of the cited files and the next review
+accepted), for fixes that failed revalidation, for `review_missed` regressions
+against work it accepted, and for incomplete reviews not caused by
+infrastructure. How often a reviewer accepts or rejects is never scored.
+
+- **Provisional.** A review younger than 30 days can still be charged a
+  `review_missed` regression filed later, so while the window has such reviews
+  a banner says how many, and those scores can still fall.
+- **accepts often** tags a reviewer whose accept rate is 10 or more points
+  above the other reviewers' on the same task tiers. It is shown, never scored.
+- The **How verdicts turned out** panel splits each reviewer's reviews into
+  accepted and held up, caught a real problem, false alarm, missed a
+  regression, and unresolved (not judged yet, incomplete, or fixes that
+  failed).
+
 With **all** selected, Agents covers the last 90 days. From a terminal,
 `orbit agents scorecard --role <role>` prints the same ranking and
 `orbit agents show --role <role> --crew <crew>` one row's tasks.

@@ -18,11 +18,11 @@ related_artifacts: []
 
 This document is the target design for the Agents destination: one scorecard per agent role, ranked by crew and model. It is a **Draft** that becomes the description of current behaviour as the delivery tracks in §10 land. It fixes the attribution rules, the shared score, each role's terms, and the API payload first, so that every track builds against a stable contract.
 
-The core and dashboard tracks have landed. Sections marked **Current** describe the code: the destination and layout (§1, except the panels later tracks add), the ranking unit (§2), attribution (§3, except the problems later tracks add), the shared score (§4), the Orchestrators and Implementers roles (§5.1–5.2), the API (§6) and the scan and cache (§8). Everything else is the target. The view itself is described in [user-interface 2_design.md §5c](../user-interface/2_design.md#5c-observe--agents). Until the pilots track lands, the Task pilot ranking stays in Analytics › Codebase.
+The core and dashboard tracks have landed. Sections marked **Current** describe the code: the destination and layout (§1, except the panels later tracks add), the ranking unit (§2), attribution (§3, except the problems later tracks add), the shared score (§4), the Orchestrators, Implementers and Reviewers roles (§5.1–5.3), the API (§6) and the scan and cache (§8). Everything else is the target. The view itself is described in [user-interface 2_design.md §5c](../user-interface/2_design.md#5c-observe--agents). Until the pilots track lands, the Task pilot ranking stays in Analytics › Codebase.
 
 ## 1. Destination and Layout
 
-**Current**, except the Reviewers and Pilots panels, the Reviewers banner and the move of the Task pilot ranking, which arrive with their roles.
+**Current**, except the Pilots panel and the move of the Task pilot ranking, which arrive with the pilots role.
 
 **Agents** is a top-level Observe destination beside Health and Analytics. Its secondary tabs are its roles: **Orchestrators** (`#agents/orchestrators`, the default), **Implementers** (`#agents/implementers`), **Reviewers** (`#agents/reviewers`) and **Pilots** (`#agents/pilots`). Each tab shows its count of ranked rows. Navigation changes:
 
@@ -37,7 +37,7 @@ Every role tab has the same layout:
 4. **How the score works.** A disclosure listing every term with its weight and definition, plus the smoothing formula.
 5. **One role-specific panel.** Orchestrators show where each orchestrator's rework went by cause. Implementers show score against cost, with the frontier of crews nothing beats on both, plus first reviews needing changes compared with the tier average. Reviewers show how each reviewer's verdicts turned out, and flag an accept rate well above peers. Pilots show assessed tier against observed tier.
 
-Reviewers also carry a **provisional** banner while any review in the window is younger than the 30-day miss lookback (§4.4).
+Reviewers also carry a **provisional** banner under the strip while any review in the window is younger than the 30-day miss lookback (§4.4). It counts those reviews against the window's total. A reviewer whose accept rate is well above its peers' carries an `accepts often` tag under its name in the ranking (§5.3). A role module supplies the banner and the row tags through optional hooks beside its panel.
 
 The view follows the shared dashboard window: 1h, 24h, 7d, 30d or 90d. `all` is accepted and treated as 90d, and labelled `all (90d)` (§8). It is read-only and scoped to the selected workspace; the aggregate view shows the usual placeholder. It builds every node with `el()`. The dashboard is dark-only. The layout keeps its ranking table in an `overflow-x` box and stacks the detail column under the ranking at phone width.
 
@@ -53,7 +53,7 @@ A row is a **crew and model**: the `resolved_crew` and `crew_model` of the job r
 
 ## 3. Attribution: Each Problem Has One Owner
 
-**Current** for every problem in §3.1 except false rejects, findings rejected by finding verification, and the two pilot problems. Tracks E and F add those to the scan.
+**Current** for every problem in §3.1 except the two pilot problems, which track F adds to the scan.
 
 Every problem counts against exactly one role, or against none (**Not scored**). Credit is separate: when one role's problem is caught or fixed by another, the catcher may earn credit (a reviewer's held finding), but the problem still counts once. The rule is recorded as [Each problem counts against exactly one role](./4_decisions.md#each-problem-counts-against-exactly-one-role).
 
@@ -66,16 +66,17 @@ Every problem counts against exactly one role, or against none (**Not scored**).
 | Final-recovery escalation citing the criteria | `final_recovery_escalated` | Orchestrator | the task's orchestrator attribution |
 | Repeat run, `[BLOCKED]` PR, unmerged delivery PR or operator requeue with cause `spec` | history, failure handoff, PR refs | Orchestrator | the task's orchestrator attribution |
 | The same rework with cause `crew` | same records | Implementer | the implementation run that ended the attempt |
-| Review verdict `reject` | review report | Implementer | the implementation run whose candidate was reviewed |
+| Review verdict `reject`, unless it is a false reject | review report | Implementer | the implementation run whose candidate was reviewed |
 | Review verdict `accept_with_fixes` | review report | Implementer | the implementation run whose candidate was reviewed |
 | Regression with escape `spec_ambiguous` | `regression_from` classification | Orchestrator | the culprit task's orchestrator attribution |
 | Regression with escape `review_missed` | `regression_from` classification | Reviewer | the review run that accepted the culprit's landed candidate |
 | Regression with escape `no_test` | `regression_from` classification | Implementer | the culprit's final implementation run |
 | Regression with escape `test_not_selected`, `platform_only`, `nondeterministic` or `unclassified` | `regression_from` classification | Not scored | — |
 | Finding closed by an authorized decision (`Disposed`) | review report | Reviewer | the review run that raised it |
-| False reject (§5.3) | review reports, run diffs | Reviewer | the review run that rejected |
+| False reject (§5.3), counted instead of the implementer's reject | settlement comments, candidate commits | Reviewer | the review run that rejected |
 | Reviewer fix that failed owner revalidation | gate escalation | Reviewer | the review run that made the fix |
 | Finding filed as a task by a review job and REJECTED by finding verification | `finding_verified` history | Reviewer | the review job run that filed it |
+| Review verdict `incomplete` | review report | Reviewer | the review run; Not scored (`infrastructure`) when run failure classification names the block that followed as infrastructure |
 | Landed file outside every selector that caused a footprint block or lock conflict | codebase facts | Pilot | the pilot run behind the newest pilot receipt |
 | Lock wait on a path the holder reserved through a selector that covered none of its landed files | lock-wait episodes, pilot receipt | Pilot | the holder task's pilot run |
 | Rework with cause `infrastructure` or `other` | history | Not scored | — |
@@ -103,13 +104,13 @@ The Not scored reasons are:
 - each unscored escape, and the unscored natures `merge_reintroduced` and `contract_drift`;
 - `unattributed`: an orchestrator problem on a task with no orchestrator attribution;
 - `no_run`: an implementer problem on a task with no implementation attempt;
-- `no_review`: a reviewer problem with no settled review to charge.
+- `no_review`: a reviewer problem with no settled review to charge, or a REJECTED finding whose filing review job is unknown.
 
-A problem falls in the window of its owner's unit of work: the task's creation for orchestrators, the charged attempt's start for implementers, the settlement for reviewers, and the problem's own time when Not scored. A regression against a task outside the 90-day scan is not counted.
+A problem falls in the window of its owner's unit of work: the task's creation for orchestrators, the charged attempt's start for implementers, the settlement for reviewers (the filing attempt's start for a review job), and the problem's own time when Not scored. A regression against a task outside the 90-day scan is not counted.
 
 ## 4. The Shared Score
 
-**Current**, except the reviewer provisional count in §4.4, which arrives with the Reviewers role.
+**Current.**
 
 One module computes every role's score. A role supplies its unit of work, its terms and their weights. Nothing else is role-specific.
 
@@ -133,7 +134,7 @@ Rows with fewer than 10 units (`min_support`, default 10, at least 1) are `below
 
 ### 4.4 Windows and late evidence
 
-A role's **unit** decides window membership (§5). Problems count whenever they are recorded, so a regression filed after the window still counts against the work in it. For reviewers this is the expected case: a `review_missed` regression is usually filed days later. A review younger than the 30-day **miss lookback** is **provisional**. The payload reports each row's provisional count and the window's total, and the view shows the banner from §1.
+A role's **unit** decides window membership (§5). Problems count whenever they are recorded, so a regression filed after the window still counts against the work in it. For reviewers this is the expected case: a `review_missed` regression is usually filed days later. A review younger than the 30-day **miss lookback** is **provisional**, measured from the scan. The payload reports each row's provisional count and the window's total (`provisional` beside `rows`), and the view shows the banner from §1. Other roles report `provisional` as null.
 
 ### 4.5 Cost is shown, never scored
 
@@ -216,11 +217,13 @@ shows review rates beside the fleet rate and scrolls within its box on phones.
 
 ### 5.3 Reviewers
 
-Unit: **settled reviews**, meaning review gate attempts by the row's crew and model whose verdict settled in the window. Review jobs that file findings as tasks count as reviews too, through their filed findings.
+**Current.**
+
+Unit: **settled reviews**, meaning review gate attempts by the row's crew and model whose verdict settled in the window. Review jobs that file findings as tasks count too: each attempt of a review job task that filed at least one finding (a bug tagged `code-review`, `delivery-code-review`, `security-review` or `qa-sweep`, linked `spawned_from` the job) is one unit, in the window of the attempt's start, under the attempt's crew and model.
 
 | Term | Weight | Definition |
 |---|---|---|
-| Findings that held | +1 | Findings repaired by the reviewer and validated, or open findings on a `reject` that the next implementation run changed a cited path to address; each weighted by severity: critical 8, high 4, medium 2, low 1. |
+| Findings that held | +1 | Findings repaired by the reviewer and validated, open findings on a `reject` that the next implementation run changed a cited path to address, and review-job findings finding verification CONFIRMED; each weighted by severity: critical 8, high 4, medium 2, low 1. |
 | Fixes that held | +1 | `accept_with_fixes` verdicts whose fixes passed owner revalidation and whose task has no regression with escape `review_missed`. |
 | Rejected findings | −1 | Findings closed by an authorized decision (`Disposed`), and findings a review job filed as tasks that finding verification REJECTED. |
 | False rejects | −2 | `reject` verdicts where the next implementation run changed none of the rejected findings' cited paths and the next review accepted. |
@@ -228,15 +231,31 @@ Unit: **settled reviews**, meaning review gate attempts by the row's crew and mo
 | Missed regressions | −4 | Regressions with escape `review_missed` against tasks the row's review accepted, whenever filed. |
 | Incomplete reviews | −0.5 | `incomplete` verdicts not caused by infrastructure. |
 
-An accept rate never enters the score. A reviewer earns only for verdicts that turned out right. See [Score accuracy, never the volume of objections](./4_decisions.md#score-accuracy-never-the-volume-of-objections).
+An accept rate never enters the score. A reviewer earns only for verdicts that turned out right. See [Score accuracy, never the volume of objections](./4_decisions.md#score-accuracy-never-the-volume-of-objections). The reject rate, the number of findings and cost are not terms either.
 
-Shown, not scored:
-- cost per review;
-- median review duration;
-- accept rate against the other reviewers on the same tiers. A row 10 or more points above its peers is tagged `accepts often`.
-- the row's provisional count.
+How a `reject` is judged:
 
-The role panel splits each reviewer's settled reviews into: accepted and held up, caught a real problem, false alarm, and missed a regression.
+- The settlement comment lists each finding that stays open with a `Cited:` line naming the paths it cites (`path` or `path:line`). The scan reads the rejected candidate (the settlement's final candidate, else its implementation commit) and the candidate the next settlement on the task reviewed.
+- It compares each cited path's blob between those two commits in the workspace repository, without fetching. A path whose content differs, or that exists in only one of them, was changed.
+- A cited finding whose path changed **held**. When no cited path changed and the next review passed (`accept` or `accept_with_fixes`), the reject is a **false reject**: it counts against the reviewer, and the implementer is not charged a review reject for it.
+- A reject with no next settlement yet, no cited path, or a commit the repository cannot read is not judged. It earns nothing and costs the reviewer nothing; the implementer's review reject stands. Settlements written before the gate recorded `Cited:` lines are never judged.
+
+Failed fixes and incomplete reviews:
+
+- A reviewer fix failed when a review gate escalation with verdict `reject` follows the `accept_with_fixes` settlement. Its fixed findings then earn nothing.
+- An `incomplete` verdict is the reviewer's unless run failure classification names the first block or status change after it as infrastructure. Then it is Not scored with reason `infrastructure`.
+
+Shown, not scored (each row's `stats`):
+
+- review gate settlements and review job runs that filed findings;
+- accept rate, the share of gate settlements that passed (`accept` or `accept_with_fixes`), and the peers' accept rate on the same tiers. The peers' rate is the rate the other reviewers had on each of the row's task tiers (complexity, or unassessed), averaged over the row's reviews. A row 10 or more points above it has `accepts_often` true and is tagged `accepts often`.
+- the five verdict outcomes below;
+- median review minutes, from the settlement's reviewer runtime;
+- the row's provisional count (the row's `provisional` field).
+
+Cost per review is not shown: no record ties a review gate attempt's cost to its settlement.
+
+The role panel, **How verdicts turned out**, splits each reviewer's settled reviews into: accepted and held up, caught a real problem (a finding or fix that held, or a CONFIRMED review-job finding), false alarm (a false reject, or a review job whose verified findings were all REJECTED), missed a regression (a passed review a `review_missed` regression came back to), and unresolved (not judged yet, incomplete, or fixes that failed).
 
 ### 5.4 Pilots
 
@@ -282,11 +301,12 @@ GET /api/agents/attribution?window=
 - `unit` (label of the role's unit);
 - `fleet_average`;
 - `terms`: `key`, `label`, `weight`, `definition`, `group`;
+- `provisional`: for reviewers, the rows' provisional reviews in total; null for the other roles;
 - `rows`, best first.
 
 Each row carries `crew`, `model`, `units`, `below_support`, `rank` (null below support), `counts` and `per_100` (term key to number), `raw`, `score`, `runs_without_model`, `provisional` (reviewers), and `stats` (the not-scored context: key, label, value).
 
-**Detail** carries the scorecard header, `fleet_average`, the selected `row`, and `terms`. Each term carries its key, label, weight, group, count, `per_100`, contribution and `tasks`, largest count first. Each task carries `task_id`, `title`, `status`, `count` and `occurrences` (`at`, `detail`, `run_id`).
+**Detail** carries the scorecard header, `fleet_average`, `provisional`, the selected `row`, and `terms`. Each term carries its key, label, weight, group, count, `per_100`, contribution and `tasks`, largest count first. Each task carries `task_id`, `title`, `status`, `count` and `occurrences` (`at`, `detail`, `run_id`).
 
 **Attribution** answers `window`, `requested_window`, `since`, `computed_at`, `cache_ttl_seconds`, `total`, `owners` and `charged`. `owners` maps each of `orchestrators`, `implementers`, `reviewers` and `pilots` to a count, plus `not_scored` as `{count, reasons}`. `charged` maps each role to its rows, each with `crew`, `model` and `problems`.
 
@@ -314,7 +334,8 @@ Each of those scans once per call and reports `cache_ttl_seconds: 0`. The defini
 One `AgentFacts` scan per workspace serves all four roles and the attribution strip. It reads:
 - every task created or updated in the last 90 days, with its history and comments;
 - the implementation job runs (owned and claimed PR and local delivery) active in that time, matched to the tasks their input names, read without their steps;
-- the review gate's settlement and escalation comments;
+- the review gate's settlement and escalation comments, and, for each judged `reject`, the cited paths' blobs in the rejected and next reviewed candidates, read from the workspace repository without fetching;
+- the `finding_verified` history of review findings filed as tasks;
 - the `regression_from` links and failed claim settlements;
 - task-pilot receipts and the codebase facts the pilot terms need (landed files, footprint blocks, lock-wait episodes), once track F lands.
 
@@ -335,9 +356,10 @@ Tests follow the repository rules: behavior at public boundaries, no copy-matchi
   - Below-support rows sort last without a rank.
   - Regressions filed after the window still count.
   - Reviewer provisional counts follow the 30-day lookback.
+  - A reject the next run proved wrong is the reviewer's false reject, a reject whose cited path changed holds its finding, and rejecting more without being right never raises a reviewer's score.
 - **API** (`orbit-web` HTTP tests): the payload contract, `not_computed`, the 400 cases, and that one scan serves role and window changes.
 - **Dashboard**:
-  - node DOM-stub tests and a Playwright fixture driven by contract-shaped JSON: ranking selection, detail, disclosure, empty and `not_computed` states, the redirect from `#analytics/orchestrators`, phone width;
+  - node DOM-stub tests and a Playwright fixture driven by contract-shaped JSON: ranking selection, detail, disclosure, empty and `not_computed` states, the Reviewers banner, `accepts often` tag and outcome bars, the redirect from `#analytics/orchestrators`, phone width;
   - screenshots of each changed view at desktop and 375 px.
 - **CLI and MCP**: goldens regenerated for the new commands, tools and the alias notes.
 
@@ -349,7 +371,7 @@ Tests follow the repository rules: behavior at public boundaries, no copy-matchi
 | B | Core and API: `application/agents/` (`facts.rs`, `attribution.rs`, `score.rs`, the role registry with all four roles, three of them `not_computed`), Orchestrators on the new score, `api/agents.rs`, cache. Landed. | A | `crates/orbit-core/src/application/agents/**`, `agents.rs` in the `orbit-web` API module, routes, `runtime_memo` |
 | C | Dashboard shell: Agents destination, `#agents/<role>` routing and redirect, the generic renderer; removes Analytics › Orchestrators and the `/api/orchestrators/*` routes. Landed. | B | `assets/dashboard/js/agents.js`, `js/agents-orchestrators.js`, `css/agents.css`, `index.html`, `app.js`, removal of `js/orchestrators.js` and `api/orchestrators.rs` |
 | D | Implementers role and its panel | C | `application/agents/roles/implementers.rs`, `js/agents-implementers.js` |
-| E | Reviewers role, its scan additions (false rejects, incomplete reviews, findings rejected by finding verification), provisional banner and outcomes panel | C | `application/agents/roles/reviewers.rs`, `js/agents-reviewers.js` |
+| E | Reviewers role, its scan additions (false rejects, incomplete reviews, findings rejected by finding verification), provisional banner and outcomes panel. Landed. | C | `application/agents/roles/reviewers.rs`, `js/agents-reviewers.js` |
 | F | Pilots role, its scan additions (pilot receipts, footprint misses, lock waits) and calibration panel; moves the pilot ranking out of Codebase | C | `application/agents/roles/pilots.rs`, `js/agents-pilots.js`, `application/codebase/pilot.rs`, `js/codebase.js` |
 | G | CLI and MCP (`orbit agents`, `orbit.agents.*`, aliases); moves `orbit orchestrator` and `orbit.orchestrator.*` onto the new scorecard and removes `application/orchestrators/`. Landed. | C | `orbit-cli` and `orbit-tools` command and tool files, goldens |
 
@@ -366,7 +388,7 @@ Each track updates the docs its change makes stale in the same PR. That includes
 
 ## 11. Concerns & Honest Limitations
 
-- **Reviewer false alarms are proxies.** The review gate records no verdict on whether its own findings were right. `Disposed` findings and the false-reject rule (§5.3) stand in for that, and a reject that the implementer satisfied by changing an unrelated file still counts as held. A dedicated record of an implementer disputing a finding would be exact, but would change the review flow to serve a dashboard. It is deferred until the proxies prove noisy.
+- **Reviewer false alarms are proxies.** The review gate records no verdict on whether its own findings were right. `Disposed` findings and the false-reject rule (§5.3) stand in for that. The rule compares file contents, not intent: a cited file the next run changed for an unrelated reason, or that changed on the base between the two candidates, counts as addressed, and a finding fixed in a file it did not cite is not credited. A dedicated record of an implementer disputing a finding would be exact, but would change the review flow to serve a dashboard. It is deferred until the proxies prove noisy.
 - **Orchestrator rows have no model.** Orchestrator sessions are not job runs, so orchestrators rank by attribution name with `model unknown` until the attribution records a model.
 - **The observed tier inherits cost differences between crews.** Work routed to a costlier crew looks harder. Ranking by cost within the window reduces this but does not remove it, so calibration should be read as a comparison between pilots on similar work.
 - **Footprint misses without a pilot are not charged.** When no pilot assessed a task, a landed file outside the filer's selectors counts against no one in v1. It could be an orchestrator spec defect, but nothing records whether the file was in scope.
@@ -381,7 +403,8 @@ Each track updates the docs its change makes stale in the same PR. That includes
 - ORB-16952 — track B: the core scan, one-owner attribution, shared score, role registry with Orchestrators computed, and the `/api/agents` routes and cache.
 - ORB-16953 — track C: the Agents destination, its role tabs, the shared renderer and the orchestrators panel; retired Analytics › Orchestrators and `/api/orchestrators/*`.
 - ORB-16954 — track D: the Implementers role and cost/tier panel (current).
-- ORB-16955, ORB-16956 — tracks E and F: the Reviewers and Pilots roles (planned).
+- ORB-16955 — track E: the Reviewers role (current), its scan additions (false rejects judged from cited paths, incomplete reviews, findings rejected by finding verification), the provisional count, the banner, the `accepts often` tag and the outcomes panel.
+- ORB-16956 — track F: the Pilots role (planned).
 - ORB-16957 — track G: CLI and MCP (planned).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

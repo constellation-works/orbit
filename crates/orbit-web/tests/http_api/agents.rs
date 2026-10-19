@@ -20,18 +20,18 @@ use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};
 
-const WS: &str = "workspace=ws_http_fixture";
+pub(super) const WS: &str = "workspace=ws_http_fixture";
 
-struct Owned<'a> {
-    title: &'a str,
-    orchestrator: Option<&'a str>,
-    origin: Option<TaskOrigin>,
-    complexity: TaskComplexity,
-    status: TaskStatus,
-    relations: Vec<TaskRelation>,
+pub(super) struct Owned<'a> {
+    pub(super) title: &'a str,
+    pub(super) orchestrator: Option<&'a str>,
+    pub(super) origin: Option<TaskOrigin>,
+    pub(super) complexity: TaskComplexity,
+    pub(super) status: TaskStatus,
+    pub(super) relations: Vec<TaskRelation>,
 }
 
-fn add(fixture: &Fixture, task: Owned<'_>) -> String {
+pub(super) fn add(fixture: &Fixture, task: Owned<'_>) -> String {
     let id = fixture
         .runtime
         .add_task(TaskAddParams {
@@ -64,7 +64,7 @@ fn add(fixture: &Fixture, task: Owned<'_>) -> String {
     id
 }
 
-fn regression(
+pub(super) fn regression(
     fixture: &Fixture,
     culprit: &str,
     nature: RegressionNature,
@@ -87,7 +87,7 @@ fn regression(
     )
 }
 
-fn bundle_dir(root: &Path, task_id: &str) -> Option<PathBuf> {
+pub(super) fn bundle_dir(root: &Path, task_id: &str) -> Option<PathBuf> {
     for entry in fs::read_dir(root).ok()? {
         let path = entry.ok()?.path();
         if !path.is_dir() {
@@ -108,7 +108,7 @@ fn bundle_dir(root: &Path, task_id: &str) -> Option<PathBuf> {
 /// Append one history row to a disposable fixture task, as a lifecycle writer
 /// would: runs, pulls, blocks and requeues have no public operator entry
 /// point that a fixture can drive without a crew.
-fn append(
+pub(super) fn append(
     fixture: &Fixture,
     task_id: &str,
     at: DateTime<Utc>,
@@ -137,7 +137,7 @@ fn append(
 
 /// A finished implementation run for `task_id`, started a second before the
 /// history entry that starts its attempt, as the pipeline records it.
-fn implementation_run(
+pub(super) fn implementation_run(
     fixture: &Fixture,
     run_id: &str,
     task_id: &str,
@@ -189,7 +189,7 @@ fn operations(trace: &[Value], name: &str) -> usize {
         .count()
 }
 
-fn as_f64(value: &Value) -> f64 {
+pub(super) fn as_f64(value: &Value) -> f64 {
     value
         .as_f64()
         .unwrap_or_else(|| panic!("a number: {value}"))
@@ -944,21 +944,20 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 "a run without a model is `model unknown`: {strip}"
             );
 
-            for role in ["reviewers", "pilots"] {
-                let payload = json_ok(server.get(&format!(
-                    "/api/agents/{role}/scorecard?{WS}&window=all&min_support=1"
-                )));
-                assert_eq!(payload["status"], "not_computed", "{payload}");
-                assert_eq!(payload["rows"], json!([]), "{payload}");
-                assert!(
-                    !payload["terms"].as_array().unwrap().is_empty(),
-                    "{payload}"
-                );
-                assert_eq!(
-                    (&payload["window"], &payload["requested_window"]),
-                    (&json!("90d"), &json!("all"))
-                );
-            }
+            // Pilots is the only role whose scorecard is still a stub.
+            let payload = json_ok(server.get(&format!(
+                "/api/agents/pilots/scorecard?{WS}&window=all&min_support=1"
+            )));
+            assert_eq!(payload["status"], "not_computed", "{payload}");
+            assert_eq!(payload["rows"], json!([]), "{payload}");
+            assert!(
+                !payload["terms"].as_array().unwrap().is_empty(),
+                "{payload}"
+            );
+            assert_eq!(
+                (&payload["window"], &payload["requested_window"]),
+                (&json!("90d"), &json!("all"))
+            );
             json_ok(server.get(&format!(
                 "/api/agents/orchestrators/scorecard?{WS}&window=7d&min_support=1"
             )));

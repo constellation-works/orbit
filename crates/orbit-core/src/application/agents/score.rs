@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
+use super::AgentRole;
 use super::facts::TaskFacts;
 
 /// Units of fleet-average evidence every row's score is blended with:
@@ -248,6 +249,13 @@ impl Scored<'_> {
     fn count(&self, key: &str) -> f64 {
         self.input.tallies.get(key).map_or(0.0, |tally| tally.count)
     }
+}
+
+/// The window's provisional units, the sum of the rows' counts. Only
+/// reviewers keep them; `None` for any other role.
+pub(super) fn provisional(role: AgentRole, rows: &[Scored<'_>]) -> Option<usize> {
+    (role == AgentRole::Reviewers)
+        .then(|| rows.iter().filter_map(|row| row.input.provisional).sum())
 }
 
 /// The role's terms as every response carries them.

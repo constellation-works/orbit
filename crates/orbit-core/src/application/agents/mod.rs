@@ -4,8 +4,9 @@
 //!
 //! [`OrbitRuntime::agent_scan`] reads the workspace once ([`AgentFacts`]):
 //! tasks with activity in the last 90 days, the implementation job runs that
-//! name them, the review gate's settlements and the typed regressions, and
-//! gives each problem its one owner ([`Charge`]). [`agent_scorecard`],
+//! name them, the review gate's settlements, the verdicts on review-filed
+//! findings and the typed regressions, and gives each problem its one owner
+//! ([`Charge`]). [`agent_scorecard`],
 //! [`agent_detail`] and [`agent_attribution`] only slice those facts by
 //! role, window and minimum support, so a caller that keeps the facts (the
 //! dashboard) answers another selection without rescanning.
@@ -15,6 +16,7 @@
 //! with K = 10. Cost is never a term.
 
 mod attribution;
+mod candidates;
 mod facts;
 mod records;
 mod roles;
@@ -219,18 +221,13 @@ pub fn agent_scorecard(
     let since = query.since();
     let spec = roles::spec(role);
     let mut payload = role_header(facts, role, query, since, cache_ttl);
-    let (fleet_average, rows) = match spec.rows {
-        Some(rows) => {
-            let (average, scored) = score::score(spec.terms, rows(facts, since), query.min_support);
-            (
-                average.map(score::number),
-                scored.iter().map(|row| row.row(spec.terms)).collect(),
-            )
-        }
+    let (fleet_average, scored) = match spec.rows {
+        Some(rows) => score::score(spec.terms, rows(facts, since), query.min_support),
         None => (None, Vec::new()),
     };
-    payload["fleet_average"] = json!(fleet_average);
-    payload["rows"] = Value::Array(rows);
+    payload["fleet_average"] = json!(fleet_average.map(score::number));
+    payload["provisional"] = json!(score::provisional(role, &scored));
+    payload["rows"] = scored.iter().map(|row| row.row(spec.terms)).collect();
     payload
 }
 
@@ -284,6 +281,7 @@ pub fn agent_detail(
     };
     let mut payload = role_header(facts, role, query, since, cache_ttl);
     payload["fleet_average"] = json!(fleet_average.map(score::number));
+    payload["provisional"] = json!(score::provisional(role, &scored));
     payload["row"] = row.row(spec.terms);
     payload["terms"] = json!(row.terms(spec.terms));
     Ok(payload)

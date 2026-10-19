@@ -7,7 +7,9 @@
 //! and unrecorded causes), and a regression's escape names the safeguard
 //! that failed. A problem recorded on a task charges the implementation
 //! attempt whose span contains it, so a task that moved between crews
-//! charges each crew only for its own attempt.
+//! charges each crew only for its own attempt. A `reject` the next run
+//! proved wrong is the reviewer's false reject, not the implementer's
+//! review reject.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -16,9 +18,10 @@ use orbit_types::task::{RegressionEscape, RegressionNature};
 use orbit_types::workflow::ReviewVerdict;
 use serde_json::{Map, Value, json};
 
-use super::facts::{Problem, Record, RegressionLink, Review, TaskFacts};
+use super::facts::{Problem, Record, RegressionLink, Review, TaskFacts, filing_attempt};
 use super::records::{Cause, complexity_weight, label};
 use super::{AgentFacts, AgentRole, MODEL_UNKNOWN};
+use crate::application::task::FindingVerdict;
 
 /// What a problem counts against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -84,31 +87,13 @@ pub(super) fn attribute(
             charges.push(record_charge(task, record));
         }
         for review in &task.reviews {
-            let problem = match review.verdict {
-                ReviewVerdict::Reject => Some(Problem::ReviewReject),
-                ReviewVerdict::AcceptWithFixes => Some(Problem::ReviewFixes),
-                ReviewVerdict::Accept | ReviewVerdict::Incomplete => None,
-            };
-            if let Some(problem) = problem {
-                let charge = Draft {
-                    task,
-                    problem,
-                    at: review.at,
-                    detail: format!(
-                        "review attempt {} settled {}",
-                        review.attempt_id,
-                        review.verdict.as_str()
-                    ),
-                    cause: None,
-                };
-                charges.push(charge.implementer(task.attempt_at(review.at)));
-            }
-            for finding in &review.disposed {
+            charges.extend(review_charge(task, review));
+            for finding in review.disposed() {
                 let charge = Draft {
                     task,
                     problem: Problem::DisposedFinding,
                     at: review.at,
-                    detail: format!("review attempt {}: {finding}", review.attempt_id),
+                    detail: format!("review attempt {}: {}", review.attempt_id, finding.line),
                     cause: None,
                 };
                 charges.push(charge.reviewer(Some(review)));
@@ -139,6 +124,21 @@ pub(super) fn attribute(
             continue;
         };
         charges.push(regression_charge(task, link));
+    }
+    for task in tasks {
+        let Some((FindingVerdict::Rejected, at, _)) =
+            task.filed.as_ref().and_then(|filed| filed.verdict)
+        else {
+            continue;
+        };
+        let draft = Draft {
+            task,
+            problem: Problem::RejectedFinding,
+            at,
+            detail: "finding verification REJECTED this review-filed finding".to_string(),
+            cause: None,
+        };
+        charges.push(draft.review_job(filing_attempt(&by_id, task)));
     }
     charges.sort_by(|left, right| {
         left.at
@@ -219,6 +219,23 @@ impl Draft<'_> {
         )
     }
 
+    /// The review job attempt that filed the finding, or Not scored when no
+    /// review job is recorded as its filer.
+    fn review_job(self, filer: Option<(&TaskFacts, usize)>) -> Charge {
+        let Some(attempt) = filer.and_then(|(task, index)| task.attempts.get(index)) else {
+            return self.not_scored("no_review");
+        };
+        let runner = attempt.runner.clone();
+        let anchor = attempt.start;
+        self.charge(
+            Owner::Role(AgentRole::Reviewers),
+            runner.crew,
+            runner.model,
+            runner.run_id,
+            anchor,
+        )
+    }
+
     /// The reviewer of `review`, or Not scored when no review settled.
     fn reviewer(self, review: Option<&Review>) -> Charge {
         let Some(review) = review else {
@@ -271,12 +288,53 @@ fn record_charge(task: &TaskFacts, record: &Record) -> Charge {
                 .find(|review| review.at <= record.at);
             draft.reviewer(review)
         }
-        // Read from settlements and relations, never from records.
+        // Read from settlements, verdicts and relations, never from records.
         Problem::ReviewReject
         | Problem::ReviewFixes
         | Problem::Regression
-        | Problem::DisposedFinding => draft.not_scored("no_cause"),
+        | Problem::DisposedFinding
+        | Problem::FalseReject
+        | Problem::RejectedFinding
+        | Problem::IncompleteReview => draft.not_scored("no_cause"),
     }
+}
+
+/// The problem a settled verdict records, if any: a `reject` or
+/// `accept_with_fixes` against the implementer whose candidate was reviewed,
+/// a false reject against the reviewer instead, and an `incomplete` against
+/// the reviewer unless infrastructure caused it.
+fn review_charge(task: &TaskFacts, review: &Review) -> Option<Charge> {
+    let problem = match review.verdict {
+        ReviewVerdict::Reject if review.false_reject() => Problem::FalseReject,
+        ReviewVerdict::Reject => Problem::ReviewReject,
+        ReviewVerdict::AcceptWithFixes => Problem::ReviewFixes,
+        ReviewVerdict::Incomplete => Problem::IncompleteReview,
+        ReviewVerdict::Accept => return None,
+    };
+    let draft = Draft {
+        task,
+        problem,
+        at: review.at,
+        detail: format!(
+            "review attempt {} settled {}",
+            review.attempt_id,
+            review.verdict.as_str()
+        ),
+        cause: None,
+    };
+    Some(match problem {
+        Problem::FalseReject => Draft {
+            detail: format!(
+                "review attempt {} settled reject; the next run changed none of the cited paths and the next review accepted",
+                review.attempt_id
+            ),
+            ..draft
+        }
+        .reviewer(Some(review)),
+        Problem::IncompleteReview if review.infrastructure => draft.not_scored("infrastructure"),
+        Problem::IncompleteReview => draft.reviewer(Some(review)),
+        _ => draft.implementer(task.attempt_at(review.at)),
+    })
 }
 
 /// The owner of a regression: its escape names the safeguard that failed.
