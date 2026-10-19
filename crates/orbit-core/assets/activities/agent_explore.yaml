@@ -103,9 +103,7 @@ spec:
   tool_disallow_list:
     - orbit.agent.invoke
     - orbit.auto_task.add
-    - orbit.auto_task.delete
     - orbit.auto_task.mint
-    - orbit.auto_task.reset
     - orbit.auto_task.update
     - orbit.command.exec
     - orbit.pipeline.invoke
@@ -116,17 +114,11 @@ spec:
     - orbit.task.add
     - orbit.task.update
     - orbit.task.artifact.put
-    - orbit.task.delete
-    - orbit.task.locks.release
-    - orbit.task.locks.reserve
     - orbit.task.pull
     - orbit.task.reconcile_review
-    - orbit.task.reject
     - orbit.task.requeue
     - orbit.task.retry_handoff
     - orbit.task.review_reset
-    - orbit.workspace.claim.acquire
-    - orbit.workspace.claim.release
     - orbit.friction.add
     - orbit.friction.update
   proc_disallowed_programs:
