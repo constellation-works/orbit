@@ -78,16 +78,22 @@ let codebaseQuery = { ...DEFAULT_QUERY };
 // full (its label), and which path was last copied.
 let view = { tile: "overlap", selected: null, hideExpected: false, lockByWait: false, allTasks: false, copied: null };
 let lastData = null;
+let lastPayloadKey = null;
 let relatedPath = "";
 let relatedData = null;
 let relatedRequest = 0;
+let relatedKey = null;
+let relatedRequestFailed = false;
 let relatedSort = "jaccard";
 let requestHashChange = () => {};
 onWorkspaceChange(() => {
   lastData = null;
+  lastPayloadKey = null;
   relatedPath = "";
   relatedData = null;
   relatedRequest += 1;
+  relatedKey = null;
+  relatedRequestFailed = false;
   for (const id of ["codebase-path-options", "codebase-related-results"]) { if ($(id)) $(id).textContent = ""; }
   if ($("codebase-path-search")) $("codebase-path-search").value = "";
 });
@@ -208,9 +214,12 @@ function setMeta(text) {
 function fetchAndRenderCodebase() {
   if (isAggregateView()) {
     lastData = null;
+    lastPayloadKey = null;
     relatedPath = "";
     relatedData = null;
     relatedRequest += 1;
+    relatedKey = null;
+    relatedRequestFailed = false;
     for (const id of ["codebase-path-options", "codebase-related-results"]) { if ($(id)) $(id).textContent = ""; }
     setMeta("");
     renderPanelPlaceholder(BODY_ID);
@@ -1099,13 +1108,23 @@ function paint() {
 
 function renderCodebase(data) {
   if (!data) return;
+  const payloadKey = JSON.stringify(data);
+  const payloadChanged = payloadKey !== lastPayloadKey;
   lastData = data;
+  lastPayloadKey = payloadKey;
   const computed = data.computed_at ? formatDateTime(data.computed_at) : "—";
   const minutes = Math.round(Number(data.cache_ttl_seconds) / 60) || 0;
   setMeta(`${plural(data.tasks_scanned, "task")} scanned · computed ${computed} · recomputed every ${minutes} min`);
   paint();
-  renderPathOptions();
-  if (relatedPath) fetchRelated(relatedPath);
+  if (payloadChanged) renderPathOptions();
+  if (relatedPath) {
+    const key = relatedFetchKey(relatedPath);
+    if (key !== relatedKey || relatedRequestFailed) fetchRelated(relatedPath, key);
+  }
+}
+
+function relatedFetchKey(path) {
+  return JSON.stringify([path, codebaseQuery, lastPayloadKey]);
 }
 
 function renderPathOptions() {
@@ -1126,11 +1145,13 @@ function renderPathOptions() {
   }
 }
 
-async function fetchRelated(path) {
+async function fetchRelated(path, key = relatedFetchKey(path)) {
   const results = $("codebase-related-results");
   if (!results || isAggregateView()) return;
   relatedPath = path;
   const request = ++relatedRequest;
+  relatedKey = key;
+  relatedRequestFailed = false;
   const visit = captureWorkspaceVisit();
   const selection = JSON.stringify(codebaseQuery);
   const sp = new URLSearchParams({ path, window: codebaseQuery.window, min_support: String(codebaseQuery.min_support), top: "100" });
@@ -1141,7 +1162,10 @@ async function fetchRelated(path) {
     relatedData = data;
     renderRelated();
   } catch (error) {
-    if (request === relatedRequest && visit.isCurrent() && selection === JSON.stringify(codebaseQuery)) results.textContent = `Could not load related files: ${error.message}`;
+    if (request === relatedRequest && visit.isCurrent() && selection === JSON.stringify(codebaseQuery)) {
+      relatedRequestFailed = true;
+      results.textContent = `Could not load related files: ${error.message}`;
+    }
   }
 }
 

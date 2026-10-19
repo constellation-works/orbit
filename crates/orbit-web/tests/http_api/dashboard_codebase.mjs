@@ -573,7 +573,8 @@ assert.deepEqual([pressed('codebase-rollup'), byId['codebase-min-support'].value
 assert.equal(codebase.buildCodebaseHash(), '#analytics/codebase?window=7d&min_support=5&rollup=dir');
 
 // Prefix suggestions include landed-only Markdown and submit the same file query.
-codebase.renderCodebase({ ...full, known_paths: ['docs/design.md', 'src/a.rs', 'src/b.rs'] });
+const pathPayload = { ...full, known_paths: ['docs/design.md', 'src/a.rs', 'src/b.rs'] };
+codebase.renderCodebase(pathPayload);
 const search = byId['codebase-path-search'];
 search.value = 'src/';
 for (const listener of search.listeners.input) listener();
@@ -596,11 +597,70 @@ assert.match(related.querySelector('a.codebase-task-link').getAttribute('href'),
 assert.match(related.querySelectorAll('a.codebase-task-link')[1].getAttribute('href'), /open=ORB-8$/, 'reservation evidence links to its task');
 click(button(related, 'Footprint misses'));
 assert.deepEqual(related.querySelectorAll('span.codebase-path').map(node => node.textContent), ['src/b.rs', 'docs/design.md']);
+
+// An unchanged analytics poll leaves the related panel and its open evidence
+// nodes in place, without issuing another related-files request.
+const evidence = related.querySelector('details');
+assert.ok(evidence, 'related task evidence is displayed in a details element');
+evidence.open = true;
+const relatedNodes = related.children.slice();
+const relatedRequestCount = () => pending.filter(request => request.url.pathname === '/api/codebase/related').length;
+const requestsBeforePoll = relatedRequestCount();
+await serve(pathPayload);
+assert.equal(relatedRequestCount(), requestsBeforePoll, 'an unchanged analytics poll does not refetch related files');
+assert.deepEqual(related.children, relatedNodes, 'an unchanged analytics poll keeps the related panel DOM');
+assert.equal(evidence.open, true, 'an unchanged analytics poll keeps evidence open');
+
+// A changed window or minimum support still fetches and renders its result.
+click(segment('codebase-window', '30d'));
+const windowRequest = await serve(pathPayload);
+assert.equal(windowRequest.pathname, '/api/codebase/related');
+assert.equal(windowRequest.searchParams.get('window'), '30d');
+pending.at(-1).resolve(response({ path: 'src/a.rs', path_support: 7, rows: [] }));
+await settle();
+assert.match(related.querySelector('p.codebase-note').textContent, /7 landed tasks changed this file/);
+
+click(byId['codebase-min-up']);
+const supportRequest = await serve(pathPayload);
+assert.equal(supportRequest.pathname, '/api/codebase/related');
+assert.equal(supportRequest.searchParams.get('min_support'), '10');
+pending.at(-1).resolve(response({ path: 'src/a.rs', path_support: 8, rows: [] }));
+await settle();
+assert.match(related.querySelector('p.codebase-note').textContent, /8 landed tasks changed this file/);
+
+// A refreshed analytics payload also refreshes the related result.
+const refreshedPayload = { ...pathPayload, computed_at: '2026-10-10T12:05:00.000Z' };
+const refreshedRequest = await serve(refreshedPayload);
+assert.equal(refreshedRequest.pathname, '/api/codebase/related');
+pending.at(-1).resolve(response({ path: 'src/a.rs', path_support: 9, rows: [] }));
+await settle();
+assert.match(related.querySelector('p.codebase-note').textContent, /9 landed tasks changed this file/);
+
+// An explicit path change fetches, and a failed related request is retried on
+// the next analytics poll even when its payload has not changed.
+search.value = 'broken.rs';
+for (const listener of search.listeners.input) listener();
+for (const listener of byId['codebase-related-form'].listeners.submit) listener({ preventDefault() {} });
+let pathRequest = pending.at(-1);
+assert.equal(pathRequest.url.pathname, '/api/codebase/related');
+assert.equal(pathRequest.url.searchParams.get('path'), 'broken.rs');
+pathRequest.resolve(response({ error: 'temporary failure' }, 503));
+await settle();
+assert.match(related.textContent, /Could not load related files: temporary failure/);
+const retryRequest = await serve(refreshedPayload);
+assert.equal(retryRequest.pathname, '/api/codebase/related');
+assert.equal(retryRequest.searchParams.get('path'), 'broken.rs');
+pending.at(-1).resolve(response({ path: 'broken.rs', rows: [] }));
+await settle();
+assert.ok(related.querySelector('p.codebase-empty'), 'a failed related request retries on the next poll');
+
 search.value = 'missing.rs';
 for (const listener of search.listeners.input) listener();
 assert.equal(byId['codebase-path-options'].children.length, 0, 'an unknown prefix has no suggestions');
 for (const listener of byId['codebase-related-form'].listeners.submit) listener({ preventDefault() {} });
-pending.at(-1).resolve(response({ path: 'missing.rs', rows: [] }));
+const missingPathRequest = pending.at(-1);
+assert.equal(missingPathRequest.url.searchParams.get('path'), 'missing.rs');
+missingPathRequest.resolve(response({ path: 'missing.rs', rows: [] }));
 await settle();
 assert.ok(related.querySelector('p.codebase-empty'), 'empty search explains minimum support');
 // A late result cannot cross workspace visits.
