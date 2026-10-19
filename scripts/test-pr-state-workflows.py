@@ -16,6 +16,8 @@ import threading
 import time
 import unittest
 
+from workflow_helper_tests import WorkflowHelperRevisionTests
+
 try:
     import yaml
 except ImportError:
@@ -576,7 +578,7 @@ class NextestShardWorkflowTests(unittest.TestCase):
                          "the shard jobs must select every count partition of NEXTEST_SHARDS")
         self.assertEqual(sorted(partitions.values()), sorted(f"Test shard {k}/{shards}" for k in range(1, shards + 1)))
         [wait] = self.run_step(jobs["ci"], "Await the test build and nextest shards")
-        self.assertEqual(wait[0], "scripts/ci-await-jobs.py")
+        self.assertEqual(wait[0], ".orbit/tmp/workflow-ci/scripts/ci-await-jobs.py")
         awaited = wait[2::2]
         self.assertEqual(wait[1::2], ["--job"] * len(awaited))
         self.assertEqual(sorted(awaited), sorted([jobs["test-build"]["name"], *partitions.values()]),
