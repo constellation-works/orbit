@@ -2133,25 +2133,37 @@ fn doctor_fixes_unknown_config_without_retired_keys() {
     );
 }
 
-/// ORB-16924: `orbit doctor` prints a summary count at the top, then failures,
-/// warnings, and ok rows in severity order. `--problems` prints only failures
-/// and warnings, while `--json` output remains unchanged.
+/// ORB-16960: the count stays visible on stderr while stdout remains records.
+/// Doctor rows keep severity order, `--problems` filters human rows, and JSON
+/// output remains the full, unfiltered array.
 #[test]
 fn doctor_prints_summary_count_orders_by_severity_and_filters_problems() {
+    if crate::isolated_test::run_in_child(
+        "doctor::doctor_prints_summary_count_orders_by_severity_and_filters_problems",
+    ) {
+        return;
+    }
     let fixture = WorkCheckout::new();
 
-    // 1. Plain output: first line must be the summary count
+    let is_summary = |line: &str| line.contains(" failure(s), ") && line.ends_with(" warning(s).");
+
+    // 1. Plain stdout stays a stream of tab-separated records; the count is a
+    // diagnostic on stderr instead of a synthetic first record.
     let plain = command(&fixture)
         .args(["doctor", "--format", "plain"])
         .output()
         .expect("doctor plain");
     let stdout = String::from_utf8(plain.stdout).expect("UTF-8 stdout");
-    let lines: Vec<&str> = stdout.lines().collect();
+    let lines: Vec<&str> = stdout.lines().filter(|line| line.contains('\t')).collect();
     assert!(!lines.is_empty(), "doctor output must not be empty");
     assert!(
-        lines[0].ends_with("failure(s), 0 warning(s).") || lines[0].contains("failure(s)"),
-        "first line must be summary count: {}",
-        lines[0]
+        !stdout.lines().any(is_summary),
+        "summary count must not appear as a plain stdout record: {stdout}"
+    );
+    let plain_stderr = String::from_utf8(plain.stderr).expect("UTF-8 stderr");
+    assert!(
+        plain_stderr.lines().any(is_summary),
+        "summary count must be reported on stderr: {plain_stderr}"
     );
 
     // 2. Introduce a warning by creating a dangling skill symlink
@@ -2166,12 +2178,18 @@ fn doctor_prints_summary_count_orders_by_severity_and_filters_problems() {
         .output()
         .expect("doctor table");
     let table_str = String::from_utf8(table_out.stdout).expect("UTF-8 stdout");
+    let table_stderr = String::from_utf8(table_out.stderr).expect("UTF-8 stderr");
 
-    // The summary count should be at the top:
+    // The count reaches the terminal-table path on stderr before the table is
+    // rendered, while stdout starts with the table header and rows.
     let first_line = table_str.lines().next().unwrap_or("");
     assert!(
-        first_line.contains("failure(s)") && first_line.contains("warning(s)."),
-        "top line must be summary count: {first_line}"
+        first_line.starts_with("CHECK") && !is_summary(first_line),
+        "table stdout must start with its header, not the count: {first_line}"
+    );
+    assert!(
+        table_stderr.lines().any(is_summary),
+        "terminal-table path must report the count on stderr: {table_stderr}"
     );
 
     // Check row ordering in plain output: failures, then warnings, then ok rows
@@ -2180,7 +2198,14 @@ fn doctor_prints_summary_count_orders_by_severity_and_filters_problems() {
         .output()
         .expect("doctor plain with warn");
     let plain_str = String::from_utf8(plain_with_warn.stdout).expect("UTF-8");
-    let plain_lines: Vec<&str> = plain_str.lines().skip(1).collect(); // skip summary line
+    assert!(
+        !plain_str.lines().any(is_summary),
+        "summary count must stay off plain stdout: {plain_str}"
+    );
+    let plain_lines: Vec<&str> = plain_str
+        .lines()
+        .filter(|line| line.contains('\t'))
+        .collect();
     let mut max_rank = 0;
     let mut seen_warning = false;
     let mut seen_ok_after_warning = false;
@@ -2223,7 +2248,10 @@ fn doctor_prints_summary_count_orders_by_severity_and_filters_problems() {
         .output()
         .expect("doctor --problems");
     let problems_str = String::from_utf8(problems_out.stdout).expect("UTF-8");
-    let problems_lines: Vec<&str> = problems_str.lines().skip(1).collect();
+    let problems_lines: Vec<&str> = problems_str
+        .lines()
+        .filter(|line| line.contains('\t'))
+        .collect();
     for line in &problems_lines {
         let parts: Vec<&str> = line.split('\t').collect();
         if parts.len() >= 2 {
