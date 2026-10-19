@@ -142,6 +142,7 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 let browser;
 let page;
 const measurements = [];
+const toolsColumns = [];
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined });
   page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
@@ -229,6 +230,88 @@ try {
     measurements.push(layout);
     await page.screenshot({ path: path.join(evidence, `tools-${width}.png`), fullPage: true, animations: 'disabled' });
   }
+  // The shipped Tools view must finish both columns at the same border edge,
+  // whichever content is taller. Exercise every nonempty subset of side cards:
+  // omitted cards must neither leave tracks behind nor stretch earlier cards.
+  const sideKeys = ['failures-by-tool', 'failure-categories', 'lifecycle-diagnostics', 'duration-by-tool', 'mcp-vs-cli'];
+  const columnFailures = [];
+  for (const width of [1500, 1600, 1920, 1499, 375]) {
+    await page.setViewportSize({ width, height: 1800 });
+    for (const tableLonger of [false, true]) {
+      for (let mask = 1; mask < 32; mask += 1) {
+        const fixture = {
+          ...summary, window: '7d',
+          tool_call_failures_by_tool: Array.from({ length: tableLonger ? 48 : 1 }, (_, index) => ({
+            ...summary.tool_call_failures_by_tool[0], tool: `orbit.fixture.tool_${index}`,
+          })),
+          failure_rate_by_tool: mask & 1 ? [{ tool: 'orbit.workflow.run.list', failed: 3, total: 10, rate: 0.3 }] : [],
+          failure_categories: mask & 2 ? summary.failure_categories : {},
+          lifecycle_diagnostic_events: mask & 4 ? 3 : 0,
+          lifecycle_diagnostic_incidents: mask & 4 ? 1 : 0,
+          duration_by_tool: mask & 8 ? summary.duration_by_tool : null,
+          mcp_vs_cli_split: mask & 16 ? summary.mcp_vs_cli_split : null,
+        };
+        const layout = await page.evaluate(({ fixture, sideKeys }) => {
+          showView('analytics', 'analytics-tools-main');
+          history.replaceState(null, '', '?workspace=ws_fixture&window=7d#analytics/reliability/tools');
+          auditFixture.renderAuditSummary(fixture, auditContext);
+          const container = document.getElementById('audit-summary-body');
+          const box = node => {
+            const rect = node.getBoundingClientRect();
+            const originalStyle = node.getAttribute('style');
+            node.style.alignSelf = 'start';
+            node.style.width = `${rect.width}px`;
+            const naturalHeight = node.getBoundingClientRect().height;
+            if (originalStyle === null) node.removeAttribute('style');
+            else node.setAttribute('style', originalStyle);
+            return { key: node.dataset.key, top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right,
+              height: rect.height, naturalHeight };
+          };
+          return {
+            display: getComputedStyle(container).display,
+            table: box(container.querySelector('[data-key="tool-call-failures-by-tool"]')),
+            sides: [...container.children].filter(node => sideKeys.includes(node.dataset.key)).map(box),
+            cards: [...container.children].map(box),
+          };
+        }, { fixture, sideKeys });
+        const label = `${width}px / ${tableLonger ? 'table-longer' : 'side-longer'} / mask ${mask}`;
+        assert.deepEqual(layout.sides.map(card => card.key), sideKeys.filter((_, index) => mask & (1 << index)), label);
+        const close = (actual, expected, guarantee) => {
+          if (Math.abs(actual - expected) > 1) columnFailures.push(`${label}: ${guarantee}: ${actual} vs ${expected}`);
+        };
+        if (width >= 1500) {
+          close(layout.table.bottom, layout.sides.at(-1).bottom, 'column bottom borders align');
+          close(layout.table.top, layout.sides[0].top, 'no empty track above side cards');
+          for (let index = 0; index < layout.sides.length - 1; index += 1) {
+            close(layout.sides[index].height, layout.sides[index].naturalHeight, 'only the last side card stretches');
+            close(layout.sides[index + 1].top, layout.sides[index].bottom + 16, 'no gap from absent side cards');
+          }
+          if (mask === 31) {
+            const naturalSides = layout.sides.reduce((sum, card) => sum + card.naturalHeight, 0) + 16 * (layout.sides.length - 1);
+            assert.equal(layout.table.naturalHeight > naturalSides, tableLonger, `fixture exercises the intended taller column: ${label}`);
+          }
+        } else {
+          assert.equal(layout.display, 'flex', `single column at ${width}`);
+          for (let index = 0; index < layout.cards.length - 1; index += 1) {
+            close(layout.cards[index + 1].top, layout.cards[index].bottom + 16, 'single-column card spacing stays natural');
+            close(layout.cards[index + 1].left, layout.cards[index].left, 'single-column left edges align');
+            close(layout.cards[index + 1].right, layout.cards[index].right, 'single-column right edges align');
+          }
+          for (const card of layout.sides) close(card.height, card.naturalHeight, 'single-column side cards do not stretch');
+        }
+        toolsColumns.push({ width, tableLonger, mask, ...layout });
+        if ((width === 1600 && [31, 9].includes(mask)) || (width === 375 && mask === 31 && !tableLonger)) {
+          await page.locator('#audit-summary-panel').screenshot({
+            path: path.join(evidence, `tools-columns-${tableLonger ? 'table-longer' : 'side-longer'}-${mask}-${width}.png`),
+            animations: 'disabled',
+          });
+        }
+      }
+    }
+  }
+  fs.writeFileSync(path.join(evidence, 'tools-columns.json'), JSON.stringify({ measurements: toolsColumns, failures: columnFailures }, null, 2));
+  assert.deepEqual(columnFailures, [], 'Tools column borders align without empty tracks or stretching earlier side cards');
+  await page.evaluate(summary => auditFixture.renderAuditSummary(summary, auditContext), summary);
   await page.evaluate(() => showView('diagnostics', 'diagnostics-events-main'));
   await page.setViewportSize({ width: 1440, height: 900 });
   const shortEventCount = events.length;
@@ -595,7 +678,7 @@ try {
   await page.setViewportSize({ width: 1440, height: 900 });
   assert.deepEqual(errors, []);
   fs.writeFileSync(path.join(evidence, 'measurements.json'), JSON.stringify({ events: measurements, codebase: { fullWidth }, errors }, null, 2));
-  console.log('Audit browser: Events statuses and Tools summary columns at 1440/1024/1920/375, duplicate targets, duration buckets, keyboard expansion, paging order across a filter change, and the full-width Analytics › Codebase view (tiles, overlap list, detail, poll stability, hash, task pilot, 375 px and contrast) passed');
+  console.log('Audit browser: Tools flush column bottoms (both height cases, every side-card subset, 1500/1600/1920 and single-column 1499/375), Events statuses and Tools summary columns at 1440/1024/1920/375, duplicate targets, duration buckets, keyboard expansion, paging order across a filter change, and the full-width Analytics › Codebase view (tiles, overlap list, detail, poll stability, hash, task pilot, 375 px and contrast) passed');
 } catch (error) {
   if (page) await page.screenshot({ path: path.join(evidence, 'failure.png'), fullPage: true }).catch(() => {});
   throw error;

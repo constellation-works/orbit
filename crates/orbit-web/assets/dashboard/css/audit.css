@@ -505,7 +505,8 @@ tr.audit-detail-row td {
 }
 @media (min-width: 1500px) {
   /* Rows: status note, rate card, one row per side card, then a flexible row
-     that takes the rest of the table's height so the side cards keep their
+     that takes the rest of the table's height. The table and last present
+     side card stretch to the shared bottom; earlier side cards keep their
      own heights. Margins rather than row gaps space the cards, so a card
      that is absent leaves no gap. */
   #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) {
@@ -520,12 +521,21 @@ tr.audit-detail-row td {
   #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > * { grid-column: 1 / -1; margin-bottom: 16px; }
   #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-panel-status] { grid-row: 1; }
   #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="tool-call-failure-rate"] { grid-row: 2; }
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="tool-call-failures-by-tool"] { grid-column: 1; grid-row: 3 / -1; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="tool-call-failures-by-tool"] { grid-column: 1; grid-row: 3 / -1; align-self: stretch; }
   #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="failures-by-tool"] { grid-column: 2; grid-row: 3; }
   #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="failure-categories"] { grid-column: 2; grid-row: 4; }
   #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="lifecycle-diagnostics"] { grid-column: 2; grid-row: 5; }
   #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="duration-by-tool"] { grid-column: 2; grid-row: 6; }
   #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="mcp-vs-cli"] { grid-column: 2; grid-row: 7; }
+  /* syncNodes preserves addCard order: side cards follow the table. A status
+     note has no data-key and must not prevent the last card from stretching. */
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > :is(
+    [data-key="failures-by-tool"],
+    [data-key="failure-categories"],
+    [data-key="lifecycle-diagnostics"],
+    [data-key="duration-by-tool"],
+    [data-key="mcp-vs-cli"]
+  ):not(:has(~ [data-key])) { grid-row-end: -1; align-self: stretch; }
 }
 
 /* Audit & Diagnostics Summary Cards */
