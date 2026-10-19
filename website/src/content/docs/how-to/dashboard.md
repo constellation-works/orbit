@@ -158,7 +158,7 @@ prove that a particular task or run succeeded.
 
 | Rail | Shows |
 |---|---|
-| **Tasks** | Tasks, with the ones waiting on you first. The right dock holds the [auto-drain](#auto-drain) card and a live log. |
+| **Tasks** | Tasks, with the ones waiting on you first. The right dock holds **Start a window**, the locks held and a live log; an open task takes its place. |
 | **Runs** | Job runs, newest first, and run detail. |
 | **Health** | What is broken now: **Incidents** and **Doctor**. Incidents has three tabs: **Incidents** (grouped failures), **Events** (every audited call, opening on failures and denials), and **Errors** (step and event failures). |
 | **Analytics** | How delivery is trending: **Metrics**, **Reliability** (with **Pipeline** and **Tools** tabs), **Codebase**, and **Cost**. |
@@ -214,9 +214,18 @@ owner. The status list shows every status:
   same as `orbit task update <id> --status <status> --force` and is recorded
   in task history as a `forced` event. Agents cannot force a status.
 
-The right dock has two modes. **Drain** shows the [auto-drain](#auto-drain)
-card and the files tasks currently lock. **Log** is a live `orbit.log` tail
-you can filter to **all**, **err**, **deny**, or **warn**.
+The right dock has two tabs. **Drain** shows **Start a window** (see
+[auto-drain](#auto-drain)) and the files tasks currently lock. **Log** is a
+live `orbit.log` tail you can filter to **all**, **err**, **deny**, or
+**warn**. Opening a task replaces the dock with the task's detail; below
+1000px wide the dock is only on the Drain page.
+
+A task's detail leads with **Details**: status, complexity, crew, the
+operating systems it can run on, who created and carried it, its run and the
+machine it ran on, its pull request, when it was created and updated, and its
+tags. A circled *i* beside a value explains it on hover or focus. Its tabs are
+**Overview**, **Delivery** (only for a task with a delivery claim), **History**,
+**Runs**, **Artifacts**, and **Comments**.
 
 ### Edit task metadata
 
@@ -227,8 +236,8 @@ do not dispatch work.
 |---|---|
 | **description** | Left column. **edit** opens a Markdown editor. |
 | **acceptance criteria** | Left column, collapsed section. **edit**, then one criterion per line. |
-| **complexity** | **properties** card. Pick **low**, **medium**, **hard**, or **xhard**; it saves on change. A stored **unassessed** is shown but cannot be picked. |
-| **tags** | **edit** in the **properties** card header. Separate tags with commas or newlines. |
+| **complexity** | **Details**. Pick **low**, **medium**, **hard**, or **xhard**; it saves on change. A stored **unassessed** is shown but cannot be picked. |
+| **tags** | **edit** after the tags in **Details**. Separate tags with commas or newlines. |
 | **context files** | **context files** section. **edit**, then one selector per line: `file:…`, `dir:…`, or `symbol:…`. |
 
 Text fields save with **save** and discard with **cancel**. A failed save
@@ -298,16 +307,16 @@ The card shows:
 |---|---|
 | **Window length** | `15m` to `8h`. |
 | **Parallel tasks** | How many tasks run at once. Blank uses the runtime default (5). Anything but a whole number of 1 or more disables **Start**. |
-| **When a task finishes** | **Stop at review** (default) leaves shipped tasks in `review`. **Mark done** moves every task the window ships from `review` to `done`, not only those in the readiness snapshot before the window starts. **Mark done** needs an operator session. |
-| **Proposed tasks** | **Leave for me** (default) leaves `proposed` tasks for you. **Approve qualifying** (`--approve-proposed`) lets every pass approve proposed tasks that have context files and an assessed complexity (or the `no-diff-expected` tag) and a clean task-pilot verification, including tasks filed while the window runs; `no-auto-approve` tasks are skipped. It needs an operator session and is disabled on a replica, where only the owner approves work. A live window started with it shows **Approving proposed tasks** with its approved and held counts. |
-| **Auto-fix PR blockers** | Off by default. Repairs failed required checks and merge conflicts on the window's own PRs through the existing watcher and repair ledger. Needs an operator session on the owner machine; disabled on pull replicas with a visible reason. It never grants merging or proposed-task approval; merging still requires **Mark done**. |
+| **Mark shipped tasks done** | Off (default) leaves shipped tasks in `review`. On moves every task the window ships from `review` to `done`, not only those in the readiness snapshot before the window starts. It needs an operator session. |
+| **Approve qualifying proposals** | Off (default) leaves `proposed` tasks for you. On (`--approve-proposed`) lets every pass approve proposed tasks that have context files and an assessed complexity (or the `no-diff-expected` tag) and a clean task-pilot verification, including tasks filed while the window runs; `no-auto-approve` tasks are skipped. It needs an operator session and is disabled on a replica, where only the owner approves work. A live window started with it shows **Approving proposed tasks** with its approved and held counts. |
+| **Auto-fix PR blockers** | Off by default. Repairs failed required checks and merge conflicts on the window's own PRs through the existing watcher and repair ledger. Needs an operator session on the owner machine; disabled on pull replicas with a visible reason. It never grants merging or proposed-task approval; merging still requires **Mark shipped tasks done**. |
 | **Review before landing** | **Workspace policy** (default) leaves review to `review.timing`. **Add before-PR review** or **Add before-landing review** (`--review`) adds that layer to this window only when policy applies none. The layer policy already applies is accepted, and the other one, an unset `workflow.purpose_crews.review` and local-only delivery are refused when you start. Disabled on a replica, where the owner decides review. See [Review layers](../../concepts/tasks/#adding-review-to-one-run). |
 | **Start … window** | After a confirmation, runs `orbit run auto` with these settings. Reads **Start another … window** while one is draining. |
 | **Stop** | Stops new admissions (`orbit run auto --stop`). Admitted workers keep running; this is not cancellation. Needs an operator session. |
 | **Send pending results** | Replaces **Stop** when no window is admitting. Delivers pull settlements this replica recorded but has not yet delivered to its owner. Needs an operator session. |
 
 Without operator capability you can still start a window that stops at
-review; **Mark done**, **Approve qualifying**, and **Auto-fix PR blockers** stay disabled and say why. Nothing is reserved or
+review; **Mark shipped tasks done**, **Approve qualifying proposals**, and **Auto-fix PR blockers** stay disabled and say why. Each control's help is behind the circled *i* beside its label. Nothing is reserved or
 started until you click **Start**. Results appear in the card's status line,
 including whether auto-fix was enabled. If the submission response is lost, check
 the window and run history before starting again; the browser does not retry it.

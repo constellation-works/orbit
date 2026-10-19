@@ -202,10 +202,10 @@ end with some tasks still in the backlog.
 ## 4. Start a bounded window
 
 - **Dashboard:** in the **Drain** card, pick a **Window length** (`15m` to
-  `8h`), set **Parallel tasks**, and under **When a task finishes** choose
-  **Stop at review** or **Mark done**. Optionally choose **Approve qualifying**
-  under **Proposed tasks** (`--approve-proposed`). You can also check
-  **Auto-fix PR blockers** to repair the window's blocked PRs. Click **Start … window** and
+  `8h`), set **Parallel tasks**, and turn on **Mark shipped tasks done** to
+  complete them (off stops at review). Optionally turn on **Approve qualifying
+  proposals** (`--approve-proposed`) or **Auto-fix PR blockers** to repair the
+  window's blocked PRs. Click **Start … window** and
   confirm.
   See [Auto-drain](../dashboard/#auto-drain).
 - **Agent:** ask for a window and say how long, how many tasks at once, and

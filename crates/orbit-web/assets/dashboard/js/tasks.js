@@ -1,12 +1,12 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, teardownNode, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref, bindTaskLink, submissionNoticeLines, stateCell, fmtDuration, elapsedDurationInfo } from './common.js';
+import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, infoHint, fetchJson, patchJson, postJson, syncNodes, teardownNode, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref, bindTaskLink, submissionNoticeLines, stateCell, fmtDuration, elapsedDurationInfo } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { DRAIN_POOLS, backlogReadiness, drainReadinessEntry, drainReadinessFor, drainReadinessView, drainWaitSignature } from './drain-waits.js';
 import { elapsedLabel, onTaskRuntimeChange, runStartedAt, taskContextContenders, taskLockFiles } from './task-runtime.js';
-import { buildAttentionCallout, buildDeliveryProgress, buildDistributedBlock, buildExecutionProvenance, claimAttention, claimedReviewApproval, deliverySteps, handoffApprovalRequest, invalidateDistributedConsole, lastKnownClaims } from './distributed.js';
+import { buildAttentionCallout, buildDeliveryPanel, buildDeliveryProgress, buildExecutionProvenance, formatExecutionLocation, claimAttention, claimedReviewApproval, deliverySteps, handoffApprovalRequest, invalidateDistributedConsole, lastKnownClaims } from './distributed.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -573,16 +573,12 @@ function filterTasks(tasks, context) {
   });
 }
 
-const TASK_META_FIELDS = [
-  ["orchestrator", "orchestrator"],
-  ["implemented_by", "Implemented by"],
-  ["planned_by", "Planned by"],
+// Who made and carried the task, recorded by the pipeline and so read-only.
+const TASK_PEOPLE_FIELDS = [
   ["created_by", "Created by"],
-  ["pr_number", "PR"],
-  ["pr_status", "PR status"],
-  ["job_run_id", "Run"],
-  ["created_at", "Created"],
-  ["updated_at", "Updated"],
+  ["planned_by", "Planned by"],
+  ["implemented_by", "Implemented by"],
+  ["orchestrator", "Orchestrator"],
 ];
 
 const RELATION_GROUPS = [
@@ -2587,13 +2583,7 @@ function isLongDescription(text) {
 // The attention callout's Retry landing goes to the claim panel's own control,
 // which asks for the reason and sends the request; nothing is sent from here.
 function goToLandingRetry(detail, claim) {
-  if (typeof detail.activateTab === "function") detail.activateTab("overview");
-  const block = detail.querySelector(".distributed-block");
-  if (block && block.classList.contains("collapsed")) {
-    block.classList.remove("collapsed");
-    const heading = block.querySelector("h4");
-    if (heading) heading.setAttribute("aria-expanded", "true");
-  }
+  if (typeof detail.activateTab === "function") detail.activateTab("delivery");
   const panel = Array.from(detail.querySelectorAll(".claim-panel"))
     .find((node) => node.getAttribute("data-claim-id") === String((claim && claim.claim_id) || ""));
   const target = panel && (panel.querySelector('[data-reason-for="retry-handoff"]') || panel.querySelector(".claim-actions"));
@@ -2634,7 +2624,7 @@ function buildTaskDetail(task, context, drain = null) {
     }
     block.appendChild(h4);
     block.appendChild(child);
-    parent.appendChild(block);
+    if (parent) parent.appendChild(block);
     return block;
   };
   const actionSlot = () => el("span", { class: "field-actions" });
@@ -2672,20 +2662,6 @@ function buildTaskDetail(task, context, drain = null) {
   };
   const known = lastKnownClaims(task.id);
   if (known) paintDelivery(known);
-
-  // ORB-12516: distributed claim provenance and the owner's handoff actions,
-  // first in the overview because a delivery in flight is what an operator
-  // opens the task to act on. The block hides itself when this workspace holds
-  // no claim for the task, so an ordinary single-host detail is unchanged;
-  // there is no distributed tab.
-  leftCol.appendChild(
-    buildDistributedBlock(task.id, {
-      onTaskChanged: () => refreshTasks(context),
-      onClaims: paintDelivery,
-      formatTime: (value) => fmtAbsTimeValue(context, value),
-      pullRequest,
-    }),
-  );
 
   if (showsEditor("acceptance_criteria")) {
     const count = Array.isArray(task.acceptance_criteria) ? task.acceptance_criteria.length : 0;
@@ -2738,89 +2714,14 @@ function buildTaskDetail(task, context, drain = null) {
     addField(leftCol, "Review gate", buildReviewGate(task.review), true, true);
   }
 
-  // The side column leads with what identifies the task — who made it, which
-  // run, when — then the levers an operator sets, then the graph around it.
-
-  // Provenance and timestamps: recorded by the pipeline, so read-only here even
-  // though the fields below are not.
-  const meta = el("div", { class: "meta-list" });
-  let metaCount = 0;
-  for (const [key, label] of TASK_META_FIELDS) {
-    const v = task[key];
-    if (v == null || v === "") continue;
-    const display = key.endsWith("_at") ? fmtAbsTimeValue(context, v) : String(v);
-    const value = el("span", { class: "value" });
-    if (key === "job_run_id") {
-      // ORB-12516: a pulled task's run lives in the executing machine's own job
-      // store, so the id alone is a dangling reference. When the recorded
-      // execution machine is this one the link still resolves; otherwise name
-      // the machine to inspect rather than linking somewhere it is not.
-      const machine = task.job_run_machine;
-      if (task.job_run_navigable !== false) {
-        const link = el("a", { text: display });
-        link.href = runHref(display);
-        value.appendChild(link);
-      } else {
-        value.appendChild(el("span", { text: display }));
-        value.appendChild(
-          el("span", {
-            class: "claim-note",
-            text: "no owner-local run for this id — inspect it on the execution machine below",
-          }),
-        );
-      }
-      // The execution note is a separate element; the space keeps its text
-      // from reading as part of the run id.
-      value.appendChild(document.createTextNode(" "));
-      value.appendChild(
-        buildExecutionProvenance(
-          machine && machine.machine_id
-            ? { known: true, machine_id: machine.machine_id, machine_name: machine.machine_name || null }
-            : { known: false },
-          { runId: display, workspace: task.workspace_id },
-        ),
-      );
-    } else {
-      value.textContent = display;
-    }
-    const span = el("div", { class: "meta-item" }, [
-      el("span", { class: "label", text: `${label}` }),
-      value,
-    ]);
-    meta.appendChild(span);
-    metaCount++;
-  }
-  if (metaCount > 0) addField(rightCol, "Details", meta);
+  // The side column holds what gates the task, then the graph around it; what
+  // the task is and where it stands sits above the tabs.
+  const metaBlock = buildTaskMeta(task, context, { addField, editor, showsEditor });
 
   const readiness = readinessOf(task);
   if (readiness || drain) {
     const count = readiness ? readinessGaps(readiness).length : 0;
     addField(rightCol, "Readiness", buildReadinessBlock(readiness, drain, task.workspace_id), false, false, count > 0 ? { count } : {});
-  }
-
-  // ORB-00037: in the aggregate ("All workspaces") view each task carries its
-  // owning workspace's filesystem location (home-abbreviated to ~ server-side);
-  // show it in full here since the row only has room for the short name badge.
-  if (task.workspace_root) {
-    const loc = el("span", { class: "ws-location mono", text: task.workspace_root, title: task.workspace_root });
-    addField(rightCol, "Location", loc);
-  }
-
-  // Status, complexity and tags are one card of properties: each is a label
-  // beside its control, and the tags edit button sits in the card header. The
-  // list rows group by status, so the status editor lives here.
-  {
-    const properties = el("div", { class: "property-list" });
-    const property = (label, control) =>
-      el("div", { class: "property-row" }, [el("span", { class: "label", text: label }), control]);
-    properties.appendChild(property("status", buildStatusUpdateControl(task, context)));
-    properties.appendChild(property("complexity", buildComplexityUpdateControl(task, context)));
-    properties.appendChild(property("runs on", el("span", { class: "task-os-readout", text: task.os_requirement?.describe || (task.crew ? "any host" : "any host from OS tags (crew unassigned)") })));
-    const actions = actionSlot();
-    if (showsEditor("tags")) {
-      properties.appendChild(property("tags", editor("tags", actions)));
-    }
-    addField(rightCol, "Properties", properties, false, false, { actions });
   }
 
   if (Array.isArray(task.external_refs) && task.external_refs.length > 0) {
@@ -2844,8 +2745,14 @@ function buildTaskDetail(task, context, drain = null) {
   const artifacts = Array.isArray(task.artifacts) ? task.artifacts.length : 0;
   const comments = Array.isArray(task.comments) ? task.comments.length : 0;
   const runs = el("div", { class: "task-runs", id: `detail-${task.id}-runs` });
+  // ORB-12516: distributed claim provenance and the owner's handoff actions.
+  // The tab appears only once a read finds a claim this workspace holds for
+  // the task, so an ordinary single-host detail keeps its five tabs; the last
+  // read for the task decides whether it shows before the panel's own read.
+  const delivery = el("div", { class: "delivery-tab" });
   const sections = buildDetailTabs(task, detail, [
     { name: "overview", label: "Overview", content: el("div", { class: "split-layout detail-overview" }, [leftCol, rightCol]) },
+    { name: "delivery", label: "Delivery", content: delivery, available: Boolean(known && known.length) },
     { name: "history", label: "History", count: history.count, content: history.node },
     { name: "runs", label: "Runs", count: taskRunCount(task), content: runs },
     {
@@ -2861,15 +2768,136 @@ function buildTaskDetail(task, context, drain = null) {
       content: comments > 0 ? buildCommentsPanel(task, context) : el("p", { class: "field-empty", text: "No comments yet." }),
     },
   ], context);
+  detail.appendChild(metaBlock);
   detail.appendChild(attentionSlot);
   detail.appendChild(progressSlot);
   for (const section of sections) detail.appendChild(section);
+  delivery.appendChild(buildDeliveryPanel(task.id, {
+    onTaskChanged: () => refreshTasks(context),
+    onClaims: paintDelivery,
+    onContent: (rendered) => detail.setTabAvailable("delivery", rendered),
+    formatTime: (value) => fmtAbsTimeValue(context, value),
+    pullRequest,
+  }));
   renderTaskRuns(runs, task, context);
   detail.appendChild(buildActionsRow(task, detail, context));
   // Activated once the panels exist: the Runs tab reads its runs then.
   detail.activateTab(activeDetailTab);
 
   return detail;
+}
+
+// The detail's Details section, above the tabs: what the task is and where it
+// stands. The levers an operator sets (status, complexity, tags) and the read
+// facts (crew, host, provenance, run, pull request, timestamps) share one card,
+// two columns once the pane is wide. The pane head carries only the id and
+// title, so nothing here is repeated there.
+function buildTaskMeta(task, context, { addField, editor, showsEditor }) {
+  const row = (label, value, extraClass = "") =>
+    el("div", { class: `property-row${extraClass ? ` ${extraClass}` : ""}` }, [el("span", { class: "label", text: label }), value]);
+  const fact = (label, value) => row(label, typeof value === "string" ? el("span", { class: "value", text: value }) : value, "fact");
+
+  const levers = el("div", { class: "property-list task-meta-levers" });
+  levers.appendChild(row("Status", buildStatusUpdateControl(task, context)));
+  levers.appendChild(row("Complexity", buildComplexityUpdateControl(task, context)));
+  const crew = explicitCrewValue(task);
+  levers.appendChild(fact("Crew", el("span", { class: "value" }, crew
+    ? [crew]
+    : [resolvedCrewName(task), el("span", { class: "fact-note", text: " · default" })])));
+  levers.appendChild(fact("Runs on", buildOsReadout(task)));
+
+  const facts = el("div", { class: "property-list task-meta-facts" });
+  for (const [key, label] of TASK_PEOPLE_FIELDS) {
+    if (task[key] != null && task[key] !== "") facts.appendChild(fact(label, String(task[key])));
+  }
+  if (task.job_run_id != null && task.job_run_id !== "") facts.appendChild(fact("Run", buildRunValue(task)));
+  const pullRequest = pullRequestLink(task);
+  if (pullRequest || task.pr_number) {
+    const value = el("span", { class: "value" });
+    if (pullRequest) {
+      const link = el("a", { text: pullRequest.number ? `#${pullRequest.number}` : "Pull request" });
+      link.href = pullRequest.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      value.appendChild(link);
+    } else {
+      value.appendChild(document.createTextNode(`#${task.pr_number}`));
+    }
+    if (task.pr_status) value.appendChild(el("span", { class: "fact-note", text: ` · ${task.pr_status}` }));
+    facts.appendChild(fact("Pull request", value));
+  }
+  if (task.created_at) facts.appendChild(fact("Created", fmtAbsTimeValue(context, task.created_at)));
+  if (task.updated_at) facts.appendChild(fact("Updated", fmtAbsTimeValue(context, task.updated_at)));
+  // ORB-00037: in the aggregate ("All workspaces") view each task carries its
+  // owning workspace's filesystem location (home-abbreviated to ~ server-side);
+  // show it in full here since the row only has room for the short name badge.
+  if (task.workspace_root) {
+    facts.appendChild(fact("Location", el("span", { class: "value ws-location mono", text: task.workspace_root, title: task.workspace_root })));
+  }
+
+  const grid = el("div", { class: "task-meta" }, facts.children.length ? [levers, facts] : [levers]);
+  const body = el("div", { class: "task-meta-body" }, [grid]);
+  // Tags close the section on a full-width row: a long list wraps there rather
+  // than squeezing one column. Its edit button follows the tags, not the
+  // section header, where it would read as editing every detail.
+  if (showsEditor("tags")) body.appendChild(el("div", { class: "property-list task-meta-tags" }, [row("Tags", editor("tags"))]));
+  return addField(null, "Details", body, false, false, { class: "task-meta-block" });
+}
+
+// Where the task may run, as a word or two: "any", or the operating systems
+// (macOS, Linux). The full sentence — which crew or tags decided it — is the
+// readout's hint.
+const OS_NAMES = { macos: "macOS", linux: "Linux", windows: "Windows" };
+
+function osReadoutText(task) {
+  const requirement = task.os_requirement;
+  if (!requirement) return "any";
+  if (["unresolved", "conflict"].includes(requirement.state)) return requirement.state;
+  const anyOf = Array.isArray(requirement.any_of) ? requirement.any_of : [];
+  return anyOf.length ? anyOf.map((os) => OS_NAMES[os] || os).join(" or ") : "any";
+}
+
+function osReadoutNote(task) {
+  return task.os_requirement?.describe || (task.crew ? "any host" : "any host from OS tags (crew unassigned)");
+}
+
+function buildOsReadout(task) {
+  const readout = el("span", { class: "value" }, [el("span", { class: "task-os-readout", text: osReadoutText(task) })]);
+  readout.appendChild(infoHint(osReadoutNote(task)));
+  return readout;
+}
+
+// ORB-12516: a pulled task's run lives in the executing machine's own job
+// store, so the id alone is a dangling reference. When the recorded execution
+// machine is this one the link still resolves; otherwise name the machine to
+// inspect rather than linking somewhere it is not.
+function buildRunValue(task) {
+  const runId = String(task.job_run_id);
+  const machine = task.job_run_machine;
+  const known = Boolean(machine && machine.machine_id);
+  const value = el("span", { class: "value run-value" });
+  if (task.job_run_navigable !== false) {
+    const link = el("a", { class: "mono", text: runId });
+    link.href = runHref(runId);
+    value.appendChild(link);
+  } else {
+    value.appendChild(el("span", { class: "mono", text: runId }));
+  }
+  // "on <machine>" follows the id on its line; what the id cannot do here (no
+  // owner-local run) and an unrecorded machine are the hint.
+  if (known) {
+    // The space keeps the machine from reading as part of the run id.
+    value.appendChild(document.createTextNode(" "));
+    value.appendChild(buildExecutionProvenance(
+      { known: true, machine_id: machine.machine_id, machine_name: machine.machine_name || null },
+      { runId, workspace: task.workspace_id },
+    ));
+  }
+  const notes = [];
+  if (task.job_run_navigable === false) notes.push("No owner-local run for this id — inspect it on its execution machine.");
+  if (!known) notes.push(`Execution machine ${formatExecutionLocation(null)}.`);
+  if (notes.length) value.appendChild(infoHint(notes.join("\n")));
+  return value;
 }
 
 // Every meaningful history entry, newest first.
@@ -2892,22 +2920,30 @@ function buildTaskHistory(task, context) {
   return { count: meaningful.length, node: wrap };
 }
 
-const DETAIL_TAB_NAMES = ["overview", "history", "runs", "artifacts", "comments"];
+const DETAIL_TAB_NAMES = ["overview", "delivery", "history", "runs", "artifacts", "comments"];
 
 // The detail's tab strip and its panels. Every panel is built with the detail
 // and switching only toggles which one shows, so a draft in one tab survives
 // a visit to another. Arrow keys move between tabs (automatic activation).
+// A tab marked `available: false` (Delivery without a claim) is left out of
+// the strip until `detail.setTabAvailable` adds it.
 function buildDetailTabs(task, detail, tabs, context) {
   const base = `detail-${task.id}`;
   const list = el("div", { class: "detail-tabs", role: "tablist", "aria-label": "Task detail sections" });
   const buttons = new Map();
   const panels = new Map();
+  const available = new Set(tabs.filter((tab) => tab.available !== false).map((tab) => tab.name));
   const runsNode = tabs.find((tab) => tab.name === "runs")?.content || null;
   let current = null;
+  // A remembered tab that is not in the strip yet (Delivery before its read
+  // lands) shows Overview and opens once it appears, unless the operator
+  // picks a tab first.
+  let waiting = null;
   const activate = (name, { focus = false } = {}) => {
-    const next = panels.has(name) ? name : "overview";
+    const next = panels.has(name) && available.has(name) ? name : "overview";
+    waiting = next === name ? null : name;
     current = next;
-    activeDetailTab = next;
+    if (next === name) activeDetailTab = next;
     for (const [key, button] of buttons) {
       const on = key === next;
       button.setAttribute("aria-selected", String(on));
@@ -2935,7 +2971,7 @@ function buildDetailTabs(task, detail, tabs, context) {
       activate(tab.name);
     });
     buttons.set(tab.name, button);
-    list.appendChild(button);
+    if (available.has(tab.name)) list.appendChild(button);
     const panel = el("div", {
       class: "detail-tabpanel",
       role: "tabpanel",
@@ -2947,7 +2983,7 @@ function buildDetailTabs(task, detail, tabs, context) {
   }
   list.addEventListener("keydown", (event) => {
     if (event.altKey || event.ctrlKey || event.metaKey) return;
-    const names = tabs.map((tab) => tab.name);
+    const names = tabs.map((tab) => tab.name).filter((name) => available.has(name));
     const at = Math.max(0, names.indexOf(current));
     let next = null;
     if (event.key === "ArrowRight") next = names[(at + 1) % names.length];
@@ -2959,6 +2995,20 @@ function buildDetailTabs(task, detail, tabs, context) {
     activate(next, { focus: true });
   });
   detail.activateTab = (name, opts) => activate(DETAIL_TAB_NAMES.includes(name) ? name : "overview", opts);
+  detail.setTabAvailable = (name, on) => {
+    const button = buttons.get(name);
+    if (!button || available.has(name) === Boolean(on)) return;
+    if (on) {
+      available.add(name);
+      const after = tabs.slice(tabs.findIndex((tab) => tab.name === name) + 1).find((tab) => available.has(tab.name));
+      list.insertBefore(button, after ? buttons.get(after.name) : null);
+      if (waiting === name) activate(name);
+    } else {
+      available.delete(name);
+      if (button.parentNode) button.parentNode.removeChild(button);
+      if (current === name) activate(name);
+    }
+  };
   return [list, ...panels.values()];
 }
 
@@ -3791,7 +3841,9 @@ function takeTaskActionNotice() {
 // selector displays without touching the editor holding that draft.
 function refreshDraftDetails(wrap, task, context, readinessTask = task) {
   for (const readout of wrap.querySelectorAll(".task-os-readout")) {
-    readout.textContent = task.os_requirement?.describe || (task.crew ? "any host" : "any host from OS tags (crew unassigned)");
+    readout.textContent = osReadoutText(task);
+    const note = readout.parentNode && readout.parentNode.querySelector(".info-hint-text");
+    if (note) note.textContent = osReadoutNote(task);
   }
   if (Array.isArray(readinessTask.context_files)) {
     for (const ul of wrap.querySelectorAll(".file-list")) {
@@ -4504,43 +4556,8 @@ function buildListTaskDetail(t, drafts, existing, context) {
   return detail;
 }
 
-// The muted line under the pane title: who runs the task, where it last ran,
-// when it was made, and its pull request. Each part appears only when known.
-function buildPaneMeta(task, context) {
-  const value = (text) => el("span", { class: "task-pane-meta-value mono", text });
-  const parts = [];
-  const crew = explicitCrewValue(task);
-  parts.push(el("span", { class: "task-pane-meta-crew" }, ["Crew ", value(crew || defaultCrewOptionText(task))]));
-  const machine = task.job_run_machine;
-  if (machine && machine.machine_id) {
-    parts.push(el("span", { class: "task-pane-meta-host" }, [
-      "Ran ",
-      buildExecutionProvenance(
-        summaryExecutionLocation(machine),
-        task.job_run_id ? { runId: String(task.job_run_id), workspace: task.workspace_id } : null,
-      ),
-    ]));
-  }
-  if (task.created_at) parts.push(el("span", { text: `Created ${fmtAbsTimeValue(context, task.created_at)}` }));
-  const pullRequest = pullRequestLink(task);
-  if (pullRequest) {
-    const link = el("a", { class: "task-pane-pr", text: pullRequest.number ? `PR #${pullRequest.number}` : "Pull request" });
-    link.href = pullRequest.url;
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-    parts.push(link);
-  }
-  const meta = el("div", { class: "task-pane-meta" }, parts);
-  const signature = [crew || defaultCrewOptionText(task), machine && machine.machine_id, machine && machine.machine_name,
-    task.job_run_id, task.created_at, pullRequest && pullRequest.url].join("|");
-  return { meta, signature };
-}
-
 function buildPaneHead(task, pinned, context) {
   const page = taskPageId === task.id;
-  // The list row is a summary; the meta line reads the full record once the
-  // detail's read has it.
-  const record = isTaskSummary(task) ? taskDetails.get(task.id) || task : task;
   const back = el("button", {
     class: "action task-pane-back",
     type: "button",
@@ -4563,42 +4580,25 @@ function buildPaneHead(task, pinned, context) {
     "aria-label": "Close task detail",
   });
   if (close) close.addEventListener("click", () => closeTaskPane(context, { forget: true }));
-  const { meta, signature } = buildPaneMeta(record, context);
   const key = `pane-head-${task.id}`;
-  const baseHash = `${task.id}-${task.title}-${task.status}-${pinned}-${page}`;
-  // The meta line fills in when the detail's read lands. Update it in place on
-  // the head already shown rather than rebuilding the head, which would take
-  // the focused heading (and the phone sheet's focus) with it.
-  const shown = Array.from($("task-detail-body")?.children || []).find((node) => node.dataset && node.dataset.key === key);
-  if (shown && shown.dataset.baseHash === baseHash) {
-    if (shown.dataset.metaSignature !== signature) {
-      const previous = shown.querySelector(".task-pane-meta");
-      if (previous && previous.parentNode) {
-        previous.parentNode.insertBefore(meta, previous);
-        previous.parentNode.removeChild(previous);
-      }
-      shown.dataset.metaSignature = signature;
-    }
-    return shown;
-  }
+  // The head carries only the id and title; status, crew, run and dates live in
+  // the detail's Details section, which edits them.
+  const baseHash = `${task.id}-${task.title}-${pinned}-${page}`;
   const title = el("h2", { class: "task-pane-title", id: "task-pane-title", text: task.title || task.id });
   title.tabIndex = -1;
   const head = el("div", { class: "task-pane-head" }, [
     el("div", { class: "task-pane-bar" }, [
       back,
       makeCopyButton(task.id, { class: "id mono", title: "Copy task ID" }),
-      statusPill(task.status),
       el("span", { class: "task-pane-spacer" }),
       full,
       close,
     ]),
     title,
-    meta,
   ]);
   head.dataset.key = key;
   head.dataset.hash = baseHash;
   head.dataset.baseHash = baseHash;
-  head.dataset.metaSignature = signature;
   return head;
 }
 

@@ -184,6 +184,9 @@
             </div>
           </section>
         </div>
+        <!-- The Drain page's dock (Start a window, Locks held, Log) moves here
+             while Tasks shows; it gives way to the task pane when one opens. -->
+        <div class="tasks-dock" id="tasks-dock"></div>
         <div class="task-pane-resizer" id="task-pane-resizer" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="task-detail-pane" aria-label="Resize the task detail pane" aria-valuemin="25" aria-valuemax="70" aria-valuenow="42" title="Drag, or use the arrow keys, to resize; double-click to reset"></div>
         <aside class="task-detail-pane" id="task-detail-pane" aria-label="Task detail" hidden>
           <div class="task-detail-body" id="task-detail-body"></div>
@@ -199,7 +202,7 @@
           </div>
           <div class="dock-head">
             <div class="dock-seg-group" id="dock-mode-toggle" role="tablist" aria-label="Drain views">
-              <button type="button" role="tab" class="dock-seg on" id="dock-tab-drain" data-mode="drain" aria-selected="true" aria-controls="dock-pane-drain" tabindex="0">Overview <span id="dock-drain-state" class="dock-drain-state"></span></button>
+              <button type="button" role="tab" class="dock-seg on" id="dock-tab-drain" data-mode="drain" aria-selected="true" aria-controls="dock-pane-drain" tabindex="0"><span class="dock-seg-label">Overview</span> <span id="dock-drain-state" class="dock-drain-state"></span></button>
               <button type="button" role="tab" class="dock-seg" id="dock-tab-log" data-mode="log" aria-selected="false" aria-controls="dock-pane-log" tabindex="-1">Log <span id="dock-log-state" class="dock-log-state"></span></button>
             </div>
           </div>

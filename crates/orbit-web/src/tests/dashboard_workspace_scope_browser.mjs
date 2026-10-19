@@ -231,7 +231,6 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
       }
 
       await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('tasks'));
-      if (await page.locator('#tasks-main #auto-drain-panel').count()) throw new Error('Tasks must not contain Drain');
       await page.locator('#tasks-body [data-key="task-PROPOSAL-1"] .task-quick.approve').waitFor();
       await page.getByText('Awaiting approval', { exact: true }).waitFor();
       for (const width of [1440, 375]) {
@@ -239,7 +238,14 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
         await page.screenshot({ path: path.join(evidence, `tasks-approval-dark-${width}.png`), animations: 'disabled' });
       }
       await page.setViewportSize({ width: 1280, height: 900 });
+      // Tasks carries the dock beside the list: Start a window and the locks,
+      // not the Drain page's status, waits and fleet cards.
+      await page.locator('#tasks-main #side-dock #auto-drain-start').waitFor({ state: 'visible' });
+      await page.locator('#tasks-main #side-dock #locks-panel').waitFor({ state: 'visible' });
+      if (await page.locator('#tasks-main #auto-drain-panel').isVisible()) throw new Error('The Tasks dock must not show the Drain status card');
       await page.locator('#tasks-body [data-key="task-SCOPE-1"] .title').click();
+      if (await page.locator('#tasks-main #side-dock').isVisible()) throw new Error('An open task takes the dock\'s place');
+      await page.locator('#task-detail-body').getByRole('tab', { name: 'Delivery' }).click();
       await page.locator('button.claim-action.approve').click();
       await page.locator('button.claim-action.revoke').waitFor({ state: 'visible' });
       await page.locator('input.claim-reason[data-reason-for="revoke"]').fill('Scope regression');

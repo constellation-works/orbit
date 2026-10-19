@@ -410,7 +410,8 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   for (const pane of document.querySelectorAll(".tab-pane")) {
     pane.classList.toggle("active", pane.dataset.tab === top);
   }
-  if (top === "drain") requestAnimationFrame(ctx.fitLogPanelToViewport || (() => {}));
+  if (ctx.placeDock) ctx.placeDock(top);
+  if (top === "drain" || top === "tasks") requestAnimationFrame(ctx.fitLogPanelToViewport || (() => {}));
 
   const indicator = $("tab-indicator") || el("div", {id: "tab-indicator", class: "tab-indicator"});
   if (!indicator.parentNode) document.querySelector(".tabs").appendChild(indicator);

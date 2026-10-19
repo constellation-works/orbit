@@ -661,6 +661,20 @@ export function el(tag, opts = {}, children = []) {
   return node;
 }
 
+// A focusable "i" that shows an explanation on hover or keyboard focus, so a
+// fact reads as a short value and its caveat is one gesture away. The text
+// stays in the DOM (visually hidden until shown), so a screen reader reads it
+// in place. The bubble spans the value column of the nearest positioned row;
+// a row sets `--hint-left` to its label width. `id` names the text, so a
+// control can point aria-describedby at it.
+export function infoHint(text, { id = null } = {}) {
+  const note = el("span", { class: "info-hint-text", text });
+  if (id) note.id = id;
+  const hint = el("span", { class: "info-hint" }, [note]);
+  hint.tabIndex = 0;
+  return hint;
+}
+
 // ORB-11658: expanding a row is the dashboard's primary interaction, so it has
 // to be operable without a mouse. For a row that holds no controls of its own,
 // the row itself carries the button semantics — wrapping the cells in a real

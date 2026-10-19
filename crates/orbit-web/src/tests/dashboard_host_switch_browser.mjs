@@ -428,13 +428,16 @@ try {
   assert(await taskRow('alpha-LOCAL').locator('.task-quick-cell a').count() === 0, 'an unregistered machine is not a link');
   assert((await taskRow('alpha-LOCAL').locator('.task-quick-cell .exec-origin').textContent()) === 'on laptop', 'an unregistered machine keeps its text');
   await page.locator('#tasks-body [data-key="task-alpha-ART"] .title').click();
-  const claimLink = page.locator('.distributed-block a.remote-run-link');
+  const deliveryTab = page.locator('#task-detail-body').getByRole('tab', { name: 'Delivery' });
+  await deliveryTab.click();
+  const claimLink = page.locator('.delivery-panel a.remote-run-link');
   await claimLink.waitFor({ state: 'visible' });
   assert(await claimLink.getAttribute('href') === '?host=hostb&workspace=ws_orbit&window=7d#runs?run_id=jrun-claim-1', 'the claim panel links to the run on hostb');
   await page.locator('#tasks-body [data-key="task-alpha-ART"] .title').click();
   await page.locator('#tasks-body [data-key="task-alpha-LOCAL"] .title').click();
-  await page.locator('.distributed-block .exec-origin', { hasText: 'on laptop' }).waitFor({ state: 'visible' });
-  assert(await page.locator('.distributed-block a.remote-run-link').count() === 0, 'an unregistered claim machine stays text');
+  await deliveryTab.click();
+  await page.locator('.delivery-panel .exec-origin', { hasText: 'on laptop' }).waitFor({ state: 'visible' });
+  assert(await page.locator('.delivery-panel a.remote-run-link').count() === 0, 'an unregistered claim machine stays text');
   routeLog = [];
   await remoteLink.click();
   await page.waitForURL((url) => url.searchParams.get('host') === 'hostb');
@@ -454,6 +457,7 @@ try {
   await page.locator('#tasks-body [data-key="task-hostb-ART"] .title').click();
   await page.locator('.host-read-only-note').waitFor({ state: 'visible' });
   assert(await page.locator('#task-detail-body .actions > .action.approve').first().isDisabled(), 'detail actions are disabled');
+  await page.locator('#task-detail-body').getByRole('tab', { name: 'Delivery' }).click();
   await page.locator('.claim-action-denied', { hasText: 'Read-only on hostb' }).first().waitFor({ state: 'visible' });
   assert(!routeLog.some((entry) => entry.method !== 'GET' && entry.path.startsWith('/api/on/')), 'no write is sent to a read-only host');
   await capture('host-read-only-1440');

@@ -238,12 +238,15 @@ let osRow = byId['tasks-body'].querySelectorAll('.row').find(row => row.dataset.
 assert.equal(osRow.querySelector('.os-badge').title, `Runs on ${constrained.os_requirement.describe}`);
 const osTitle = osRow.querySelector('button.title');
 clickTitle(osTitle);
-assert.equal(paneBody.querySelector('.task-os-readout').textContent, constrained.os_requirement.describe);
+// The detail names the OS in a word; the hint beside it carries the full reason.
+assert.equal(paneBody.querySelector('.task-os-readout').textContent, 'macOS');
+assert.equal(paneBody.querySelector('.task-os-readout').parentNode.querySelector('.info-hint-text').textContent, constrained.os_requirement.describe);
 constrained.os_requirement = { any_of: [], state: 'unresolved', describe: 'unresolved (crew fixture-crew)' };
 paint({ total: 1, limit: 50, offset: 0, next_cursor: null }, [constrained]);
 osRow = byId['tasks-body'].querySelectorAll('.row').find(row => row.dataset.key === 'task-ORB-67');
 assert.equal(osRow.querySelector('.os-badge').textContent, 'unresolved');
-assert.equal(paneBody.querySelector('.task-os-readout').textContent, constrained.os_requirement.describe);
+assert.equal(paneBody.querySelector('.task-os-readout').textContent, 'unresolved');
+assert.equal(paneBody.querySelector('.task-os-readout').parentNode.querySelector('.info-hint-text').textContent, constrained.os_requirement.describe);
 
 // The expanded task detail paints transitions from the same history projection
 // the CLI reads, while older entries without statuses retain their event label.
