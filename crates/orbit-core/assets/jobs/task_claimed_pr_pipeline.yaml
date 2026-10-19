@@ -57,7 +57,7 @@
 # findings, and the next claim's `resume_candidate` applies the repair and
 # hands the implementer the findings to repair from.
 #
-# ORB-13908: when the claim captured the owner's `review.before_pr`, the leaf
+# ORB-13908: when the claim captured the owner's `review.timing = before_pr`, the leaf
 # runs the same before-PR gate as `task_pr_pipeline` between base
 # synchronization and push. One fresh reviewer, with the claim's captured crew,
 # fixes what it finds as the candidate's second commit and comments a summary;
@@ -81,7 +81,7 @@
 # reviewed head, and the owner attributes the reviewer's paths when it widens
 # the footprint at acceptance, so there is no separate `review_validate`.
 #
-# ORB-14849: when the claim captured the owner's `review.before_landing`
+# ORB-14849: when the claim captured the owner's `review.timing = before_landing`
 # instead, the before-PR gate does not apply and the leaf publishes at once.
 # After `pr_open` the `landing_review*` steps review the published head while
 # hosted CI runs on it, under the same crew, budget, manifest and
@@ -118,7 +118,7 @@ spec:
   # live by `orbit run concurrency`) bounds how many of these run at once.
   max_active_runs: 0
   # ORB-13907: once step recovery is spent, a crew from
-  # `workflow.final_recovery_crews` gets one last look and returns a typed
+  # `workflow.purpose_crews.final_recovery` gets one last look and returns a typed
   # decision. `resume` reruns from the failed step or an earlier one of its
   # phase; any other decision is applied by Orbit's deterministic applier on the
   # owner, carried by the claim's failure settlement — never written here.
@@ -269,7 +269,7 @@ spec:
 
     # `review_gate_admit` and `review_gate_settle` always run so later steps
     # can read their output; they report `applies: false` when the claim
-    # captured `review.before_pr` off (a `review.before_landing` claim
+    # captured no `review.timing = before_pr` (a `before_landing` claim
     # reviews after `pr_open` instead). Transient gate and reviewer failures
     # retry, then get one diagnosed recovery before the leaf fails.
     - id: review_gate_admit
@@ -407,7 +407,7 @@ spec:
 
     # ORB-14849: the before-landing review of the published pull request.
     # The gate steps always run and report `applies: false` unless the claim
-    # captured `review.before_landing`, and for a no-diff exemption.
+    # captured `review.timing = before_landing`, and for a no-diff exemption.
     # ORB-15630: `validate` already ran the owner's required commands on this
     # head, natively outside the agent sandbox; admission hands those results
     # to the reviewer and settlement decides the gates from them.

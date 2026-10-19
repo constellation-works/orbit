@@ -840,7 +840,7 @@ pub trait RuntimeHost: Send + Sync {
     /// A host with run storage records the admission in the run's state
     /// before answering `Admitted`, so neither a crash during the activity
     /// nor any resume of the run invokes it again; it skips when final
-    /// recovery is disabled (an empty `workflow.final_recovery_crews`), when
+    /// recovery is disabled (an empty `workflow.purpose_crews.final_recovery`), when
     /// the run already spent it, or when the run is no longer running. A host
     /// without run storage skips: it cannot promise "once".
     fn admit_final_recovery(

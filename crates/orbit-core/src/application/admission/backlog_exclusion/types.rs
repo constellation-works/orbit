@@ -97,12 +97,12 @@ pub(crate) enum BacklogTaskExclusionReason {
     /// finding verification job. `detail` names the job to run; a CONFIRMED
     /// verdict, or a retag or retype by an operator, clears it.
     UnverifiedReviewFinding,
-    /// Effective `review.before_pr` is on and this delivery is the local-only
+    /// Effective `review.timing` is `before_pr` and this delivery is the local-only
     /// route. Pipeline admission refuses that combination; the task stays in
     /// `backlog` until the switch is turned off or delivery uses the PR route.
     /// `detail` names the deciding config layer and the remedy [ORB-14168].
     LocalRouteBeforePr,
-    /// Effective `review.before_landing` is on and this delivery is the
+    /// Effective `review.timing` is `before_landing` and this delivery is the
     /// local-only route, which opens no pull request to review. Pipeline
     /// admission refuses it the same way; `detail` names the deciding config
     /// layer and the remedy [ORB-14849].

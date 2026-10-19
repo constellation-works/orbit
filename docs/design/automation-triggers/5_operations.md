@@ -100,7 +100,7 @@ debt and preview the new baseline first.
 
 A delivery review definition mints its tasks with the crew named in its own
 template, exactly like any other auto-task, with one exception: while
-`operation.review_crew` is set, `delivery-code-review` mints with that crew
+`workflow.purpose_crews.review` is set, `delivery-code-review` mints with that crew
 instead [ORB-13896]. The crew is applied at mint time and is not part of the
 consumer's epoch. While this consumer is enabled, `orbit doctor` also fails its
 `review` row when the consumer is missing, unowned, wedged, stalled, held for

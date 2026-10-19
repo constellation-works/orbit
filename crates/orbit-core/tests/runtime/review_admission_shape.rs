@@ -6,6 +6,8 @@
 use std::collections::BTreeMap;
 
 use chrono::Utc;
+use orbit_core::OrbitRuntime;
+use orbit_core::application::task::TaskUpdateParams;
 use orbit_engine::{DispatchError, RuntimeHost};
 use orbit_types::workflow::{
     REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewBudget, ReviewConsumption,
@@ -227,4 +229,95 @@ fn not_applicable_and_preflight_outputs_keep_their_recorded_shape() {
             "lineage_key": lineage_key,
         }))
     );
+}
+
+/// [ORB-16775] A run input recorded while `review.before_pr` and
+/// `review.before_landing` were the review switches deserializes from its
+/// recorded bytes, and the gate follows the timing it captured after the
+/// workspace config moves to `review.timing = "off"`.
+#[test]
+fn a_run_captured_under_the_deprecated_switches_gates_as_it_captured() {
+    for timing in ["before-pr", "before-landing"] {
+        let mut fixture = if timing == "before-pr" {
+            Fixture::new()
+        } else {
+            Fixture::before_landing()
+        };
+        let workspace = fixture.repo.join(".orbit");
+        std::fs::write(
+            workspace.join("config.toml"),
+            "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n\
+             [workflow]\ndefault_crew = \"reviewers\"\n\n\
+             [workflow.purpose_crews]\nreview = \"reviewers\"\n\n\
+             [review]\ntiming = \"off\"\n",
+        )
+        .unwrap();
+        fixture.runtime =
+            OrbitRuntime::from_roots(&fixture._root.path().join("global"), &workspace).unwrap();
+        assert!(!fixture.runtime.operation_policy().review_before_pr.value);
+        assert!(
+            !fixture
+                .runtime
+                .operation_policy()
+                .review_before_landing
+                .value
+        );
+
+        let recorded = json!({
+            "contract_version": 1,
+            "policy_version": 5,
+            "timing": timing,
+            "timing_source": "workspace",
+            "crew": "reviewers",
+            "crew_source": "workspace",
+            "budget": {"minutes": 10},
+            "required_validation_commands": [],
+            "captured_at": "2026-10-01T00:00:00Z",
+        });
+        let run = fixture
+            .runtime
+            .insert_job_run(
+                "task_pr_pipeline",
+                1,
+                Utc::now(),
+                Some(json!({
+                    "review": recorded,
+                    "task_ids": [fixture.task_id],
+                    "task_id": fixture.task_id,
+                })),
+                None,
+            )
+            .unwrap();
+        fixture
+            .runtime
+            .update_task_with_identity(
+                &fixture.task_id,
+                TaskUpdateParams {
+                    job_run_id: Some(Some(run.run_id.clone())),
+                    ..Default::default()
+                },
+                Some("codex".into()),
+                None,
+            )
+            .unwrap();
+        fixture.input["job_run_id"] = json!(run.run_id);
+
+        fixture.admit();
+        let admission = &fixture.input["admission"];
+        assert_eq!(admission["timing"], timing, "{admission}");
+        if timing == "before-pr" {
+            assert_eq!(admission["decision"], "admitted", "{admission}");
+            assert_eq!(admission["reviewer"]["crew"], "reviewers", "{admission}");
+        } else {
+            assert_eq!(
+                bytes(admission),
+                bytes(&json!({
+                    "applies": false,
+                    "reason": "review_before_landing",
+                    "timing": "before-landing",
+                    "timing_source": "workspace",
+                }))
+            );
+        }
+    }
 }

@@ -5,7 +5,8 @@ use orbit_types::identity::Crew;
 use orbit_types::task::TaskComplexity;
 use orbit_types::workflow::activity_job::requires_native_inspection;
 use orbit_types::workflow::{
-    ActivityCrewDraw, CrewPurpose, FINAL_RECOVERY_CREWS_KEY, RunStateUpdate,
+    ActivityCrewDraw, CrewPurpose, FINAL_RECOVERY_CREWS_CONFIG_KEY, FINAL_RECOVERY_CREWS_KEY,
+    RunStateUpdate,
 };
 use serde_json::Value;
 
@@ -22,7 +23,9 @@ use super::types::CrewCandidate;
 
 impl OrbitRuntime {
     /// The crew a `final_recovery` activity runs as: one draw from
-    /// `workflow.final_recovery_crews`, frozen in the executing run's state.
+    /// `workflow.purpose_crews.final_recovery`, frozen in the executing run's
+    /// state under the activity binding [`FINAL_RECOVERY_CREWS_KEY`], the key
+    /// earlier runs froze theirs under.
     ///
     /// The first dispatch draws over the enabled members this run's
     /// `allowed_crews` permits. Every later dispatch of the key in this run,
@@ -34,8 +37,8 @@ impl OrbitRuntime {
         input: &Value,
         random: &mut impl FnMut() -> Result<u64, OrbitError>,
     ) -> Result<Crew, OrbitError> {
-        let source = FINAL_RECOVERY_CREWS_KEY;
-        self.frozen_activity_crew(input, source, &mut |allowlist| {
+        let source = FINAL_RECOVERY_CREWS_CONFIG_KEY;
+        self.frozen_activity_crew(input, FINAL_RECOVERY_CREWS_KEY, &mut |allowlist| {
             let candidates = self.final_recovery_candidates()?;
             let candidates = permitted_candidates(candidates, source, allowlist)?;
             let selected = weighted_draw(&candidates, source, random)?;
@@ -355,12 +358,12 @@ impl OrbitRuntime {
         Some(format!("provider_hold: no crew left in {source}; {detail}"))
     }
 
-    /// The enabled members of `workflow.final_recovery_crews`, each with its
+    /// The enabled members of `workflow.purpose_crews.final_recovery`, each with its
     /// tickets. An empty pool disables final recovery, and a pool whose every
     /// member is disabled is refused the same way rather than falling back to
     /// another crew.
     fn final_recovery_candidates(&self) -> Result<Vec<CrewCandidate>, OrbitError> {
-        let source = FINAL_RECOVERY_CREWS_KEY;
+        let source = FINAL_RECOVERY_CREWS_CONFIG_KEY;
         let registry = self.context.settings().crews();
         let pool = canonical_crew_pool(
             self.context.settings().final_recovery_crews(),

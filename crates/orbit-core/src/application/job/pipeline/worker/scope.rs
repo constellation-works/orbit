@@ -34,9 +34,9 @@
 //! By default, disabled or unavailable containment (containers, sandboxes
 //! without a user bus) launches workers uncontained with one warning per
 //! process. Platforms without systemd (macOS) launch uncontained silently:
-//! there is nothing to warn about. `machine.worker_containment_strict=true` or the CLI's
-//! `--strict-worker-containment` refuses an unavailable scope before spawning
-//! the worker. Strict mode requires `machine.worker_containment=true`.
+//! there is nothing to warn about. `machine.worker_containment = "strict"` or
+//! the CLI's `--strict-worker-containment` refuses an unavailable scope before
+//! spawning the worker; the flag is refused while containment is `off`.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -146,11 +146,11 @@ pub(crate) fn contain_worker_command_with_availability(
     let Some(limits) = limits else {
         if strict {
             return Err(orbit_common::OrbitError::WorkerContainmentUnavailable {
-                reason: "machine.worker_containment=false".into(),
+                reason: "machine.worker_containment=off".into(),
             });
         }
         if systemd_expected {
-            warn_uncontained("machine.worker_containment is false", warned);
+            warn_uncontained("machine.worker_containment is off", warned);
         }
         return Ok(prefer_as_oom_victim(base));
     };

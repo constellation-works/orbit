@@ -2063,7 +2063,7 @@ function autoDrainReviewControl(payload, reasons) {
   });
   return el("div", { class: "drain-field" }, [label, select,
     el("p", { class: `drain-field-hint${reasons.review ? " warn" : ""}`, text: reasons.review
-      || (autoDrainReview ? AUTO_DRAIN_REVIEW_HELP : "The workspace's review.before_pr and review.before_landing settings decide.") }),
+      || (autoDrainReview ? AUTO_DRAIN_REVIEW_HELP : "The workspace's review.timing setting decides.") }),
   ]);
 }
 

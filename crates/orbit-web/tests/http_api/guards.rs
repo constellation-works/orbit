@@ -319,12 +319,12 @@ fn effective_config_lists_every_crew_setting_and_enabled_auto_task() {
             let mut global = std::fs::read_to_string(&global_path).unwrap();
             global.push_str(concat!(
                 "\n[workflow]\ndefault_crew = \"opus\"\n",
-                "final_recovery_crews = [\"opus:20\", \"sol:100\"]\n",
                 "low_complexity_crews = [\"haiku\", \" haiku \"]\n",
                 "medium_complexity_crews = [\" sol : 2 \"]\n",
                 "hard_complexity_crews = [\"opus\"]\n",
                 "xhard_complexity_crews = [\"opus:3\"]\n",
-                "\n[operation]\nreview_crew = \"opus\"\n",
+                "\n[workflow.purpose_crews]\nreview = \"opus\"\n",
+                "final_recovery = [\"opus:20\", \"sol:100\"]\n",
                 "\n[crews.opus]\nprovider = \"claude\"\nmodel = \"opus\"\n",
                 "\n[crews.sol]\nprovider = \"codex\"\nmodel = \"fixture-sol\"\n",
                 "\n[crews.haiku]\nprovider = \"claude\"\nmodel = \"haiku\"\n",
@@ -333,7 +333,7 @@ fn effective_config_lists_every_crew_setting_and_enabled_auto_task() {
             std::fs::write(global_path, global).unwrap();
             std::fs::write(
                 fixture.work.join("config.toml"),
-                "[operation]\nreview_crew = \"haiku\"\n",
+                "[workflow.purpose_crews]\nreview = \"haiku\"\n",
             )
             .unwrap();
             let definitions = fixture.work.join("auto_tasks");
@@ -355,22 +355,25 @@ fn effective_config_lists_every_crew_setting_and_enabled_auto_task() {
             for (name, expected) in [
                 (
                     "haiku",
-                    json!(["operation.review_crew", "workflow.low_complexity_crews"]),
+                    json!([
+                        "workflow.low_complexity_crews",
+                        "workflow.purpose_crews.review"
+                    ]),
                 ),
                 (
                     "opus",
                     json!([
                         "workflow.default_crew",
-                        "workflow.final_recovery_crews",
                         "workflow.hard_complexity_crews",
+                        "workflow.purpose_crews.final_recovery",
                         "workflow.xhard_complexity_crews"
                     ]),
                 ),
                 (
                     "sol",
                     json!([
-                        "workflow.final_recovery_crews",
-                        "workflow.medium_complexity_crews"
+                        "workflow.medium_complexity_crews",
+                        "workflow.purpose_crews.final_recovery"
                     ]),
                 ),
                 ("grok", json!(["auto-task skill-validation"])),
@@ -555,12 +558,12 @@ fn config_key_admission_refuses_invalid_writes_and_preserves_types() {
                 assert_eq!(row["settable"], false, "catalog write status for {key}");
             }
 
-            // [ORB-13992] The Config tab reports both review switches with
+            // [ORB-13992] The Config tab reports both review layers with
             // their sources, as `orbit config show` and `orbit doctor` do.
             super::support::json_ok(server.send(
                 "PUT",
-                "/api/config/keys/review.before_pr?workspace=ws_http_fixture",
-                json!({"value":true}),
+                "/api/config/keys/review.timing?workspace=ws_http_fixture",
+                json!({"value":"before_pr"}),
             ));
             let review = &super::support::json_ok(
                 server.get("/api/config/effective?workspace=ws_http_fixture"),

@@ -37,8 +37,8 @@ impl ShipMode {
                   crew is refused before its provider starts.\n\n\
                   `--review` adds a second-agent review before landing to this run only. It\n\
                   can only add review: the layer workspace policy already applies is accepted\n\
-                  unchanged, and the other layer, an unset `operation.review_crew` and\n\
-                  local-only delivery are refused before the run starts.\n\n\
+                  unchanged, and the other layer, an unset `workflow.purpose_crews.review`\n\
+                  and local-only delivery are refused before the run starts.\n\n\
                   Inspect submitted runs with `orbit run history -j task_auto_pipeline` and\n\
                   `orbit run show <RUN_ID>`."
 )]
@@ -73,14 +73,13 @@ pub struct ShipCommand {
     /// Add this review layer before landing to this run when workspace
     /// policy applies none: `before-pr` holds PR creation for a reviewer,
     /// `before-landing` reviews the open PR before it lands. The layer
-    /// `review.before_pr` or `review.before_landing` already applies is
-    /// accepted unchanged; the other one is refused, as are an unset
-    /// `operation.review_crew` and local-only delivery. Omitted, workspace
-    /// policy decides.
+    /// `review.timing` already applies is accepted unchanged; the other one
+    /// is refused, as are an unset `workflow.purpose_crews.review` and
+    /// local-only delivery. Omitted, workspace policy decides.
     #[arg(long, value_enum, value_name = "LAYER")]
     pub review: Option<orbit_types::workflow::ReviewLayer>,
     /// Require a systemd user scope for this run and every worker it starts.
-    /// Overrides machine.worker_containment_strict for this invocation.
+    /// Treats machine.worker_containment as strict for this invocation.
     #[arg(long)]
     pub strict_worker_containment: bool,
     /// Token for this workspace's exclusive claim, when another operator holds

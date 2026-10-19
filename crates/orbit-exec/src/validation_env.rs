@@ -22,7 +22,7 @@
 //! The probe runs `<shell> -i -l -c "exec /bin/sh -c '<printer>'"`, reading
 //! interactive rc files as well as profiles. Startup failure, nonzero exit,
 //! timeout or a missing marker triggers a fallback to `<shell> -l -c …`.
-//! `workflow.validation_env.interactive = false` uses only that login probe.
+//! `workflow.validation_env.shell_probe = "login"` uses only that login probe.
 //! Each attempt has a bounded timeout and null stdin. The printer writes a
 //! marker and then one NUL-terminated record per toolchain variable, ignoring
 //! banners and rc output. Successful probes ignore stderr (including bash's
@@ -644,8 +644,8 @@ impl ValidationEnvironment {
         }
         if !self.login_shell_enabled && self.source == ValidationEnvSource::LauncherFallback {
             return Some(format!(
-                "login-shell resolution is disabled (`workflow.validation_env.login_shell = \
-                 false`) and `workflow.validation_env.path` is empty, so required validation \
+                "login-shell resolution is disabled (`workflow.validation_env.shell_probe = \
+                 off`) and `workflow.validation_env.path` is empty, so required validation \
                  runs with whatever PATH launched the worker: PATH={path} (source: \
                  launcher_fallback)."
             ));

@@ -184,16 +184,17 @@ Common reasons a backlog task waits:
   remotes. Run `orbit workspace ship-mode local`, add a remote on the forge
   host, or tag the task `delivery:task_local_pipeline` to deliver it locally.
   `orbit doctor` reports the same verdict on its `forge-remote` row.
-- **`local_route_before_pr`**: `review.before_pr` is on and this workspace
+- **`local_route_before_pr`**: `review.timing` is `before_pr` and this workspace
   ships locally, or the task's `delivery:task_local_pipeline` tag routes it
   locally. Before-PR review holds pull-request creation and does not run
   on the local-only route, so the task stays in the backlog instead of failing
   after dispatch. The detail names whether the global or workspace config
-  turned the switch on. Turn `review.before_pr` off, or ship through the PR
-  route. `orbit doctor` names the same combination.
-- **`local_route_before_landing`**: the same hold for `review.before_landing`,
-  which reviews an open pull request before it lands; a local delivery opens
-  none. Turn `review.before_landing` off, or ship through the PR route.
+  set it. Set `review.timing` to `off`, or ship through the PR route.
+  `orbit doctor` names the same combination.
+- **`local_route_before_landing`**: the same hold for `review.timing` at
+  `before_landing`, which reviews an open pull request before it lands; a local
+  delivery opens none. Set `review.timing` to `off`, or ship through the PR
+  route.
 
 Neither approval nor the drain bypasses dependencies or locks, so a window may
 end with some tasks still in the backlog.

@@ -29,7 +29,7 @@
 //! `runtime::host_resource::usage`), in the same units. Concurrent workers
 //! offer the same minute and the first insert wins.
 //!
-//! A Linux worker with no scope (`machine.worker_containment = false`, no
+//! A Linux worker with no scope (`machine.worker_containment = "off"`, no
 //! user manager) starts no sampler, records nothing and logs nothing.
 //! Recording is telemetry: a failed read skips a sample and a failed write
 //! loses a row, and neither touches the run.

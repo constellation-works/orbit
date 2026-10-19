@@ -595,7 +595,7 @@
   },
   {
     "name": "orbit.drain.probe",
-    "description": "Read-only preflight for the distributed drain, served by the workspace owner. Reports the owner machine, binary version, distributed-drain protocol schema, the capabilities this session holds, the diagnostic caller machine, the owner-resolved ship configuration, and both review switches (`review.before_pr` and the after-landing auto-task). Declaring `caller_version`, `caller_schema`, or `caller_before_pr` also reports the first refusal an admission would raise, in the order admission applies it. It creates no request receipt, reservation, claim, or task transition, and it is never a health check for admission itself.",
+    "description": "Read-only preflight for the distributed drain, served by the workspace owner. Reports the owner machine, binary version, distributed-drain protocol schema, the capabilities this session holds, the diagnostic caller machine, the owner-resolved ship configuration, and both review switches (`review.timing` and the after-landing auto-task). Declaring `caller_version`, `caller_schema`, or `caller_before_pr` also reports the first refusal an admission would raise, in the order admission applies it. It creates no request receipt, reservation, claim, or task transition, and it is never a health check for admission itself.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -621,7 +621,7 @@
       },
       {
         "name": "caller_before_pr",
-        "description": "Optional. The executor's `review.before_pr`. Diagnostic only: a claimed leaf runs the before-PR review the owner's ship contract captures, never the executor's own. After-landing review never affects admission.",
+        "description": "Optional. Whether the executor's `review.timing` is `before_pr`. Diagnostic only: a claimed leaf runs the before-PR review the owner's ship contract captures, never the executor's own. After-landing review never affects admission.",
         "param_type": "boolean",
         "required": false
       }
@@ -1425,7 +1425,7 @@
       },
       {
         "name": "caller_before_pr",
-        "description": "The `review.before_pr` the executor's drain captured at submission. Diagnostic only: a claimed leaf runs the before-PR review the owner's `ship` contract captures, never the executor's own. After-landing review never affects admission.",
+        "description": "Whether the executor's drain captured `review.timing = before_pr` at submission. Diagnostic only: a claimed leaf runs the before-PR review the owner's `ship` contract captures, never the executor's own. After-landing review never affects admission.",
         "param_type": "boolean",
         "required": true
       },
@@ -1437,7 +1437,7 @@
       },
       {
         "name": "review_gate",
-        "description": "Whether the executor's claimed PR leaf runs the before-PR review the `ship` contract captures. An owner with `review.before_pr` on refuses an executor that does not declare it as `before_pr_unsupported`. Omitted: `false`.",
+        "description": "Whether the executor's claimed PR leaf runs the before-PR review the `ship` contract captures. An owner with `review.timing = before_pr` refuses an executor that does not declare it as `before_pr_unsupported`. Omitted: `false`.",
         "param_type": "boolean",
         "required": false
       },
@@ -2047,7 +2047,7 @@
       },
       {
         "name": "review",
-        "description": "Start only: add this review layer before landing (before-pr or before-landing) to the window when workspace policy applies none; every task it admits inherits it. The layer policy already applies is accepted unchanged; the other layer, an unset operation.review_crew and a workspace that delivers locally are refused. It can only add review. Omitted keeps workspace policy",
+        "description": "Start only: add this review layer before landing (before-pr or before-landing) to the window when workspace policy applies none; every task it admits inherits it. The layer policy already applies is accepted unchanged; the other layer, an unset workflow.purpose_crews.review and a workspace that delivers locally are refused. It can only add review. Omitted keeps workspace policy",
         "param_type": "string",
         "required": false
       },
@@ -2237,7 +2237,7 @@
       },
       {
         "name": "review",
-        "description": "Optional review layer before landing (`before-pr` or `before-landing`) this run adds when workspace policy applies none. The layer policy already applies is accepted unchanged; the other layer, an unset operation.review_crew and local-only delivery are refused before the run starts. It can only add review. Omitted keeps workspace policy.",
+        "description": "Optional review layer before landing (`before-pr` or `before-landing`) this run adds when workspace policy applies none. The layer policy already applies is accepted unchanged; the other layer, an unset workflow.purpose_crews.review and local-only delivery are refused before the run starts. It can only add review. Omitted keeps workspace policy.",
         "param_type": "string",
         "required": false
       },

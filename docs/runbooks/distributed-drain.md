@@ -103,22 +103,21 @@ Confirm:
   those files **grant nothing** (delete them; deny access by removing the
   caller's key from `~/.ssh/authorized_keys`);
 - when before-PR or before-landing review is on at the owner
-  (`review.before_pr = true` or `review.before_landing = true`), the owner sets `operation.review_crew`, the workspace ships through the PR route,
-  and every follower can run that crew. When `operation.review_crew` is a pool
+  (`review.timing` is `before_pr` or `before_landing`), the owner sets `workflow.purpose_crews.review`, the workspace ships through the PR route,
+  and every follower can run that crew. When `workflow.purpose_crews.review` is a pool
   (`["sol", "grok"]`), the owner resolves it to one member each time it offers
   a claim, and that crew is what the claim captures, so every follower must
   be able to run each member it may be offered.
 
 ```bash
-orbit config get review.before_pr
-orbit config get review.before_landing
-orbit config get operation.review_crew
-orbit config show        # the Review lines report both switches and their sources
+orbit config get review.timing
+orbit config get workflow.purpose_crews.review
+orbit config show        # the Review lines report the timing and its source
 ```
 
-The owner's `review.before_pr` is captured on each claim with its review crew,
+The owner's `review.timing` is captured on each claim with its review crew,
 minutes, `workflow.required_validation_commands` and `review.baseline_commands`; the follower's own
-setting does not define review requirements. With it on, each
+setting does not define review requirements. With `before_pr` captured, each
 claimed PR leaf runs the before-PR review between base synchronization and
 push: one reviewer with the captured crew fixes what it finds as the
 candidate's second commit and comments a summary on the owner's task. A
@@ -166,8 +165,8 @@ or run the captured crew stops pulling with `before_pr_reviewer_unavailable`
 rather than claiming work it cannot review. A local-only ship workspace with
 before-PR review on is refused (`before_pr_unsupported`).
 
-The owner's `review.before_landing` is captured the same way, and the
-follower's own value is ignored. A claimed PR leaf then pushes and opens its
+With the owner's `review.timing` at `before_landing` instead, the follower's
+own value is still ignored. A claimed PR leaf then pushes and opens its
 PR first and runs the same contract on the published head after `pr_open`,
 while hosted CI runs. A reviewer fix is revalidated on the leaf and pushed onto
 the PR under a lease (`push_lease_lost` if the branch moved to a commit that
@@ -531,7 +530,7 @@ Expected refusals you may see (and must not work around):
 | `protocol_skew` | Caller and owner request fingerprints differ (or the owner predates fingerprints); refused before pull, with both fingerprints in the diagnosis |
 | `protocol_mismatch` | Legacy probe report for differing integer revisions; current followers surface typed `protocol_skew` |
 | `ship_mode_unsupported` | A remote caller targeted a local-only ship workspace |
-| `before_pr_unsupported` | Owner has `review.before_pr` or `review.before_landing` on and ships local-only, or the executor's leaf does not run the review gate (an older binary) |
+| `before_pr_unsupported` | Owner's `review.timing` is `before_pr` or `before_landing` and it ships local-only, or the executor's leaf does not run the review gate (an older binary) |
 
 ### 7. Receipt lookup after uncertainty
 
@@ -566,8 +565,8 @@ allocates a new request it prunes its idle and refused rows to the newest
 
 ### 8. Start the follower's pull drain
 
-Matching binaries, a replica role, a working probe, and, when the owner has
-`review.before_pr` on, the owner's review crew on this host are **installation**. Starting a drain is the rollout, and it is explicit. On
+Matching binaries, a replica role, a working probe, and, when the owner's
+`review.timing` is `before_pr`, the owner's review crew on this host are **installation**. Starting a drain is the rollout, and it is explicit. On
 the follower, from the replica checkout:
 
 ```bash
@@ -583,8 +582,8 @@ submitted, the command refuses unless:
   and **its** logical workspace;
 - the owner answers the probe **as that machine** and would admit this
   executor now (binary, protocol schema, before-PR review, ship mode);
-- this host can resolve the owner's before-PR review crew, when the owner has
-  `review.before_pr` on (`before_pr_reviewer_unavailable` otherwise);
+- this host can resolve the owner's before-PR review crew, when the owner's
+  `review.timing` is `before_pr` (`before_pr_reviewer_unavailable` otherwise);
 - every `--allow-crew` name is a crew this host configures (none blank).
 
 Without `--for` (or with `--for 0s`) the drain makes **one** admission pass:
@@ -1129,7 +1128,7 @@ submitted value or `pull_run_control` after `orbit run concurrency --set` (or
 `orbit run extend --concurrency`). A live local drain still supplies the
 ceiling instead (`run_input` or `run_control`), and with neither drain live
 the report stays at 5 (`default`). A leaf in its before-landing review (the owner's
-`review.before_landing`) runs no implementer but keeps its claim until it
+`review.timing = "before_landing"`) runs no implementer but keeps its claim until it
 settles. Admission counts `occupied - min(reviewing, --concurrency)` against
 `--concurrency` before each claim. Reviewing starts after the persisted
 before-landing admission has `applies=true`; validation and publishing before
@@ -1541,7 +1540,7 @@ orbit task reconcile-review status <task-id>
 head and base) and the `contract` a new key would freeze. It refuses with the
 next step while a claim is live, the pull request is open or names another
 repository or landing branch, there is no command to validate with, or
-`operation.review_crew` is unset or does not resolve.
+`workflow.purpose_crews.review` is unset or does not resolve.
 
 The contract's `required_commands` are the accepted handoff's captured list
 (`commands_source: accepted_handoff`). An accepted handoff always captures one,
@@ -1549,7 +1548,7 @@ so an empty list means that acceptance explicitly required no check; the
 reconciliation then adopts the owner's `workflow.required_validation_commands`
 at submission as its own contract (`commands_source:
 owner_configuration_at_submission`, with `accepted_commands: []`) rather than
-claiming the delivery was held to it. `review_crew` is `operation.review_crew`
+claiming the delivery was held to it. `review_crew` is `workflow.purpose_crews.review`
 at submission; a pool contributes one member, preferring one that did not
 implement the task, with `review_crew_source` naming the pool's layer.
 
@@ -2149,7 +2148,7 @@ On the owner:
 orbit --version
 orbit workspace show
 orbit doctor
-orbit config get review.before_pr
+orbit config get review.timing
 ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input '{
   "caller_version": "<owner-version>",
   "caller_schema": 9,
@@ -2163,8 +2162,8 @@ From a follower session aimed at the owner selector, repeat the probe with
 that follower's `orbit --version`. Confirm:
 
 - versions and schema match;
-- the probe admits (`admits: true`), and with the owner's `review.before_pr`
-  on, the follower's drain lists the owner's review crew as runnable
+- the probe admits (`admits: true`), and with the owner's `review.timing`
+  at `before_pr`, the follower's drain lists the owner's review crew as runnable
   (`Crews:` in `orbit run show <drain-run>`);
 - the probe created no task, reservation, or claim (`orbit task locks list`
   unchanged);

@@ -1661,7 +1661,7 @@ fn auto_start_and_ship_report_the_validation_environment() {
             let _credential = held_worker_credential();
             let fixture = notice_fixture(
                 "[workflow]\nrequired_validation_commands = [\"make ci-fast\"]\n\n\
-                 [workflow.validation_env]\nlogin_shell = false\n",
+                 [workflow.validation_env]\nshell_probe = \"off\"\n",
             );
             let explicit = backlog_task(&fixture, "explicit", &[]);
             let server = fixture.server(false);
@@ -1678,7 +1678,7 @@ fn auto_start_and_ship_report_the_validation_environment() {
                     .as_str()
                     .unwrap_or_else(|| panic!("{path}: {receipt}"));
                 assert!(
-                    warning.contains("`workflow.validation_env.login_shell = false`"),
+                    warning.contains("`workflow.validation_env.shell_probe = off`"),
                     "{path}: {receipt}"
                 );
                 assert!(

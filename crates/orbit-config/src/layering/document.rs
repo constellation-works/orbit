@@ -5,7 +5,6 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
 
-use crate::operation::translate_legacy_review_keys;
 use crate::store::read_config_file;
 
 use super::load::ConfigDocument;
@@ -17,14 +16,17 @@ pub(super) fn read_config_document(path: &Path) -> Result<Option<ConfigDocument>
     parse_config_document(path, &raw).map(Some)
 }
 
+/// Parse one file. Deprecated spellings are not translated here: a
+/// workspace file's translation needs the global file beneath it, so the
+/// loader translates each document once it knows its layer
+/// ([`crate::aliases::translate_deprecated_keys`]).
 pub(super) fn parse_config_document(path: &Path, raw: &str) -> Result<ConfigDocument, OrbitError> {
-    let mut value = toml::from_str(raw).map_err(|err| {
+    let value = toml::from_str(raw).map_err(|err| {
         OrbitError::InvalidInput(format!(
             "invalid runtime config '{}': {err}",
             redact_home_dir(&path.display().to_string())
         ))
     })?;
-    translate_legacy_review_keys(&mut value, path)?;
     if let Some(patterns) =
         crate::registry::read_optional::<Vec<String>>(&value, "worktree.reclaim", path)?
     {

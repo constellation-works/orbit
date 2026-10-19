@@ -764,6 +764,105 @@ fn clock_sweep_resumes_only_the_current_upgrades_interruptions_and_audits_each_d
     }
 }
 
+/// [ORB-16775] The release before `review.timing` layered `review.before_pr`
+/// and `review.before_landing` one key at a time and captured the layer of
+/// the switch that decided the timing. A workspace that only switched
+/// before-landing review off left that decision to the built-in default, so
+/// its interrupted drain resumes over the same file; a capture naming
+/// another layer still differs from today's policy.
+#[test]
+fn clock_sweep_resumes_a_drain_captured_under_the_deprecated_review_switches() {
+    let test_name =
+        "upgrade_resume::clock_sweep_resumes_a_drain_captured_under_the_deprecated_review_switches";
+    if run_isolated_test(test_name) {
+        return;
+    }
+    orbit_core::test_support::install_substitute_pipeline_worker(["true".to_string()]);
+    let mut ctx = setup_context();
+    std::fs::write(
+        ctx.workspace.join("config.toml"),
+        "[review]\nbefore_landing = false\n",
+    )
+    .unwrap();
+    ctx.runtime = OrbitRuntime::from_roots(&ctx.global, &ctx.workspace).unwrap();
+    let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    for (kind, name) in [
+        ("jobs", "workspace_pull_pipeline"),
+        ("activities", "drain_window"),
+        ("activities", "pull_refill"),
+        ("activities", "sleep"),
+    ] {
+        let dir = ctx.global.join("resources").join(kind);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::copy(
+            assets.join(kind).join(format!("{name}.yaml")),
+            dir.join(format!("{name}.yaml")),
+        )
+        .unwrap();
+    }
+
+    let now = Utc::now();
+    let deadline = (now + Duration::hours(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
+    let policy = ctx.runtime.operation_policy();
+    let interrupted_drain = |timing_source: &str| {
+        // The admission as that release recorded it.
+        let input = json!({"review": {
+            "contract_version": REVIEW_CONTRACT_VERSION,
+            "policy_version": policy.version,
+            "timing": "none",
+            "timing_source": timing_source,
+            "crew_source": "built-in",
+            "budget": policy.review_budget(),
+            "required_validation_commands": ctx.runtime.workflow_required_validation_commands(),
+            "baseline_commands": ctx.runtime.review_baseline_commands(),
+            "captured_at": "2026-10-01T00:00:00Z",
+        }});
+        let run = ctx
+            .jobs
+            .insert_job_run(
+                "workspace_pull_pipeline",
+                1,
+                Utc::now(),
+                Some(input.clone()),
+                None,
+            )
+            .unwrap();
+        let mut state =
+            PipelineState::new(run.run_id.clone(), "workspace_pull_pipeline".into(), input);
+        state.record_pipeline_output("open_window", json!({"deadline": deadline}));
+        ctx.jobs.write_run_state(&run.run_id, &state).unwrap();
+        record_upgrade_interruption_at(ctx.jobs.as_ref(), &run.run_id, now);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        run.run_id
+    };
+    let provider = SingleWorkspace(ctx.runtime.clone());
+    let tick = || {
+        let sweep = run_sweep_at_with_providers(
+            &ctx.global,
+            SweepOptions::default(),
+            RoutineMachineIdentity {
+                machine_id: "test-mach".into(),
+                machine_name: "test-host".into(),
+            },
+            &provider,
+        )
+        .expect("sweep runs");
+        assert!(!sweep.lock_busy);
+    };
+
+    let captured = interrupted_drain("built-in");
+    tick();
+    let resumed = decisions(&ctx, &captured);
+    assert_eq!(resumed.len(), 1, "{resumed:?}");
+    assert_eq!(resumed[0]["decision"], "resumed", "{resumed:?}");
+    assert_eq!(ctx.jobs.job_run_retries(&captured, 10).unwrap().len(), 1);
+
+    // A later drain, so the resumed one does not supersede it.
+    let other_layer = interrupted_drain("workspace");
+    tick();
+    assert_skipped(&ctx, &other_layer, "review_admission_changed");
+}
+
 #[test]
 fn clock_sweep_caps_successful_upgrade_resumes_per_tick() {
     let test_name = "upgrade_resume::clock_sweep_caps_successful_upgrade_resumes_per_tick";

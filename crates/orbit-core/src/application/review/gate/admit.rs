@@ -148,15 +148,14 @@ fn admission_output(
     if input.get("mode").and_then(Value::as_str) == Some("local") {
         // A review layer before landing on a local-only route is refused
         // rather than reinterpreted; a pipeline may learn its route late.
-        let key = if admission.gates_landing() {
-            "review.before_landing"
+        let (code, setting) = if admission.gates_landing() {
+            ("review_before_landing", "review.timing = before_landing")
         } else {
-            "review.before_pr"
+            ("review_before_pr", "review.timing = before_pr")
         };
         return Err(refused(format!(
-            "{}_local_route_refused: this run captured {key} on but delivers locally; ship \
-             through the PR route or turn {key} off",
-            key.replace('.', "_")
+            "{code}_local_route_refused: this run captured {setting} but delivers locally; \
+             ship through the PR route or set review.timing = off"
         )));
     }
 
@@ -620,7 +619,7 @@ fn resolve_reviewer_crew(
     let name = admission.crew.as_deref().ok_or_else(|| {
         OrbitError::CapabilityDenied(
             "review_crew_unconfigured: before-PR review needs an explicitly configured \
-             operation.review_crew; automatic review never inherits the implementer's crew"
+             workflow.purpose_crews.review; automatic review never inherits the implementer's crew"
                 .to_string(),
         )
     })?;

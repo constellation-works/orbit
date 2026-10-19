@@ -159,8 +159,8 @@ hostname
 orbit --version
 shasum -a 256 "$(command -v orbit)"
 ssh "$OWNER" 'hostname; orbit --version; shasum -a 256 "$(command -v orbit)"'
-# review.before_pr is a workspace setting: read it for the owner workspace.
-ssh "$OWNER" orbit config get review.before_pr --workspace "$OWNER_WS" --json # expect true
+# review.timing is a workspace setting: read it for the owner workspace.
+ssh "$OWNER" orbit config get review.timing --workspace "$OWNER_WS" --json # expect before_pr
 
 # Follower: inspect the actual drain, claimed leaf and accepted owner handoff.
 orbit run show "$DRAIN_RUN" --json --no-reconcile > drain-run.json

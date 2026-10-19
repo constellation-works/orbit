@@ -14,9 +14,10 @@ use crate::memory_limit::MemoryLimit;
 /// to reject.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerContainmentSettings {
-    /// `machine.worker_containment` — launch workers in their own scope.
+    /// `machine.worker_containment` is `warn` or `strict` — launch workers in
+    /// their own scope.
     pub enabled: bool,
-    /// `machine.worker_containment_strict` — refuse uncontained launches.
+    /// `machine.worker_containment = "strict"` — refuse uncontained launches.
     pub strict: bool,
     /// `machine.worker_memory_high` — throttling threshold.
     pub memory_high: MemoryLimit,

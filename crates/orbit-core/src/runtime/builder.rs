@@ -276,9 +276,10 @@ pub(crate) fn build_context_from_roots(
         .clone();
     // Config admitted the mode's spelling; Core translates it into the exec
     // layer's policy, as it does for PR settings above.
+    let shell_probe = runtime_config.snapshot.shell_probe();
     let validation_env = orbit_exec::ValidationEnvPolicy {
-        login_shell: runtime_config.snapshot.workflow_validation_env_login_shell,
-        interactive: runtime_config.snapshot.workflow_validation_env_interactive,
+        login_shell: shell_probe.probes(),
+        interactive: shell_probe.interactive(),
         path: runtime_config.snapshot.workflow_validation_env_path.clone(),
         build_output_env: runtime_config
             .snapshot

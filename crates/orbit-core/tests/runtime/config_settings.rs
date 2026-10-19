@@ -283,7 +283,7 @@ fn settings_rows_report_built_in_fallback_equality_and_global_reach() {
     .unwrap();
     std::fs::write(
         workspace.join("config.toml"),
-        "[review]\nminutes = 120\nbefore_pr = false\n\n\
+        "[review]\nminutes = 120\ntiming = \"off\"\n\n\
          [workflow]\nauto_ship = true\ndefault_crew = \"sol\"\n\n\
          [execution.codex]\nsandbox = \"danger-full-access\"\n\n\
          [crews.sol]\nprovider = \"codex\"\nmodel = \"sol-model\"\n",
@@ -317,14 +317,11 @@ fn settings_rows_report_built_in_fallback_equality_and_global_reach() {
         row(&effective, "workflow.auto_ship")["equals"],
         json!({"global": true, "built_in": false})
     );
-    let before_pr = row(&effective, "review.before_pr");
+    let timing = row(&effective, "review.timing");
+    assert_eq!(timing["equals"], json!({"global": null, "built_in": true}));
     assert_eq!(
-        before_pr["equals"],
-        json!({"global": null, "built_in": true})
-    );
-    assert_eq!(
-        before_pr["fallback"],
-        json!({"layer": "built-in", "value": false, "state": "default"})
+        timing["fallback"],
+        json!({"layer": "built-in", "value": "off", "state": "default"})
     );
     // Removing a workspace security key falls to the built-in value, never the
     // global one, while the workspace file exists.
@@ -437,7 +434,7 @@ fn settings_rows_report_built_in_fallback_equality_and_global_reach() {
         json!("built-in")
     );
     assert_eq!(
-        row(&workspace_view, "review.before_pr")["equals"],
+        row(&workspace_view, "review.timing")["equals"],
         json!({"global": null, "built_in": true})
     );
     assert_eq!(
@@ -468,8 +465,8 @@ fn settings_fallback_and_equality_use_admitted_global_values() {
     let remaining_workspace = "[crews.terra]\nprovider = 'codex'\nmodel = 'terra-model'\n";
     for (key, section, global_literal, workspace_literal, raw_global, equal, fallback_layer) in [
         (
-            "operation.review_crew",
-            "operation",
+            "workflow.purpose_crews.review",
+            "workflow.purpose_crews",
             "'sol'",
             "'sol'",
             json!("sol"),
@@ -513,8 +510,8 @@ fn settings_fallback_and_equality_use_admitted_global_values() {
             "global",
         ),
         (
-            "operation.review_crew",
-            "operation",
+            "workflow.purpose_crews.review",
+            "workflow.purpose_crews",
             "'sol'",
             "'opus'",
             json!("sol"),
@@ -608,7 +605,7 @@ fn settings_global_facts_keep_workspace_admission_context() {
     std::fs::create_dir_all(&workspace).unwrap();
     std::fs::write(
         global.join("config.toml"),
-        "[operation]\nreview_crew = 'terra'\n\n\
+        "[workflow.purpose_crews]\nreview = 'terra'\n\n\
          [workflow]\nbase_branch = ''\n\n\
          [workflow.resource_throttle]\ncpu_resume_percent = 95\n",
     )
@@ -618,18 +615,18 @@ fn settings_global_facts_keep_workspace_admission_context() {
                      [crews.terra]\nprovider = 'codex'\nmodel = 'terra-model'\n";
     std::fs::write(
         workspace.join("config.toml"),
-        format!("[operation]\nreview_crew = ['terra']\n\n{remaining}"),
+        format!("[workflow.purpose_crews]\nreview = ['terra']\n\n{remaining}"),
     )
     .unwrap();
     let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("build runtime");
     let effective = config::effective_view(&runtime).expect("effective view");
-    let review = row(&effective, "operation.review_crew");
+    let review = row(&effective, "workflow.purpose_crews.review");
     assert_eq!(review["equals"]["global"], json!(true));
     assert_eq!(review["fallback"]["value"], json!(["terra"]));
     let workspace_view =
         config::file_view(&runtime, ConfigScope::Workspace).expect("workspace view");
     assert_eq!(
-        row(&workspace_view, "operation.review_crew")["equals"]["global"],
+        row(&workspace_view, "workflow.purpose_crews.review")["equals"]["global"],
         json!(true)
     );
     // The overwritten global branch cannot be admitted. Do not claim a
@@ -643,7 +640,7 @@ fn settings_global_facts_keep_workspace_admission_context() {
     let after_removal = config::effective_view(&reloaded).expect("view after key removal");
     assert_eq!(
         review["fallback"]["value"],
-        row(&after_removal, "operation.review_crew")["value"]
+        row(&after_removal, "workflow.purpose_crews.review")["value"]
     );
 }
 

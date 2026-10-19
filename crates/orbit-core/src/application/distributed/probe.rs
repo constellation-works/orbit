@@ -39,8 +39,8 @@ pub struct DrainProbeReport {
     pub session: DrainProbeSession,
     /// Ship configuration the owner would resolve at admission.
     pub ship: AdmissionShipContract,
-    /// The owner's review switches. `review.before_pr` and
-    /// `review.before_landing` take part in admission — with either on, each
+    /// The owner's review switches. `review.timing` takes part in admission —
+    /// with `before_pr` or `before_landing`, each
     /// claimed PR leaf runs the review the ship contract captures
     /// [ORB-13908] [ORB-14849]; after-landing
     /// review (the `delivery-code-review` auto-task) is reported for context

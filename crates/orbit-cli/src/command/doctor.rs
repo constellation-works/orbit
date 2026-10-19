@@ -514,10 +514,11 @@ fn orphan_task_store_removal_message(removed: &OrphanTaskStoreRemoval) -> String
     )
 }
 
-/// Render `--fix-retired-config-keys`: which keys were removed, and the backup
-/// written beside each edited file. An empty repair changed nothing.
+/// Render `--fix-retired-config-keys`: which replacement keys were written,
+/// which keys were removed, and the backup written beside each edited file.
+/// An empty repair changed nothing.
 fn retired_config_key_repair_message(repair: &RetiredConfigKeyRepair) -> String {
-    if repair.removed.is_empty() {
+    if repair.removed.is_empty() && repair.written.is_empty() {
         return "No retired, deprecated or unknown config keys were present.".to_string();
     }
     let mut groups: Vec<(String, String, Vec<&str>)> = Vec::new();
@@ -538,10 +539,21 @@ fn retired_config_key_repair_message(repair: &RetiredConfigKeyRepair) -> String 
         .collect::<Vec<_>>()
         .join("; ");
     let count = repair.removed.len();
-    format!(
-        "Removed {count} retired, deprecated or unknown config key{}: {detail}.",
+    let removed = format!(
+        "Removed {count} retired, deprecated or unknown config key{}: {detail}",
         if count == 1 { "" } else { "s" }
-    )
+    );
+    let written = repair
+        .written
+        .iter()
+        .map(|entry| format!("{} in {}", entry.key, entry.config_path.display()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    match (count, written.is_empty()) {
+        (_, true) => format!("{removed}."),
+        (0, false) => format!("Rewrote deprecated config values: {written}."),
+        (_, false) => format!("{removed}; wrote their replacements first: {written}."),
+    }
 }
 
 /// Render `--fix-automation-pins`'s outcome: what it reclaimed, why the rest

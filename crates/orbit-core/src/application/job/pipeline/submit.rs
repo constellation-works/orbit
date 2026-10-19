@@ -411,7 +411,7 @@ impl OrbitRuntime {
     fn validate_strict_worker_containment(&self, strict: bool) -> Result<(), OrbitError> {
         if strict && !self.context.settings().worker_containment().enabled {
             return Err(OrbitError::InvalidInput(
-                "--strict-worker-containment requires machine.worker_containment=true".into(),
+                "--strict-worker-containment requires machine.worker_containment to be warn or strict, not off".into(),
             ));
         }
         Ok(())

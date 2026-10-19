@@ -31,7 +31,7 @@ use crate::application::task::{
 };
 
 /// A runtime whose repository has one commit on `main` and whose
-/// `workflow.final_recovery_crews` is `pool`.
+/// `workflow.purpose_crews.final_recovery` is `pool`.
 fn recovery_runtime(pool: &str) -> (tempfile::TempDir, OrbitRuntime) {
     assert_isolated_child();
     let root = tempdir().expect("create tempdir");
@@ -46,7 +46,9 @@ fn recovery_runtime(pool: &str) -> (tempfile::TempDir, OrbitRuntime) {
             r#"
 [workflow]
 default_crew = "implementer"
-final_recovery_crews = {pool}
+
+[workflow.purpose_crews]
+final_recovery = {pool}
 
 [crews.implementer]
 model = "implementer-model"

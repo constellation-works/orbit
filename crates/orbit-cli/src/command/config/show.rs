@@ -50,8 +50,8 @@ impl Execute for ConfigShowArgs {
 }
 
 /// Every automatic-review switch with its source [ORB-13992]: before-PR
-/// review (`review.before_pr`, minutes, crew), before-landing review
-/// (`review.before_landing`) and after-landing review (the
+/// review (`review.timing = before_pr`, minutes, crew), before-landing review
+/// (`review.timing = before_landing`) and after-landing review (the
 /// `delivery-code-review` auto-task, its next batch and health).
 struct ReviewView {
     json: JsonValue,

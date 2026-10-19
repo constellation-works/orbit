@@ -129,8 +129,8 @@ actor, so any such edit after the block also leaves it to a human; `orbit
 doctor` names those tasks. It never runs on a follower or inside a claimed
 worker.
 
-The crew comes from `workflow.final_recovery_crews`. To opt out, set it to
-`[]`; this also turns off final recovery inside the delivery pipelines.
+The crew comes from `workflow.purpose_crews.final_recovery`. To opt out, set
+it to `[]`; this also turns off final recovery inside the delivery pipelines.
 
 ## Built in: re-checking tasks held for a red base
 

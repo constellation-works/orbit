@@ -22,39 +22,38 @@ changes no schedule; a verdict grants no merge permission.
 ## 1. Preferences: three timings [ORB-13992] [ORB-14849]
 
 Automatic review runs at up to three timings. Before-PR review and
-before-landing review are `config.toml` booleans; after-landing review is the
+before-landing review are the two values of the `config.toml` key
+`review.timing` besides `off`; after-landing review is the
 `delivery-code-review` auto-task's own `enabled` flag. Config preferences
 resolve **built-in → global → workspace**, each with its winning layer
 recorded. Unknown keys and out-of-range values fail config load.
 
 | Key | Values (default) |
 | --- | --- |
-| `review.before_pr` | bool (`false`) |
-| `review.before_landing` | bool (`false`) |
+| `review.timing` | `off`, `before_pr` or `before_landing` (`off`) |
 | `review.before_landing_hosts` | machine ids (`[]` by default; entries are `hm_…`; owner policy for claimed leaves) |
 | `review.minutes` | 1..=1440 (30): wall-clock limit for one candidate's review |
-| `operation.review_crew` | crew name or weighted pool |
+| `workflow.purpose_crews.review` | crew name or weighted pool |
 
-`review.before_pr` holds PR creation for a fresh reviewer (§3).
-`review.before_landing` opens the PR first and reviews it while hosted CI
+`review.timing = "before_pr"` holds PR creation for a fresh reviewer (§3).
+`before_landing` opens the PR first and reviews it while hosted CI
 runs, so a clean review costs about max(review, CI) of wall time instead of
 review + CI; the PR lands only at the head that review settled (§3.2). Both
 need an explicit `review_crew`, and admission escalates
 `review_crew_unconfigured` until one is set; both share `review.minutes`, and
 each candidate gets one review (§5).
 
-There is one review layer before landing. A resolution with both
-`review.before_pr` and `review.before_landing` on fails config load with an
-error naming both keys and the layer that set each, and `orbit config set`
-refuses an edit that would turn both on in one file. After-landing review is
-independent of either and may run beside them.
+There is one review layer before landing, so `review.timing` selects at most
+one of them. A file still carrying the deprecated `review.before_pr` and
+`review.before_landing` booleans with both on fails config load, naming both
+keys. After-landing review is independent of either and may run beside them.
 
 An owner can use `review.before_landing_hosts` to turn before-landing review
 on for claimed leaves from selected machines while leaving the owner's own
 deliveries and unlisted machines unaffected. It is owner-side delivery
 policy, not machine authentication; it is redundant when
-`review.before_landing` is already on and cannot be combined with
-`review.before_pr`. The [configuration reference](../../CONFIG.md) documents
+`review.timing` is already `before_landing` and cannot be combined with
+`before_pr`. The [configuration reference](../../CONFIG.md) documents
 the list's validation and claim behavior.
 
 After-landing review is carried out by the workspace's shipped
@@ -88,8 +87,8 @@ before-PR or before-landing review switched on without a resolvable
 
 **Migration.** `operation.review_policy` and `operation.review_minutes` are
 deprecated: they are translated on load with a warning naming each key, and a
-later release makes them errors. `before-pr` sets `review.before_pr = true`;
-`none` turns neither switch on; `after-landing` enables the consumer only while
+later release makes them errors. `before-pr` sets `review.timing = "before_pr"`;
+`none` sets it `off`; `after-landing` enables the consumer only while
 no operator has configured it (its `updated_by` is unset or `system`) — once
 `orbit auto-task toggle` or any other edit stamps an actor, its own flag
 decides. `orbit auto-task list`/`show` report that as `effective_enabled`. A
@@ -109,7 +108,7 @@ submission in the delivery family (`workspace_auto_pipeline`,
 `task_auto_pipeline`, `task_gate_pipeline`, `task_pr_pipeline`,
 `task_local_pipeline`) carries a versioned `review`
 snapshot in its immutable input: timing and its source, the reviewer crew
-selected from `operation.review_crew` and its source, the lineage budget,
+selected from `workflow.purpose_crews.review` and its source, the lineage budget,
 the policy version, the owner's `workflow.required_validation_commands`
 list, and its `review.baseline_commands` list (§4). A
 parent-authorized child inherits its parent's snapshot exactly; any other submission resolves from the
@@ -117,14 +116,14 @@ workspace preferences at that moment. A distributed drain
 (`workspace_pull_pipeline`) captures the same snapshot, so the `before_pr` it
 declares to owners is the value it was submitted with. Ordinary input naming
 the reserved `review` key is refused, and a resume keeps its persisted input,
-so switching `review.before_pr` off never weakens a gate that is already
+so setting `review.timing` to `off` never weakens a gate that is already
 active and switching it on never gates a run already admitted. The captured
 timing is `before-pr`, `before-landing` [ORB-14849] or `none`, with the source
 of the switch that decided it. A run captured under the retired
 `after-landing` policy value reads as not gated.
-`review.before_pr` is refused at submission for `task_local_pipeline` delivery,
+`review.timing = "before_pr"` is refused at submission for `task_local_pipeline` delivery,
 with no exemption: epic assembly was the one caller that gated a combined
-candidate later, and it is retired [ORB-12491]. `review.before_landing` is
+candidate later, and it is retired [ORB-12491]. `before_landing` is
 refused there the same way, since a local delivery opens no pull request to
 review. Readiness and the drain's wave hold such backlog work before dispatch
 (`local_route_before_pr`, `local_route_before_landing`), and doctor fails its
@@ -226,7 +225,7 @@ nor recover: a settled `reject` or `incomplete` verdict, a reviewer timeout, an 
 budget, an unconfigured, unavailable, or excluded crew, and a local route.
 `review_validate` has no retry and no step recovery: its failure is the
 review's `reject`. Every such failure is still eligible for the job's final
-recovery (one look by `workflow.final_recovery_crews`) before the failure
+recovery (one look by `workflow.purpose_crews.final_recovery`) before the failure
 handoff runs.
 
 ### 3.1 Verdicts, the two-commit shape, and revalidation [ORB-13989]
@@ -355,7 +354,7 @@ promoted, an evidence-only `incomplete` is not held in progress (§4): it ends l
 recovery still gets one look, as for a failed re-review.
 
 **Claimed leaves: the review runs on the leaf.** A claim from an owner with
-`review.before_landing` on, or a caller matching
+`review.timing = "before_landing"`, or a caller matching
 `review.before_landing_hosts`, captures `before_landing` and the owner's
 review contract in its ship contract. A host-list-only match leaves
 `before_pr` off. The owner admits only an executor whose
@@ -1253,8 +1252,7 @@ Existing runs without a `review` snapshot behave exactly as before. The
 seeded cron `code-review` auto-task and any custom definition stay untouched;
 migrating to delivery-triggered review remains the explicit edit described in
 [delivery automation operations](../automation-triggers/5_operations.md).
-To roll back, set `review.before_pr = false` or `review.before_landing =
-false` (and toggle the
+To roll back, set `review.timing = "off"` (and toggle the
 `delivery-code-review` consumer on for after-landing review, §1): future
 submissions capture the new value, admitted runs keep their gate, and
 certificates, ledgers, and landings stay readable. An older binary cannot settle an
@@ -1280,7 +1278,7 @@ so for a `codeql` or `linux` `host_sandbox_test` hold on its next tick.
   its intent.
 - Provider token and cost caps are not enforced; only reviewer runtime is
   bounded, so reviewer spend stays unknown.
-- `review.before_pr` and `review.before_landing` have no meaning on the
+- `review.timing` `before_pr` and `before_landing` have no meaning on the
   local-only delivery route and are refused at submission rather than
   downgraded.
 - A before-landing reviewer's fixes reach the open PR as a commit, not as a
@@ -1290,7 +1288,7 @@ so for a `codeql` or `linux` `host_sandbox_test` hold on its next tick.
   PR is already published, so it leaves the PR open in review like any other
   `incomplete`. A claimed leaf instead releases its claim with the evidence
   hold while its owner's task is still in progress.
-- The resolved-policy version is 5 with `review.before_landing`, and the
+- The resolved-policy version is 5 with before-landing review, and the
   distributed pull request schema changed with the ship contract's
   `before_landing`: owner and followers must run matching builds.
 - A denied required check is not evidence either way: it keeps its own

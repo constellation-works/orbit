@@ -359,17 +359,11 @@ define_config_settings! {
         section: ConfigSection::Machine, order: 30,
         resolve: |raw: Option<String>| resolve_task_prefix(raw),
     },
-    machine_worker_containment: bool => bool {
-        key: "machine.worker_containment", value_type: "bool",
-        description: "Launch each detached pipeline worker in its own transient systemd user scope bounded by the machine.worker_* limits (Linux with a systemd user manager). false, or no reachable user manager, launches workers in the caller's cgroup with a warning.",
+    machine_worker_containment: String => crate::aliases::WorkerContainmentSetting {
+        key: "machine.worker_containment", value_type: "string",
+        description: "How detached pipeline workers are bounded: `warn` (default) launches each in its own transient systemd user scope bounded by the machine.worker_* limits (Linux with a systemd user manager), or in the caller's cgroup with a warning when no user manager is reachable; `strict` refuses that launch instead; `off` always uses the caller's cgroup.",
         section: ConfigSection::Machine, order: 40,
-        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
-    },
-    machine_worker_containment_strict: bool => bool {
-        key: "machine.worker_containment_strict", value_type: "bool",
-        description: "Refuse detached worker launches when a systemd user scope is unavailable. Requires machine.worker_containment=true; default false keeps warn-and-launch behavior.",
-        section: ConfigSection::Machine, order: 45,
-        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
+        resolve: |raw: Option<crate::aliases::WorkerContainmentSetting>| crate::aliases::resolve_worker_containment(raw).map(|mode| mode.as_str().to_string()),
     },
     machine_worker_memory_high: MemoryLimit => String {
         key: "machine.worker_memory_high", value_type: "string",
@@ -399,12 +393,6 @@ define_config_settings! {
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u32>| Ok::<_, OrbitError>(raw.unwrap_or(0)),
     },
-    operation_review_crew: Option<Vec<String>> => operation::ReviewCrewSetting {
-        key: "operation.review_crew", value_type: "array<string>",
-        description: "Crew for automatic review: the before-PR or before-landing reviewer, and the crew of every review task the delivery-code-review auto-task mints (unset, that definition's template crew). One crew name, or a pool written like the complexity pools (`name` or `name:weight`, all bare or all weighted) from which each review draws one crew by weight, preferring a crew other than the one that implemented the reviewed work and skipping disabled or provider-limited crews. [] unsets it. Before-PR and before-landing review refuse to start without it.",
-        section: ConfigSection::Review, order: 30,
-        resolve: operation::review_crew,
-    },
     security_alert_sweep_min_severity: String => String {
         key: "security_alert_sweep.min_severity", value_type: "string",
         description: "Minimum severity filed by the security alert sweep for Dependabot and Code scanning: low, moderate (default), high, or critical. Run input overrides workspace then global config; secret scanning is always filed.",
@@ -433,27 +421,21 @@ define_config_settings! {
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<String>| Ok::<_, OrbitError>(raw),
     },
-    review_before_pr: bool => bool {
-        key: "review.before_pr", value_type: "bool",
-        description: "Hold PR creation for a fresh reviewer that fixes what it finds (default false). A drain or ship captures it at submission, so a run in flight keeps the value it started with. PR route only: refused for local-only delivery, and distributed admission refuses an endpoint that has it on. Never on together with review.before_landing. After-landing review is not a config key: it is the delivery-code-review auto-task's own enabled flag.",
+    review_timing: String => String {
+        key: "review.timing", value_type: "string",
+        description: "Review before landing, by a fresh reviewer that fixes what it finds: `off` (default), `before_pr` (hold PR creation for the review) or `before_landing` (open the PR, review it while hosted CI runs, and land only the head the review settled; any outcome but approve leaves the PR open and the task in review). PR route only: refused for local-only delivery, and distributed admission refuses an endpoint with `before_pr`. A drain or ship captures it at submission. After-landing review is the delivery-code-review auto-task's own enabled flag.",
         section: ConfigSection::Review, order: 10,
-        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
-    },
-    review_before_landing: bool => bool {
-        key: "review.before_landing", value_type: "bool",
-        description: "Open the PR first, then have a fresh reviewer review it and fix what it finds while hosted CI runs; the PR lands only at the head that review settled (default false). Any outcome other than an approve leaves the PR open and the task in review. Shares review.minutes and operation.review_crew with before-PR review, and is captured at submission like it. PR route only: refused for local-only delivery. Loading fails while it and review.before_pr are both on: there is one review layer before landing.",
-        section: ConfigSection::Review, order: 15,
-        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
+        resolve: |raw: Option<String>| resolve_choice(raw, "off", "review.timing", operation::ReviewTimingSetting::CHOICES),
     },
     review_before_landing_hosts: Vec<String> => Vec<String> {
         key: "review.before_landing_hosts", value_type: "array<string>",
-        description: "Owner policy: machine ids (hm_...) whose claimed leaves review their open PR before it lands, as review.before_landing does, while this owner's own deliveries keep review.before_landing off. The probe and pull admission resolve it for the caller's machine label and the claim captures the result. Ignored for machines already covered by review.before_landing = true; loading fails while review.before_pr is on and the list is non-empty. The label is caller-chosen, so this is policy, not a security boundary. Default empty.",
+        description: "Owner policy: machine ids (hm_...) whose claimed leaves review their open PR before it lands, as review.timing = before_landing does, while this owner's own deliveries do not. The probe and pull admission resolve it for the caller's machine label and the claim captures the result. Loading fails while review.timing is before_pr and the list is non-empty. The label is caller-chosen, so this is policy, not a security boundary. Default empty.",
         section: ConfigSection::Review, order: 16,
         resolve: |raw: Option<Vec<String>>| operation::before_landing_hosts(raw).map(Option::unwrap_or_default),
     },
     review_minutes: u32 => u32 {
         key: "review.minutes", value_type: "integer",
-        description: "Reviewer runtime minutes for one candidate's before-PR or before-landing review, its fix commit and final validation included. Each candidate gets one review: retries and interruptions share these minutes, and once they are spent the review is not restarted; a changed candidate, such as a completion rebase, is a new review (1..=1440, default 30).",
+        description: "Reviewer runtime minutes for one candidate's review before landing, its fix commit and final validation included. Each candidate gets one review: retries and interruptions share these minutes, and once they are spent the review is not restarted; a changed candidate, such as a completion rebase, is a new review (1..=1440, default 30).",
         section: ConfigSection::Review, order: 20,
         resolve: |raw: Option<u32>| operation::review_minutes(raw).map(|minutes| minutes.unwrap_or(DEFAULT_REVIEW_MINUTES)),
     },
@@ -573,12 +555,6 @@ define_config_settings! {
         section: ConfigSection::Delivery, order: 65,
         resolve: |raw: Option<String>| resolve_distributed_completion(raw),
     },
-    workflow_final_recovery_crews: Option<Vec<String>> => Vec<String> {
-        key: "workflow.final_recovery_crews", value_type: "array<string>",
-        description: "Weighted crew pool the final-recovery activity draws once per run after step recovery is exhausted; entries are `name` or `name:weight` (all bare or all weighted). Unset defaults to [\"sol:100\", \"opus:20\"], keeping only the members the crew registry defines; [] disables final recovery.",
-        section: ConfigSection::Delivery, order: 105,
-        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw),
-    },
     workflow_generated_paths: BTreeMap<String, String> => BTreeMap<String, String> {
         key: "workflow.generated_paths", value_type: "table<string,string>",
         description: "Generated files and the command that regenerates each, keyed by relative path glob (for example `\"docs/INDEX.md\" = \"make docs-index\"`). Conflict recovery never hand-merges a conflicting path that matches: the host takes one side, runs its command in the checkout and stages the output; a command that fails or leaves conflict markers fails the repair. Default empty.",
@@ -655,27 +631,27 @@ define_config_settings! {
         section: ConfigSection::Delivery, order: 106,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
-    workflow_purpose_crews_ci_failure_sweep: Vec<String> => Vec<String> {
-        key: "workflow.purpose_crews.ci_failure_sweep", value_type: "array<string>",
-        description: "Weighted crew pool tasks the CI failure sweep files (tag `ci-failure-sweep`) draw from when they are created without a crew. Unset or [] keeps today's route: the task's complexity pool, then `workflow.default_crew`. Entries are `name` or `name:weight` (all bare or all weighted). An explicit crew wins over it, and the run's allowed_crews still applies.",
-        section: ConfigSection::Delivery, order: 106,
-        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
-    },
-    workflow_purpose_crews_dependabot: Vec<String> => Vec<String> {
-        key: "workflow.purpose_crews.dependabot", value_type: "array<string>",
-        description: "Weighted crew pool Dependabot and code-scanning sweep tasks (tags `dependabot-sweep`, `code-scanning-sweep`) draw from when they are created without a crew. Unset or [] keeps today's route: the task's complexity pool, then `workflow.default_crew`. Entries are `name` or `name:weight` (all bare or all weighted). An explicit crew wins over it, and the run's allowed_crews still applies.",
-        section: ConfigSection::Delivery, order: 106,
-        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
-    },
     workflow_purpose_crews_failure_recovery: Vec<String> => Vec<String> {
         key: "workflow.purpose_crews.failure_recovery", value_type: "array<string>",
         description: "Weighted crew pool step-failure and PR conflict recovery draw from, once per run. Unset or [] keeps today's route: `workflow.medium_complexity_crews`. Entries are `name` or `name:weight` (all bare or all weighted). An explicit crew wins over it, and the run's allowed_crews still applies.",
         section: ConfigSection::Delivery, order: 106,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
-    workflow_purpose_crews_merged_head_repair: Vec<String> => Vec<String> {
-        key: "workflow.purpose_crews.merged_head_repair", value_type: "array<string>",
-        description: "Weighted crew pool merged-head repair tasks a review reconciliation files draw from when they are created without a crew. Unset or [] keeps today's route: the task's complexity pool, then `workflow.default_crew`. Entries are `name` or `name:weight` (all bare or all weighted). An explicit crew wins over it, and the run's allowed_crews still applies.",
+    workflow_purpose_crews_final_recovery: Option<Vec<String>> => Vec<String> {
+        key: "workflow.purpose_crews.final_recovery", value_type: "array<string>",
+        description: "Weighted crew pool the final-recovery activity draws once per run after step recovery is exhausted; entries are `name` or `name:weight` (all bare or all weighted). Unset defaults to [\"sol:100\", \"opus:20\"], keeping only the members the crew registry defines; [] disables final recovery.",
+        section: ConfigSection::Delivery, order: 105,
+        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw),
+    },
+    workflow_purpose_crews_review: Option<Vec<String>> => operation::ReviewCrewSetting {
+        key: "workflow.purpose_crews.review", value_type: "array<string>",
+        description: "Crew for automatic review: the reviewer review.timing runs, and the crew of every review task the delivery-code-review auto-task mints (unset, that definition's template crew). One crew name, or a pool written like the complexity pools from which each review draws one crew by weight, preferring a crew other than the one that implemented the reviewed work and skipping disabled or provider-limited crews. [] unsets it. Review before landing refuses to start without it.",
+        section: ConfigSection::Review, order: 30,
+        resolve: operation::review_crew,
+    },
+    workflow_purpose_crews_sweep_tasks: Vec<String> => Vec<String> {
+        key: "workflow.purpose_crews.sweep_tasks", value_type: "array<string>",
+        description: "Weighted crew pool that tasks filed by the CI failure, Dependabot and code-scanning sweeps, and merged-head repairs filed by review reconciliation, draw from when they are created without a crew. Unset or [] keeps today's route: the task's complexity pool, then `workflow.default_crew`. Entries are `name` or `name:weight` (all bare or all weighted). An explicit crew wins over it, and the run's allowed_crews still applies.",
         section: ConfigSection::Delivery, order: 106,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
@@ -792,17 +768,11 @@ define_config_settings! {
         section: ConfigSection::Delivery, order: 68,
         resolve: resolve_unlocked_path_validation_commands,
     },
-    workflow_validation_env_login_shell: bool => bool {
-        key: "workflow.validation_env.login_shell", value_type: "bool",
-        description: "Resolve required-validation and local_shell PATH (plus allowlisted toolchain locators such as CARGO_HOME) from the owner's shell via `-i -l -c`, falling back to `-l -c` on failure (default true); false never probes the shell. Each probe is bounded to 10 seconds and the outcome is cached for two minutes.",
+    workflow_validation_env_shell_probe: String => String {
+        key: "workflow.validation_env.shell_probe", value_type: "string",
+        description: "How required-validation and local_shell PATH (plus allowlisted toolchain locators such as CARGO_HOME) are resolved from the owner's shell: `interactive` (default) tries `-i -l -c` so toolchains exported in rc files are found, falling back to `-l -c` on startup failure, nonzero exit, timeout or a missing marker; `login` probes only `-l -c`; `off` never probes. Each probe is bounded to 10 seconds and cached for two minutes; only allowlisted toolchain variables cross.",
         section: ConfigSection::Delivery, order: 61,
-        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
-    },
-    workflow_validation_env_interactive: bool => bool {
-        key: "workflow.validation_env.interactive", value_type: "bool",
-        description: "Try an interactive login shell (`-i -l -c`) so toolchains exported in rc files are found (default true). Startup failure, nonzero exit, timeout or a missing marker falls back to `-l -c`, recording the mode and reason. False probes only `-l -c`; ignored when login_shell is false. Only allowlisted toolchain variables cross.",
-        section: ConfigSection::Delivery, order: 62,
-        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
+        resolve: |raw: Option<String>| resolve_choice(raw, "interactive", "workflow.validation_env.shell_probe", crate::aliases::ShellProbeMode::CHOICES),
     },
     workflow_validation_env_path: Vec<String> => Vec<String> {
         key: "workflow.validation_env.path", value_type: "array<string>",

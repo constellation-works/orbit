@@ -80,11 +80,11 @@ capability and authenticates no machine. Local account access and SSH login are 
 this single-user model: the fence prevents mixed attempts among cooperating executors, not
 impersonation by a caller able to start the server with another label, including locally from a
 managed agent context. Owner-local drains use trusted local
-runtime identity and the same logical admission contract. With the owner's `review.before_pr` on,
-admission refuses, before creating a claim, an executor that does not declare `review_gate` and a
-local ship mode, where no gate runs; the executor's own `caller_before_pr` never refuses
-[ORB-13908]. The owner resolves its ship contract per executor: with `review.before_landing` off
-and `review.before_pr` off, an executor whose trusted session machine id is listed in the owner's
+runtime identity and the same logical admission contract. With the owner's `review.timing` at
+`before_pr`, admission refuses, before creating a claim, an executor that does not declare
+`review_gate` and a local ship mode, where no gate runs; the executor's own `caller_before_pr`
+never refuses [ORB-13908]. The owner resolves its ship contract per executor: with the owner's
+`review.timing` `off`, an executor whose trusted session machine id is listed in the owner's
 `review.before_landing_hosts` gets `before_landing` on and the owner's `review` contract, every
 other executor and the owner's own deliveries get neither [ORB-15192]. The probe resolves it for
 the probing session's machine and pull admission for the pulling session's machine, so a
@@ -102,8 +102,8 @@ defined in [design §4.1](../2_design.md#41-read-only-admission-probe).
 | `caller_version` | string | Caller binary version |
 | `caller_schema` | integer | Caller distributed-drain wire-protocol schema version |
 | `caller_fingerprint` | string, optional for historical requests | Type-derived request fingerprint, checked before request deserialization |
-| `caller_before_pr` | bool | The `review.before_pr` the calling drain captured at submission; diagnostic only, since a claimed leaf runs the review the `ship` contract captures [ORB-13908] |
-| `review_gate` | bool, optional | Whether the executor's claimed PR leaf runs the before-PR gate; an owner with `review.before_pr` on admits only an executor that declares it. Absent: `false` |
+| `caller_before_pr` | bool | Whether the calling drain captured before-PR review (`review.timing = "before_pr"`) at submission; diagnostic only, since a claimed leaf runs the review the `ship` contract captures [ORB-13908] |
+| `review_gate` | bool, optional | Whether the executor's claimed PR leaf runs the before-PR gate; an owner with `review.timing` at `before_pr` admits only an executor that declares it. Absent: `false` |
 | `run_context` | object | Calling drain's `run_id`, `job_name`, and diagnostic `host_id` |
 | `crews` | object, optional | Executor crew capability: `runnable` (crew names its window preflight found runnable; absent means unrestricted), `default_crew` (what a task naming no crew runs as there; absent admits no crew-less task) and `excluded` (`{crew, source, reason}` crews it will not run for the rest of its window). Absent: every crew is admissible |
 | `os` | enum, optional | Executor host OS: `linux`, `macos` or `windows`. A task carrying `os:` tags is admitted only to an executor whose OS one of them names. Absent (an OS outside that set): only tasks without an `os:` tag are admissible |
@@ -187,7 +187,7 @@ for a pull drain as for a local one.
 
 1. Apply pre-admission refusals in the table order below: selector, current authorization,
    trusted invocation context, input shape, version/schema, ship mode, then before-PR review: an
-   owner with `review.before_pr` on admits only a PR-mode request whose executor declares
+   owner with `review.timing` at `before_pr` admits only a PR-mode request whose executor declares
    `review_gate`. The executor's `caller_before_pr` is not checked.
    These checks also apply to pull receipt replay; the separate read-only receipt lookup below
    is for reconciliation across configuration/upgrades.
@@ -438,7 +438,7 @@ read, so a preflight cannot report a verdict admission would not reach.
 | `protocol_skew` | Caller and owner request fingerprints differ (or the owner predates fingerprints); refused before pull, with both fingerprints in the diagnosis |
 | `protocol_mismatch` | Legacy probe report for differing integer revisions; current followers surface typed `protocol_skew` |
 | `ship_mode_unsupported` | A remote caller targets a local-only ship workspace |
-| `before_pr_unsupported` | The ship contract captures `before_pr` or `before_landing` (owner's `review.before_pr`, `review.before_landing`, or a `review.before_landing_hosts` match for this executor) and the executor does not declare `review_gate`, or the ship mode is local (stored receipts may spell it `review_policy_unsupported`) |
+| `before_pr_unsupported` | The ship contract captures `before_pr` or `before_landing` (owner's `review.timing`, or a `review.before_landing_hosts` match for this executor) and the executor does not declare `review_gate`, or the ship mode is local (stored receipts may spell it `review_policy_unsupported`) |
 | `request_mismatch` | Existing request ID is reused with different input |
 | `request_expired` | An old request is represented only by a non-reusable tombstone |
 | `ship_contract_mismatch` | A *new* request carries a ship contract other than the one the owner resolves now for the calling machine; replays keep their stored contract |

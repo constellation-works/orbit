@@ -10,7 +10,7 @@
 //! - the owner answers the read-only probe **as that machine**, and would
 //!   admit this executor now (binary, protocol schema, ship mode), and this
 //!   host can resolve the before-PR reviewer crew the owner's ship contract
-//!   captured, when `review.before_pr` is on there.
+//!   captured, when `review.timing` is `before_pr` there.
 //!
 //! An empty `workflow.required_validation_commands` is not a refusal: its
 //! claimed leaves run no required check, as an owner's own delivery does, and

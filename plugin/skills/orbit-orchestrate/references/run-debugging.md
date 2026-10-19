@@ -121,8 +121,8 @@ An explicit activity `crew` always wins. Otherwise activities with a
 `workflow.purpose_crews.task_pilot`, step-failure and PR conflict recovery from
 `workflow.purpose_crews.failure_recovery`, auto-fix repairs from
 `workflow.purpose_crews.auto_fix`, final recovery from
-`workflow.final_recovery_crews`. An unset purpose pool falls back to the pool
-it replaced (`low` for the pilot and auto-fix, `medium` for recovery). The run
+`workflow.purpose_crews.final_recovery`. An unset purpose pool falls back to
+the pool it replaced (`low` for the pilot and auto-fix, `medium` for recovery). The run
 state's `activity_crew_draws` records each draw, its source and the eligible
 members; `orbit run show` prints them as `Activity Crew:` lines, and `--json`
 names each draw's `rule`. An empty complexity pool falls back to

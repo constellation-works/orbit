@@ -899,13 +899,13 @@ them only. The other claim kinds stay, as do admission receipts.
 and PR identity, source branch, published candidate head SHA, validated base SHA, intended base
 and landing branch, execution summary and validation artifact references.
 
-- The owner captures its `review.before_pr` and `review.before_landing` contract at admission;
-  config load refuses both on at once [ORB-14849]. With both off, `review.before_landing_hosts`
+- The owner captures its `review.timing` contract at admission; one key selects at most one
+  review layer before landing [ORB-14849]. With it `off`, `review.before_landing_hosts`
   turns before-landing on for the claims of the executor machines it lists, so the owner's own
   deliveries can skip it while a follower's claims review before landing [ORB-15192]; it is
-  refused beside `review.before_pr`. When either is on, the owner admits only
-  PR-mode executors that declare `review_gate`; the executor's captured `caller_before_pr` is
-  diagnostic. Local ship mode is refused because it has no claimed leaf on which to run the gate.
+  refused beside `review.timing = "before_pr"`. When either timing applies, the owner admits
+  only PR-mode executors that declare `review_gate`; the executor's captured `caller_before_pr`
+  is diagnostic. Local ship mode is refused because it has no claimed leaf on which to run the gate.
   Before-PR review runs on the leaf before the PR opens. Before-landing review runs on the leaf
   after `pr_open`, against the open PR's published head, and merges nothing; `handoff_land` merges
   only the head that review settled. After-landing review is the owner's `delivery-code-review`
@@ -1260,8 +1260,8 @@ reports:
   mutations of it.
 
 It also reports the owner's review switches and the verdict of `orbit_store::admission_refusal`,
-without raising it: when the captured owner contract has `review.before_pr` or
-`review.before_landing` on, only a PR-mode claim whose executor declares `review_gate` is admitted;
+without raising it: when the captured owner contract has `review.timing` at `before_pr` or
+`before_landing`, only a PR-mode claim whose executor declares `review_gate` is admitted;
 local ship mode is refused because it cannot run the claimed-leaf gate. After-landing review does
 not change the verdict.
 
@@ -1349,7 +1349,7 @@ Acceptance criteria, not reported as passing.
 | Epic retirement with active old runs, including roots in review | Migration refused until execution and reservations are reconciled |
 | Missing file selector, then reservation expiry | Full declared footprint stays protected |
 | Truly empty legacy task/epic context | Diagnostic with repair; no guessed or inherited surface |
-| `review.before_pr` or `review.before_landing` on or off, after-landing auto-task on or off | With both off, admit and hand off a typed not-required disposition without reviewed SHA or artifact; with either on, admit only a PR-mode executor declaring `review_gate` and require typed review evidence for the captured timing: before-PR evidence before the PR opens, or before-landing evidence for the settled head after `pr_open`. After-landing does not affect admission |
+| `review.timing` `off`, `before_pr` or `before_landing`, after-landing auto-task on or off | With `off`, admit and hand off a typed not-required disposition without reviewed SHA or artifact; with either timing, admit only a PR-mode executor declaring `review_gate` and require typed review evidence for the captured timing: before-PR evidence before the PR opens, or before-landing evidence for the settled head after `pr_open`. After-landing does not affect admission |
 | Owner-local task without origin | Local candidate handoff and authorized local landing; no PR or remote credentials |
 | SSH session and managed worker invocation | Session capability gates operator actions; managed runs never propagate operator authority; payload labels cannot replace claim/run authority |
 | Revocation during a live attempt | Revoked attempt cannot bind, mutate, settle or promote; its receipt reports the revoked phase |

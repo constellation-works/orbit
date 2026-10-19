@@ -284,8 +284,8 @@ pub(super) fn backlog_snapshot_in_mode(
         }
     });
     // [ORB-14168] A task that cleared the per-task gates would still fail
-    // closed at local-route admission while `review.before_pr` or
-    // `review.before_landing` [ORB-14849] is on. Hold it here so the drain
+    // closed at local-route admission while `review.timing` is `before_pr` or
+    // `before_landing` [ORB-14849]. Hold it here so the drain
     // does not spawn that delivery. Tasks already excluded above keep the
     // more specific reason. PR delivery skips this, and turning the switch
     // off (workspace overriding global included) clears it. A PR drain holds

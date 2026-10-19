@@ -104,7 +104,7 @@ systemctl --user status | head -n 3   # your user manager must answer for the cl
 Microsoft notes that on Debian/Ubuntu/Kali the `systemd` and `systemd-sysv`
 packages must be installed. Without a working user manager, workers run in the
 caller's cgroup with one warning (`machine.worker_containment`; refused when
-`machine.worker_containment_strict` is on — see [CONFIG.md](../CONFIG.md)) and
+it is `strict` — see [CONFIG.md](../CONFIG.md)) and
 `orbit routine init --install-clock` cannot install the timer.
 
 ## 4. Install the toolchain, Orbit and provider CLIs inside the distribution

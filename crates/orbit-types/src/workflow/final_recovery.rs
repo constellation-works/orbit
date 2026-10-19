@@ -14,9 +14,15 @@ use super::FinalRecoveryError;
 /// Name of the shipped activity that produces a [`FinalRecoveryDecision`].
 pub const FINAL_RECOVERY_ACTIVITY: &str = "final_recovery";
 
-/// Configuration key naming the weighted crew pool final recovery draws from.
-/// It is also the activity's `crew_config_key`.
+/// The final-recovery activity's `crew_config_key`, and the key its frozen
+/// crew draw is recorded under in pipeline state. Shipped job definitions and
+/// run state persist it, so it keeps the spelling of the configuration key it
+/// was named after; the pool itself is configured as
+/// [`FINAL_RECOVERY_CREWS_CONFIG_KEY`].
 pub const FINAL_RECOVERY_CREWS_KEY: &str = "workflow.final_recovery_crews";
+
+/// Configuration key naming the weighted crew pool final recovery draws from.
+pub const FINAL_RECOVERY_CREWS_CONFIG_KEY: &str = "workflow.purpose_crews.final_recovery";
 
 /// Longest free-text field a decision may carry. Every decision is recorded
 /// as a task comment, so an unbounded rationale is refused rather than stored.

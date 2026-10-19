@@ -1,53 +1,75 @@
 //  Public review and machine config admission, provenance and migration.
-//  `review.before_landing` [ORB-14849] resolves like `review.before_pr`; a load
-//  with both on fails because there is one review layer before landing.
+//  `review.timing` [ORB-16775] is the one review layer before landing; the
+//  deprecated `review.before_pr` and `review.before_landing` booleans still
+//  load into it with the per-key layering they had.
 
 fn review_layers_write_config(root: &Path, body: &str) {
     std::fs::write(root.join("config.toml"), body).expect("write config");
 }
 
 #[test]
-fn before_landing_resolves_built_in_then_global_then_workspace_with_its_layer() {
+fn review_timing_resolves_built_in_then_global_then_workspace_with_its_layer() {
     let global = tempfile::tempdir().expect("global tempdir");
     let workspace = tempfile::tempdir().expect("workspace tempdir");
     let load = || {
         ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
             .expect("config loads")
             .operation
-            .review_before_landing
     };
 
     review_layers_write_config(workspace.path(), "[workflow]\nauto_ship = true\n");
     let built_in = load();
-    assert!(!built_in.value);
-    assert_eq!(built_in.source, OperationLayerSource::BuiltIn);
+    assert!(!built_in.review_before_landing.value && !built_in.review_before_pr.value);
+    assert_eq!(
+        built_in.review_before_landing.source,
+        OperationLayerSource::BuiltIn
+    );
 
-    review_layers_write_config(global.path(), "[review]\nbefore_landing = true\n");
+    review_layers_write_config(global.path(), "[review]\ntiming = \"before_landing\"\n");
     let from_global = load();
-    assert!(from_global.value);
-    assert_eq!(from_global.source, OperationLayerSource::Global);
+    assert!(from_global.review_before_landing.value && !from_global.review_before_pr.value);
+    assert_eq!(
+        from_global.review_before_landing.source,
+        OperationLayerSource::Global
+    );
 
-    review_layers_write_config(workspace.path(), "[review]\nbefore_landing = false\n");
+    // A workspace timing replaces the global one whole: `before_pr` here
+    // never meets the global `before_landing`.
+    review_layers_write_config(workspace.path(), "[review]\ntiming = \"before_pr\"\n");
     let from_workspace = load();
-    assert!(!from_workspace.value);
-    assert_eq!(from_workspace.source, OperationLayerSource::Workspace);
-    admit_settable_config_key("review.before_landing").expect("live key");
+    assert!(from_workspace.review_before_pr.value && !from_workspace.review_before_landing.value);
+    assert_eq!(
+        from_workspace.review_before_pr.source,
+        OperationLayerSource::Workspace
+    );
+    admit_settable_config_key("review.timing").expect("live key");
 }
 
+/// The deprecated booleans keep their per-key layering through the alias: a
+/// workspace that states one inherits the other from the global file, so
+/// two switches on across the layers still fail the load.
 #[test]
-fn before_pr_and_before_landing_both_on_fail_the_load_naming_both_keys() {
+fn deprecated_review_booleans_layer_per_key_and_both_on_fail_the_load() {
     let global = tempfile::tempdir().expect("global tempdir");
     let workspace = tempfile::tempdir().expect("workspace tempdir");
     let roots = ConfigRoots::new(global.path(), workspace.path());
-    // Across layers: each key is named with the layer that turned it on.
+
+    review_layers_write_config(global.path(), "[review]\nbefore_landing = true\n");
+    review_layers_write_config(workspace.path(), "[review]\nbefore_pr = false\n");
+    let policy = ResolvedConfig::load(&roots)
+        .expect("config loads")
+        .operation;
+    assert!(policy.review_before_landing.value && !policy.review_before_pr.value);
+
     review_layers_write_config(global.path(), "[review]\nbefore_pr = true\n");
     review_layers_write_config(workspace.path(), "[review]\nbefore_landing = true\n");
     let error = ResolvedConfig::load(&roots)
         .expect_err("two review layers before landing are refused")
         .to_string();
     assert!(
-        error.contains("review.before_pr (global)")
-            && error.contains("review.before_landing (workspace)"),
+        error.contains("review.before_pr")
+            && error.contains("review.before_landing")
+            && error.contains("review.timing"),
         "{error}"
     );
 
@@ -68,8 +90,8 @@ fn before_pr_and_before_landing_both_on_fail_the_load_naming_both_keys() {
 
 /// [ORB-15192] `review.before_landing_hosts` resolves through the layers
 /// trimmed and deduplicated, refuses a label that is not a machine id, and
-/// fails the load beside `review.before_pr`, naming both keys: a listed
-/// host's claims would otherwise get two review layers before landing.
+/// fails the load beside `review.timing = before_pr`, naming both keys: a
+/// listed host's claims would otherwise get two review layers before landing.
 #[test]
 fn before_landing_hosts_resolve_validated_and_are_refused_beside_before_pr() {
     let global = tempfile::tempdir().expect("global tempdir");
@@ -100,7 +122,7 @@ fn before_landing_hosts_resolve_validated_and_are_refused_beside_before_pr() {
         .to_string();
     assert!(error.contains("review.before_landing_hosts[0]"), "{error}");
 
-    review_layers_write_config(global.path(), "[review]\nbefore_pr = true\n");
+    review_layers_write_config(global.path(), "[review]\ntiming = \"before_pr\"\n");
     review_layers_write_config(
         workspace.path(),
         "[review]\nbefore_landing_hosts = [\"hm_mac\"]\n",
@@ -109,7 +131,7 @@ fn before_landing_hosts_resolve_validated_and_are_refused_beside_before_pr() {
         .expect_err("before-PR review beside listed hosts is refused")
         .to_string();
     assert!(
-        error.contains("review.before_pr (global)")
+        error.contains("review.timing is before_pr (global)")
             && error.contains("review.before_landing_hosts (workspace)"),
         "{error}"
     );
@@ -119,6 +141,9 @@ fn before_landing_hosts_resolve_validated_and_are_refused_beside_before_pr() {
     ResolvedConfig::load(&roots).expect("before-PR review with no listed hosts loads");
 }
 
+/// A global `review.timing` edit that a workspace's deprecated boolean would
+/// combine into two layers is refused before it is saved, so the workspace
+/// keeps loading.
 #[test]
 fn global_set_that_would_turn_on_both_review_layers_is_refused_before_saving() {
     let global = tempfile::tempdir().expect("global tempdir");
@@ -128,9 +153,9 @@ fn global_set_that_would_turn_on_both_review_layers_is_refused_before_saving() {
 
     // Each pairing: the workspace layer already has one switch on, and the
     // global edit turns on the other.
-    for (workspace_key, global_key) in [
-        ("before_pr", "review.before_landing"),
-        ("before_landing", "review.before_pr"),
+    for (workspace_key, global_timing) in [
+        ("before_pr", "before_landing"),
+        ("before_landing", "before_pr"),
     ] {
         review_layers_write_config(
             workspace.path(),
@@ -141,15 +166,14 @@ fn global_set_that_would_turn_on_both_review_layers_is_refused_before_saving() {
         let mut store =
             ConfigStore::open(ConfigScope::Global, global_path.clone()).expect("open global store");
         store
-            .set_value(global_key, "true")
+            .set_value("review.timing", global_timing)
             .expect("stage global set");
         let error = store
-            .validate_global_for_set(global_key, workspace.path())
+            .validate_global_for_set("review.timing", workspace.path())
             .expect_err("a global set that conflicts with the workspace layer is refused")
             .to_string();
         assert!(
-            error.contains(&format!("review.{workspace_key} (workspace)"))
-                && error.contains(&format!("{global_key} (global)")),
+            error.contains("review.before_pr") && error.contains("review.before_landing"),
             "{error}"
         );
 
@@ -160,54 +184,15 @@ fn global_set_that_would_turn_on_both_review_layers_is_refused_before_saving() {
         );
         ResolvedConfig::load(&roots).expect("workspace config stays loadable");
 
-        // The other switch off in the workspace layer is not a conflict.
+        // A workspace that states the other switch off is not a conflict.
         review_layers_write_config(
             workspace.path(),
             "[review]\nbefore_pr = false\nbefore_landing = false\n",
         );
         store
-            .validate_global_for_set(global_key, workspace.path())
+            .validate_global_for_set("review.timing", workspace.path())
             .expect("no workspace switch is on");
     }
-
-    // With one pinned root there is no workspace layer; the one-file check still applies.
-    review_layers_write_config(global.path(), "[review]\nbefore_pr = true\n");
-    let mut store = ConfigStore::open(ConfigScope::Global, global_path).expect("open global store");
-    store
-        .set_value("review.before_landing", "true")
-        .expect("stage global set");
-    let error = store
-        .validate_global_for_set("review.before_landing", global.path())
-        .expect_err("one file alone still refuses both on")
-        .to_string();
-    assert!(error.contains("review.before_landing"), "{error}");
-}
-
-#[test]
-fn global_review_conflict_without_workspace_file_names_global_layer() {
-    let global = tempfile::tempdir().expect("global tempdir");
-    let workspace = tempfile::tempdir().expect("workspace tempdir");
-    let global_path = global.path().join("config.toml");
-    review_layers_write_config(global.path(), "[review]\nbefore_pr = true\n");
-    assert!(
-        !workspace.path().join("config.toml").exists(),
-        "the fixture must have no workspace config"
-    );
-
-    let mut store = ConfigStore::open(ConfigScope::Global, global_path).expect("open global store");
-    store
-        .set_value("review.before_landing", "true")
-        .expect("stage global set");
-    let error = store
-        .validate_global_for_set("review.before_landing", workspace.path())
-        .expect_err("a global-only review conflict is refused")
-        .to_string();
-
-    assert!(
-        error.contains("review.before_pr (global)")
-            && error.contains("review.before_landing (global)"),
-        "{error}"
-    );
 }
 
 #[test]
@@ -327,7 +312,7 @@ fn review_crew_loads_a_crew_or_a_pool_and_fails_on_an_unknown_member() {
 
     review_layers_write_config(
         workspace.path(),
-        "[operation]\nreview_crew = [\" sol \", \"grok\"]\n",
+        "[workflow.purpose_crews]\nreview = [\" sol \", \"grok\"]\n",
     );
     let pool = load().expect("a bare pool loads");
     assert_eq!(
@@ -335,13 +320,13 @@ fn review_crew_loads_a_crew_or_a_pool_and_fails_on_an_unknown_member() {
         vec!["grok".to_string(), "sol".to_string()]
     );
     assert_eq!(
-        pool.snapshot.operation_review_crew.as_ref(),
+        pool.snapshot.workflow_purpose_crews_review.as_ref(),
         Some(&pool.operation.review_crew.value)
     );
 
     review_layers_write_config(
         workspace.path(),
-        "[operation]\nreview_crew = [\"sol:3\", \"grok:1\"]\n",
+        "[workflow.purpose_crews]\nreview = [\"sol:3\", \"grok:1\"]\n",
     );
     assert_eq!(
         load()
@@ -354,12 +339,15 @@ fn review_crew_loads_a_crew_or_a_pool_and_fails_on_an_unknown_member() {
 
     review_layers_write_config(
         workspace.path(),
-        "[operation]\nreview_crew = [\"sol:3\", \"grok\"]\n",
+        "[workflow.purpose_crews]\nreview = [\"sol:3\", \"grok\"]\n",
     );
     load().expect_err("bare and weighted entries do not mix");
 
-    review_layers_write_config(global.path(), "[operation]\nreview_crew = \"sol\"\n");
-    review_layers_write_config(workspace.path(), "[operation]\nreview_crew = []\n");
+    review_layers_write_config(
+        global.path(),
+        "[workflow.purpose_crews]\nreview = \"sol\"\n",
+    );
+    review_layers_write_config(workspace.path(), "[workflow.purpose_crews]\nreview = []\n");
     let unset = load().expect("an empty pool loads");
     assert!(unset.operation.review_crew.value.is_empty());
     assert_eq!(
@@ -369,18 +357,18 @@ fn review_crew_loads_a_crew_or_a_pool_and_fails_on_an_unknown_member() {
 
     review_layers_write_config(
         workspace.path(),
-        "[operation]\nreview_crew = [\"sol\", \"no-such-crew\"]\n",
+        "[workflow.purpose_crews]\nreview = [\"sol\", \"no-such-crew\"]\n",
     );
     let error = load()
         .expect_err("an unknown pool member fails the load")
         .to_string();
     assert!(
-        error.contains("operation.review_crew") && error.contains("no-such-crew"),
+        error.contains("workflow.purpose_crews.review") && error.contains("no-such-crew"),
         "{error}"
     );
     review_layers_write_config(
         workspace.path(),
-        "[operation]\nreview_crew = \"no-such-crew\"\n",
+        "[workflow.purpose_crews]\nreview = \"no-such-crew\"\n",
     );
     let error = load()
         .expect_err("an unknown single crew fails the load")
@@ -494,6 +482,9 @@ mod operation;
 
 #[path = "review_layers/machine.rs"]
 mod machine;
+
+#[path = "review_layers/deprecated_aliases.rs"]
+mod deprecated_aliases;
 
 #[test]
 fn build_output_bindings_default_empty_and_workspace_replaces_global() {

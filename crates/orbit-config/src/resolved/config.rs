@@ -16,9 +16,7 @@ use super::crew::{IgnoredCrewProperty, crews_from_raw, default_crews};
 use super::execution_env::{CodexExecutionPolicy, ExecutionEnvPolicy};
 use crate::ConfigRoots;
 use crate::layering::load_layered_resolved;
-use crate::operation::{
-    OperationLayer, OperationLayerSource, OperationPolicy, translate_legacy_review_keys,
-};
+use crate::operation::{OperationLayer, OperationLayerSource, OperationPolicy};
 use crate::persistence::PersistenceConfig;
 use crate::raw::RawRuntimeConfig;
 use crate::registry::ConfigSnapshot;
@@ -183,7 +181,7 @@ impl ResolvedConfig {
                 redact_home_dir(&config_path.display().to_string())
             ))
         })?;
-        translate_legacy_review_keys(&mut document, config_path)?;
+        crate::aliases::translate_deprecated_keys(&mut document, None, config_path)?;
         let resolved = Self::from_document_with_warnings(
             document,
             config_path,
@@ -315,7 +313,10 @@ impl ResolvedConfig {
         let operation_layer = OperationLayer::from_document(&document, config_path)?;
         let mut operation =
             OperationPolicy::resolve(&[(options.operation_layer_source, &operation_layer)]);
-        operation.review_crew.value = snapshot.operation_review_crew.clone().unwrap_or_default();
+        operation.review_crew.value = snapshot
+            .workflow_purpose_crews_review
+            .clone()
+            .unwrap_or_default();
 
         let compatibility_keys = CompatibilityKeys {
             deprecated_task_id_pattern: parsed

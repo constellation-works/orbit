@@ -177,7 +177,7 @@ pub enum OrbitError {
     ProcessTimeout { timeout_ms: u64, detail: String },
     /// Strict worker containment refused a launch before the worker existed.
     #[error(
-        "worker containment required but unavailable: {reason}; enable machine.worker_containment and run under a Linux systemd user manager, or drop --strict-worker-containment / machine.worker_containment_strict"
+        "worker containment required but unavailable: {reason}; run under a Linux systemd user manager, or drop --strict-worker-containment and set machine.worker_containment to warn"
     )]
     WorkerContainmentUnavailable { reason: String },
     #[error(

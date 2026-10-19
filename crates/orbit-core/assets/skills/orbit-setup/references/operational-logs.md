@@ -192,9 +192,9 @@ scripts. Compare that value with the service's `Environment=PATH=…` when a too
 cannot be found. Restart the launching service between runs after changing its
 environment, then confirm a new box delivery passes `candidate_validate`.
 
-The config schema exposes `workflow.validation_env.login_shell` to disable
-shell probing and `workflow.validation_env.interactive` to select only the
-non-interactive probe. `workflow.validation_env.path` adds explicit PATH entries
+The config schema exposes `workflow.validation_env.shell_probe`: `interactive`
+(default), `login` to select only the non-interactive probe, or `off` to
+disable shell probing. `workflow.validation_env.path` adds explicit PATH entries
 (leading `~/` expands to the owner's home); `workflow.validation_env.path_mode`
 is `prepend` by default or `replace` to use only those entries. Only allow-listed
 toolchain variables cross the probe; it does not copy the shell's environment.
@@ -208,8 +208,7 @@ The limits live only in the global `~/.orbit/config.toml` `[machine]` table:
 
 | Key | Default | Scope property |
 | --- | --- | --- |
-| `machine.worker_containment` | `true` | `false` launches workers in the caller's cgroup |
-| `machine.worker_containment_strict` | `false` | Refuse a worker launch when a systemd user scope is unavailable; requires containment enabled |
+| `machine.worker_containment` | `warn` | `off` launches workers in the caller's cgroup; `warn` falls back to it with a warning when a systemd user scope is unavailable; `strict` refuses the worker launch instead |
 | `machine.worker_memory_high` | `40%` | `MemoryHigh=`: the kernel throttles the run above it |
 | `machine.worker_memory_max` | `50%` | `MemoryMax=`: OOM kills stay inside the run |
 | `machine.worker_tasks_max` | `4096` | `TasksMax=`: processes plus threads before fork/clone fails |
@@ -281,7 +280,7 @@ workers launch without a bounded systemd scope"), when it is disabled or when
 `systemd-run --user --scope` cannot reach a user manager on Linux (containers,
 sandboxes, sessions without `XDG_RUNTIME_DIR`). macOS and other platforms
 without systemd launch uncontained silently: no warning is logged. With
-`machine.worker_containment_strict=true` or `--strict-worker-containment` on
+`machine.worker_containment = "strict"` or `--strict-worker-containment` on
 `orbit run ship` or `orbit run auto`, an unavailable scope instead refuses the
 worker before spawn; `orbit run show` reports
 `worker_containment_unavailable` and the reason. The CLI flag is inherited by

@@ -65,20 +65,12 @@ impl ConfigSnapshot {
                 "workflow.purpose_crews.baseline_red_repair",
             ),
             (
-                &mut self.workflow_purpose_crews_ci_failure_sweep,
-                "workflow.purpose_crews.ci_failure_sweep",
-            ),
-            (
-                &mut self.workflow_purpose_crews_dependabot,
-                "workflow.purpose_crews.dependabot",
-            ),
-            (
                 &mut self.workflow_purpose_crews_failure_recovery,
                 "workflow.purpose_crews.failure_recovery",
             ),
             (
-                &mut self.workflow_purpose_crews_merged_head_repair,
-                "workflow.purpose_crews.merged_head_repair",
+                &mut self.workflow_purpose_crews_sweep_tasks,
+                "workflow.purpose_crews.sweep_tasks",
             ),
             (
                 &mut self.workflow_purpose_crews_task_pilot,
@@ -87,11 +79,11 @@ impl ConfigSnapshot {
         ] {
             admit_crew_pool(pool, crews, setting)?;
         }
-        if let Some(pool) = self.operation_review_crew.as_mut() {
+        if let Some(pool) = self.workflow_purpose_crews_review.as_mut() {
             admit_crew_pool(pool, crews, crate::operation::REVIEW_CREW_KEY)?;
         }
-        self.workflow_final_recovery_crews = Some(admit_final_recovery_crews(
-            self.workflow_final_recovery_crews.take(),
+        self.workflow_purpose_crews_final_recovery = Some(admit_final_recovery_crews(
+            self.workflow_purpose_crews_final_recovery.take(),
             crews,
         )?);
         self.workflow_default_crew = resolve_default_crew(
@@ -100,12 +92,6 @@ impl ConfigSnapshot {
             env_default,
             require_default_crew,
         )?;
-        if self.machine_worker_containment_strict && !self.machine_worker_containment {
-            return Err(OrbitError::InvalidInput(
-                "machine.worker_containment_strict=true requires machine.worker_containment=true"
-                    .to_string(),
-            ));
-        }
         let resources = self.resource_throttle();
         let auto_concurrency = self.auto_concurrency();
         if auto_concurrency.profile_window < auto_concurrency.min_profile_deliveries {
@@ -146,12 +132,25 @@ impl ConfigSnapshot {
         Ok(())
     }
 
-    /// The admitted `workflow.final_recovery_crews` pool; empty disables final
-    /// recovery. Admission always fills the field, so `None` never reaches here.
+    /// The admitted `workflow.purpose_crews.final_recovery` pool; empty
+    /// disables final recovery. Admission always fills the field, so `None`
+    /// never reaches here.
     pub fn final_recovery_crews(&self) -> &[String] {
-        self.workflow_final_recovery_crews
+        self.workflow_purpose_crews_final_recovery
             .as_deref()
             .unwrap_or_default()
+    }
+
+    /// The admitted `review.timing`.
+    pub fn review_timing(&self) -> crate::operation::ReviewTimingSetting {
+        crate::operation::ReviewTimingSetting::parse(&self.review_timing)
+            .unwrap_or(crate::operation::ReviewTimingSetting::Off)
+    }
+
+    /// The admitted `workflow.validation_env.shell_probe`.
+    pub fn shell_probe(&self) -> crate::aliases::ShellProbeMode {
+        crate::aliases::ShellProbeMode::parse(&self.workflow_validation_env_shell_probe)
+            .unwrap_or(crate::aliases::ShellProbeMode::Interactive)
     }
 
     /// The admitted `workflow.purpose_crews.<purpose>` pools.
@@ -174,16 +173,8 @@ impl ConfigSnapshot {
                 self.workflow_purpose_crews_baseline_red_repair.clone(),
             ),
             (
-                CrewPurpose::CiFailureSweep,
-                self.workflow_purpose_crews_ci_failure_sweep.clone(),
-            ),
-            (
-                CrewPurpose::MergedHeadRepair,
-                self.workflow_purpose_crews_merged_head_repair.clone(),
-            ),
-            (
-                CrewPurpose::Dependabot,
-                self.workflow_purpose_crews_dependabot.clone(),
+                CrewPurpose::SweepTasks,
+                self.workflow_purpose_crews_sweep_tasks.clone(),
             ),
         ])
     }
@@ -212,9 +203,11 @@ impl ConfigSnapshot {
 
     /// The admitted `machine.worker_*` limits.
     pub fn worker_containment(&self) -> WorkerContainmentSettings {
+        let mode = crate::aliases::WorkerContainmentMode::parse(&self.machine_worker_containment)
+            .unwrap_or(crate::aliases::WorkerContainmentMode::Warn);
         WorkerContainmentSettings {
-            enabled: self.machine_worker_containment,
-            strict: self.machine_worker_containment_strict,
+            enabled: mode != crate::aliases::WorkerContainmentMode::Off,
+            strict: mode == crate::aliases::WorkerContainmentMode::Strict,
             memory_high: self.machine_worker_memory_high,
             memory_max: self.machine_worker_memory_max,
             tasks_max: self.machine_worker_tasks_max,
@@ -243,7 +236,7 @@ fn default_admission_crews() -> BTreeMap<String, Crew> {
     crate::resolved::default_crews()
 }
 
-/// Admit one `workflow.*_complexity_crews` or `operation.review_crew` value
+/// Admit one `workflow.*_complexity_crews` or `workflow.purpose_crews.*` value
 /// in place, replacing it with its canonical `name[:weight]` rendering.
 fn admit_crew_pool(
     pool: &mut Vec<String>,
@@ -254,7 +247,7 @@ fn admit_crew_pool(
     Ok(())
 }
 
-/// Admit `workflow.final_recovery_crews`.
+/// Admit `workflow.purpose_crews.final_recovery`.
 ///
 /// A written pool is admitted exactly like the complexity pools, so a typo
 /// fails at load. An unset key is the built-in default, which names crews a
@@ -279,7 +272,7 @@ fn admit_final_recovery_crews(
             .collect(),
     };
     Ok(
-        crate::canonical_crew_pool(&pool, crews, "workflow.final_recovery_crews")?
+        crate::canonical_crew_pool(&pool, crews, "workflow.purpose_crews.final_recovery")?
             .to_setting_value(),
     )
 }

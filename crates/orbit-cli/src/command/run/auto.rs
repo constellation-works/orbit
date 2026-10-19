@@ -68,10 +68,10 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
                   Approval does not bypass `--allow-crew` or the complexity pools.\n\n\
                   `--review` adds a second-agent review before landing to every task this\n\
                   window admits, when workspace policy applies none. It can only add review:\n\
-                  the layer `review.before_pr` or `review.before_landing` already applies is\n\
-                  accepted unchanged, and the other layer, an unset `operation.review_crew`, a\n\
-                  workspace that delivers locally and `--pull` are refused before the drain\n\
-                  starts. With it, a backlog task routed to local delivery is held, not started.\n\n\
+                  the layer `review.timing` already applies is accepted unchanged, and the\n\
+                  other layer, an unset `workflow.purpose_crews.review`, a workspace that\n\
+                  delivers locally and `--pull` are refused before the drain starts. With\n\
+                  it, a backlog task routed to local delivery is held, not started.\n\n\
                   Complexity pools select only for tasks without an explicit crew.\n\
                   The tiers are low, medium, hard and xhard; xhard is the reserved top tier.\n\
                   Each CLI pool replaces its matching workflow pool for this drain.\n\
@@ -159,8 +159,8 @@ pub struct AutoCommand {
     /// holds PR creation for a reviewer, `before-landing` reviews the open PR
     /// before it lands. The layer workspace policy already applies is
     /// accepted unchanged; the other one is refused, as are an unset
-    /// `operation.review_crew`, local delivery and `--pull` (the owner decides
-    /// the review of its claims). Omitted, workspace policy decides.
+    /// `workflow.purpose_crews.review`, local delivery and `--pull` (the owner
+    /// decides the review of its claims). Omitted, workspace policy decides.
     #[arg(long, value_enum, value_name = "LAYER")]
     pub review: Option<orbit_types::workflow::ReviewLayer>,
     /// Restrict this run to these configured crews, e.g. when a provider is
@@ -174,7 +174,7 @@ pub struct AutoCommand {
     #[arg(long = "allow-crew", value_name = "CREW", value_delimiter = ',')]
     pub allow_crew: Vec<String>,
     /// Require a systemd user scope for the coordinator and every leaf worker
-    /// it starts. Overrides machine.worker_containment_strict for this drain.
+    /// it starts. Treats machine.worker_containment as strict for this drain.
     #[arg(long)]
     pub strict_worker_containment: bool,
     /// Random crew pool for unassigned low-complexity tasks. Entries are

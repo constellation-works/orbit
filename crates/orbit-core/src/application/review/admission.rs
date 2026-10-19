@@ -1,6 +1,6 @@
-//! Captured review admission: the `review.before_pr` or
-//! `review.before_landing` switch, minutes and crew a delivery run carries in
-//! its immutable input [ORB-11333] [ORB-13992] [ORB-14849].
+//! Captured review admission: the `review.timing` layer, minutes and crew a
+//! delivery run carries in its immutable input [ORB-11333] [ORB-13992]
+//! [ORB-14849].
 //!
 //! Resolution order at submission: a parent-authorized child inherits its
 //! parent's snapshot exactly; every other delivery run resolves from
@@ -10,8 +10,8 @@
 //! provenance but still requires a reviewer crew, and the other layer is
 //! refused. Ordinary input naming the reserved key is refused, and a resume
 //! carries its persisted input forward unchanged.
-//! `review.before_pr` or `review.before_landing` on `task_local_pipeline` is
-//! local-only final delivery with no PR, and is refused outright. After-landing review is the `delivery-code-review`
+//! A `review.timing` other than `off` on `task_local_pipeline` is local-only
+//! final delivery with no PR, and is refused outright. After-landing review is the `delivery-code-review`
 //! auto-task, not an admission value, so it never reaches a snapshot.
 
 use chrono::Utc;
@@ -118,11 +118,11 @@ fn parent_review_admission(
 }
 
 /// The fail-closed sentence `install_review_admission` returns for
-/// `review.before_pr` on `task_local_pipeline`. Pre-dispatch surfaces quote
+/// `review.timing = before_pr` on `task_local_pipeline`. Pre-dispatch surfaces quote
 /// it so an operator sees one explanation before and after a spawn.
 pub(crate) fn local_route_before_pr_refusal() -> &'static str {
-    "review.before_pr holds PR creation for a reviewer and has no meaning on the \
-     local-only delivery route; ship through the PR route or turn review.before_pr off \
+    "review.timing = before_pr holds PR creation for a reviewer and has no meaning on the \
+     local-only delivery route; ship through the PR route or set review.timing = off \
      for local delivery (after-landing review is the delivery-code-review auto-task)"
 }
 
@@ -130,16 +130,20 @@ pub(crate) fn local_route_before_pr_refusal() -> &'static str {
 /// and readiness. `source` is the operation-layer label (`global`,
 /// `workspace`, or `built-in`).
 pub(crate) fn local_route_before_pr_conflict(source: &str) -> String {
-    with_source(local_route_before_pr_refusal(), "review.before_pr", source)
+    with_source(
+        local_route_before_pr_refusal(),
+        ReviewLayer::BeforePr.config_setting(),
+        source,
+    )
 }
 
 /// The fail-closed sentence `install_review_admission` returns for
-/// `review.before_landing` on `task_local_pipeline` [ORB-14849]: a local
+/// `review.timing = before_landing` on `task_local_pipeline` [ORB-14849]: a local
 /// delivery opens no pull request to review before it lands.
 pub(crate) fn local_route_before_landing_refusal() -> &'static str {
-    "review.before_landing reviews an open pull request before it lands and has no meaning \
-     on the local-only delivery route, which opens none; ship through the PR route or turn \
-     review.before_landing off for local delivery (after-landing review is the \
+    "review.timing = before_landing reviews an open pull request before it lands and has no \
+     meaning on the local-only delivery route, which opens none; ship through the PR route \
+     or set review.timing = off for local delivery (after-landing review is the \
      delivery-code-review auto-task)"
 }
 
@@ -148,7 +152,7 @@ pub(crate) fn local_route_before_landing_refusal() -> &'static str {
 pub(crate) fn local_route_before_landing_conflict(source: &str) -> String {
     with_source(
         local_route_before_landing_refusal(),
-        "review.before_landing",
+        ReviewLayer::BeforeLanding.config_setting(),
         source,
     )
 }
@@ -228,7 +232,7 @@ pub(crate) fn admit_review_request(
 /// run's `--review` request added when policy applies no layer before
 /// landing [ORB-16572]. The request never removes or swaps a layer. A matching
 /// layer keeps policy provenance, and both matching and added layers need
-/// the same `operation.review_crew` a configured layer does.
+/// the same `workflow.purpose_crews.review` a configured layer does.
 pub(crate) fn resolve(
     runtime: &OrbitRuntime,
     request: Option<ReviewLayer>,
@@ -247,7 +251,7 @@ pub(crate) fn resolve(
              workspace; there is one review layer before landing, and --review can only add \
              review where workspace policy applies none. Submit without --review to keep {}",
             layer.as_str(),
-            applied.config_key(),
+            applied.config_setting(),
             admission.timing_source,
             applied.as_str(),
             applied.as_str(),
@@ -272,13 +276,13 @@ fn require_reviewer_crew(
     }
     let message = match applied_source {
         Some(source) => format!(
-            "{} ({source}) requires a reviewer crew, but operation.review_crew is unset; \
-             configure operation.review_crew (automatic review never inherits the implementer's crew)",
-            layer.config_key()
+            "{} ({source}) requires a reviewer crew, but workflow.purpose_crews.review is unset; \
+             configure workflow.purpose_crews.review (automatic review never inherits the implementer's crew)",
+            layer.config_setting()
         ),
         None => format!(
-            "--review {} needs a reviewer crew, but operation.review_crew is unset; configure \
-             operation.review_crew (automatic review never inherits the implementer's crew) or \
+            "--review {} needs a reviewer crew, but workflow.purpose_crews.review is unset; configure \
+             workflow.purpose_crews.review (automatic review never inherits the implementer's crew) or \
              submit without --review",
             layer.as_str()
         ),
@@ -431,7 +435,7 @@ pub(crate) fn upgrade_resume_admission_mismatch(
 fn reserved_review_key_error(job_name: &str) -> OrbitError {
     OrbitError::InvalidInput(format!(
         "run input for job '{job_name}' set the reserved `{REVIEW_ADMISSION_KEY}` field; the \
-         effective review.before_pr and review.before_landing settings are captured from \
-         configuration at submission and cannot be requested through ordinary job input"
+         effective review.timing is captured from configuration at submission and cannot be \
+         requested through ordinary job input"
     ))
 }

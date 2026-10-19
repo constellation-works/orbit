@@ -1,11 +1,11 @@
 //! One read view of every automatic-review switch [ORB-13992].
 //!
-//! Before-PR review is `review.before_pr` and before-landing review is
-//! `review.before_landing` [ORB-14849], both with `review.minutes` and
-//! `operation.review_crew`; an owner may also turn before-landing review on
-//! only for the claims of the machines `review.before_landing_hosts` lists
-//! [ORB-15192]. After-landing review is the
-//! `delivery-code-review` auto-task's `enabled` flag. `orbit config show`,
+//! Before-PR review is `review.timing = before_pr` and before-landing review
+//! is `review.timing = before_landing` [ORB-14849], both with `review.minutes`
+//! and `workflow.purpose_crews.review`; an owner may also turn before-landing
+//! review on only for the claims of the machines `review.before_landing_hosts`
+//! lists [ORB-15192]. After-landing review is the `delivery-code-review`
+//! auto-task's `enabled` flag. `orbit config show`,
 //! `orbit doctor`, the dashboard and the drain probe all render this view, so
 //! they report the switches together and with the same provenance.
 
@@ -31,16 +31,16 @@ pub struct ReviewSwitches {
     pub after_landing: AfterLandingSwitch,
 }
 
-/// `review.before_pr`: hold PR creation for a fresh reviewer.
+/// `review.timing = before_pr`: hold PR creation for a fresh reviewer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BeforePrSwitch {
     pub enabled: bool,
-    /// Config layer that decided `review.before_pr`.
+    /// Config layer that decided `review.timing`.
     pub source: String,
     /// `review.minutes`: the wall-clock limit for one candidate's review.
     pub minutes: u32,
     pub minutes_source: String,
-    /// `operation.review_crew`, the reviewer crew or pool as canonical
+    /// `workflow.purpose_crews.review`, the reviewer crew or pool as canonical
     /// `name[:weight]` entries; empty when unset.
     pub crews: Vec<String>,
     pub crew_source: String,
@@ -51,7 +51,7 @@ pub struct BeforePrSwitch {
     /// Why before-PR review cannot run here while it is on; empty when it
     /// can or is off.
     pub problems: Vec<String>,
-    /// `review.before_pr` is on and automatic delivery uses the local-only
+    /// `review.timing` is `before_pr` and automatic delivery uses the local-only
     /// route [ORB-14168]. The problem text already says so; doctor uses this
     /// to name the ship-mode remedy rather than the crew remedy. Omitted from
     /// JSON because `problems` and `healthy` carry it.
@@ -59,12 +59,12 @@ pub struct BeforePrSwitch {
     pub local_route_incompatible: bool,
 }
 
-/// `review.before_landing`: review the open PR before it lands. It shares
-/// `review.minutes` and `operation.review_crew` with [`BeforePrSwitch`].
+/// `review.timing = before_landing`: review the open PR before it lands. It shares
+/// `review.minutes` and `workflow.purpose_crews.review` with [`BeforePrSwitch`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BeforeLandingSwitch {
     pub enabled: bool,
-    /// Config layer that decided `review.before_landing`.
+    /// Config layer that decided `review.timing`.
     pub source: String,
     /// `review.before_landing_hosts`: machines whose claimed leaves review
     /// before landing while `enabled` is off here.
@@ -78,7 +78,7 @@ pub struct BeforeLandingSwitch {
     /// whose own deliveries never read it, or `enabled` already covers every
     /// machine.
     pub warnings: Vec<String>,
-    /// `review.before_landing` is on and automatic delivery uses the
+    /// `review.timing` is `before_landing` and automatic delivery uses the
     /// local-only route, which opens no PR. Omitted from JSON because
     /// `problems` and `healthy` carry it.
     #[serde(skip)]
@@ -115,8 +115,8 @@ impl ReviewSwitches {
             .crew_selection
             .map_or_else(String::new, |rule| format!("; {rule}"));
         format!(
-            "{problems}{} (review.before_pr, {}); {} min per candidate (review.minutes, {}); \
-             {crew} (operation.review_crew, {}{selection})",
+            "{problems}{} (review.timing, {}); {} min per candidate (review.minutes, {}); \
+             {crew} (workflow.purpose_crews.review, {}{selection})",
             if before_pr.enabled { "on" } else { "off" },
             before_pr.source,
             before_pr.minutes,
@@ -143,8 +143,8 @@ impl ReviewSwitches {
             )
         };
         format!(
-            "{problems}{} (review.before_landing, {}){hosts}; shares review.minutes and \
-             operation.review_crew with before-PR review",
+            "{problems}{} (review.timing, {}){hosts}; shares review.minutes and \
+             workflow.purpose_crews.review with before-PR review",
             if before_landing.enabled { "on" } else { "off" },
             before_landing.source,
         )
@@ -259,8 +259,8 @@ fn review_switches_under(
         before_landing_problems.extend(crew_problems);
         if !hosts.value.is_empty() {
             before_landing_warnings.push(format!(
-                "review.before_landing_hosts ({}) is redundant: review.before_landing ({}) is \
-                 already on for every delivery",
+                "review.before_landing_hosts ({}) is redundant: review.timing ({}) is \
+                 already before_landing for every delivery",
                 hosts.source.label(),
                 policy.review_before_landing.source.label(),
             ));
@@ -278,7 +278,7 @@ fn review_switches_under(
         }
         if policy.review_crew.value.is_empty() {
             before_landing_problems.push(
-                "operation.review_crew is unset, so every claim from a listed host is refused"
+                "workflow.purpose_crews.review is unset, so every claim from a listed host is refused"
                     .to_string(),
             );
         }
@@ -289,7 +289,7 @@ fn review_switches_under(
         before_landing_warnings.push(format!(
             "review.before_landing_hosts ({}) lists this owner ({owner}); its own deliveries \
              never read the list, only claims it pulls from itself do, so set \
-             review.before_landing to review its own deliveries before landing",
+             review.timing = before_landing to review its own deliveries before landing",
             hosts.source.label(),
         ));
     }
@@ -333,11 +333,18 @@ fn review_switches_under(
 fn crew_problems(runtime: &OrbitRuntime, policy: &OperationPolicy) -> Vec<String> {
     let members = match configured_pool_members(runtime, &policy.review_crew.value) {
         Ok(members) => members,
-        Err(error) => return vec![format!("operation.review_crew does not resolve: {error}")],
+        Err(error) => {
+            return vec![format!(
+                "workflow.purpose_crews.review does not resolve: {error}"
+            )];
+        }
     };
     match members.as_slice() {
         [] => {
-            vec!["operation.review_crew is unset, so every gated delivery is refused".to_string()]
+            vec![
+                "workflow.purpose_crews.review is unset, so every gated delivery is refused"
+                    .to_string(),
+            ]
         }
         [only] => runtime
             .resolve_crew_for_task(Some(&only.name), None)

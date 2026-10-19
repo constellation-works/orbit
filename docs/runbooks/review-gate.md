@@ -10,26 +10,25 @@ last_validated: 2026-10-18
 
 # Operate the Review Gate
 
-Use this runbook when `review.before_pr = true` or `review.before_landing =
-true` and you need to read what a review did to a delivery, or a task is
+Use this runbook when `review.timing` is `before_pr` or `before_landing` and
+you need to read what a review did to a delivery, or a task is
 `blocked` with a `review_gate_escalation` or
 `review_timeout_requeue_exhausted` event, requeued after a reviewer timeout,
 `in-progress` while awaiting named external evidence, or in `review` with an
 open PR after a before-landing review did not approve it.
 
-Review has three timings. Before-PR review (`review.before_pr`) holds PR
-creation for the reviewer. Before-landing review (`review.before_landing`)
-opens the PR first and reviews it while hosted CI runs. After-landing review is
+Review has three timings. Before-PR review (`review.timing = "before_pr"`)
+holds PR creation for the reviewer. Before-landing review (`review.timing =
+"before_landing"`) opens the PR first and reviews it while hosted CI runs. After-landing review is
 the `delivery-code-review` auto-task. There is one review layer before
-landing: config load fails, naming both keys, while `review.before_pr` and
-`review.before_landing` are both on. Both share `review.minutes` and
-`operation.review_crew`, and neither runs on a workspace that ships locally:
+landing, so `review.timing` selects at most one of them. Both share
+`review.minutes` and `workflow.purpose_crews.review`, and neither runs on a workspace that ships locally:
 readiness holds that backlog as `local_route_before_pr` or
 `local_route_before_landing`, and `orbit doctor` fails its `review` check.
 
 ## 1. What the gate does
 
-One fresh reviewer, from `operation.review_crew`, examines the implementation
+One fresh reviewer, from `workflow.purpose_crews.review`, examines the implementation
 commit, fixes what it finds, and returns a verdict. There is no findings-driven
 rework loop. If PR completion rebases a conflicting reviewed head, the pipeline
 may admit up to two fresh re-reviews in the same lineage; a conflict after the
@@ -123,7 +122,7 @@ no agent environment. To review a tagged task anyway, remove the tag
 
 ### Before-landing review
 
-With `review.before_landing` captured, the table above applies to the
+With `review.timing = "before_landing"` captured, the table above applies to the
 `landing_review*` steps after `pr_open`, with these differences:
 
 | Outcome | Pull request | Task |
@@ -711,7 +710,7 @@ handoff output must show acceptance for the same final candidate. For
 
 - [Review gate design](../design/review-gate/2_design.md) — verdicts, the
   two-commit shape, revalidation, budgets, and coverage.
-- [CONFIG.md](../CONFIG.md) — the `[review]` keys and `operation.review_crew`.
+- [CONFIG.md](../CONFIG.md) — the `[review]` keys and `workflow.purpose_crews.review`.
 - [Claimed-review artifacts](./claimed-review-artifacts.md) — the follower
   reviewer's coordinator route, its smoke procedure and rollout record.
 - [Recover stuck job runs](./stuck-job-runs.md) — runs that never reached the

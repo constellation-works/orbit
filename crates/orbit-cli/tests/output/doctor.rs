@@ -624,7 +624,7 @@ fn default_doctor_large_store_and_worktrees_under_five_seconds() {
     // rather than rehashing an uncached debug image on a read-only invocation.
     // This uses normal admission and does not change the database/page or walk probes.
     let initialized = command(&fixture)
-        .args(["config", "set", "review.before_pr", "false"])
+        .args(["config", "set", "review.timing", "off"])
         .output()
         .expect("initialize fixture generation digest");
     assert!(
@@ -1255,35 +1255,35 @@ fn doctor_retired_review_repair_preserves_effective_policy() {
     ) {
         return;
     }
-    for (global, workspace, before_pr, minutes) in [
+    for (global, workspace, timing, minutes) in [
         (
             "",
             "[operation]\nreview_policy = 'before-pr'\nreview_minutes = 7\n",
-            true,
+            "before_pr",
             7,
         ),
         (
             "[operation]\nreview_policy = 'before-pr'\nreview_minutes = 11\n",
             "",
-            true,
+            "before_pr",
             11,
         ),
         (
-            "[review]\nbefore_pr = true\nminutes = 11\n",
+            "[review]\ntiming = 'before_pr'\nminutes = 11\n",
             "[operation]\nreview_policy = 'none'\nreview_minutes = 7\n",
-            false,
+            "off",
             7,
         ),
         (
             "[operation]\nreview_policy = 'before-pr'\nreview_minutes = 11\n",
-            "[review]\nbefore_pr = false\nminutes = 9\n",
-            false,
+            "[review]\ntiming = 'off'\nminutes = 9\n",
+            "off",
             9,
         ),
         (
             "",
-            "[operation]\nreview_policy = 'before-pr'\nreview_minutes = 7\n[review]\nbefore_pr = false\nminutes = 9\n",
-            false,
+            "[operation]\nreview_policy = 'before-pr'\nreview_minutes = 7\n[review]\ntiming = 'off'\nminutes = 9\n",
+            "off",
             9,
         ),
     ] {
@@ -1296,7 +1296,7 @@ fn doctor_retired_review_repair_preserves_effective_policy() {
         let workspace_path = fixture.work.join(".orbit/config.toml");
         fs::write(&global_path, global).unwrap();
         fs::write(&workspace_path, workspace).unwrap();
-        let expected = (Value::Bool(before_pr), Value::from(minutes));
+        let expected = (Value::from(timing), Value::from(minutes));
         assert_eq!(effective_review(&fixture), expected, "before repair");
         let fixed = rows(&doctor(&fixture, &["--fix-retired-config-keys"]));
         assert_eq!(
@@ -1387,7 +1387,7 @@ fn doctor_retired_review_repair_refuses_after_landing_before_any_write() {
         ),
         (
             "[operation]\nreview_policy = 'after-landing'\n",
-            "[review]\nbefore_pr = false\n",
+            "[review]\ntiming = 'off'\n",
         ),
     ] {
         let started = Instant::now();
@@ -1416,6 +1416,147 @@ fn doctor_retired_review_repair_refuses_after_landing_before_any_write() {
     }
 }
 
+/// [ORB-16775] The repair writes each consolidated family's replacement into
+/// the file that set the deprecated spelling, removes the old keys, and the
+/// effective values `orbit config get` reports are the same before and after.
+#[test]
+fn doctor_retired_repair_rewrites_consolidated_key_families() {
+    if crate::isolated_test::run_in_child(
+        "doctor::doctor_retired_repair_rewrites_consolidated_key_families",
+    ) {
+        return;
+    }
+    const KEYS: [&str; 6] = [
+        "workflow.purpose_crews.review",
+        "workflow.purpose_crews.final_recovery",
+        "workflow.purpose_crews.sweep_tasks",
+        "review.timing",
+        "machine.worker_containment",
+        "workflow.validation_env.shell_probe",
+    ];
+    let fixture = WorkCheckout::new();
+    let global_dir = fixture.home.join(".orbit");
+    fs::create_dir_all(&global_dir).unwrap();
+    let global_path = global_dir.join("config.toml");
+    let workspace_path = fixture.work.join(".orbit/config.toml");
+    let global = "[workflow]\nfinal_recovery_crews = [\"sol\"]\n\n\
+                  [workflow.validation_env]\nlogin_shell = false\n\n\
+                  [machine]\nworker_containment = false\n";
+    let workspace = "# keep this note\n[operation]\nreview_crew = [\"sol\", \"grok\"]\n\n\
+                     [review]\nbefore_landing = false\n\n\
+                     [workflow.purpose_crews]\nci_failure_sweep = [\"sol\"]\n\
+                     merged_head_repair = [\"sol\"]\n\n\
+                     [workflow.validation_env]\ninteractive = false\n";
+    fs::write(&global_path, global).unwrap();
+    fs::write(&workspace_path, workspace).unwrap();
+    let effective = || {
+        KEYS.map(|key| {
+            let output = command(&fixture)
+                .args(["config", "get", key, "--json"])
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "config get {key}: {output:?}");
+            serde_json::from_slice::<Value>(&output.stdout).unwrap()["value"].clone()
+        })
+    };
+    let before = effective();
+    assert_eq!(
+        before,
+        [
+            serde_json::json!(["grok", "sol"]),
+            serde_json::json!(["sol"]),
+            serde_json::json!(["sol"]),
+            serde_json::json!("off"),
+            serde_json::json!("off"),
+            serde_json::json!("off"),
+        ],
+        "the deprecated spellings load"
+    );
+
+    let fixed = rows(&doctor(&fixture, &["--fix-retired-config-keys"]));
+    assert_eq!(
+        row(&fixed, "fix-retired-config-keys")["status"],
+        "ok",
+        "{fixed:?}"
+    );
+    assert_eq!(
+        row(&fixed, "retired-config-keys")["status"],
+        "ok",
+        "{fixed:?}"
+    );
+    assert_eq!(
+        effective(),
+        before,
+        "the repair keeps every effective value"
+    );
+
+    let read = |path: &std::path::Path| -> toml::Value {
+        toml::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    };
+    let global_doc = read(&global_path);
+    assert_eq!(
+        global_doc["workflow"]["purpose_crews"]["final_recovery"],
+        toml::Value::Array(vec!["sol".into()])
+    );
+    assert!(global_doc["workflow"].get("final_recovery_crews").is_none());
+    assert_eq!(
+        global_doc["workflow"]["validation_env"]["shell_probe"].as_str(),
+        Some("off")
+    );
+    assert!(
+        global_doc["workflow"]["validation_env"]
+            .get("login_shell")
+            .is_none()
+    );
+    assert_eq!(
+        global_doc["machine"]["worker_containment"].as_str(),
+        Some("off")
+    );
+
+    let workspace_doc = read(&workspace_path);
+    assert_eq!(
+        workspace_doc["workflow"]["purpose_crews"]["review"],
+        toml::Value::Array(vec!["sol".into(), "grok".into()])
+    );
+    assert_eq!(
+        workspace_doc["workflow"]["purpose_crews"]["sweep_tasks"],
+        toml::Value::Array(vec!["sol".into()])
+    );
+    for legacy in ["ci_failure_sweep", "merged_head_repair"] {
+        assert!(
+            workspace_doc["workflow"]["purpose_crews"]
+                .get(legacy)
+                .is_none()
+        );
+    }
+    assert!(
+        workspace_doc
+            .get("operation")
+            .and_then(|v| v.get("review_crew"))
+            .is_none()
+    );
+    assert_eq!(workspace_doc["review"]["timing"].as_str(), Some("off"));
+    assert!(workspace_doc["review"].get("before_landing").is_none());
+    assert_eq!(
+        workspace_doc["workflow"]["validation_env"]["shell_probe"].as_str(),
+        Some("off")
+    );
+    assert!(
+        fs::read_to_string(&workspace_path)
+            .unwrap()
+            .contains("# keep this note"),
+        "the repair keeps the operator's comment"
+    );
+    assert_eq!(
+        fs::read_to_string(global_dir.join("config.toml.bak")).unwrap(),
+        global
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.work.join(".orbit/config.toml.bak")).unwrap(),
+        workspace
+    );
+}
+
 fn effective_review(fixture: &WorkCheckout) -> (Value, Value) {
     let get = |key: &str| {
         let output = command(fixture)
@@ -1425,7 +1566,7 @@ fn effective_review(fixture: &WorkCheckout) -> (Value, Value) {
         assert!(output.status.success(), "config get {key}: {output:?}");
         serde_json::from_slice::<Value>(&output.stdout).unwrap()["value"].clone()
     };
-    (get("review.before_pr"), get("review.minutes"))
+    (get("review.timing"), get("review.minutes"))
 }
 
 /// The review host rules a resolved load gives effect to, with the layer that set them.

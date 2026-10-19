@@ -17,7 +17,7 @@ pub(super) struct ProbeVerdict {
 
 /// Ask the owner whether it would admit this executor now, and for the ship
 /// contract a new request must carry. Declaring this binary's version, the
-/// protocol schema and the drain's captured `review.before_pr` makes the
+/// protocol schema and the drain's captured before-PR review switch makes the
 /// owner report the first refusal admission would raise, so a mismatch stops
 /// new requests before any is persisted.
 pub(super) fn probe(
@@ -120,7 +120,7 @@ fn reviewer_refusal(
         }))
 }
 
-/// The `review.before_pr` the pull drain captured at submission
+/// The before-PR review switch (`review.timing = before_pr`) the pull drain captured at submission
 /// [ORB-13992]: turning it on later does not change what a running drain
 /// declares. A drain submitted before the capture existed falls back to this
 /// host's current setting.

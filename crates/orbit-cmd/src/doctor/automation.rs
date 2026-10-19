@@ -496,7 +496,7 @@ pub(super) fn doctor_check_validation_env(runtime: &OrbitRuntime) -> WorkspaceDo
             message,
             "Make the interactive login shell export the intended toolchain PATH (`$SHELL \
              -i -l -c 'echo $PATH'` should list it first), fix rc failures or set \
-             `workflow.validation_env.interactive = false` to use login profiles only, or \
+             `workflow.validation_env.shell_probe = login` to use login profiles only, or \
              set `workflow.validation_env.path` with `orbit config set`, then rerun \
              `orbit doctor`."
                 .to_string(),
@@ -703,13 +703,13 @@ pub(super) fn doctor_check_stalled_automation(runtime: &OrbitRuntime) -> Workspa
 }
 
 /// Every automatic-review switch in one row [ORB-13992]: before-PR review
-/// (`review.before_pr`, its minutes and crew), before-landing review
-/// (`review.before_landing`, sharing them, and the machines
+/// (`review.timing = before_pr`, its minutes and crew), before-landing review
+/// (`review.timing = before_landing`, sharing them, and the machines
 /// `review.before_landing_hosts` turns it on for [ORB-15192]) and
 /// after-landing review (the `delivery-code-review` auto-task, with when its
 /// next batch is due), each with its source. A host list that names this
-/// owner, whose own deliveries never read it, or repeats an enabled
-/// `review.before_landing` is a warning; one whose claims would be refused is
+/// owner, whose own deliveries never read it, or repeats a workspace-wide
+/// `review.timing = before_landing` is a warning; one whose claims would be refused is
 /// an error. A switch that is on but cannot run here reviews nothing
 /// while every other surface looks healthy, so that is an error, not a
 /// warning: before-PR or before-landing review on a local-only ship
@@ -742,19 +742,18 @@ pub(super) fn doctor_check_review(runtime: &OrbitRuntime) -> WorkspaceDoctorResu
     let mut remediation = Vec::new();
     if switches.before_pr.local_route_incompatible {
         remediation.push(
-            "`review.before_pr` is on and this workspace ships locally, so every local delivery \
-             is refused before it can run. Turn it off with `orbit config set review.before_pr \
-             false`, or ship through the PR route. After-landing review is the \
+            "`review.timing` is `before_pr` and this workspace ships locally, so every local \
+             delivery is refused before it can run. Turn it off with `orbit config set \
+             review.timing off`, or ship through the PR route. After-landing review is the \
              `delivery-code-review` auto-task, not this switch."
                 .to_string(),
         );
     }
     if switches.before_landing.local_route_incompatible {
         remediation.push(
-            "`review.before_landing` is on and this workspace ships locally, which opens no pull \
-             request to review, so every local delivery is refused before it can run. Turn it \
-             off with `orbit config set review.before_landing false`, or ship through the PR \
-             route."
+            "`review.timing` is `before_landing` and this workspace ships locally, which opens no \
+             pull request to review, so every local delivery is refused before it can run. Turn \
+             it off with `orbit config set review.timing off`, or ship through the PR route."
                 .to_string(),
         );
     }
@@ -765,7 +764,7 @@ pub(super) fn doctor_check_review(runtime: &OrbitRuntime) -> WorkspaceDoctorResu
         remediation.push(
             "`review.before_landing_hosts` lists machines whose claims this owner would refuse. \
              Fix each problem named above (ship through the PR route, set \
-             `operation.review_crew`), or remove `review.before_landing_hosts` from \
+             `workflow.purpose_crews.review`), or remove `review.before_landing_hosts` from \
              `config.toml`."
                 .to_string(),
         );
@@ -780,14 +779,14 @@ pub(super) fn doctor_check_review(runtime: &OrbitRuntime) -> WorkspaceDoctorResu
             switches.before_landing.local_route_incompatible,
         ))
     {
-        let (layer, key) = if switches.before_landing.enabled {
-            ("Before-landing", "review.before_landing")
+        let layer = if switches.before_landing.enabled {
+            "Before-landing"
         } else {
-            ("Before-PR", "review.before_pr")
+            "Before-PR"
         };
         remediation.push(format!(
-            "{layer} review needs `operation.review_crew` set to a crew, or a pool with a crew, \
-             that resolves on this host; set it, or turn `{key}` off."
+            "{layer} review needs `workflow.purpose_crews.review` set to a crew, or a pool with a \
+             crew, that resolves on this host; set it, or set `review.timing` to `off`."
         ));
     }
     if let Some(health) = switches

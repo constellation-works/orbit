@@ -97,7 +97,7 @@ pub(super) fn resolve_generated_paths(
     Ok(resolved)
 }
 
-/// Built-in `workflow.final_recovery_crews`: the strongest reasoning crews, so
+/// Built-in `workflow.purpose_crews.final_recovery`: the strongest reasoning crews, so
 /// the last automated look at a failed task is the most capable one.
 pub(crate) const DEFAULT_FINAL_RECOVERY_CREWS: &[&str] = &["sol:100", "opus:20"];
 

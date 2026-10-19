@@ -520,7 +520,7 @@ fn readiness_snapshot_reports_replica_and_validation_warning() {
         "{idle}"
     );
     for (key, value) in [
-        ("workflow.validation_env.login_shell", "false"),
+        ("workflow.validation_env.shell_probe", "off"),
         (
             "workflow.required_validation_commands",
             r#"["make ci-fast"]"#,

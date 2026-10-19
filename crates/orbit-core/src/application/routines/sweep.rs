@@ -498,7 +498,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
 
     // The final-recovery backstop runs last: it only submits runs for tasks
     // already blocked, and stands down itself off the owner or with an empty
-    // `workflow.final_recovery_crews` pool.
+    // `workflow.purpose_crews.final_recovery` pool.
     if !options.dry_run {
         for (workspace, runtime) in &discovered.entries {
             if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
