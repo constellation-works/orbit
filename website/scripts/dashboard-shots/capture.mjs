@@ -34,6 +34,9 @@ const page = await browser.newPage({
   timezoneId: "America/Los_Angeles",
 });
 const settle = (ms = 1200) => page.waitForTimeout(ms);
+// The fixture holds admissions on a CPU throttle only for the Drain shot, so
+// the other captures keep their unthrottled host.
+let drainThrottled = false;
 
 // A live dashboard keeps log streams open, so the network never goes idle:
 // load the page, then wait for the element each shot needs.
@@ -119,11 +122,28 @@ if (selection === "--fixture-core") {
       case "/api/host/resources":
         payload = resources;
         break;
+      case "/api/tasks/locks":
+        payload = {
+          by_task: [{
+            id: "DEMO-003", title: "Build the website", status: "in-progress", job_run_id: "jrun-20261008-0712-c1",
+            context_files: ["website/dashboard.md"],
+          }],
+          total_locked: 1,
+          total_tasks: 1,
+        };
+        break;
       case "/api/workflows/auto/readiness":
         payload = {
-          capacity: { drain_phase: "idle", active_leaf_runs: 1, max_active_leaf_runs: 5, free_slots: 4 },
+          capacity: {
+            drain_phase: "idle", active_leaf_runs: 1, max_active_leaf_runs: 5, free_slots: 4,
+            ...(drainThrottled && {
+              resource_throttle: { resources: [{ resource: "cpu", percent: 164, high_percent: 90, resume_percent: 75, since: "2026-10-08T07:12:00-07:00" }] },
+            }),
+          },
           tasks: [
-            { task_id: "DEMO-001", status: "backlog", eligible: true, reason: "ready" },
+            drainThrottled
+              ? { task_id: "DEMO-001", status: "backlog", eligible: false, reason: "resource_throttled" }
+              : { task_id: "DEMO-001", status: "backlog", eligible: true, reason: "ready" },
             {
               task_id: "DEMO-002",
               status: "backlog",
@@ -133,6 +153,8 @@ if (selection === "--fixture-core") {
               conflicts: [{ requested_file: "file:website/dashboard.md", blocking_task_id: "DEMO-003" }],
             },
           ],
+          controls_authorized: true,
+          auto_concurrency: { mode: "enforce", source: "configured", configured_mode: "enforce" },
         };
         break;
       case "/api/routines":
@@ -167,6 +189,20 @@ if (selection === "--fixture-core") {
           };
         }
         break;
+    }
+    // Fleet drains: the demo workspace's row, and the unreachable remote's error.
+    if (pathname.endsWith("/fleet/drains")) {
+      if (pathname.includes("/build-box/")) {
+        await route.fulfill({ status: 502, json: { error: "ssh: Could not resolve hostname build-box.invalid", code: "unreachable_destination" } });
+        return;
+      }
+      payload = {
+        items: [{
+          workspace_id: "ws_demo", workspace_name: "dashboard-demo", phase: "idle", slots_used: 1, slots_ceiling: 5,
+          eligible_count: drainThrottled ? 0 : 1, counts_truncated: false, top_wait_reason: "conflict_deferred",
+          holds: drainThrottled ? ["cpu throttled"] : [],
+        }],
+      };
     }
     await route.fulfill({ json: payload });
   });
@@ -274,12 +310,16 @@ await tall(1600, async () => {
   await shot("dashboard-approve-ship", [page.locator("#tasks-panel > header"), end]);
 });
 
-// The Drain dock: delivery state and capacity, then the controls that start a window.
-await tall(1600, async () => {
-  const targets = [page.locator("#side-dock .dock-head"), page.locator("#auto-drain-panel")];
-  if (await page.locator("#auto-drain-start").isVisible()) targets.push(page.locator("#auto-drain-start"));
-  await shot("dashboard-drain-card", targets, 12);
+// The Drain page's Overview: the throttle banner and summary tiles, the
+// Auto-drain card and why tasks wait, then Start a window and Locks held.
+drainThrottled = true;
+await tall(1800, async () => {
+  await open("drain", "#drain-summary:not([hidden])");
+  // The pane fills the page height, so crop to its visible cards.
+  const cards = await page.locator("#drain-banner:not([hidden]), #drain-summary, #dock-pane-drain .drain-col > .panel:not([hidden])").all();
+  await shot("dashboard-drain-card", [page.locator("#side-dock .dock-head"), ...cards], 12);
 });
+drainThrottled = false;
 
 // Automation: the workspace's routines and whether each will fire.
 await page.locator('button.tab[data-tab="operations"]').click();

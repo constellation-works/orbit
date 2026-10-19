@@ -255,7 +255,7 @@ with a gauge of the reading against its resume and stop thresholds. Summary
 tiles follow: the window's state, slots in use, the queue's waiting and
 eligible counts, and locked files with how many tasks hold them.
 
-![The Drain dock: the Auto-drain card with its state, workspace leaf slots, and Send pending results, then Start a window with its eligible and waiting counts, window length, parallel tasks, completion mode, proposed-task handling, and Start.](../../../assets/dashboard/dashboard-drain-card.png)
+![The Drain page: a header with Overview and Log tabs; an amber banner saying admissions are paused while host load is throttled, with a gauge against its resume and stop thresholds; summary tiles for the window state, slots in use, the queue and locked files; the Auto-drain card with its slots and forecast; Why 2 tasks are waiting, with each wait reason; and Fleet drains. A right column holds Start a window, with window length, parallel tasks, admission control, completion mode, proposed-task handling and Start, above Locks held.](../../../assets/dashboard/dashboard-drain-card.png)
 
 The card shows:
 
