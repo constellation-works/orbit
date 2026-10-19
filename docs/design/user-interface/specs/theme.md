@@ -22,7 +22,7 @@ The theme uses a layered dark mode, relying on subtle lightness shifts rather th
 - `--bg-rail`: `#0e1115` (Navigation rail; the same surface as the chrome)
 - `--bg-elev`: `#121519` (Cards and panels)
 - `--bg-control`: `#151920` (A raised control on a card: selects, steppers, badges)
-- `--bg-well`: `#0f1216` (A well one step below a card: stat tiles, segmented-control tracks, the expanded task detail)
+- `--bg-well`: `#0f1216` (A well one step below a card: stat tiles, segmented-control tracks, expanded detail rows)
 - `--bg-sunk`: `#0f1216` (Sticky group headings)
 - `--bg-selected`: `#1a1f27` (The selected rail entry, chip or segment)
 
@@ -83,6 +83,7 @@ A backlog task's readiness dot, the Backlog card's readiness bar and its legend 
 Data tables use expandable rows (`.row.expanded`). When expanded:
 - The row background shifts to the accent wash (`--accent-wash`, `rgba(122, 167, 255, 0.1)`).
 - The expanded detail view uses `--bg-well` with a 2-column layout (main content + side metadata).
+- Tasks are the exception: the selected task row takes the same wash, and its detail opens in a side pane on `--bg-elev` with tabs instead of under the row. The pane's Overview gains its side metadata column only when the pane is wide enough.
 - Collapsible field carets rotate `-90deg` for clear state indication.
 
 ## Agent Signature

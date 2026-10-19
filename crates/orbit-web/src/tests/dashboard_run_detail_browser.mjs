@@ -248,7 +248,7 @@ async function assertTaskLinksOpenUnderFilter(page, { ids, show, selector }) {
     for (const id of ids) {
       await show();
       await page.locator(selector).filter({ hasText: new RegExp(`^${id}$`) }).click();
-      const pinned = page.locator('#tasks-body .row.pinned-external');
+      const pinned = page.locator('#task-detail-body:has(.pinned-external)');
       await pinned.filter({ hasText: id }).waitFor({ state: 'visible' });
       const scope = new URL(page.url());
       if (scope.searchParams.get('workspace') !== FIXTURE_WORKSPACE || !scope.hash.includes(`open=${id}`)) {

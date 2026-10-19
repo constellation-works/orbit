@@ -95,9 +95,9 @@ async function assertFrictionTaskLinks(page) {
         await assertAccentFocusRing(filter);
       }
       await page.locator('#friction-detail .knowledge-link-row').click();
-      const pinned = page.locator('#tasks-body [data-key="pinned-LINK-1"]');
+      const pinned = page.locator('#task-detail-body [data-key="pinned-LINK-1"]');
       await pinned.waitFor({ state: 'visible', timeout: 5000 });
-      if (await pinned.locator('.title').textContent() !== `Linked ${status} task`
+      if (await page.locator('#task-detail-body .task-pane-title').textContent() !== `Linked ${status} task`
         || !(await pinned.locator('.row-detail').textContent()).includes(`Detail for linked ${status} task`)) {
         throw new Error(`Friction link did not open the ${status} task's full detail`);
       }
@@ -119,7 +119,7 @@ async function assertFrictionTaskLinks(page) {
           await pinned.locator(`.${action}-form .action.cancel`).click();
         }
       }
-      await pinned.locator('button[title="Dismiss global task detail"]').click();
+      await page.locator('#task-detail-pane').getByRole('button', { name: 'Close task detail', exact: true }).click();
     }
   } finally {
     await page.evaluate(() => {
@@ -206,7 +206,7 @@ async function assertLockedTaskNavigation(page) {
       }
       await page.keyboard.press('Enter');
       const row = page.locator(`#tasks-body [data-key="task-${task.id}"]`);
-      await page.locator(`#tasks-body #detail-${task.id}`).waitFor({ state: 'visible' });
+      await page.locator(`#task-detail-body #detail-${task.id}`).waitFor({ state: 'visible' });
       if (!(await row.locator('.title').textContent()).includes(task.title)) {
         throw new Error(`${task.id} task link opened the wrong task`);
       }
@@ -280,16 +280,16 @@ async function assertRowKeyboard(page) {
   await title(keys[1]).focus();
   await page.keyboard.press('Enter');
   const detailId = `detail-${keys[1].slice('task-'.length)}`;
-  await page.locator(`#tasks-body #${detailId}`).waitFor({ state: 'visible' });
-  await expectFocus(keys[1], 'Enter expands and keeps focus on the disclosure');
-  if (await title(keys[1]).getAttribute('aria-expanded') !== 'true' || await title(keys[1]).getAttribute('aria-controls') !== detailId) {
-    throw new Error('Expanded task disclosure must report its state and detail');
+  await page.locator(`#task-detail-body #${detailId}`).waitFor({ state: 'visible' });
+  await expectFocus(keys[1], 'Enter selects and keeps focus on the disclosure');
+  if (await title(keys[1]).getAttribute('aria-expanded') !== 'true' || await title(keys[1]).getAttribute('aria-controls') !== 'task-detail-pane') {
+    throw new Error('Selected task disclosure must report its state and the pane it opens');
   }
   const nestedExpanded = await nestedInteractive(page, '#tasks-body');
   if (nestedExpanded.length) throw new Error(`Expanded task detail nests controls in a button: ${nestedExpanded.join('\n')}`);
   await page.keyboard.press(' ');
-  await page.locator(`#tasks-body #${detailId}`).waitFor({ state: 'detached' });
-  await expectFocus(keys[1], 'Space collapses and keeps focus on the disclosure');
+  await page.locator(`#task-detail-body #${detailId}`).waitFor({ state: 'detached' });
+  await expectFocus(keys[1], 'Space closes the pane and keeps focus on the disclosure');
   if (await title(keys[1]).getAttribute('aria-expanded') !== 'false') throw new Error('Collapsed task disclosure must report its state');
 
   // A refresh that changes the task rebuilds its row; focus follows the key.
@@ -1400,7 +1400,7 @@ try {
     // Open it the way a person does, by its title: on a narrow row the centre
     // of the box is the crew select, which takes the click for itself.
     await firstTask.locator('.title').click();
-    const detail = page.locator('#tasks-body .row-detail').first();
+    const detail = page.locator('#task-detail-body .row-detail').first();
     await detail.waitFor({ state: 'visible' });
     const pageOverflowsHorizontally = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     if (pageOverflowsHorizontally) throw new Error('Task filters or expanded details introduced horizontal page clipping');

@@ -144,7 +144,7 @@ export async function assertTaskTitleLayout(page, evidence) {
     await page.setViewportSize({ width: 1280, height: 800 });
     const row = page.locator('#tasks-body [data-key="task-TITLE-1"]');
     // Rows group by status, so a row edits only its crew; status is a property
-    // of the expanded detail.
+    // of the task detail pane.
     if (await row.locator('.task-status-select').count() !== 0) throw new Error('A task row must not carry a status editor');
     await row.locator('.title').focus();
     await page.keyboard.press('Tab');
@@ -164,7 +164,7 @@ export async function assertTaskTitleLayout(page, evidence) {
     });
     await row.locator('.title').focus();
     await page.keyboard.press('Enter');
-    const status = page.locator('#tasks-body [data-key="detail-TITLE-1"] .task-status-select');
+    const status = page.locator('#task-detail-body [data-key="detail-TITLE-1"] .task-status-select');
     await status.waitFor({ state: 'visible' });
     await status.focus();
     if (!(await status.evaluate(node => document.activeElement === node && getComputedStyle(node).opacity === '1'))) {
@@ -207,7 +207,7 @@ export async function assertTaskTitleLayout(page, evidence) {
   }
 }
 
-// Status lives in the expanded detail and rows group by status, so a status
+// Status lives in the task detail pane and rows group by status, so a status
 // change from the detail folds it in. Its feedback and undo follow the row (or a
 // notice when the new status is filtered out); a refused change keeps the detail
 // open with its feedback; a refresh that changes status leaves rows as they are.
@@ -222,7 +222,7 @@ async function assertStatusChangeFoldsDetail(page, evidence) {
     throw new Error(`${reason}: ${JSON.stringify(state)}`);
   };
   const row = id => page.locator(`#tasks-body .row[data-key="task-${id}"]`);
-  const detail = id => page.locator(`#tasks-body [data-key="detail-${id}"]`);
+  const detail = id => page.locator(`#task-detail-body [data-key="detail-${id}"]`);
   const note = id => row(id).locator('.task-status-note');
   const notice = id => page.locator(`#tasks-body [data-key="status-notice-${id}"]`);
   const openParam = () => page.evaluate(() => new URLSearchParams(window.location.hash.split('?')[1] || '').get('open'));

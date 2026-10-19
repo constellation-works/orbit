@@ -490,7 +490,15 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     // ORB-10874: the status chips and search box are represented in the hash
     // (mirroring the audit tab) so they survive a reload or the browser's
     // back/forward navigation instead of resetting to the in-memory default.
-    if (ctx.applyTasksHashQuery) ctx.applyTasksHashQuery(query);
+    // `#tasks/<id>` is one task's full-page view; a malformed id falls back
+    // to the list.
+    let page = null;
+    try {
+      page = segments[1] ? decodeURIComponent(segments[1]) : null;
+    } catch {
+      page = null;
+    }
+    if (ctx.applyTasksHashQuery) ctx.applyTasksHashQuery(query, page);
     if (ctx.syncTaskControls) ctx.syncTaskControls();
     hash = ctx.buildTasksHash ? ctx.buildTasksHash() : "#tasks";
   } else {
@@ -512,8 +520,9 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   // Back does not land on the legacy hash and redirect forward again.
   // A task link (`#tasks?open=ID`) is normalized the same way: pushing the
   // full filter hash after it would leave two entries, and Back from the second
-  // would land on the first and push again.
-  const taskLink = top === "tasks" && query.has("open");
+  // would land on the first and push again. So is a task page route the list
+  // replaced (a malformed id).
+  const taskLink = top === "tasks" && (query.has("open") || segments.length > 1);
   const rewriteInPlace = hashChanged && (legacyRoute || opts.repairRoute || taskLink) && typeof window.history?.replaceState === "function";
   if (rewriteInPlace) {
     window.history.replaceState(null, "", hash);
