@@ -89,7 +89,7 @@ crate::scenario_table!(
 #[cfg(target_os = "macos")]
 #[test]
 fn native_seatbelt_denial_is_unavailable_before_landing() {
-    if !crate::admission_audit::isolate(
+    if !isolated(
         module_path!(),
         "native_seatbelt_denial_is_unavailable_before_landing",
     ) {
