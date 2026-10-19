@@ -335,7 +335,7 @@ When required validation runs on a candidate, Orbit compares the candidate's tre
 
 ### Light delivery: `skip-review` and `skip-validation`
 
-Two task tags let a documentation or CI change land on the hosted pull-request checks alone. Only filing a task or an operator update sets them. An agent's update, including the implementer's own during its run, is refused when it adds either one. Removing a tag is always allowed.
+Two task tags let a documentation or CI change land on the hosted pull-request checks alone. Only filing a task or an operator update sets them. An agent's update, including the implementer's own during its run, is refused when it adds either one. Naming an agent model on a tool or API update counts as that agent, including when the server process has no agent environment. Removing a tag is always allowed.
 
 - `skip-review`: no before-PR review (`review.before_pr`), no before-landing review (`review.before_landing`, `review.before_landing_hosts`), and no after-landing delivery-code-review sampling.
 - `skip-validation`: no local validation. The implementer runs no AGENTS.md gates and no required or final validation commands. Its task context carries no `final_validation_commands`, and its `light_delivery` field names the tags and the allow-list. Orbit's shipped tag instruction says so. Required validation (`candidate_validate`, and `claim_validate` on a claimed leaf) records `skipped_light_delivery`. A handoff without validation logs is accepted.

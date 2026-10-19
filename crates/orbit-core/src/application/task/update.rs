@@ -2,6 +2,9 @@ use orbit_common::OrbitError;
 use orbit_common::governance::authorization::agent_context_declared;
 use orbit_common::security::redaction::redact_all;
 use orbit_engine::TaskActivityUpdate;
+use orbit_types::identity::{
+    all_agent_families, infer_agent_family_from_model, normalize_attribution_label,
+};
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     ArtifactWriter, CANDIDATE_DISCARDED_EVENT, LIGHT_DELIVERY_TAGS, Task, TaskArtifact,
@@ -109,6 +112,57 @@ pub(super) struct ValidatedTaskFieldEdits {
     pub(super) crew_assignment: Option<CreationCrewAssignment>,
     pub(super) crew_source: Option<Option<String>>,
     pub(super) crew_redraw_history: Option<TaskHistoryEntry>,
+}
+
+/// Who is editing an existing task's fields [ORB-16872].
+///
+/// Built from the same signals as `operator_write` in `update_task_locked`:
+/// decision authority, canonical agent and model, the automation-actor label,
+/// and whether this process declares an agent envelope. An attributed agent
+/// or model is an agent writer even when that envelope is absent, which is
+/// how a user-launched MCP server calls tools.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TaskFieldWriter {
+    /// May add `skip-review` and `skip-validation`.
+    Operator,
+    /// Attributed agent or tool writer, or any writer inside an agent envelope.
+    Agent,
+    /// In-process machinery that is neither an operator nor an agent.
+    Machinery,
+}
+
+/// Classify `writer` for shared field admission.
+///
+/// A non-empty canonical agent, or a model that names or infers an agent
+/// family, is an agent writer. A bare label such as `human` is not: trusted
+/// in-process callers store that label in the model slot without attributing
+/// an agent.
+pub(super) fn task_field_writer(
+    operator_decision_authority: bool,
+    canonical_agent: Option<&str>,
+    canonical_model: Option<&str>,
+    actor_label: &str,
+) -> TaskFieldWriter {
+    if agent_context_declared() || attributed_agent_identity(canonical_agent, canonical_model) {
+        TaskFieldWriter::Agent
+    } else if operator_decision_authority && !super::helpers::is_automation_actor(actor_label) {
+        TaskFieldWriter::Operator
+    } else {
+        TaskFieldWriter::Machinery
+    }
+}
+
+/// Whether this identity is an agent family or a model string that infers one.
+fn attributed_agent_identity(agent: Option<&str>, model: Option<&str>) -> bool {
+    let names_agent = |value: &str| {
+        let value = value.trim();
+        !value.is_empty()
+            && (all_agent_families()
+                .iter()
+                .any(|family| value.eq_ignore_ascii_case(family))
+                || infer_agent_family_from_model(value).is_some())
+    };
+    agent.is_some_and(names_agent) || model.is_some_and(names_agent)
 }
 
 impl OrbitRuntime {
@@ -451,7 +505,23 @@ impl OrbitRuntime {
                 "task {id} is in-progress; discard a preserved candidate after its run stops"
             )));
         }
-        let validated = self.validate_and_normalize_task_field_edits(id, &task, params)?;
+        // The label matches the one `operator_write` derives below. An agent
+        // identity does not consult it, and resolving it would repeat work
+        // the canonical pair already settled.
+        let classification_label = if let Some(label) = actor_override.as_deref() {
+            normalize_attribution_label(label, None)
+        } else if canonical_agent.is_none() && canonical_model.is_none() {
+            super::helpers::effective_actor_label(&self.actor().label, None, None)?
+        } else {
+            String::new()
+        };
+        let writer = task_field_writer(
+            operator_decision_authority,
+            canonical_agent.as_deref(),
+            canonical_model.as_deref(),
+            &classification_label,
+        );
+        let validated = self.validate_and_normalize_task_field_edits(id, &task, params, writer)?;
         let crew_assignment = validated.crew_assignment;
         let crew_source = validated.crew_source;
         let crew_redraw_history = validated.crew_redraw_history;
@@ -685,11 +755,15 @@ impl OrbitRuntime {
 
     /// Apply the validation and canonicalization shared by ordinary updates
     /// and the guarded start body before either path reaches the record layer.
+    ///
+    /// `writer` is this caller's trusted class. Light-delivery tag additions
+    /// consult it, not the process environment alone [ORB-16872].
     pub(super) fn validate_and_normalize_task_field_edits(
         &self,
         id: &str,
         task: &Task,
         mut params: TaskUpdateParams,
+        writer: TaskFieldWriter,
     ) -> Result<ValidatedTaskFieldEdits, OrbitError> {
         // Both ordinary updates and guarded starts reach this application
         // boundary, including CLI/dashboard callers that bypass tool-host
@@ -761,10 +835,12 @@ impl OrbitRuntime {
                     }
                 }
             }
-            // [ORB-16855] A light-delivery tag skips review or validation, so
-            // only filing or an operator may set it: an agent, the task's
-            // own implementer above all, cannot add one to an existing task.
-            if agent_context_declared()
+            // [ORB-16855] [ORB-16872] A light-delivery tag skips review or
+            // validation, so only filing or an operator may add it. An
+            // attributed agent or tool writer is refused even when this
+            // process has no agent envelope — the normal shape of a
+            // user-launched MCP server. Removing a tag stays allowed.
+            if writer == TaskFieldWriter::Agent
                 && let Some(added) = LIGHT_DELIVERY_TAGS.iter().find(|tag| {
                     tags.iter().any(|new| new == *tag) && !task.tags.iter().any(|old| old == *tag)
                 })

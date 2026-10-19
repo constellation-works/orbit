@@ -389,6 +389,167 @@ fn light_delivery_tags_are_set_only_by_filing_or_an_operator() {
     assert_eq!(approved["tags"], json!(["skip-review", "skip-validation"]));
 }
 
+/// [ORB-16872] A user-launched MCP server has no agent envelope. A tool
+/// update that still names an agent model is an attributed agent write, so
+/// it cannot add `skip-review` or `skip-validation`, including when the write
+/// is a guarded start. Filing, an operator update, and removal still succeed,
+/// and a refusal leaves the stored tags unchanged.
+fn attributed_agent_without_envelope_cannot_add_light_delivery_tags() {
+    let workspace = workspace();
+    let filed = workspace.add_task_cli_with_tags(
+        "Filed with both light-delivery tags",
+        &["skip-review", "skip-validation"],
+    );
+    assert_eq!(
+        filed["tags"],
+        json!(["skip-review", "skip-validation"]),
+        "filing sets both tags"
+    );
+
+    let reviewed = workspace.add_task_cli_with_tags("Reviewed docs task", &["skip-review"]);
+    let reviewed_id = reviewed["id"].as_str().expect("reviewed task id");
+    let plain = workspace.add_task_cli_with_tags("Plain docs task", &[]);
+    let plain_id = plain["id"].as_str().expect("plain task id");
+    assert_eq!(
+        plain["tags"],
+        json!([]),
+        "filing without the tags stores none"
+    );
+
+    let add_validation = run_tool_update_without_agent_envelope(
+        &workspace,
+        &json!({
+            "id": reviewed_id,
+            "model": "claude",
+            "tags": ["skip-review", "skip-validation"],
+        }),
+    );
+    assert_light_delivery_addition_refused(&add_validation, "skip-validation");
+    assert_eq!(
+        shown_tags(&workspace, reviewed_id),
+        json!(["skip-review"]),
+        "the refused update wrote nothing"
+    );
+
+    let add_review = run_tool_update_without_agent_envelope(
+        &workspace,
+        &json!({
+            "id": plain_id,
+            "model": "grok",
+            "tags": ["skip-review"],
+        }),
+    );
+    assert_light_delivery_addition_refused(&add_review, "skip-review");
+    assert_eq!(
+        shown_tags(&workspace, plain_id),
+        json!([]),
+        "the refused update wrote nothing"
+    );
+
+    let guarded_start = run_tool_update_without_agent_envelope(
+        &workspace,
+        &json!({
+            "id": reviewed_id,
+            "model": "codex",
+            "status": "in-progress",
+            "plan": "Exercise guarded-start admission.",
+            "tags": ["skip-review", "skip-validation"],
+        }),
+    );
+    assert_light_delivery_addition_refused(&guarded_start, "skip-validation");
+    let shown = show_task(&workspace, reviewed_id);
+    assert_eq!(
+        shown["tags"],
+        json!(["skip-review"]),
+        "the refused start wrote nothing"
+    );
+    assert_eq!(
+        shown["status"], "proposed",
+        "the refused start did not move the task"
+    );
+
+    let removed = run_tool_update_without_agent_envelope(
+        &workspace,
+        &json!({
+            "id": reviewed_id,
+            "model": "claude",
+            "tags": ["docs"],
+        }),
+    );
+    assert!(
+        removed.status.success(),
+        "an attributed agent may remove a light-delivery tag\n{}",
+        String::from_utf8_lossy(&removed.stderr)
+    );
+    let removed: Value = serde_json::from_slice(&removed.stdout).expect("removal JSON");
+    assert_eq!(removed["tags"], json!(["docs"]));
+
+    let approved = workspace.run_as_operator(
+        &[
+            "task",
+            "update",
+            reviewed_id,
+            "--tag",
+            "docs",
+            "--tag",
+            "skip-review",
+            "--tag",
+            "skip-validation",
+            "--json",
+        ],
+        "operator adds both light-delivery tags",
+    );
+    let approved: Value = serde_json::from_slice(&approved.stdout).expect("operator update JSON");
+    assert_eq!(
+        approved["tags"],
+        json!(["docs", "skip-review", "skip-validation"])
+    );
+}
+
+/// Tool update in a child with no agent envelope and no operator override.
+/// Attribution comes only from `model` in the tool input.
+fn run_tool_update_without_agent_envelope(workspace: &TestWorkspace, input: &Value) -> Output {
+    let payload = input.to_string();
+    let mut command = assert_cmd::cargo::cargo_bin_cmd!("orbit");
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .current_dir(&workspace.work)
+        .env("HOME", &workspace.home)
+        .env("USERPROFILE", &workspace.home)
+        .args(["tool", "run", "orbit.task.update", "--input", &payload])
+        .output()
+        .expect("run attributed tool update without an agent envelope")
+}
+
+fn assert_light_delivery_addition_refused(output: &Output, tag: &str) {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "attributed agent adding `{tag}` without an agent envelope must be refused\n{stderr}"
+    );
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap_or_else(|_| {
+        panic!("stderr is not the tool error JSON: {stderr}");
+    });
+    assert_eq!(error["code"], "capability_denied", "{stderr}");
+    assert!(
+        error["error"]
+            .as_str()
+            .is_some_and(|message| message.contains(tag)),
+        "names `{tag}`: {stderr}"
+    );
+}
+
+fn show_task(workspace: &TestWorkspace, task_id: &str) -> Value {
+    let shown = workspace.run(&["task", "show", task_id, "--json"], "show task");
+    serde_json::from_slice(&shown.stdout).expect("show JSON")
+}
+
+fn shown_tags(workspace: &TestWorkspace, task_id: &str) -> Value {
+    show_task(workspace, task_id)["tags"].clone()
+}
+
 fn assert_task_titles(output: &Output, expected: &[&str]) {
     let value: Value = serde_json::from_slice(&output.stdout).expect("task array JSON");
     let tasks = value.as_array().expect("task array");
@@ -456,6 +617,10 @@ fn task_tags_status_filters_and_identity() {
         (
             "light_delivery_tags_are_set_only_by_filing_or_an_operator",
             light_delivery_tags_are_set_only_by_filing_or_an_operator as fn(),
+        ),
+        (
+            "attributed_agent_without_envelope_cannot_add_light_delivery_tags",
+            attributed_agent_without_envelope_cannot_add_light_delivery_tags as fn(),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");
