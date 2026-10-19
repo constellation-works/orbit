@@ -45,7 +45,7 @@ pub(super) fn related(
     let mut misses = BTreeMap::<&str, Vec<&TaskFacts>>::new();
     for task in &facts.tasks {
         let Some(landed) = &task.landed else {
-            unavailable += usize::from(task.done_at.is_some_and(|at| params.within(at)));
+            unavailable += usize::from(task.delivery_at.is_some_and(|at| params.within(at)));
             continue;
         };
         if !params.within(landed.at) {

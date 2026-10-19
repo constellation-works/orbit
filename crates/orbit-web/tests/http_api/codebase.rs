@@ -1774,6 +1774,10 @@ fn codebase_related_uses_landed_diffs_and_filters_support_and_window() {
                 "Markdown needs no reservation to co-change"
             );
             assert_eq!(payload["excluded_large"], 1);
+            assert_eq!(
+                payload["unavailable_landed_tasks"], 0,
+                "an old landing receipt is outside the window even when the task was updated recently"
+            );
             let all = json_ok(server.get(&format!(
                 "/api/codebase/related?{WS}&path=src/a.rs&window=all&min_support=1"
             )));

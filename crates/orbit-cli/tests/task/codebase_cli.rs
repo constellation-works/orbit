@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{ActorIdentity, JobRun, JobRunState, OrbitRuntime};
+use orbit_engine::RuntimeHost;
 use orbit_types::task::{
     TASK_ARTIFACT_SCHEMA_VERSION, TASK_COMMENTS_FILE_NAME, TASK_EVENTS_FILE_NAME, TaskCommentRowV2,
     TaskEventRowV2, TaskRelation, TaskRelationType, TaskStatus,
@@ -394,4 +395,138 @@ fn codebase_cli_ranks_task_pilot_crews_against_the_landed_diff() {
             && line.contains("67%")),
         "the text table ranks the crew by F1:\n{human}"
     );
+}
+
+/// Analytics is history-only, and old done tasks cannot add delivery I/O to
+/// a related query. Git's own trace records identity resolution independently
+/// of the observer diagnostic, without timing assertions or synthetic load.
+#[test]
+fn codebase_delivery_reads_are_lazy_and_window_bounded() {
+    if crate::isolated_test::run_in_child(
+        "codebase_cli::codebase_delivery_reads_are_lazy_and_window_bounded",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let shown = fixture.json(&["workspace", "show", "--json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    let jobs = fixture.root.join("resources/jobs");
+    fs::create_dir_all(&jobs).unwrap();
+    fs::write(jobs.join("codebase_fixture.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: codebase_fixture\nspec:\n  state: enabled\n  task_delivery: {}\n  steps: []\n").unwrap();
+    crate::git_repo::run(
+        &fixture.repo,
+        &[
+            "config",
+            "remote.origin.url",
+            "https://github.com/fixture/codebase.git",
+        ],
+    );
+    let seed = |title: &str, status: TaskStatus, at: chrono::DateTime<chrono::Utc>| {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+            .unwrap()
+            .with_actor(ActorIdentity::human("codebase-fixture"));
+        let task = runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                status: Some(status),
+                context_files: vec!["file:src/lib.rs".into()],
+                ..Default::default()
+            })
+            .unwrap()
+            .id
+            .to_string();
+        // No host checkpoint is present: observing the run must still resolve
+        // its repository and report unavailable delivery rather than a landing.
+        runtime
+            .insert_job_run(
+                "codebase_fixture",
+                1,
+                at,
+                Some(json!({"task_ids": [task]})),
+                None,
+            )
+            .unwrap();
+        let path = bundle(&fixture.root, &task)
+            .unwrap()
+            .join(TASK_EVENTS_FILE_NAME);
+        let rows = fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|line| {
+                let mut row: TaskEventRowV2 = serde_json::from_str(line).unwrap();
+                row.at = at;
+                serde_json::to_string(&row).unwrap()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(path, format!("{rows}\n")).unwrap();
+    };
+    let now = chrono::Utc::now();
+    seed("recent one", TaskStatus::Done, now);
+    seed("recent two", TaskStatus::Done, now);
+    seed("unfinished", TaskStatus::Backlog, now);
+    let run = |verb: &str, window: &str, expected_observations: usize, expected_git: usize| {
+        let trace = fixture._temp.path().join("git-trace.log");
+        fs::write(&trace, "").unwrap();
+        let mut args = vec!["codebase", verb];
+        if verb != "analytics" {
+            args.push("src/lib.rs");
+        }
+        args.extend(["--window", window, "--min-support", "1", "--json"]);
+        let output = fixture
+            .command(&args)
+            .env("GIT_TRACE", &trace)
+            .env(
+                "RUST_LOG",
+                "orbit_core::application::job::run::delivery=debug",
+            )
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let git = fs::read_to_string(trace).unwrap();
+        if verb != "related" {
+            assert!(git.trim().is_empty(), "{verb} must not spawn Git: {git}");
+        }
+        assert_eq!(
+            git.lines()
+                .filter(|line| line.contains("config --get remote.origin.url"))
+                .count(),
+            expected_git,
+            "{verb}/{window}: repository identity must resolve at most once: {git}"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            stderr
+                .lines()
+                .filter(|line| line.contains("codebase_delivery_observation=true"))
+                .count(),
+            expected_observations,
+            "{verb}/{window}: delivery observation must be lazy and window-bounded: {stderr}"
+        );
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    run("analytics", "30d", 0, 0);
+    run("show", "30d", 0, 0);
+    let before = run("related", "30d", 2, 1);
+    // A small fixed fixture proves the bound; it does not attempt to create
+    // CPU load or reproduce a timing race on a shared host.
+    for title in ["old one", "old two", "old three"] {
+        seed(title, TaskStatus::Done, now - chrono::Duration::days(40));
+    }
+    run("analytics", "30d", 0, 0);
+    run("show", "30d", 0, 0);
+    let after = run("related", "30d", 2, 1);
+    assert_eq!(before["rows"], after["rows"]);
+    assert_eq!(
+        before["unavailable_landed_tasks"],
+        after["unavailable_landed_tasks"]
+    );
+    run("related", "all", 5, 1);
 }

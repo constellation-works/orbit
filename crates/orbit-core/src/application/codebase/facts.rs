@@ -154,6 +154,9 @@ pub(super) const ACTOR_KINDS: &[&str] = &["operator", "agent", "system", "unknow
 #[derive(Debug, Clone)]
 pub(super) struct TaskFacts {
     pub(super) landed: Option<super::landed::Landed>,
+    /// Landing receipt time, else done time: admits delivery fallback and
+    /// places unavailable deliveries in the same window.
+    pub(super) delivery_at: Option<DateTime<Utc>>,
     /// For a landed task, what its task-pilot receipts predicted.
     pub(super) pilot: Option<super::pilot::PilotFacts>,
     /// Tagged `no-diff-expected`: the task was not meant to change files.
@@ -219,7 +222,11 @@ pub struct CodebaseFacts {
 
 /// Scan the workspace once. A task whose history cannot be read keeps its
 /// envelope facts with an empty history rather than failing the whole view.
-pub(super) fn scan(runtime: &OrbitRuntime) -> Result<CodebaseFacts, OrbitError> {
+pub(super) fn scan(
+    runtime: &OrbitRuntime,
+    delivery_window: Option<&super::sections::Params>,
+    include_landed: bool,
+) -> Result<CodebaseFacts, OrbitError> {
     let computed_at = Utc::now();
     let tasks = runtime.list_task_metadata()?;
 
@@ -237,8 +244,8 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<CodebaseFacts, OrbitError> 
 
     let settlements = failed_claim_settlements(runtime);
     let mut facts = Vec::with_capacity(tasks.len());
-    let mut landed_scan = super::landed::Scanner::new(runtime);
-    let pilot_runs = super::pilot::PilotRuns::load(runtime);
+    let mut landed_scan = include_landed.then(|| super::landed::Scanner::new(runtime));
+    let mut pilot_runs = None;
     for task in tasks {
         let id = task.id.to_string();
         let history = runtime.get_task_history(&id).unwrap_or_else(|error| {
@@ -295,15 +302,26 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<CodebaseFacts, OrbitError> 
             .map(|entry| entry.at)
             .collect();
         left_backlog.sort();
-        let landed = (task.status == TaskStatus::Done)
-            .then(|| landed_scan.read(runtime, &id, &history))
-            .flatten();
+        let receipt = super::landed::receipt(&history);
+        let delivery_at =
+            done_at.map(|at| receipt.as_ref().map_or(at, |(_, landed_at)| *landed_at));
+        let landed = delivery_at
+            .filter(|at| delivery_window.is_none_or(|params| params.within(*at)))
+            .and_then(|_| {
+                landed_scan
+                    .as_mut()?
+                    .read(runtime, &id, receipt, delivery_window.is_some())
+            });
         let no_diff = task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG);
         let pilot = (landed.is_some() && !no_diff)
-            .then(|| super::pilot::read(runtime, &pilot_runs, &id, computed_at))
+            .then(|| {
+                let runs = pilot_runs.get_or_insert_with(|| super::pilot::PilotRuns::load(runtime));
+                super::pilot::read(runtime, runs, &id, computed_at)
+            })
             .flatten();
         facts.push(TaskFacts {
             landed,
+            delivery_at,
             pilot,
             no_diff,
             regressed_by: regressed_by.remove(&id).unwrap_or_default(),
