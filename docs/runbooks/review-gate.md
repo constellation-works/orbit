@@ -475,6 +475,16 @@ pass without executing their confined path. The reviewer copies each notice
 into the record's `deferred`, and such a pass never counts as running that
 path: settlement reads it as `not_run` (`validation_incomplete`).
 
+When a broader run, such as `cargo test -p <crate> --test <target> <module>`,
+defers some of its tests, name each one as a `host_sandbox_test` requirement
+whose command is `cargo test -p <crate> --test <target> <test>`. Use the same
+package and target, and the full test path the notice prints as the filter.
+Record each requirement as its own `required`, `not_run` record too. A host
+result for each requirement then establishes the broader record. A notice no
+requirement names exactly leaves the record `not_run`, and the review blocks
+instead of holding
+([design](../design/review-gate/2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545)).
+
 A test runner may instead exit nonzero because nested Seatbelt application
 or a required child-process spawn was refused by the review sandbox. Record
 that affected check as `required` and `denied`, with the exact command,

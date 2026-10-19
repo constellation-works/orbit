@@ -25,6 +25,7 @@ use orbit_types::workflow::{
 const ARTIFACT: &str = "evidence/host-sandbox-probe.json";
 const LOG_ARTIFACT: &str = "evidence/host-sandbox-probe.log.json";
 
+mod deferred;
 mod sandbox;
 
 /// A claimed leaf whose follower resolves `cargo` to a stand-in running
@@ -40,8 +41,9 @@ fn leaf_with_probe_at(probe: &str, before_landing: bool) -> (ReviewedLeaf, Strin
     let bin = home.join("host-evidence-bin");
     std::fs::create_dir_all(&bin).unwrap();
     let cargo = bin.join("cargo");
-    // `cargo test -p <package> --test <target> [filter] -- --nocapture`
-    std::fs::write(&cargo, "#!/bin/sh\nexec sh \"tests/host/$5.sh\"\n").unwrap();
+    // `cargo test -p <package> --test <target> [filter] -- --nocapture`; the
+    // probe gets the filter, or `--` without one.
+    std::fs::write(&cargo, "#!/bin/sh\nexec sh \"tests/host/$5.sh\" \"$6\"\n").unwrap();
     std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
     let follower_config = format!(
         "[workflow.validation_env]\nlogin_shell = false\npath = [\"{}\"]\n",

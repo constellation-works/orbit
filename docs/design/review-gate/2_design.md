@@ -454,6 +454,25 @@ deferred test as `host_sandbox_test` evidence instead. A result from a host
 that executed the path, such as owner fulfilment below, stands in for the
 record and clears its notices.
 
+A broader required run can defer the very tests the reviewer names
+[ORB-17043]: `cargo test -p <crate> --test <target> <module>` passes with a
+deferral notice for each of two tests, and each test is its own
+`host_sandbox_test` requirement with its own required `not_run` record. A
+requirement covers a notice only when its command is admitted as
+`cargo test -p <crate> --test <target> <test>`, with the broader run's one
+package and one target and a filter equal to the test the notice names
+(`<prefix> <test>: <detail>`, for a Bubblewrap, Seatbelt or ps-denied
+notice). A requirement without a filter, a module filter, another package or
+target, or a command outside the grammar covers nothing. When every notice
+on the record is covered, the review counts as evidence-only, so it holds or
+a claimed host replays the requirements. Each passing result clears only the
+notice it covers and notes its result and log on the broader record, which
+passes once none is left. A replay that skips, defers, runs no test or meets
+an unavailable sandbox leaves its notice, and the review holds for that
+requirement. A failing replay fails its own record and the broader one. One
+uncovered notice keeps the record `not_run`, the review is not evidence-only,
+and nothing is replayed. A record that failed keeps its failure.
+
 The implementer lane follows the same reading [ORB-15287]. An affected-test
 gate that exits 0 with only deferral notices is handed off by naming the
 gate's validation summary, and the implement step derives the typed
@@ -923,8 +942,9 @@ apply: macOS `sandbox_apply` fails with `EPERM`, and Bubblewrap cannot create
 its namespaces. So the reviewer cannot run Orbit's sandbox tests, nor an
 owner-required command that runs them. Settlement on the leaf's host is
 Orbit's deterministic worker, outside the agent sandbox. When the report would
-otherwise be an evidence-only hold, it runs each requirement whose `os` is this
-host's and that no accepted result already satisfies. The command must be
+otherwise be an evidence-only hold, including a broader run whose every
+deferred test a requirement covers (above), it runs each requirement whose
+`os` is this host's and that no accepted result already satisfies. The command must be
 either an exact owner-required validation command or
 `cargo test -p <crate> --test <target> [<filter>]`. That form takes no other
 option, and the command may use only `[A-Za-z0-9._/:@+=-]` and spaces. A
@@ -942,7 +962,8 @@ no sandbox-unavailable diagnostic, prints no skip notice (`SKIP:`, `DEFERRED:`,
 those checks leaves the evidence missing with `sandbox_unavailable`,
 `self_skipped`, `no_tests_ran`, `tool_missing`, `timed_out` or `run_failed`, so
 the review holds as above. A failing test (`test_failed`) fails the reviewer's
-required record, and the review blocks. A passing run attaches a result like
+required record, and any broader record that deferred the test, and the
+review blocks. A passing run attaches a result like
 the operator's, with `os`, and settlement counts it on this tree, so the review
 passes with no hold. The certificate's `host_evidence` lists every attempt.
 
