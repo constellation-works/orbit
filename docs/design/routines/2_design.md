@@ -1,15 +1,15 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-10-11
-last_validated: 2026-10-17
+last_updated: 2026-10-19
+last_validated: 2026-10-19
 status: Accepted
 feature: routines
 doc_role: design
 type: design
 summary: Contract for routine definitions, clock-tick dispatch, host-local state, and OS clock integration.
 tags: [routines, scheduler]
-paths: ["crates/orbit-cli/src/command/routine/**", "crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry/routines.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-registry/src/host_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-store/src/sqlite/routine_store/**"]
+paths: ["crates/orbit-cli/src/command/routine/**", "crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry/routines.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-store/src/driver/sqlite/routine_store/**"]
 related_features: [routines, auto-tasks, activity-job, host-registry]
 related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10800, ORB-10986, ORB-11082, ORB-11315, ORB-12236, ORB-12237, ORB-12745]
 ---
@@ -639,16 +639,18 @@ task or an unreachable owner leaves the worktree in place.
 A `config.toml` written before [ORB-12236] may still carry `[routines] role = "source"`;
 it loads with a warning for one release and selects nothing.
 
-Host identity is the one genuinely host-local datum: `~/.orbit/host.toml` carries the
-versioned `machine_id`, human-facing `host_id`, and immutable `task_prefix`. `orbit init` owns identity
-creation and legacy migration; `orbit routine init --install-clock` only installs the OS
-clock unit (§5). A malformed `host.toml` is an error, not a fallback. Host identity names
-run ownership and display; it takes no part in deciding what is evaluated.
+Host identity is the one genuinely host-local datum: the `[machine]` table of the global
+`~/.orbit/config.toml` carries the generated `id` (the machine ID), the operator-chosen
+`name`, and the immutable `task_prefix`. `orbit init` owns identity creation; a legacy
+`host.toml` from before [ORB-12725] is migrated into that table once.
+`orbit routine init --install-clock` only installs the OS clock unit (§5). A malformed
+`[machine]` table is an error, not a fallback. Host identity names run ownership and
+display; it takes no part in deciding what is evaluated.
 
 The implementation boundary is vertical: `crates/orbit-cmd/src/registry/routines.rs` reads
-`host.toml` and `workspaces.json` through `orbit-registry`, validates local checkout paths,
-and constructs registered runtimes through `registry_runtime`. It projects those inputs
-through `RoutineWorkspaceProvider` into
+the `[machine]` identity from `config.toml` and `workspaces.json` through `orbit-registry`,
+validates local checkout paths, and constructs registered runtimes through `registry_runtime`.
+It projects those inputs through `RoutineWorkspaceProvider` into
 `crates/orbit-core/src/application/routines/`. Core owns the registry-neutral scheduler and does not
 read either registry file directly. There is no hub snapshot, satellite cache, fleet
 health, or remote placement service in the v1 path.
