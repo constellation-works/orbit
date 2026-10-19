@@ -5590,9 +5590,9 @@ fn agent_invoke_wait_deadline_is_bounded_and_leaves_the_run_observable() {
         properties["timeout_seconds"]["maximum"],
         orbit_core::application::job::MAX_AGENT_INVOKE_TIMEOUT_SECONDS
     );
-    assert_eq!(
-        properties["timeout_seconds"]["default"],
-        orbit_core::application::job::DEFAULT_AGENT_INVOKE_TIMEOUT_SECONDS
+    assert!(
+        properties["timeout_seconds"]["default"].is_null(),
+        "timeout_seconds has no schema default because operator and explorer ceilings differ"
     );
     for invalid in [json!(601), json!(-1), json!(0.5), json!("1")] {
         let error = client.call_tool_err(

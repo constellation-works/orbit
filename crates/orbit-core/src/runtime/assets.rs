@@ -131,6 +131,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/agent_invoke.yaml"),
     ),
     (
+        "agent_explore",
+        include_str!("../../assets/activities/agent_explore.yaml"),
+    ),
+    (
         "gate_starvation_defer",
         include_str!("../../assets/activities/gate_starvation_defer.yaml"),
     ),
@@ -314,6 +318,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
 /// they exist for `crates/orbit-engine/examples/v2_job_runtime_smoke.rs`
 /// only.
 pub(crate) const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
+    (
+        "agent_explore_pipeline",
+        include_str!("../../assets/jobs/agent_explore_pipeline.yaml"),
+    ),
     (
         "agent_invoke_pipeline",
         include_str!("../../assets/jobs/agent_invoke_pipeline.yaml"),

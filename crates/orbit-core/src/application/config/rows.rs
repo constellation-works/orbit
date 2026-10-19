@@ -41,6 +41,7 @@ pub(super) const CREW_POOL_KEYS: &[&str] = &[
     "workflow.purpose_crews.pre_landing_review",
     "workflow.purpose_crews.baseline_red_repair",
     "workflow.purpose_crews.sweep_tasks",
+    "workflow.purpose_crews.explorer",
 ];
 
 /// Keys whose global value the workspace file did not inherit, so the caller

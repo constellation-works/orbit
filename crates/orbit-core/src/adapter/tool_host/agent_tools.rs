@@ -1,8 +1,10 @@
 //! `orbit.agent.invoke` protocol translation [ORB-11354].
 //!
 //! Parses the tool payload and hands it to
-//! [`OrbitRuntime::submit_agent_invoke_run`], which owns the admission and
-//! every validation rule. Nothing here decides anything.
+//! [`OrbitRuntime::submit_agent_invocation`], which owns the admission and
+//! every validation rule for both modes — an operator's trusted-host
+//! invocation and a managed run's read-only explorer [ORB-16814]. Nothing
+//! here decides anything.
 
 use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::{optional_string, required_string};
@@ -10,7 +12,9 @@ use orbit_types::tool::ToolSessionContext;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::job::AgentInvokeRequest;
+use crate::application::job::{
+    AgentInvocation, AgentInvokeRequest, AgentInvokeSubmission, ExploreSubmission,
+};
 
 pub(super) fn invoke(
     runtime: &OrbitRuntime,
@@ -32,7 +36,7 @@ pub(super) fn invoke(
         model.as_deref(),
     );
 
-    let submission = runtime.submit_agent_invoke_run(AgentInvokeRequest {
+    let submission = runtime.submit_agent_invocation(AgentInvokeRequest {
         prompt: &prompt,
         cwd: &cwd,
         crew: crew.as_deref(),
@@ -42,7 +46,19 @@ pub(super) fn invoke(
         actor: actor.as_deref(),
         session_context,
     })?;
+    match submission {
+        AgentInvocation::TrustedHost(submission) => {
+            trusted_host_response(runtime, submission, wait_seconds)
+        }
+        AgentInvocation::Explore(submission) => explore_response(runtime, submission, wait_seconds),
+    }
+}
 
+fn trusted_host_response(
+    runtime: &OrbitRuntime,
+    submission: AgentInvokeSubmission,
+    wait_seconds: Option<u64>,
+) -> Result<Value, OrbitError> {
     let mut response = json!({
         "run_id": submission.run_id,
         "job_id": submission.job_id,
@@ -67,6 +83,44 @@ pub(super) fn invoke(
         response["state"] = json!(result.outcome);
         let result = serde_json::to_value(result)
             .map_err(|error| OrbitError::Execution(format!("encode agent invocation: {error}")))?;
+        response["answer"] = result["answer"].clone();
+        response["agent_invocation"] = result;
+    }
+    Ok(response)
+}
+
+fn explore_response(
+    runtime: &OrbitRuntime,
+    submission: ExploreSubmission,
+    wait_seconds: Option<u64>,
+) -> Result<Value, OrbitError> {
+    let mut response = json!({
+        "run_id": submission.run_id,
+        "job_id": submission.job_id,
+        "submitted_at": submission.submitted_at,
+        "state": if submission.queued { "queued" } else { "submitted" },
+        "queued": submission.queued,
+        "queue_position": submission.queue_position,
+        "waited": wait_seconds.is_some(),
+        "deduplicated": submission.deduplicated,
+        "timeout_seconds": submission.timeout_seconds,
+        "parent_run_id": submission.parent_run_id,
+        "crew": submission.crew,
+        "workspace_path": submission.workspace_path,
+        "cwd": submission.cwd,
+        "sandboxed": true,
+        "read_only": true,
+        "calls_used": submission.calls_used,
+        "calls_allowed": submission.calls_allowed,
+        "max_answer_bytes": submission.max_answer_bytes,
+    });
+    if let Some(seconds) = wait_seconds {
+        let result = runtime.wait_agent_invoke_run(&submission.run_id, Some(seconds))?;
+        response["state"] = json!(result.outcome);
+        let bounded = runtime.bound_explore_answer(result);
+        response["answer_truncated"] = json!(bounded.answer_truncated);
+        let result = serde_json::to_value(bounded.result)
+            .map_err(|error| OrbitError::Execution(format!("encode explorer answer: {error}")))?;
         response["answer"] = result["answer"].clone();
         response["agent_invocation"] = result;
     }

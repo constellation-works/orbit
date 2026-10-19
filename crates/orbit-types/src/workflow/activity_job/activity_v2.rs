@@ -61,6 +61,12 @@ pub struct AgentLoopSpec {
     /// or with nothing marked, the rendered instruction is unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regression_risk_instruction: Option<String>,
+    /// Read-only exploration delegation an implement or review-repair agent
+    /// may use, appended to the instruction only when the host enables
+    /// `workflow.explore` and has an explorer crew to draw [ORB-16814].
+    /// Absent or unavailable, the rendered instruction offers no delegation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explore_instruction: Option<String>,
     /// Tool allowlist (§6). Custom activities keep this exact allowlist
     /// contract. An empty list with no `tool_disallow_list` is deprecated:
     /// asset load warns and enforcement keeps its legacy behaviour until the

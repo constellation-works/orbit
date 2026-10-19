@@ -668,6 +668,10 @@ pub trait NullRuntimeHost: Send + Sync {
         None
     }
 
+    fn explore_delegation_available(&self) -> bool {
+        false
+    }
+
     fn tag_instructions_for_activity(
         &self,
         _run_id: &str,

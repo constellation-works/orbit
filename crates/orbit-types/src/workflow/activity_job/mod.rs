@@ -6,6 +6,7 @@ pub const ACTIVITY_REF_PREFIX: &str = "activity:";
 pub mod activity_roles;
 pub mod activity_v2;
 pub mod audit_envelope;
+pub mod explore;
 pub mod job_v2;
 pub mod provider_sandbox;
 pub mod retired;
@@ -13,6 +14,10 @@ pub mod schema_header;
 pub mod tool_allowlist;
 pub mod trusted_host;
 
+pub use explore::{
+    EXPLORE_ACTIVITY, EXPLORE_CALLER_ACTIVITIES, EXPLORE_JOB, EXPLORE_PARENT_RUN_KEY,
+    EXPLORE_PROVIDER_SANDBOX_MODE,
+};
 pub use provider_sandbox::{
     CODEX_LEAST_RESTRICTIVE_SANDBOX, CODEX_PROVIDER_SANDBOX_MODES, DEFAULT_PROVIDER_SANDBOX,
     admit_provider_sandbox_mode, format_provider_sandbox, is_least_restrictive_provider_sandbox,

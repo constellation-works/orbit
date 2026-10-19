@@ -516,7 +516,7 @@ pub(crate) fn resolve_percent(raw: Option<u8>, default: u8, key: &str) -> Result
 
 /// A `workflow.regression_risk.*` count: `default` when unset, else
 /// `1..=max`.
-pub(super) fn resolve_regression_risk_bound(
+pub(super) fn resolve_bounded_count(
     raw: Option<u32>,
     default: u32,
     max: u32,

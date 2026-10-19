@@ -347,3 +347,15 @@
     align-items: baseline;
   }
 }
+
+/* Read-only exploration: implement runs with and without explorer calls. */
+.scoreboard-explore-comparison {
+  min-width: 0;
+  font-size: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.scoreboard-explore-comparison > .scoreboard-orchestration-scope {
+  padding: 12px 16px 8px;
+  color: var(--fg-dim);
+}

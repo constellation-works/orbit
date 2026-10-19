@@ -379,6 +379,41 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.explore.enabled": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.explore.max_answer_bytes": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.explore.max_calls_per_run": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.explore.max_concurrent_per_run": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.explore.timeout_seconds": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.generated_paths": {
       "scope": "built-in",
       "state": "default",
@@ -464,6 +499,13 @@
       "shadowed_by": []
     },
     "workflow.purpose_crews.baseline_red_repair": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.purpose_crews.explorer": {
       "scope": "built-in",
       "state": "default",
       "tier": "standard",

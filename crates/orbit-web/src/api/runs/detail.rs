@@ -135,8 +135,17 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
             None
         });
 
+    // The read-only explorers an implement or review-repair agent delegated
+    // to, with their crew, duration and spend. Empty for every other run.
+    let explore_invocations = or_warn(
+        runtime.explore_invocation_summaries(run_id),
+        run_id,
+        "explore invocations",
+    );
+
     json!({
         "run": full,
+        "explore_invocations": explore_invocations,
         "pull_claim": pull_claim,
         "claimed_leaves": claimed_leaves,
         "pull_breaker": pull_breaker,

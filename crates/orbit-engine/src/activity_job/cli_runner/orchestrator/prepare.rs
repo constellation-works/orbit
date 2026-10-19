@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use orbit_tools::ToolContext;
-use orbit_types::workflow::activity_job::{AgentLoopSpec, TrustedHostAdmission};
+use orbit_types::workflow::activity_job::{AgentLoopSpec, EXPLORE_ACTIVITY, TrustedHostAdmission};
 use serde_json::Value;
 
 use super::super::super::dispatcher::{DispatchError, ResolvedSandbox};
@@ -41,6 +41,7 @@ pub(super) fn trusted_host_admission(
 /// timeout, only ever shortened by the run input.
 pub(super) fn invocation_timeout_seconds(
     spec: &AgentLoopSpec,
+    activity_name: &str,
     trusted_host: Option<&TrustedHostAdmission>,
     input: &Value,
 ) -> u64 {
@@ -52,14 +53,15 @@ pub(super) fn invocation_timeout_seconds(
     // [ORB-11354] An operator submitting an exploration says how long they are
     // willing to wait. The request can only *shorten* the activity's declared
     // bound, so the asset stays the ceiling and no run input can extend an
-    // unsandboxed subprocess past it. Only the admitted mode reads the key;
-    // every other activity keeps its declared timeout verbatim.
-    match trusted_host.and(
-        input
-            .get("timeout_seconds")
-            .and_then(Value::as_u64)
-            .filter(|seconds| *seconds > 0),
-    ) {
+    // unsandboxed subprocess past it. Only the admitted mode and an explorer,
+    // whose admission bounds each call [ORB-16814], read the key; every other
+    // activity keeps its declared timeout verbatim.
+    let reads_request = trusted_host.is_some() || activity_name == EXPLORE_ACTIVITY;
+    match input
+        .get("timeout_seconds")
+        .and_then(Value::as_u64)
+        .filter(|seconds| *seconds > 0 && reads_request)
+    {
         Some(requested) => requested.min(declared_timeout_seconds),
         None => declared_timeout_seconds,
     }

@@ -12,7 +12,7 @@ use orbit_common::process::stopped_descendants::{StoppedDescendant, stopped_desc
 use orbit_common::security::child_env::{MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAGED_WORKSPACE_ENV};
 use orbit_common::security::redaction::argv_redactor;
 use orbit_tools::plugin::BrokeredCaller;
-use orbit_types::workflow::activity_job::{AgentLoopSpec, V2AuditEventKind};
+use orbit_types::workflow::activity_job::{AgentLoopSpec, EXPLORE_ACTIVITY, V2AuditEventKind};
 use orbit_types::workflow::{ActivityToolDenyPolicy, ExecutorSandboxKind, render_tag_instructions};
 use serde_json::Value;
 
@@ -24,8 +24,8 @@ use super::super::super::dispatcher::{DispatchError, DispatchOutcome};
 use super::super::super::workspace::{WorktreeBoundaryGuard, validate_declared_worktree_pair};
 use super::super::argv::{
     apply_provider_runtime_arg_fixups, apply_provider_static_arg_fixups,
-    apply_trusted_host_provider_sandbox, codex_mcp_server_launch_args, neutralize_inner_sandbox,
-    try_audit_argv_for_dispatch,
+    apply_read_only_provider_sandbox, apply_trusted_host_provider_sandbox,
+    codex_mcp_server_launch_args, neutralize_inner_sandbox, try_audit_argv_for_dispatch,
 };
 use super::super::envelope::{cli_agent_envelope_json, task_id_from_input, task_ids_from_input};
 use super::super::inspection_tools::prepare_inspection_tools;
@@ -109,7 +109,8 @@ pub(crate) fn run_cli_backend_for_step(
     let mut cli_executor = host.resolve_cli_executor(&provider)?;
     let inspection_tools =
         prepare_inspection_tools(&provider, input, fs_profile, &cli_executor.args)?;
-    let timeout_seconds = invocation_timeout_seconds(spec, trusted_host.as_ref(), input);
+    let timeout_seconds =
+        invocation_timeout_seconds(spec, activity_name, trusted_host.as_ref(), input);
     let wall_clock_timeout = Duration::from_secs(timeout_seconds);
     let stall_window = host.agent_stall_window();
 
@@ -186,6 +187,15 @@ pub(crate) fn run_cli_backend_for_step(
         envelope_spec.instruction.push_str("\n\n");
         envelope_spec.instruction.push_str(instruction);
     }
+    if let Some(instruction) = spec
+        .explore_instruction
+        .as_deref()
+        .filter(|instruction| !instruction.trim().is_empty())
+        .filter(|_| host.explore_delegation_available())
+    {
+        envelope_spec.instruction.push_str("\n\n");
+        envelope_spec.instruction.push_str(instruction);
+    }
     // Trusted per-tag guidance goes last, after every built-in rule it may
     // not override. The audit row names what the prompt carried.
     let tag_instructions = host.tag_instructions_for_activity(run_id, activity_name, input)?;
@@ -239,7 +249,14 @@ pub(crate) fn run_cli_backend_for_step(
     let explicitly_off = resolved_sandbox
         .as_ref()
         .is_some_and(|sandbox| sandbox.kind == ExecutorSandboxKind::Off);
-    if sandbox.is_some() || explicitly_off {
+    // [ORB-16814] An explorer is read-only by contract. Wrapped by Orbit's
+    // sandbox, its reviewer profile already denies every worktree write and a
+    // second inner sandbox cannot nest (Seatbelt refuses it). Unwrapped,
+    // including an explicit executor opt-out, the provider's own read-only
+    // sandbox is the boundary instead of being neutralized.
+    if activity_name == EXPLORE_ACTIVITY && sandbox.is_none() {
+        apply_read_only_provider_sandbox(&provider, &mut provider_config);
+    } else if sandbox.is_some() || explicitly_off {
         neutralize_inner_sandbox(&provider, &mut provider_config, &mut cli_executor.args);
     }
 

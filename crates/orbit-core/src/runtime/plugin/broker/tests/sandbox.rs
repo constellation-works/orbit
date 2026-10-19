@@ -261,6 +261,7 @@ impl BrokerHost {
             instruction: String::new(),
             steering_instruction: None,
             regression_risk_instruction: None,
+            explore_instruction: None,
             tools: Vec::new(),
             on_denial: OnDenial::Terminate,
             model: None,

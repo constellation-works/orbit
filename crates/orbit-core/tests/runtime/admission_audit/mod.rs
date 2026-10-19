@@ -87,6 +87,8 @@ mod run_conflict;
 
 mod agent_invoke;
 
+mod agent_explore;
+
 mod disk_probe;
 
 mod run_support;
