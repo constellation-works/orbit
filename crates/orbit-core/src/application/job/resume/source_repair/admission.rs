@@ -1,30 +1,25 @@
-//! Authenticate and admit owner-local published-candidate recovery.
-mod adoption;
-mod completion;
-mod handoff;
-mod identity;
-mod observation;
-mod publication;
-mod published_owner;
-mod resumed_recovery;
-mod successor;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
-use orbit_common::fs::git::run_git;
+use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::required_string;
 use orbit_common::security::release::sha256_hex;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::{
-    CommitObservationStatus, PR_AUTO_FIX_BUDGET, ReviewAdmission, SOURCE_REPAIR_KEY,
+    JobRun, JobRunState, JobV2, PR_AUTO_FIX_BUDGET, ReviewAdmission, SOURCE_REPAIR_KEY,
     SOURCE_REPAIR_LINKED, SOURCE_REPAIR_RESERVED, SourceRepairAdmission, SourceRepairBinding,
     pr_auto_fix_attempts,
 };
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
-use super::*;
+use super::super::plan::{RESUME_LINEAGE_SCAN_LIMIT, ResumePlan};
+use crate::OrbitRuntime;
+use crate::application::job::pipeline::PipelineSubmission;
+use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
+use crate::runtime::run_input::carried_task_ids;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,22 +35,22 @@ struct Request {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RepairLink {
-    request_key: String,
-    run_id: String,
+pub(super) struct RepairLink {
+    pub(super) request_key: String,
+    pub(super) run_id: String,
 }
 
-fn refuse(message: impl Into<String>) -> OrbitError {
+pub(super) fn refuse(message: impl Into<String>) -> OrbitError {
     OrbitError::JobValidation(format!("source repair refused: {}", message.into()))
 }
 
-fn digest(value: &impl serde::Serialize) -> Result<String, OrbitError> {
+pub(super) fn digest(value: &impl serde::Serialize) -> Result<String, OrbitError> {
     serde_json::to_vec(value)
         .map(|bytes| sha256_hex(&bytes))
         .map_err(|error| refuse(format!("unreadable evidence: {error}")))
 }
 
-fn task_digest(task: &Task) -> Result<String, OrbitError> {
+pub(super) fn task_digest(task: &Task) -> Result<String, OrbitError> {
     digest(&json!({
         "meaning": orbit_automation::review::task_meaning_digest(task)
             .map_err(|e| refuse(e.to_string()))?,
@@ -66,7 +61,7 @@ fn task_digest(task: &Task) -> Result<String, OrbitError> {
     }))
 }
 
-fn field<'a>(value: &'a Value, name: &str) -> Result<&'a str, OrbitError> {
+pub(super) fn field<'a>(value: &'a Value, name: &str) -> Result<&'a str, OrbitError> {
     value
         .get(name)
         .and_then(Value::as_str)
@@ -77,7 +72,7 @@ fn field<'a>(value: &'a Value, name: &str) -> Result<&'a str, OrbitError> {
 /// Corroborate an authenticated publication without selecting authority from
 /// reference order. Historical PRs remain intact; contradictory identities do
 /// not become valid merely because another reference matches.
-fn task_pr_association(task: &Task, number: &str, url: &str) -> Result<(), OrbitError> {
+pub(super) fn task_pr_association(task: &Task, number: &str, url: &str) -> Result<(), OrbitError> {
     let mut associated = false;
     for reference in task
         .external_refs
@@ -207,7 +202,7 @@ impl OrbitRuntime {
         {
             return Err(refuse(format!("{prefix}: source evidence changed")));
         }
-        if adoption::admitted_task_digest(
+        if super::adoption::admitted_task_digest(
             &task,
             &self.get_task_history(&task.id)?,
             run_id,
@@ -598,7 +593,7 @@ impl OrbitRuntime {
         )
     }
 
-    fn source_repair_definition(&self, source: &JobRun) -> Result<JobV2, OrbitError> {
+    pub(super) fn source_repair_definition(&self, source: &JobRun) -> Result<JobV2, OrbitError> {
         let mut job = match self.read_run_definition_snapshot(&source.run_id)? {
             Some((job, _)) => job,
             None => self.load_v2_job_asset_by_name(&source.job_id)?.1,

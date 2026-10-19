@@ -8,7 +8,7 @@ feature: auto-concurrency
 doc_role: design
 summary: Proposed mechanism for predictive admission — per-task CPU and memory sampling from Linux worker scopes and the macOS process tree, resource profiles per workspace, work class and complexity, a host-wide load forecast with admission reservations, gap-fit admission under the existing throttle, and a shadow-first rollout.
 tags: [auto-concurrency, drain, capacity, admission]
-paths: ["crates/orbit-core/src/application/job/pipeline/worker/scope.rs", "crates/orbit-core/src/application/job/pipeline/worker/usage.rs", "crates/orbit-core/src/application/job/pipeline/worker/delivery_class.rs", "crates/orbit-core/src/application/admission/auto_admission.rs", "crates/orbit-core/src/application/admission/gap_fit.rs", "crates/orbit-core/src/application/workspace_auto/classify.rs", "crates/orbit-core/src/application/workspace_auto/limiters.rs", "crates/orbit-core/src/application/pull_drain/refill/**", "crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-store/src/driver/sqlite/admission_load_store.rs", "crates/orbit-config/src/registry/settings/machine.rs", "crates/orbit-core/src/application/distributed/work_fit.rs", "crates/orbit-store/src/contracts/task/coordination/admission.rs"]
+paths: ["crates/orbit-core/src/application/job/pipeline/worker/scope.rs", "crates/orbit-core/src/application/job/pipeline/worker/usage.rs", "crates/orbit-core/src/application/job/pipeline/worker/delivery_class.rs", "crates/orbit-core/src/application/admission/auto_admission.rs", "crates/orbit-core/src/application/admission/gap_fit.rs", "crates/orbit-core/src/application/workspace_auto/classify/**", "crates/orbit-core/src/application/workspace_auto/limiters.rs", "crates/orbit-core/src/application/pull_drain/refill/**", "crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-store/src/driver/sqlite/admission_load_store.rs", "crates/orbit-config/src/registry/settings/machine.rs", "crates/orbit-core/src/application/distributed/work_fit.rs", "crates/orbit-store/src/contracts/task/coordination/admission.rs"]
 related_features: [auto-concurrency, distributed-drain]
 related_artifacts: [ORB-15757, ORB-15774]
 ---
@@ -58,7 +58,7 @@ Every occupancy query filters on `workspace_id`. No limit spans workspaces:
 two workspaces draining on one host each take their full ceiling.
 
 **Admission.** Each pass of `classify_workspace_auto_tasks`
-(`workspace_auto/classify.rs`) does three things:
+(`workspace_auto/classify/`) does three things:
 
 1. It computes free slots as the ceiling minus occupancy.
 2. It applies the resource gate.
@@ -69,7 +69,7 @@ two workspaces draining on one host each take their full ceiling.
 A pass that dispatched re-lists at once. An idle pass sleeps 30 s when work is
 waiting or the host is throttled, and 60 s otherwise. A pull drain instead
 requests one claim per free slot from the owner, and the owner chooses the
-task (`pull_drain/refill/mod.rs`, `pull_drain/drain/refill_pass.rs`).
+task (`pull_drain/refill/pass.rs`, `pull_drain/drain/refill_pass.rs`).
 
 **The reactive guard.** The resource throttle (`runtime/host_resource/`)
 samples host CPU, memory and disk every 5 s while admission is being
@@ -967,7 +967,7 @@ assumes the worst, so the forecast never treats unknown work as free.
 ## 6. Pull drains
 
 Implemented in `application/distributed/work_fit.rs` and the pull refill
-(`application/pull_drain/refill/mod.rs`); the owner's filter is in the store's admission selection.
+(`application/pull_drain/refill/pass.rs`); the owner's filter is in the store's admission selection.
 
 A follower does not pick its task; the owner does. So the follower cannot run
 gap fit on a specific candidate. Instead, before every request, under the host
@@ -1130,7 +1130,7 @@ Linux eligibility and raw history retention remain unchanged.
 
 ### 8.1 The accuracy report
 
-Implemented for local and pull drains, with local passes in `workspace_auto/classify.rs` (recording),
+Implemented for local and pull drains, with local passes in `workspace_auto/classify/` (recording),
 `runtime/host_resource/forecast/record.rs` (the recorded points) and
 `runtime/host_resource/accuracy.rs` (the report), read through
 `OrbitRuntime::forecast_accuracy` and shown by
