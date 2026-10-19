@@ -1,7 +1,7 @@
 ---
 type: design
 summary: Spec for idempotent owner-side task admission, request receipts, execution claims, and lifecycle invariants.
-last_validated: 2026-10-15
+last_validated: 2026-10-19
 title: Spec — orbit.task.pull
 owner: claude
 status: Draft
