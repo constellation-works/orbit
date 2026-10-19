@@ -42,7 +42,7 @@ Every Orbit operation that touches code, task state, persistent runtime state, e
 - New operation classes must update this matrix in the same PR that introduces the operation.
 - Registry-backed and in-process MCP tools must have parity for preflight denial, runtime success, and tool failure, with one trusted call context across the path.
 - MCP initialize/tool JSON cannot become trusted audit identity, capability, transport, or correlation; malicious-payload wire tests must pin this boundary.
-- MCP capability, workspace, binding, role, owner, placement, and unknown-name denials produce exactly one row with D2's call ID before runtime/store mutation; checkoutless/global denials use the global coordination audit database.
+- MCP capability, workspace, binding, role, owner, placement, and unknown-name denials produce exactly one row with the call's `mcp_call_id` ([event-schema.md](./event-schema.md)) before runtime/store mutation; checkoutless/global denials use the global coordination audit database.
 
 ## Known Gaps
 
