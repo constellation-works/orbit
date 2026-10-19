@@ -1062,7 +1062,15 @@ jobs:
       - name: Await the nextest archive
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/ci-await-jobs.py --job "Test build" --step "Upload nextest archive"
+        # A pull request head older than the `--step` option checks out a
+        # helper without it, while this workflow comes from the merge ref; such
+        # a head waits for the whole test build instead (ORB-16850).
+        run: |
+          if [ -f scripts/ci-await-jobs.py ] && ! grep -q -- '"--step"' scripts/ci-await-jobs.py; then
+            python3 scripts/ci-await-jobs.py --job "Test build"
+          else
+            python3 scripts/ci-await-jobs.py --job "Test build" --step "Upload nextest archive"
+          fi
 
       - name: Download nextest archive
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
