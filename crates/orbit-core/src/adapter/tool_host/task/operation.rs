@@ -1,8 +1,8 @@
 //! Handlers for the task verbs declared in the task operation registry.
 //!
 //! These take the input the spec already parsed. The write verbs' handlers
-//! live in [`super::task_write_tools`], artifact reads in
-//! [`super::task_tools`], and the review verbs in `application::review`.
+//! live in [`super::write`], artifact reads in [`super::read`], and the review
+//! verbs in `application::review`.
 
 use orbit_common::OrbitError;
 use orbit_common::governance::operation::{OperationInput, OperationVerb};
@@ -18,19 +18,19 @@ use crate::application::task::{
     TaskEligibilityQuery, TaskListFilter, TaskListQuery, TaskOsReadout,
 };
 
-use super::dispatch::ToolCaller;
-use super::input::{
+use super::super::dispatch::ToolCaller;
+use super::super::input::{
     parse_optional_task_origin, parse_task_priority, parse_task_status, parse_task_type,
 };
-use super::json::{
+use super::super::json::{
     serialize_error, serialize_task_lint_report, serialize_task_show,
     serialize_task_write_response, task_fields_to_json,
 };
-use super::task_tools::{TaskWriteOutput, write_response_fields};
+use super::write::{TaskWriteOutput, write_response_fields};
 
 /// Run one migrated task verb. A write also answers the id it persisted, for
 /// the redaction audit.
-pub(super) fn dispatch(
+pub(in crate::adapter::tool_host) fn dispatch(
     runtime: &OrbitRuntime,
     caller: ToolCaller<'_>,
     operator: bool,
@@ -40,7 +40,7 @@ pub(super) fn dispatch(
     // The attachment surface has already authenticated/prepared its path-free
     // payload. Its public source_path parameter is no longer present here.
     if verb == TaskVerb::ArtifactPut {
-        let output = super::task_write_tools::artifact_put(runtime, caller, &input, operator)?;
+        let output = super::write::artifact_put(runtime, caller, &input, operator)?;
         return Ok((output.response, Some(output.persisted_id)));
     }
     // Re-wraps the input the tool entry already parsed; see `parse_input`.
@@ -50,12 +50,8 @@ pub(super) fn dispatch(
         output.map(|output| (output.response, Some(output.persisted_id)))
     };
     match verb {
-        TaskVerb::Add => written(super::task_write_tools::add(
-            runtime,
-            caller,
-            input.as_value(),
-        )),
-        TaskVerb::Update => written(super::task_write_tools::update(
+        TaskVerb::Add => written(super::write::add(runtime, caller, input.as_value())),
+        TaskVerb::Update => written(super::write::update(
             runtime,
             caller,
             input.as_value(),
@@ -64,7 +60,7 @@ pub(super) fn dispatch(
         TaskVerb::ArtifactPut => Err(OrbitError::Execution(
             "artifact preparation dispatch invariant violated".into(),
         )),
-        TaskVerb::ArtifactGet => read(super::task_tools::artifact_get(runtime, &input)),
+        TaskVerb::ArtifactGet => read(super::read::artifact_get(runtime, &input)),
         TaskVerb::LocksList => read(crate::runtime::task::locks::list(runtime)),
         TaskVerb::LocksReserve => read(crate::runtime::task::locks::reserve(
             runtime,
@@ -256,7 +252,7 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
             })
             .transpose()?,
         path: input.optional_string("path")?,
-        limit: super::input::task_list_limit(input.as_value())?,
+        limit: super::super::input::task_list_limit(input.as_value())?,
     })?;
     let status_by_id = page.status_by_id;
     let os_readout = TaskOsReadout::new(runtime)?;
@@ -347,7 +343,7 @@ fn eligible(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, Orb
     let eligibility = runtime.task_eligibility(&TaskEligibilityQuery {
         statuses: statuses(input)?,
         path: input.optional_string("path")?,
-        limit: super::input::task_list_limit(input.as_value())?,
+        limit: super::super::input::task_list_limit(input.as_value())?,
     })?;
     let mut payload = Map::new();
     payload.insert(

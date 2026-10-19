@@ -119,7 +119,7 @@ pub(super) fn execute(
         }
         OrbitBuiltinAction::Search(verb) => super::search_tools::dispatch(runtime, verb, input),
         OrbitBuiltinAction::Task(verb) => {
-            let (response, written) = super::task_operation_tools::dispatch(
+            let (response, written) = super::task::operation::dispatch(
                 runtime,
                 ToolCaller {
                     session_context,

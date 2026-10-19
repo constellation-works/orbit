@@ -1,21 +1,13 @@
+//! Handler for the task artifact read verb.
+
 use orbit_common::OrbitError;
 use orbit_common::governance::operation::OperationInput;
-use orbit_common::protocol::tool_input::optional_csv_or_string_list_alias;
-use orbit_types::task::{
-    is_task_show_projection_field, unknown_task_show_field_message, validate_relative_artifact_path,
-};
+use orbit_types::task::validate_relative_artifact_path;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
 
-use super::json::serialize_task_artifact_read;
-
-/// The persisted identity travels beside the caller's response projection so
-/// redaction audit attribution does not depend on which fields were requested.
-pub(super) struct TaskWriteOutput {
-    pub response: Value,
-    pub persisted_id: String,
-}
+use super::super::json::serialize_task_artifact_read;
 
 /// Read one stored artifact's bytes through the task's own artifact owner.
 ///
@@ -53,21 +45,4 @@ pub(super) fn artifact_get(
             )
         })?;
     serialize_task_artifact_read(&task.id, &artifact)
-}
-
-/// Read-only projection controls are accepted by mutating task tools solely
-/// for shaping their response. In particular, `comments` and `history` are
-/// omitted from the default write response and can be requested explicitly.
-pub(super) fn write_response_fields(input: &Value) -> Result<Option<Vec<String>>, OrbitError> {
-    let fields = optional_csv_or_string_list_alias(input, &["fields", "field"])?;
-    if let Some(fields) = &fields
-        && let Some(unknown) = fields
-            .iter()
-            .find(|field| !is_task_show_projection_field(field))
-    {
-        return Err(OrbitError::InvalidInput(unknown_task_show_field_message(
-            unknown,
-        )));
-    }
-    Ok(fields)
 }

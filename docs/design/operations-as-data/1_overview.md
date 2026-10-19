@@ -128,7 +128,7 @@ and again in the tool handler.
 | Handler table, keyed on `AutoTaskVerb` | [crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs) | [ORB-15935] |
 | Handler table, keyed on `DrainVerb` | [crates/orbit-core/src/adapter/tool_host/drain_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/drain_tools.rs) | [ORB-15936] |
 | Handler table, keyed on `WorkspaceClaimVerb` | [crates/orbit-core/src/adapter/tool_host/workspace_claim_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/workspace_claim_tools.rs) | [ORB-15936] |
-| Handler table, keyed on `TaskVerb` | [crates/orbit-core/src/adapter/tool_host/task_operation_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/task_operation_tools.rs) | [ORB-15937] |
+| Handler table, keyed on `TaskVerb` | [crates/orbit-core/src/adapter/tool_host/task/operation.rs](../../../crates/orbit-core/src/adapter/tool_host/task/operation.rs) | [ORB-15937] |
 | Handler table, keyed on `WorkflowVerb` | [crates/orbit-core/src/adapter/tool_host/workflow_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/workflow_tools.rs) | [ORB-15941] |
 | ID routing, keyed by tool name (host prefix routing; owner-workspace binding is `ID_RESOLVED_WORKSPACE_TOOLS` in the CLI's MCP server) | [crates/orbit-tools/src/mcp_rules.rs](../../../crates/orbit-tools/src/mcp_rules.rs) | [ORB-15937] |
 | Redaction policy, derived from each parameter's `redact` class | [crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs](../../../crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs) | [ORB-15932] |

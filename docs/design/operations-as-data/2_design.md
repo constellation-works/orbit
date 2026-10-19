@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: The operation spec kernel v2 (noun spec, effect, redaction class, parameter groups, aliases, retired fields, at-least-one-of, switch/enum/enum-list/object and CLI-only parameters, CLI help beyond the summary, input validation at the tool entry in warn mode, generic tool and CLI adapters, CLI action subcommands) as built on friction, auto-task, drain, workspace claim, every task tool, the workflow-run tools and search; the migration is complete with explicit verdicts for the remaining single-surface or wider CLI contracts.
 tags: [operations-as-data, architecture]
-paths: ["crates/orbit-common/src/governance/operation/**", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/friction.rs", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-core/src/adapter/tool_host/worker_tools.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-core/src/adapter/tool_host/friction_tools.rs", "crates/orbit-web/src/api/frictions.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-tools/src/builtin/orbit/task/operation.rs", "crates/orbit-core/src/adapter/tool_host/task_operation_tools.rs", "crates/orbit-core/src/adapter/tool_host/task_write_tools.rs", "crates/orbit-tools/src/builtin/orbit/task/guarded.rs", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs", "crates/orbit-core/src/adapter/tool_host/workflow_tools.rs", "crates/orbit-common/src/governance/search.rs"]
+paths: ["crates/orbit-common/src/governance/operation/**", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/operation/spec.rs", "crates/orbit-cli/src/command/friction.rs", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs", "crates/orbit-core/src/adapter/tool_host/worker_tools.rs", "crates/orbit-common/src/protocol/tool_input.rs", "crates/orbit-core/src/adapter/tool_host/friction_tools.rs", "crates/orbit-web/src/api/frictions.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-tools/src/builtin/orbit/task/operation.rs", "crates/orbit-core/src/adapter/tool_host/task/operation.rs", "crates/orbit-core/src/adapter/tool_host/task/write.rs", "crates/orbit-tools/src/builtin/orbit/task/guarded.rs", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs", "crates/orbit-core/src/adapter/tool_host/workflow_tools.rs", "crates/orbit-common/src/governance/search.rs"]
 related_features: [operations-as-data, orbit-core]
 related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15940, ORB-15941, ORB-15942]
 ---
@@ -50,7 +50,7 @@ allowed for a migrated noun. Friction's tables in `friction_tools.rs`,
 `worker_tools.rs`, `artifact_redaction.rs` and `command/friction.rs` follow it,
 as do auto-task's in `auto_task_tools.rs`, the same two core tables,
 `builtin/orbit/auto_task.rs` (MCP guarded modes) and `command/auto_task/`.
-The task read verbs' tables are `task_operation_tools.rs`, the same two core
+The task read verbs' tables are `task/operation.rs`, the same two core
 tables, `builtin/orbit/task/operation.rs` (MCP guarded modes),
 `command/task/operation.rs` and `task_operation` in `command/operation/spec.rs`.
 See
@@ -722,7 +722,7 @@ are not redacted or rewritten.
 `orbit.task.lint` are declared in
 [governance/task/operations.rs](../../../crates/orbit-common/src/governance/task/operations.rs)
 and served by `OperationTool<TaskVerb>`. The handlers in
-[task_operation_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/task_operation_tools.rs)
+[task/operation.rs](../../../crates/orbit-core/src/adapter/tool_host/task/operation.rs)
 answer every surface, so the CLI and MCP read the same record: the full `show`
 record (`task_show_json`) carries `next_step` for a run-blocked task and the
 `final_recovery` decision (`run_id`, `decision`, `outcome`, `at`). The
@@ -746,7 +746,7 @@ listed in
 [write_operations.rs](../../../crates/orbit-common/src/governance/task/write_operations.rs)
 and served by `OperationTool<TaskVerb>`. `orbit task add` and `orbit task
 update` execute through `run_tool`, and the one handler in
-[task_write_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/task_write_tools.rs)
+[task/write.rs](../../../crates/orbit-core/src/adapter/tool_host/task/write.rs)
 assembles `TaskAddParams` and `TaskUpdateParams` for every surface. The help
 goldens under `crates/orbit-cli/tests/help_goldens/task/` (`add.txt`,
 `update.txt`) were captured before the migration and pass unchanged, and the
@@ -821,7 +821,7 @@ and `orbit.task.retry_handoff`, the operator tools, and the inactive
 `orbit.task.reject` and `orbit.task.delete` are declared in
 [lifecycle_operations.rs](../../../crates/orbit-common/src/governance/task/lifecycle_operations.rs)
 and served by `OperationTool<TaskVerb>`. The handler table in
-[task_operation_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/task_operation_tools.rs)
+[task/operation.rs](../../../crates/orbit-core/src/adapter/tool_host/task/operation.rs)
 calls the review application services the old tools reached, and holds the
 reject and delete handlers that moved there. The CLI names stay hyphenated
 (`review-reset`, `reconcile-review`) and the tool names underscored; reject

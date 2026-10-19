@@ -14,7 +14,10 @@ use orbit_common::protocol::tool_input::{
     optional_csv_or_string_list_alias, optional_raw_string, optional_string,
     optional_string_list_alias, reject_unknown_tool_fields, required_string,
 };
-use orbit_types::task::{ExternalRef, TaskPriority, TaskStatus};
+use orbit_types::task::{
+    ExternalRef, TaskPriority, TaskStatus, is_task_show_projection_field,
+    unknown_task_show_field_message,
+};
 use serde_json::{Map, Value, json};
 
 use crate::OrbitRuntime;
@@ -23,14 +26,13 @@ use crate::application::task::{
     TaskUpdateParams, TaskWriteScreen, is_operator_rescue_close,
 };
 
-use super::dispatch::ToolCaller;
-use super::input::{
+use super::super::dispatch::ToolCaller;
+use super::super::input::{
     empty_string_to_none, optional_bool_alias, parse_artifacts, parse_assessed_task_complexity,
     parse_optional_task_origin, parse_relations, parse_task_priority, parse_task_status,
     parse_task_type,
 };
-use super::json::serialize_task_write_response;
-use super::task_tools::{TaskWriteOutput, write_response_fields};
+use super::super::json::serialize_task_write_response;
 
 /// The CLI-only options `orbit task add` sends.
 const ADD_CLI_OPTIONS: &[&str] = &[
@@ -567,4 +569,28 @@ fn task_update_params_from_input(
 /// intent rather than skipping validation.
 fn allows_missing_context(input: &Value) -> Result<bool, OrbitError> {
     Ok(optional_bool_alias(input, &["allow_missing_context"])?.unwrap_or(false))
+}
+
+/// The persisted identity travels beside the caller's response projection so
+/// redaction audit attribution does not depend on which fields were requested.
+pub(super) struct TaskWriteOutput {
+    pub response: Value,
+    pub persisted_id: String,
+}
+
+/// Read-only projection controls are accepted by mutating task tools solely
+/// for shaping their response. In particular, `comments` and `history` are
+/// omitted from the default write response and can be requested explicitly.
+pub(super) fn write_response_fields(input: &Value) -> Result<Option<Vec<String>>, OrbitError> {
+    let fields = optional_csv_or_string_list_alias(input, &["fields", "field"])?;
+    if let Some(fields) = &fields
+        && let Some(unknown) = fields
+            .iter()
+            .find(|field| !is_task_show_projection_field(field))
+    {
+        return Err(OrbitError::InvalidInput(unknown_task_show_field_message(
+            unknown,
+        )));
+    }
+    Ok(fields)
 }

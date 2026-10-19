@@ -5,7 +5,7 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
 targets=(
-  "crates/orbit-core/src/adapter/tool_host/task_tools.rs"
+  "crates/orbit-core/src/adapter/tool_host/task"
   "crates/orbit-core/src/adapter/tool_host/friction_tools.rs"
   "crates/orbit-tools/src/builtin/orbit/task"
   "crates/orbit-tools/src/builtin/orbit/operation.rs"
