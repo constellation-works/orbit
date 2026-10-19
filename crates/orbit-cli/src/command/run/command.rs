@@ -32,7 +32,7 @@ Workflow entrypoints:
   orbit run agent <prompt> [--cwd DIR] [--crew NAME] [--timeout SECONDS] [--provider-sandbox MODE]
 
 Run history:
-  orbit run history [--task <id>] [--state failed,held] [--since 24h] [--limit 50]
+  orbit run history [--task <id>] [--state failed,held] [--since 24h] [--limit 50] [--failures]
   orbit run history -j <job_id>
   orbit run show [run_id] [-s step_id] [--json]
   orbit run logs [run_id] [-s step_id] [--json]

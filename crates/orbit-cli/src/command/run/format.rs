@@ -1,3 +1,4 @@
+use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
     JobRunState, JobRunTrigger, JobRunTriggerKind, PipelineState, run_id_role,
 };
@@ -54,6 +55,24 @@ impl WaitingTaskFormatter {
 
     pub(crate) fn host_fleet(&self, task_id: &str) -> Option<&str> {
         self.host_fleet.get(task_id).map(String::as_str)
+    }
+
+    /// `id` plus its current status, when the status index has the task.
+    pub(crate) fn task_with_status(&self, id: &str) -> String {
+        self.task_label(id, None)
+    }
+
+    /// Whether a failed leaf's retry line still applies to this task.
+    ///
+    /// A failed run leaves its task `blocked`. Readmission and completion move
+    /// it on, so the drain must not keep offering `orbit job resume`. An
+    /// unreadable task keeps the advice: missing status is not evidence the
+    /// task has moved on.
+    pub(crate) fn retry_still_applies(&self, id: &str) -> bool {
+        match self.statuses.get(id) {
+            Some(TaskStatus::Blocked) | None => true,
+            Some(_) => false,
+        }
     }
 
     fn task_label(&self, id: &str, status: Option<&str>) -> String {

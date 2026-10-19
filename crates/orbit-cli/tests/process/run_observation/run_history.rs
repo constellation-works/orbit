@@ -347,3 +347,194 @@ fn history_error_column_names_failed_runs_at_the_end_capped() {
     let text = String::from_utf8(successes.stdout).unwrap();
     assert!(!text.lines().next().unwrap().contains("ERROR"), "{text}");
 }
+
+/// Three echoing runs of one task are one `--failures` row, named by the
+/// root-cause run, with that run's first error line uncut. A second task's
+/// own failure stays a second row. The root run itself is outside `--since`,
+/// so the row has to load it rather than repeat the echo.
+#[test]
+fn history_failures_reports_one_row_per_task_and_root_cause() {
+    if !isolated_run_observation(
+        "run_observation::run_history::history_failures_reports_one_row_per_task_and_root_cause",
+    ) {
+        return;
+    }
+    use orbit_core::application::task::TaskAddParams;
+    use orbit_types::workflow::{PipelineState, RunRootCause};
+
+    let fixture = Fixture::terminal();
+    let runtime =
+        OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
+            .unwrap();
+    let task = |title: &str| {
+        runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                description: "History failure fixture.".into(),
+                ..Default::default()
+            })
+            .unwrap()
+            .id
+            .to_string()
+    };
+    let echoed = task("echoed failure");
+    let other = task("separate failure");
+    let workspace_id = fixture.workspace_id();
+    let db = fixture.db();
+    let at = |hours: i64| (Utc::now() - Duration::hours(hours)).to_rfc3339();
+    let insert = |id: &str, state: &str, hours: i64, task_id: &str, crew: Option<&str>| {
+        db.execute(
+            "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state,
+                scheduled_at, started_at, finished_at, created_at, input_json, resolved_crew)
+             VALUES (?1, ?2, 'task_pr_pipeline', 1, ?3, ?4, ?4, ?4, ?4, ?5, ?6)",
+            params![
+                id,
+                workspace_id,
+                state,
+                at(hours),
+                json!({"task_ids":[task_id]}).to_string(),
+                crew,
+            ],
+        )
+        .unwrap();
+    };
+    const ROOT: &str = "jrun-fail-root";
+    const OTHER: &str = "jrun-fail-other";
+    // Outside the 24h window, so a row that only echoes it must load this run.
+    insert(ROOT, "failed", 48, &echoed, Some("grok"));
+    insert(OTHER, "failed", 1, &other, Some("sol"));
+    insert("jrun-fail-echo-c4", "failed", 2, &echoed, None);
+    insert("jrun-fail-echo-held", "held", 3, &echoed, None);
+    insert("jrun-fail-echo-c11", "failed", 4, &echoed, None);
+    insert("jrun-fail-success", "success", 5, &echoed, None);
+    let root_message = "provider quota exhausted before the claimed leaf could finish its delivery\nsecond line must not appear in the failures row";
+    let other_message = "validation failed because the candidate build exceeded the elapsed budget by too many seconds\ndo not join this second line";
+    for (id, target, code, message) in [
+        (ROOT, "implement", "provider_limit", root_message),
+        (OTHER, "validate", "validation", other_message),
+    ] {
+        db.execute(
+            "INSERT INTO job_run_steps (workspace_id, run_id, step_index, target_type, target_id,
+                state, started_at, finished_at, error_code, error_message)
+             VALUES (?1, ?2, 0, 'activity', ?3, 'failed', ?4, ?4, ?5, ?6)",
+            params![workspace_id, id, target, at(1), code, message],
+        )
+        .unwrap();
+    }
+    for id in [
+        "jrun-fail-echo-c4",
+        "jrun-fail-echo-held",
+        "jrun-fail-echo-c11",
+    ] {
+        let state = PipelineState {
+            root_cause: Some(RunRootCause {
+                leaf_run_id: ROOT.into(),
+                task_id: Some(echoed.clone()),
+                step: Some("implement".into()),
+                code: Some("provider_limit".into()),
+            }),
+            ..PipelineState::new(id.into(), "task_pr_pipeline".into(), json!({}))
+        };
+        db.execute(
+            "INSERT INTO job_run_states (workspace_id, run_id, pipeline_state_json)
+             VALUES (?1, ?2, ?3)",
+            params![workspace_id, id, serde_json::to_string(&state).unwrap()],
+        )
+        .unwrap();
+    }
+
+    let root_cause = format!("provider_limit: {}", root_message.lines().next().unwrap());
+    let other_cause = format!("validation: {}", other_message.lines().next().unwrap());
+    assert!(
+        root_cause.chars().count() > 60 && other_cause.chars().count() > 60,
+        "the fixture cause must exceed the ordinary ERROR cap"
+    );
+
+    let doc = fixture.json(&[
+        "run",
+        "history",
+        "--no-reconcile",
+        "--json",
+        "--since",
+        "24h",
+        "--failures",
+    ]);
+    let rows = doc["failures"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{doc}");
+    assert_eq!(
+        rows[0],
+        json!({
+            "task_id": other,
+            "run_id": OTHER,
+            "step": "validate",
+            "crew": "sol",
+            "cause": other_cause,
+            "show": format!("orbit run show {OTHER}"),
+        }),
+        "{doc}"
+    );
+    assert_eq!(
+        rows[1],
+        json!({
+            "task_id": echoed,
+            "run_id": ROOT,
+            "step": "implement",
+            "crew": "grok",
+            "cause": root_cause,
+            "show": format!("orbit run show {ROOT}"),
+        }),
+        "{doc}"
+    );
+
+    let output = fixture
+        .orbit()
+        .args([
+            "run",
+            "history",
+            "--no-reconcile",
+            "--format",
+            "table",
+            "--since",
+            "24h",
+            "--failures",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8(output.stdout).unwrap();
+    let header = text.lines().next().unwrap();
+    assert_eq!(
+        header.split_whitespace().collect::<Vec<_>>(),
+        ["TASK", "RUN_ID", "STEP", "CREW", "CAUSE", "SHOW"],
+        "{text}"
+    );
+    assert!(text.contains(&root_cause), "{text}");
+    assert!(text.contains(&other_cause), "{text}");
+    assert!(!text.contains("second line"), "{text}");
+    assert!(!text.contains("do not join"), "{text}");
+    assert!(!text.contains("..."), "{text}");
+    for echo in [
+        "jrun-fail-echo-c4",
+        "jrun-fail-echo-held",
+        "jrun-fail-echo-c11",
+    ] {
+        assert!(!text.contains(echo), "{text}");
+    }
+    assert!(text.contains(ROOT) && text.contains(OTHER), "{text}");
+
+    let empty = fixture.json(&[
+        "run",
+        "history",
+        "--no-reconcile",
+        "--json",
+        "--since",
+        &(Utc::now() + Duration::hours(1)).to_rfc3339(),
+        "--failures",
+    ]);
+    assert_eq!(empty["failures"], json!([]), "{empty}");
+    fixture
+        .orbit()
+        .args(["run", "history", "--failures", "--incidents"])
+        .assert()
+        .failure();
+}

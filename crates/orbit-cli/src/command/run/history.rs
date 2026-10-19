@@ -1,9 +1,11 @@
+use std::collections::{HashMap, HashSet};
+
 use clap::Args;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::job::{
     JobRunListParams, fold_run_incidents, job_run_task_ids, run_error_step,
 };
-use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
+use orbit_types::workflow::{JobRun, JobRunState, PipelineState, RunRootCause};
 use serde_json::json;
 
 use crate::command::{Block, CommandOut, Execute, Payload};
@@ -25,7 +27,7 @@ fn parse_run_state(raw: &str) -> Result<JobRunState, String> {
 
 #[derive(Args)]
 #[command(
-    after_help = "JSON shape: {\"runs\":[<job-run>]}\nROLE says how a run was submitted: top-level directly, child by a parent run.\nRun ids minted before role markers existed read as unmarked.\nA gate or auto run that failed only because a child failed records the leaf it echoes in `.root_cause` ({leaf_run_id, task_id, step, code}); it is null for a run that failed on its own. --incidents folds every listed run that echoes the same leaf into one row, the leaf's own when it is listed: CASCADED counts the folded runs and `.cascaded_run_ids` names them.\nExamples:\n  orbit run history\n  orbit run history -j task_local_pipeline --limit 20\n  orbit run history --state failed,held --since 24h\n  orbit run history --state failed --incidents\n  orbit run history --json\n  orbit run history --limit 200 --no-reconcile --json"
+    after_help = "JSON shape: {\"runs\":[<job-run>]}. --failures uses {\"failures\":[{\"task_id\",\"run_id\",\"step\",\"crew\",\"cause\",\"show\"}]} instead.\nROLE says how a run was submitted: top-level directly, child by a parent run.\nRun ids minted before role markers existed read as unmarked.\nA gate or auto run that failed only because a child failed records the leaf it echoes in `.root_cause` ({leaf_run_id, task_id, step, code}); it is null for a run that failed on its own. --incidents folds every listed run that echoes the same leaf into one row, the leaf's own when it is listed: CASCADED counts the folded runs and `.cascaded_run_ids` names them. --failures folds the same runs into one row per task and root cause: RUN_ID, STEP and CREW are the root-cause run's, CAUSE is that run's error on one line with no 60-character cap, and SHOW is `orbit run show` for that run. --failures and --incidents cannot be combined.\nExamples:\n  orbit run history\n  orbit run history -j task_local_pipeline --limit 20\n  orbit run history --state failed,held --since 24h\n  orbit run history --state failed --incidents\n  orbit run history --state failed --failures\n  orbit run history --json\n  orbit run history --limit 200 --no-reconcile --json"
 )]
 pub struct RunHistoryArgs {
     /// Filter to one job ID
@@ -57,8 +59,13 @@ pub struct RunHistoryArgs {
 
     /// Show one row per incident: fold runs that failed only because a child
     /// failed into the run that failed on its own
-    #[arg(long)]
+    #[arg(long, conflicts_with = "failures")]
     pub incidents: bool,
+
+    /// One row per task and root cause: the root-cause run, its step and crew,
+    /// the cause's first line in full, and `orbit run show` for that run
+    #[arg(long, conflicts_with = "incidents")]
+    pub failures: bool,
 }
 
 impl Execute for RunHistoryArgs {
@@ -79,6 +86,7 @@ impl Execute for RunHistoryArgs {
             },
             RunRead::from_no_reconcile(self.no_reconcile),
             self.incidents,
+            self.failures,
         )
     }
 }
@@ -88,6 +96,7 @@ pub(crate) fn run_history_payload(
     params: JobRunListParams,
     read: RunRead,
     incidents: bool,
+    failures: bool,
 ) -> CommandOut {
     let include_job_id = params.job_id.is_none();
     let state_filtered = params.state.is_some() || !params.states.is_empty();
@@ -101,6 +110,10 @@ pub(crate) fn run_history_payload(
         .iter()
         .map(|run| states.get(&run.run_id).and_then(Option::as_ref))
         .collect::<Vec<_>>();
+
+    if failures {
+        return failure_history_payload(runtime, read, &runs, &states);
+    }
 
     // [ORB-15202] Each incident keeps one row: its leaf's when listed.
     let rows = if incidents {
@@ -202,6 +215,182 @@ pub(crate) fn run_history_payload(
         blocks.push(Block::text(waiting.join("\n")));
     }
     Ok(Payload::blocks(doc, blocks).into())
+}
+
+/// One `--failures` row: a task and the root-cause run behind it.
+struct FailureRow {
+    task_id: Option<String>,
+    run_id: String,
+    step: Option<String>,
+    crew: Option<String>,
+    cause: Option<String>,
+}
+
+/// Fold the listing into one row per task and root cause.
+///
+/// Echoes of the same leaf collapse, including a held or interrupted parent.
+/// The cause is the root-cause run's own error, first line only, with no
+/// character cap. `--limit` still bounds the runs scanned.
+fn failure_history_payload(
+    runtime: &OrbitRuntime,
+    read: RunRead,
+    runs: &[JobRun],
+    states: &[Option<&PipelineState>],
+) -> CommandOut {
+    let listed = runs
+        .iter()
+        .enumerate()
+        .map(|(index, run)| (run.run_id.as_str(), index))
+        .collect::<HashMap<_, _>>();
+    let mut loaded: HashMap<String, Option<JobRun>> = HashMap::new();
+    let mut seen = HashSet::new();
+    let mut rows = Vec::new();
+    for (index, run) in runs.iter().enumerate() {
+        if !is_reported_failure(run.state) {
+            continue;
+        }
+        let recorded = states
+            .get(index)
+            .copied()
+            .flatten()
+            .and_then(|state| state.root_cause.as_ref());
+        let root_id = recorded
+            .map(|cause| cause.leaf_run_id.as_str())
+            .unwrap_or(run.run_id.as_str());
+        let (mut task_ids, mut step, crew, cause) =
+            root_facts(runtime, read, runs, &listed, &mut loaded, root_id);
+        if step.is_none() {
+            step = recorded.and_then(|cause| cause.step.clone());
+        }
+        if task_ids.is_empty() {
+            task_ids = recorded_or_echo_tasks(run, recorded);
+        }
+        let tasks = if task_ids.is_empty() {
+            vec![None]
+        } else {
+            task_ids.into_iter().map(Some).collect::<Vec<_>>()
+        };
+        for task_id in tasks {
+            let key = (task_id.clone().unwrap_or_default(), root_id.to_string());
+            if !seen.insert(key) {
+                continue;
+            }
+            rows.push(FailureRow {
+                task_id,
+                run_id: root_id.to_string(),
+                step: step.clone(),
+                crew: crew.clone(),
+                cause: cause.clone(),
+            });
+        }
+    }
+
+    let values = rows
+        .iter()
+        .map(|row| {
+            json!({
+                "task_id": row.task_id,
+                "run_id": row.run_id,
+                "step": row.step,
+                "crew": row.crew,
+                "cause": row.cause,
+                "show": format!("orbit run show {}", row.run_id),
+            })
+        })
+        .collect::<Vec<_>>();
+    let doc = json!({ "failures": values });
+
+    use crate::output::table::{Column, Table};
+    let columns = vec![
+        Column::new("TASK").fixed(),
+        Column::new("RUN_ID").fixed(),
+        Column::new("STEP").fixed(),
+        Column::new("CREW").fixed(),
+        Column::new("CAUSE"),
+        Column::new("SHOW").fixed(),
+    ];
+    let mut table = Table::new(columns)
+        .empty_message("no failures recorded")
+        .keep_all_columns();
+    for row in &rows {
+        use comfy_table::Cell;
+        table.add_row(vec![
+            Cell::new(row.task_id.as_deref().unwrap_or("-")),
+            Cell::new(&row.run_id),
+            Cell::new(row.step.as_deref().unwrap_or("-")),
+            Cell::new(row.crew.as_deref().unwrap_or("-")),
+            Cell::new(row.cause.as_deref().unwrap_or("-")),
+            Cell::new(format!("orbit run show {}", row.run_id)),
+        ]);
+    }
+    Ok(Payload::blocks(doc, vec![Block::table(table)]).into())
+}
+
+fn is_reported_failure(state: JobRunState) -> bool {
+    matches!(
+        state,
+        JobRunState::Failed | JobRunState::Held | JobRunState::Interrupted | JobRunState::Timeout
+    )
+}
+
+/// Task ids, failing step, crew and first cause line of the root-cause run.
+/// Missing runs contribute nothing; the caller fills step and tasks from the
+/// recorded cause.
+fn root_facts(
+    runtime: &OrbitRuntime,
+    read: RunRead,
+    runs: &[JobRun],
+    listed: &HashMap<&str, usize>,
+    loaded: &mut HashMap<String, Option<JobRun>>,
+    root_id: &str,
+) -> (Vec<String>, Option<String>, Option<String>, Option<String>) {
+    if let Some(&index) = listed.get(root_id) {
+        return facts_of(&runs[index]);
+    }
+    let slot = loaded
+        .entry(root_id.to_string())
+        .or_insert_with(|| read.show(runtime, root_id).ok());
+    slot.as_ref().map(facts_of).unwrap_or_default()
+}
+
+fn facts_of(run: &JobRun) -> (Vec<String>, Option<String>, Option<String>, Option<String>) {
+    (
+        job_run_task_ids(run),
+        run_error_step(run).map(|step| step.target_id.clone()),
+        run.resolved_crew.clone(),
+        failure_cause_line(run),
+    )
+}
+
+fn recorded_or_echo_tasks(run: &JobRun, recorded: Option<&RunRootCause>) -> Vec<String> {
+    if let Some(task_id) = recorded.and_then(|cause| cause.task_id.clone()) {
+        return vec![task_id];
+    }
+    job_run_task_ids(run)
+}
+
+/// The root-cause run's error on one line. Later lines stay off the row, and
+/// nothing here applies the history table's 60-character cap.
+fn failure_cause_line(run: &JobRun) -> Option<String> {
+    let step = run_error_step(run)?;
+    let text = match (step.error_code.as_deref(), step.error_message.as_deref()) {
+        (Some(code), Some(message)) => format!("{code}: {}", first_line(message)),
+        (Some(text), None) | (None, Some(text)) => first_line(text),
+        (None, None) => return None,
+    };
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_string())
+}
+
+/// The first line of `text`, with whitespace runs collapsed so a cell cannot
+/// split a tab-separated row.
+fn first_line(text: &str) -> String {
+    text.lines()
+        .next()
+        .unwrap_or("")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The ERROR cell for one run: the root cause it echoes, else its own failing

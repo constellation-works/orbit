@@ -210,23 +210,42 @@ impl DrainLeafSummary {
                 self.admitted,
             ));
             for leaf in &self.failed_leaves {
+                // One run id per failure: the root-cause run the retry would
+                // resume, not the drain's wrapper leaf. `resume_hint` on a
+                // resumable run's own header is a different line and stays;
+                // a finished drain never prints it.
+                let run_id = leaf.resume_run_id.as_deref().unwrap_or(&leaf.run_id);
                 let tasks = if leaf.task_ids.is_empty() {
                     "-".to_string()
                 } else {
-                    leaf.task_ids.join(",")
+                    leaf.task_ids
+                        .iter()
+                        .map(|id| formatter.task_with_status(id))
+                        .collect::<Vec<_>>()
+                        .join(",")
                 };
                 lines.push(format!(
-                    "  Failed leaf {} task={tasks} state={} error={}",
-                    leaf.run_id,
+                    "  Failed leaf {run_id} task={tasks} state={} error={}",
                     leaf.state,
                     summarize_error_message(leaf.error.as_deref()),
                 ));
-                lines.push(match &leaf.resume_run_id {
-                    Some(resume) => format!(
-                        "    retry: `orbit job resume {resume}` (or move the task back to backlog)"
-                    ),
-                    None => "    retry: move the task back to backlog".to_string(),
-                });
+                // Keep the retry only while a named task is still blocked, or
+                // its status cannot be read. A task readmitted or completed
+                // has left `blocked`, and the historical leaf must not advise
+                // resuming it.
+                let retry = leaf.task_ids.is_empty()
+                    || leaf
+                        .task_ids
+                        .iter()
+                        .any(|id| formatter.retry_still_applies(id));
+                if retry {
+                    lines.push(match &leaf.resume_run_id {
+                        Some(resume) => format!(
+                            "    retry: `orbit job resume {resume}` (or move the task back to backlog)"
+                        ),
+                        None => "    retry: move the task back to backlog".to_string(),
+                    });
+                }
             }
         }
         if let Some(throttle) = self.waiting.resource_throttle.as_ref() {

@@ -700,6 +700,184 @@ fn run_show_reports_the_failed_step_before_a_later_skip() {
     assert!(!success.contains("Logs:"), "{success}");
 }
 
+/// A drain's failed-leaf warning names the root-cause run, states the task's
+/// current status, and drops retry advice once that task has left `blocked`.
+#[test]
+fn run_show_failed_leaf_uses_root_cause_and_current_task_status() {
+    if !isolated_run_observation(
+        "run_observation::run_show_display::run_show_failed_leaf_uses_root_cause_and_current_task_status",
+    ) {
+        return;
+    }
+    use orbit_core::application::task::TaskAddParams;
+    use orbit_core::{TaskComplexity, TaskStatus, TaskType};
+    use orbit_types::workflow::{ChildDispatch, PipelineState};
+
+    let fixture = Fixture::terminal();
+    let runtime =
+        OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
+            .unwrap();
+    let task = |title: &str, status: TaskStatus| {
+        runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                description: "Drain leaf fixture.".into(),
+                acceptance_criteria: vec!["The warning follows the task.".into()],
+                plan: "Fixture plan.".into(),
+                task_type: Some(TaskType::Bug),
+                complexity: TaskComplexity::Low,
+                status: Some(status),
+                ..Default::default()
+            })
+            .unwrap()
+            .id
+            .to_string()
+    };
+    let done = task("completed after the leaf failed", TaskStatus::Done);
+    let readmitted = task("readmitted after the leaf failed", TaskStatus::InProgress);
+    let blocked = task("still blocked on the leaf", TaskStatus::Blocked);
+
+    let workspace_id = fixture.workspace_id();
+    let db = fixture.db();
+    let now = chrono::Utc::now();
+    let stamp = now.to_rfc3339();
+    let insert = |id: &str, job: &str, state: &str, task_id: Option<&str>| {
+        let input = match task_id {
+            Some(task_id) => serde_json::json!({"task_ids":[task_id]}).to_string(),
+            None => "{}".to_string(),
+        };
+        db.execute(
+            "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, input_json,
+                scheduled_at, started_at, finished_at, created_at)
+             VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, ?6, ?6, ?6)",
+            params![id, workspace_id, job, state, input, stamp],
+        )
+        .unwrap();
+    };
+    let cases = [
+        (
+            "done",
+            done.as_str(),
+            "jrun-show-root-done",
+            "jrun-show-leaf-done",
+        ),
+        (
+            "readmitted",
+            readmitted.as_str(),
+            "jrun-show-root-readmitted",
+            "jrun-show-leaf-readmitted",
+        ),
+        (
+            "blocked",
+            blocked.as_str(),
+            "jrun-show-root-blocked",
+            "jrun-show-leaf-blocked",
+        ),
+    ];
+    for (_, task_id, root, leaf) in cases {
+        insert(root, "task_local_pipeline", "failed", Some(task_id));
+        insert(leaf, "task_auto_pipeline", "failed", Some(task_id));
+        let mut state = PipelineState::new(
+            leaf.into(),
+            "task_auto_pipeline".into(),
+            serde_json::json!({"task_ids":[task_id]}),
+        );
+        state.record_child_dispatch(ChildDispatch::submitted(
+            root.into(),
+            "task_local_pipeline".into(),
+            "invoke_and_wait".into(),
+            true,
+            false,
+            now,
+        ));
+        runtime.write_run_state(leaf, &state).unwrap();
+    }
+    const DRAIN: &str = "jrun-show-drain";
+    insert(DRAIN, "workspace_auto_pipeline", "success", None);
+    let mut drain = PipelineState::new(
+        DRAIN.into(),
+        "workspace_auto_pipeline".into(),
+        serde_json::json!({}),
+    );
+    for (_, _, _, leaf) in cases {
+        drain.record_child_dispatch(ChildDispatch::submitted(
+            leaf.into(),
+            "task_auto_pipeline".into(),
+            "invoke_detached".into(),
+            false,
+            false,
+            now,
+        ));
+    }
+    runtime.write_run_state(DRAIN, &drain).unwrap();
+
+    let output = fixture
+        .orbit()
+        .args(["run", "show", DRAIN, "--no-reconcile"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    let leaf_at = |task_id: &str| {
+        lines
+            .iter()
+            .position(|line| line.contains("Failed leaf") && line.contains(task_id))
+            .unwrap_or_else(|| panic!("no failed leaf for {task_id} in {text}"))
+    };
+    for (task_id, root, leaf, status, retry) in [
+        (
+            done.as_str(),
+            "jrun-show-root-done",
+            "jrun-show-leaf-done",
+            "(done)",
+            false,
+        ),
+        (
+            readmitted.as_str(),
+            "jrun-show-root-readmitted",
+            "jrun-show-leaf-readmitted",
+            "(in-progress)",
+            false,
+        ),
+        (
+            blocked.as_str(),
+            "jrun-show-root-blocked",
+            "jrun-show-leaf-blocked",
+            "(blocked)",
+            true,
+        ),
+    ] {
+        let index = leaf_at(task_id);
+        let line = lines[index];
+        assert!(
+            line.contains(&format!("Failed leaf {root}")) && line.contains(status),
+            "{line}"
+        );
+        assert!(!line.contains(leaf), "{line}");
+        let next = lines.get(index + 1).copied().unwrap_or("");
+        if retry {
+            assert!(
+                next.contains(&format!("orbit job resume {root}")) && !next.contains(leaf),
+                "{next}\n{text}"
+            );
+        } else {
+            assert!(!next.contains("retry:"), "{next}\n{text}");
+        }
+    }
+
+    let shown = fixture.json(&["run", "show", DRAIN, "--no-reconcile", "--json"]);
+    let leaves = shown["drain_summary"]["failed_leaves"].as_array().unwrap();
+    assert_eq!(leaves.len(), 3, "{shown}");
+    for leaf in leaves {
+        let wrapper = leaf["run_id"].as_str().unwrap();
+        let resume = leaf["resume_run_id"].as_str().unwrap();
+        assert!(wrapper.starts_with("jrun-show-leaf-"), "{leaf}");
+        assert!(resume.starts_with("jrun-show-root-"), "{leaf}");
+        assert_ne!(wrapper, resume, "{leaf}");
+    }
+}
+
 #[test]
 fn run_show_contracts() {
     if !isolated_run_observation("run_observation::run_show_display::run_show_contracts") {

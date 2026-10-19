@@ -627,7 +627,7 @@ hand-wired for the same reason. The inventory:
 |---|---|---|
 | `run ship` | `orbit.workflow.ship` | Keep. Adds `--complete`, which the tool refuses by contract ([ORB-11187]); auto-selection with no task IDs; `--strict-worker-containment`; and the registry-checkout ship-mode fallback |
 | `run show` | `orbit.workflow.run.show` | Keep. Optional ID defaulting to the latest run, `--step`, `--no-reconcile` and `--verbose`, plus pull-claim, crew-window, drain-summary, lock-holder and root-cause sections the tool does not return |
-| `run history` | `orbit.workflow.run.list` | Keep. `--task`, several states, a relative `--since`, `--incidents` and a default of 50 rows, answered as `{runs}` where the tool answers `{items}` |
+| `run history` | `orbit.workflow.run.list` | Keep. `--task`, several states, a relative `--since`, `--incidents` and a default of 50 rows, answered as `{runs}` where the tool answers `{items}`. `--failures` is CLI-only and answers `{failures}`: one row per task and root cause |
 | `run auto` | `orbit.workflow.auto` | Keep. A different operation: `--pull`, complexity pools, `--allow-crew` and strict containment, with no resize, force or status; those are `run concurrency` and `run readiness` |
 | `job resume` | `orbit.workflow.run.resume` | Keep. Another noun's CLI, with `--wait` |
 | `run ship-sweep`, `task-pilot`, `job`, `agent`, `logs`, `events`, `trace`, `settlements`, `cancel`, `concurrency`, `extend`, `readiness`, `profiles` | none (`agent` has `orbit.agent.invoke`, phase 5) | Keep: no workflow tool to share a handler with |
