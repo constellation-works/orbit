@@ -1,7 +1,7 @@
 ---
 type: design
 summary: Spec: Audit Event Schema
-last_validated: 2026-10-17
+last_validated: 2026-10-19
 ---
 
 # Spec: Audit Event Schema
