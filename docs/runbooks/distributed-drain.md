@@ -722,8 +722,11 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   missing files, scratch escapes, invalid or duplicate artifact paths, and
   names colliding with either clean-tree report or its declared logs, naming
   the refused path. The engine's `no-diff-handoff/<claim>.json` checkpoint
-  and `validation/<claim>/` logs are reserved too. `no_diff_artifacts` still
-  admits only the report and its logs. Owner-mode agents continue using `orbit.task.artifact.put`.
+  and `validation/<claim>/` logs are reserved too, and so is the `review-`
+  namespace (any ASCII case): only the review gate writes there, so a path in
+  it is refused before attachment, naming the namespace and the path.
+  `no_diff_artifacts` still admits only the report and its logs. Owner-mode
+  agents continue using `orbit.task.artifact.put`.
   The handoff pins that verifier report; the owner rechecks it against its live
   base and completes without a PR under the same completion authority. A moved
   base or changed report requires fresh validation; a skip flag alone is refused.
