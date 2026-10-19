@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Task/Reservation Commit Boundary"
-last_validated: 2026-10-17
+last_validated: 2026-10-19
 ---
 # Task/Reservation Commit Boundary
 
@@ -210,8 +210,9 @@ actual reservation ID and expiry atomically. Idle receipts use a SQL-only transa
 there is no task bundle to publish. Receipt compaction replaces the payload with a permanent
 tombstone; it never deletes the request identity and refuses unsettled claims.
 
-The public pull/lifecycle tools remain unavailable. Generic task writes refuse active
-execution claims; claimed work writes through claim-scoped mutations. The one exception is an
+The pull and drain verbs (`orbit.task.pull`, `orbit.drain.*`) are absent from the public MCP
+tool list and reach an owner through the internal drain protocol. Generic task writes refuse
+active execution claims; claimed work writes through claim-scoped mutations. The one exception is an
 operator's comment-only update: orbit-core flags it, and `update_task_history` admits it under
 the claim only when its sole effect is appending one comment, recording no creation grant.
 Every other write inside that update still takes the ordinary fence. Frozen

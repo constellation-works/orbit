@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit Data Handling — what stays on your machine, what leaves it, and to whom"
-last_validated: 2026-10-17
+last_validated: 2026-10-19
 ---
 
 # Orbit Data Handling
@@ -73,8 +73,9 @@ command you ran or a crew you configured.
 
 ### Initiated by tools Orbit runs for you
 
-Most Orbit work is done by agent CLIs — Claude Code, Codex, Gemini, Copilot,
-Cursor, Grok, Pi — running as subprocesses. Those processes talk to their own
+Most Orbit work is done by agent CLIs — for example Claude Code, Codex, Gemini,
+Copilot, Cursor, Grok, Pi, Antigravity, OpenCode, and Muse — running as
+subprocesses. Those processes talk to their own
 providers with their own credentials under their own terms of service. Orbit
 does not proxy, log, or inspect that traffic beyond the stdout/stderr it
 captures into the audit trail. The same applies to `git`, `gh`, and `ssh`
@@ -99,8 +100,9 @@ Two specifics worth knowing:
 | Surface | Default | Notes |
 | --- | --- | --- |
 | Dashboard (`orbit web serve`) | Binds `127.0.0.1` | Reach a remote workspace with `orbit web connect`, which tunnels over SSH. |
-| MCP server (`orbit mcp serve`) | Local stdio, or a loopback-bound TCP listener | A wider bind must be requested explicitly. Remote access is a byte-transparent SSH stdio proxy; authorization is by the SSH identity you configure. |
-| Federated MCP | Off | Presents one MCP namespace over this host plus operator-configured SSH remotes. Only hosts you name; there is no registry or discovery. |
+| MCP server (`orbit mcp serve`) | Local stdio | Remote access (`--mode remote`) is a byte-transparent SSH stdio proxy; authorization is by the SSH identity you configure. |
+| MCP TCP listener (`orbit mcp listen`) | Loopback-bound TCP socket | A wider bind must be requested explicitly with `--allow-non-loopback`. |
+| Federated MCP | Off | Presents one MCP namespace over this host plus the hosts you register with `orbit host add`. Only hosts you name; there is no discovery. |
 | Task publication | Off | Pushes task bundles to a Git repository you bind. |
 
 ## Credentials and secrets
@@ -114,8 +116,10 @@ Two specifics worth knowing:
   name you list in `[execution.env].pass`. A benignly named credential such
   as `DATABASE_URL` does not reach an agent by accident. See
   [CONFIG.md — `[execution.env]`](./CONFIG.md#executionenv--the-agent-subprocess-environment).
-- **Redaction runs before persistence.** Environment values whose names match
-  `TOKEN`, `SECRET`, `PASSWORD`, or `API_KEY`; `Authorization` and `x-api-key`
+- **Redaction runs before persistence.** Environment values whose names contain
+  `TOKEN`, `SECRET`, `PASSWORD`, or `API_KEY`, or another credential marker such
+  as `PRIVATE`, `CREDENTIAL`, `COOKIE`, `BEARER`, or a `_KEY` suffix;
+  `Authorization` and `x-api-key`
   headers; and `sk-…`-shaped keys are redacted before they reach the log sink
   or an audit blob. Redaction is a safety net, not the boundary — the
   allowlist is the boundary.
