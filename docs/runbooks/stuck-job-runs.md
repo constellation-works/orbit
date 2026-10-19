@@ -497,15 +497,20 @@ known-red result or damaged receipt grants no reuse. A configured review must
 have an unchanged successful settlement and matching host certificate.
 
 This continuation is limited to a failed observation before any merge, automatic
-merge, rebase or repair mutation. Enabling automatic source repair does not
-exclude an otherwise unchanged original publication. The host checks the existing
+merge, post-publication rebase or repair mutation. A `delivery_preparation`
+checkpoint from a `pr_prepare` step before the first push does not exclude reuse:
+the published head, remote base and validation receipts must still match the
+completion binding. Enabling automatic source repair does not exclude an
+otherwise unchanged original publication. The host checks the existing
 repair admissions/publications, source-repair, infrastructure and base-update
 reservations, including pending or unreadable records. Any such task history
 refuses this narrow continuation, even if the tree or head is unchanged. Merge,
 auto-merge and local rebase attempts record write-ahead mutation provenance;
-unknown replies keep it. Retry descendants and prior recovery checkpoints also
-require governed recovery. Native policy captures from before this provenance
-contract cannot authorize reuse.
+unknown replies keep it. Retry descendants, other rebase recovery checkpoints,
+reviewer fixes and a `failure_activity_checkpoint` require governed recovery.
+Refusals identify mutation provenance, the checkpoint step, the failure-activity
+checkpoint or the reviewer repair that prevented reuse. Native policy captures
+from before this provenance contract cannot authorize reuse.
 
 Current hosted checks, merge policy, PR identity and merge state are read again
 by ordinary completion. Unknown mutation replies retain the existing reconciliation path;

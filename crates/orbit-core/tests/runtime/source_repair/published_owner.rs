@@ -110,10 +110,24 @@ fn publication_inner(
     f.runtime.apply_task_automation_update(&f.task, TaskAutomationUpdate { execution_summary:Some("Outcome: success\nChanges: complete the source repair and preserve its public behavior.\nAssessment: candidate ready for host validation.".into()), ..Default::default() }).unwrap();
     let commit = f.action("git_commit", json!({"job_run_id":run.run_id,"scope":"all","workspace_path":checkout,"base_sha":setup["base_sha"],"base_ref":setup["base_ref"]}));
     checkpoint(f, &run.run_id, 1, "commit", commit);
-    let prepared = f.action("pr_prepare", json!({"job_run_id":run.run_id,"workspace_path":checkout,"completed_task_ids":[f.task],"base":"main","base_sync":"remote"}));
+    if validated {
+        // Reproduce routine preparation against a base that advanced after setup.
+        git(&f.repo, &["checkout", "main"]);
+        std::fs::write(
+            f.repo.join("preparation-base.txt"),
+            "advance before publication\n",
+        )
+        .unwrap();
+        git(&f.repo, &["add", "preparation-base.txt"]);
+        git(&f.repo, &["commit", "-qm", "advance before preparation"]);
+        git(&f.repo, &["push", "origin", "main"]);
+        f.base = git(&f.repo, &["rev-parse", "HEAD"]);
+    }
+    let prepared = f.action("pr_prepare", json!({"job_run_id":run.run_id,"workspace_path":checkout,"completed_task_ids":[f.task],"base":"main","base_sync":"remote","authenticate_preparation":validated}));
     checkpoint(f, &run.run_id, 2, "prepare_branch", prepared.clone());
     let mut sync_input = prepared.clone();
     sync_input["job_run_id"] = json!(run.run_id);
+    sync_input["step_id"] = json!("sync_base");
     sync_input["workspace_path"] = json!(checkout);
     sync_input["completed_task_ids"] = json!([f.task]);
     sync_input["preparation"] = prepared;
@@ -122,7 +136,7 @@ fn publication_inner(
     f.branch = git(&checkout, &["branch", "--show-current"]);
     f.head = git(&checkout, &["rev-parse", "HEAD"]);
     if validated || successful {
-        let validation = f.action("candidate_validate", json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,"base_sha":setup["base_sha"]}));
+        let validation = f.action("candidate_validate", json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,"base_sha":f.base}));
         assert_eq!(validation["decision"], "passed");
         if validated {
             checkpoint(f, &run.run_id, 4, "validate", validation);
@@ -136,7 +150,7 @@ fn publication_inner(
     answer["headRefName"] = json!(f.branch);
     answer["headRefOid"] = json!(f.head);
     std::fs::write(&f.answer, answer.to_string()).unwrap();
-    let opened = f.action("pr_open", json!({"job_run_id":run.run_id,"workspace_path":checkout,"completed_task_ids":[f.task],"head":f.branch,"base":"main","base_ref":setup["base_ref"],"base_sha":setup["base_sha"]}));
+    let opened = f.action("pr_open", json!({"job_run_id":run.run_id,"workspace_path":checkout,"completed_task_ids":[f.task],"head":f.branch,"base":"main","base_ref":setup["base_ref"],"base_sha":f.base}));
     assert_eq!(opened["pr_created"], true);
     checkpoint(
         f,
@@ -147,7 +161,7 @@ fn publication_inner(
     );
     if validated {
         checkpoint(f, &run.run_id, 8, "resume_candidate", Value::Null);
-        let promoted = f.action("pr_promote", json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,"head":f.branch,"base":"main","base_ref":setup["base_ref"],"base_sha":setup["base_sha"],"pr_number":"17","pr_url":"https://github.com/owner/repository/pull/17"}));
+        let promoted = f.action("pr_promote", json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,"head":f.branch,"base":"main","base_ref":setup["base_ref"],"base_sha":f.base,"pr_number":"17","pr_url":"https://github.com/owner/repository/pull/17"}));
         checkpoint(f, &run.run_id, 9, "promote", promoted);
     }
     if successful {
