@@ -11,7 +11,7 @@ paths:
   - "scripts/build-bundled-bwrap.sh"
 related_features: [policy-sandbox, executors]
 related_artifacts: []
-last_validated: 2026-10-17
+last_validated: 2026-10-19
 ---
 
 # Linux sandbox onboarding and diagnostics
