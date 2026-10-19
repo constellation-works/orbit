@@ -218,3 +218,16 @@
   font-size: 12px;
   white-space: nowrap;
 }
+
+.lock-reservation-label {
+  color: var(--ready-locks);
+  font-size: 12.5px;
+}
+.lock-reservation-holders {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-width: 0;
+  color: var(--fg-dim);
+  font-size: 12px;
+}

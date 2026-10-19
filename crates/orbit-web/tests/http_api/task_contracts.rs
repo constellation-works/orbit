@@ -732,6 +732,213 @@ fn push_checkout(
         .push(WorkspaceCheckout::owner(id.to_string(), repo, orbit_dir));
 }
 
+/// HTTP must expose admission's canonical holders, reservations and expiry side effects.
+#[test]
+fn task_locks_matches_shared_listing_and_excludes_non_holding_contenders() {
+    isolated(
+        "task_contracts::task_locks_matches_shared_listing_and_excludes_non_holding_contenders",
+        || {
+            let fixture = Fixture::new();
+            let runtime = &fixture.runtime;
+            for file in [
+                "held.rs",
+                "review.rs",
+                "audit.rs",
+                "review-audit.rs",
+                "notes.md",
+                "reserved.rs",
+                "expired.rs",
+            ] {
+                std::fs::write(runtime.paths().repo_root.join(file), "").unwrap();
+            }
+            let seed = |title: &str, status, files: &[&str], tags: &[&str]| {
+                runtime
+                    .add_task(TaskAddParams {
+                        title: title.into(),
+                        description: "Shared lock HTTP regression".into(),
+                        plan: "Check admission parity".into(),
+                        status: Some(status),
+                        context_files: files.iter().map(|file| format!("file:{file}")).collect(),
+                        tags: tags.iter().map(|tag| (*tag).into()).collect(),
+                        ..Default::default()
+                    })
+                    .unwrap()
+            };
+            let active = seed(
+                "Holding task",
+                TaskStatus::InProgress,
+                &["held.rs", "notes.md"],
+                &[],
+            );
+            let review = seed("Review holder", TaskStatus::Review, &["review.rs"], &[]);
+            let no_diff = seed(
+                "Audit only",
+                TaskStatus::InProgress,
+                &["audit.rs"],
+                &["no-diff-expected"],
+            );
+            let no_diff_review = seed(
+                "Review audit",
+                TaskStatus::Review,
+                &["review-audit.rs"],
+                &["no-diff-expected"],
+            );
+            let waiting = seed(
+                "Waiting",
+                TaskStatus::Backlog,
+                &[
+                    "held.rs",
+                    "notes.md",
+                    "audit.rs",
+                    "review.rs",
+                    "reserved.rs",
+                ],
+                &[],
+            );
+            // A legacy bundle can predate write-time selector validation. Seed
+            // that persisted input here; the public HTTP read must canonicalize
+            // aliases and omit declarations escaping the workspace.
+            let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+                &orbit_store::maintenance::task_registry::task_registry_path(&fixture.global),
+            )
+            .unwrap();
+            let binding = registry.find_task_binding(&active.id).unwrap().unwrap();
+            let envelope_path = binding.canonical_path.join("task.yaml");
+            let mut envelope: orbit_types::task::TaskEnvelopeV2 =
+                serde_yaml::from_str(&std::fs::read_to_string(&envelope_path).unwrap()).unwrap();
+            envelope
+                .context_files
+                .extend(["file:./held.rs".into(), "file:../escape.rs".into()]);
+            std::fs::write(&envelope_path, serde_yaml::to_string(&envelope).unwrap()).unwrap();
+            let reserve = |task_ids: Vec<String>, file: &str| {
+                json!(
+                    runtime
+                        .sqlite_store()
+                        .unwrap()
+                        .reserve_task_reservation(
+                            &orbit_store::contracts::TaskReservationReserveParams {
+                                workspace_orbit_dir: runtime
+                                    .paths()
+                                    .orbit_dir
+                                    .display()
+                                    .to_string(),
+                                workspace_id: Some("ws_http_fixture".into()),
+                                task_ids,
+                                requested_files: vec![format!("file:{file}")],
+                                stored_files: vec![format!("file:{file}")],
+                                actor: "fixture".into(),
+                                ttl_seconds: 120,
+                                owner_run_id: None,
+                                owner_metadata_json: None,
+                            }
+                        )
+                        .unwrap()
+                )
+            };
+            let reserved = reserve(vec![waiting.id.to_string()], "reserved.rs");
+            assert_eq!(reserved["reserved"], true, "{reserved}");
+            let expired = reserve(vec![], "expired.rs");
+            assert_eq!(expired["reserved"], true, "{expired}");
+            // Deterministically expire the fixture grant without sleeping or racing a TTL.
+            runtime.sqlite_store().unwrap().with_transaction(|tx| {
+                tx.connection().execute(
+                    "UPDATE task_reservations SET expires_at = '2000-01-01T00:00:00Z' WHERE reservation_id = ?1",
+                    [expired["reservation_id"].as_str().unwrap()],
+                ).map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                Ok(())
+            }).unwrap();
+            let server = fixture.server(false);
+            let http = body_json(request(&server, "/tasks/locks"));
+            let expiry_events = || {
+                runtime
+                    .list_audit_events(
+                        None,
+                        Some("orbit.task.locks.reserve".into()),
+                        None,
+                        None,
+                        100,
+                    )
+                    .unwrap()
+                    .into_iter()
+                    .filter(|event| event.command == "task.locks.reserve.expired")
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(
+                expiry_events().len(),
+                1,
+                "HTTP reads expire reservations and record the shared audit event"
+            );
+            let shared = runtime.run_tool("orbit.task.locks", json!({})).unwrap();
+            for field in [
+                "locked_files",
+                "by_task",
+                "by_reservation",
+                "total_tasks",
+                "total_locked",
+                "total_reservations",
+            ] {
+                assert_eq!(
+                    http[field], shared[field],
+                    "HTTP preserves the shared {field}"
+                );
+            }
+            assert_eq!(
+                http["locked_files"],
+                json!(["file:held.rs", "file:reserved.rs", "file:review.rs"])
+            );
+            assert_eq!(
+                http["total_tasks"], 3,
+                "reservation-only tasks count once beside active/review holders"
+            );
+            assert_eq!(http["total_reservations"], 1);
+            assert_eq!(
+                http["by_reservation"][0]["reservation_id"],
+                reserved["reservation_id"]
+            );
+            assert_eq!(
+                http["by_task"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|row| row["id"].as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                vec![active.id.as_str(), review.id.as_str()]
+            );
+            assert_eq!(http["by_task"][0]["context_files"], json!(["file:held.rs"]));
+            for task in [&no_diff, &no_diff_review] {
+                assert!(
+                    !http["by_task"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|holder| holder["id"] == task.id)
+                );
+            }
+            let entries = http["context_contention"][&waiting.id]["entries"]
+                .as_array()
+                .unwrap();
+            assert_eq!(
+                entries[0]["contenders"],
+                json!([{"id": active.id, "status": "in-progress", "selector": "file:held.rs"}])
+            );
+            for entry in &entries[1..] {
+                assert_eq!(
+                    entry["contenders"],
+                    json!([]),
+                    "unlocked paths, no-diff, review and reservations never cause highlights"
+                );
+            }
+            assert!(http["context_contention"].get(&review.id).is_none());
+            assert_eq!(
+                body_json(request(&server, "/tasks/locks")),
+                http,
+                "repeated reads are stable"
+            );
+            assert_eq!(expiry_events().len(), 1, "expiry is audited once");
+        },
+    );
+}
+
 #[test]
 fn task_locks_reports_per_selector_active_contention_and_refreshes() {
     isolated(
