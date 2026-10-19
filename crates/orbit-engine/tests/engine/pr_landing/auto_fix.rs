@@ -493,7 +493,7 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
                 contract(commit)
             };
             let run = u64::from_str_radix(&commit[..12], 16).unwrap();
-            let test = json!({"name":"test","workflow":"CI","conclusion":if contents == "fixed" {"success"} else {"failure"},"run_id":run,"job_id":run+1,"failed_step":"source contract"});
+            let test = json!({"name":"test","workflow":"CI","status":"completed","conclusion":if contents == "fixed" {"success"} else {"failure"},"run_id":run,"job_id":run+1,"failed_step":"source contract"});
             let jobs = match aggregate.as_deref() {
                 Some(aggregate) => {
                     let mut jobs = vec![
@@ -832,7 +832,7 @@ fn docs_only_auto_fix_repairs_shared_source_and_watches_published_green_head() {
                         pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).len(),
                         if mode == "budget" {
                             3
-                        } else if mode == "review_required" {
+                        } else if matches!(mode, "review_required" | "landed" | "landed_reviewed") {
                             0
                         } else {
                             1
@@ -1870,7 +1870,11 @@ fn plant_commit_ci(fx: &Fixture, sha: &str, run_id: u64, conclusion: &str, log: 
     fs::write(dir.join("run_id"), run_id.to_string()).unwrap();
     fs::write(
         dir.join("runs.json"),
-        format!(r#"{{"workflow_runs":[{{"id":{run_id},"name":"CI"}}]}}"#),
+        serde_json::to_vec(&json!({"total_count":1,"workflow_runs":[{
+            "id":run_id,"name":"CI","workflow_id":1,"event":"push",
+            "head_sha":sha,"head_branch":BASE
+        }]}))
+        .unwrap(),
     )
     .unwrap();
     let steps = if conclusion == "failure" {
@@ -1881,12 +1885,213 @@ fn plant_commit_ci(fx: &Fixture, sha: &str, run_id: u64, conclusion: &str, log: 
     fs::write(
         dir.join("jobs.json"),
         format!(
-            r#"{{"jobs":[{{"id":{},"name":"test","status":"completed","conclusion":"{conclusion}","steps":{steps}}}]}}"#,
+            r#"{{"total_count":1,"jobs":[{{"id":{},"name":"test","status":"completed","conclusion":"{conclusion}","steps":{steps}}}]}}"#,
             run_id + 1
         ),
     )
     .unwrap();
     fs::write(dir.join("log"), log).unwrap();
+}
+
+/// A failed PR cut before a base fix must refresh before repair admission,
+/// even without historical CI on its fork point. Current-base failures with
+/// the same diagnostic hold instead; a distinct diagnostic still repairs.
+#[test]
+#[allow(
+    clippy::print_stderr,
+    reason = "isolated regression rows report their identity and elapsed time"
+)]
+fn auto_fix_checks_current_base_before_spending_a_repair() {
+    isolated(
+        "auto_fix::auto_fix_checks_current_base_before_spending_a_repair",
+        |sandbox| {
+            for case in [
+                "fixed_base",
+                "red_tip",
+                "candidate",
+                "already_current",
+                "red_tip_older_green",
+                "red_tip_foreign_green",
+                "non_push_green",
+                "incomplete_green",
+                "fixed_base_older_red",
+                "fixed_base_exhausted_repairs",
+                "fixed_base_reserved",
+            ] {
+                in_fresh_row(sandbox, |row| {
+                    eprintln!("scenario: {case}");
+                    let row_started = std::time::Instant::now();
+                    let fx = Fixture::new(row);
+                    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+                    open_for_completion(&fx, &host);
+                    let shared = "error[E0433]: cannot find module `broken_base`\n";
+                    plant_commit_ci(&fx, &fx.candidate, 11, "failure", shared);
+                    if case != "already_current" {
+                        fx.advance_base();
+                    }
+                    let tip = fx.local_tip(BASE);
+                    plant_commit_ci(
+                        &fx,
+                        &tip,
+                        31,
+                        if case.starts_with("red_tip") || case == "candidate" {
+                            "failure"
+                        } else {
+                            "success"
+                        },
+                        if case == "candidate" {
+                            "error[E0433]: cannot find module `different_failure`\n"
+                        } else {
+                            shared
+                        },
+                    );
+                    let runs_path = fx.forge.join("commit-ci").join(&tip).join("runs.json");
+                    let mut runs: Value =
+                        serde_json::from_slice(&fs::read(&runs_path).unwrap()).unwrap();
+                    match case {
+                        "red_tip_older_green"
+                        | "fixed_base_older_red"
+                        | "red_tip_foreign_green" => {
+                            // No jobs exist for this distractor: consulting it
+                            // instead of the latest base push cannot pass.
+                            let mut distractor = runs["workflow_runs"][0].clone();
+                            distractor["id"] = json!(if case == "red_tip_foreign_green" {
+                                41
+                            } else {
+                                21
+                            });
+                            if case == "red_tip_foreign_green" {
+                                distractor["event"] = json!("pull_request");
+                            }
+                            runs["workflow_runs"]
+                                .as_array_mut()
+                                .unwrap()
+                                .push(distractor);
+                            runs["total_count"] = json!(2);
+                        }
+                        "non_push_green" => {
+                            runs["workflow_runs"][0]["event"] = json!("pull_request")
+                        }
+                        "incomplete_green" => runs["total_count"] = json!(101),
+                        _ => {}
+                    }
+                    fs::write(runs_path, serde_json::to_vec(&runs).unwrap()).unwrap();
+                    if case == "fixed_base_exhausted_repairs" {
+                        for attempt in 1..=PR_AUTO_FIX_BUDGET {
+                            seed_auto_fix_history(
+                                &host,
+                                PR_AUTO_FIX_ADMITTED_EVENT,
+                                &PrAutoFixAttempt {
+                                    pr_number: PR_NUMBER.into(),
+                                    head_sha: format!("spent-{attempt}"),
+                                    blocker: PrAutoFixBlocker::FailedChecks,
+                                    attempt,
+                                    budget: PR_AUTO_FIX_BUDGET,
+                                    run_id: RUN_ID.into(),
+                                    crew: "fixture".into(),
+                                    crew_source: "fixture".into(),
+                                },
+                            );
+                        }
+                    }
+                    if case == "fixed_base_reserved" {
+                        seed_auto_fix_history(
+                            &host,
+                            orbit_types::workflow::PR_BASE_UPDATE_RESERVED_EVENT,
+                            &orbit_types::workflow::PrBaseUpdateReservation {
+                                execution: RUN_ID.into(),
+                                repository: "forge/remote".into(),
+                                pr_number: PR_NUMBER.into(),
+                                head_sha: fx.candidate.clone(),
+                                head_branch: BRANCH.into(),
+                                base_branch: BASE.into(),
+                                base_sha: tip.clone(),
+                                deadline_ms: 1_100_000,
+                                evidence: json!({"cause":"inherited"}),
+                            },
+                        );
+                    }
+                    fx.script_checks(
+                        if case.starts_with("fixed_base") && case != "fixed_base_reserved" {
+                            &["failure", "success"]
+                        } else {
+                            &["failure"]
+                        },
+                    );
+                    let mut input = fx.complete_ungated_input();
+                    input["auto_fix"] = json!(true);
+                    input["completion"] = json!("review");
+                    input["max_wait_seconds"] = json!(15);
+                    input["poll_interval_seconds"] = json!(5);
+                    let result = super::complete_with_logical_clock(&host, &input);
+                    let attempts = pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER);
+                    match case {
+                        "fixed_base" | "fixed_base_older_red" | "fixed_base_exhausted_repairs" => {
+                            let output = result.expect("refresh stale branch without repair");
+                            assert!(
+                                attempts.len()
+                                    == if case == "fixed_base_exhausted_repairs" {
+                                        PR_AUTO_FIX_BUDGET as usize
+                                    } else {
+                                        0
+                                    },
+                                "a base refresh spends no repair attempt"
+                            );
+                            let refreshed = fx.remote_tip(BRANCH);
+                            assert_ne!(refreshed, fx.candidate);
+                            assert_eq!(git(&fx.repo, &["merge-base", &tip, &refreshed]), tip);
+                            assert_eq!(output["merge"]["head_sha"], refreshed);
+                            assert!(
+                                host.history(TASK_ID)
+                                    .iter()
+                                    .any(|entry| entry.event == "pr_auto_fix_base_refresh")
+                            );
+                        }
+                        "red_tip" | "red_tip_older_green" | "red_tip_foreign_green" => {
+                            let error = result.expect_err("current base is known red").to_string();
+                            assert!(error.contains("base_red"), "{error}");
+                            assert!(
+                                attempts.is_empty(),
+                                "known-red base spends no repair attempt"
+                            );
+                            assert_eq!(
+                                host.history(TASK_ID)
+                                    .iter()
+                                    .filter(|entry| entry.event == "pr_auto_fix_base_red")
+                                    .count(),
+                                1,
+                                "repeated known-red polls keep a single decision record"
+                            );
+                            assert_eq!(fx.remote_tip(BRANCH), fx.candidate);
+                        }
+                        "fixed_base_reserved" => {
+                            let error = result.expect_err("one cumulative base update").to_string();
+                            assert!(error.contains("base update budget is spent"), "{error}");
+                            assert!(attempts.is_empty());
+                            assert_eq!(fx.remote_tip(BRANCH), fx.candidate);
+                        }
+                        _ => {
+                            let error = result.expect_err("candidate needs repair").to_string();
+                            assert!(
+                                orbit_types::workflow::is_pr_auto_fix_check_repair(&error),
+                                "{case}: {error}"
+                            );
+                            assert_eq!(attempts.len(), 1, "{case}: ordinary repair admission");
+                            assert_eq!(fx.remote_tip(BRANCH), fx.candidate);
+                        }
+                    }
+                    assert!(
+                        fx.merge_requests().is_empty(),
+                        "auto-fix alone never merges"
+                    );
+                    eprintln!(
+                        "scenario: {case} row elapsed {:.3} s",
+                        row_started.elapsed().as_secs_f64()
+                    );
+                });
+            }
+        },
+    );
 }
 
 /// The advanced base's same job, still running: GitHub leaves `conclusion`
@@ -1915,9 +2120,8 @@ fn plant_open_commit_ci(fx: &Fixture, sha: &str, run_id: u64) {
 /// and stops base-red at the completion deadline, and an optional check that
 /// also fails beside it, with no job of its own, does not end that hold. A
 /// failure the base does not fail that way is still admitted from the same
-/// budget, and so is a red base on a provider-side head the workspace never
-/// fetched: git state the check cannot read is not a base-red hold and must
-/// not end the watch.
+/// budget. A provider-side head need not be fetched to recognize matching
+/// current-base diagnostics from authenticated CI jobs.
 #[test]
 fn auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure() {
     isolated(
@@ -2021,11 +2225,10 @@ fn auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure() {
                         .to_string();
                     let attempts = pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER);
                     let polls = fx.status_reads() - reads_before;
-                    if case.starts_with("red_base") {
+                    if case != "candidate" {
                         assert!(
                             error.contains("auto_fix_stopped")
                                 && error.contains("base_red")
-                                && error.contains("has not moved past it")
                                 && error.contains(&fx.base_sha)
                                 && !error.contains("timed out"),
                             "{case}: {error}"
@@ -2044,11 +2247,7 @@ fn auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure() {
                             orbit_types::workflow::is_pr_auto_fix_check_repair(&error),
                             "{case}: {error}"
                         );
-                        let evidence = if case == "candidate" {
-                            "candidate_only"
-                        } else {
-                            "broken_base"
-                        };
+                        let evidence = "candidate_only";
                         assert!(
                             error.contains(&format!(
                                 "error[e0433]: cannot find module `{evidence}`"

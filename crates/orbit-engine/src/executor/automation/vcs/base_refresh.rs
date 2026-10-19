@@ -54,7 +54,10 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
         }
         // The shared reservation also fences inherited-failure updates. Its
         // own recovery handles old-head failures; no cause grants a second write.
-        if prior.evidence.get("cause") == Some(&json!("inherited")) {
+        if matches!(
+            prior.evidence.get("cause").and_then(Value::as_str),
+            Some("inherited" | "auto_fix_landed")
+        ) {
             return Ok(RefreshStep::None);
         }
         if status.head_sha.as_deref() == Some(&prior.head_sha) {

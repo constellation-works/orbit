@@ -824,28 +824,51 @@ fn same_job_passes<H: RuntimeHost + ?Sized>(
     })
 }
 
-/// A shared-base failure already repaired on a newer base. Every failed
-/// required job must have the same diagnostic on the old base and succeed on
-/// the new one. Missing evidence never authorizes a refresh.
-pub(super) fn landed_check_repair<H: RuntimeHost + ?Sized>(
+/// Compare every required failure with the latest push jobs on the exact
+/// current base tip. A green tip needs no historical fork-point logs. A red
+/// tip needs the same emitted diagnostic; sharing a job name alone is not
+/// enough to suppress a candidate repair.
+pub(super) fn base_tip_check_evidence<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
     head: &str,
-    old_base: &str,
-    new_base: &str,
+    base_branch: &str,
+    tip: &str,
     failed: &[(Option<String>, String)],
 ) -> Option<Value> {
-    if old_base == new_base {
-        return None;
-    }
     let jobs = commit_jobs(host, workspace, head).ok()?;
-    let base_jobs = commit_jobs(host, workspace, old_base).ok()?;
-    let tip_jobs = commit_jobs(host, workspace, new_base).ok()?;
+    let response = host
+        .run_private_vcs_operation(
+            operations::CI_COMMIT_JOBS,
+            json!({"commit":tip,"workspace_path":workspace,"latest_push_branch":base_branch}),
+        )
+        .ok()?;
+    let tip_jobs = response["jobs"].as_array()?;
     let mut evidence = Vec::new();
+    let mut red = false;
     for check in failed {
         let job = jobs
             .iter()
             .find(|job| unsuccessful(job) && answers(job, check))?;
+        let matching = tip_jobs
+            .iter()
+            .filter(|candidate| same_job(candidate, job))
+            .collect::<Vec<_>>();
+        // Ambiguous workflow names, incomplete jobs and pending jobs prove
+        // neither a passing base nor an inherited failure.
+        let [base_job] = matching.as_slice() else {
+            return None;
+        };
+        if base_job["status"] != "completed" {
+            return None;
+        }
+        if base_job["conclusion"] == "success" {
+            evidence.push(json!({"failed_job":job,"passing_job":base_job}));
+            continue;
+        }
+        if base_job["conclusion"] != "failure" {
+            return None;
+        }
         let log = job_log(
             host,
             workspace,
@@ -854,40 +877,34 @@ pub(super) fn landed_check_repair<H: RuntimeHost + ?Sized>(
             job,
         )
         .ok()?;
-        if transient_evidence(&log).is_some() {
+        let base_log = job_log(
+            host,
+            workspace,
+            base_job["run_id"].as_u64()?,
+            base_job["job_id"].as_u64()?,
+            base_job,
+        )
+        .ok()?;
+        if transient_evidence(&log).is_some() || transient_evidence(&base_log).is_some() {
             return None;
         }
         let signature = error_signature(&log, failed_step(job));
-        if signature.step_fallback {
+        let base_signature = error_signature(&base_log, failed_step(base_job));
+        if signature.step_fallback
+            || base_signature.step_fallback
+            || signature.text != base_signature.text
+        {
             return None;
         }
-        let mut matched = None;
-        for base_job in base_jobs
-            .iter()
-            .filter(|base_job| same_job(base_job, job) && unsuccessful(base_job))
-        {
-            let base_log = job_log(
-                host,
-                workspace,
-                base_job["run_id"].as_u64()?,
-                base_job["job_id"].as_u64()?,
-                base_job,
-            )
-            .ok()?;
-            let base_signature = error_signature(&base_log, failed_step(base_job));
-            if !base_signature.step_fallback && base_signature.text == signature.text {
-                matched = Some(base_job);
-                break;
-            }
-        }
-        let base_job = matched?;
-        let passing = tip_jobs
-            .iter()
-            .find(|tip| same_job(tip, job) && tip["conclusion"].as_str() == Some("success"))?;
-        evidence.push(json!({"failed_job":job,"base_job":base_job,"passing_job":passing,"signature":signature.text,"log_excerpt":excerpt(&log)}));
+        red = true;
+        evidence.push(json!({"failed_job":job,"base_job":base_job,"signature":signature.text,"log_excerpt":excerpt(&log)}));
     }
-    (!evidence.is_empty()).then(
-        || json!({"failed_head":head,"old_base":old_base,"landed_base":new_base,"checks":evidence}),
+    if evidence.is_empty() || (!red && contains(workspace, tip, head)) {
+        return None;
+    }
+    Some(
+        json!({"failed_head":head,"landed_base":tip,"base_branch":base_branch,"source":"latest_push","checks":evidence,
+        "path":if red {"known_red_base"} else {"base_refresh"}}),
     )
 }
 

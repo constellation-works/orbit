@@ -19,15 +19,12 @@
 //!   required check run outside a workflow (a provider app's aggregate) is
 //!   repaired only from its authenticated source failure annotations, which
 //!   are retained with the task before the repair is admitted [ORB-16185].
-//!   A failure the landing classifies as inherited from the base commit, while
-//!   that base branch has not moved past it, spends no repair attempt
-//!   ([`red_base_wait`]): the watcher keeps polling until the completion
-//!   deadline and then stops with a base-red reason. The same hold applies
-//!   when the base has moved and the tip's same job has not concluded yet; a
-//!   concluded tip job, including a failure, and a tip that lists no such
-//!   job, keep the ordinary repair path. A tip job that succeeded is the
-//!   landed refresh, decided before this hold. A candidate-caused
-//!   failure is still admitted from the same budget.
+//!   Before repair admission, current-base push jobs decide whether to refresh
+//!   a stale PR without an agent attempt or hold a matching known-red failure.
+//!   The latest push run of each workflow on that exact tip supplies the jobs;
+//!   historical fork-point logs are unnecessary for a green-tip refresh.
+//!   The existing inherited-base hold also waits while the moved tip's same
+//!   jobs have not concluded. Other failures retain the ordinary repair path.
 //!
 //! An optional-only failure first passes the narrowly evidenced prerequisite
 //! recovery in `infrastructure`: one durable rerun, no crew or source repair.
@@ -409,10 +406,8 @@ pub(super) fn repair_failed_checks<H: RuntimeHost + ?Sized>(
     }
 }
 
-/// Recognize a landed repair using all required failures and exact base jobs.
-/// This is only diagnosis: the caller still admits an attempt, validates,
-/// reviews and lease-publishes the refreshed candidate.
-pub(super) fn landed_repair<H: RuntimeHost + ?Sized>(
+/// Compare required failures with the current base tip before repair admission.
+pub(super) fn base_tip_checks<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
     workspace_path: &str,
@@ -428,8 +423,14 @@ pub(super) fn landed_repair<H: RuntimeHost + ?Sized>(
         resolve_worktree_start_point(workspace, &base, base_sync_mode_from_input(input).ok()?)
             .ok()?;
     let tip = commit_sha(workspace, &base_ref).ok()?;
-    let old = git_output(workspace, &["merge-base", head, &tip]).ok()?;
-    super::super::landing_checks::landed_check_repair(host, workspace, head, &old, &tip, &failed)
+    super::super::landing_checks::base_tip_check_evidence(
+        host,
+        workspace,
+        head,
+        base.strip_prefix("origin/").unwrap_or(&base),
+        &tip,
+        &failed,
+    )
 }
 
 /// Retain the failed and passing exact-head evidence before refreshing.
@@ -446,7 +447,82 @@ pub(super) fn record_landed_repair<H: RuntimeHost + ?Sized>(
         auto_fix,
         &format!("auto-fix/{}/landed-{head}.json", auto_fix.run_id),
         evidence,
-    )
+    )?;
+    record_base_path(host, auto_fix, "pr_auto_fix_base_refresh", evidence)
+}
+
+/// Reserve a base refresh separately from agent repair attempts. A previous
+/// reservation never authorizes another rewrite, including after interruption.
+pub(super) fn reserve_base_refresh<H: RuntimeHost + ?Sized>(
+    host: &H,
+    auto_fix: &AutoFix,
+    candidate: &orbit_types::workflow::handoff::HandoffCandidate,
+    deadline_ms: u64,
+    evidence: &Value,
+) -> Result<(), OrbitError> {
+    use orbit_types::workflow::{PrBaseUpdateAdmission, PrBaseUpdateReservation};
+    let request = PrBaseUpdateReservation {
+        execution: auto_fix.run_id.clone(),
+        repository: candidate.repository.clone(),
+        pr_number: match candidate.delivery {
+            orbit_types::workflow::handoff::HandoffDelivery::PullRequest { number } => {
+                number.to_string()
+            }
+            _ => return Err(stopped("", "base refresh requires a pull request")),
+        },
+        head_sha: evidence["failed_head"].as_str().unwrap_or_default().into(),
+        head_branch: candidate.source_branch.clone(),
+        base_branch: candidate.base_branch.clone(),
+        base_sha: evidence["landed_base"].as_str().unwrap_or_default().into(),
+        deadline_ms,
+        evidence: json!({"cause":"auto_fix_landed", "checks":evidence}),
+    };
+    match host.admit_pr_base_update(&auto_fix.task_ids, &request)? {
+        PrBaseUpdateAdmission::Reserved => Ok(()),
+        PrBaseUpdateAdmission::Observe(_) => Err(stopped(
+            &request.pr_number,
+            "the base refresh was already reserved; no second branch rewrite is allowed",
+        )),
+        PrBaseUpdateAdmission::Refused(why) => Err(stopped(&request.pr_number, &why)),
+    }
+}
+
+/// Record a base decision once per exact evidence on every owning task;
+/// repeated known-red polls do not flood history.
+pub(super) fn record_base_path<H: RuntimeHost + ?Sized>(
+    host: &H,
+    auto_fix: &AutoFix,
+    event: &str,
+    evidence: &Value,
+) -> Result<(), OrbitError> {
+    let note = serde_json::to_string(evidence)
+        .map_err(|error| OrbitError::Execution(error.to_string()))?;
+    for task in &auto_fix.task_ids {
+        if host
+            .get_task_history(task)?
+            .iter()
+            .any(|entry| entry.event == event && entry.note.as_deref() == Some(&note))
+        {
+            continue;
+        }
+        host.apply_task_automation_update(
+            task,
+            TaskAutomationUpdate {
+                append_history: vec![orbit_types::task::TaskHistoryEntry {
+                    at: chrono::Utc::now(),
+                    by: "system".into(),
+                    event: event.into(),
+                    note: Some(note.clone()),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: None,
+                    decision: None,
+                }],
+                ..TaskAutomationUpdate::default()
+            },
+        )?;
+    }
+    Ok(())
 }
 
 /// Retain the authenticated check annotations a repair of `head` relies on,
