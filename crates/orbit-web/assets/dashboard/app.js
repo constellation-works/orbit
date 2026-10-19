@@ -10,7 +10,7 @@ import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/sco
 import { fetchAndRenderOrchestrators, placeholdOrchestratorsAggregate, wireOrchestratorControls } from './js/orchestrators.js';
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/reliability.js';
 import { openDoctor, peekDoctor, wireDoctorPanel } from './js/doctor.js';
-import { initLogTail, fitLogPanelToViewport, setDockMode } from './js/log-tail.js';
+import { initLogTail, fitLogPanelToViewport, placeDock, setDockMode } from './js/log-tail.js';
 import { renderDiagnostics } from './js/diagnostics.js';
 import { fetchAndRenderMetrics, placeholdMetricsAggregate } from './js/metrics.js';
 import { fetchAndRenderResources, placeholdResourcesAggregate } from './js/resources.js';
@@ -266,6 +266,7 @@ function routerContext() {
     openDoctor: () => openDoctor().catch((e) => console.error("Failed to run doctor", e)),
     fitLogPanelToViewport,
     setDrainView: (mode) => setDockMode(mode),
+    placeDock,
 
     // Events and Codebase pass-throughs (re-exported here for router;
     // imported at top of this file)
@@ -1437,7 +1438,8 @@ function activeRefreshJobs() {
 
   if (activeTab === "tasks") {
     add("Tasks", fetchAndRenderTasks());
-    // Task rows still show their locked-file counts; the panel lives on Drain.
+    // Task rows show their locked-file counts, and the dock beside them holds
+    // the Locks held panel.
     if (!aggregate && !document.hidden) add("Locked files", fetchAndRenderTaskLocks());
     // When each running task's run started, for the In progress rows' elapsed
     // time. Only while that group can show.

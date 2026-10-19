@@ -205,10 +205,10 @@ end with some tasks still in the backlog.
 ## 4. Start a bounded window
 
 - **Dashboard:** in the **Drain** card, pick a **Window length** (`15m` to
-  `8h`), set **Parallel tasks**, and under **When a task finishes** choose
-  **Stop at review** or **Mark done**. Optionally choose **Approve qualifying**
-  under **Proposed tasks** (`--approve-proposed`). You can also check
-  **Auto-fix PR blockers** to repair the window's blocked PRs. Click **Start … window** and
+  `8h`), set **Parallel tasks**, and turn on **Mark shipped tasks done** to
+  complete them (off stops at review). Optionally turn on **Approve qualifying
+  proposals** (`--approve-proposed`) or **Auto-fix PR blockers** to repair the
+  window's blocked PRs. Click **Start … window** and
   confirm.
   See [Auto-drain](../dashboard/#auto-drain).
 - **Agent:** ask for a window and say how long, how many tasks at once, and
@@ -225,7 +225,7 @@ The window length bounds only when new work may start; a task in flight when
 it expires still finishes. **Parallel tasks** (`--concurrency`, default 5) is
 not a batch size: the drain refills each free slot from the whole backlog.
 
-**Mark done** (`--complete`) authorizes this window to move every task it
+**Mark shipped tasks done** (`--complete`) authorizes this window to move every task it
 ships from `review` to `done`, including tasks admitted later in the window. It
 never approves `proposed` tasks. In the dashboard it needs an operator
 session. See [Completing work with

@@ -189,7 +189,7 @@ globalThis.fetch = async (path, options = {}) => {
 const distributed = await import("./js/distributed.js");
 const {
   buildAttentionCallout,
-  buildDistributedBlock,
+  buildDeliveryPanel,
   buildExecutionProvenance,
   claimAttention,
   invalidateDistributedConsole,
@@ -212,7 +212,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   invalidateDistributedConsole();
   confirms.length = 0;
   confirmAnswer = true;
-  const block = buildDistributedBlock(taskId, options);
+  const block = buildDeliveryPanel(taskId, options);
   place(block);
   await settle();
   return block;
@@ -307,7 +307,6 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   const text = block.textContent;
 
   assert.equal(block.style.display, "", "a task with a claim shows the block");
-  assert.equal(block.querySelector("h4").getAttribute("aria-expanded"), "true");
   assert.ok(text.includes("on runner-2"), "execution names the machine");
 
   // The bound run lives in the follower's job store: name the machine to inspect
@@ -389,7 +388,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   sent.length = 0;
 
   setWorkspace("workspace-a");
-  const oldWorkspaceBlock = buildDistributedBlock("ORB-2");
+  const oldWorkspaceBlock = buildDeliveryPanel("ORB-2");
   await settle();
   assert.equal(oldWorkspaceBlock.style.display, "none", "workspace A has no claim for the task");
   assert.equal(
@@ -401,7 +400,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   // This is the dashboard selector path: tasks.js observes the workspace
   // change and must drop the distributed.js memo before the next detail mount.
   setWorkspace("workspace-b");
-  const newWorkspaceBlock = buildDistributedBlock("ORB-2");
+  const newWorkspaceBlock = buildDeliveryPanel("ORB-2");
   await settle();
   assert.equal(newWorkspaceBlock.style.display, "", "workspace B's live claim renders its panel");
   assert.equal(
@@ -443,7 +442,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   holdConsoleReads = true;
 
   setWorkspace("workspace-a");
-  buildDistributedBlock("ORB-2");
+  buildDeliveryPanel("ORB-2");
   assert.equal(heldConsoleReads.length, 1, "workspace A console read is in flight");
   assert.equal(heldConsoleReads[0].workspace, "workspace-a");
 
@@ -453,7 +452,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   await settle();
   holdConsoleReads = false;
 
-  const newWorkspaceBlock = buildDistributedBlock("ORB-2");
+  const newWorkspaceBlock = buildDeliveryPanel("ORB-2");
   await settle();
   assert.equal(newWorkspaceBlock.style.display, "", "workspace B's live claim renders its panel");
   assert.ok(
@@ -887,7 +886,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
 
     // Inside the window, rows share one read.
     clock += 1000;
-    const shared = buildDistributedBlock("ORB-2");
+    const shared = buildDeliveryPanel("ORB-2");
     await settle();
     assert.equal(consoleReads.length, reads, "a detail opened inside the window reuses the read");
     assert.ok(button(shared, "Approve handoff"));
@@ -898,7 +897,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
     approved.handoff.authority = { state: "authorized", summary: "completion authority recorded elsewhere", authorization_id: "auth-9", recorded_at: null };
     consoleBody = console_([approved]);
     clock += CONSOLE_TTL_MS + 1;
-    const later = buildDistributedBlock("ORB-2");
+    const later = buildDeliveryPanel("ORB-2");
     await settle();
     assert.equal(consoleReads.length, reads + 1, "a detail opened after the window re-reads");
     assert.ok(!button(later, "Approve handoff"), "the stale approve button is gone");
@@ -921,7 +920,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
     onTaskChanged: () => {
       readsAtChange.push(consoleReads.length);
       setTimeout(() => {
-        rebuilt = buildDistributedBlock("ORB-2");
+        rebuilt = buildDeliveryPanel("ORB-2");
         place(rebuilt);
       }, 0);
     },
@@ -953,7 +952,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   sent.length = 0;
   consoleBody = console_([claim()]);
   let rebuilt = null;
-  const block = await mount("ORB-2", { onTaskChanged: () => { rebuilt = buildDistributedBlock("ORB-2"); } });
+  const block = await mount("ORB-2", { onTaskChanged: () => { rebuilt = buildDeliveryPanel("ORB-2"); } });
   nextAction = { status: 400, body: { error: "candidate not found", code: "no_candidate", remedy: "push the candidate branch and try again" } };
   press(button(block, "Approve handoff"));
   await settle();
@@ -995,7 +994,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   consoleBody = console_([claim()]);
   invalidateDistributedConsole();
   failConsoleReads = 1;
-  const block = buildDistributedBlock("ORB-2");
+  const block = buildDeliveryPanel("ORB-2");
   await settle();
   assert.equal(block.style.display, "", "a failed read is shown");
   const alert = block.querySelector(".claim-feedback.error");

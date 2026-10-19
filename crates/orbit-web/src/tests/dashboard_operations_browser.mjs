@@ -661,14 +661,14 @@ try {
   const approveCard = async (label) => {
     await page.evaluate(async () => {
       await globalThis.setDrainFixturePhase('idle');
-      document.querySelector('input[name="auto-drain-approve"][value="approve"]').click();
+      document.getElementById('auto-drain-approve').click();
     });
     const form = await page.evaluate(() => {
       const card = document.getElementById('auto-drain-start');
       const box = card.getBoundingClientRect();
       const label = card.querySelector('.drain-field-approve');
       return {
-        selected: card.querySelector('input[name="auto-drain-approve"][value="approve"]').checked,
+        selected: document.getElementById('auto-drain-approve').checked,
         overflowing: Array.from(card.querySelectorAll('*')).filter((node) => node.getClientRects().length > 0 && node.getBoundingClientRect().right > box.right + 1).map((node) => node.className || node.tagName),
         reachable: label.getBoundingClientRect().width > 0,
       };
@@ -695,7 +695,8 @@ try {
     await page.locator('#auto-drain-panel').screenshot({ path: path.join(evidence, `drain-approve-live-${label}.png`) });
     await page.evaluate(async () => {
       await globalThis.setDrainFixtureApprovals({ enabled: false });
-      document.querySelector('input[name="auto-drain-approve"][value="leave"]')?.click();
+      const approve = document.getElementById('auto-drain-approve');
+      if (approve?.checked) approve.click();
       await globalThis.setDrainFixturePhase('draining');
     });
   };

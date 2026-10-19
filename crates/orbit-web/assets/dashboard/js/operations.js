@@ -1,6 +1,6 @@
 // Routine-definition, host clock, and auto-task operations [ORB-10875, ORB-10876].
 
-import { normalizeTaskStatus, captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, isAggregateView, onWorkspaceChange, postJson, reviewLayerText, runHref, statusPill, submissionNoticeLines, fmtDuration, bindTaskLink } from './common.js';
+import { normalizeTaskStatus, captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, infoHint, fetchJson, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, isAggregateView, onWorkspaceChange, postJson, reviewLayerText, runHref, statusPill, submissionNoticeLines, fmtDuration, bindTaskLink } from './common.js';
 import { navigateToRun, setActiveTab } from './router.js';
 import { renderAutomation } from './automation.js';
 import { FLEET_CACHE_MS, fetchFleetDrains, fleetDrainLabel, peekFleetDrains, renderFleetDrains } from './fleet-drains.js';
@@ -1710,7 +1710,11 @@ function updateDrainIndicators(phase, label) {
   const tabState = $("dock-drain-state");
   if (tab) {
     tab.dataset.drainState = indicatorPhase;
-    tab.setAttribute("aria-label", `Overview: ${indicatorLabel}`);
+    // The tab's own name differs by page (Overview on Drain, Drain on Tasks);
+    // the dock relabels from `drainLabel` when it moves.
+    tab.dataset.drainLabel = indicatorLabel;
+    const name = tab.querySelector?.(".dock-seg-label")?.textContent || "Overview";
+    tab.setAttribute("aria-label", `${name}: ${indicatorLabel}`);
     tab.title = indicatorLabel;
   }
   if (tabState) tabState.textContent = aggregate ? "fleet" : phase === "winding_down" ? label : "";
@@ -1851,6 +1855,47 @@ function autoDrainApprovals(approvals) {
   };
 }
 
+// A Start-card field's label with its help as an info hint beside it; `warn`
+// tints the hint amber. The hint sits outside the <label>, so pressing it never
+// focuses or toggles the control.
+function drainFieldHead(label, help, { warn = false, id = null } = {}) {
+  const head = el("span", { class: "drain-field-head" }, [label]);
+  if (help) {
+    const hint = infoHint(help, { id });
+    if (warn) hint.classList.add("warn");
+    head.appendChild(hint);
+  }
+  return head;
+}
+
+// Why a control is unavailable stays visible text: a disabled control with no
+// reason in view reads as broken.
+function drainFieldRefusal(text, id = null) {
+  if (!text) return null;
+  const note = el("p", { class: "drain-field-hint warn", text });
+  if (id) note.id = id;
+  return note;
+}
+
+// An on/off choice: the label and its hint on the left, a switch on the right.
+function drainSwitchField({ id, label, help, warn = false, checked, disabled = false, title = "", refusal = "", extraClass = "", onChange }) {
+  const input = el("input", { class: "drain-switch", role: "switch" });
+  input.id = id;
+  input.type = "checkbox";
+  input.checked = checked;
+  input.disabled = disabled;
+  input.dataset.drainFocus = id;
+  if (title) input.title = title;
+  input.setAttribute("aria-describedby", refusal ? `${id}-reason ${id}-help` : `${id}-help`);
+  input.addEventListener("change", () => onChange(input.checked));
+  const name = el("label", { class: "drain-field-label", text: label });
+  name.htmlFor = id;
+  return el("div", { class: `drain-field drain-field-row${extraClass ? ` ${extraClass}` : ""}` }, [
+    el("div", { class: "drain-field-text" }, [drainFieldHead(name, help, { warn, id: `${id}-help` }), drainFieldRefusal(refusal, `${id}-reason`)]),
+    input,
+  ]);
+}
+
 function autoDrainDurationControl(payload) {
   const segment = el("div", { class: "drain-durations" });
   segment.setAttribute("role", "group");
@@ -1900,10 +1945,10 @@ function autoDrainModeControl(payload) {
   const help = chosen
     ? `${AUTO_DRAIN_MODE_HELP[chosen]} For this window only; configuration is unchanged.`
     : `Uses this host's auto-concurrency mode.${AUTO_DRAIN_MODE_HELP[configured] ? ` ${AUTO_DRAIN_MODE_HELP[configured]}` : ""}`;
-  return el("div", { class: "drain-field" }, [label, select,
-    el("p", { class: "drain-field-hint", text: authorized
-      ? help
-      : "A per-window mode requires an operator session on an owner workspace." }),
+  return el("div", { class: "drain-field" }, [
+    drainFieldHead(label, authorized ? help : ""),
+    select,
+    drainFieldRefusal(authorized ? "" : "A per-window mode requires an operator session on an owner workspace."),
   ]);
 }
 
@@ -1956,124 +2001,74 @@ function autoDrainConcurrencyControl(payload, form) {
     return button;
   };
   form.syncConcurrency();
-  const hint = el("p", { class: "drain-field-hint", text: "Upper bound; the forecast may admit fewer." });
-  hint.id = "auto-drain-concurrency-hint";
-  input.setAttribute("aria-describedby", `${problem.id} ${hint.id}`);
+  input.setAttribute("aria-describedby", `${problem.id} auto-drain-concurrency-hint`);
   return el("div", { class: "drain-field drain-field-row" }, [
-    el("div", { class: "drain-field-text" }, [label, hint]),
+    el("div", { class: "drain-field-text" }, [
+      drainFieldHead(label, "Upper bound; the forecast may admit fewer.", { id: "auto-drain-concurrency-hint" }),
+    ]),
     el("div", { class: "drain-stepper" }, [step(-1, "Decrease"), input, step(1, "Increase")]),
   ]);
 }
 
-// Completion is a choice between two outcomes, so it reads as two named
-// options rather than a checkbox whose label describes its current state.
-// "Mark done" turns amber, in place of a separate warning banner.
+const AUTO_DRAIN_REVIEW_STOP = "Off: shipped tasks stay in review; a separate action completes them.";
+
+// Completion: off stops each shipped task at review, on marks it done. On is
+// the riskier choice, so its hint turns amber with the warning.
 function autoDrainCompletionControl(payload, reasons) {
-  const group = el("div", { class: "drain-completion" });
-  group.setAttribute("role", "radiogroup");
-  group.setAttribute("aria-labelledby", "auto-drain-completion-label");
-  const option = (value, text, title) => {
-    const input = el("input");
-    input.type = "radio";
-    input.name = "auto-drain-completion";
-    input.value = value;
-    input.checked = autoDrainComplete === (value === "done");
-    input.disabled = value === "done" && Boolean(reasons.complete);
-    input.dataset.drainFocus = `complete-${value}`;
-    input.addEventListener("change", () => {
-      if (!input.checked) return;
-      autoDrainComplete = value === "done";
+  const unavailable = Boolean(reasons.complete) && !autoDrainComplete;
+  return drainSwitchField({
+    id: "auto-drain-complete",
+    label: "Mark shipped tasks done",
+    help: unavailable ? reasons.complete : autoDrainComplete ? AUTO_DRAIN_COMPLETE_WARNING : AUTO_DRAIN_REVIEW_STOP,
+    warn: autoDrainComplete || unavailable,
+    checked: autoDrainComplete,
+    disabled: unavailable,
+    title: unavailable ? reasons.complete : "",
+    extraClass: "drain-field-complete",
+    onChange: (on) => {
+      autoDrainComplete = on;
       renderAutoDrain(payload);
-    });
-    return el("label", {
-      class: `drain-completion-option${input.checked ? " selected" : ""}${value === "done" ? " done" : ""}`,
-      title: input.disabled ? reasons.complete : title,
-    }, [input, el("span", { text })]);
-  };
-  const review = "Shipped tasks stay in review; a separate action completes them.";
-  group.append(
-    option("review", "Stop at review", review),
-    option("done", "Mark done", AUTO_DRAIN_COMPLETE_WARNING),
-  );
-  const label = el("span", { class: "drain-field-label", text: "When a task finishes" });
-  label.id = "auto-drain-completion-label";
-  return el("div", { class: "drain-field drain-field-complete" }, [
-    label,
-    group,
-    el("p", { class: `drain-field-hint${autoDrainComplete ? " warn" : ""}`, text: autoDrainComplete ? AUTO_DRAIN_COMPLETE_WARNING : review }),
-  ]);
+    },
+  });
 }
 
-// Approving proposed tasks is a second two-option choice beside completion,
-// in the same segmented style; the amber option is the one that acts on work
-// nobody has looked at yet. Its reason is visible text, not only a tooltip.
+// Approving proposed tasks, off by default; on acts on work nobody has looked
+// at yet, so its hint turns amber. The qualification rule is in the hint and
+// a refusal stays visible.
 function autoDrainApproveControl(payload, reasons) {
-  const group = el("div", { class: "drain-completion" });
-  group.setAttribute("role", "radiogroup");
-  group.setAttribute("aria-labelledby", "auto-drain-approve-label");
-  const option = (value, text, title) => {
-    const input = el("input");
-    input.type = "radio";
-    input.name = "auto-drain-approve";
-    input.value = value;
-    input.checked = autoDrainApproveProposed === (value === "approve");
-    input.disabled = value === "approve" && Boolean(reasons.approve);
-    input.dataset.drainFocus = `approve-${value}`;
-    input.addEventListener("change", () => {
-      if (!input.checked) return;
-      autoDrainApproveProposed = value === "approve";
+  return drainSwitchField({
+    id: "auto-drain-approve",
+    label: "Approve qualifying proposals",
+    help: autoDrainApproveProposed ? `${AUTO_DRAIN_APPROVE_WARNING}\n${AUTO_DRAIN_APPROVE_RULE}` : `Off: proposed tasks stay proposed until you approve them.\n${AUTO_DRAIN_APPROVE_RULE}`,
+    warn: autoDrainApproveProposed,
+    checked: autoDrainApproveProposed,
+    disabled: Boolean(reasons.approve) && !autoDrainApproveProposed,
+    title: reasons.approve || "",
+    refusal: reasons.approve && !reasons.submit ? reasons.approve : "",
+    extraClass: "drain-field-approve",
+    onChange: (on) => {
+      autoDrainApproveProposed = on;
       renderAutoDrain(payload);
-    });
-    return el("label", {
-      class: `drain-completion-option${input.checked ? " selected" : ""}${value === "approve" ? " done" : ""}`,
-      title: input.disabled ? reasons.approve : title,
-    }, [input, el("span", { text })]);
-  };
-  group.append(
-    option("leave", "Leave for me", "Proposed tasks stay proposed until you approve them."),
-    option("approve", "Approve qualifying", AUTO_DRAIN_APPROVE_RULE),
-  );
-  const label = el("span", { class: "drain-field-label", text: "Proposed tasks" });
-  label.id = "auto-drain-approve-label";
-  const field = el("div", { class: "drain-field drain-field-approve" }, [
-    label,
-    group,
-    el("p", {
-      class: `drain-field-hint${autoDrainApproveProposed ? " warn" : ""}`,
-      text: autoDrainApproveProposed ? AUTO_DRAIN_APPROVE_WARNING : "Proposed tasks stay proposed until you approve them.",
-    }),
-  ]);
-  if (reasons.approve && !reasons.submit) {
-    field.appendChild(el("div", { class: "operation-control-note drain-stop-note disabled-reason", text: reasons.approve }));
-  }
-  return field;
+    },
+  });
 }
 
-const AUTO_DRAIN_AUTO_FIX_HELP = "Repair failed required checks and merge conflicts on this window's PRs. Merging still requires Mark done.";
+const AUTO_DRAIN_AUTO_FIX_HELP = "Repair failed required checks and merge conflicts on this window's PRs. Merging still requires Mark shipped tasks done.";
 
 function autoDrainAutoFixControl(payload, reasons) {
-  const input = el("input");
-  input.id = "auto-drain-auto-fix";
-  input.type = "checkbox";
-  input.checked = autoDrainAutoFix;
-  // Keep an unavailable selected option clearable after authority changes.
-  input.disabled = Boolean(reasons.autoFix) && !autoDrainAutoFix;
-  input.dataset.drainFocus = "auto-fix";
-  input.setAttribute("aria-describedby", "auto-drain-auto-fix-help");
-  input.addEventListener("change", () => {
-    autoDrainAutoFix = input.checked;
-    renderAutoDrain(payload);
+  return drainSwitchField({
+    id: "auto-drain-auto-fix",
+    label: "Auto-fix PR blockers",
+    help: AUTO_DRAIN_AUTO_FIX_HELP,
+    checked: autoDrainAutoFix,
+    // Keep an unavailable selected option clearable after authority changes.
+    disabled: Boolean(reasons.autoFix) && !autoDrainAutoFix,
+    refusal: reasons.autoFix || "",
+    onChange: (on) => {
+      autoDrainAutoFix = on;
+      renderAutoDrain(payload);
+    },
   });
-  input.className = "drain-switch";
-  input.setAttribute("role", "switch");
-  const help = el("p", { class: `drain-field-hint${reasons.autoFix ? " warn" : ""}`, text: reasons.autoFix || AUTO_DRAIN_AUTO_FIX_HELP });
-  help.id = "auto-drain-auto-fix-help";
-  const label = el("label", { class: "drain-field-label", text: "Auto-fix PR blockers" });
-  label.htmlFor = input.id;
-  return el("div", { class: "drain-field drain-field-row" }, [
-    el("div", { class: "drain-field-text" }, [label, help]),
-    input,
-  ]);
 }
 
 const AUTO_DRAIN_REVIEW_HELP = "Adds a second-agent review before landing to every task this window admits. It can only add review: the layer workspace policy already applies is kept, and the other layer is refused.";
@@ -2098,9 +2093,10 @@ function autoDrainReviewControl(payload, reasons) {
     autoDrainReview = select.value;
     renderAutoDrain(payload);
   });
-  return el("div", { class: "drain-field" }, [label, select,
-    el("p", { class: `drain-field-hint${reasons.review ? " warn" : ""}`, text: reasons.review
-      || (autoDrainReview ? AUTO_DRAIN_REVIEW_HELP : "The workspace's review.timing setting decides.") }),
+  return el("div", { class: "drain-field" }, [
+    drainFieldHead(label, autoDrainReview ? AUTO_DRAIN_REVIEW_HELP : "The workspace's review.timing setting decides."),
+    select,
+    drainFieldRefusal(reasons.review || ""),
   ]);
 }
 
@@ -2122,7 +2118,7 @@ function autoDrainStartButton(payload, form) {
   const reasons = autoDrainReasons(payload);
   const pending = pendingOperations.has(key);
   const button = el("button", {
-    class: `operation-button drain-start${payload.capacity?.drain_phase === "draining" ? "" : " primary"}`,
+    class: "operation-button drain-start primary",
     text: pending ? "Starting…" : `${payload.capacity?.drain_phase === "draining" ? "Start another" : "Start"} ${autoDrainDuration} window`,
     title: reasons.submit || "Submit orbit.workflow.auto with this duration and concurrency",
   });
@@ -3100,7 +3096,8 @@ function fetchDrainPass(payload) {
 
 // The Start card: window length, parallel tasks and admission control, then
 // what happens after a task ships (completion, proposed tasks, auto-fix,
-// review). Each choice says what it does in visible text under the control.
+// review). Each choice explains itself in an info hint beside its label; a
+// refusal is visible text under the control.
 // A sunk footer sums the window up, warns when a throttle will hold its
 // admissions, and holds Start.
 function renderAutoDrainStart(payload, reasons) {
@@ -3120,9 +3117,8 @@ function renderAutoDrainStart(payload, reasons) {
   durationLabel.id = "auto-drain-duration-label";
   body.append(
     el("div", { class: "drain-field drain-field-duration" }, [
-      durationLabel,
+      drainFieldHead(durationLabel, "Admissions stop when the window closes; tasks already started run to the end."),
       autoDrainDurationControl(payload),
-      el("p", { class: "drain-field-hint", text: "Admissions stop when the window closes; tasks already started run to the end." }),
     ]),
     autoDrainConcurrencyControl(payload, form),
     form.problem,

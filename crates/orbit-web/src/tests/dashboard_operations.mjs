@@ -340,12 +340,13 @@ assert(startNode('auto-drain-concurrency').value === '5', 'the stepper steps up 
 drainButton('−').click(); drainButton('−').click(); drainButton('−').click(); drainButton('−').click(); drainButton('−').click();
 assert(startNode('auto-drain-concurrency').value === '1', 'the stepper stops at the input minimum of 1');
 drainButton('+').click();
-const completionOption = value => descendants(get('auto-drain-start-body')).find(node => node.type === 'radio' && node.value === value);
-assert(drainText().includes('Stop at review') && drainText().includes('Mark done'), 'completion names both outcomes');
-assert(completionOption('review').checked && !completionOption('done').checked, 'completion defaults to stopping at review');
-const markDone = completionOption('done');
-markDone.checked = true; markDone.dispatchEvent(new Event('change'));
-assert(completionOption('done').checked && !completionOption('review').checked, 'choosing Mark done selects it and releases review');
+// Completion is a switch: off stops at review, on marks shipped tasks done.
+const completeSwitch = () => startNode('auto-drain-complete');
+const setSwitch = (node, on) => { node.checked = on; node.dispatchEvent(new Event('change')); };
+assert(completeSwitch().type === 'checkbox' && !completeSwitch().checked, 'completion defaults to stopping at review');
+assert(get('auto-drain-complete-help').textContent.includes('stay in review'), 'the off state says shipped tasks stay in review');
+setSwitch(completeSwitch(), true);
+assert(completeSwitch().checked && get('auto-drain-complete-help').textContent.includes('review -> done'), 'turning completion on marks done and warns');
 drainButton('Start 2h window').click(); await tick(); await tick(); await tick();
 const started = requests.find(r => r.path === '/api/workflows/auto');
 assert(started && started.workspace === 'one' && started.body.for_duration === '2h' && started.body.concurrency === 2 && started.body.complete === true && started.body.approve_proposed === false && started.body.auto_concurrency === 'enforce', `start posts the chosen window: ${JSON.stringify(started)}`);
@@ -353,40 +354,39 @@ assert(confirmations.at(-1).includes('Duration: 2h · Concurrency: 2') && confir
 assert(get('auto-drain-operation-feedback').textContent.includes('Run jrun-20260923-0400-a1 submitted (completion: done).'), 'start result lands in the card status line');
 // The receipt's notices are shown one per line, as `orbit run auto` prints them.
 assert(get('auto-drain-operation-feedback').textContent.split('\n').slice(1).join('|') === 'Auto-concurrency: enforce (explicit).|Warning: Admissions throttled: memory 95%. Running work is not touched.|Warning: FIXTURE_TOKEN is listed in execution.env.pass but not set|Note: no `workflow.required_validation_commands` configured', `start warnings and note follow the result: ${get('auto-drain-operation-feedback').textContent}`);
-const backToReview = completionOption('review');
-backToReview.checked = true; backToReview.dispatchEvent(new Event('change'));
-assert(completionOption('review').checked, 'completion returns to review');
+setSwitch(completeSwitch(), false);
+assert(!completeSwitch().checked, 'completion returns to review');
 
 assert(get('auto-drain-operation-feedback').textContent.includes('Auto-concurrency: enforce (explicit).'), 'receipt shows the submitted effective mode, separately from inherited config');
 modeInput().value = ''; modeInput().dispatchEvent(new Event('change'));
 // Approving proposed tasks is its own explicit opt-in, off by default, with the
 // qualification rule in the tooltip and a line in the confirm dialog.
-const approveOption = value => descendants(get('auto-drain-start-body')).find(node => node.type === 'radio' && node.name === 'auto-drain-approve' && node.value === value);
-const approveLabel = value => approveOption(value).parentNode;
-assert(drainText().includes('Proposed tasks') && drainText().includes('Leave for me') && drainText().includes('Approve qualifying'), 'proposed-task handling names both choices');
-assert(approveOption('leave').checked && !approveOption('approve').checked, 'approving proposed tasks defaults to off');
-assert(String(approveLabel('approve').title).includes('context files') && String(approveLabel('approve').title).includes('task-pilot') && String(approveLabel('approve').title).includes('no-diff-expected') && String(approveLabel('approve').title).includes('no-auto-approve'), `the tooltip states the qualification rule: ${approveLabel('approve').title}`);
+const approveSwitch = () => startNode('auto-drain-approve');
+const approveHelp = () => get('auto-drain-approve-help').textContent;
+assert(drainText().includes('Approve qualifying proposals'), 'proposed-task handling is named');
+assert(approveSwitch().type === 'checkbox' && !approveSwitch().checked, 'approving proposed tasks defaults to off');
+assert(approveHelp().includes('context files') && approveHelp().includes('task-pilot') && approveHelp().includes('no-diff-expected') && approveHelp().includes('no-auto-approve'), `the hint states the qualification rule: ${approveHelp()}`);
 const requestsBeforeApprove = requests.filter(r => r.path === '/api/workflows/auto').length;
 drainButton('Start 2h window').click(); await tick(); await tick(); await tick();
 const defaultStart = requests.filter(r => r.path === '/api/workflows/auto').at(-1);
 assert(requests.filter(r => r.path === '/api/workflows/auto').length === requestsBeforeApprove + 1 && defaultStart.body.approve_proposed === false && defaultStart.body.auto_fix === false && !Object.hasOwn(defaultStart.body, 'auto_concurrency'), `an ordinary start posts approve_proposed false: ${JSON.stringify(defaultStart)}`);
 assert(!confirmations.at(-1).includes('approve qualifying proposed tasks'), 'the confirm dialog stays quiet when approving is off');
-approveOption('approve').checked = true; approveOption('approve').dispatchEvent(new Event('change'));
-assert(approveOption('approve').checked && !approveOption('leave').checked, 'choosing Approve qualifying selects it');
+setSwitch(approveSwitch(), true);
+assert(approveSwitch().checked, 'turning approving on selects it');
 drainButton('Start 2h window').click(); await tick(); await tick(); await tick();
 const approveStart = requests.filter(r => r.path === '/api/workflows/auto').at(-1);
 assert(approveStart.body.approve_proposed === true && approveStart.body.complete === false, `the opt-in posts approve_proposed true: ${JSON.stringify(approveStart)}`);
 assert(confirmations.at(-1).includes('approve qualifying proposed tasks, including ones filed while it runs'), `the confirm dialog names it: ${confirmations.at(-1)}`);
 assert(get('auto-drain-operation-feedback').textContent.includes('Approving qualifying proposed tasks.'), 'the start result says the window approves');
-approveOption('leave').checked = true; approveOption('leave').dispatchEvent(new Event('change'));
-assert(approveOption('leave').checked, 'approving returns to off');
+setSwitch(approveSwitch(), false);
+assert(!approveSwitch().checked, 'approving returns to off');
 
 // Repair authority is a separate default-off choice, retained across polling.
 const autoFixInput = () => startNode('auto-drain-auto-fix');
 assert(autoFixInput().type === 'checkbox' && !autoFixInput().checked, 'repair defaults off independently of completion and approval');
 autoFixInput().click();
 await fetchAndRenderOperations();
-assert(autoFixInput().checked && completionOption('review').checked && approveOption('leave').checked, 'poll retains repair without raising other authorities');
+assert(autoFixInput().checked && !completeSwitch().checked && !approveSwitch().checked, 'poll retains repair without raising other authorities');
 const autoPosts = () => requests.filter(r => r.path === '/api/workflows/auto');
 delayPost = true;
 const beforeRepair = autoPosts().length;
@@ -422,20 +422,20 @@ await fetchAndRenderOperations();
 // reason as visible text; Start itself still works without the opt-in.
 controlsAuthorized = false;
 await fetchAndRenderOperations();
-assert(autoFixInput().disabled && get('auto-drain-auto-fix-help').textContent.trim(), 'unauthorized repair is disabled with a visible reason');
+assert(autoFixInput().disabled && get('auto-drain-auto-fix-reason').textContent.trim(), 'unauthorized repair is disabled with a visible reason');
 assert(modeInput().disabled && modeInput().value === '', 'unauthorized launch cannot submit an explicit mode');
-assert(approveOption('approve').disabled && !approveOption('leave').disabled, 'an unauthorized session cannot choose to approve');
+assert(approveSwitch().disabled, 'an unauthorized session cannot choose to approve');
 assert(drainText().includes('Approving proposed tasks requires an authorized operator session'), 'the unauthorized reason is visible text');
 assert(!drainButton('Start 2h window').disabled, 'an unauthorized session can still start a default window');
 controlsAuthorized = true;
 replicaWorkspace = true;
 await fetchAndRenderOperations();
-assert(autoFixInput().disabled && get('auto-drain-auto-fix-help').textContent.includes('owner'), 'replica repair is disabled with an owner restriction');
+assert(autoFixInput().disabled && get('auto-drain-auto-fix-reason').textContent.includes('owner'), 'replica repair is disabled with an owner restriction');
 assert(modeInput().disabled, 'replica launch cannot choose an unsupported override');
-assert(approveOption('approve').disabled && drainText().includes('A pull replica cannot approve proposed tasks'), 'a pull replica is not offered approving');
+assert(approveSwitch().disabled && drainText().includes('A pull replica cannot approve proposed tasks'), 'a pull replica is not offered approving');
 replicaWorkspace = false;
 await fetchAndRenderOperations();
-assert(!approveOption('approve').disabled, 'the opt-in returns on an owner');
+assert(!approveSwitch().disabled, 'the opt-in returns on an owner');
 
 // Concurrency the server would refuse (zero, negative, fractional) never reaches
 // it: the readiness read a poll makes would answer 400 and blank the card, and

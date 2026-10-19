@@ -24,7 +24,7 @@
 // currentness and merge certainty inside the transaction that would change
 // anything.
 
-import { captureWorkspaceVisit, el, fetchJson, formatDateTime, postJson, makeToggleRow, isAggregateView, getRegisteredHosts, getWorkspace, getWorkspaceRevision, hostWriteRefusal, runHref } from './common.js';
+import { captureWorkspaceVisit, el, fetchJson, formatDateTime, infoHint, postJson, isAggregateView, getRegisteredHosts, getWorkspace, getWorkspaceRevision, hostWriteRefusal, runHref } from './common.js';
 
 const CONSOLE_PATH = "/api/distributed/claims";
 
@@ -400,15 +400,17 @@ export function buildExecutionProvenance(location, run = null) {
   });
 }
 
+// A fact is a short value; the server's explanation of it (opts.note) is an
+// info hint after the value rather than a sentence under it.
 function line(label, value, opts = {}) {
-  const row = el("div", { class: opts.class ? `claim-line ${opts.class}` : "claim-line" }, [
+  const node = typeof value === "string" || value == null
+    ? el("span", { class: "value", text: value == null ? "—" : value })
+    : value;
+  if (opts.note) node.appendChild(infoHint(opts.note));
+  return el("div", { class: opts.class ? `claim-line ${opts.class}` : "claim-line" }, [
     el("span", { class: "label", text: label }),
-    typeof value === "string" || value == null
-      ? el("span", { class: "value", text: value == null ? "—" : value })
-      : value,
+    node,
   ]);
-  if (opts.note) row.appendChild(el("div", { class: "claim-note", text: opts.note }));
-  return row;
 }
 
 function shortCommit(value) {
@@ -523,9 +525,9 @@ export function buildClaimPanel(claim, capabilities, options = {}) {
       // host is the honest answer; an owner-local link would resolve against
       // this checkout's job store and open the wrong thing or nothing.
       panel.appendChild(
-        line("bound run", `${run.run_id} on machine ${run.machine_id || "unknown"}`, {
-          class: "remote",
-          note: claim.inspect_on || "inspect this run on its execution machine",
+        line("bound run", run.run_id, {
+          class: "remote mono-value",
+          note: claim.inspect_on || `inspect this run on machine ${run.machine_id || "unknown"}`,
         }),
       );
     }
@@ -671,13 +673,13 @@ function buildHandoffPanel(handoff, options = {}) {
   if (validation.length === 0 && required.length === 0) {
     wrap.appendChild(line("validation", "no owner-required commands"));
   } else {
-    const logs = el("div", { class: "handoff-validation" });
-    for (const entry of validation) {
-      logs.appendChild(el("div", { class: "mono", text: `${entry.path} · ${shortCommit(entry.sha256)}` }));
-    }
+    // The count and the commands; each captured log's path and digest are in
+    // the hint, since a path runs to a claim-long directory name.
+    const logs = validation.map((entry) => `${entry.path} · ${shortCommit(entry.sha256)}`);
     wrap.appendChild(
-      line("validation", logs, {
-        note: `${validation.length} captured log(s) for ${required.length} owner-required command(s): ${required.join(", ") || "none"}`,
+      line("validation", `${countOf(validation.length, "log")} · ${required.join(", ") || "no required commands"}`, {
+        class: "handoff-validation",
+        note: [`${validation.length} captured log(s) for ${required.length} owner-required command(s): ${required.join(", ") || "none"}`, ...logs].join("\n"),
       }),
     );
   }
@@ -900,10 +902,7 @@ function buildClaimActions(claim, capabilities, handlers) {
 
   if (!any) return null;
   row.appendChild(
-    el("div", {
-      class: "claim-note",
-      text: "Approving records completion authority for this exact candidate; it does not merge. Recovery fences the attempt and is never automatic — there is no heartbeat.",
-    }),
+    infoHint("Approving records completion authority for this exact candidate; it does not merge. Recovery fences the attempt and is never automatic — there is no heartbeat."),
   );
   return row;
 }
@@ -1204,31 +1203,18 @@ function actionSummary(body) {
   return `decision recorded: claim ${shortId(result.claim_id)} ${phase}, task ${status}`;
 }
 
-/// Collapsible wrapper matching the task detail's other field blocks, so the
-/// panel is reachable by keyboard the same way every other block is.
-export function buildDistributedBlock(taskId, opts = {}) {
-  const block = el("div", { class: "field-block collapsible distributed-block" });
-  // Hidden until the read says this task actually has a claim, so an ordinary
-  // single-host task detail is unchanged.
-  block.style.display = "none";
-  const heading = el("h4", { class: "section-title" }, [el("span", { class: "field-title", text: "Delivery" })]);
-  const body = el("div", { class: "claim-body" });
-  makeToggleRow(heading, {
-    expanded: true,
-    onToggle: (event) => {
-      event.stopPropagation();
-      const collapsed = block.classList.toggle("collapsed");
-      heading.setAttribute("aria-expanded", String(!collapsed));
-    },
-  });
-  block.appendChild(heading);
-  block.appendChild(body);
+/// The task detail's Delivery tab content: the claim panel, hidden until the
+/// read says this task actually has a claim, so an ordinary single-host task
+/// detail is unchanged. `onContent` tells the detail whether to offer the tab.
+export function buildDeliveryPanel(taskId, opts = {}) {
+  const body = el("div", { class: "claim-body delivery-panel" });
+  body.style.display = "none";
   mountTaskClaimPanel(body, taskId, {
     ...opts,
     onContent: (rendered) => {
-      block.style.display = rendered ? "" : "none";
+      body.style.display = rendered ? "" : "none";
       if (opts.onContent) opts.onContent(rendered);
     },
   });
-  return block;
+  return body;
 }

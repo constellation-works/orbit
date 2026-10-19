@@ -136,8 +136,8 @@ a.failure-id-link:focus-visible {
   font-style: italic;
 }
 /* A claim reads as a two-column list of facts — a muted sentence-case label,
-   then the value, with the server's note beneath the value — so the task
-   detail's Delivery section scans like the rest of the overview. */
+   then a short value whose explanation is an info hint — so the Delivery tab
+   scans like the task's Details. */
 .claim-panel {
   font-size: 13px;
 }
@@ -156,10 +156,12 @@ a.failure-id-link:focus-visible {
 .claim-header .claim-id { font-family: var(--font-mono); font-size: 12px; color: var(--fg-dim); }
 .claim-header .claim-created { color: var(--fg-mute); font-size: 12px; }
 .claim-line {
+  position: relative;
+  --hint-left: 126px;
   display: grid;
   grid-template-columns: 112px minmax(0, 1fr);
   gap: 2px 14px;
-  padding: 4px 0;
+  padding: 3px 0;
   align-items: baseline;
 }
 .claim-line > .label {
@@ -191,12 +193,12 @@ a.failure-id-link:focus-visible {
 /* Labels stack above values once the column is too narrow for two; a
    112px label track leaves a machine id or selector unreadable. */
 @media (max-width: 480px) {
-  .claim-line { grid-template-columns: 1fr; gap: 2px; }
+  .claim-line { grid-template-columns: 1fr; gap: 2px; --hint-left: 0; }
   .claim-line > .label { grid-row: auto; }
   .claim-note { grid-column: 1; }
 }
 @container task-pane (max-width: 400px) {
-  .claim-line { grid-template-columns: 1fr; gap: 2px; }
+  .claim-line { grid-template-columns: 1fr; gap: 2px; --hint-left: 0; }
   .claim-line > .label { grid-row: auto; }
   .claim-note { grid-column: 1; }
 }
@@ -283,6 +285,7 @@ a.failure-id-link:focus-visible {
   margin-right: 8px;
 }
 .claim-actions {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: center;

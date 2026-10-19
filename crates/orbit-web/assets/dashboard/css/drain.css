@@ -281,6 +281,8 @@ main.drain-layout { height: 100%; grid-template-columns: minmax(0, 1fr); padding
 #auto-drain-start-body { display: flex; flex-direction: column; gap: 18px; padding: 18px 18px 0; min-width: 0; }
 .drain-field { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .drain-field-label { color: var(--fg-soft); font: 400 13px var(--font-sans); }
+/* The label line: its help is an info hint whose bubble spans the line. */
+.drain-field-head { position: relative; --hint-left: 0; display: flex; align-items: center; min-width: 0; }
 .drain-field-hint { margin: -2px 0 0; color: var(--fg-mute); font-size: 12.5px; line-height: 1.45; }
 .drain-field-hint.warn { color: var(--warn-fg); }
 /* A label and its hint on the left, the control on the right. */
@@ -294,29 +296,20 @@ main.drain-layout { height: 100%; grid-template-columns: minmax(0, 1fr); padding
 }
 .drain-mode-select:disabled { color: var(--fg-disabled); }
 .drain-mode-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-/* Segmented controls: buttons for the length, radios for the two choices. */
-.drain-durations, .drain-completion {
+/* The window length is a segmented control of buttons. */
+.drain-durations {
   display: grid; gap: 3px; padding: 3px;
   border: 1px solid var(--border); border-radius: 8px; background: var(--bg-well);
+  grid-template-columns: repeat(6, minmax(0, 1fr));
 }
-.drain-durations { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-.drain-completion { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .drain-duration {
   min-width: 0; height: 34px; padding: 0; border: 0; border-radius: 6px;
   background: transparent; color: var(--fg-dim); font: 500 13px var(--font-sans); cursor: pointer;
 }
-.drain-duration:hover, .drain-completion-option:hover { color: var(--fg); }
-.drain-duration.selected, .drain-completion-option.selected { background: var(--bg-selected); color: var(--fg-strong); font-weight: 600; box-shadow: inset 0 0 0 1px var(--border-strong); }
+.drain-duration:hover { color: var(--fg); }
+.drain-duration.selected { background: var(--bg-selected); color: var(--fg-strong); font-weight: 600; box-shadow: inset 0 0 0 1px var(--border-strong); }
 .drain-duration:focus-visible, .drain-step:focus-visible, .drain-stepper-value:focus-visible,
-.drain-completion-option:focus-within, .drain-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.drain-completion-option {
-  position: relative; display: flex; align-items: center; justify-content: center; min-width: 0; height: 34px;
-  border-radius: 6px; color: var(--fg-dim); font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap;
-}
-.drain-completion-option input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
-.drain-completion-option span { overflow: hidden; text-overflow: ellipsis; padding: 0 6px; }
-.drain-completion-option.done.selected { background: var(--warn-wash); color: var(--warn-fg); box-shadow: inset 0 0 0 1px var(--warn-line); }
-.drain-completion-option:has(input:disabled) { opacity: .5; cursor: not-allowed; }
+.drain-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* Parallel tasks: − value + on the right of its label. */
 .drain-stepper {

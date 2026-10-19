@@ -123,7 +123,7 @@ try {
       }
       return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
     };
-    const { buildDistributedBlock, invalidateDistributedConsole } = await import('/js/distributed.js');
+    const { buildDeliveryPanel, invalidateDistributedConsole } = await import('/js/distributed.js');
     invalidateDistributedConsole();
     // The app orchestrator that activates a tab is stripped from this fixture,
     // so select the Tasks pane the way the router would before measuring.
@@ -131,7 +131,7 @@ try {
     // The real detail column, so the panel is measured inside the grid it ships in.
     const host = document.getElementById('tasks-body');
     host.innerHTML = '<div class="row-detail split-layout"><div class="detail-main" id="fixture-detail-main"></div><div class="detail-side"></div></div>';
-    document.getElementById('fixture-detail-main').appendChild(buildDistributedBlock('ORB-2'));
+    document.getElementById('fixture-detail-main').appendChild(buildDeliveryPanel('ORB-2'));
     await new Promise(resolve => setTimeout(resolve, 50));
     globalThis.fixtureRequests = requests;
     return requests;
@@ -173,18 +173,8 @@ try {
   }
   await page.setViewportSize({ width: 1440, height: 1000 });
 
-  // 3. Keyboard operability: the block header is a real toggle, and the action
-  //    is reachable and activatable without a pointer.
-  const heading = await page.$('.distributed-block h4');
-  if (!heading) throw new Error('the distributed block must ship a heading');
-  if (await heading.getAttribute('role') !== 'button') throw new Error('the block heading must carry button semantics');
-  if (await heading.getAttribute('aria-expanded') !== 'true') throw new Error('the block heading must report its expanded state');
-  await heading.focus();
-  await page.keyboard.press('Enter');
-  if (await heading.getAttribute('aria-expanded') !== 'false') throw new Error('Enter must collapse the block');
-  await page.keyboard.press('Enter');
-  if (await heading.getAttribute('aria-expanded') !== 'true') throw new Error('Enter must re-expand the block');
-
+  // 3. Keyboard operability: the action is reachable and activatable without
+  //    a pointer.
   const approve = await page.$('button.claim-action.approve');
   if (!approve) throw new Error('an unauthorized handoff must offer approval');
   if (await approve.getAttribute('type') !== 'button') throw new Error('an action must be a real button');

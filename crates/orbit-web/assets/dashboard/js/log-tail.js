@@ -48,8 +48,10 @@ let logSnapshotRetryMs = LOG_STREAM_RETRY_MIN_MS;
 let logSnapshotAttempt = 0;
 let logVisibilityWired = false;
 
-// Drain and Log share the Drain page. The route selects its view; agent and
-// wrapping preferences stay local to this browser.
+// Drain and Log share one dock. It sits on the Drain page and, while Tasks
+// shows, beside the task list (placeDock). The Drain route selects its view;
+// on Tasks the view is the last one chosen. Agent and wrapping preferences
+// stay local to this browser.
 const LOG_PANEL_PREFS_KEY = "orbit.dashboard.logPanel";
 const DOCK_MODES = ["drain", "log"];
 
@@ -145,6 +147,31 @@ function applyDockMode() {
   }
 }
 
+// One dock, two homes: the Tasks page's right column and the Drain page. It
+// moves to whichever of the two is shown, so its cards keep one renderer and
+// one set of element ids. On Tasks its first view is named Drain, since the
+// page around it is not.
+const DOCK_HOMES = { tasks: { slot: "tasks-dock", label: "Drain" }, drain: { slot: "drain-main", label: "Overview" } };
+
+export function placeDock(tab) {
+  const dock = $("side-dock");
+  const home = DOCK_HOMES[tab];
+  const slot = home ? $(home.slot) : null;
+  if (!dock || !slot || dock.parentNode === slot) return;
+  slot.appendChild(dock);
+  dock.dataset.home = tab;
+  const button = $("dock-tab-drain");
+  const label = button && button.querySelector(".dock-seg-label");
+  if (label) label.textContent = home.label;
+  if (button && button.dataset.drainLabel) button.setAttribute("aria-label", `${home.label}: ${button.dataset.drainLabel}`);
+}
+
+// On the Drain page a view is a route; on Tasks choosing one only switches it.
+function chooseDockMode(mode) {
+  setDockMode(mode);
+  if ($("side-dock")?.dataset.home !== "tasks") window.location.hash = mode === "log" ? "#drain/log" : "#drain";
+}
+
 // The router selects the Drain page view through this presentation handle.
 export function setDockMode(mode) {
   if (!DOCK_MODES.includes(mode)) return;
@@ -157,10 +184,7 @@ function wireDockModeToggle() {
   const toggle = $("dock-mode-toggle");
   if (!toggle) return;
   for (const btn of toggle.querySelectorAll(".dock-seg")) {
-    btn.addEventListener("click", () => {
-      setDockMode(btn.dataset.mode);
-      window.location.hash = btn.dataset.mode === "log" ? "#drain/log" : "#drain";
-    });
+    btn.addEventListener("click", () => chooseDockMode(btn.dataset.mode));
   }
   // Arrow keys move between the two segments, matching the window selectors;
   // Home and End jump to the first and last, as a tablist promises.
@@ -172,8 +196,7 @@ function wireDockModeToggle() {
       : event.key === "End" ? DOCK_MODES.length - 1
         : event.key === "ArrowLeft" ? idx - 1 : idx + 1;
     const mode = DOCK_MODES[(next + DOCK_MODES.length) % DOCK_MODES.length];
-    setDockMode(mode);
-    window.location.hash = mode === "log" ? "#drain/log" : "#drain";
+    chooseDockMode(mode);
     const btn = toggle.querySelector(`.dock-seg[data-mode="${mode}"]`);
     if (btn) btn.focus();
   });
