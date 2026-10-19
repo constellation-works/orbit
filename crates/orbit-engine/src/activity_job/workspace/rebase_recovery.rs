@@ -12,6 +12,7 @@ use crate::executor::automation::vcs::absorbed::{
     ABSORBING_STEP, AbsorbedReason, covering_commit, task_scope_digest,
 };
 use crate::executor::automation::vcs::git::{BaseSyncMode, GitBytesOutcome, git_run_bytes};
+use crate::executor::automation::vcs::recovery_published_head;
 
 use super::boundary_guard::is_host_owned_path;
 use super::fingerprint::{
@@ -114,6 +115,32 @@ impl WorktreeBoundaryGuard {
             .unwrap_or(target);
         let step_id =
             validate_failed_step_identity(input, prepared, original).ok_or_else(invalid)?;
+        // Completion's rendered input retains the initial publication even
+        // after its watcher publishes a check repair. Authenticate that input
+        // first, then bind Git's original head (and the publication lease) to
+        // the contiguous repair heads the host recorded for this PR.
+        let published_original = original;
+        let original = if input.get("activity_name").and_then(Value::as_str) == Some("pr_complete")
+        {
+            let primary_task = prepared
+                .get("completed_task_ids")
+                .or_else(|| input.get("task_ids"))
+                .and_then(Value::as_array)
+                .and_then(|ids| ids.iter().filter_map(Value::as_str).min())
+                .or_else(|| self.recovery_task_id(input))
+                .ok_or_else(invalid)?;
+            recovery_published_head(
+                host,
+                &self.run_id,
+                primary_task,
+                prepared["pr_number"].as_str().ok_or_else(invalid)?,
+                original,
+            )
+            .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?
+        } else {
+            original.to_string()
+        };
+        let original = original.as_str();
         // The stopped rebase is pinned by its own `onto` metadata below, not by
         // the moving base ref: a linked worktree shares remote-tracking refs
         // with every sibling checkout, so `origin/<base>` routinely advances
@@ -182,11 +209,15 @@ impl WorktreeBoundaryGuard {
                 base_ref,
                 target_base_sha: target.to_string(),
                 conflicting_paths,
-                remote_sha_before: prepared
-                    .get("remote_sha")
-                    .or_else(|| prepared.get("published_head_sha"))
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
+                remote_sha_before: if original != published_original {
+                    Some(original.to_string())
+                } else {
+                    prepared
+                        .get("remote_sha")
+                        .or_else(|| prepared.get("published_head_sha"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                },
                 task_scope_digest,
             });
             return Ok(());

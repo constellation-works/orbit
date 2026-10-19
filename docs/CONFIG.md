@@ -1196,6 +1196,11 @@ existing recovery activities, final validation and push do the repair:
   unreadable tip evidence cannot prove a landed fix or a known-red base. A
   distinct candidate failure keeps the ordinary repair path and three-attempt
   budget. A conflict is rebased onto the current base by PR conflict recovery.
+  If a published check repair then conflicts, recovery follows the contiguous
+  auto-fix pushes recorded by the host for that PR and this run or its
+  authenticated retry ancestors. The stopped rebase's branch and original head
+  must both match that repaired head; its target base remains pinned. Missing,
+  unrelated or disconnected push records cannot authorize a different head.
 - A failed required check run that no workflow produced (a provider app's
   aggregate result, such as a code-scanning check beside passing analysis jobs)
   is repaired only from its own failure annotations. The watcher reads them

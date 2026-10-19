@@ -27,6 +27,7 @@ pub(in crate::executor::automation::vcs) use answers::{
 };
 pub(in crate::executor::automation::vcs) use answers::{read_pr_status, read_pr_status_before};
 pub(in crate::executor::automation) use attribution::ship_done_attribution;
+pub(crate) use auto_fix::recovery_published_head;
 pub(in crate::executor::automation::vcs) use body::meaningful_execution_summary;
 pub(in crate::executor::automation) use complete::pr_complete;
 pub(in crate::executor::automation::vcs) use delivery::{

@@ -143,6 +143,16 @@ after the wrapper signals that its queue interval earned the capped credit.
 - `conflict_recovery_leaf_completes_only_its_checkpointed_rebase`
 - `a_resumed_run_recovers_the_same_step_again_as_a_new_attempt`
 
+### `v2_worktree_lifecycle::auto_fix_conflict::completion_conflict_follows_only_recorded_auto_fix_pushes`
+
+Publishes a candidate and two check repairs to a bare remote, then stops the
+repaired branch's rebase on an advanced base. Recovery keeps the completion
+input's original publication checkpoint and follows only the host's contiguous
+push records for the same PR and authorized run. Missing records, another PR,
+another run, disconnected records and an incomplete chain refuse before provider
+dispatch. The complete chain admits file repair, continues every pick and
+certifies the repaired head as both the original head and publication lease.
+
 ### `v2_worktree_lifecycle::worktree_contracts_7`
 
 - `conflict_recovery_commits_companion_edits_with_the_resolution`
