@@ -401,7 +401,13 @@
 .orch-weights { margin: 0 0 6px; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 2px 12px; font-family: var(--font-mono); font-size: 12px; color: var(--fg); }
 .orch-norm { font-style: italic; }
 .orch-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 3px; }
-.orch-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.orch-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12.5px;
+}
 .orch-table th,
 .orch-table td { padding: 6px 6px; border-bottom: 1px solid var(--hair); text-align: left; vertical-align: top; white-space: nowrap; }
 .orch-table thead th {
@@ -414,6 +420,11 @@
   text-transform: uppercase;
   color: var(--fg-dim);
   font-weight: 500;
+}
+.orch-table thead th.orch-num {
+  min-width: 4.75rem;
+  max-width: 6.5rem;
+  white-space: normal;
 }
 .orch-group-row th.orch-group { border-left: 1px solid var(--border); text-align: center; color: var(--fg); }
 .orch-table .orch-num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -428,9 +439,11 @@
   text-transform: inherit;
   color: inherit;
   cursor: pointer;
+  display: block;
+  width: 100%;
   white-space: normal;
+  overflow-wrap: anywhere;
   text-align: right;
-  max-width: 76px;
 }
 .orch-sort:hover { color: var(--fg); }
 .orch-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -444,7 +457,9 @@ th[aria-sort="ascending"] .orch-sort::after { content: " ↑"; color: var(--acce
   letter-spacing: normal;
   text-transform: none;
 }
-/* The orchestrator and composite columns stay in view while the components scroll. */
+/* The orchestrator name stays pinned while the component columns scroll.
+   The composite scrolls with its group: a sticky composite covered the
+   header at the right edge of the wrap (Review rejects at 1440px). */
 .orch-table .orch-name,
 .orch-table thead tr > th:first-child {
   position: sticky;
@@ -453,14 +468,6 @@ th[aria-sort="ascending"] .orch-sort::after { content: " ↑"; color: var(--acce
   background: var(--bg-elev);
 }
 .orch-table thead tr > th:first-child { background: var(--bg); z-index: 2; }
-.orch-table td.orch-composite,
-.orch-table th.orch-composite {
-  position: sticky;
-  right: 0;
-  z-index: 1;
-  background: color-mix(in srgb, var(--accent) 8%, var(--bg-elev));
-}
-.orch-table thead th.orch-composite { z-index: 2; background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
 .orch-below {
   display: block;
   margin-top: 2px;

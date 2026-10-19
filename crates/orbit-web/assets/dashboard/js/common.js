@@ -1261,10 +1261,11 @@ export function elapsedDurationInfo(record, durationMs = record?.duration_ms, no
   return { durationMs, isLive: false };
 }
 
-// Timestamps. The dashboard reads one clock: an absolute instant renders as
-// 24-hour local time with the zone abbreviation, a relative age carries that
-// absolute instant in its title, and UTC appears only for values defined in
-// UTC (cron schedules, the UTC-aligned Reliability window), always labelled.
+// Timestamps. The dashboard reads one clock, UTC unless this browser has
+// chosen Local. An absolute instant renders as 24-hour time with its zone
+// abbreviation, a relative age carries that absolute instant in its title,
+// and values defined in UTC (cron schedules, the Reliability window) stay
+// on formatUtcDateTime / formatUtcRange, always labelled UTC.
 
 function toDate(value) {
   if (value == null || value === "") return null;
@@ -1297,28 +1298,85 @@ export function zoneName(value = new Date()) {
     .find((part) => part.type === "timeZoneName")?.value || "UTC";
 }
 
-/// "2026-10-06 23:31 PDT". Unparseable input is returned as given, empty as "-".
+// Per browser, so a dashboard time can be lined up with a CLI timestamp
+// without converting by hand. Unset storage and a storage refusal both
+// stay on UTC.
+const CLOCK_ZONE_KEY = "orbit.dashboard.clock";
+const clockZoneListeners = new Set();
+
+function storedClockZone() {
+  try {
+    const stored = window.localStorage.getItem(CLOCK_ZONE_KEY);
+    if (stored === "utc" || stored === "local") return stored;
+  } catch (_) {
+    // Private mode and the vm fixtures have no storage; the default stands.
+  }
+  return "utc";
+}
+
+let clockZone = storedClockZone();
+
+export function getClockZone() {
+  return clockZone;
+}
+
+/// Selects `utc` or `local`. Returns true when the choice changed.
+/// An unknown value is ignored.
+export function setClockZone(zone) {
+  if (zone !== "utc" && zone !== "local") return false;
+  if (zone === clockZone) return false;
+  clockZone = zone;
+  try {
+    window.localStorage.setItem(CLOCK_ZONE_KEY, zone);
+  } catch (_) {
+    // The choice still applies to this page when storage is refused.
+  }
+  for (const listener of clockZoneListeners) {
+    try {
+      listener(zone);
+    } catch (error) {
+      console.error(error);
+    }
+  }
+  return true;
+}
+
+export function onClockZoneChange(listener) {
+  clockZoneListeners.add(listener);
+  return () => clockZoneListeners.delete(listener);
+}
+
+function clockIsUtc() {
+  return clockZone === "utc";
+}
+
+function activeZoneName(date) {
+  return clockIsUtc() ? "UTC" : zoneName(date);
+}
+
+/// "2026-10-07 06:31 UTC", or the browser's zone when Local is selected.
+/// Unparseable input is returned as given, empty as "-".
 export function formatDateTime(value, { seconds = false } = {}) {
   const date = toDate(value);
   if (!date) return value == null || value === "" ? "-" : String(value);
-  return `${dateTimeText(dateParts(date, false), seconds)} ${zoneName(date)}`;
+  return `${dateTimeText(dateParts(date, clockIsUtc()), seconds)} ${activeZoneName(date)}`;
 }
 
-/// "2026-10-06", using the browser's local calendar date.
+/// "2026-10-07" on the dashboard clock's calendar.
 export function formatDate(value) {
   const date = toDate(value);
   if (!date) return value == null || value === "" ? "-" : String(value);
-  const parts = dateParts(date, false);
+  const parts = dateParts(date, clockIsUtc());
   return `${parts.y}-${pad2(parts.mo)}-${pad2(parts.d)}`;
 }
 
-/// A local wall-clock time, "23:32:57 PDT"; `zone: false` drops the zone for
-/// dense columns whose title or header carries it.
+/// A wall-clock time on the dashboard clock, "06:32:57 UTC"; `zone: false`
+/// drops the zone for dense columns whose title or header carries it.
 export function formatClock(value, { seconds = true, zone = true } = {}) {
   const date = toDate(value);
   if (!date) return value == null || value === "" ? "" : String(value);
-  const text = clockText(dateParts(date, false), seconds);
-  return zone ? `${text} ${zoneName(date)}` : text;
+  const text = clockText(dateParts(date, clockIsUtc()), seconds);
+  return zone ? `${text} ${activeZoneName(date)}` : text;
 }
 
 /// "2026-10-07 06:33 UTC", for values whose meaning is defined in UTC.

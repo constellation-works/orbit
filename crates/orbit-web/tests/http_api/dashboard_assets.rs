@@ -147,7 +147,7 @@ fn runs_view_executes_load_more_live_duration_actions_header_and_cancel_style() 
 }
 
 #[test]
-fn dashboard_clock_renders_local_times_with_zone_and_reliability_range_in_utc() {
+fn dashboard_clock_defaults_to_utc_persists_local_and_keeps_reliability_range_in_utc() {
     let result = std::process::Command::new("node")
         .args([
             "--experimental-vm-modules",

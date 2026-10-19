@@ -11,7 +11,7 @@
 import {
   el as makeEl, syncNodes, fetchJson, getWindow, setWindow, persistScopeToUrl, syncWindowSelectors,
   notifyScopeChange, wireWindowSelector, requestPanel, panelCanRender, getWorkspaceRevision,
-  onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, formatClock,
+  onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, formatClock, getClockZone,
   bindTaskLink, DASHBOARD_WINDOWS,
 } from './common.js';
 import { linePath, sparkline as lineSparkline, svg } from './sparkline.js';
@@ -235,7 +235,8 @@ function perBucketUnit(seconds) {
 }
 
 // Buckets of 6h and wider start on UTC boundaries, so they are named by UTC
-// date; narrower ones by the browser's clock, like the rest of the dashboard.
+// date. Narrower ones follow the dashboard clock (UTC unless Local is
+// selected) and omit the zone abbreviation; the axis has no room for it.
 function utcDate(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
@@ -247,11 +248,18 @@ function tickLabel(start, seconds) {
 
 /// Which buckets carry an x-axis label: round clock times where the width
 /// allows, else every few buckets counted back from the newest.
-function isTick(start, seconds, index, count) {
+function tickParts(start) {
   const date = new Date(start);
-  if (seconds === 300) return date.getMinutes() % 10 === 0;
-  if (seconds === 3600) return date.getHours() % 4 === 0;
-  if (seconds === 21600) return date.getUTCHours() === 0;
+  return getClockZone() === "utc"
+    ? { minutes: date.getUTCMinutes(), hours: date.getUTCHours() }
+    : { minutes: date.getMinutes(), hours: date.getHours() };
+}
+
+function isTick(start, seconds, index, count) {
+  const parts = tickParts(start);
+  if (seconds === 300) return parts.minutes % 10 === 0;
+  if (seconds === 3600) return parts.hours % 4 === 0;
+  if (seconds === 21600) return new Date(start).getUTCHours() === 0;
   const every = seconds === 86400 ? 5 : Math.max(1, Math.ceil(count / 7));
   return (count - 1 - index) % every === 0;
 }

@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { bindTaskLink, captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, fmtDuration } from './js/common.js';
+import { bindTaskLink, captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
 import { cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
 import { initTaskCreate } from './js/task-create.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, renderAuditSummary, renderDenialCount, syncAuditControls, wireAuditSearch, } from './js/audit.js';
@@ -1300,7 +1300,10 @@ async function initWorkspaceSelector() {
   setMultiWorkspace(dashboardWorkspaces.length > 1);
   if (dashboardWorkspaces.length <= 1) {
     const railWorkspace = $("rail-workspace");
-    if (railWorkspace) railWorkspace.replaceChildren();
+    if (railWorkspace) {
+      railWorkspace.replaceChildren();
+      mountRailClock();
+    }
     const only = dashboardWorkspaces.find((workspace) => workspace.status === "active");
     if (only) {
       const linkedAll = isAggregateLinked();
@@ -1390,6 +1393,7 @@ function buildWorkspaceSelector() {
   host.innerHTML = "";
   host.appendChild(select);
   host.appendChild(note);
+  mountRailClock();
 }
 
 // ORB-10874/ORB-10872: workspace + window live in the query string so a
@@ -1605,7 +1609,7 @@ function fetchJobsInFlight() {
   return fetchJson(`${aggregate ? "/api/job-runs/all" : "/api/job-runs"}?state=active&limit=1`).then((payload) => {
     if (revision !== getWorkspaceRevision() || sequence !== jobsInFlightSequence) return;
     const count = Number.isFinite(payload.total) ? payload.total : listItems(payload).length;
-    setRailCount("rail-count-jobs", count, false, "Pending and running job runs, independent of the History window and filters.");
+    setRailCount("rail-count-jobs", count, false, "Pending and running job runs, not tasks. One task is several pipeline runs. Independent of the History window and filters.", formatJobsRailCount);
   });
 }
 
@@ -1759,11 +1763,11 @@ function fetchAndRenderFrictions() {
 // blocked colour so a failure count is legible from any tab without opening
 // the tab it belongs to. Every value here comes from a fetch the dashboard
 // already makes — this adds no endpoint.
-function setRailCount(id, value, alert = false, title = "") {
+function setRailCount(id, value, alert = false, title = "", format = formatBigInt) {
   const node = $(id);
   if (!node) return;
   const empty = value == null || value === 0;
-  node.textContent = empty ? "" : formatBigInt(value);
+  node.textContent = empty ? "" : format(value);
   node.classList.toggle("alert", Boolean(alert) && !empty);
   node.title = empty ? "" : title;
 }
@@ -1779,6 +1783,12 @@ function formatBigInt(n) {
   return String(n);
 }
 
+// The Jobs badge counts pipeline runs (a task has one run per leg), so the
+// unit is on the badge. Other rail counts keep their own labels.
+function formatJobsRailCount(n) {
+  return `${formatBigInt(n)} ${n === 1 ? "run" : "runs"}`;
+}
+
 // The connection line names the destination the way the rail does, not by its
 // route: the connection line uses the destination label.
 function refreshLabel() {
@@ -1790,7 +1800,7 @@ function refreshLabel() {
 // and renderers that replace it while other panels are still failing.
 function markRefreshStale(stale) {
   const suffix = lastCleanRefresh
-    ? `Stale · as of ${lastCleanRefresh.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}`
+    ? `Stale · as of ${formatClock(lastCleanRefresh, { seconds: false })}`
     : "Stale · no successful refresh yet";
   for (const node of document.querySelectorAll(".rail-count, #global-drain-state")) {
     const previous = node.dataset.refreshStaleSuffix;
@@ -1946,7 +1956,50 @@ buildAuditChips(auditContext());
 wireAuditSearch(auditContext());
 wireCodebaseControls(() => { window.location.hash = buildCodebaseHash(); });
 wireOrchestratorControls();
+function syncClockControls() {
+  const zone = getClockZone();
+  const localTitle = `Show times in this browser's zone (${zoneName()})`;
+  for (const button of document.querySelectorAll(".clock-zone-btn")) {
+    const on = button.dataset.zone === zone;
+    button.classList.toggle("on", on);
+    button.setAttribute("aria-pressed", String(on));
+    button.title = button.dataset.zone === "utc" ? "Show times in UTC, matching the CLI" : localTitle;
+  }
+}
+
+function wireClockControls() {
+  for (const button of document.querySelectorAll(".clock-zone-btn")) {
+    if (button.dataset.wired === "true") continue;
+    button.dataset.wired = "true";
+    button.addEventListener("click", () => {
+      if (!setClockZone(button.dataset.zone)) return;
+      syncClockControls();
+      refreshDashboard();
+    });
+  }
+  syncClockControls();
+}
+
+// The top bar holds the control from 1280px up. Below that the bar is already
+// full, so the same control lives in the workspace scope card. Rebuilding the
+// card replaces its children, so the copy is mounted again afterwards.
+function mountRailClock() {
+  const host = $("rail-workspace");
+  const source = document.querySelector(".topbar .clock-zone");
+  if (!host || !source) return;
+  let clock = host.querySelector(".rail-clock");
+  if (!clock) {
+    clock = source.cloneNode(true);
+    clock.classList.add("rail-clock");
+    for (const button of clock.querySelectorAll("[data-wired]")) button.removeAttribute("data-wired");
+    host.appendChild(clock);
+  }
+  wireClockControls();
+}
+
 $("refresh-btn").addEventListener("click", refreshDashboard);
+wireClockControls();
+mountRailClock();
 initHostResources();
 wireReliabilityWindowSelector();
 wireDoctorPanel();

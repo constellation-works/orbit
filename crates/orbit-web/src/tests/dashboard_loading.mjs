@@ -364,7 +364,7 @@ check(fleetRows.length === 2 && fleetRows[0][1] === 'one' && fleetRows[0][2] ===
   && fleetRows[1][3] === '1 / 4', 'aggregate fleet card shows idle eligible work beside the live drain');
 check(readinessReads === selectedWorkspaceReadinessReads, 'aggregate view does not fetch one workspace drain status as if it were global');
 check(crewReads === selectedWorkspaceCrewReads, 'aggregate view does not request a workspace crew registry');
-check(text('rail-count-jobs') === '22', `aggregate Jobs rail shows the fleet total, not the one-item page: ${text('rail-count-jobs')}`);
+check(text('rail-count-jobs') === '22 runs', `aggregate Jobs rail shows the fleet total in runs, not the one-item page: ${text('rail-count-jobs')}`);
 globalThis.fleetScopeEvidence = {
   source: 'controlled API responses; shipped dashboard assets; no production drain exercised',
   selected: { workspace: 'one', drainPhase: 'idle', fleetLabel: selectedFleetLabel },
@@ -476,7 +476,7 @@ heldPath = null;
 terminalRunFixture = true;
 setActiveTab('tasks');
 refresh(); await settle();
-check(text('rail-count-jobs') === '2' && !node('rail-count-jobs').classList.contains('alert'), 'Jobs counts pending and running work in flight');
+check(text('rail-count-jobs') === '2 runs' && !node('rail-count-jobs').classList.contains('alert'), 'Jobs counts pending and running runs in flight');
 click(node('rail-count-jobs')); await settle();
 check(window.location.hash === '#jobs/live' && text('jobs-live-body').includes('live-pending') && text('jobs-live-body').includes('live-running'), 'the in-flight badge opens Live with both active states');
 setActiveTab('jobs/history'); await settle();

@@ -148,7 +148,7 @@ try {
     assert.notEqual(partial.color, clean.color, 'A failed panel must not display the clean green dot');
     assert.match(partial.label, /Settings › Workspace file/);
     assert(!partial.label.includes('offline'), 'An HTTP panel failure must remain distinct from offline');
-    assert.equal(partial.nodes.find(node => node.id === 'rail-count-jobs').text, '18.0k', 'Healthy panels must keep updating during a partial failure');
+    assert.equal(partial.nodes.find(node => node.id === 'rail-count-jobs').text, '18.0k runs', 'Healthy panels must keep updating during a partial failure');
     expectStale(partial);
     await page.screenshot({ path: path.join(evidence, `partial-${width}.png`) });
     await refresh();

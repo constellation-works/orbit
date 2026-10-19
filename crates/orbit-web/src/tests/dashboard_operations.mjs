@@ -489,9 +489,9 @@ resourceThrottle = {
 };
 await fetchAndRenderOperations();
 assert(
-  drainText().includes('Admissions throttled: memory 93% (throttled at ≥ 90% since 2026-10-04 01:41 PDT') &&
+  drainText().includes('Admissions throttled: memory 93% (throttled at ≥ 90% since 2026-10-04 08:41 UTC') &&
   drainText().includes('; resumes below 80%)') &&
-  drainText().includes('load 0.9× cores (throttled at ≥ 0.9× cores since 2026-10-04 01:40 PDT') &&
+  drainText().includes('load 0.9× cores (throttled at ≥ 0.9× cores since 2026-10-04 08:40 UTC') &&
   drainText().includes('; resumes below 0.75× cores)') &&
   drainText().includes('Running tasks are not touched.'),
   `the throttle names both thresholds for held resources above high and in hysteresis band: ${drainText()}`
@@ -1059,9 +1059,9 @@ const legacyAfterClasses = String(legacyAfter?.className || '').split(/\s+/);
 assert(legacyAfterClasses.includes('disabled') && !legacyAfterClasses.includes('enabled'), `readback styles the consumer disabled: ${legacyAfter?.className}`);
 assert(descendants(legacyAfter).some(node => node.type === 'button' && node.textContent === 'Enable'), 'readback offers Enable after Disable');
 assert(get('auto-tasks-count').textContent.startsWith('2 enabled of 3'), `readback drops the consumer from the enabled count: ${get('auto-tasks-count').textContent}`);
-// The browser runs in America/Los_Angeles: the 22:00Z mint is a local 15:00
-// and says so, beside cron triggers that are stated in the host zone.
-assert(autoStats.some(text => text.startsWith('Next mint') && text.endsWith('15:00 PDT')), `next mint names its local zone: ${autoStats}`);
+// The dashboard clock defaults to UTC, so the 22:00Z mint reads 22:00 UTC.
+// Cron triggers beside it stay in the host zone.
+assert(autoStats.some(text => text.startsWith('Next mint') && text.endsWith('22:00 UTC')), `next mint uses the dashboard clock: ${autoStats}`);
 const autoSwitch = descendants(autoCard).find(node => String(node.className || '').includes('operation-switch'));
 assert(autoSwitch?.getAttribute('role') === 'switch' && autoSwitch.getAttribute('aria-checked') === 'true', 'auto-task toggle is a switch');
 assert(autoHead.textContent.includes('still open · scheduler will skip'), 'open duplicate is called out on the row');
@@ -1292,7 +1292,7 @@ await fetchAndRenderAutoDrainPane();
 let forecast = forecastCard();
 let forecastText = forecast?.textContent || '';
 assert(forecast?.dataset.forecastState === 'built' && !forecast.querySelector('.drain-forecast-state'), `enforce forecast replaces the empty state: ${forecastText}`);
-assert(forecast.querySelector('time')?.dateTime === forecastAt && forecastText.includes('2026-10-16 23:25') && forecastText.includes('PDT'), `forecast time: ${forecastText}`);
+assert(forecast.querySelector('time')?.dateTime === forecastAt && forecastText.includes('2026-10-17 06:25') && forecastText.includes('UTC'), `forecast time: ${forecastText}`);
 assert(forecastText.includes('90.0%') && forecastText.includes('7.2 cores') && forecastText.includes('at +6m') && forecastText.includes('admit 89%') && forecastText.includes('headroom -1.0'), `cpu peak, threshold and headroom: ${forecastText}`);
 assert(forecast.querySelector('.drain-forecast-peak.over')?.textContent.includes('CPU peak'), 'a peak over its admit threshold is marked');
 assert(forecastText.includes('40.0%') && forecastText.includes('1.0 KiB') && forecastText.includes('at +2m') && forecastText.includes('admit 74%') && forecastText.includes('headroom 34.0'), `memory peak, threshold and headroom: ${forecastText}`);
@@ -1379,7 +1379,7 @@ assert(forecast?.dataset.forecastState === 'retained' && forecast.querySelector(
 assert(forecastText.includes('Starvation guard protects') && forecastText.includes('Heavy candidate'), `this pass still shows a protected head: ${forecastText}`);
 const retained = forecast.querySelector('.drain-forecast-retained');
 const retainedText = retained?.textContent || '';
-assert(retainedText.includes('Last forecast') && retainedText.includes('2026-10-16 22:00') && retainedText.includes('50.0%') && retainedText.includes('admit 89%') && retainedText.includes('headroom 39.0') && !retainedText.includes('Fitting candidate'), `retained forecast: ${retainedText}`);
+assert(retainedText.includes('Last forecast') && retainedText.includes('2026-10-17 05:00') && retainedText.includes('50.0%') && retainedText.includes('admit 89%') && retainedText.includes('headroom 39.0') && !retainedText.includes('Fitting candidate'), `retained forecast: ${retainedText}`);
 assert([...retained.querySelectorAll('.drain-forecast-spark-label')].map(label => label.textContent).join() === '+4m,+1m', `the Last forecast panel draws its series: ${retainedText}`);
 drainCapacityOverride = {};
 await fetchAndRenderAutoDrainPane();

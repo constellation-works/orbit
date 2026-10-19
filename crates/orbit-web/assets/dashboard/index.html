@@ -13,7 +13,8 @@
     <a class="skip-link" id="skip-link" href="#tasks-main">Skip to content</a>
     <div class="shell">
       <!-- The bar spans the window: the brand, the selected host's live
-           readings, Drain, when the dashboard last refreshed, and Refresh.
+           readings, Drain, when the dashboard last refreshed, the UTC/Local
+           clock (the rail has the same control below 1280px), and Refresh.
            The destination heading stays for assistive tech. -->
       <header class="topbar">
           <div class="rail-brand">
@@ -51,6 +52,10 @@
           </div>
           <!-- Opt-in browser notifications for a drain end or a new hold while
                this tab is in the background; shown where notifications exist. -->
+          <div class="scoreboard-window-selector clock-zone" role="group" aria-label="Time zone">
+            <button type="button" class="scoreboard-window-seg clock-zone-btn on" data-zone="utc" aria-pressed="true" title="Show times in UTC, matching the CLI">UTC</button>
+            <button type="button" class="scoreboard-window-seg clock-zone-btn" data-zone="local" aria-pressed="false" title="Show times in this browser's zone">Local</button>
+          </div>
           <button id="notify-btn" class="refresh-btn notify-btn" type="button" aria-pressed="false" title="Notify me when a drain ends or a task is held while this tab is in the background" hidden><svg class="refresh-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 8a5 5 0 0 1 10 0c0 4 1.5 5.5 2 6H3c.5-.5 2-2 2-6M8.5 17a1.5 1.5 0 0 0 3 0"/></svg><span class="refresh-label">Notify</span></button>
           <button id="refresh-btn" class="refresh-btn" type="button" title="Refresh dashboard"><svg class="refresh-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 8a6 6 0 1 0 0 4M16 3v5h-5"/></svg><span class="refresh-label">Refresh</span></button>
       </header>
